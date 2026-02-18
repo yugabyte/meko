@@ -1,0 +1,39 @@
+# Ignore build artifacts
+yuga-cli
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Config files (may contain sensitive data)
+*.yaml
+*.yml
+!.*.yaml
+!.*.yml
+
+# Log files
+*.log

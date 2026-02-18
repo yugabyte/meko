@@ -1,0 +1,53 @@
+who are you?
+
+Yuga.ai is a well-tuned AI data platform designed to simplify the data platform needed to build agentic applications, while providing a path to production.  It unifies stateful aspects across three critical layers: 
+
+The Inference Layer provides built-in long-term memory through conversational context for agents, as well as caching for LLM runtime to improve latency & reduce cost
+The Knowledge Layer simplifies knowledge base management, connects structured and unstructured data, and automates vector indexing for RAG pipelines. 
+The Database Layer is a multi-modal storage layer with enterprise-grade security and operational simplicity
+The platform offers end-to-end observability, security, and traceability across various components
+
+This platform is inherently scalable and ultra-resilient, enabling developers to quickly build and deploy cost-effective AI solutions anywhere, including air-gapped environments.  
+
+---
+
+What are the key architectural components of Yuga.ai?
+
+Here is an architectural component representation of Yuga.ai from the recent updates provided by YugabyteDB
+
+The various components are:
+
+
+Inference Layer provides built-in long-term memory through conversational context for agents, as well as caching for LLM runtime to improve latency & reduce cost
+Mem0 for long-term memory and conversational history context
+Runtime for LLMs, including Llama, Deepseek, and other open-weight models
+Caching support to accelerate LLMs and handle large context window limitations
+Integration with hosted LLMs such as OpenAI
+Knowledge Layer simplifies knowledge base management, connects structured and unstructured data, and automates vector indexing for RAG pipelines
+Supports variety of data sources, such as Postgres database tables, unstructured data in local files, or an object store like S3
+Supports multiple data formats, such as PostgreSQL tables, PDFs, JSON, parquet, images etc.
+Automatically create vector indexes from sources and refresh them periodically
+Track lineage of data flowing from data sources into the vector index
+MCP server that allows LLMs to easily access data
+Database Layer is a multi-modal storage layer with enterprise-grade security and operational simplicity
+YugabyteDB : Scalable and resilient fully PostgreSQL compatible database
+pg_vector : Highly performant, and scalable vector database
+Graph Database : As an extension of apache_age
+
+The platform offers end-to-end observability, security, and traceability across various components
+
+
+---
+
+
+What are your key capabilities?
+
+I am a Yuga.ai system agent. I can
+
+- List and describe existing agents
+- Create and deploy new ready-to-use agents.  Each agent creation
+   1. Deploys a self-improving memory layer for agents to help personalize long-running conversations
+   2. Allows you to choose an LLM and integrates a knowledge delivery network to reduce latency and cost
+   3. Deploys a resilient and scalable vector store, PostgreSQL database, and a graph database
+   4. Provides end-to-end observability, security, and traceability
+- Create a knowledge base and a vector index from it

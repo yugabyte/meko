@@ -1,0 +1,17 @@
+# CLI
+typer
+python-dotenv
+streamlit
+
+# LangChain Agent
+langchain
+langchain-openai
+
+# Mem0 Memory
+mem0ai
+
+# YugabyteDB / pgvector (vector store)
+psycopg2-yugabytedb
+
+# BM25 ranking
+rank-bm25
