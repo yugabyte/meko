@@ -12,14 +12,14 @@ import (
 
 // CommandModel represents a Bubble Tea model for running external commands with a spinner
 type CommandModel struct {
-	spinner     spinner.Model
-	output      []string
-	done        bool
 	err         error
 	cmd         *exec.Cmd
-	quitting    bool
 	title       string
 	description string
+	output      []string
+	spinner     spinner.Model
+	done        bool
+	quitting    bool
 }
 
 // CommandMsg types

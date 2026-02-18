@@ -13,52 +13,18 @@ var configFile embed.FS
 
 // TextConfig holds all text content and styling configuration
 type TextConfig struct {
-	Logo struct {
-		Lines   []string `yaml:"lines"`
-		Color   string   `yaml:"color"`
-		Bold    bool     `yaml:"bold"`
-		Pulsing bool     `yaml:"pulsing"`
-	} `yaml:"logo"`
-
-	Welcome struct {
-		Title      string `yaml:"title"`
-		Help       string `yaml:"help"`
-		Hint       string `yaml:"hint"`
-		TitleColor string `yaml:"title_color"`
-		TextColor  string `yaml:"text_color"`
-		Bold       bool   `yaml:"bold"`
-	} `yaml:"welcome"`
-
-	Menu struct {
-		Title string `yaml:"title"`
-		Items []struct {
-			Title       string `yaml:"title"`
-			Description string `yaml:"description"`
-		} `yaml:"items"`
-	} `yaml:"menu"`
-
-	CommandPalette struct {
-		Title    string `yaml:"title"`
-		Commands []struct {
-			Name        string `yaml:"name"`
-			Description string `yaml:"description"`
-			Action      string `yaml:"action"`
-		} `yaml:"commands"`
-	} `yaml:"command_palette"`
-
 	Messages struct {
-		Quit                    string `yaml:"quit"`
-		Initializing            string `yaml:"initializing"`
-		Loading                 string `yaml:"loading"`
-		LandingNormal           string `yaml:"landing_normal"`
-		LandingPaletteVisible   string `yaml:"landing_palette_visible"`
-		LandingPaletteFocused   string `yaml:"landing_palette_focused"`
-		InputHelp               string `yaml:"input_help"`
-		StatusHelp              string `yaml:"status_help"`
-		StatusPalette           string `yaml:"status_palette"`
-		TextareaPlaceholder     string `yaml:"textarea_placeholder"`
+		Quit                  string `yaml:"quit"`
+		Initializing          string `yaml:"initializing"`
+		Loading               string `yaml:"loading"`
+		LandingNormal         string `yaml:"landing_normal"`
+		LandingPaletteVisible string `yaml:"landing_palette_visible"`
+		LandingPaletteFocused string `yaml:"landing_palette_focused"`
+		InputHelp             string `yaml:"input_help"`
+		StatusHelp            string `yaml:"status_help"`
+		StatusPalette         string `yaml:"status_palette"`
+		TextareaPlaceholder   string `yaml:"textarea_placeholder"`
 	} `yaml:"messages"`
-
 	Content struct {
 		Dashboard ContentSection `yaml:"dashboard"`
 		Database  ContentSection `yaml:"database"`
@@ -67,7 +33,6 @@ type TextConfig struct {
 		Help      ContentSection `yaml:"help"`
 		Agent     ContentSection `yaml:"agent"`
 	} `yaml:"content"`
-
 	Styles struct {
 		Colors struct {
 			Primary    string `yaml:"primary"`
@@ -83,6 +48,35 @@ type TextConfig struct {
 			Italic    bool `yaml:"italic"`
 		} `yaml:"emphasis"`
 	} `yaml:"styles"`
+	Welcome struct {
+		Title      string `yaml:"title"`
+		Help       string `yaml:"help"`
+		Hint       string `yaml:"hint"`
+		TitleColor string `yaml:"title_color"`
+		TextColor  string `yaml:"text_color"`
+		Bold       bool   `yaml:"bold"`
+	} `yaml:"welcome"`
+	Menu struct {
+		Title string `yaml:"title"`
+		Items []struct {
+			Title       string `yaml:"title"`
+			Description string `yaml:"description"`
+		} `yaml:"items"`
+	} `yaml:"menu"`
+	CommandPalette struct {
+		Title    string `yaml:"title"`
+		Commands []struct {
+			Name        string `yaml:"name"`
+			Description string `yaml:"description"`
+			Action      string `yaml:"action"`
+		} `yaml:"commands"`
+	} `yaml:"command_palette"`
+	Logo struct {
+		Color   string   `yaml:"color"`
+		Lines   []string `yaml:"lines"`
+		Pulsing bool     `yaml:"pulsing"`
+		Bold    bool     `yaml:"bold"`
+	} `yaml:"logo"`
 }
 
 // ContentSection represents a content area with title and sections
@@ -133,7 +127,7 @@ func GetTextConfig() *TextConfig {
 // Helper method to format content sections
 func (cs *ContentSection) Format() string {
 	var b strings.Builder
-	
+
 	for _, section := range cs.Sections {
 		if section.Title != "" {
 			b.WriteString(focusedStyle.Render(section.Title))
@@ -145,7 +139,7 @@ func (cs *ContentSection) Format() string {
 		}
 		b.WriteString("\n")
 	}
-	
+
 	return strings.TrimSpace(b.String())
 }
 
@@ -153,10 +147,10 @@ func (cs *ContentSection) Format() string {
 func getDefaultTextConfig() *TextConfig {
 	return &TextConfig{
 		Logo: struct {
-			Lines   []string `yaml:"lines"`
 			Color   string   `yaml:"color"`
-			Bold    bool     `yaml:"bold"`
+			Lines   []string `yaml:"lines"`
 			Pulsing bool     `yaml:"pulsing"`
+			Bold    bool     `yaml:"bold"`
 		}{
 			Lines: []string{
 				"██╗   ██╗██╗   ██╗ ██████╗  █████╗     █████╗ ██╗",
@@ -167,8 +161,8 @@ func getDefaultTextConfig() *TextConfig {
 				"   ╚═╝    ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝",
 			},
 			Color:   "#FF6F00",
-			Bold:    true,
 			Pulsing: true,
+			Bold:    true,
 		},
 		Messages: struct {
 			Quit                  string `yaml:"quit"`

@@ -2,10 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+
 	"yuga-cli/internal/tui"
 )
 
@@ -59,10 +59,4 @@ func initConfig() {
 		// Use config file from the flag
 		fmt.Printf("Using config file: %s\n", cfgFile)
 	}
-}
-
-// exitError prints the error and exits with code 1
-func exitError(err error) {
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-	os.Exit(1)
 }

@@ -1,0 +1,44 @@
+# https://EditorConfig.org
+
+root = true
+
+[*]
+charset = utf-8
+max_line_length = 100
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+tab_width = 4
+trim_trailing_whitespace = true
+
+# Go uses tabs by convention
+[*.go]
+indent_style = tab
+indent_size = tab
+tab_width = 4
+max_line_length = 120
+
+# Python
+[*.py]
+indent_size = 4
+
+# Shell scripts
+[*.sh]
+indent_size = 2
+
+# YAML
+[*.{yml,yaml}]
+indent_size = 2
+
+# Markdown - preserve trailing whitespace for line breaks
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefiles require tabs
+[Makefile]
+indent_style = tab
+
+# Go module files
+[go.{mod,sum}]
+indent_style = tab

@@ -6,12 +6,12 @@ import (
 
 // Common color palette
 var (
-	ColorPrimary   = lipgloss.Color("#7D56F4")
-	ColorSuccess   = lipgloss.Color("#04B575")
-	ColorError     = lipgloss.Color("#FF0000")
-	ColorWarning   = lipgloss.Color("#FFA500")
-	ColorInfo      = lipgloss.Color("#00A9FF")
-	ColorMuted     = lipgloss.Color("#888888")
+	ColorPrimary = lipgloss.Color("#7D56F4")
+	ColorSuccess = lipgloss.Color("#04B575")
+	ColorError   = lipgloss.Color("#FF0000")
+	ColorWarning = lipgloss.Color("#FFA500")
+	ColorInfo    = lipgloss.Color("#00A9FF")
+	ColorMuted   = lipgloss.Color("#888888")
 )
 
 // Common styles for consistent UI across all commands

@@ -39,9 +39,9 @@ func RunCommandWithUI(cmd *exec.Cmd, title, description string) error {
 		// Print success message in a box after Bubble Tea exits
 		fmt.Println()
 		successBox := BoxStyle.Render(
-			SuccessStyle.Render(EmojiCheckmark + " " + m.description + " completed successfully! " + EmojiParty) +
-			"\n\n" +
-			DividerLine(80),
+			SuccessStyle.Render(EmojiCheckmark+" "+m.description+" completed successfully! "+EmojiParty) +
+				"\n\n" +
+				DividerLine(80),
 		)
 		fmt.Println(successBox)
 		fmt.Println()

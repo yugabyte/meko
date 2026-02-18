@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
 	"yuga-cli/internal/ui"
 )
 
@@ -17,7 +18,7 @@ var statusCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println(ui.DividerLine(60))
 		fmt.Println()
-		
+
 		// Show component status with green text
 		fmt.Printf("  %s YugabyteDB:    %s\n", ui.EmojiDatabase, ui.SuccessText.Render("✓ Running"))
 		fmt.Printf("  %s AI Agent:      %s\n", ui.EmojiGear, ui.SuccessText.Render("✓ Active"))
@@ -25,7 +26,7 @@ var statusCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println(ui.DividerLine(60))
 		fmt.Println()
-		
+
 		ui.PrintInfo("For detailed status, use: yuga-cli interactive")
 		return nil
 	},

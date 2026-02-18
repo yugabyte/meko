@@ -30,19 +30,19 @@ type StepInfo struct {
 
 // PlatformStartupModel represents the Bubble Tea model for platform startup
 type PlatformStartupModel struct {
+	err          error
+	steps        []StepInfo
+	platformInfo PlatformInfo
 	spinner      spinner.Model
 	currentStep  PlatformStartupStep
-	steps        []StepInfo
 	done         bool
-	err          error
 	quitting     bool
-	platformInfo PlatformInfo
 }
 
 // PlatformInfo contains information to display at the end
 type PlatformInfo struct {
-	PID         int
 	HostAddress string
+	PID         int
 }
 
 // Message types for platform startup
@@ -51,9 +51,9 @@ type (
 		Step PlatformStartupStep
 	}
 	StepCompleteMsg struct {
-		Step    PlatformStartupStep
-		Details []string
 		Err     error
+		Details []string
+		Step    PlatformStartupStep
 	}
 	PlatformCompleteMsg struct {
 		Info PlatformInfo

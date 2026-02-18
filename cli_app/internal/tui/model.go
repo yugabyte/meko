@@ -28,62 +28,46 @@ const (
 
 // Model represents the main TUI model
 type Model struct {
-	mode              ViewMode
-	list              list.Model
-	viewport          viewport.Model
-	spinner           spinner.Model
-	textarea          textarea.Model
-	commandList       list.Model
-	keys              keyMap
-	width             int
-	height            int
-	ready             bool
-	content           string
-	title             string
-	err               error
-	quitting          bool
-	pulseOffset       float64
+	list               list.Model
+	commandList        list.Model
+	textarea           textarea.Model
+	err                error
+	content            string
+	title              string
+	keys               keyMap
+	viewport           viewport.Model
+	spinner            spinner.Model
+	width              int
+	mode               ViewMode
+	height             int
+	pulseOffset        float64
+	ready              bool
+	quitting           bool
 	showCommandPalette bool
 	commandListFocused bool
 }
 
 // keyMap defines keyboard shortcuts
 type keyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Left     key.Binding
-	Right    key.Binding
-	Enter    key.Binding
-	Back     key.Binding
-	Quit     key.Binding
-	Help     key.Binding
-	Refresh  key.Binding
+	Up      key.Binding
+	Down    key.Binding
+	Left    key.Binding
+	Right   key.Binding
+	Enter   key.Binding
+	Back    key.Binding
+	Quit    key.Binding
+	Help    key.Binding
+	Refresh key.Binding
 }
 
 // Styles
 var (
-	subtle    = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
-	highlight = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
-	special   = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"}
-
-	boxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(highlight).
-			Padding(1, 2).
-			BorderTop(true).
-			BorderLeft(true).
-			BorderRight(true).
-			BorderBottom(true)
+	special = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"}
 
 	titleStyle = lipgloss.NewStyle().
 			Foreground(special).
 			Bold(true).
 			Padding(0, 1)
-	// titleStyle = lipgloss.NewStyle().
-	// 		Bold(true).
-	// 		Foreground(lipgloss.Color("#7D56F4")).
-	// 		Background(lipgloss.Color("#1E1E2E")).
-	// 		Padding(0, 1)
 
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
@@ -178,8 +162,8 @@ func (c Command) FilterValue() string { return c.name }
 // getAvailableCommands returns all available commands for the command palette
 func getAvailableCommands() []list.Item {
 	cfg := GetTextConfig()
-	var commands []list.Item
-	
+	commands := make([]list.Item, 0, len(cfg.CommandPalette.Commands))
+
 	for _, cmd := range cfg.CommandPalette.Commands {
 		commands = append(commands, Command{
 			name:        cmd.Name,
@@ -187,7 +171,7 @@ func getAvailableCommands() []list.Item {
 			action:      cmd.Action,
 		})
 	}
-	
+
 	return commands
 }
 
@@ -195,9 +179,9 @@ func getAvailableCommands() []list.Item {
 func NewModel() Model {
 	// Load text configuration
 	cfg := GetTextConfig()
-	
+
 	// Create list items from config
-	var items []list.Item
+	items := make([]list.Item, 0, len(cfg.Menu.Items))
 	for _, item := range cfg.Menu.Items {
 		items = append(items, Item{
 			title:       item.Title,
@@ -257,13 +241,15 @@ type pulseTickMsg time.Time
 func parseHexColor(hexColor string) struct{ r, g, b int } {
 	// Remove # if present
 	hexColor = strings.TrimPrefix(hexColor, "#")
-	
+
 	// Parse RGB values
 	var r, g, b int
 	if len(hexColor) == 6 {
-		fmt.Sscanf(hexColor, "%02x%02x%02x", &r, &g, &b)
+		if _, err := fmt.Sscanf(hexColor, "%02x%02x%02x", &r, &g, &b); err != nil {
+			return struct{ r, g, b int }{0, 0, 0}
+		}
 	}
-	
+
 	return struct{ r, g, b int }{r, g, b}
 }
 
@@ -304,10 +290,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.list.SetSize(msg.Width, msg.Height-2)
 		m.commandList.SetSize(msg.Width-4, 15)
-		
+
 		// Update textarea width for responsive resizing
 		m.textarea.SetWidth(msg.Width - 20)
-		
+
 		// Force a re-render by returning the model
 		// The View() function will be called automatically with the new dimensions
 		return m, nil
@@ -377,7 +363,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
-	
+
 	case pulseTickMsg:
 		// Update pulse offset for breathing effect
 		m.pulseOffset += 0.1
@@ -392,7 +378,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ViewLanding:
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
-		
+
 		// Check if user typed "/" to show command palette
 		text := m.textarea.Value()
 		if strings.HasPrefix(text, "/") && !m.showCommandPalette {
@@ -403,7 +389,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showCommandPalette = false
 			m.commandListFocused = false
 		}
-		
+
 	case ViewMenu:
 		m.list, cmd = m.list.Update(msg)
 		cmds = append(cmds, cmd)
@@ -413,7 +399,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ViewInput:
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
-		
+
 		// Check if user typed "/" to show command palette
 		text := m.textarea.Value()
 		if strings.HasPrefix(text, "/") && !m.showCommandPalette {
@@ -423,7 +409,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showCommandPalette = false
 			m.commandListFocused = false
 		}
-		
+
 	case ViewLoading:
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
@@ -435,7 +421,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View renders the UI
 func (m Model) View() string {
 	cfg := GetTextConfig()
-	
+
 	if m.quitting {
 		return cfg.Messages.Quit + "\n"
 	}
@@ -636,7 +622,7 @@ func (m Model) renderLandingView() string {
 		r := int(float64(baseColor.r) * pulseBrightness)
 		g := int(float64(baseColor.g) * pulseBrightness)
 		b := int(float64(baseColor.b) * pulseBrightness)
-		
+
 		// Clamp values
 		if r > 255 {
 			r = 255
@@ -656,14 +642,14 @@ func (m Model) renderLandingView() string {
 		if b < 0 {
 			b = 0
 		}
-		
+
 		hexColor = fmt.Sprintf("#%02X%02X%02X", r, g, b)
 	} else {
 		hexColor = cfg.Logo.Color
 	}
 
 	// Apply pulse effect to each line with the same color
-	var styledLines []string
+	styledLines := make([]string, 0, len(asciiLines))
 	for _, line := range asciiLines {
 		styledLine := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(hexColor)).
@@ -672,7 +658,7 @@ func (m Model) renderLandingView() string {
 		styledLines = append(styledLines, styledLine)
 	}
 
-	styledAscii := strings.Join(styledLines, "\n")
+	styledASCII := strings.Join(styledLines, "\n")
 
 	// Style the textarea with responsive width
 	textareaWidth := m.width - 8
@@ -683,7 +669,7 @@ func (m Model) renderLandingView() string {
 	if textareaWidth > 120 {
 		textareaWidth = 120
 	}
-	
+
 	textareaView := lipgloss.NewStyle().
 		Width(textareaWidth).
 		Padding(0, 2).
@@ -712,7 +698,7 @@ func (m Model) renderLandingView() string {
 			welcomeWidth = 30
 		}
 	}
-	
+
 	welcomeMsg := lipgloss.NewStyle().
 		Bold(cfg.Welcome.Bold).
 		Foreground(lipgloss.Color(cfg.Welcome.TitleColor)).
@@ -720,7 +706,7 @@ func (m Model) renderLandingView() string {
 		Align(lipgloss.Left).
 		PaddingLeft(2).
 		Render(cfg.Welcome.Title)
-	
+
 	// Help text with larger size
 	welcomeHelp := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(cfg.Welcome.TextColor)).
@@ -729,7 +715,7 @@ func (m Model) renderLandingView() string {
 		Align(lipgloss.Left).
 		PaddingLeft(2).
 		Render("\n" + cfg.Welcome.Help)
-	
+
 	welcomeHint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(cfg.Welcome.TextColor)).
 		Bold(cfg.Welcome.Bold).
@@ -737,37 +723,37 @@ func (m Model) renderLandingView() string {
 		Align(lipgloss.Left).
 		PaddingLeft(2).
 		Render("\n" + cfg.Welcome.Hint)
-	
+
 	welcomeSection := lipgloss.JoinVertical(
 		lipgloss.Left,
 		welcomeMsg,
 		welcomeHelp,
 		welcomeHint,
 	)
-	
+
 	// Join ASCII art and welcome message
 	// Use horizontal layout for wider screens, vertical for narrow screens
 	var combinedSection string
 	minWidthForHorizontal := 100
-	
+
 	if m.width >= minWidthForHorizontal {
 		// Horizontal layout for wider screens
 		combinedSection = lipgloss.JoinHorizontal(
 			lipgloss.Center,
-			styledAscii,
-			"      ",  // Spacing between sections
+			styledASCII,
+			"      ", // Spacing between sections
 			welcomeSection,
 		)
 	} else {
 		// Vertical layout for narrow screens
 		combinedSection = lipgloss.JoinVertical(
 			lipgloss.Center,
-			styledAscii,
+			styledASCII,
 			"\n",
 			welcomeSection,
 		)
 	}
-	
+
 	// Center the combined section
 	centeredCombined := lipgloss.Place(
 		m.width, lipgloss.Height(combinedSection),
@@ -795,12 +781,14 @@ func (m Model) renderLandingView() string {
 		// Calculate available height for command palette
 		commandPaletteHeight := 18 // approximate height
 		availableHeight := m.height
-		topPadding := (availableHeight - commandPaletteHeight - lipgloss.Height(centeredCombined) - lipgloss.Height(centeredTextarea) - lipgloss.Height(centeredHelp)) / 2
+		usedHeight := commandPaletteHeight + lipgloss.Height(centeredCombined) +
+			lipgloss.Height(centeredTextarea) + lipgloss.Height(centeredHelp)
+		topPadding := (availableHeight - usedHeight) / 2
 		if topPadding < 1 {
 			topPadding = 1
 		}
 		padding := strings.Repeat("\n", topPadding)
-		
+
 		content = lipgloss.JoinVertical(
 			lipgloss.Center,
 			padding,
@@ -823,7 +811,7 @@ func (m Model) renderLandingView() string {
 			topPadding = 1
 		}
 		padding := strings.Repeat("\n", topPadding)
-		
+
 		content = lipgloss.JoinVertical(
 			lipgloss.Center,
 			padding,
@@ -839,13 +827,13 @@ func (m Model) renderLandingView() string {
 	contentHeight := lipgloss.Height(content)
 	if contentHeight < m.height {
 		bottomPadding := strings.Repeat("\n", m.height-contentHeight)
-		content = content + bottomPadding
+		content += bottomPadding
 	}
 
 	return content
 }
 
-// renderStatusBar renders the bottom status bar 	
+// renderStatusBar renders the bottom status bar
 func (m Model) renderStatusBar() string {
 	cfg := GetTextConfig()
 	var helpText string
@@ -867,7 +855,7 @@ func (m Model) renderCommandPalette() string {
 	if paletteWidth > 60 {
 		paletteWidth = 60
 	}
-	
+
 	commandPaletteStyle := lipgloss.NewStyle().
 		Width(paletteWidth).
 		Padding(1, 2).
