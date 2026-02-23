@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"yuga-cli/cmd"
+	"cli_app/cmd"
 )
 
 func main() {

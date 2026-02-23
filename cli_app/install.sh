@@ -32,19 +32,19 @@ go mod download
 
 # Build the binary
 echo "🔨 Building binary..."
-go build -o yuga-cli .
+go build -o meko .
 
 # Make it executable
-chmod +x yuga-cli
+chmod +x meko
 
 echo ""
 echo "✅ Installation complete!"
 echo ""
 echo "To run the CLI:"
-echo "  ./yuga-cli interactive    # Launch interactive TUI"
-echo "  ./yuga-cli status         # Check system status"
-echo "  ./yuga-cli --help         # View all commands"
+echo "  ./meko interactive    # Launch interactive TUI"
+echo "  ./meko status         # Check system status"
+echo "  ./meko --help         # View all commands"
 echo ""
 echo "To install globally, run:"
-echo "  sudo mv yuga-cli /usr/local/bin/"
+echo "  sudo mv meko /usr/local/bin/"
 echo ""

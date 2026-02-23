@@ -1,5 +1,5 @@
 # Ignore build artifacts
-yuga-cli
+meko
 *.exe
 *.exe~
 *.dll

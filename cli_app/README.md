@@ -1,6 +1,6 @@
-# Yuga CLI
+# meko CLI
 
-A powerful Terminal User Interface (TUI) CLI tool for the Yuga AI Platform, built with [Cobra](https://github.com/spf13/cobra) and [Bubble Tea](https://github.com/charmbracelet/bubbletea).
+A powerful Terminal User Interface (TUI) CLI tool for the meko Platform, built with [Cobra](https://github.com/spf13/cobra) and [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
 Inspired by Sourcegraph's AMP CLI, this tool provides a modern, interactive command-line experience with beautiful live updates and intuitive navigation.
 
@@ -25,7 +25,7 @@ Inspired by Sourcegraph's AMP CLI, this tool provides a modern, interactive comm
 ```bash
 cd cli_app
 go mod download
-go build -o yuga-cli .
+go build -o meko .
 ```
 
 ### Install globally
@@ -41,15 +41,15 @@ go install
 Launch the full interactive TUI experience:
 
 ```bash
-./yuga-cli interactive
+./meko interactive
 ```
 
 Or use shortcuts:
 
 ```bash
-./yuga-cli i      # Short form
-./yuga-cli tui    # Alias
-./yuga-cli ui     # Another alias
+./meko i      # Short form
+./meko tui    # Alias
+./meko ui     # Another alias
 ```
 
 ### Traditional CLI Commands
@@ -57,22 +57,22 @@ Or use shortcuts:
 Check system status:
 
 ```bash
-./yuga-cli status
+./meko status
 ```
 
 Database commands:
 
 ```bash
-./yuga-cli db status                    # Check database status
-./yuga-cli db connect                   # Connect to database
-./yuga-cli db status --host localhost --port 5433
+./meko db status                    # Check database status
+./meko db connect                   # Connect to database
+./meko db status --host localhost --port 5433
 ```
 
 Get help:
 
 ```bash
-./yuga-cli --help
-./yuga-cli db --help
+./meko --help
+./meko db --help
 ```
 
 ## TUI Navigation
@@ -121,7 +121,7 @@ cli_app/
 
 The CLI uses [Cobra](https://github.com/spf13/cobra) for command structure:
 
-- **Root command** (`yuga-cli`) - Entry point with global flags
+- **Root command** (`meko`) - Entry point with global flags
 - **Interactive command** - Launches the TUI
 - **Traditional commands** - Standard CLI operations (status, db, etc.)
 
@@ -198,7 +198,7 @@ var myStyle = lipgloss.NewStyle().
 
 Configuration can be loaded from:
 
-- Default: `$HOME/.yuga-cli.yaml`
+- Default: `$HOME/.meko.yaml`
 - Custom: Use `--config` flag
 
 Example config:
@@ -222,20 +222,20 @@ ui:
 ### Launch interactive mode and navigate to database view
 
 ```bash
-./yuga-cli interactive
+./meko interactive
 # Then: Use arrow keys to select "Database" and press Enter
 ```
 
 ### Check status with verbose output
 
 ```bash
-./yuga-cli status --verbose
+./meko status --verbose
 ```
 
 ### Connect to remote database
 
 ```bash
-./yuga-cli db connect --host 192.168.1.100 --port 5433
+./meko db connect --host 192.168.1.100 --port 5433
 ```
 
 ## Troubleshooting
@@ -249,7 +249,7 @@ ui:
 ### Commands not found
 
 - Ensure Go bin is in your PATH
-- Rebuild the binary: `go build -o yuga-cli .`
+- Rebuild the binary: `go build -o meko .`
 
 ### Dependencies issues
 

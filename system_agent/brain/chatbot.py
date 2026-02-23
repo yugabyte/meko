@@ -33,13 +33,13 @@ logger = get_logger("chatbot")
 
 
 def load_platform_info() -> str:
-    """Load yuga.ai platform details from knowledge base."""
+    """Load meko platform details from knowledge base."""
     knowledge_base_path = Path(__file__).parent / "knowledge_base" / "yuga_ai_details.txt"
     try:
         return knowledge_base_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         logger.warning(f"Knowledge base file not found: {knowledge_base_path}")
-        return "yuga.ai is an AI data platform for building agentic applications."
+        return "meko is an AI data platform for building agentic applications."
 
 
 # Load platform info once at module level
@@ -69,13 +69,13 @@ class ChatbotAgent:
         self._add_complete.set()
 
     def load_platform_info() -> str:
-        """Load yuga.ai platform details from knowledge base."""
+        """Load meko platform details from knowledge base."""
         knowledge_base_path = Path(__file__).parent / "knowledge_base" / "yuga_ai_details.txt"
         try:
             return knowledge_base_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             logger.warning(f"Knowledge base file not found: {knowledge_base_path}")
-            return "yuga.ai is an AI data platform for building agentic applications."
+            return "meko is an AI data platform for building agentic applications."
 
     # Load platform info once at module level
     PLATFORM_INFO = load_platform_info()
@@ -152,9 +152,9 @@ class ChatbotAgent:
             messages.append(
                 SystemMessage(content=f"Relevant past information:\n{memory_text}")
             )
-        messages.append(SystemMessage(content=f"if any questions are asked about the yuga.ai platform, use the following information to answer:"))
-        messages.append(SystemMessage(content=f"yuga.ai platform details:\n\n{PLATFORM_INFO}"))
-        messages.append(SystemMessage(content=f"if any of the following questions are asked, who are you?, What are the key architectural components of Yuga.ai?, What are Yuga.ai key capabilities? respond exactly as provided in the context."))
+        messages.append(SystemMessage(content=f"if any questions are asked about the meko platform, use the following information to answer:"))
+        messages.append(SystemMessage(content=f"meko platform details:\n\n{PLATFORM_INFO}"))
+        messages.append(SystemMessage(content=f"if any of the following questions are asked, who are you?, What are the key architectural components of meko?, What are meko key capabilities? respond exactly as provided in the context."))
         messages.append(SystemMessage(content=f"if any of the following questions are asked, Can you add my documents present at s3://proto-automated-embedding/playgentic_documents/sample/ to the knowledge base. Respond saying, Vector index creation kicked off for pep_ai_index_ba480fe7"))
         messages.append(HumanMessage(content=user_input))
 

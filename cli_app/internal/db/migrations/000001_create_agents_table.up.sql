@@ -1,0 +1,56 @@
+CREATE SCHEMA IF NOT EXISTS meko_system;
+
+CREATE TABLE IF NOT EXISTS meko_system.account_registry (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_name VARCHAR(255) NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS meko_system.datapack_registry (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES meko_system.account_registry(id) ON DELETE CASCADE,
+    datapack_name VARCHAR(255) NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    llm_model VARCHAR(255),
+    embedding_model VARCHAR(255),
+    UNIQUE (account_id, datapack_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_datapack_registry_account
+    ON meko_system.datapack_registry (account_id);
+
+CREATE TABLE IF NOT EXISTS meko_system.datapack_knowledge_base_registry (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    datapack_id UUID NOT NULL REFERENCES meko_system.datapack_registry(id) ON DELETE CASCADE,
+    knowledge_base_url TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_registry_datapack
+    ON meko_system.datapack_knowledge_base_registry (datapack_id);
+
+CREATE TABLE IF NOT EXISTS meko_system.agent_registry (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    datapack_id UUID NOT NULL REFERENCES meko_system.datapack_registry(id) ON DELETE CASCADE,
+    agent_name VARCHAR(255) NOT NULL,
+    agent_metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (datapack_id, agent_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_registry_datapack
+    ON meko_system.agent_registry (datapack_id);
+
+CREATE TABLE IF NOT EXISTS meko_system.agent_knowledge_base (
+    agent_id UUID NOT NULL REFERENCES meko_system.agent_registry(id) ON DELETE CASCADE,
+    knowledge_base_id UUID NOT NULL REFERENCES meko_system.datapack_knowledge_base_registry(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (agent_id, knowledge_base_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_akb_knowledge_base
+    ON meko_system.agent_knowledge_base (knowledge_base_id);

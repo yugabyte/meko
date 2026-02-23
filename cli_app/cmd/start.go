@@ -1,9 +1,8 @@
 package cmd
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +13,10 @@ import (
 	_ "github.com/lib/pq" // registers the postgres driver for database/sql
 	"github.com/spf13/cobra"
 
-	"yuga-cli/internal/ui"
-)
+	"cli_app/internal/db"
+	"cli_app/internal/logger"
+	"cli_app/internal/ui"
+)	
 
 var inferenceNode bool
 var hostAddress string
@@ -89,8 +90,10 @@ func startYugabyteDBNodeSilent(ctx *PlatformContext) ([]string, error) {
 	// Create the command
 	cmd := exec.Command(yugabytedBin, args...)
 
-	// Run the command
+	slog.Info("starting yugabyted", "binary", yugabytedBin, "host", hostAddress)
+
 	if err := cmd.Run(); err != nil {
+		slog.Error("yugabyted start failed", "error", err)
 		return nil, err
 	}
 
@@ -99,56 +102,24 @@ func startYugabyteDBNodeSilent(ctx *PlatformContext) ([]string, error) {
 		"YSQL API enabled",
 	}
 
+	slog.Info("yugabytedb started", "address", hostAddress+":5433")
 	return details, nil
 }
 
 func configureDatabaseForPlatformSilent(_ *PlatformContext) ([]string, error) {
-	// Build connection string using the host address
 	connString := fmt.Sprintf("postgresql://%s:5433/yugabyte?user=yugabyte&password=&sslmode=disable", hostAddress)
 
-	// Wait for database to be ready (retry logic)
-	maxRetries := 3
-	retryDelay := 2 * time.Second
-
-	var db *sql.DB
-	var err error
-
-	// Retry connecting to the database
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		db, err = sql.Open("postgres", connString)
-		if err != nil {
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				continue
-			}
-			return nil, fmt.Errorf("failed to open database connection after %d attempts: %w", maxRetries, err)
-		}
-
-		// Test the connection with context timeout
-		ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err = db.PingContext(ctx2)
-		cancel()
-
-		if err != nil {
-			db.Close()
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				continue
-			}
-			return nil, fmt.Errorf("failed to connect to YugabyteDB after %d attempts: %w", maxRetries, err)
-		}
-
-		// Successfully connected
-		break
+	slog.Info("connecting to database", "host", hostAddress)
+	conn, err := db.ConnectWithRetry(connString, 3, 2*time.Second)
+	if err != nil {
+		return nil, err
 	}
-
-	defer db.Close()
+	defer conn.Close()
 
 	var details []string
 
-	// Check if pgvector extension already exists
 	var exists bool
-	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')").Scan(&exists)
+	err = conn.QueryRow("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')").Scan(&exists)
 	if err != nil {
 		return nil, fmt.Errorf("error checking for pgvector extension: %w", err)
 	}
@@ -156,42 +127,27 @@ func configureDatabaseForPlatformSilent(_ *PlatformContext) ([]string, error) {
 	if exists {
 		details = append(details, "Extensions already configured")
 	} else {
-		// Create pgvector and pg_dist_rag extensions
-		_, err = db.Exec("CREATE EXTENSION vector")
-		if err != nil {
-			return nil, fmt.Errorf("error creating pgvector extension: %w", err)
+		extensions := []struct {
+			name    string
+			display string
+		}{
+			{"vector", "pgvector"},
+			{"pg_dist_rag", "pg_dist_rag"},
+			{"age", "Apache AGE"},
 		}
-
-		_, err = db.Exec("CREATE EXTENSION pg_dist_rag")
-		if err != nil {
-			return nil, fmt.Errorf("error creating pg_dist_rag extension: %w", err)
+		for _, ext := range extensions {
+			if _, err := conn.Exec("CREATE EXTENSION " + ext.name); err != nil {
+				return nil, fmt.Errorf("error creating %s extension: %w", ext.display, err)
+			}
+			details = append(details, fmt.Sprintf("Created %s extension", ext.display))
 		}
-
-		_, err = db.Exec("CREATE EXTENSION age")
-		if err != nil {
-			return nil, fmt.Errorf("error creating Apache AGE extension: %w", err)
-		}
-
-		details = append(details, "Created pgvector extension")
-		details = append(details, "Created pg_dist_rag extension")
-		details = append(details, "Created Apache AGE extension")
 	}
 
-	// Create agents table if it doesn't exist
-	createTableSQL := `
-		CREATE TABLE IF NOT EXISTS agents (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			agent_name VARCHAR(255),
-			agent_metadata JSONB
-		);
-	`
-
-	_, err = db.Exec(createTableSQL)
+	migrationDetails, err := db.RunMigrations(conn)
 	if err != nil {
-		return nil, fmt.Errorf("error creating agents table: %w", err)
+		return nil, err
 	}
-
-	details = append(details, "Configured agents table")
+	details = append(details, migrationDetails...)
 
 	return details, nil
 }
@@ -206,8 +162,7 @@ func setupSystemAgentSilent(ctx *PlatformContext) ([]string, error) {
 		return nil, fmt.Errorf("streamlit app not found at %s", streamlitAppPath)
 	}
 
-	// Create log directory
-	ctx.logDir = filepath.Join(ctx.platformDir, "logs")
+	ctx.logDir = logger.LogDir()
 	if err := os.MkdirAll(ctx.logDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
@@ -286,15 +241,15 @@ func setupSystemAgentSilent(ctx *PlatformContext) ([]string, error) {
 		fmt.Sprintf("PATH=%s:%s", filepath.Join(venvDir, "bin"), os.Getenv("PATH")),
 	)
 
-	// Start the process in the background
 	if err := cmd.Start(); err != nil {
 		stdoutFile.Close()
 		stderrFile.Close()
+		slog.Error("streamlit start failed", "error", err)
 		return nil, fmt.Errorf("failed to start streamlit: %w", err)
 	}
 
-	// Get the PID
 	ctx.pid = cmd.Process.Pid
+	slog.Info("streamlit started", "pid", ctx.pid, "log_dir", ctx.logDir)
 
 	// Save PID to file
 	pidFile := filepath.Join(ctx.logDir, "streamlit.pid")
@@ -440,13 +395,27 @@ func printFinalStatus(info ui.PlatformInfo) {
 	fmt.Println()
 }
 
+var logDir string
+
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the Yuga AI Platform",
-	Long:  `Start the Yuga AI Platform`,
+	Short: "Start the Meko Platform",
+	Long:  `Start the Meko Platform`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("log_dir") {
+			appConfig.LogDir = logDir
+			logger.Close()
+			if err := logger.Init(appConfig.LogDir, verbose); err != nil {
+				return fmt.Errorf("failed to reinitialize logger: %w", err)
+			}
+		}
+
+		if err := appConfig.Save(); err != nil {
+			return fmt.Errorf("failed to save config: %w", err)
+		}
+
 		if inferenceNode {
-			ui.PrintInfo("Starting the Yuga AI Platform with inference stack enabled")
+			ui.PrintInfo("Starting the Meko Platform with inference stack enabled")
 			// TODO: Implement inference stack startup
 		}
 		return startYugaAIPlatform()
@@ -458,4 +427,6 @@ func init() {
 	startCmd.Flags().BoolVar(&inferenceNode, "inference_node", false, "Start the inference stack")
 	startCmd.Flags().StringVar(&hostAddress, "host", "127.0.0.1",
 		"Host address (IP or DNS) for all external service endpoints and connections")
+	startCmd.Flags().StringVar(&logDir, "log_dir", "",
+		"directory for log files (default ~/var/meko/logs)")
 }

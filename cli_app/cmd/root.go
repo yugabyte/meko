@@ -6,27 +6,38 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"yuga-cli/internal/tui"
+	"cli_app/internal/config"
+	"cli_app/internal/logger"
+	"cli_app/internal/tui"
 )
 
 var (
-	// Flags
-	verbose bool
-	cfgFile string
+	verbose   bool
+	appConfig *config.Config
 )
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "yuga-cli",
-	Short: "A powerful TUI-based CLI tool for Yuga AI Platform",
-	Long: `Yuga CLI is a command-line interface tool that provides an interactive
-Terminal User Interface (TUI) for managing and interacting with the Yuga AI Platform.
+	Use:   "meko",
+	Short: "A powerful TUI-based CLI tool for meko AI Platform",
+	Long: `Meko is a command-line interface tool that provides an interactive
+Terminal User Interface (TUI) for managing and interacting with the meko AI Platform.
 
 Built with Cobra and Bubble Tea, it offers a modern, responsive CLI experience
 similar to Sourcegraph's AMP CLI.`,
 	Version: "0.1.0",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+		appConfig = cfg
+		return logger.Init(cfg.LogDir, verbose)
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		logger.Close()
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Launch interactive TUI when no subcommand is provided
 		p := tea.NewProgram(
 			tui.NewModel(),
 			tea.WithAltScreen(),
@@ -47,16 +58,5 @@ func Execute() error {
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
-
-	// Persistent flags (available to all subcommands)
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.yuga-cli.yaml)")
-}
-
-func initConfig() {
-	if cfgFile != "" {
-		// Use config file from the flag
-		fmt.Printf("Using config file: %s\n", cfgFile)
-	}
 }

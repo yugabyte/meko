@@ -1,5 +1,5 @@
 """
-Streamlit Chat UI for the yuga.ai system agent.
+Streamlit Chat UI for the meko system agent.
 
 This is the frontend layer - it only handles UI rendering.
 All chat logic (memory retrieval, LLM calls) happens in the backend modules.
@@ -60,7 +60,7 @@ def init_session_state():
 
 def initialize_agent():
     """Initialize the agent and memory."""
-    with st.spinner("Initializing yuga.ai system agent..."):
+    with st.spinner("Initializing meko system agent..."):
         logger.info("Initializing agent for user: %s", st.session_state.user_id)
         st.session_state.memory = build_mem0_memory()
         st.session_state.agent = ChatbotAgent(memory=st.session_state.memory)
@@ -75,7 +75,7 @@ def initialize_agent():
 
 def render_landing_page():
     """Render the landing page with title, user input, and start button."""
-    st.title(" yuga.ai ")
+    st.title(" meko ")
     st.caption("Agentic data platform with conversational memory, accelerated TTFT inference, and knowledge base management.")
     
     st.divider()
@@ -109,7 +109,7 @@ def render_landing_page():
                 st.error("Please enter your credentials to continue.")
     
     st.divider()
-    st.caption("Powered by yuga.ai")
+    st.caption("Powered by meko")
 
 
 @st.dialog("Create a New Agent")
@@ -328,8 +328,8 @@ def render_sidebar():
         if st.button("💬 Describe an Agent", use_container_width=True):    
             print("Describing an Agent...")
 
-        if st.button("💬 What are the key architectural components of Yuga.ai?", use_container_width=True):
-            prompt = "What are the key architectural components of Yuga.ai?"
+        if st.button("💬 What are the key architectural components of meko?", use_container_width=True):
+            prompt = "What are the key architectural components of meko?"
             
             # Add user message
             user_message = {
@@ -347,7 +347,7 @@ def render_sidebar():
             st.rerun()
             
 
-        # if st.button("💬 What are the key architectural components of Yuga.ai?", use_container_width=True):
+        # if st.button("💬 What are the key architectural components of meko?", use_container_width=True):
         #     # Trigger architecture analysis in the chat
         #     architecture_image_path = "system_agent/ui/assets/yuga_ai_architecture.png"
         #     prompt = "Please analyze and describe the Agent memory architecture shown in the image. Explain the key components, data flow, and how they interact."
@@ -390,7 +390,7 @@ def render_sidebar():
                     st.error("Failed to clear memories")
         
         st.divider()
-        st.caption("Powered by Yuga.AI")
+        st.caption("Powered by meko")
 
 
 def render_chat_messages():
@@ -434,7 +434,7 @@ def render_chat_page():
     with col1:
         st.image("system_agent/ui/assets/yugabyte_icon.png", width="content")
     with col2:
-        st.title("yuga.ai")
+        st.title("meko")
     
     st.caption("Agentic data platform with conversational memory, accelerated TTFT inference, and knowledge base management.")
     
@@ -464,7 +464,7 @@ def main():
 
     # Page config
     st.set_page_config(
-        page_title="yuga.ai | Agentic Memory Platform",
+        page_title="meko | Agentic Memory Platform",
         page_icon="system_agent/ui/assets/yugabyte_icon.png",
         layout="wide",
         initial_sidebar_state="expanded",

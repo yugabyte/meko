@@ -1,11 +1,12 @@
-module yuga-cli
+module cli_app
 
-go 1.21
+go 1.24.0
 
 require (
 	github.com/charmbracelet/bubbles v0.18.0
 	github.com/charmbracelet/bubbletea v0.25.0
 	github.com/charmbracelet/lipgloss v0.9.1
+	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/lib/pq v1.10.9
 	github.com/spf13/cobra v1.8.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -27,8 +28,8 @@ require (
 	github.com/rivo/uniseg v0.4.6 // indirect
 	github.com/sahilm/fuzzy v0.1.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	golang.org/x/sync v0.3.0 // indirect
-	golang.org/x/sys v0.12.0 // indirect
-	golang.org/x/term v0.6.0 // indirect
-	golang.org/x/text v0.3.8 // indirect
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/term v0.37.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 )

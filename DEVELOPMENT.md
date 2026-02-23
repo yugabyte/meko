@@ -87,3 +87,38 @@ Once installed, any `git push` will be blocked if linters report errors.
 $ cd cli_app
 $ go build -o meko .
 ```
+
+## Meko CLI cms
+
+```
+./meko start
+./meko datapack create --name foo --embed_model text-embedding-3-small --inference_model LLama-3.1-8B-Instruct --seed_knowledge_base s3://proto-automated-embedding/playgentic_documents/sample/
+```
+
+
+### Testing
+
+```
+./bin/ysqlsh -U yugabyte -d yugabyte -c "TRUNCATE meko_system.agent_knowledge_base, meko_system.agent_registry, meko_system.datapack_knowledge_base_registry, meko_system.datapack_registry, meko_system.account_registry CASCADE;"
+```
+
+```
+-- list all knoweldge bases that belongs to a datapack
+SELECT kb.id, kb.knowledge_base_url, kb.created_at
+FROM meko_system.datapack_knowledge_base_registry kb
+JOIN meko_system.datapack_registry dp ON dp.id = kb.datapack_id
+WHERE dp.datapack_name = 'foo';
+
+-- list all agents that belong to a datapack
+SELECT a.id, a.agent_name, a.agent_metadata, a.created_at
+FROM meko_system.agent_registry a
+JOIN meko_system.datapack_registry dp ON dp.id = a.datapack_id
+WHERE dp.datapack_name = 'foo';
+
+-- list all knowledge bases that belong to a agent
+SELECT kb.id, kb.knowledge_base_url, kb.created_at
+FROM meko_system.datapack_knowledge_base_registry kb
+JOIN meko_system.agent_knowledge_base akb ON akb.knowledge_base_id = kb.id
+JOIN meko_system.agent_registry a ON a.id = akb.agent_id
+WHERE a.agent_name = 'meko_user_agent';
+```

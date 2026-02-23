@@ -6,13 +6,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"yuga-cli/internal/tui"
+	"cli_app/internal/tui"
 )
 
 var interactiveCmd = &cobra.Command{
 	Use:   "interactive",
 	Short: "Launch interactive TUI mode",
-	Long: `Launch the interactive Terminal User Interface (TUI) for Yuga AI Platform.
+	Long: `Launch the interactive Terminal User Interface (TUI) for Meko Platform.
 
 This provides a live, interactive experience with menu navigation, real-time updates,
 and a beautiful interface powered by Bubble Tea.`,
