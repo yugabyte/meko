@@ -8,6 +8,12 @@ import (
 )
 
 // HealthHandler returns an Echo handler that reports server and DB health.
+//
+//	@Summary	Health check
+//	@Tags		health
+//	@Produce	json
+//	@Success	200	{object}	APIResponse
+//	@Router		/health [get]
 func HealthHandler(db *sql.DB) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		dbStatus := "ok"

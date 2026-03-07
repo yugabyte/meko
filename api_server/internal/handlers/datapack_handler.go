@@ -21,6 +21,15 @@ func NewDatapackHandler(svc *service.DatapackService) *DatapackHandler {
 }
 
 // Create handles POST /api/v1/datapacks.
+//
+//	@Summary	Create a datapack
+//	@Tags		datapacks
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.CreateRequest	true	"Create request"
+//	@Success	201		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Router		/datapacks [post]
 func (h *DatapackHandler) Create(c echo.Context) error {
 	var req service.CreateRequest
 	if err := c.Bind(&req); err != nil {
@@ -42,6 +51,12 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 }
 
 // List handles GET /api/v1/datapacks.
+//
+//	@Summary	List all datapacks
+//	@Tags		datapacks
+//	@Produce	json
+//	@Success	200	{object}	APIResponse
+//	@Router		/datapacks [get]
 func (h *DatapackHandler) List(c echo.Context) error {
 	datapacks, err := h.svc.List()
 	if err != nil {
@@ -55,6 +70,14 @@ func (h *DatapackHandler) List(c echo.Context) error {
 }
 
 // Describe handles GET /api/v1/datapacks/:name.
+//
+//	@Summary	Describe a datapack
+//	@Tags		datapacks
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Router		/datapacks/{name} [get]
 func (h *DatapackHandler) Describe(c echo.Context) error {
 	name := c.Param("name")
 	if name == "" {
@@ -76,6 +99,16 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 }
 
 // Update handles PATCH /api/v1/datapacks/:name.
+//
+//	@Summary	Update a datapack
+//	@Tags		datapacks
+//	@Accept		json
+//	@Produce	json
+//	@Param		name	path		string					true	"Datapack name"
+//	@Param		body	body		service.UpdateRequest	true	"Update fields"
+//	@Success	200		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Router		/datapacks/{name} [patch]
 func (h *DatapackHandler) Update(c echo.Context) error {
 	name := c.Param("name")
 	if name == "" {
@@ -104,6 +137,14 @@ func (h *DatapackHandler) Update(c echo.Context) error {
 }
 
 // Delete handles DELETE /api/v1/datapacks/:name.
+//
+//	@Summary	Delete a datapack
+//	@Tags		datapacks
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Router		/datapacks/{name} [delete]
 func (h *DatapackHandler) Delete(c echo.Context) error {
 	name := c.Param("name")
 	if name == "" {
@@ -126,6 +167,14 @@ func (h *DatapackHandler) Delete(c echo.Context) error {
 }
 
 // Status handles GET /api/v1/datapacks/:name/status.
+//
+//	@Summary	Get datapack status
+//	@Tags		datapacks
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Router		/datapacks/{name}/status [get]
 func (h *DatapackHandler) Status(c echo.Context) error {
 	name := c.Param("name")
 	if name == "" {

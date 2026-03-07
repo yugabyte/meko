@@ -20,6 +20,17 @@ func NewAgentHandler(svc *service.AgentService) *AgentHandler {
 }
 
 // Create handles POST /api/v1/datapacks/:name/agents.
+//
+//	@Summary	Create an agent
+//	@Tags		agents
+//	@Accept		json
+//	@Produce	json
+//	@Param		name	path		string						true	"Datapack name"
+//	@Param		body	body		service.CreateAgentRequest	true	"Agent request"
+//	@Success	201		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Router		/datapacks/{name}/agents [post]
 func (h *AgentHandler) Create(c echo.Context) error {
 	dpName := c.Param("name")
 	if dpName == "" {
@@ -55,6 +66,13 @@ func (h *AgentHandler) Create(c echo.Context) error {
 }
 
 // List handles GET /api/v1/datapacks/:name/agents.
+//
+//	@Summary	List agents in a datapack
+//	@Tags		agents
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Router		/datapacks/{name}/agents [get]
 func (h *AgentHandler) List(c echo.Context) error {
 	dpName := c.Param("name")
 	if dpName == "" {
@@ -74,6 +92,15 @@ func (h *AgentHandler) List(c echo.Context) error {
 }
 
 // Delete handles DELETE /api/v1/datapacks/:name/agents/:agent.
+//
+//	@Summary	Delete an agent
+//	@Tags		agents
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Param		agent	path		string	true	"Agent name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Router		/datapacks/{name}/agents/{agent} [delete]
 func (h *AgentHandler) Delete(c echo.Context) error {
 	dpName := c.Param("name")
 	agentName := c.Param("agent")

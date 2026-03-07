@@ -4,7 +4,9 @@ import (
 	"database/sql"
 
 	"github.com/labstack/echo/v4"
+	echoSwagger "github.com/swaggo/echo-swagger"
 
+	_ "meko/api_server/docs" // registers swagger spec with swag
 	"meko/api_server/internal/handlers"
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
@@ -16,6 +18,8 @@ func NewRouter(db *sql.DB) *echo.Echo {
 	e.HideBanner = true
 	e.HTTPErrorHandler = handlers.CustomHTTPErrorHandler
 	RegisterMiddleware(e)
+
+	e.GET("/swagger/*", echoSwagger.WrapHandler)
 
 	v1 := e.Group("/api/v1")
 

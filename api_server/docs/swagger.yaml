@@ -1,0 +1,367 @@
+basePath: /api/v1
+definitions:
+  handlers.APIError:
+    properties:
+      code:
+        type: string
+      details:
+        items:
+          type: string
+        type: array
+      message:
+        type: string
+    type: object
+  handlers.APIResponse:
+    properties:
+      data: {}
+      error:
+        $ref: '#/definitions/handlers.APIError'
+    type: object
+  service.AddRequest:
+    properties:
+      url:
+        type: string
+    type: object
+  service.CreateAgentRequest:
+    properties:
+      agent_metadata:
+        type: string
+      agent_name:
+        type: string
+    type: object
+  service.CreateRequest:
+    properties:
+      embed_model:
+        type: string
+      inference_model:
+        type: string
+      name:
+        type: string
+      seed_knowledge_base:
+        type: string
+    type: object
+  service.DeleteRequest:
+    properties:
+      url:
+        type: string
+    type: object
+  service.UpdateRequest:
+    properties:
+      embedding_model:
+        type: string
+      llm_model:
+        type: string
+    type: object
+host: localhost:25433
+info:
+  contact: {}
+  description: REST API for managing datapacks, agents, and knowledge bases in the
+    meko platform.
+  title: Meko Datapack API
+  version: "1.0"
+paths:
+  /datapacks:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: List all datapacks
+      tags:
+      - datapacks
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Create request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.CreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Create a datapack
+      tags:
+      - datapacks
+  /datapacks/{name}:
+    delete:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Delete a datapack
+      tags:
+      - datapacks
+    get:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Describe a datapack
+      tags:
+      - datapacks
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Update fields
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.UpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Update a datapack
+      tags:
+      - datapacks
+  /datapacks/{name}/agents:
+    get:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: List agents in a datapack
+      tags:
+      - agents
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Agent request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.CreateAgentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Create an agent
+      tags:
+      - agents
+  /datapacks/{name}/agents/{agent}:
+    delete:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Agent name
+        in: path
+        name: agent
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Delete an agent
+      tags:
+      - agents
+  /datapacks/{name}/knowledge-bases:
+    delete:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: KB to delete
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.DeleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Delete a knowledge base
+      tags:
+      - knowledge-bases
+    get:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: List knowledge bases
+      tags:
+      - knowledge-bases
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: KB request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.AddRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Add a knowledge base
+      tags:
+      - knowledge-bases
+  /datapacks/{name}/status:
+    get:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Get datapack status
+      tags:
+      - datapacks
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Health check
+      tags:
+      - health
+swagger: "2.0"

@@ -1,4 +1,10 @@
 // Package main is the entry point for the meko datapack API server.
+//
+//	@title			Meko Datapack API
+//	@version		1.0
+//	@description	REST API for managing datapacks, agents, and knowledge bases in the meko platform.
+//	@host			localhost:25433
+//	@BasePath		/api/v1
 package main
 
 import (

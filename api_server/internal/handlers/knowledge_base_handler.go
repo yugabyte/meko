@@ -22,6 +22,17 @@ func NewKnowledgeBaseHandler(
 }
 
 // Add handles POST /api/v1/datapacks/:name/knowledge-bases.
+//
+//	@Summary	Add a knowledge base
+//	@Tags		knowledge-bases
+//	@Accept		json
+//	@Produce	json
+//	@Param		name	path		string				true	"Datapack name"
+//	@Param		body	body		service.AddRequest	true	"KB request"
+//	@Success	201		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Router		/datapacks/{name}/knowledge-bases [post]
 func (h *KnowledgeBaseHandler) Add(c echo.Context) error {
 	dpName := c.Param("name")
 	if dpName == "" {
@@ -57,6 +68,13 @@ func (h *KnowledgeBaseHandler) Add(c echo.Context) error {
 }
 
 // List handles GET /api/v1/datapacks/:name/knowledge-bases.
+//
+//	@Summary	List knowledge bases
+//	@Tags		knowledge-bases
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Router		/datapacks/{name}/knowledge-bases [get]
 func (h *KnowledgeBaseHandler) List(c echo.Context) error {
 	dpName := c.Param("name")
 	if dpName == "" {
@@ -76,6 +94,17 @@ func (h *KnowledgeBaseHandler) List(c echo.Context) error {
 }
 
 // Delete handles DELETE /api/v1/datapacks/:name/knowledge-bases.
+//
+//	@Summary	Delete a knowledge base
+//	@Tags		knowledge-bases
+//	@Accept		json
+//	@Produce	json
+//	@Param		name	path		string					true	"Datapack name"
+//	@Param		body	body		service.DeleteRequest	true	"KB to delete"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Router		/datapacks/{name}/knowledge-bases [delete]
 func (h *KnowledgeBaseHandler) Delete(c echo.Context) error {
 	dpName := c.Param("name")
 	if dpName == "" {
