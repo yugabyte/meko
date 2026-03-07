@@ -40,5 +40,13 @@ func NewRouter(db *sql.DB) *echo.Echo {
 	v1.GET("/datapacks/:name/agents", agentH.List)
 	v1.DELETE("/datapacks/:name/agents/:agent", agentH.Delete)
 
+	kbRepo := repository.NewKnowledgeBaseRepo(db)
+	kbSvc := service.NewKnowledgeBaseService(kbRepo)
+	kbH := handlers.NewKnowledgeBaseHandler(kbSvc)
+
+	v1.POST("/datapacks/:name/knowledge-bases", kbH.Add)
+	v1.GET("/datapacks/:name/knowledge-bases", kbH.List)
+	v1.DELETE("/datapacks/:name/knowledge-bases", kbH.Delete)
+
 	return e
 }
