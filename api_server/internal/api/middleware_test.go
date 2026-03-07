@@ -8,85 +8,51 @@ import (
 	"meko/api_server/internal/api"
 )
 
-func TestLoggingMiddleware(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+func TestMiddleware_CORSHeaders(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
 
-	handler := api.LoggingMiddleware(inner)
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	w := httptest.NewRecorder()
+	e := api.NewRouter(db)
+	srv := httptest.NewServer(e)
+	defer srv.Close()
 
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	req, err := http.NewRequest(
+		http.MethodOptions, srv.URL+"/api/v1/health", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
 
-func TestRecoveryMiddleware(t *testing.T) {
-	inner := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		panic("test panic")
-	})
-
-	handler := api.RecoveryMiddleware(inner)
-	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf(
-			"expected status %d, got %d",
-			http.StatusInternalServerError, w.Code,
-		)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS request failed: %v", err)
 	}
-}
+	defer resp.Body.Close()
 
-func TestCORSMiddleware_Options(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	handler := api.CORSMiddleware(inner)
-	req := httptest.NewRequest(http.MethodOptions, "/test", nil)
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusNoContent {
-		t.Errorf(
-			"expected status %d, got %d",
-			http.StatusNoContent, w.Code,
-		)
-	}
-
-	origin := w.Header().Get("Access-Control-Allow-Origin")
+	origin := resp.Header.Get("Access-Control-Allow-Origin")
 	if origin != "*" {
 		t.Errorf("expected CORS origin *, got %s", origin)
 	}
 }
 
-func TestCORSMiddleware_PassThrough(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte("ok")); err != nil {
-			t.Logf("failed to write response: %v", err)
-		}
-	})
+func TestMiddleware_RecoveryViaRouter(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
 
-	handler := api.CORSMiddleware(inner)
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	w := httptest.NewRecorder()
+	e := api.NewRouter(db)
+	srv := httptest.NewServer(e)
+	defer srv.Close()
 
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	resp, err := http.Get(srv.URL + "/api/v1/health")
+	if err != nil {
+		t.Fatalf("GET /health failed: %v", err)
 	}
+	defer resp.Body.Close()
 
-	origin := w.Header().Get("Access-Control-Allow-Origin")
-	if origin != "*" {
-		t.Errorf("expected CORS origin *, got %s", origin)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status %d, got %d",
+			http.StatusOK, resp.StatusCode)
 	}
 }

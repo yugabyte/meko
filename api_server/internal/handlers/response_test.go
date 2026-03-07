@@ -6,98 +6,75 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"meko/api_server/internal/api"
+	mekoDb "meko/api_server/internal/db"
 	"meko/api_server/internal/handlers"
 )
 
-func TestWriteJSON(t *testing.T) {
-	w := httptest.NewRecorder()
-	data := map[string]string{"status": "ok"}
+func TestAPIResponse_SuccessEnvelope(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
 
-	handlers.WriteJSON(w, http.StatusOK, data)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	if _, err := mekoDb.RunMigrations(db); err != nil {
+		t.Fatalf("failed to run migrations: %v", err)
 	}
 
-	ct := w.Header().Get("Content-Type")
-	if ct != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %s", ct)
+	e := api.NewRouter(db)
+	srv := httptest.NewServer(e)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var apiResp handlers.APIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		t.Fatal(err)
 	}
 
-	var resp handlers.APIResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if resp.Error != nil {
-		t.Errorf("expected nil error, got %+v", resp.Error)
-	}
-	if resp.Data == nil {
+	if apiResp.Data == nil {
 		t.Fatal("expected data to be non-nil")
 	}
-}
-
-func TestWriteError(t *testing.T) {
-	w := httptest.NewRecorder()
-
-	handlers.WriteError(
-		w, http.StatusBadRequest, "VALIDATION_ERROR", "name is required",
-	)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf(
-			"expected status %d, got %d",
-			http.StatusBadRequest, w.Code,
-		)
-	}
-
-	var resp handlers.APIResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if resp.Error == nil {
-		t.Fatal("expected error to be non-nil")
-	}
-	if resp.Error.Code != "VALIDATION_ERROR" {
-		t.Errorf(
-			"expected error code VALIDATION_ERROR, got %s",
-			resp.Error.Code,
-		)
-	}
-	if resp.Error.Message != "name is required" {
-		t.Errorf(
-			"expected message 'name is required', got %s",
-			resp.Error.Message,
-		)
+	if apiResp.Error != nil {
+		t.Errorf("expected nil error, got %+v", apiResp.Error)
 	}
 }
 
-func TestWriteErrorWithDetails(t *testing.T) {
-	w := httptest.NewRecorder()
-	details := []string{"field 'name' is empty", "field 'model' is empty"}
+func TestAPIResponse_ErrorEnvelope(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
 
-	handlers.WriteErrorWithDetails(
-		w, http.StatusUnprocessableEntity,
-		"VALIDATION_ERROR", "invalid input", details,
+	if _, err := mekoDb.RunMigrations(db); err != nil {
+		t.Fatalf("failed to run migrations: %v", err)
+	}
+
+	e := api.NewRouter(db)
+	srv := httptest.NewServer(e)
+	defer srv.Close()
+
+	resp, err := http.Get(
+		srv.URL + "/api/v1/datapacks/nonexistent-dp-envelope",
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Errorf(
-			"expected status %d, got %d",
-			http.StatusUnprocessableEntity, w.Code,
-		)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
 
-	var resp handlers.APIResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	var apiResp handlers.APIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		t.Fatal(err)
 	}
 
-	if resp.Error == nil {
+	if apiResp.Error == nil {
 		t.Fatal("expected error to be non-nil")
 	}
-	if len(resp.Error.Details) != 2 {
-		t.Errorf("expected 2 details, got %d", len(resp.Error.Details))
+	if apiResp.Error.Code != "NOT_FOUND" {
+		t.Errorf("expected error code NOT_FOUND, got %s", apiResp.Error.Code)
 	}
 }

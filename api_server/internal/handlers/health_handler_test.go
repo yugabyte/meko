@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/labstack/echo/v4"
 	_ "github.com/lib/pq"
 
 	"meko/api_server/internal/handlers"
@@ -30,18 +31,22 @@ func TestHealthHandler_WithDB(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	handler := handlers.HealthHandler(db)
+	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
-	w := httptest.NewRecorder()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
 
-	handler.ServeHTTP(w, req)
+	h := handlers.HealthHandler(db)
+	if err := h(c); err != nil {
+		t.Fatal(err)
+	}
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
 	var resp handlers.APIResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
@@ -62,18 +67,22 @@ func TestHealthHandler_WithDB(t *testing.T) {
 }
 
 func TestHealthHandler_NilDB(t *testing.T) {
-	handler := handlers.HealthHandler(nil)
+	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
-	w := httptest.NewRecorder()
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
 
-	handler.ServeHTTP(w, req)
+	h := handlers.HealthHandler(nil)
+	if err := h(c); err != nil {
+		t.Fatal(err)
+	}
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
 	var resp handlers.APIResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 

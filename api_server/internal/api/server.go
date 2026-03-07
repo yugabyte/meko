@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,23 +17,16 @@ type ServerConfig struct {
 	Port int
 }
 
-// Run starts the HTTP server and blocks until a shutdown signal is received.
+// Run starts the Echo server and blocks until a shutdown signal is received.
 func Run(cfg ServerConfig) error {
-	router := NewRouter(cfg.DB)
-
-	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.Port),
-		Handler:           router,
-		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	e := NewRouter(cfg.DB)
 
 	errCh := make(chan error, 1)
 	go func() {
+		addr := fmt.Sprintf(":%d", cfg.Port)
 		slog.Info("api server starting", "port", cfg.Port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- fmt.Errorf("server listen error: %w", err)
+		if err := e.Start(addr); err != nil {
+			errCh <- fmt.Errorf("server error: %w", err)
 		}
 		close(errCh)
 	}()
@@ -55,7 +47,7 @@ func Run(cfg ServerConfig) error {
 	defer cancel()
 
 	slog.Info("shutting down api server")
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := e.Shutdown(ctx); err != nil {
 		return fmt.Errorf("server shutdown error: %w", err)
 	}
 

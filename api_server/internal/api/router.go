@@ -2,42 +2,43 @@ package api
 
 import (
 	"database/sql"
-	"net/http"
+
+	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/handlers"
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
 
-// NewRouter builds the top-level HTTP mux with all API routes registered.
-func NewRouter(db *sql.DB) http.Handler {
-	mux := http.NewServeMux()
+// NewRouter builds an Echo instance with all API routes registered.
+func NewRouter(db *sql.DB) *echo.Echo {
+	e := echo.New()
+	e.HideBanner = true
+	e.HTTPErrorHandler = handlers.CustomHTTPErrorHandler
+	RegisterMiddleware(e)
 
-	mux.HandleFunc("GET /api/v1/health", handlers.HealthHandler(db))
+	v1 := e.Group("/api/v1")
+
+	v1.GET("/health", handlers.HealthHandler(db))
 
 	dpRepo := repository.NewDatapackRepo(db)
 	dpSvc := service.NewDatapackService(dpRepo)
-	dpHandler := handlers.NewDatapackHandler(dpSvc)
+	dpH := handlers.NewDatapackHandler(dpSvc)
 
-	mux.HandleFunc("POST /api/v1/datapacks", dpHandler.Create)
-	mux.HandleFunc("GET /api/v1/datapacks", dpHandler.List)
-	mux.HandleFunc(
-		"GET /api/v1/datapacks/{name}", dpHandler.Describe,
-	)
-	mux.HandleFunc(
-		"PATCH /api/v1/datapacks/{name}", dpHandler.Update,
-	)
-	mux.HandleFunc(
-		"DELETE /api/v1/datapacks/{name}", dpHandler.Delete,
-	)
-	mux.HandleFunc(
-		"GET /api/v1/datapacks/{name}/status", dpHandler.Status,
-	)
+	v1.POST("/datapacks", dpH.Create)
+	v1.GET("/datapacks", dpH.List)
+	v1.GET("/datapacks/:name", dpH.Describe)
+	v1.PATCH("/datapacks/:name", dpH.Update)
+	v1.DELETE("/datapacks/:name", dpH.Delete)
+	v1.GET("/datapacks/:name/status", dpH.Status)
 
-	var handler http.Handler = mux
-	handler = LoggingMiddleware(handler)
-	handler = RecoveryMiddleware(handler)
-	handler = CORSMiddleware(handler)
+	agentRepo := repository.NewAgentRepo(db)
+	agentSvc := service.NewAgentService(agentRepo)
+	agentH := handlers.NewAgentHandler(agentSvc)
 
-	return handler
+	v1.POST("/datapacks/:name/agents", agentH.Create)
+	v1.GET("/datapacks/:name/agents", agentH.List)
+	v1.DELETE("/datapacks/:name/agents/:agent", agentH.Delete)
+
+	return e
 }

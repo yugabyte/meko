@@ -1,10 +1,10 @@
-// Package handlers provides HTTP request handlers for the datapack API.
+// Package handlers provides Echo request handlers for the datapack API.
 package handlers
 
 import (
-	"encoding/json"
-	"log/slog"
 	"net/http"
+
+	"github.com/labstack/echo/v4"
 )
 
 // APIResponse is the standard envelope for all API responses.
@@ -20,51 +20,38 @@ type APIError struct {
 	Details []string `json:"details,omitempty"`
 }
 
-// WriteJSON writes a success response with the given status code and data.
-func WriteJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	resp := APIResponse{Data: data}
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		slog.Error("failed to encode response", "error", err)
-	}
+// ok sends a success JSON response.
+func ok(c echo.Context, status int, data any) error {
+	return c.JSON(status, APIResponse{Data: data})
 }
 
-// WriteError writes an error response with the given status code.
-func WriteError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	resp := APIResponse{
-		Error: &APIError{
-			Code:    code,
-			Message: message,
-		},
-	}
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		slog.Error("failed to encode error response", "error", err)
-	}
+// apiError sends an error JSON response.
+func apiError(c echo.Context, status int, code, message string) error {
+	return c.JSON(status, APIResponse{
+		Error: &APIError{Code: code, Message: message},
+	})
 }
 
-// WriteErrorWithDetails writes an error response with additional detail strings.
-func WriteErrorWithDetails(
-	w http.ResponseWriter,
-	status int,
-	code, message string,
-	details []string,
-) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	resp := APIResponse{
-		Error: &APIError{
-			Code:    code,
-			Message: message,
-			Details: details,
-		},
+// CustomHTTPErrorHandler provides a uniform JSON error envelope for Echo
+// errors (404, 405, etc.).
+func CustomHTTPErrorHandler(err error, c echo.Context) {
+	if c.Response().Committed {
+		return
 	}
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		slog.Error("failed to encode error response", "error", err)
+
+	code := http.StatusInternalServerError
+	msg := "internal server error"
+
+	if he, isHTTPErr := err.(*echo.HTTPError); isHTTPErr {
+		code = he.Code
+		if m, isStr := he.Message.(string); isStr {
+			msg = m
+		}
+	}
+
+	if jsonErr := c.JSON(code, APIResponse{
+		Error: &APIError{Code: http.StatusText(code), Message: msg},
+	}); jsonErr != nil {
+		c.Logger().Error(jsonErr)
 	}
 }

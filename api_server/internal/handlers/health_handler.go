@@ -3,11 +3,13 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+
+	"github.com/labstack/echo/v4"
 )
 
-// HealthHandler returns a handler that reports server and database health.
-func HealthHandler(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+// HealthHandler returns an Echo handler that reports server and DB health.
+func HealthHandler(db *sql.DB) echo.HandlerFunc {
+	return func(c echo.Context) error {
 		dbStatus := "ok"
 		if db == nil {
 			dbStatus = "unavailable"
@@ -15,7 +17,7 @@ func HealthHandler(db *sql.DB) http.HandlerFunc {
 			dbStatus = "unavailable"
 		}
 
-		WriteJSON(w, http.StatusOK, map[string]string{
+		return ok(c, http.StatusOK, map[string]string{
 			"status":   "ok",
 			"database": dbStatus,
 		})
