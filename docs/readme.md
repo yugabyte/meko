@@ -1,3 +1,8 @@
-# meko - Memory and Knowledge platform
+# Meko Documentation
 
-Test edit
+The docs folder contains everything you need to build the
+
+
+
+
+
