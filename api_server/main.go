@@ -23,7 +23,10 @@ import (
 func run() error {
 	port := flag.Int("port", 25433, "API server listen port")
 	dbHost := flag.String("db-host", "127.0.0.1", "database host")
+	dbUserName := flag.String("db-user-name", "yugabyte", "database user name")
+	dbPassword := flag.String("db-password", "", "database password")
 	dbPort := flag.Int("db-port", 5433, "database port")
+	migrateOnly := flag.Bool("migrate-only", false, "run migrations and exit without starting the server")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(
@@ -33,8 +36,8 @@ func run() error {
 	))
 
 	connStr := fmt.Sprintf(
-		"postgresql://%s:%d/yugabyte?user=yugabyte&password=&sslmode=disable",
-		*dbHost, *dbPort,
+		"postgresql://%s:%d/yugabyte?user=%s&password=%s&sslmode=disable",
+		*dbHost, *dbPort, *dbUserName, *dbPassword,
 	)
 
 	conn, err := db.ConnectWithRetry(connStr, 5, 3*time.Second)
@@ -47,12 +50,16 @@ func run() error {
 		}
 	}()
 
-	details, err := db.RunMigrations(conn)
-	if err != nil {
-		return fmt.Errorf("migration failed: %w", err)
-	}
-	for _, d := range details {
-		slog.Info("migration", "detail", d)
+	if *migrateOnly {
+		details, err := db.RunMigrations(conn)
+		if err != nil {
+			return fmt.Errorf("migration failed: %w", err)
+		}
+		for _, d := range details {
+			slog.Info("migration", "detail", d)
+		}
+		slog.Info("migrations complete, exiting")
+		return nil
 	}
 
 	return api.Run(api.ServerConfig{DB: conn, Port: *port})

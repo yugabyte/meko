@@ -531,16 +531,10 @@ const docTemplate = `{
         "service.CreateRequest": {
             "type": "object",
             "properties": {
-                "embed_model": {
-                    "type": "string"
-                },
-                "inference_model": {
+                "account_id": {
                     "type": "string"
                 },
                 "name": {
-                    "type": "string"
-                },
-                "seed_knowledge_base": {
                     "type": "string"
                 }
             }
@@ -556,10 +550,7 @@ const docTemplate = `{
         "service.UpdateRequest": {
             "type": "object",
             "properties": {
-                "embedding_model": {
-                    "type": "string"
-                },
-                "llm_model": {
+                "datapack_ysql_connection_string": {
                     "type": "string"
                 }
             }

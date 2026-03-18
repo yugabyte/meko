@@ -10,55 +10,84 @@ import (
 
 // DatapackService orchestrates datapack lifecycle operations.
 type DatapackService struct {
-	repo *repository.DatapackRepo
+	repo   *repository.DatapackRepo
+	ybaSvc *YBAService
 }
 
 // NewDatapackService creates a new DatapackService.
-func NewDatapackService(repo *repository.DatapackRepo) *DatapackService {
-	return &DatapackService{repo: repo}
+func NewDatapackService(repo *repository.DatapackRepo, ybaSvc *YBAService) *DatapackService {
+	return &DatapackService{repo: repo, ybaSvc: ybaSvc}
 }
 
-// CreateRequest holds the fields for creating a datapack. Only name and
-// seed_knowledge_base are required; embed_model and inference_model can be
-// configured later via `meko config select_*` commands.
+// CreateRequest holds the fields for creating a datapack.
 type CreateRequest struct {
-	Name           string `json:"name"`
-	EmbedModel     string `json:"embed_model,omitempty"`
-	InferenceModel string `json:"inference_model,omitempty"`
-	KnowledgeBase  string `json:"seed_knowledge_base"`
+	Name string `json:"name"`
+	AccountID string `json:"account_id"`
+}
+
+// MCPServerInfo holds the MCP server connection details returned after
+// datapack creation.
+type MCPServerInfo struct {
+	URL    string `json:"url"`
+	APIKey string `json:"api_key"`
+}
+
+// DBAccessInfo holds the direct database access credentials.
+type DBAccessInfo struct {
+	UserName string `json:"user_name"`
+	Password string `json:"password"`
+	ConnStr  string `json:"conn_str"`
 }
 
 // CreateResponse holds the result of creating a datapack.
 type CreateResponse struct {
-	DatapackID string `json:"datapack_id"`
-	AgentID    string `json:"agent_id"`
-	Name       string `json:"name"`
-	ConnectURL string `json:"connect_url"`
+	DatapackID string        `json:"datapack_id"`
+	AgentID    string        `json:"agent_id"`
+	Name       string        `json:"name"`
+	MCPServer  MCPServerInfo `json:"mcp_server"`
+	DBAccess   DBAccessInfo  `json:"db_access"`
 }
 
-// Create validates the request and creates a new datapack.
+// Create validates the request, assigns a YBA universe, and creates a new datapack.
 func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 	if req.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if req.KnowledgeBase == "" {
-		return nil, fmt.Errorf("seed_knowledge_base is required")
+	if req.AccountID == "" {
+		return nil, fmt.Errorf("account_id is required")
 	}
 
-	dpID, agentID, err := s.repo.Create(
-		req.Name, req.EmbedModel, req.InferenceModel, req.KnowledgeBase,
-	)
+	universe, err := s.ybaSvc.AssignUniverse()
 	if err != nil {
+		return nil, fmt.Errorf("failed to assign universe: %w", err)
+	}
+
+	res, err := s.repo.Create(repository.CreateDatapackParams{
+		Name:         req.Name,
+		AccountID:    req.AccountID,
+		YBUniverseID: universe.UniverseID,
+		YBHostname:   universe.Hostname,
+		YBPort:       universe.Port,
+		YBAdminConnStr: universe.AdminConnStr,
+	})
+	if err != nil {
+		_ = s.ybaSvc.ReleaseUniverse(universe.UniverseID)
 		return nil, fmt.Errorf("failed to create datapack: %w", err)
 	}
 
 	return &CreateResponse{
-		DatapackID: dpID,
-		AgentID:    agentID,
+		DatapackID: res.DatapackID,
+		AgentID:    res.AgentID,
 		Name:       req.Name,
-		ConnectURL: fmt.Sprintf(
-			"https://localhost:5435/mcp/%s", req.Name,
-		),
+		MCPServer: MCPServerInfo{
+			URL:    fmt.Sprintf("https://mekodev.com/%s/mcp", res.AccountID),
+			APIKey: res.MCPPassword,
+		},
+		DBAccess: DBAccessInfo{
+			UserName: res.DBUserName,
+			Password: res.DBPassword,
+			ConnStr:  res.DBConnStr,
+		},
 	}, nil
 }
 
@@ -84,8 +113,7 @@ func (s *DatapackService) Describe(name string) (*models.Datapack, error) {
 
 // UpdateRequest holds the mutable fields for updating a datapack.
 type UpdateRequest struct {
-	LLMModel       string `json:"llm_model,omitempty"`
-	EmbeddingModel string `json:"embedding_model,omitempty"`
+	YBUniverseConnStr string `json:"datapack_ysql_connection_string,omitempty"`
 }
 
 // Update modifies a datapack's configuration.
@@ -95,7 +123,7 @@ func (s *DatapackService) Update(
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
-	return s.repo.Update(name, req.LLMModel, req.EmbeddingModel)
+	return s.repo.Update(name, req.YBUniverseConnStr)
 }
 
 // Delete removes a datapack by name.
@@ -122,3 +150,6 @@ func (s *DatapackService) Status(
 	}
 	return st, nil
 }
+
+
+

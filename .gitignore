@@ -17,6 +17,9 @@ Thumbs.db
 *.swo
 *~
 
+# Build output
+build/
+
 # Linter caches
 .mypy_cache/
 .tox/

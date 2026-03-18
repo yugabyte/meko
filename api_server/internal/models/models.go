@@ -10,8 +10,10 @@ type Datapack struct {
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
 	AccountID      string    `json:"account_id"`
-	LLMModel       string    `json:"llm_model"`
-	EmbeddingModel string    `json:"embedding_model"`
+	YBUniverseID   string    `json:"yb_universe_id"`
+	YBUniverseConn string    `json:"datapack_ysql_connection_string"`
+	MCPUserName    string    `json:"mcp_user_name"`
+	DBUserName     string    `json:"db_user_name"`
 }
 
 // Agent represents an agent within a datapack.

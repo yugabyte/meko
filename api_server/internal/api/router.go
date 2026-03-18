@@ -21,12 +21,15 @@ func NewRouter(db *sql.DB) *echo.Echo {
 
 	e.GET("/swagger/*", echoSwagger.WrapHandler)
 
-	v1 := e.Group("/api/v1")
+	v1 := e.Group("/api/v1", ManagementRateLimiter())
 
 	v1.GET("/health", handlers.HealthHandler(db))
 
+	ybaRepo := repository.NewYBARepo(db)
+	ybaSvc := service.NewYBAService(ybaRepo)
+
 	dpRepo := repository.NewDatapackRepo(db)
-	dpSvc := service.NewDatapackService(dpRepo)
+	dpSvc := service.NewDatapackService(dpRepo, ybaSvc)
 	dpH := handlers.NewDatapackHandler(dpSvc)
 
 	v1.POST("/datapacks", dpH.Create)

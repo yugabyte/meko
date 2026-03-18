@@ -43,6 +43,10 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 			return apiError(c, http.StatusBadRequest,
 				"VALIDATION_ERROR", err.Error())
 		}
+		if isConflictErr(err) {
+			return apiError(c, http.StatusConflict,
+				"CONFLICT", err.Error())
+		}
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", err.Error())
 	}
@@ -201,4 +205,8 @@ func isValidationErr(err error) bool {
 
 func isNotFoundErr(err error) bool {
 	return strings.Contains(err.Error(), "not found")
+}
+
+func isConflictErr(err error) bool {
+	return strings.Contains(err.Error(), "already exists")
 }
