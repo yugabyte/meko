@@ -1,6 +1,6 @@
 # Meko Documentation
 
-The docs folder contains everything you need to build the
+The docs folder contains everything you need to build the Meko docs.
 
 
 
