@@ -19,7 +19,10 @@ func TestAPIResponse_SuccessEnvelope(t *testing.T) {
 		t.Fatalf("failed to run migrations: %v", err)
 	}
 
-	e := api.NewRouter(db)
+	e, routerErr := api.NewRouter(api.ServerConfig{DB: db})
+	if routerErr != nil {
+		t.Fatalf("failed to create router: %v", routerErr)
+	}
 	srv := httptest.NewServer(e)
 	defer srv.Close()
 
@@ -50,7 +53,10 @@ func TestAPIResponse_ErrorEnvelope(t *testing.T) {
 		t.Fatalf("failed to run migrations: %v", err)
 	}
 
-	e := api.NewRouter(db)
+	e, routerErr := api.NewRouter(api.ServerConfig{DB: db})
+	if routerErr != nil {
+		t.Fatalf("failed to create router: %v", routerErr)
+	}
 	srv := httptest.NewServer(e)
 	defer srv.Close()
 

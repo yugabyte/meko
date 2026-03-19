@@ -236,8 +236,6 @@ func renderSQL(tmpl *template.Template, data map[string]string) (string, error) 
 // target universe using the admin connection string.
 func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass, dbUser, dbPass string) error {
 
-	//todo: remove this after testing
-	adminConnStr = "postgresql://yugabyte:@localhost:5433/yugabyte?sslmode=disable"
 	slog.Info("provisioning datapack database",
 		"db_name", dbName, "admin_conn_str", adminConnStr)
 

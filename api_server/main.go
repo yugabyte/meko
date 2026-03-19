@@ -27,6 +27,10 @@ func run() error {
 	dbPassword := flag.String("db-password", "", "database password")
 	dbPort := flag.Int("db-port", 5433, "database port")
 	migrateOnly := flag.Bool("migrate-only", false, "run migrations and exit without starting the server")
+	cognitoRegion := flag.String("cognito-region", "", "AWS region for Cognito User Pool")
+	cognitoPoolID := flag.String("cognito-pool-id", "", "Cognito User Pool ID")
+	cognitoClientID := flag.String("cognito-client-id", "", "Cognito App Client ID")
+	cognitoClientSecret := flag.String("cognito-client-secret", "", "Cognito App Client secret")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(
@@ -62,7 +66,14 @@ func run() error {
 		return nil
 	}
 
-	return api.Run(api.ServerConfig{DB: conn, Port: *port})
+	return api.Run(api.ServerConfig{
+		DB:                  conn,
+		Port:                *port,
+		CognitoRegion:       *cognitoRegion,
+		CognitoPoolID:       *cognitoPoolID,
+		CognitoClientID:     *cognitoClientID,
+		CognitoClientSecret: *cognitoClientSecret,
+	})
 }
 
 func main() {

@@ -27,11 +27,18 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func testConfig(db *sql.DB) api.ServerConfig {
+	return api.ServerConfig{DB: db}
+}
+
 func TestRouter_HealthEndpoint(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	router := api.NewRouter(db)
+	router, err := api.NewRouter(testConfig(db))
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 
@@ -77,7 +84,10 @@ func TestRouter_NotFound(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	router := api.NewRouter(db)
+	router, err := api.NewRouter(testConfig(db))
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 

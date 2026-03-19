@@ -13,13 +13,20 @@ import (
 
 // ServerConfig holds the configuration for the API server.
 type ServerConfig struct {
-	DB   *sql.DB
-	Port int
+	DB                 *sql.DB
+	CognitoRegion      string
+	CognitoPoolID      string
+	CognitoClientID    string
+	CognitoClientSecret string
+	Port               int
 }
 
 // Run starts the Echo server and blocks until a shutdown signal is received.
 func Run(cfg ServerConfig) error {
-	e := NewRouter(cfg.DB)
+	e, err := NewRouter(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to initialize router: %w", err)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

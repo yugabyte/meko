@@ -22,6 +22,16 @@ definitions:
       url:
         type: string
     type: object
+  service.ConfirmSignupRequest:
+    properties:
+      code:
+        type: string
+      email:
+        type: string
+    required:
+    - email
+    - code
+    type: object
   service.CreateAgentRequest:
     properties:
       agent_metadata:
@@ -41,6 +51,52 @@ definitions:
       url:
         type: string
     type: object
+  service.LoginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    required:
+    - email
+    - password
+    type: object
+  service.LoginResponse:
+    properties:
+      access_token:
+        type: string
+      expires_in:
+        type: integer
+      id_token:
+        type: string
+      refresh_token:
+        type: string
+    type: object
+  service.SignupRequest:
+    properties:
+      email:
+        type: string
+      first_name:
+        type: string
+      last_name:
+        type: string
+      password:
+        type: string
+    required:
+    - email
+    - password
+    - first_name
+    - last_name
+    type: object
+  service.SignupResponse:
+    properties:
+      account_id:
+        type: string
+      email:
+        type: string
+      message:
+        type: string
+    type: object
   service.UpdateRequest:
     properties:
       datapack_ysql_connection_string:
@@ -54,6 +110,111 @@ info:
   title: Meko Datapack API
   version: "1.0"
 paths:
+  /auth/confirm-signup:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Confirm request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.ConfirmSignupRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Confirm email with verification code
+      tags:
+      - auth
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Login request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Authenticate and receive tokens
+      tags:
+      - auth
+  /auth/logout:
+    post:
+      parameters:
+      - description: Bearer access token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Invalidate all sessions
+      tags:
+      - auth
+  /auth/signup:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Signup request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.SignupRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Register a new user
+      tags:
+      - auth
   /datapacks:
     get:
       produces:
@@ -63,6 +224,8 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: List all datapacks
       tags:
       - datapacks
@@ -87,6 +250,8 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Create a datapack
       tags:
       - datapacks
@@ -109,6 +274,8 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Delete a datapack
       tags:
       - datapacks
@@ -130,6 +297,8 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Describe a datapack
       tags:
       - datapacks
@@ -159,6 +328,8 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Update a datapack
       tags:
       - datapacks
@@ -177,6 +348,8 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: List agents in a datapack
       tags:
       - agents
@@ -210,6 +383,8 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Create an agent
       tags:
       - agents
@@ -237,6 +412,8 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Delete an agent
       tags:
       - agents
@@ -271,6 +448,8 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Delete a knowledge base
       tags:
       - knowledge-bases
@@ -288,6 +467,8 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: List knowledge bases
       tags:
       - knowledge-bases
@@ -321,6 +502,8 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Add a knowledge base
       tags:
       - knowledge-bases
@@ -343,6 +526,8 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Get datapack status
       tags:
       - datapacks
@@ -358,4 +543,10 @@ paths:
       summary: Health check
       tags:
       - health
+securityDefinitions:
+  BearerAuth:
+    description: JWT access token from /auth/login. Format: Bearer {token}
+    in: header
+    name: Authorization
+    type: apiKey
 swagger: "2.0"

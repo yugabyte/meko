@@ -12,7 +12,10 @@ func TestMiddleware_CORSHeaders(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	e := api.NewRouter(db)
+	e, err := api.NewRouter(api.ServerConfig{DB: db})
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
 	srv := httptest.NewServer(e)
 	defer srv.Close()
 
@@ -41,7 +44,10 @@ func TestMiddleware_RecoveryViaRouter(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	e := api.NewRouter(db)
+	e, err := api.NewRouter(api.ServerConfig{DB: db})
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
 	srv := httptest.NewServer(e)
 	defer srv.Close()
 
