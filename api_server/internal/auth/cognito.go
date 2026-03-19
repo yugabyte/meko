@@ -7,9 +7,15 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	cip "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
@@ -236,6 +242,85 @@ func (c *CognitoClient) Logout(
 
 	slog.Info("cognito logout succeeded")
 	return nil
+}
+
+// ExchangeCode exchanges an OAuth2 authorization code (from the
+// Cognito Hosted UI redirect) for tokens by calling the Cognito
+// /oauth2/token endpoint.
+func (c *CognitoClient) ExchangeCode(
+	ctx context.Context,
+	code, cognitoDomain, redirectURI string,
+) (*Result, error) {
+	tokenURL := fmt.Sprintf("https://%s/oauth2/token", cognitoDomain)
+
+	form := url.Values{
+		"grant_type":   {"authorization_code"},
+		"client_id":    {c.clientID},
+		"code":         {code},
+		"redirect_uri": {redirectURI},
+	}
+	if c.clientSecret != "" {
+		form.Set("client_secret", c.clientSecret)
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, tokenURL,
+		strings.NewReader(form.Encode()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("building token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Error("cognito token exchange failed",
+			"url", tokenURL, "error", err,
+		)
+		return nil, fmt.Errorf("token exchange request: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			slog.Warn("failed to close token response body",
+				"error", closeErr,
+			)
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading token response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("cognito token exchange returned error",
+			"status", resp.StatusCode, "body", string(body),
+		)
+		return nil, fmt.Errorf(
+			"token exchange returned status %d", resp.StatusCode,
+		)
+	}
+
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		IDToken      string `json:"id_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int32  `json:"expires_in"`
+		TokenType    string `json:"token_type"`
+	}
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("parsing token response: %w", err)
+	}
+
+	slog.Info("cognito code exchange succeeded")
+
+	return &Result{
+		AccessToken:  tokenResp.AccessToken,
+		IDToken:      tokenResp.IDToken,
+		RefreshToken: tokenResp.RefreshToken,
+		ExpiresIn:    tokenResp.ExpiresIn,
+	}, nil
 }
 
 // secretHash computes the HMAC-SHA256 SECRET_HASH required when the

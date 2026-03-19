@@ -31,6 +31,7 @@ func run() error {
 	cognitoPoolID := flag.String("cognito-pool-id", "", "Cognito User Pool ID")
 	cognitoClientID := flag.String("cognito-client-id", "", "Cognito App Client ID")
 	cognitoClientSecret := flag.String("cognito-client-secret", "", "Cognito App Client secret")
+	cognitoDomain := flag.String("cognito-domain", "", "Cognito hosted UI domain (e.g. myapp.auth.us-east-2.amazoncognito.com)")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(
@@ -73,6 +74,7 @@ func run() error {
 		CognitoPoolID:       *cognitoPoolID,
 		CognitoClientID:     *cognitoClientID,
 		CognitoClientSecret: *cognitoClientSecret,
+		CognitoDomain:       *cognitoDomain,
 	})
 }
 

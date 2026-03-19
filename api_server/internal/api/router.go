@@ -27,6 +27,8 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 
 	e.GET("/swagger/*", echoSwagger.WrapHandler)
 
+	var successCfg *handlers.SuccessConfig
+
 	v1 := e.Group("/api/v1", ManagementRateLimiter())
 
 	v1.GET("/health", handlers.HealthHandler(cfg.DB))
@@ -38,18 +40,36 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 	datapackGroup := v1.Group("")
 
 	if authEnabled {
-		if err := registerAuthRoutes(
+		var authDeps *authRouteDeps
+		authDeps, err := registerAuthRoutes(
 			cfg, v1, &datapackGroup,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, err
+		}
+		if cfg.CognitoDomain != "" {
+			successCfg = &handlers.SuccessConfig{
+				CognitoClient: authDeps.cognitoClient,
+				AuthService:   authDeps.authService,
+				CognitoDomain: cfg.CognitoDomain,
+			}
 		}
 	} else {
 		slog.Warn("cognito config not set, auth disabled")
 	}
 
+	e.GET("/success", handlers.SuccessHandler(successCfg))
+
 	registerDatapackRoutes(cfg, datapackGroup)
 
 	return e, nil
+}
+
+// authRouteDeps holds the initialized auth objects needed by the
+// success handler.
+type authRouteDeps struct {
+	cognitoClient *auth.CognitoClient
+	authService   *service.AuthService
 }
 
 // registerAuthRoutes wires the public /auth endpoints and configures
@@ -58,7 +78,7 @@ func registerAuthRoutes(
 	cfg ServerConfig,
 	v1 *echo.Group,
 	datapackGroup **echo.Group,
-) error {
+) (*authRouteDeps, error) {
 	accountRepo := repository.NewAccountRepo(cfg.DB)
 
 	cognitoClient, err := auth.NewCognitoClient(
@@ -69,7 +89,7 @@ func registerAuthRoutes(
 		cfg.CognitoClientSecret,
 	)
 	if err != nil {
-		return fmt.Errorf("initializing cognito client: %w", err)
+		return nil, fmt.Errorf("initializing cognito client: %w", err)
 	}
 
 	authSvc := service.NewAuthService(cognitoClient, accountRepo)
@@ -91,7 +111,10 @@ func registerAuthRoutes(
 	)
 
 	slog.Info("auth middleware enabled on protected routes")
-	return nil
+	return &authRouteDeps{
+		cognitoClient: cognitoClient,
+		authService:   authSvc,
+	}, nil
 }
 
 // registerDatapackRoutes wires all datapack, agent, and knowledge-base

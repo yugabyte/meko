@@ -13,12 +13,13 @@ import (
 
 // ServerConfig holds the configuration for the API server.
 type ServerConfig struct {
-	DB                 *sql.DB
-	CognitoRegion      string
-	CognitoPoolID      string
-	CognitoClientID    string
+	DB                  *sql.DB
+	CognitoRegion       string
+	CognitoPoolID       string
+	CognitoClientID     string
 	CognitoClientSecret string
-	Port               int
+	CognitoDomain       string
+	Port                int
 }
 
 // Run starts the Echo server and blocks until a shutdown signal is received.

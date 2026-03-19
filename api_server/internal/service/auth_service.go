@@ -187,7 +187,7 @@ func (s *AuthService) Login(
 		return nil, fmt.Errorf("cognito login: %w", err)
 	}
 
-	s.ensureAccountFromIDToken(ctx, result.IDToken)
+	s.EnsureAccountFromIDToken(ctx, result.IDToken)
 
 	slog.Info("user login succeeded", "email", req.Email)
 
@@ -226,11 +226,11 @@ type idTokenClaims struct {
 	FamilyName string `json:"family_name"`
 }
 
-// ensureAccountFromIDToken parses the Cognito ID token (without
+// EnsureAccountFromIDToken parses the Cognito ID token (without
 // cryptographic verification — the token came directly from the
 // Cognito API) and creates a local account if one does not already
 // exist for the user's cognito sub.
-func (s *AuthService) ensureAccountFromIDToken(
+func (s *AuthService) EnsureAccountFromIDToken(
 	ctx context.Context, rawIDToken string,
 ) {
 	claims, err := parseIDTokenClaims(rawIDToken)
