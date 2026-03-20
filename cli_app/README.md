@@ -1,26 +1,39 @@
-# meko CLI
-
-A powerful Terminal User Interface (TUI) CLI tool for the meko Platform, built with [Cobra](https://github.com/spf13/cobra) and [Bubble Tea](https://github.com/charmbracelet/bubbletea).
-
-Inspired by Sourcegraph's AMP CLI, this tool provides a modern, interactive command-line experience with beautiful live updates and intuitive navigation.
-
-## Features
-
-- 🎨 **Beautiful TUI** - Modern, colorful interface with smooth animations
-- ⚡ **Live Updates** - Real-time status monitoring and updates
-- 🎯 **Interactive Navigation** - Keyboard-driven menu system
-- 📊 **Multiple Views** - Dashboard, database management, logs, and more
-- 🔧 **Traditional CLI** - Both interactive TUI and standard CLI commands
-- 🎭 **Responsive** - Adapts to terminal size changes
+# Meko CLI Usage
 
 ## Installation
 
-### Prerequisites
+### Download a pre-built binary
 
-- Go 1.21 or higher
-- YugabyteDB instance (for database features)
+Pre-built binaries are published as GitHub Releases for every tagged version.
+Visit [Releases](https://github.com/yugabyte/meko/releases/latest) to download
+the archive for your platform.
+
+| Platform | Archive |
+|----------|---------|
+| macOS (Apple Silicon) | `meko_<VERSION>_darwin_arm64.tar.gz` |
+| macOS (Intel) | `meko_<VERSION>_darwin_amd64.tar.gz` |
+| Linux x86_64 | `meko_<VERSION>_linux_amd64.tar.gz` |
+| Linux ARM64 | `meko_<VERSION>_linux_arm64.tar.gz` |
+
+Example install (macOS Apple Silicon):
+
+```bash
+curl -Lo meko.tar.gz \
+  https://github.com/yugabyte/meko/releases/latest/download/meko_0.1.0_darwin_arm64.tar.gz
+tar xzf meko.tar.gz
+chmod +x meko
+sudo mv meko /usr/local/bin/
+```
+
+Verify:
+
+```bash
+meko --version
+```
 
 ### Build from source
+
+Requires Go 1.25+.
 
 ```bash
 cd cli_app
@@ -28,269 +41,209 @@ go mod download
 go build -o meko .
 ```
 
-### Install globally
+---
+
+## Authentication
+
+All datapack commands require a valid login session. Credentials are stored
+locally at `~/var/meko/credentials.json`.
+
+### Login
 
 ```bash
-go install
+meko login
 ```
 
-## Quick Start
-
-### Interactive TUI Mode
-
-Launch the full interactive TUI experience:
+You will be prompted for your email and password. Alternatively, pass them as
+flags:
 
 ```bash
-./meko interactive
+meko login --email user@example.com --password secret
 ```
 
-Or use shortcuts:
+To authenticate against a different API server:
 
 ```bash
-./meko i      # Short form
-./meko tui    # Alias
-./meko ui     # Another alias
+meko login --api-server https://my-server.example.com
 ```
 
-### Traditional CLI Commands
+The default API server is `https://mekodev.com`.
 
-Check system status:
+### Logout
 
 ```bash
-./meko status
+meko logout
 ```
 
-Database commands:
-
-```bash
-./meko db status                    # Check database status
-./meko db connect                   # Connect to database
-./meko db status --host localhost --port 5433
-```
-
-Get help:
-
-```bash
-./meko --help
-./meko db --help
-```
-
-## TUI Navigation
-
-### Keyboard Shortcuts
-
-- **↑/k** or **↓/j** - Navigate up/down
-- **←/h** or **→/l** - Navigate left/right (context-dependent)
-- **Enter** - Select/confirm
-- **Esc** - Go back to previous screen
-- **q** - Quit application
-- **r** - Refresh content
-- **?** - Toggle help
-- **/** - Filter/search (in list views)
-
-### Available Views
-
-1. **Dashboard** - System overview with metrics and status
-2. **Database** - YugabyteDB management and monitoring
-3. **Agent** - AI Agent interaction interface
-4. **Configuration** - View and edit settings
-5. **Logs** - Application logs viewer
-6. **Help** - Documentation and keyboard shortcuts
-
-## Project Structure
-
-```
-cli_app/
-├── main.go                    # Application entry point
-├── go.mod                     # Go module dependencies
-├── cmd/                       # Cobra commands
-│   ├── root.go               # Root command and config
-│   ├── interactive.go        # TUI mode command
-│   ├── status.go             # Status command
-│   └── db.go                 # Database commands
-├── internal/
-│   ├── tui/                  # Bubble Tea TUI components
-│   │   └── model.go          # Main TUI model
-│   └── models/               # Data models (optional)
-└── README.md                 # This file
-```
-
-## Architecture
-
-### Cobra Commands
-
-The CLI uses [Cobra](https://github.com/spf13/cobra) for command structure:
-
-- **Root command** (`meko`) - Entry point with global flags
-- **Interactive command** - Launches the TUI
-- **Traditional commands** - Standard CLI operations (status, db, etc.)
-
-### Bubble Tea TUI
-
-The interactive mode uses [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI:
-
-- **Model** - Application state and business logic
-- **Update** - Message handling and state transitions
-- **View** - Rendering logic for different screens
-
-### Components Used
-
-- **Bubbles** - Pre-built components (list, viewport, spinner, textarea)
-- **Lipgloss** - Styling and layout
-- **Multiple view modes** - Menu, detail, input, loading screens
-
-## Development
-
-### Adding New Commands
-
-Create a new file in `cmd/`:
-
-```go
-package cmd
-
-import (
-    "fmt"
-    "github.com/spf13/cobra"
-)
-
-var myCmd = &cobra.Command{
-    Use:   "mycommand",
-    Short: "Description",
-    RunE: func(cmd *cobra.Command, args []string) error {
-        fmt.Println("Hello from my command!")
-        return nil
-    },
-}
-
-func init() {
-    rootCmd.AddCommand(myCmd)
-}
-```
-
-### Adding New TUI Views
-
-Extend the `Model` in `internal/tui/model.go`:
-
-1. Add a new `ViewMode` constant
-2. Implement the view rendering logic
-3. Add navigation handling in `handleSelection()`
-4. Create a content generation method
-
-### Customizing Styles
-
-Modify the `lipgloss` styles in `internal/tui/model.go`:
-
-```go
-var myStyle = lipgloss.NewStyle().
-    Foreground(lipgloss.Color("#7D56F4")).
-    Background(lipgloss.Color("#1E1E2E")).
-    Padding(1, 2)
-```
-
-## Dependencies
-
-- **github.com/spf13/cobra** - CLI framework
-- **github.com/charmbracelet/bubbletea** - TUI framework
-- **github.com/charmbracelet/bubbles** - TUI components
-- **github.com/charmbracelet/lipgloss** - Styling
-
-## Configuration
-
-Configuration can be loaded from:
-
-- Default: `$HOME/.meko.yaml`
-- Custom: Use `--config` flag
-
-Example config:
-
-```yaml
-database:
-  host: localhost
-  port: 5433
-  name: yugabyte
-
-agent:
-  model: gpt-4
-  temperature: 0.7
-
-ui:
-  theme: dark
-```
-
-## Examples
-
-### Launch interactive mode and navigate to database view
-
-```bash
-./meko interactive
-# Then: Use arrow keys to select "Database" and press Enter
-```
-
-### Check status with verbose output
-
-```bash
-./meko status --verbose
-```
-
-### Connect to remote database
-
-```bash
-./meko db connect --host 192.168.1.100 --port 5433
-```
-
-## Troubleshooting
-
-### TUI not rendering correctly
-
-- Ensure your terminal supports colors (most modern terminals do)
-- Try a different terminal emulator
-- Check terminal size (minimum 80x24 recommended)
-
-### Commands not found
-
-- Ensure Go bin is in your PATH
-- Rebuild the binary: `go build -o meko .`
-
-### Dependencies issues
-
-```bash
-go mod tidy
-go mod download
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## License
-
-MIT License - see LICENSE file for details
-
-## Acknowledgments
-
-- [Cobra](https://github.com/spf13/cobra) - CLI framework
-- [Bubble Tea](https://github.com/charmbracelet/bubbletea) - TUI framework
-- [Charm](https://charm.sh/) - Amazing terminal tools
-- Inspired by [Sourcegraph AMP CLI](https://sourcegraph.com/)
-
-## Resources
-
-- [Bubble Tea Documentation](https://github.com/charmbracelet/bubbletea)
-- [Cobra Documentation](https://cobra.dev/)
-- [Lipgloss Examples](https://github.com/charmbracelet/lipgloss/tree/master/examples)
-- [Bubble Tea Examples](https://github.com/charmbracelet/bubbletea/tree/master/examples)
-
-## Support
-
-For issues and questions:
-- Open an issue on GitHub
-- Check existing documentation
-- Review example implementations
+Removes locally stored tokens.
 
 ---
 
-**Enjoy building beautiful CLI applications with Yuga CLI!** 🚀
+## Datapack Commands
+
+All `meko datapack` subcommands require a valid login session. If you are not
+logged in, they will fail with:
+
+```
+Error: not logged in - run `meko login` first
+```
+
+### Global flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output raw JSON instead of formatted text |
+| `--verbose`, `-v` | Enable verbose logging |
+
+### Create a datapack
+
+```bash
+meko datapack create --name my-datapack
+```
+
+This provisions a new datapack with a dedicated database, MCP server endpoint,
+and database access credentials. A spinner is shown while the server processes
+the request (typically up to 10 seconds).
+
+For machine-readable output:
+
+```bash
+meko datapack create --name my-datapack --json
+```
+
+Example JSON output:
+
+```json
+{
+  "datapack_id": "e02a7107-c79e-451d-b360-9cd1e13f175d",
+  "agent_id": "18311fce-36c5-40fe-bd45-67f5913b0b52",
+  "name": "my-datapack",
+  "mcp_server": {
+    "url": "https://mekodev.com/<account_id>/mcp",
+    "api_key": "318ce1c589d08edb11e24b0a781fe675"
+  },
+  "db_access": {
+    "user_name": "db_my-datapack",
+    "password": "d28a0d1498c1ab9692184dd9c9cd1a79",
+    "conn_str": "postgresql://db_my-datapack:d28a0d14...@host:5433/account_id_my-datapack"
+  }
+}
+```
+
+### List datapacks
+
+```bash
+meko datapack list
+```
+
+Displays a table of all datapacks with name, ID, and creation date.
+
+```bash
+meko datapack list --json
+```
+
+### Delete a datapack
+
+```bash
+meko datapack delete --name my-datapack
+```
+
+You will be prompted to re-type the datapack name as confirmation, since this
+permanently destroys the datapack and its underlying database.
+
+To skip the confirmation prompt (for scripts):
+
+```bash
+meko datapack delete --name my-datapack --force
+```
+
+### Show datapack status
+
+```bash
+meko datapack status --name my-datapack
+```
+
+Displays summary info: name, ID, agent count, knowledge base count, and
+creation date.
+
+```bash
+meko datapack status --name my-datapack --json
+```
+
+---
+
+## Logging
+
+The CLI writes structured logs to `~/var/meko/logs/`. Use `--verbose` to enable
+debug-level output. Log files are useful for diagnosing authentication or
+network errors.
+
+---
+
+## Releasing a New Version
+
+The CLI release pipeline is fully automated via
+[GoReleaser](https://goreleaser.com/) and GitHub Actions.
+
+### How it works
+
+1. A developer pushes a version tag.
+2. The GitHub Actions workflow (`.github/workflows/release.yml`) triggers.
+3. GoReleaser cross-compiles the CLI for macOS and Linux (amd64 + arm64).
+4. Archives (`.tar.gz`) and a SHA256 checksum file are uploaded to a new
+   GitHub Release.
+
+### Cutting a release
+
+```bash
+# Tag the commit
+git tag v0.2.0
+
+# Push the tag to trigger the pipeline
+git push origin v0.2.0
+```
+
+The release will appear at
+`https://github.com/yugabyte/meko/releases/tag/v0.2.0` once the workflow
+completes.
+
+### Version injection
+
+The binary's version string is injected at build time via Go ldflags. The
+variable `cli_app/cmd.version` is set to the git tag value by GoReleaser.
+During local development, `meko --version` shows `dev`.
+
+### Configuration files
+
+| File | Purpose |
+|------|---------|
+| `.goreleaser.yml` | GoReleaser config: build targets, archive format, release settings |
+| `.github/workflows/release.yml` | GitHub Actions workflow triggered on `v*` tags |
+
+### Testing the release locally
+
+You can dry-run the build without publishing:
+
+```bash
+goreleaser build --snapshot --clean
+```
+
+This produces binaries under `dist/` without creating a GitHub release.
+
+To validate the config:
+
+```bash
+goreleaser check
+```
+
+### Release artifacts
+
+Each release includes:
+
+| File | Contents |
+|------|----------|
+| `meko_<VERSION>_darwin_arm64.tar.gz` | macOS Apple Silicon binary |
+| `meko_<VERSION>_darwin_amd64.tar.gz` | macOS Intel binary |
+| `meko_<VERSION>_linux_amd64.tar.gz` | Linux x86_64 binary |
+| `meko_<VERSION>_linux_arm64.tar.gz` | Linux ARM64 binary |
+| `checksums.txt` | SHA256 checksums for all archives |
