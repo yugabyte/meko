@@ -38,7 +38,7 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 			"INVALID_JSON", "malformed request body")
 	}
 
-	if account, ok := c.Get(auth.ContextKeyAccount).(*models.Account); ok {
+	if account, err := auth.GetAccount(c); err == nil {
 		req.AccountID = account.ID
 	}
 
@@ -67,7 +67,13 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 //	@Success	200	{object}	APIResponse
 //	@Router		/datapacks [get]
 func (h *DatapackHandler) List(c echo.Context) error {
-	datapacks, err := h.svc.List()
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
+	datapacks, err := h.svc.List(account.ID)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", err.Error())

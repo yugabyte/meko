@@ -95,9 +95,12 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 	}, nil
 }
 
-// List returns all registered datapacks.
-func (s *DatapackService) List() ([]models.Datapack, error) {
-	return s.repo.List()
+// List returns datapacks belonging to the given account.
+func (s *DatapackService) List(accountID string) ([]models.Datapack, error) {
+	if accountID == "" {
+		return nil, fmt.Errorf("account_id is required")
+	}
+	return s.repo.List(accountID)
 }
 
 // Describe returns details for a single datapack by name.

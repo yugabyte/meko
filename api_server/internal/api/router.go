@@ -132,24 +132,29 @@ func registerDatapackRoutes(
 
 	g.POST("/datapacks", dpH.Create)
 	g.GET("/datapacks", dpH.List)
-	g.GET("/datapacks/:name", dpH.Describe)
-	g.PATCH("/datapacks/:name", dpH.Update)
-	g.DELETE("/datapacks/:name", dpH.Delete)
-	g.GET("/datapacks/:name/status", dpH.Status)
+
+	named := g.Group("/datapacks/:name",
+		auth.RequireDatapackOwnership(dpRepo),
+	)
+
+	named.GET("", dpH.Describe)
+	named.PATCH("", dpH.Update)
+	named.DELETE("", dpH.Delete)
+	named.GET("/status", dpH.Status)
 
 	agentRepo := repository.NewAgentRepo(cfg.DB)
 	agentSvc := service.NewAgentService(agentRepo)
 	agentH := handlers.NewAgentHandler(agentSvc)
 
-	g.POST("/datapacks/:name/agents", agentH.Create)
-	g.GET("/datapacks/:name/agents", agentH.List)
-	g.DELETE("/datapacks/:name/agents/:agent", agentH.Delete)
+	named.POST("/agents", agentH.Create)
+	named.GET("/agents", agentH.List)
+	named.DELETE("/agents/:agent", agentH.Delete)
 
 	kbRepo := repository.NewKnowledgeBaseRepo(cfg.DB)
 	kbSvc := service.NewKnowledgeBaseService(kbRepo)
 	kbH := handlers.NewKnowledgeBaseHandler(kbSvc)
 
-	g.POST("/datapacks/:name/knowledge-bases", kbH.Add)
-	g.GET("/datapacks/:name/knowledge-bases", kbH.List)
-	g.DELETE("/datapacks/:name/knowledge-bases", kbH.Delete)
+	named.POST("/knowledge-bases", kbH.Add)
+	named.GET("/knowledge-bases", kbH.List)
+	named.DELETE("/knowledge-bases", kbH.Delete)
 }

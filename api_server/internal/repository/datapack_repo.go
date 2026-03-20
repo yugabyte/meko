@@ -329,15 +329,17 @@ func dropProvisioned(adminDB *sql.DB, dbName, mcpUser, dbUser string) {
 	_ = DropDatapackDB(adminDB, dbName, mcpUser, dbUser)
 }
 
-// List returns all datapacks.
-func (r *DatapackRepo) List() ([]models.Datapack, error) {
+// List returns datapacks belonging to the given account.
+func (r *DatapackRepo) List(accountID string) ([]models.Datapack, error) {
 	rows, err := r.db.Query(
 		`SELECT id, account_id, datapack_name,
 		        yb_universe_id, datapack_ysql_connection_string,
 		        mcp_user_name, db_user_name,
 		        created_at, updated_at
 		 FROM meko_system.datapack_registry
+		 WHERE account_id = $1
 		 ORDER BY created_at DESC`,
+		accountID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list datapacks: %w", err)

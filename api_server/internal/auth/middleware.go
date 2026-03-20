@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -15,7 +16,18 @@ import (
 const (
 	ContextKeyAccount    = "account"
 	ContextKeyCognitoSub = "cognito_sub"
+	ContextKeyDatapack   = "datapack"
 )
+
+// GetAccount extracts the authenticated account from the Echo context.
+// Returns ErrNoAccount if the account is missing (i.e. RequireAuth did not run).
+func GetAccount(c echo.Context) (*models.Account, error) {
+	account, ok := c.Get(ContextKeyAccount).(*models.Account)
+	if !ok || account == nil {
+		return nil, ErrNoAccount
+	}
+	return account, nil
+}
 
 // AccountLookup abstracts account resolution for the auth middleware.
 // EnsureAccount must return an existing account or auto-create one for
@@ -81,6 +93,65 @@ func RequireAuth(
 	}
 }
 
+// DatapackOwnershipLookup abstracts datapack lookup for the ownership
+// middleware. Typically implemented by repository.DatapackRepo.
+type DatapackOwnershipLookup interface {
+	GetByName(name string) (*models.Datapack, error)
+}
+
+// RequireDatapackOwnership returns Echo middleware that verifies the
+// authenticated user owns the datapack identified by the :name route
+// parameter. Must run after RequireAuth.
+//
+// On success the resolved *models.Datapack is stored on the context
+// under ContextKeyDatapack so downstream handlers can reuse it.
+func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			account, err := GetAccount(c)
+			if err != nil {
+				return authError(c, "missing account context")
+			}
+
+			name := c.Param("name")
+			if name == "" {
+				return c.JSON(http.StatusBadRequest, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "VALIDATION_ERROR",
+						"message": "datapack name is required",
+					},
+				})
+			}
+
+			dp, err := datapacks.GetByName(name)
+			if err != nil {
+				slog.Error("ownership lookup failed",
+					"datapack", name, "error", err)
+				return c.JSON(http.StatusInternalServerError, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "INTERNAL_ERROR",
+						"message": "failed to verify datapack ownership",
+					},
+				})
+			}
+			if dp == nil || dp.AccountID != account.ID {
+				return c.JSON(http.StatusNotFound, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "NOT_FOUND",
+						"message": fmt.Sprintf("datapack %q not found", name),
+					},
+				})
+			}
+
+			c.Set(ContextKeyDatapack, dp)
+			return next(c)
+		}
+	}
+}
+
 // extractBearerToken pulls the token from the "Authorization: Bearer <token>"
 // header. Returns an error if the header is missing or malformed.
 func extractBearerToken(r *http.Request) (string, error) {
@@ -113,10 +184,11 @@ func authError(c echo.Context, message string) error {
 	})
 }
 
-// Sentinel errors for authorization header extraction.
+// Sentinel errors.
 var (
 	ErrMissingAuthHeader   = newAuthErr("missing authorization header")
 	ErrMalformedAuthHeader = newAuthErr("malformed authorization header")
+	ErrNoAccount           = newAuthErr("no account in request context")
 )
 
 type authErr struct {
