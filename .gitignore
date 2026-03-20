@@ -23,3 +23,6 @@ build/
 # Linter caches
 .mypy_cache/
 .tox/
+
+# Local notes
+.notes/
