@@ -1,7 +1,7 @@
 ---
 title: Another guide page
 linkTitle: Guide page 2
-description: A guide page
+description: Description of another guide page
 weight: 20
 ---
 

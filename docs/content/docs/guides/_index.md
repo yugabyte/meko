@@ -1,12 +1,9 @@
 ---
 title: Guidance on working with Meko
-headerTitle: Guidance on working with Meko
 linkTitle: Guides
-headcontent: Explore how to use Meko's interfaces
 description: Explore how to use Meko's interfaces
-weight: 30
+weight: 300
 type: docs
-showRightNav: true
 ---
 
 ## Working with Memory

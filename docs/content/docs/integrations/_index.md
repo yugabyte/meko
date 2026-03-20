@@ -4,7 +4,7 @@ headerTitle: Meko Integrations
 linkTitle: Integration
 headcontent: Explore how to integrate Meko into existing tools and environments
 description: Explore how to integrate Meko into existing tools and environments
-weight: 40
+weight: 400
 type: docs
 ---
 
