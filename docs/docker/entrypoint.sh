@@ -18,6 +18,10 @@ if [ "${1:-}" = "setup-fork" ]; then
     fi
 
     GITHUB_USER=$(gh api user --jq '.login')
+    if [[ ! "${GITHUB_USER}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo "ERROR: Unexpected GitHub username format: ${GITHUB_USER}"
+        exit 1
+    fi
     echo "    GitHub user: ${GITHUB_USER}"
 
     if ! gh api "repos/${GITHUB_USER}/meko" &>/dev/null; then
@@ -46,14 +50,20 @@ cd "${DOCS_DIR}"
 # If HUGO_POLL is set, create a wrapper that injects --poll into "hugo server" calls.
 # This enables file-change polling for bind mounts that don't support inotify (e.g. Colima).
 if [ -n "${HUGO_POLL:-}" ]; then
+    # Validate HUGO_POLL value (must be a duration like 500ms, 1s, etc.)
+    if [[ ! "${HUGO_POLL}" =~ ^[0-9]+(ms|s)$ ]]; then
+        echo "ERROR: Invalid HUGO_POLL value '${HUGO_POLL}'. Expected format: 700ms, 1s, etc."
+        exit 1
+    fi
     # Move real binary out of the way, then create wrapper at the original path
     mv /usr/local/bin/hugo /usr/local/bin/hugo-real
-    cat > /usr/local/bin/hugo <<'WRAPPER'
+    POLL_VAL="${HUGO_POLL}"
+    cat > /usr/local/bin/hugo <<WRAPPER
 #!/usr/bin/env bash
-if [[ "$*" == *"server"* ]]; then
-    exec /usr/local/bin/hugo-real "$@" --poll "${HUGO_POLL}"
+if [[ "\$*" == *"server"* ]]; then
+    exec /usr/local/bin/hugo-real "\$@" --poll "${POLL_VAL}"
 else
-    exec /usr/local/bin/hugo-real "$@"
+    exec /usr/local/bin/hugo-real "\$@"
 fi
 WRAPPER
     chmod +x /usr/local/bin/hugo
