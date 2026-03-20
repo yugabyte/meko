@@ -40,7 +40,8 @@ var dbConnectCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(dbCmd)
+	// todo: add back in for meko lite
+	// rootCmd.AddCommand(dbCmd)
 	dbCmd.AddCommand(dbStatusCmd)
 	dbCmd.AddCommand(dbConnectCmd)
 

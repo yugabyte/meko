@@ -1,8 +1,12 @@
 CREATE SCHEMA IF NOT EXISTS meko_system;
 
+CREATE TYPE meko_system.account_type AS ENUM ('free', 'pro', 'enterprise');
+
 CREATE TABLE IF NOT EXISTS meko_system.account_registry (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_name VARCHAR(255) NOT NULL UNIQUE,
+    account_email VARCHAR(255) NOT NULL UNIQUE,
+    account_type meko_system.account_type NOT NULL DEFAULT 'free',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

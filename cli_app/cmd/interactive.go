@@ -34,5 +34,6 @@ and a beautiful interface powered by Bubble Tea.`,
 }
 
 func init() {
-	rootCmd.AddCommand(interactiveCmd)
+	// todo: add back in for meko lite
+	// rootCmd.AddCommand(interactiveCmd)
 }

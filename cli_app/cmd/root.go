@@ -19,12 +19,8 @@ var (
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "meko",
-	Short: "A powerful TUI-based CLI tool for meko AI Platform",
-	Long: `Meko is a command-line interface tool that provides an interactive
-Terminal User Interface (TUI) for managing and interacting with the meko AI Platform.
-
-Built with Cobra and Bubble Tea, it offers a modern, responsive CLI experience
-similar to Sourcegraph's AMP CLI.`,
+	Short: "CLI tool for meko AI Platform",
+	Long: `meko CLI - Manage your datapacks and knowledge bases on Meko Platform.`,
 	Version: "0.1.0",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
@@ -59,4 +55,5 @@ func Execute() error {
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
 }

@@ -33,5 +33,6 @@ var statusCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(statusCmd)
+	// todo: add back in for meko lite
+	// rootCmd.AddCommand(statusCmd)
 }
