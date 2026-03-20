@@ -1,5 +1,5 @@
 ---
-title: Child page
+title: Quick start child page
 linkTitle: Child page
 description: A child page
 weight: 10

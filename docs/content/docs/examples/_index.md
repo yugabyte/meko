@@ -1,8 +1,6 @@
 ---
 title: Meko Solution Examples
-headerTitle: Meko Solution Examples
 linkTitle: Examples
-headcontent: Explore sample solutions that can be built with Meko
 description: Explore sample solutions that can be built with Meko
 weight: 20
 type: docs
