@@ -4,12 +4,14 @@ headerTitle: Meko Integrations
 linkTitle: Integration
 headcontent: Explore how to integrate Meko into existing tools and environments
 description: Explore how to integrate Meko into existing tools and environments
+weight: 40
 type: docs
 ---
 
-# Integrations
+## Integrations
 
 ### w/ AI Coding Tools
+
 - [ ] Overview
 - [ ] Cursor
 - [ ] Claude Code
@@ -19,6 +21,7 @@ type: docs
 - [ ] Google Anti-gravity	- P1
 
 ### w/ AGENT FRAMEWORKS
+
 - [ ] Overview
 - [ ] Python (direct MCP client)
 - [ ] LangChain
@@ -26,11 +29,13 @@ type: docs
 
 
 ### w/ Vibe coding platforms
+
 - [ ] Lovable
 - [ ] Replit
 
 
 ### ─ w/ Consumer AI LLMs     		- P1
+
 - [ ] Claude Desktop
 - [ ] OpenAI chatgpt Desktop
 
