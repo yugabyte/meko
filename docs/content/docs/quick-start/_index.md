@@ -4,7 +4,7 @@ headerTitle: Meko Quick Start
 linkTitle: Quick Start
 headcontent: Learn about Meko's features, with examples
 description: Learn about Meko's features, with examples
-weight: 10
+weight: 100
 type: docs
 ---
 

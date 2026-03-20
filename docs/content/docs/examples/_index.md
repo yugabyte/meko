@@ -2,7 +2,7 @@
 title: Meko Solution Examples
 linkTitle: Examples
 description: Explore sample solutions that can be built with Meko
-weight: 20
+weight: 200
 type: docs
 ---
 

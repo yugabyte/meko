@@ -2,7 +2,7 @@
 title: Guidance on working with Meko
 linkTitle: Guides
 description: Explore how to use Meko's interfaces
-weight: 30
+weight: 300
 type: docs
 ---
 
