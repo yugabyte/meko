@@ -5,6 +5,4 @@ description: A child page
 weight: 10
 ---
 
-## Testing
-
-Testing a child page
+## Guide page

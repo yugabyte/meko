@@ -1,10 +1,10 @@
 ---
-title: A Child page
+title: Second child page
 linkTitle: Second child
 description: A second child page
-weight: 10
+weight: 20
 ---
 
 ## Testing
 
-Testing a child page
+Testing a second child page

@@ -1,10 +1,8 @@
 ---
 title: Meko Solution Examples
-headerTitle: Meko Solution Examples
 linkTitle: Examples
-headcontent: Explore sample solutions that can be built with Meko
 description: Explore sample solutions that can be built with Meko
-weight: 20
+weight: 200
 type: docs
 ---
 
@@ -18,3 +16,16 @@ type: docs
 
 
 Above section is awaiting:  Heather & Naveen
+
+Some code:
+
+```sql
+CREATE TABLE census(
+   id int,
+   name varchar(255),
+   age int,
+   zipcode int,
+   employed boolean,
+   PRIMARY KEY(id ASC)
+);
+```
