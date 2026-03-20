@@ -1,14 +1,14 @@
 ---
 title: Meko Reference Docs
 headerTitle: Meko Reference Docs
-linkTitle: Reference Docs
+linkTitle: Reference
 headcontent: Peruse Meko's Reference Docs
 description: Peruse Meko's Reference Docs
+weight: 50
 type: docs
 ---
 
-# Reference
-
+## Reference
 
 
 │   └── Meko CLI Overview              (Simple explanation of the CLI)

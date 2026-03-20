@@ -3,11 +3,12 @@ title: Meko Solution Examples
 headerTitle: Meko Solution Examples
 linkTitle: Examples
 headcontent: Explore sample solutions that can be built with Meko
-description: Example solutions
+description: Explore sample solutions that can be built with Meko
+weight: 20
 type: docs
 ---
 
-# Examples of How You can Use Meko
+## Examples of How You can Use Meko
 
 * Conversation history - verbatim knowledge & derived memories. S3-backed tiering
 * Portable developer coding prefs

@@ -1,2 +1,0 @@
-Backported two diffs to 2025.2
-Apache Age queries run 10x slower on YB vs PG in local deployment.
