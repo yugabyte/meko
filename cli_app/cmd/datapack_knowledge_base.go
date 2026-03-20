@@ -108,9 +108,10 @@ var listKnowledgeBaseCmd = &cobra.Command{
 }
 
 func init() {
-	datapackCmd.AddCommand(addKnowledgeBaseCmd)
-	datapackCmd.AddCommand(deleteKnowledgeBaseCmd)
-	datapackCmd.AddCommand(listKnowledgeBaseCmd)
+	// todo: add back in after knowledge base endpoints are implemented
+	// datapackCmd.AddCommand(addKnowledgeBaseCmd)
+	// datapackCmd.AddCommand(deleteKnowledgeBaseCmd)
+	// datapackCmd.AddCommand(listKnowledgeBaseCmd)
 
 	for _, sub := range []*cobra.Command{
 		addKnowledgeBaseCmd,

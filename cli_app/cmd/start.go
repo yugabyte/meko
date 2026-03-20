@@ -423,7 +423,8 @@ var startCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(startCmd)
+	// todo: add back in for meko lite
+	// rootCmd.AddCommand(startCmd)
 	startCmd.Flags().BoolVar(&inferenceNode, "inference_node", false, "Start the inference stack")
 	startCmd.Flags().StringVar(&hostAddress, "host", "127.0.0.1",
 		"Host address (IP or DNS) for all external service endpoints and connections")

@@ -106,9 +106,10 @@ var datapackAgentListCmd = &cobra.Command{
 }
 
 func init() {
-	datapackCmd.AddCommand(datapackAgentCreateCmd)
-	datapackCmd.AddCommand(datapackAgentDeleteCmd)
-	datapackCmd.AddCommand(datapackAgentListCmd)
+	// todo: add back in after dedicated agent per datapack is implemented
+	// datapackCmd.AddCommand(datapackAgentCreateCmd)
+	// datapackCmd.AddCommand(datapackAgentDeleteCmd)
+	// datapackCmd.AddCommand(datapackAgentListCmd)
 
 	for _, sub := range []*cobra.Command{
 		datapackAgentCreateCmd,

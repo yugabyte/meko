@@ -306,21 +306,27 @@ func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass, dbUser, dbPass 
 	return nil
 }
 
-// dropProvisioned is a best-effort cleanup of a partially provisioned datapack.
-func dropProvisioned(adminDB *sql.DB, dbName, mcpUser, dbUser string) {
+// DropDatapackDB drops the database and roles for a datapack, returning
+// an error if the database drop fails.
+func DropDatapackDB(adminDB *sql.DB, dbName, mcpUser, dbUser string) error {
 	if _, err := adminDB.Exec(fmt.Sprintf(
 		`DROP DATABASE IF EXISTS %s`, quoteIdent(dbName),
 	)); err != nil {
-		slog.Error("cleanup: failed to drop database",
-			"db_name", dbName, "error", err)
+		return fmt.Errorf("failed to drop database %s: %w", dbName, err)
 	}
 	if _, err := adminDB.Exec(fmt.Sprintf(
 		`DROP ROLE IF EXISTS %s; DROP ROLE IF EXISTS %s`,
 		quoteIdent(mcpUser), quoteIdent(dbUser),
 	)); err != nil {
-		slog.Error("cleanup: failed to drop roles",
+		slog.Warn("dropped database but failed to drop roles",
 			"mcp_user", mcpUser, "db_user", dbUser, "error", err)
 	}
+	return nil
+}
+
+// dropProvisioned is a best-effort cleanup of a partially provisioned datapack.
+func dropProvisioned(adminDB *sql.DB, dbName, mcpUser, dbUser string) {
+	_ = DropDatapackDB(adminDB, dbName, mcpUser, dbUser)
 }
 
 // List returns all datapacks.

@@ -19,6 +19,11 @@ func (s *YBAService) AssignUniverse() (*repository.UniverseAssignment, error) {
 	return s.repo.AssignUniverse()
 }
 
+// GetAdminConnStr returns the admin connection string for a universe.
+func (s *YBAService) GetAdminConnStr(universeID string) (string, error) {
+	return s.repo.GetAdminConnStr(universeID)
+}
+
 // ReleaseUniverse decrements the datapack counter for a universe.
 func (s *YBAService) ReleaseUniverse(universeID string) error {
 	return s.repo.ReleaseUniverse(universeID)

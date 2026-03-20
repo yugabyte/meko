@@ -14,6 +14,7 @@ import (
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
+	authToken  string
 }
 
 // New creates a Client targeting the given host and port.
@@ -24,6 +25,23 @@ func New(host string, port int) *Client {
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// NewFromBaseURL creates a Client from an already-formed base URL
+// (e.g. "https://mekodev.com"). The /api/v1 suffix is appended
+// automatically.
+func NewFromBaseURL(base string) *Client {
+	return &Client{
+		baseURL: base + "/api/v1",
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// SetAuthToken configures a Bearer token that is sent on every request.
+func (c *Client) SetAuthToken(token string) {
+	c.authToken = token
 }
 
 // APIResponse is the standard envelope returned by the API server.
@@ -61,6 +79,9 @@ func (c *Client) do(method, path string, body any) (json.RawMessage, error) {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -87,20 +108,40 @@ func (c *Client) do(method, path string, body any) (json.RawMessage, error) {
 	return apiResp.Data, nil
 }
 
+// LoginRequest is the payload sent to POST /auth/login.
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// LoginResponse is the token set returned by the API on success.
+type LoginResponse struct {
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int32  `json:"expires_in"`
+}
+
+// Login authenticates with the API server and returns the token set.
+func (c *Client) Login(email, password string) (*LoginResponse, error) {
+	data, err := c.do(http.MethodPost, "/auth/login", LoginRequest{
+		Email:    email,
+		Password: password,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var resp LoginResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("parse login response: %w", err)
+	}
+	return &resp, nil
+}
+
 // CreateDatapack creates a new datapack via the API.
-func (c *Client) CreateDatapack(
-	name, seedKB, embedModel, inferModel string,
-) (json.RawMessage, error) {
-	body := map[string]string{
-		"name":                name,
-		"seed_knowledge_base": seedKB,
-	}
-	if embedModel != "" {
-		body["embed_model"] = embedModel
-	}
-	if inferModel != "" {
-		body["inference_model"] = inferModel
-	}
+func (c *Client) CreateDatapack(name string) (json.RawMessage, error) {
+	body := map[string]string{"name": name}
 	return c.do(http.MethodPost, "/datapacks", body)
 }
 

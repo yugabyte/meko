@@ -52,6 +52,23 @@ func (r *YBARepo) AssignUniverse() (*UniverseAssignment, error) {
 	return &a, nil
 }
 
+// GetAdminConnStr returns the admin connection string for a universe.
+func (r *YBARepo) GetAdminConnStr(universeID string) (string, error) {
+	var connStr string
+	err := r.db.QueryRow(
+		`SELECT ysql_admin_connection_string
+		 FROM meko_system.yba_universe_registry
+		 WHERE id = $1`, universeID,
+	).Scan(&connStr)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("universe %s not found", universeID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get admin conn str for universe %s: %w", universeID, err)
+	}
+	return connStr, nil
+}
+
 // ReleaseUniverse decrements the counter when a datapack is removed.
 func (r *YBARepo) ReleaseUniverse(universeID string) error {
 	_, err := r.db.Exec(

@@ -2,7 +2,11 @@
 package service
 
 import (
+	"database/sql"
 	"fmt"
+	"log/slog"
+
+	_ "github.com/lib/pq"
 
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
@@ -126,12 +130,55 @@ func (s *DatapackService) Update(
 	return s.repo.Update(name, req.YBUniverseConnStr)
 }
 
-// Delete removes a datapack by name.
+// Delete tears down the underlying database, removes the registry
+// entry, and releases the universe slot.
 func (s *DatapackService) Delete(name string) error {
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
-	return s.repo.Delete(name)
+
+	dp, err := s.repo.GetByName(name)
+	if err != nil {
+		return fmt.Errorf("failed to look up datapack: %w", err)
+	}
+	if dp == nil {
+		return fmt.Errorf("datapack %q not found", name)
+	}
+
+	adminConnStr, err := s.ybaSvc.GetAdminConnStr(dp.YBUniverseID)
+	if err != nil {
+		return fmt.Errorf("failed to get admin connection: %w", err)
+	}
+
+	dbName := fmt.Sprintf("%s_%s", dp.AccountID, dp.Name)
+
+	slog.Info("dropping datapack database",
+		"datapack", name, "db_name", dbName)
+
+	adminDB, err := sql.Open("postgres", adminConnStr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to universe: %w", err)
+	}
+	defer adminDB.Close()
+
+	if err := repository.DropDatapackDB(adminDB, dbName, dp.MCPUserName, dp.DBUserName); err != nil {
+		return fmt.Errorf("failed to drop datapack database: %w", err)
+	}
+
+	slog.Info("datapack database dropped, removing registry entry",
+		"datapack", name)
+
+	if err := s.repo.Delete(name); err != nil {
+		return fmt.Errorf("failed to delete registry entry: %w", err)
+	}
+
+	if err := s.ybaSvc.ReleaseUniverse(dp.YBUniverseID); err != nil {
+		slog.Warn("failed to release universe slot",
+			"universe_id", dp.YBUniverseID, "error", err)
+	}
+
+	slog.Info("datapack deleted successfully", "datapack", name)
+	return nil
 }
 
 // Status returns summary information about a datapack.

@@ -6,6 +6,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"meko/api_server/internal/auth"
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/service"
 )
@@ -35,6 +36,10 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest,
 			"INVALID_JSON", "malformed request body")
+	}
+
+	if account, ok := c.Get(auth.ContextKeyAccount).(*models.Account); ok {
+		req.AccountID = account.ID
 	}
 
 	resp, err := h.svc.Create(req)
