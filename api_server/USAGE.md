@@ -8,13 +8,18 @@
 
 ### Flags
 
-| Flag             | Default       | Description            |
-|------------------|---------------|------------------------|
-| `-port`          | `25433`       | API server listen port |
-| `-db-host`       | `127.0.0.1`   | Database host          |
-| `-db-port`       | `5433`        | Database port          |
-| `-db-user-name`  | `yugabyte`    | Database user name     |
-| `-db-password`   | (empty)       | Database password      |
+| Flag                | Default       | Description                      |
+|---------------------|---------------|----------------------------------|
+| `-port`             | `25433`       | API server listen port           |
+| `-db-host`          | `127.0.0.1`   | Database host                    |
+| `-db-port`          | `5433`        | Database port                    |
+| `-db-user-name`     | `yugabyte`    | Database user name               |
+| `-db-password`      | (empty)       | Database password                |
+| `-cognito-region`   | (empty)       | AWS region for Cognito User Pool |
+| `-cognito-pool-id`  | (empty)       | Cognito User Pool ID             |
+| `-cognito-client-id`| (empty)       | Cognito App Client ID            |
+| `-cognito-client-secret`| (empty)  | Cognito App Client secret        |
+| `-cognito-domain`       | (empty)  | Cognito Hosted UI domain (e.g. `myapp.auth.us-east-2.amazoncognito.com`) |
 
 ### Example
 
@@ -24,11 +29,33 @@
 
 The server runs database migrations on startup, then listens on the configured port.
 
-## Running the migration
+### Running the migration
 
 ```bash
 # Run migrations only, then exit
 ./meko-api-server -migrate-only -db-host 127.0.0.1 -db-port 5433
+
+```
+
+### Running with cognito
+
+```bash
+./meko-api-server \
+  --port 25433 \
+  --db-host 127.0.0.1 \
+  --cognito-region us-east-1 \
+  --cognito-pool-id us-east-1_XXXXX \
+  --cognito-client-id abc123def456 \
+  --cognito-client-secret your-client-secret \
+  --cognito-domain myapp.auth.us-east-1.amazoncognito.com
+```
+
+The `--cognito-domain` flag is required for the `/success` callback endpoint to exchange OAuth2 authorization codes. The value is the full domain from **Cognito Console > App Integration > Domain name** (without `https://`).
+
+### Docker
+
+```bash
+docker build -t meko/meko-api-server:latest api_server/
 
 ```
 
@@ -97,6 +124,173 @@ Returns server and database health status.
 
 ```bash
 curl http://localhost:25433/api/v1/health
+```
+
+---
+
+### Authentication
+
+When Cognito flags are provided, all `/datapacks` endpoints require a valid JWT in the `Authorization` header. The `/auth` endpoints are always public.
+
+#### `POST /api/v1/auth/signup` — Register a new user
+
+**Request body:**
+
+| Field        | Type   | Required | Description       |
+|--------------|--------|----------|-------------------|
+| `email`      | string | yes      | User email        |
+| `password`   | string | yes      | User password     |
+| `first_name` | string | yes      | First name        |
+| `last_name`  | string | yes      | Last name         |
+
+```bash
+curl -X POST http://localhost:25433/api/v1/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "jane@example.com",
+    "password": "SecureP@ss1",
+    "first_name": "Jane",
+    "last_name": "Doe"
+  }'
+```
+
+**Response (201):**
+
+```json
+{
+  "data": {
+    "account_id": "uuid",
+    "email": "jane@example.com",
+    "message": "confirmation code sent to jane@example.com"
+  }
+}
+```
+
+---
+
+#### `POST /api/v1/auth/confirm-signup` — Confirm email
+
+**Request body:**
+
+| Field   | Type   | Required | Description                   |
+|---------|--------|----------|-------------------------------|
+| `email` | string | yes      | User email                    |
+| `code`  | string | yes      | 6-digit code from email       |
+
+```bash
+curl -X POST http://localhost:25433/api/v1/auth/confirm-signup \
+  -H "Content-Type: application/json" \
+  -d '{"email": "jane@example.com", "code": "123456"}'
+```
+
+**Response (200):**
+
+```json
+{
+  "data": { "message": "email confirmed" }
+}
+```
+
+---
+
+#### `POST /api/v1/auth/login` — Authenticate and receive tokens
+
+**Request body:**
+
+| Field      | Type   | Required | Description   |
+|------------|--------|----------|---------------|
+| `email`    | string | yes      | User email    |
+| `password` | string | yes      | User password |
+
+```bash
+curl -X POST http://localhost:25433/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "jane@example.com", "password": "SecureP@ss1"}'
+```
+
+**Response (200):**
+
+```json
+{
+  "data": {
+    "access_token": "eyJ...",
+    "id_token": "eyJ...",
+    "refresh_token": "eyJ...",
+    "expires_in": 3600
+  }
+}
+```
+
+---
+
+#### `POST /api/v1/auth/logout` — Invalidate all sessions
+
+Requires the access token in the `Authorization` header.
+
+```bash
+curl -X POST http://localhost:25433/api/v1/auth/logout \
+  -H "Authorization: Bearer <access_token>"
+```
+
+**Response (200):**
+
+```json
+{
+  "data": { "message": "logged out" }
+}
+```
+
+---
+
+#### `GET /success` — Cognito Hosted UI callback
+
+This endpoint handles the redirect from the Cognito Managed Login (Hosted UI) after a user signs up or logs in. Cognito redirects to this URL with an authorization code in the query string.
+
+**Flow:**
+
+1. User signs up or logs in via the Cognito Hosted UI
+2. Cognito redirects to `https://mekodev.com/success?code=<authorization_code>`
+3. The server exchanges the code for tokens by calling Cognito's `/oauth2/token` endpoint
+4. A local account is created automatically (JIT provisioning) if one doesn't exist
+5. A success page is rendered
+
+**Cognito configuration required:**
+
+| Setting                     | Value                                     |
+|-----------------------------|-------------------------------------------|
+| Allowed callback URLs       | `https://mekodev.com/success`             |
+| Allowed OAuth Flows         | Authorization code grant                  |
+| Allowed OAuth Scopes        | `openid`, `email`, `profile`              |
+
+**Hosted UI signup link for users:**
+
+```
+https://<cognito-domain>/signup?client_id=<client-id>&response_type=code&scope=openid+email+profile&redirect_uri=https://mekodev.com/success
+```
+
+After the callback completes successfully, users can authenticate with the CLI using `POST /api/v1/auth/login` with their email and password.
+
+---
+
+#### Using authenticated endpoints
+
+After login, include the access token in all `/datapacks` requests:
+
+```bash
+curl http://localhost:25433/api/v1/datapacks \
+  -H "Authorization: Bearer <access_token>"
+```
+
+Unauthenticated requests return `401`:
+
+```json
+{
+  "data": null,
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "missing or malformed authorization header"
+  }
+}
 ```
 
 ---
@@ -398,4 +592,64 @@ curl -X DELETE http://localhost:25433/api/v1/datapacks/my-datapack/knowledge-bas
 {
   "data": { "message": "knowledge base deleted" }
 }
+```
+
+---
+
+## Running Tests
+
+All tests are run from the `api_server/` directory.
+
+### Unit tests (no database required)
+
+These tests use mocked dependencies and run quickly without any external services.
+
+```bash
+# Auth package -- Cognito client, JWT validation, middleware
+go test ./internal/auth/ -v
+
+# Auth service -- signup, login, logout business logic
+go test ./internal/service/ -run TestAuthService -v
+
+# Auth handler -- HTTP endpoint tests
+go test ./internal/handlers/ -run TestAuth_ -v
+```
+
+### Integration tests (requires YugabyteDB)
+
+These tests need a running YugabyteDB instance on `localhost:5433`. They exercise the full stack including database operations.
+
+```bash
+# All handler integration tests (datapacks, agents, knowledge bases)
+go test ./internal/handlers/ -v
+
+# Router and middleware integration tests
+go test ./internal/api/ -v
+```
+
+### Run all tests
+
+```bash
+go test ./... -v
+```
+
+### Run tests with count (no caching)
+
+```bash
+go test ./... -v -count=1
+```
+
+### Run a specific test by name
+
+```bash
+go test ./internal/auth/ -run TestValidateAccessToken_Valid -v
+go test ./internal/handlers/ -run TestAuth_Login_Success -v
+```
+
+### Linting
+
+Run the project linter before committing:
+
+```bash
+golangci-lint run ./...
 ```

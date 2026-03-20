@@ -11,6 +11,8 @@ import (
 	"cli_app/internal/tui"
 )
 
+var version = "dev"
+
 var (
 	verbose   bool
 	appConfig *config.Config
@@ -21,7 +23,7 @@ var rootCmd = &cobra.Command{
 	Use:   "meko",
 	Short: "CLI tool for meko AI Platform",
 	Long: `meko CLI - Manage your datapacks and knowledge bases on Meko Platform.`,
-	Version: "0.1.0",
+	Version: version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
