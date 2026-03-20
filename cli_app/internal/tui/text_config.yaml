@@ -1,0 +1,188 @@
+# TUI Text Configuration
+# Configure all text strings and their styling for the Yuga CLI TUI
+
+# ASCII Art Logo
+logo:
+  lines:
+    - "██╗   ██╗██╗   ██╗ ██████╗  █████╗     █████╗ ██╗"
+    - "╚██╗ ██╔╝██║   ██║██╔════╝ ██╔══██╗   ██╔══██╗██║"
+    - " ╚████╔╝ ██║   ██║██║  ███╗███████║   ███████║██║"
+    - "  ╚██╔╝  ██║   ██║██║   ██║██╔══██║   ██╔══██║██║"
+    - "   ██║   ╚██████╔╝╚██████╔╝██║  ██║██╗██║  ██║██║"
+    - "   ╚═╝    ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝"
+  color: "#FF6F00"  # YugabyteDB orange
+  bold: true
+  pulsing: true
+
+# Welcome Section
+welcome:
+  title: "W e l c o m e   t o   y u g a . a i   p l a t f o r m . ."
+  help: "? for help"
+  hint: "Use ctrl + m to create your first agent memory"
+  title_color: "#7D56F4"
+  text_color: "#626262"
+  bold: true
+
+# Menu Items
+menu:
+  title: "Yuga AI Platform CLI"
+  items:
+    - title: "Dashboard"
+      description: "View system status and metrics"
+    - title: "Database"
+      description: "Manage YugabyteDB instances"
+    - title: "Agent"
+      description: "Interact with AI agent"
+    - title: "Configuration"
+      description: "View and edit configuration"
+    - title: "Logs"
+      description: "View application logs"
+    - title: "Help"
+      description: "Get help and documentation"
+
+# Command Palette
+command_palette:
+  title: "Available Commands"
+  commands:
+    - name: "/dashboard"
+      description: "View system status and metrics"
+      action: "dashboard"
+    - name: "/database"
+      description: "Manage YugabyteDB instances"
+      action: "database"
+    - name: "/agent"
+      description: "Interact with AI agent"
+      action: "agent"
+    - name: "/config"
+      description: "View and edit configuration"
+      action: "config"
+    - name: "/logs"
+      description: "View application logs"
+      action: "logs"
+    - name: "/help"
+      description: "Get help and documentation"
+      action: "help"
+    - name: "/clear"
+      description: "Clear the textarea"
+      action: "clear"
+    - name: "/quit"
+      description: "Quit the application"
+      action: "quit"
+
+# Help Text / Status Messages
+messages:
+  quit: "Thanks for using Yuga CLI!"
+  initializing: "Initializing..."
+  loading: "Loading..."
+  
+  # Landing page help text
+  landing_normal: "Press Enter to continue • Type / for commands • q to quit"
+  landing_palette_visible: "Press Enter to select command • Esc to cancel • q to quit"
+  landing_palette_focused: "↑↓ to navigate • Enter to select • Esc to cancel"
+  
+  # Input view help text
+  input_help: "Press Enter to submit, Esc to go back"
+  
+  # Status bar help text
+  status_help: "Press ? for help • q to quit • esc to go back"
+  status_palette: "Use ↑↓ to navigate • Enter to select • Esc to cancel"
+  
+  # Textarea placeholder
+  textarea_placeholder: "Type your message here... (/ for commands)"
+
+# Content Sections
+content:
+  dashboard:
+    title: "Dashboard"
+    sections:
+      - title: "System Status"
+        items:
+          - "✓ YugabyteDB: Running"
+          - "✓ AI Agent: Active"
+          - "✓ API Server: Healthy"
+      - title: "Metrics"
+        items:
+          - "• CPU Usage: 45%"
+          - "• Memory: 2.3 GB / 8 GB"
+          - "• Active Connections: 12"
+          - "• Queries/sec: 127"
+  
+  database:
+    title: "Database Management"
+    sections:
+      - title: "YugabyteDB Instance"
+        items:
+          - "Version: 2.29.0.0"
+          - "Status: Running"
+          - "Master Address: 127.0.0.1:7100"
+          - "TServer Address: 127.0.0.1:9100"
+      - title: "Tables"
+        items:
+          - "• system.users"
+          - "• system.agents"
+          - "• system.logs"
+  
+  config:
+    title: "Configuration"
+    sections:
+      - title: "Current Configuration"
+        items:
+          - "Config File: ~/.yuga-cli.yaml"
+          - ""
+          - "Database:"
+          - "  Host: localhost"
+          - "  Port: 5433"
+          - ""
+          - "Agent:"
+          - "  Model: gpt-4"
+          - "  Temperature: 0.7"
+  
+  logs:
+    title: "Application Logs"
+    sections:
+      - title: "Recent Logs"
+        items:
+          - "[2026-02-05 10:30:15] INFO: Application started"
+          - "[2026-02-05 10:30:16] INFO: Database connection established"
+          - "[2026-02-05 10:30:17] INFO: AI Agent initialized"
+          - "[2026-02-05 10:31:22] INFO: Processing user request"
+          - "[2026-02-05 10:31:23] INFO: Query completed successfully"
+  
+  help:
+    title: "Help"
+    sections:
+      - title: "Keyboard Shortcuts"
+        items:
+          - "↑/k, ↓/j  - Navigate up/down"
+          - "←/h, →/l  - Navigate left/right"
+          - "Enter     - Select item"
+          - "Esc       - Go back"
+          - "q         - Quit application"
+          - "r         - Refresh content"
+          - "?         - Toggle help"
+      - title: "About"
+        items:
+          - "Yuga CLI v0.1.0"
+          - "Built with Cobra and Bubble Tea"
+          - ""
+          - "For more information, visit:"
+          - "https://github.com/yourusername/yuga-cli"
+  
+  agent:
+    title: "AI Agent"
+
+# Styling Configuration
+styles:
+  colors:
+    primary: "#7D56F4"
+    secondary: "#73F59F"
+    error: "#FF5555"
+    muted: "#626262"
+    background: "#1E1E2E"
+    border: "#7D56F4"
+  
+  # Text emphasis
+  emphasis:
+    bold: true
+    underline: false
+    italic: false
