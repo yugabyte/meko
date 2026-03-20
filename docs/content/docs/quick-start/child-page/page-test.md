@@ -8,3 +8,9 @@ weight: 10
 ## Child of a child page
 
 Testing a child page
+
+| This | Is a | Table |
+| :--- | :--- | :--- |
+| First | Row | Here |
+| Second | Row | Here |
+| Third | Row | Here |

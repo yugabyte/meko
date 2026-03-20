@@ -16,3 +16,16 @@ type: docs
 
 
 Above section is awaiting:  Heather & Naveen
+
+Some code:
+
+```sql
+CREATE TABLE census(
+   id int,
+   name varchar(255),
+   age int,
+   zipcode int,
+   employed boolean,
+   PRIMARY KEY(id ASC)
+);
+```
