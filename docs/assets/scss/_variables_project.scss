@@ -1,0 +1,18 @@
+$orange: #ff6900;
+$white:  #fff;
+
+$colors: (
+  "orange": $orange,
+  "white":  $white,
+);
+
+$primary:   $black;
+$secondary: $white;
+$light:     $white;
+$dark:      $black;
+
+$td-enable-google-fonts: true;
+$td-google-font-name: "IBM Plex Sans";
+$td-google-font-family: "IBM Plex Sans:400,700";
+
+$td-navbar-min-height: 6rem;

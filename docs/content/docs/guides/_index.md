@@ -4,9 +4,10 @@ headerTitle: Guidance on working with Meko
 linkTitle: Guides
 headcontent: Explore how to use Meko's interfaces
 description: Explore how to use Meko's interfaces
-type: indexpage
+type: docs
 showRightNav: true
 ---
+
 # Working with Memory
 
 │   │   ├── Add memories from chat        (memory_add)
@@ -37,7 +38,7 @@ showRightNav: true
 ## Multi-agent patterns             (shared vs private datapacks — mark P1/future)
 
 
- 
+
 ## Observability & explainability
 
 │   │   ├── Traces
@@ -50,5 +51,3 @@ showRightNav: true
 Above section is awaiting:  blocked on Engr.
 
 **
-
-

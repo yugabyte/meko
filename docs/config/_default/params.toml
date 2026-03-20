@@ -1,0 +1,21 @@
+author = "Team meko"
+copyright = 'meko. All Rights Reserved'
+version = false
+
+[ui]
+  navbar_logo = true
+  sidebar_menu_compact = true
+  sidebar_menu_foldable = true
+  sidebar_search_disable = false
+  sidebar_root_enabled = true
+  ul_show = 1
+
+[[links.developer]]
+  name = "GitHub"
+  url = "https://github.com/yugabyte/meko"
+  icon = "fab fa-github"
+
+[[links.developer]]
+  name = "Discord"
+  url = "https://discord.gg/smxHNvmf"
+  icon = "fab fa-discord"

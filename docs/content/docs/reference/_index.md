@@ -4,9 +4,9 @@ headerTitle: Meko Reference Docs
 linkTitle: Reference Docs
 headcontent: Peruse Meko's Reference Docs
 description: Peruse Meko's Reference Docs
-type: indexpage
-showRightNav: true
+type: docs
 ---
+
 # Reference
 
 

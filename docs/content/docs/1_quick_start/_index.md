@@ -4,7 +4,7 @@ headerTitle: Meko Quick Start
 linkTitle: Quick Start
 headcontent: Learn about Meko's features, with examples
 description: Explore the features of Meko's features
-type: indexpage
+type: docs
 showRightNav: true
 ---
 
@@ -26,7 +26,7 @@ One liners for each of these
 
 ## Explore your datapack
 * Add memory to Trip Planner       (the money page — 5 min to see value
-* Observability - costs, calls, timings 
+* Observability - costs, calls, timings
 * Build a knowledge base       	(pg_dist_rag, S3 source → vector index)
 
 Above section is awaiting:   Dev implementation of the web portal.   Week of March 23

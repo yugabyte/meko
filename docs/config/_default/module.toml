@@ -1,0 +1,7 @@
+[hugoVersion]
+  extended = true
+  min = "0.145.0"
+
+[[imports]]
+  path = "github.com/google/docsy"
+  disable = false

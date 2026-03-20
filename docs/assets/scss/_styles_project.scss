@@ -1,0 +1,23 @@
+@import "./_nav.scss";
+@import "./_sidebar-toc.scss";
+@import "./_sidebar-tree.scss";
+
+:root {
+  --bs-border-color: #262626;
+  --bs-secondary-color: $white;
+}
+
+body {
+  background-color: $black;
+  color: $white;
+
+  .container-fluid {
+    padding: 0 24px;
+  }
+
+  .td-footer {
+    min-height: 120px;
+    padding-top: 0px;
+    align-items: center;
+  }
+}

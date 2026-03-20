@@ -4,15 +4,14 @@ headerTitle: Meko Integrations
 linkTitle: Integration
 headcontent: Explore how to integrate Meko into existing tools and environments
 description: Explore how to integrate Meko into existing tools and environments
-type: indexpage
-showRightNav: true
+type: docs
 ---
+
 # Integrations
 
-
-### w/ AI Coding Tools       
-- [ ] Overview                     
-- [ ] Cursor		   	
+### w/ AI Coding Tools
+- [ ] Overview
+- [ ] Cursor
 - [ ] Claude Code
 - [ ] OpenAI Codex
 - [ ] VS Code			- P1
@@ -26,8 +25,8 @@ showRightNav: true
 - [ ] OpenAI Agents SDK
 
 
-### w/ Vibe coding platforms                 
-- [ ] Lovable                         
+### w/ Vibe coding platforms
+- [ ] Lovable
 - [ ] Replit
 
 
@@ -36,5 +35,3 @@ showRightNav: true
 - [ ] OpenAI chatgpt Desktop
 
 Above section is awaiting:  Heather & Yu-Shen
-
-

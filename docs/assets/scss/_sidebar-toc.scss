@@ -1,0 +1,32 @@
+body {
+  &.no-toc {
+    aside.td-sidebar-toc {
+      display: none !important;
+    }
+
+    @media (min-width: 768px) {
+      main.col-12 {
+        width: 80% !important;
+      }
+    }
+  }
+
+  .td-toc {
+    #TableOfContents {
+      a.active {
+        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+        background-size: 200% 200%;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      a:focus,
+      a:hover {
+        color: $white;
+        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+        background-size: 200% 200%;
+        -webkit-text-fill-color: inherit;
+      }
+    }
+  }
+}

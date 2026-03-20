@@ -1,0 +1,18 @@
+[[main]]
+  name = "GitHub"
+  weight = 5
+  url = "https://github.com/yugabyte/meko"
+  pre = '<i class="fa-brands fa-github"></i>'
+
+[[main]]
+  name = "Discord"
+  weight = 10
+  url = "https://discord.gg/smxHNvmf"
+  pre = '<i class="fa-brands fa-discord"></i>'
+
+[[main]]
+  name = "Sign Up FREE"
+  weight = 15
+  url = "#"
+  pre = "<span class='btn'>"
+  post = "</span>"
