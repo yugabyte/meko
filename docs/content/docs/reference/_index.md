@@ -1,24 +1,17 @@
 ---
-title: Meko Reference Docs
-headerTitle: Meko Reference Docs
+title: Reference
+headerTitle: Meko Reference
 linkTitle: Reference
-headcontent: Peruse Meko's Reference Docs
-description: Peruse Meko's Reference Docs
+headcontent: CLI commands, API endpoints, and technical reference
+description: Complete reference documentation for the Meko CLI and REST API
 weight: 500
 type: docs
 ---
 
-## Reference
+Technical reference for Meko's command-line interface and REST API.
 
-
-│   └── Meko CLI Overview              (Simple explanation of the CLI)
-
-│   └── Install the CLI              (Go binary install, Linux/Mac)
-
-│   └── Meko CLI              (Go binary install, Linux/Mac)
-
-│   ├── Datapacks                     (isolation model — 1 datapack per agent)
-
-│   ├── Knowledge Bases (pg_dist_rag)    (chunking, embedding, vector index pipeline)
-
-Above section is awaiting:  blocked on Engr.   Targets Friday, Mar 20, 2026**
+- **[CLI Overview](cli-overview/)** --- Authentication, global flags, and logging
+- **[Install the CLI](install-cli/)** --- Download or build the Meko CLI
+- **[CLI Commands](cli-commands/)** --- Complete command reference
+- **[API Reference](api-reference/)** --- REST API endpoint documentation
+- **[Build the Docs](build-the-docs/)** --- Run the documentation site locally

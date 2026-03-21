@@ -1,51 +1,15 @@
 ---
-title: Guidance on working with Meko
+title: Guides
 linkTitle: Guides
-description: Explore how to use Meko's interfaces
-weight: 300
+description: Step-by-step guides for working with Meko's features
+weight: 400
 type: docs
 ---
 
-## Working with Memory
+These guides walk you through common tasks and workflows with Meko.
 
-│   │   ├── Add memories from chat        (memory_add)
-
-│   │   ├── Search memories               (memory_search)
-
-│   │   └── Clear memories
-
-
-##  Working with Knowledge Bases
-
-│   │   ├── Trigger a knowledge base build (trigger_knowledge_base_build)
-
-│   │   ├── Check index build status      (check_index_status)
-
-│   │   └── Add a new source to an index  (add_source_to_index)
-
-│   │   └── Refresh Knowledge base using cron  
-
-
-## Database Access
-
-│   │   ├── Run read-only queries         (db_* tools)
-
-│   │   └── Summarize your datapack schema
-
-
-## Multi-agent patterns             (shared vs private datapacks — mark P1/future)
-
-
-
-## Observability & explainability
-
-│   │   ├── Traces
-
-│   │   ├── Conversations history
-
-│   │   └── chain of thought
-
-
-Above section is awaiting:  blocked on Engr.
-
-**
+- **[Working with Memory](working-with-memory/)** --- Add, search, and manage agent memories
+- **[Working with Knowledge Bases](working-with-knowledge-bases/)** --- Build and query knowledge bases from your documents
+- **[Database Access](database-access/)** --- Connect directly to your datapack's PostgreSQL database
+- **[Multi-Agent Patterns](multi-agent-patterns/)** --- Shared vs. private datapacks for multi-agent systems
+- **[Observability](observability/)** --- Traces, conversation history, and chain-of-thought visibility

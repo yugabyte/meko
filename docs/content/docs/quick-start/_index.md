@@ -1,37 +1,14 @@
 ---
-title: Meko Quick Start
+title: Quick Start
 headerTitle: Meko Quick Start
 linkTitle: Quick Start
-headcontent: Learn about Meko's features, with examples
-description: Learn about Meko's features, with examples
+headcontent: Get up and running with Meko in minutes
+description: Sign up, connect your IDE, and explore your first datapack
 weight: 100
 type: docs
 ---
 
-## What is Meko
+Get from zero to a working Meko integration in minutes. Follow these steps in order:
 
-Features & benefits / What can Meko do? Me (Memory), K (Knowledge), and O (Observability), is a unified data layer for agentic workloads. Users can interact with the Meko platform primarily with CLI or an MCP Server.
-
-One liners for each of these
-
-* Core concepts
-* Datapacks
-* Memory
-* Knowledge
-* How does meko fit in your stack?
-
-## Meko Quick Start
-
-### Connect to Meko
-
-Sign up & get your API token    (Cognito-based signup → token mgmt)
-
-Set up your IDE to access your default datapack ( Cursor, Claude, Codex)
-
-### Explore your datapack
-
-* Add memory to Trip Planner       (the money page — 5 min to see value
-* Observability - costs, calls, timings
-* Build a knowledge base       	(pg_dist_rag, S3 source → vector index)
-
-Above section is awaiting:   Dev implementation of the web portal.   Week of March 23
+1. **[Connect to Meko](connect-to-meko/)** --- Sign up, get your API token, and configure your IDE to use your default datapack.
+2. **[Explore Your Datapack](explore-your-datapack/)** --- Add memories, query your knowledge base, and see Meko in action.

@@ -1,31 +1,12 @@
 ---
-title: Meko Solution Examples
+title: Examples
 linkTitle: Examples
-description: Explore sample solutions that can be built with Meko
+description: Real-world scenarios and sample solutions built with Meko
 weight: 200
 type: docs
 ---
 
-## Examples of How You can Use Meko
+Explore practical examples of what you can build with Meko. Each example walks through a realistic scenario that demonstrates Meko's capabilities.
 
-* Conversation history - verbatim knowledge & derived memories. S3-backed tiering
-* Portable developer coding prefs
-* Group/team policies, standards, norms - e.g. coding standards, testing policies, etc.
-* Project storage for an individual or team
-* Resumability for agents and sub-agents - persist all their state in Meko for resumability
-
-
-Above section is awaiting:  Heather & Naveen
-
-Some code:
-
-```sql
-CREATE TABLE census(
-   id int,
-   name varchar(255),
-   age int,
-   zipcode int,
-   employed boolean,
-   PRIMARY KEY(id ASC)
-);
-```
+- **[Use Meko in Your IDE](meko-in-your-ide/)** --- Store personal preferences, portable coding standards, and team policies that follow you across sessions and projects.
+- **[Build Software with Meko](build-software-with-meko/)** --- Leverage conversation history, agent reasoning traces, and resumability for robust software development workflows.

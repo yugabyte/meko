@@ -1,42 +1,18 @@
 ---
-title: Meko Integrations
+title: Integrations
 headerTitle: Meko Integrations
-linkTitle: Integration
-headcontent: Explore how to integrate Meko into existing tools and environments
-description: Explore how to integrate Meko into existing tools and environments
-weight: 400
+linkTitle: Integrations
+headcontent: Connect Meko to your tools and frameworks
+description: Integrate Meko with AI coding tools, agent frameworks, vibe coding platforms, and consumer AI applications
+weight: 300
 type: docs
 ---
 
-## Integrations
+Meko integrates with the AI ecosystem through its MCP server protocol. Each datapack exposes an MCP endpoint that any compatible tool can connect to.
 
-### w/ AI Coding Tools
+Browse integrations by category:
 
-- [ ] Overview
-- [ ] Cursor
-- [ ] Claude Code
-- [ ] OpenAI Codex
-- [ ] VS Code			- P1
-- [ ] Opencode			- P1
-- [ ] Google Anti-gravity	- P1
-
-### w/ AGENT FRAMEWORKS
-
-- [ ] Overview
-- [ ] Python (direct MCP client)
-- [ ] LangChain
-- [ ] OpenAI Agents SDK
-
-
-### w/ Vibe coding platforms
-
-- [ ] Lovable
-- [ ] Replit
-
-
-### ─ w/ Consumer AI LLMs     		- P1
-
-- [ ] Claude Desktop
-- [ ] OpenAI chatgpt Desktop
-
-Above section is awaiting:  Heather & Yu-Shen
+- **[AI Coding Tools](ai-coding-tools/)** --- Cursor, Claude Code, OpenAI Codex, and more
+- **[Agent Frameworks](agent-frameworks/)** --- Python MCP, LangChain, OpenAI Agents SDK
+- **[Vibe Coding Platforms](vibe-coding/)** --- Lovable, Replit
+- **[Consumer AI](consumer-ai/)** --- Claude Desktop, ChatGPT Desktop
