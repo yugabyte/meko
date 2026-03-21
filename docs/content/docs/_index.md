@@ -54,20 +54,6 @@ Meko is the agent-native data layer designed to unify agent knowledge, memory, a
 
 ## Architecture Overview
 
-```text
-Agent SDK (CrewAI, LangChain, LangGraph, etc.)
-  |
-  v
-MEKO
-  +-- Inference:  LLMs (Llama, OpenAI, HF) - vLLM* - LMCache/KDN*
-  +-- Knowledge:  pg_dist_rag - data lineage - MCP server* - reranking**
-  +-- Database:   YugabyteDB YSQL - pgvector - Apache AGE** - BM25** - Valkey**
-  +-- Observability, audit, RBAC: LangFuse*
-  |
-  v
-YugabyteDB (distributed PostgreSQL)
-
-* in progress  ** roadmap
-```
+<img src="/images/architecture.svg" alt="Meko Architecture Diagram" style="max-width: 100%; height: auto;" />
 
 Agents interact via MCP. Developers interact via CLI, API, or direct PostgreSQL connection. Meko runs anywhere --- local, cloud, on-prem, or air-gapped --- with the same config everywhere.

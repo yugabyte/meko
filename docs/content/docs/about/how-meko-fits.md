@@ -9,21 +9,7 @@ weight: 30
 
 Meko sits between your agent SDK and the underlying database, providing a unified data layer that replaces multiple standalone systems.
 
-```text
-Agent SDK (CrewAI, LangChain, LangGraph, etc.)
-  |
-  v
-MEKO
-  +-- Inference:  LLMs (Llama, OpenAI, HF) - vLLM* - LMCache/KDN*
-  +-- Knowledge:  pg_dist_rag - data lineage - MCP server* - reranking**
-  +-- Database:   YugabyteDB YSQL - pgvector - Apache AGE** - BM25** - Valkey**
-  +-- Observability, audit, RBAC: LangFuse*
-  |
-  v
-YugabyteDB (distributed PostgreSQL)
-
-* in progress  ** roadmap
-```
+<img src="/images/architecture.svg" alt="Meko Architecture Diagram" style="max-width: 100%; height: auto;" />
 
 ### What Meko Replaces
 
