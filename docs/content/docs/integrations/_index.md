@@ -66,7 +66,7 @@ The result should look like this:
 
 ![[Pasted image 20260320164527.png]]
 
-{{< tip title="Tip" >}} If you see errors when restarting Claude, examine the log file that appears.  Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.{{< /tip >}}
+TIP: If you see errors when restarting Claude, examine the log file that appears.  Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.
 
 #### Claude Code (via CLI)
 
