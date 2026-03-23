@@ -1,0 +1,13 @@
+apiVersion: saas.mekodata.ai/v1
+kind: MekoUserAccount
+metadata:
+  name: mekouseraccount-abc123
+  namespace: meko-tenants
+spec:
+  accountId: "abc123"
+  accountTier: "free"
+  mcpImage: "161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/mcp-server:latest"
+  ragImage: "161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/rag-worker:latest"
+  langfuseImage: "langfuse/langfuse:latest"
+  mcpReplicas: 1
+  ragReplicas: 1
