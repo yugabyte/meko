@@ -5,7 +5,69 @@ description: How to run the Meko docs locally
 weight: 10
 ---
 
-## Steps
+## Using Docker (recommended)
+
+The Docker setup provides a consistent development environment without installing Hugo, Go, or Node.js on your machine.
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+
+### Quick start
+
+1. Clone the repository:
+
+    ```sh
+    git clone https://github.com/yugabyte/meko.git
+    cd meko
+    ```
+
+1. Start the dev server:
+
+    ```sh
+    ./docs-dev.sh start
+    ```
+
+1. Visit <http://localhost:1313/> in your browser. Changes to files on your host are reflected automatically via live reload.
+
+### Available commands
+
+| Command | Description |
+|---------|-------------|
+| `./docs-dev.sh start` | Build image and start Hugo dev server (default) |
+| `./docs-dev.sh stop` | Stop the container |
+| `./docs-dev.sh shell` | Open a bash shell inside the container |
+| `./docs-dev.sh setup-fork` | Configure your GitHub fork and remotes |
+| `./docs-dev.sh build` | Run a production build |
+| `./docs-dev.sh clean` | Remove containers, volumes, and images |
+| `./docs-dev.sh logs` | Tail container logs |
+
+### Setting up your fork for PRs
+
+1. Open a shell in the container:
+
+    ```sh
+    ./docs-dev.sh shell
+    ```
+
+1. Authenticate with GitHub (if you haven't already):
+
+    ```sh
+    gh auth login
+    ```
+
+1. Run the fork setup helper:
+
+    ```sh
+    exit
+    ./docs-dev.sh setup-fork
+    ```
+
+1. Create a branch, make your changes on the host, preview in the browser, then push and create a PR from the container shell.
+
+---
+
+## Manual setup (without Docker)
 
 1. Fork the repository (github.com/yugabyte/meko/):
 
@@ -33,8 +95,8 @@ weight: 10
 
     ```sh
     cd docs/
-    git checkout master
-    git pull upstream master
+    git checkout main
+    git pull upstream main
     ```
 
 1. When setting it up for the first time, while in the docs/ directory, run:

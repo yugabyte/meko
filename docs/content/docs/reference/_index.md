@@ -1,9 +1,9 @@
 ---
-title: Meko Reference Docs
-headerTitle: Meko Reference Docs
+title: Reference
+headerTitle: Meko Reference
 linkTitle: Reference
-headcontent: Peruse Meko's Reference Docs
-description: Peruse Meko's Reference Docs
+headcontent: CLI commands, API endpoints, and technical reference
+description: Complete reference documentation for the Meko CLI and REST API
 weight: 500
 type: docs
 ---

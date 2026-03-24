@@ -27,3 +27,91 @@ body {
     }
   }
 }
+
+// Fix code styling for dark theme
+
+:root {
+  --td-pre-bg: #2d2d2d;
+}
+
+// Inline code (must match theme specificity: .td-content p code)
+.td-content p code,
+.td-content li > code,
+.td-content li code,
+.td-content table code,
+.td-content h1 code,
+.td-content h2 code,
+.td-content h3 code,
+.td-content h4 code,
+.td-content dd code,
+.td-content dt code,
+code:not([class*="language-"]) {
+  background-color: #2d2d2d !important;
+  color: #e6e6e6 !important;
+}
+
+// Code blocks (fenced / <pre><code>)
+pre {
+  background-color: #1e1e1e !important;
+  color: #d4d4d4;
+
+  code {
+    background-color: transparent !important;
+    color: inherit !important;
+  }
+}
+
+// Highlight.js / Chroma code blocks
+.highlight pre {
+  background-color: #1e1e1e !important;
+  color: #d4d4d4;
+}
+
+// Landing page cards
+.meko-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin: 1.5rem 0;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.meko-card {
+  display: flex;
+  flex-direction: column;
+  padding: 1.25rem 1.5rem;
+  background: #1a1a2e;
+  border: 1px solid #2d2d4a;
+  border-radius: 0.5rem;
+  text-decoration: none !important;
+  color: $white !important;
+  transition: border-color 0.2s, background-color 0.2s, transform 0.15s;
+
+  &:hover {
+    border-color: $orange;
+    background: #1e1e36;
+    transform: translateY(-2px);
+  }
+
+  h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1.1rem;
+    color: $white;
+  }
+
+  p {
+    margin: 0 0 0.75rem;
+    font-size: 0.9rem;
+    color: #b0b0c0;
+    flex-grow: 1;
+  }
+
+  .meko-card-link {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: $orange;
+  }
+}

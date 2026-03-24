@@ -1,10 +1,10 @@
 ---
-title: Meko Integrations
+title: Integrations
 headerTitle: Meko Integrations
-linkTitle: Integration
-headcontent: Explore how to integrate Meko into existing tools and environments
-description: Explore how to integrate Meko into existing tools and environments
-weight: 400
+linkTitle: Integrations
+headcontent: Connect Meko to your tools and frameworks
+description: Integrate Meko with AI coding tools, agent frameworks, vibe coding platforms, and consumer AI applications
+weight: 300
 type: docs
 ---
 # Integrations
