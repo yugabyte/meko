@@ -203,6 +203,8 @@ func connStrWithDB(adminConnStr, dbName string) (string, error) {
 // `))
 
 var rolesAndGrantsTmpl = template.Must(template.New("roles").Parse(`
+REVOKE CONNECT ON DATABASE {{.DB}} FROM PUBLIC;
+
 CREATE USER {{.MCP}} WITH PASSWORD {{.MCPPass}};
 CREATE USER {{.User}} WITH PASSWORD {{.UserPass}};
 

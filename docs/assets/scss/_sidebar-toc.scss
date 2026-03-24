@@ -30,3 +30,29 @@ body {
     }
   }
 }
+
+@media (max-width: 767px) {
+  .td-main .td-sidebar {
+    top: 0;
+    z-index: 99;
+
+    .td-sidebar__search {
+      padding: 10px 0;
+    }
+
+    .td-sidebar__toggle {
+      font-size: 22px;
+      margin: 0;
+      width: 30px;
+      margin-top: -125px;
+      background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+      background-size: 200% 200%;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    form.td-sidebar__search {
+      justify-content: right;
+    }
+  }
+}

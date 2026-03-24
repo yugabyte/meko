@@ -8,10 +8,24 @@ weight: 500
 type: docs
 ---
 
-Technical reference for Meko's command-line interface and REST API.
+# Reference
 
-- **[CLI Overview](cli-overview/)** --- Authentication, global flags, and logging
-- **[Install the CLI](install-cli/)** --- Download or build the Meko CLI
-- **[CLI Commands](cli-commands/)** --- Complete command reference
-- **[API Reference](api-reference/)** --- REST API endpoint documentation
-- **[Build the Docs](build-the-docs/)** --- Run the documentation site locally
+Complete reference documentation for Meko's CLIs, Datapacks, and Knowledge Bases. The Meko CLI is a command-line tool that allows you to manage your Meko Datapacks, and Knowledge Bases.
+
+## Meko CLI Overview (Simple introduction to the CLI
+
+
+## Install the CLI 
+
+(Go binary install, Linux/Mac)
+
+## Meko CLI
+(Go binary install, Linux/Mac)
+
+## Datapacks
+ (isolation model — 1 or more datapacks per agent)
+
+ ## Knowledge Bases (pg_dist)rag)
+ (chunking embedding, vector index build pipeline)
+
+Above section is awaiting:  blocked on Engr.   Targets Friday, Mar 20, 2026**
