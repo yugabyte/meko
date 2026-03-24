@@ -2,7 +2,7 @@
 title: How Meko Fits in Your Stack
 linkTitle: How Meko Fits
 description: Where Meko sits in your architecture and how it deploys
-weight: 30
+weight: 4200
 ---
 
 ## Architecture

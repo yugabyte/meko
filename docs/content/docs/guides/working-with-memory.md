@@ -2,7 +2,7 @@
 title: Working with Memory
 linkTitle: Working with Memory
 description: Add, search, and manage agent memories in Meko
-weight: 10
+weight: 4300
 ---
 
 Meko's memory system gives your agents persistent recall across sessions. Memories are automatically extracted from conversations and stored as both vector embeddings (for semantic search) and graph edges (for relationship traversal).

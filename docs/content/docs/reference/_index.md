@@ -4,7 +4,7 @@ headerTitle: Meko Reference
 linkTitle: Reference
 headcontent: CLI commands, API endpoints, and technical reference
 description: Complete reference documentation for the Meko CLI and REST API
-weight: 500
+weight: 5000
 type: docs
 ---
 

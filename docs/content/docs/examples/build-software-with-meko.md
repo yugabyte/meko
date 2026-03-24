@@ -2,7 +2,7 @@
 title: Build Software with Meko
 linkTitle: Build Software with Meko
 description: Leverage conversation history, reasoning traces, and resumability
-weight: 20
+weight: 2020
 ---
 
 Meko stores conversation history and agent reasoning traces, enabling features like cross-session recall and resumability after failures.

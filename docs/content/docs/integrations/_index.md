@@ -4,7 +4,7 @@ headerTitle: Meko Integrations
 linkTitle: Integrations
 headcontent: Connect Meko to your tools and frameworks
 description: Integrate Meko with AI coding tools, agent frameworks, vibe coding platforms, and consumer AI applications
-weight: 300
+weight: 3000
 type: docs
 ---
 # Integrations

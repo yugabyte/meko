@@ -2,7 +2,7 @@
 title: Connect to Meko
 linkTitle: Connect to Meko
 description: Sign up, authenticate, and connect your IDE to Meko
-weight: 10
+weight: 1010
 ---
 
 ## Step 1: Sign Up
