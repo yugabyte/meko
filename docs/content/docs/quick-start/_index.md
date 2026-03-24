@@ -4,7 +4,7 @@ headerTitle: Meko Quick Start
 linkTitle: Quick Start
 headcontent: Get up and running with Meko in minutes
 description: Sign up, connect your IDE, and explore your first datapack
-weight: 100
+weight: 1000
 type: docs
 ---
 

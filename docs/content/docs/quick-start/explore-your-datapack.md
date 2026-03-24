@@ -2,7 +2,7 @@
 title: Explore Your Datapack
 linkTitle: Explore Your Datapack
 description: Add memories, query knowledge, and see Meko in action
-weight: 20
+weight: 1020
 ---
 
 Now that you're [connected to Meko](../connect-to-meko/), let's explore what your datapack can do.

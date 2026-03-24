@@ -11,6 +11,7 @@ cascade:
       breadcrumb_disable: true
 type: docs
 layout: list
+aliases:
 ---
 
 Meko is the agent-native data layer designed to unify agent knowledge, memory, and conversations, eliminating the impedance mismatch of traditional relational and vector databases.

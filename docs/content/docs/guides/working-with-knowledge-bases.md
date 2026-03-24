@@ -2,7 +2,7 @@
 title: Working with Knowledge Bases
 linkTitle: Working with Knowledge Bases
 description: Build, query, and manage knowledge bases in Meko
-weight: 20
+weight: 4400
 ---
 
 Knowledge bases let you load documents into your datapack and query them using semantic search (RAG). Meko handles chunking, embedding, and indexing automatically.

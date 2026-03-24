@@ -2,7 +2,7 @@
 title: Observability
 linkTitle: Observability
 description: Traces, conversation history, and chain-of-thought visibility
-weight: 50
+weight: 4600
 ---
 
 Meko provides end-to-end observability into your agents' data operations, giving you the visibility production AI applications require.

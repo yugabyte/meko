@@ -2,7 +2,7 @@
 title: Multi-Agent Patterns
 linkTitle: Multi-Agent Patterns
 description: Shared vs. private datapacks for multi-agent systems
-weight: 40
+weight: 4800
 ---
 
 {{% pageinfo color="info" %}}

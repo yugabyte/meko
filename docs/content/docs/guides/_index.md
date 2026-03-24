@@ -2,7 +2,7 @@
 title: Guides
 linkTitle: Guides
 description: Step-by-step guides for working with Meko's features
-weight: 400
+weight: 4000
 type: docs
 ---
 

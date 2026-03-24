@@ -2,7 +2,7 @@
 title: Examples
 linkTitle: Examples
 description: Real-world scenarios and sample solutions built with Meko
-weight: 200
+weight: 2000
 type: docs
 ---
 
