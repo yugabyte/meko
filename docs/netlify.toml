@@ -1,0 +1,91 @@
+# Settings in the [build] context are global and are applied to
+# all contexts unless otherwise overridden by more specific contexts.
+[build]
+  # Default build command.
+  command = "npm run build"
+
+# Deploy contexts
+# Environment variables here override variables set in the web UI.
+#
+# https://docs.netlify.com/site-deploys/overview/#deploy-contexts
+# https://docs.netlify.com/build/configure-builds/file-based-configuration/#deploy-contexts
+# all api_keys were generated from btoa(orig_key)
+[context.deploy-preview.environment]
+  GO_VERSION = "1.25.6"
+  HUGO_VERSION = "0.154.5"
+  NODE_VERSION = "22"
+
+[context.branch-deploy.environment]
+  GO_VERSION = "1.25.6"
+  HUGO_VERSION = "0.154.5"
+  NODE_VERSION = "22"
+
+[context.production.environment]
+  GO_VERSION = "1.25.6"
+  HUGO_VERSION = "0.154.5"
+  NODE_VERSION = "22"
+
+##########################################################
+
+# Hugo resource caching plugin configuration
+# https://github.com/cdeleeuwe/netlify-plugin-hugo-cache-resources#readme
+
+[[plugins]]
+  package = "netlify-plugin-hugo-cache-resources"
+
+    [plugins.inputs]
+    # If it should show more verbose logs (optional, default = true)
+    debug = true
+    # Relative path to source directory in case you use Hugo's "--s" option
+    srcdir = "docs"
+
+[[headers]]
+  #
+  # https://docs.netlify.com/configure-builds/file-based-configuration/#headers
+  # CSP
+  for = "/*"
+  [headers.values]
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    Content-Security-Policy = '''
+        default-src 'self' 'unsafe-inline'
+        ;
+
+        connect-src 'self'
+        ;
+
+        script-src 'self' 'unsafe-eval' 'unsafe-inline'
+						https://code.jquery.com/jquery-3.7.1.min.js
+            https://netlify-cdp-loader.netlify.app/
+            https://netlify-rum.netlify.app
+        ;
+
+        style-src 'self' 'unsafe-inline'
+            https://fonts.googleapis.com
+        ;
+
+        font-src 'self'
+            https://docs.yugabyte.com/fonts/
+        ;
+
+        object-src 'none'
+        ;
+
+        img-src 'self'
+            https://docs.mekodata.ai/images/favicon.ico
+        ;
+
+        child-src 'self' 'unsafe-inline'
+            https://app.netlify.com/
+            https://www.google.com/
+        ;
+
+        frame-ancestors 'self'
+        ;
+
+        media-src 'self' 'unsafe-inline'
+        ;
+'''
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin"
+    Permissions-Policy = "disabled"
+    X-XSS-Protection = "1"
