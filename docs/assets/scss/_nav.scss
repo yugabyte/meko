@@ -11,12 +11,24 @@
       align-items: center;
       gap: 0.5rem;
       color: $white;
+      padding: 0 !important;
       transition: all 0.3s ease;
+
+      .social-link {
+        padding: 6px;
+        text-align: center;
+        width: 50px;
+      }
 
       i {
         transition: all 0.3s ease;
         color: $white;
+        padding: 0 !important;
         font-size: 24px;
+
+        @media(max-width: 500px) {
+          padding-right: 0 !important;
+        }
 
         + span {
           display: none;
@@ -47,7 +59,6 @@
       background: #000;
       z-index: 1;
       overflow: hidden;
-      border: 3px solid transparent;
 
       &::before {
         content: '';
@@ -56,9 +67,8 @@
         padding: 3px;
         border-radius: 40px;
         background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        -webkit-mask:
-          linear-gradient(#fff 0 0) content-box,
-          linear-gradient(#fff 0 0);
+        -webkit-mask: linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
         -webkit-mask-composite: destination-out;
         mask-composite: exclude;
         z-index: -1;
@@ -80,8 +90,52 @@
       }
     }
   }
-
   .navbar-brand__name {
     display: none;
+  }
+}
+
+@media(max-width: 767px) {
+  .td-navbar {
+    min-height: 100px;
+
+    > .container-fluid {
+      padding: 0 15px !important;
+      flex-flow: row !important;
+      position: relative;
+      z-index: 9999 ;
+    }
+
+    .navbar-nav .nav-item .btn {
+      > span {
+        padding: 5px;
+        font-size: 14px;
+      }
+    }
+
+    .scroll-indicator {
+      display: none !important;
+    }
+
+    .td-navbar__main {
+      padding-right: 50px;
+    }
+
+    .navbar-brand {
+      padding: 0;
+
+      .navbar-brand__logo {
+        width: 39px;
+        overflow: hidden;
+        display: block;
+
+        svg {
+          max-width: 140px;
+          width: 140px;
+          margin-left: -13px;
+          margin-top: -11px;
+        }
+      }
+    }
   }
 }
