@@ -1,58 +1,9 @@
 ---
-title: Explore Your Datapack
-linkTitle: Explore Your Datapack
+title: Explore Knowledge
+linkTitle: Explore Knowledge
 description: Add memories, query knowledge, and see Meko in action
 weight: 1020
 ---
-
-Now that you're [connected to Meko](../connect-to-meko/), let's explore what your datapack can do.
-
-## Demo 1: Trip Planner with Memory
-
-This demo shows how memory makes your agents dramatically better.
-
-### Without Meko
-
-Open your IDE and type:
-
-```text
-Propose a 5 day vacation for me.
-```
-
-Without any stored context, the agent asks generic follow-up questions: "What kind of vacation?", "Budget?", "Where?"
-
-### With Meko
-
-Now, connect to your Meko MCP server and type:
-
-```text
-You have access to the Meko platform through MCP server.
-Have Meko remember all my personal preferences.
-agent_id is cursor_agent and user_id is <your_username>
-```
-
-Then store some preferences:
-
-```text
-Please remember that I like to take vacations at tropical beach locations, on a budget
-```
-
-**Start a new chat session**, then type:
-
-```text
-Propose a 5 day vacation for me.
-```
-
-Notice how the agent retrieves your stored preferences and immediately proposes a tropical beach vacation within budget --- no follow-up questions needed.
-
-### View Your Memories
-
-You can verify what Meko stored by checking your datapack's memories in the Meko portal. You'll see:
-
-- The stored memories with their extracted entities
-- Key metrics: number of memories, knowledge base sources, and MCP requests
-
-<!-- TODO: Add screenshots of the Meko portal showing datapack memories once the web portal is available -->
 
 ## Demo 2: Build a Knowledge Base
 
