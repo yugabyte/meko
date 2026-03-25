@@ -1,4 +1,6 @@
 ## Append samples of your project ##
 resources:
+- namespace_meko-tenants.yaml
+- shared_credentials_secret.yaml
 - saas_v1_mekouseraccount.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

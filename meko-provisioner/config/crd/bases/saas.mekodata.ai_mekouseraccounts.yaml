@@ -62,12 +62,31 @@ spec:
                 default: 1
                 format: int32
                 type: integer
+              yugabyteDBHost:
+                minLength: 1
+                type: string
+              yugabyteDBName:
+                minLength: 1
+                type: string
+              yugabyteDBPassword:
+                minLength: 1
+                type: string
+              yugabyteDBPort:
+                default: 5433
+                format: int32
+                type: integer
+              yugabyteDBUser:
+                default: yugabyte
+                type: string
             required:
             - accountId
             - accountTier
             - langfuseImage
             - mcpImage
             - ragImage
+            - yugabyteDBHost
+            - yugabyteDBName
+            - yugabyteDBPassword
             type: object
           status:
             description: status defines the observed state of MekoUserAccount
@@ -131,6 +150,8 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              mcpEndpoint:
+                type: string
               namespaceName:
                 type: string
               phase:

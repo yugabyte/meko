@@ -7,7 +7,9 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
   - namespaces
+  - secrets
   - services
   verbs:
   - create

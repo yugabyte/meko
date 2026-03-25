@@ -173,9 +173,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	mcpIngressDomain := os.Getenv("MCP_INGRESS_DOMAIN")
+	if mcpIngressDomain != "" {
+		slog.Info("MCP ingress domain configured", "domain", mcpIngressDomain)
+	}
+
 	if err := (&controller.MekoUserAccountReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		MCPIngressDomain: mcpIngressDomain,
 	}).SetupWithManager(mgr); err != nil {
 		slog.Error("failed to create controller", "controller", "MekoUserAccount", "error", err)
 		os.Exit(1)

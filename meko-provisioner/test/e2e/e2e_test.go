@@ -34,7 +34,7 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "meko-provisioner-system"
+const namespace = "meko-system"
 
 // serviceAccountName created for the project
 const serviceAccountName = "meko-provisioner-controller-manager"

@@ -6,8 +6,13 @@ metadata:
 spec:
   accountId: "abc123"
   accountTier: "free"
-  mcpImage: "161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/mcp-server:latest"
-  ragImage: "161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/rag-worker:latest"
+  mcpImage: "161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/meko-mcp-server:latest"
+  ragImage: "161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/rag-agent:0.1.0-20260326"
   langfuseImage: "langfuse/langfuse:latest"
+  yugabyteDBHost: "yb-tserver.yb-system.svc.cluster.local"
+  yugabyteDBPort: 5433
+  yugabyteDBUser: "yugabyte"
+  yugabyteDBPassword: "password"
+  yugabyteDBName: "meko_abc123"
   mcpReplicas: 1
   ragReplicas: 1

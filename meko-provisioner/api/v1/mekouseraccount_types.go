@@ -17,6 +17,8 @@ limitations under the License.
 package v1
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -37,6 +39,18 @@ type MekoUserAccountSpec struct {
 	MCPImage      string      `json:"mcpImage"`
 	RAGImage      string      `json:"ragImage"`
 	LangfuseImage string      `json:"langfuseImage"`
+	// +kubebuilder:validation:MinLength=1
+	YugabyteDBHost string `json:"yugabyteDBHost"`
+	// +kubebuilder:default=5433
+	// +optional
+	YugabyteDBPort int32 `json:"yugabyteDBPort,omitempty"`
+	// +kubebuilder:default="yugabyte"
+	// +optional
+	YugabyteDBUser string `json:"yugabyteDBUser,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	YugabyteDBPassword string `json:"yugabyteDBPassword"`
+	// +kubebuilder:validation:MinLength=1
+	YugabyteDBName string `json:"yugabyteDBName"`
 	// +kubebuilder:default=1
 	// +optional
 	MCPReplicas int32 `json:"mcpReplicas,omitempty"`
@@ -49,6 +63,8 @@ type MekoUserAccountSpec struct {
 type MekoUserAccountStatus struct {
 	Phase         string `json:"phase,omitempty"`
 	NamespaceName string `json:"namespaceName,omitempty"`
+	// +optional
+	MCPEndpoint string `json:"mcpEndpoint,omitempty"`
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -82,6 +98,36 @@ type MekoUserAccountList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []MekoUserAccount `json:"items"`
+}
+
+// GetYugabyteDBPort returns the port with a default of 5433.
+func (s *MekoUserAccountSpec) GetYugabyteDBPort() int32 {
+	if s.YugabyteDBPort == 0 {
+		return 5433
+	}
+	return s.YugabyteDBPort
+}
+
+// GetYugabyteDBUser returns the user with a default of "yugabyte".
+func (s *MekoUserAccountSpec) GetYugabyteDBUser() string {
+	if s.YugabyteDBUser == "" {
+		return "yugabyte"
+	}
+	return s.YugabyteDBUser
+}
+
+// YugabyteDBConnectionStringURI returns a PostgreSQL URI connection string.
+func (s *MekoUserAccountSpec) YugabyteDBConnectionStringURI() string {
+	return fmt.Sprintf("postgresql://%s:%s@%s:%d/%s",
+		s.GetYugabyteDBUser(), s.YugabyteDBPassword,
+		s.YugabyteDBHost, s.GetYugabyteDBPort(), s.YugabyteDBName)
+}
+
+// YugabyteDBConnectionStringLibpq returns a libpq-format connection string.
+func (s *MekoUserAccountSpec) YugabyteDBConnectionStringLibpq() string {
+	return fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s",
+		s.YugabyteDBHost, s.GetYugabyteDBPort(), s.YugabyteDBName,
+		s.GetYugabyteDBUser(), s.YugabyteDBPassword)
 }
 
 func init() {

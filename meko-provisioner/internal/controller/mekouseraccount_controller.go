@@ -34,18 +34,25 @@ import (
 	saasv1 "github.com/meko/meko-provisioner/api/v1"
 )
 
-const finalizerName = "saas.mekodata.ai/cleanup"
+const (
+	finalizerName = "saas.mekodata.ai/cleanup"
+
+	SharedSecretName      = "meko-shared-credentials"
+	SharedSecretNamespace = "meko-system"
+)
 
 // MekoUserAccountReconciler reconciles a MekoUserAccount object
 type MekoUserAccountReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme           *runtime.Scheme
+	MCPIngressDomain string
 }
 
 // +kubebuilder:rbac:groups=saas.mekodata.ai,resources=mekouseraccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=saas.mekodata.ai,resources=mekouseraccounts/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=saas.mekodata.ai,resources=mekouseraccounts/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 
 func (r *MekoUserAccountReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -76,7 +83,28 @@ func (r *MekoUserAccountReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("ensuring namespace %s: %w", ns, err)
 	}
 
-	// 2. Create deployments.
+	// 2. Read shared credentials and create RAG ConfigMap + Secret.
+	sharedData, err := r.fetchSharedSecretData(ctx)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reading shared secret %s/%s: %w", SharedSecretNamespace, SharedSecretName, err)
+	}
+	slog.Info("Fetched shared credentials", "accountId", accountID, "sourceNamespace", SharedSecretNamespace)
+
+	if err := r.ensureConfigMap(ctx, BuildRAGConfigMap(account, ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensuring configmap %s/%s: %w", ns, RAGConfigMapName, err)
+	}
+	if err := r.ensureSecret(ctx, BuildRAGSecret(account, ns, sharedData)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensuring secret %s/%s: %w", ns, RAGSecretName, err)
+	}
+
+	if err := r.ensureConfigMap(ctx, BuildMCPConfigMap(account, ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensuring configmap %s/%s: %w", ns, MCPConfigMapName, err)
+	}
+	if err := r.ensureSecret(ctx, BuildMCPSecret(account, ns, sharedData)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensuring secret %s/%s: %w", ns, MCPSecretName, err)
+	}
+
+	// 3. Create deployments.
 	deployments := []*appsv1.Deployment{
 		BuildMCPDeployment(account, ns),
 		BuildRAGDeployment(account, ns),
@@ -88,9 +116,9 @@ func (r *MekoUserAccountReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	// 3. Create services (mcp-server:8080, langfuse:3000).
+	// 4. Create services (mcp-server:8080, langfuse:3000).
 	services := []*corev1.Service{
-		BuildService("mcp-server", ns, accountID, 8080),
+		BuildService("mcp-server", ns, accountID, 8000),
 		BuildService("langfuse", ns, accountID, 3000),
 	}
 	for _, svc := range services {
@@ -99,9 +127,12 @@ func (r *MekoUserAccountReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	// 4. Update status.
+	// 5. Update status.
 	account.Status.Phase = "Active"
 	account.Status.NamespaceName = ns
+	if r.MCPIngressDomain != "" {
+		account.Status.MCPEndpoint = fmt.Sprintf("https://%s.%s", accountID, r.MCPIngressDomain)
+	}
 	if err := r.Status().Update(ctx, account); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 	}
@@ -187,6 +218,43 @@ func (r *MekoUserAccountReconciler) ensureService(ctx context.Context, desired *
 	}
 	existing.Spec.Selector = desired.Spec.Selector
 	existing.Spec.Ports = desired.Spec.Ports
+	return r.Update(ctx, existing)
+}
+
+func (r *MekoUserAccountReconciler) fetchSharedSecretData(ctx context.Context) (map[string][]byte, error) {
+	secret := &corev1.Secret{}
+	key := client.ObjectKey{Name: SharedSecretName, Namespace: SharedSecretNamespace}
+	if err := r.Get(ctx, key, secret); err != nil {
+		return nil, err
+	}
+	return secret.Data, nil
+}
+
+func (r *MekoUserAccountReconciler) ensureConfigMap(ctx context.Context, desired *corev1.ConfigMap) error {
+	existing := &corev1.ConfigMap{}
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing)
+	if apierrors.IsNotFound(err) {
+		slog.Info("Creating ConfigMap", "name", desired.Name, "namespace", desired.Namespace)
+		return r.Create(ctx, desired)
+	}
+	if err != nil {
+		return err
+	}
+	existing.Data = desired.Data
+	return r.Update(ctx, existing)
+}
+
+func (r *MekoUserAccountReconciler) ensureSecret(ctx context.Context, desired *corev1.Secret) error {
+	existing := &corev1.Secret{}
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing)
+	if apierrors.IsNotFound(err) {
+		slog.Info("Creating Secret", "name", desired.Name, "namespace", desired.Namespace)
+		return r.Create(ctx, desired)
+	}
+	if err != nil {
+		return err
+	}
+	existing.Data = desired.Data
 	return r.Update(ctx, existing)
 }
 
