@@ -1,0 +1,65 @@
+// Landing page cards
+.meko-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin: 1.5rem 0;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.meko-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 1.25rem 1.5rem;
+  background: $background-color-primary;
+  border-radius: 0.5rem;
+  text-decoration: none !important;
+  color: $white !important;
+  position:relative;
+  
+  &:after{
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: -1;
+    margin: 2px;
+    border-radius: inherit;
+    background: linear-gradient(to right, #2d94ee 0%, #9b46d8 100%);
+    box-shadow: 0 0 6px 0 rgba(255, 255, 255, 0.50);
+    transition: all 400ms ease;
+  }
+
+  &:hover:after {
+    margin: -3px;
+  }
+
+  h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1.1rem;
+    color: $white;
+  }
+
+  p {
+    margin: 0 0 0.75rem;
+    font-size: 0.9rem;
+    color: #b0b0c0;
+    flex-grow: 1;
+  }
+
+  .meko-card-link {
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    display: inline-block;
+  }
+}

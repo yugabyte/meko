@@ -1,0 +1,36 @@
+// Breadcrumb
+
+.td-breadcrumbs {
+  @media print {
+    display: none;
+  }
+
+  &__single {
+    display: none;
+  }
+
+  .breadcrumb {
+    background: inherit;
+    padding-left: 0;
+    padding-top: 0;
+
+    .breadcrumb-item {
+      a {
+        text-decoration: none;
+        opacity: 0.6;
+        transition: all 250ms ease;
+        &:hover {
+          opacity: 1;
+          color: #fff;
+        }
+      }
+    }
+
+    .breadcrumb-item + .breadcrumb-item {
+      &::before {
+        content: ">";
+        transform: scale(0.9, 1);
+      }
+    }
+  }
+}

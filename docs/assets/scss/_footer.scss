@@ -1,0 +1,11 @@
+.td-footer {
+	min-height: 120px;
+	padding-top: 0px;
+	align-items: center;
+
+	.td-footer__center {
+		@media(max-width: 600px) {
+			margin-top: 15px;
+		}
+	}
+}

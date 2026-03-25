@@ -1,0 +1,19 @@
+{{ $href := .Get "href" }}
+{{- if $href -}}
+  <a class="meko-card" href="{{ $href | relURL }}">
+{{- else -}}
+  <div class="meko-card">
+{{- end -}}
+
+<h3>{{- .Get "title" -}}</h3>
+<p>{{- .Get "desc" -}}</p>
+
+{{- with .Get "cta" -}}
+  <span class="meko-card-link">{{ . | safeHTML }}</span>
+{{- end -}}
+
+{{- if $href -}}
+  </a>
+{{- else -}}
+  </div>
+{{- end -}}

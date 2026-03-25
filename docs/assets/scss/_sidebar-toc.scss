@@ -1,10 +1,12 @@
 body {
+
+
   &.no-toc {
     aside.td-sidebar-toc {
       display: none !important;
     }
 
-    @media (min-width: 768px) {
+    @media (min-width: 1200px) {
       main.col-12 {
         width: 80% !important;
       }
@@ -12,20 +14,24 @@ body {
   }
 
   .td-toc {
-    #TableOfContents {
-      a.active {
-        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        background-size: 200% 200%;
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+    .td-toc-title{
+      .td-toc-title__link{
+        display: none ;
       }
+    }
 
-      a:focus,
-      a:hover {
-        color: $white;
-        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        background-size: 200% 200%;
-        -webkit-text-fill-color: inherit;
+    #TableOfContents {
+      a{
+        display:inline-block;
+        background: none ;
+        font-weight: 500;
+        
+        &:hover,&.active{
+          background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+          background-size: 200% 200%;
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
       }
     }
   }
