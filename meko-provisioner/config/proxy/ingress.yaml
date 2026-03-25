@@ -11,6 +11,7 @@ metadata:
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
     # Replace with your ACM certificate ARN for *.mcp.mekodev.com
     alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-2:ACCOUNT_ID:certificate/REPLACE_ME"
 spec:

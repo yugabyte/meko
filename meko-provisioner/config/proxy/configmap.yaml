@@ -21,10 +21,9 @@ data:
         access_log /dev/stdout;
         resolver kube-dns.kube-system.svc.cluster.local valid=10s ipv6=off;
 
-        upstream_keepalive 64;
-
         map $host $account_id {
-            ~^(?P<id>[^.]+)\. $id;
+            default "";
+            ~^(?P<id>[a-zA-Z][a-zA-Z0-9_-]*)\. $id;
         }
 
         server {
@@ -36,6 +35,10 @@ data:
             }
 
             location / {
+                if ($account_id = "") {
+                    return 400 '{"error":"missing or invalid account ID in hostname"}\n';
+                }
+
                 set $target "mcp-server.tenant-${account_id}.svc.cluster.local:8000";
 
                 proxy_pass http://$target;
