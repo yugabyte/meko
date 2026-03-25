@@ -12,4 +12,4 @@ Get from zero to a working Meko integration in minutes.
 
 ## Next
 
-* **[Connect to Meko](connect-to-meko/)** --- Sign up, authenticate, and connect your IDE to Meko.
+* **[Explore Memory](explore-memory/)** --- Sign up, authenticate, and connect your IDE to Meko.

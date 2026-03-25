@@ -12,7 +12,7 @@ type: docs
 
 Complete reference documentation for Meko's CLIs, Datapacks, and Knowledge Bases. The Meko CLI is a command-line tool that allows you to manage your Meko Datapacks, and Knowledge Bases.
 
-## Meko CLI Overview (Simple introduction to the CLI
+## Meko CLI Overview (Simple introduction to the CLI)
 
 
 ## Install the CLI 
@@ -21,6 +21,7 @@ Complete reference documentation for Meko's CLIs, Datapacks, and Knowledge Bases
 
 ## Meko CLI
 (Go binary install, Linux/Mac)
+
 
 ## Datapacks
  (isolation model — 1 or more datapacks per agent)
