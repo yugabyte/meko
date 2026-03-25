@@ -4,13 +4,13 @@ linkTitle: Explore Memory
 description: See how to use Meko to store your memories
 weight: 1010
 ---
-## Sign Up
+## Sign up
 
 Create a Meko account at the Meko portal. You can sign up with your Gmail or email address.
 
-## Try This without Meko
+## Prompt without Meko
 
-In the chatbot of your AI-driven IDE or development tool, enter:
+In the chatbot of your AI-driven IDE or development tool, before even setting up Meko, type:
 
 ```text
 Propose a 5 day vacation for me.
@@ -41,18 +41,17 @@ Where: Banff / Lake Louise (or substitute: Pacific Northwest coast, Swiss Alps
 
 ## Quick choices so the plan fits you
 
-If you answer these, the itinerary can be tightened (budget, pace, solo/couple/family):
+If you answer these questions, the itinerary can be tightened (budget, pace, solo/couple/family):
 
 1. Relax vs. busy (roughly 50/50 vs. mostly slow)?
 2. Fly vs. drive from home?
 3. Rough season (when you’re thinking of going)?
 4. Beach, city, or mountains as a first pick?
 
-I don’t have your travel budget or dates in Meko—once you share those, I can...
 ```
 
 
-## Connect Your IDE to Meko
+## Connect IDE to Meko
 
 Let's register the Meko MCP Server with your IDE or Developer Tool
 
@@ -114,7 +113,7 @@ Add the MCP server configuration to your Codex settings:
 
 For troubleshooting, see [Integrations](../integrations/_index)
 
-## Configure Your IDE for Meko
+## Configure IDE for Meko
  
 In your IDE or dev tool, enter the following:
 
@@ -127,7 +126,7 @@ Have Meko remember all my personal preferences.
 
 If the connection is working, your IDE will use the Meko MCP tools to store the memory.
 
-## Create a Memory 
+## Create a memory 
 
 Type this to persist your personal preferences as memory:
 
@@ -135,7 +134,7 @@ Type this to persist your personal preferences as memory:
 Please remember that I like to take vacations at tropical beach locations, on a budget
 ```
 
-## Retry with Meko
+## Prompt with Meko
 
 **Start a new chat session**, then type:
 
@@ -170,18 +169,24 @@ Why it fits: Warm water, palm-lined beaches, easy buses from Cancún airport, h
 ## If you tell me your month, home airport region, and solo vs. group, I can narrow this to one place, rough daily spend, and a rain-day backup.
 ```
 
-## Visibility & Observability
+## Verify
 
 You can verify what Meko stored by checking your datapack's memories in the Meko portal. You'll see:
 
 - The stored memories with their extracted entities
 - Key metrics: number of memories, knowledge base sources, and MCP requests
 
+Type:
+
+```text
+What does Meko remember about me?
+```
+
 ## Recap
 
-Meko streamlined and enhanced the user experience through **personalization**.
+We've seen how Meko uses **memory** to enhance a user experience through **personalization**.
 
-Meko can store not only personal preferences, but also personal, team, and organization preferences, standards, policies.   Meko allows empowers teams (of people or agents) to **collaborate** through its ability to manage and share these as "memories"
+**Memory from Meko** can do much more.   Beyond personal preferences, it can also capture personal, team, and organization preferences, standards, policies, and more.  Meko's memory  empowers teams to **collaborate**.   Memories can be captured, shared, managed, and extended... and not just for human teams, but also for agent teams.   Hence, Meko is a multi-agent data layer for shared memory.
 
 Under the hood, memories are stored in a graph database... where the graph's entities and relationships are derived by Meko's processing of the LLM prompts.
 
