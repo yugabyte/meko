@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: meko-ingress
+  labels:
+    app.kubernetes.io/name: meko-ingress
+    app.kubernetes.io/part-of: meko

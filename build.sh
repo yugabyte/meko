@@ -37,8 +37,9 @@ Usage: $(basename "$0") [OPTIONS] [TARGETS...]
 Build meko binaries into build/latest/.
 
 Targets (default: all):
-  cli        Build the CLI app (meko)
-  api        Build the API server (meko-api-server)
+  cli            Build the CLI app (meko)
+  api            Build the API server (meko-api-server)
+  provisioner    Build the provisioner operator (meko-provisioner)
 
 Options:
   -l, --lint     Run golangci-lint after building
@@ -55,13 +56,13 @@ while [[ $# -gt 0 ]]; do
         -v|--verbose) VERBOSE=true; shift ;;
         -c|--clean)   rm -rf "${BUILD_DIR}"; ok "Cleaned ${BUILD_DIR}"; exit 0 ;;
         -h|--help)    usage ;;
-        cli|api)      TARGETS+=("$1"); shift ;;
+        cli|api|provisioner) TARGETS+=("$1"); shift ;;
         *)            die "Unknown argument: $1 (see --help)" ;;
     esac
 done
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
-    TARGETS=(cli api)
+    TARGETS=(cli api provisioner)
 fi
 
 # ── Build metadata ───────────────────────────────────────────────────────────
@@ -94,6 +95,12 @@ build_api() {
     ok "meko-api-server $(file_size "${BUILD_DIR}/meko-api-server")"
 }
 
+build_provisioner() {
+    info "Building meko-provisioner → meko-provisioner"
+    (cd "${REPO_ROOT}/meko-provisioner" && go build "${GO_BUILD_FLAGS[@]}" -o "${BUILD_DIR}/meko-provisioner" ./cmd)
+    ok "meko-provisioner $(file_size "${BUILD_DIR}/meko-provisioner")"
+}
+
 file_size() {
     local size
     size="$(stat --printf='%s' "$1" 2>/dev/null || stat -f '%z' "$1" 2>/dev/null)"
@@ -109,8 +116,9 @@ printf "\n${CYAN}meko build${NC}  commit=%s  branch=%s\n\n" "${GIT_COMMIT}" "${G
 
 for target in "${TARGETS[@]}"; do
     case "${target}" in
-        cli) build_cli ;;
-        api) build_api ;;
+        cli)         build_cli ;;
+        api)         build_api ;;
+        provisioner) build_provisioner ;;
     esac
 done
 
@@ -120,8 +128,9 @@ if [ "${RUN_LINT}" = true ]; then
         printf "\n"
         for target in "${TARGETS[@]}"; do
             case "${target}" in
-                cli) info "Linting cli_app"; (cd "${REPO_ROOT}/cli_app" && golangci-lint run ./...) && ok "cli_app lint passed" ;;
-                api) info "Linting api_server"; (cd "${REPO_ROOT}/api_server" && golangci-lint run ./...) && ok "api_server lint passed" ;;
+                cli)         info "Linting cli_app"; (cd "${REPO_ROOT}/cli_app" && golangci-lint run ./...) && ok "cli_app lint passed" ;;
+                api)         info "Linting api_server"; (cd "${REPO_ROOT}/api_server" && golangci-lint run ./...) && ok "api_server lint passed" ;;
+                provisioner) info "Linting meko-provisioner"; (cd "${REPO_ROOT}/meko-provisioner" && GOTOOLCHAIN=go1.25.8 make lint) && ok "meko-provisioner lint passed" ;;
             esac
         done
     else
