@@ -3,28 +3,30 @@ title: Integrations
 headerTitle: Meko Integrations
 linkTitle: Integrations
 headcontent: Connect Meko to your tools and frameworks
-description: Integrate Meko with AI coding tools, agent frameworks, vibe coding platforms, and consumer AI applications
+description: Integrate Meko with AI coding tools, agent frameworks, and consumer AI applications
 weight: 3000
 type: docs
 ---
-# Integrations
+Meko integrates via the Model Context Protocol (MCP).  Each Datapack exposes an MCP server that your AI coding tools, agent frameworks, or consumer chat applications connect to.
 
-Meko can be integrated 
-a) for direct interactive use (e.g. with Claude, ChatGPT, Cursor), or
-b) for programmatic use by your AI agent application
+You follow the same basic pattern with all tools and frameworks:
+1. **Create a datapack** -- via either the Meko web portal or the Meko CLI
+2. **Register the Meko MCP server** with your coding tool or with your application's MCP Client
+3. **Start using Meko** through natural language prompts
 
-## Interactive Use       
 
-Interactive use involves registering a connector, MCP Server, or equivalent with your preferred interactive productivity tool.
-#### Cursor
+<!-- TODO: create cards here that link to the different sections below for Cursor Desktop, Claude Desktop, Claude Code, LangGraph/LangChain, etc. -->
 
-**Cursor Desktop**
-* On a Mac, go to the menu item Cursor -> Settings -> Cursor Settings -> Tools & MCPs -> New MCP Server
+## Interactive integrations with IDE's 
+
+Integrate with IDE's for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
+### Cursor Desktop
+* From the menu, select Cursor -> Settings -> Cursor Settings -> Tools & MCPs -> New MCP Server
 * Modify the mcp.json file that Cursor opens to add the below MCP server configuration 
-```sh
+```json
 {
   "mcpServers": {
-    "meko-mcp-server": {
+    "meko": {
       "url": "<YOUR DATAPACK'S URL>",
       "headers": {
         "API_KEY": "<YOUR DATAPACK'S API KEY>"
@@ -35,18 +37,26 @@ Interactive use involves registering a connector, MCP Server, or equivalent with
 ```
 
 The result should look like this:
-![[Pasted image 20260320163105.png]]
+<img src="Pasted image 20260320163105.png" alt="Cursor Desktop Screenshot" style="max-width: 100%; height: auto;" />
 
-**Cursor Web**
-* Not working yet.   Feel free to contribute here with info!
-#### Claude Desktop (for Claude Chat, Cowork, and Code)
+* Verify the Connection.  In chat, type the below.  If you're connected, Cursor will respond by indicating that it will use Meko’s MCP tools to store memories.
+
+`You have access to the Meko platform through MCP server. Have Meko remember all my personal preferences.`
+### Cursor Web
+
+{{% pageinfo %}}
+This page is under development. Check back soon.
+{{% /pageinfo %}}
+
+Feel free to contribute here with info!
+### Claude Desktop
 
 In Claude Desktop (whether used for Chat, Cowork, or Code), 
 * On a Mac, go to the menu item Claude -> Settings -> Developer ->  Edit Config
 * Edit the claude_desktop_config.json file so that the below MCP Server entry is added
 * Quit and restart your Claude Desktop app
 
-```sh
+```json
 {
   "mcpServers": {
     "meko": {
@@ -64,11 +74,12 @@ In Claude Desktop (whether used for Chat, Cowork, or Code),
 
 The result should look like this:
 
-![[Pasted image 20260320164527.png]]
+<img src="Pasted image 20260320164527.png" alt="Claude Desktop Screenshot" style="max-width: 100%; height: auto;" />
 
 TIP: If you see errors when restarting Claude, examine the log file that appears.  Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.
 
-#### Claude Code (via CLI)
+<!-- TODO : fix the Tip above to use proper formatting -->
+### Claude Code (via CLI)
 
 Run the setup command.   Run this command in your terminal to add the Meko MCP server to Claude Code. 
 
@@ -80,11 +91,9 @@ To verify correct configuration, ask Claude at the command-line Console this que
 "Is Claude configured with an MCP Server for Meko?"
 
 You should see a response like the below:
-![[Pasted image 20260320172719.png]]
+<img src="Pasted image 20260320172719.png" alt="Claude Desktop Screenshot" style="max-width: 100%; height: auto;" />
 
-
-
-#### Coming Soon
+### Coming Soon
 * OpenAI Codex
 * VS Code / GitHub CoPilot 
 * Opencode
@@ -95,20 +104,24 @@ You should see a response like the below:
 
 Feel free to contribute here with info!
 
-### Programmatic Use
+## Programmatic integrations for applications
 
 To integrate Meko programmatically, register the Meko MCP Server with your application’s internal MCP Client. Most AI frameworks include built-in clients to simplify this process.
 
-#### LangChain
+This approach enables your application to save memory and knowledge in Meko, such as conversation memory, user and team preferences, and even application state.  
 
-#### Python
+### LangChain and LangGraph
 
-#### Coming Soon
+Meko can be integrated with LangChain and LangGraph agent frameworks through MCP. This page documents the setup and usage patterns for using Meko as the data layer for LangChain-based agents.
 
-* LangGraph
+### Python
+
+You can connect to Meko's MCP server directly from Python using an MCP client library. This page documents the setup, connection pattern, and example code for interacting with Meko datapacks from Python.
+
+
+### Coming soon
+
 * OpenAI Agents SDK
 
 
-
-
-
+## Programmatic integrations for applications
