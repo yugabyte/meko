@@ -43,9 +43,11 @@ This provisions a dedicated database, MCP server endpoint, and access credential
 
 ## Step 4: Connect Your IDE
 
-Each datapack exposes an MCP server.  Configure your IDE or development tool to connect.  
+Each datapack exposes an MCP server.  Configure your IDE or development tool to connect.
 
-TIP: if you get stuck below, see [Integrations](../integrations/_index)
+> [!TIP]
+>
+> If you get stuck below, see [Integrations](../integrations/_index)
 
 ### Cursor
 

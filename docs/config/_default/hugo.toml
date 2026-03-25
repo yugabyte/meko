@@ -2,9 +2,6 @@ baseURL = 'https://docs.mekodata.ai/'
 languageCode = 'en-us'
 resourceDir = 'docs/resources'
 
-[markup.goldmark.renderer]
-  unsafe = true
-
 # Publish docs pages/sections at site root (no /docs prefix).
 [permalinks.page]
   docs = "/:sections[1:]/:contentbasename/"

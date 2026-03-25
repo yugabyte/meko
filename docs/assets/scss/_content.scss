@@ -1,0 +1,58 @@
+:root {
+  --bs-border-color: #262626;
+  --bs-secondary-color: $white;
+	--td-pre-bg: #2d2d2d; // Fix code styling for dark theme
+}
+
+body {
+  background-color: $black;
+  color: $white;
+
+  .container-fluid {
+    padding: 0 24px;
+  }
+
+  .td-max-width-on-larger-screens {
+    max-width: calc(100% - 40px);
+    @media(max-width: 767px) {
+      max-width: 100%;
+    }
+  }
+
+  .td-content{
+    li,p,strong,h2,h3,h4,h5,h6{
+      >a{
+        font-weight: 400;
+        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+        background-size: 200% 200%;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-decoration: none;
+        position: relative;
+        &:after{
+          content: "";
+          position:absolute;
+          width: 100%;
+          height: 1px;
+          background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+          bottom: -1px;
+          left: 0;
+          transition: all 250ms ease;
+        }
+        &:hover:after{
+          opacity: 0;
+        }
+      }
+    }
+    
+    h2,h3,h4,h5,h6{
+      >a{
+        &:after{
+        display:none;
+        }
+      }
+    }
+  }
+
+
+}
