@@ -2,7 +2,10 @@
 package service
 
 import (
+	"context"
 	"database/sql"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 
@@ -14,13 +17,14 @@ import (
 
 // DatapackService orchestrates datapack lifecycle operations.
 type DatapackService struct {
-	repo   *repository.DatapackRepo
-	ybaSvc *YBAService
+	repo        *repository.DatapackRepo
+	ybaSvc      *YBAService
+	accountRepo *repository.AccountRepo
 }
 
 // NewDatapackService creates a new DatapackService.
-func NewDatapackService(repo *repository.DatapackRepo, ybaSvc *YBAService) *DatapackService {
-	return &DatapackService{repo: repo, ybaSvc: ybaSvc}
+func NewDatapackService(repo *repository.DatapackRepo, ybaSvc *YBAService, accountRepo *repository.AccountRepo) *DatapackService {
+	return &DatapackService{repo: repo, ybaSvc: ybaSvc, accountRepo: accountRepo}
 }
 
 // CreateRequest holds the fields for creating a datapack.
@@ -61,18 +65,48 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 		return nil, fmt.Errorf("account_id is required")
 	}
 
+	ctx := context.Background()
+
+	mcpCreds, err := s.accountRepo.GetMCPCredentials(ctx, req.AccountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up MCP credentials: %w", err)
+	}
+
+	mcpUserExists := mcpCreds != nil
+	var mcpUserName, mcpPassword string
+	if mcpUserExists {
+		mcpUserName = mcpCreds.UserName
+		mcpPassword = mcpCreds.Password
+		slog.Info("reusing existing account MCP user",
+			"account_id", req.AccountID, "mcp_user", mcpUserName)
+	} else {
+		mcpUserName = fmt.Sprintf("mcp_%s", req.AccountID)
+		mcpPassword, err = randomServiceHex(16)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate MCP password: %w", err)
+		}
+		if err := s.accountRepo.SetMCPCredentials(ctx, req.AccountID, mcpUserName, mcpPassword); err != nil {
+			return nil, fmt.Errorf("failed to store MCP credentials: %w", err)
+		}
+		slog.Info("created new account MCP user",
+			"account_id", req.AccountID, "mcp_user", mcpUserName)
+	}
+
 	universe, err := s.ybaSvc.AssignUniverse()
 	if err != nil {
 		return nil, fmt.Errorf("failed to assign universe: %w", err)
 	}
 
 	res, err := s.repo.Create(repository.CreateDatapackParams{
-		Name:         req.Name,
-		AccountID:    req.AccountID,
-		YBUniverseID: universe.UniverseID,
-		YBHostname:   universe.Hostname,
-		YBPort:       universe.Port,
+		Name:           req.Name,
+		AccountID:      req.AccountID,
+		YBUniverseID:   universe.UniverseID,
+		YBHostname:     universe.Hostname,
+		YBPort:         universe.Port,
 		YBAdminConnStr: universe.AdminConnStr,
+		MCPUserName:    mcpUserName,
+		MCPPassword:    mcpPassword,
+		MCPUserExists:  mcpUserExists,
 	})
 	if err != nil {
 		_ = s.ybaSvc.ReleaseUniverse(universe.UniverseID)
@@ -164,7 +198,7 @@ func (s *DatapackService) Delete(name string) error {
 	}
 	defer adminDB.Close()
 
-	if err := repository.DropDatapackDB(adminDB, dbName, dp.MCPUserName, dp.DBUserName); err != nil {
+	if err := repository.DropDatapackDB(adminDB, dbName, dp.DBUserName); err != nil {
 		return fmt.Errorf("failed to drop datapack database: %w", err)
 	}
 
@@ -201,5 +235,10 @@ func (s *DatapackService) Status(
 	return st, nil
 }
 
-
-
+func randomServiceHex(nBytes int) (string, error) {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}

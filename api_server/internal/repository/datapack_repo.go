@@ -30,12 +30,15 @@ func NewDatapackRepo(db *sql.DB) *DatapackRepo {
 
 // CreateDatapackParams holds the inputs for registering a new datapack.
 type CreateDatapackParams struct {
-	Name         string
-	AccountID    string
-	YBUniverseID string
-	YBHostname   string
-	YBPort       int
+	Name           string
+	AccountID      string
+	YBUniverseID   string
+	YBHostname     string
+	YBPort         int
 	YBAdminConnStr string
+	MCPUserName    string // account-level MCP YSQL role name
+	MCPPassword    string // account-level MCP YSQL role password
+	MCPUserExists  bool   // true when the YSQL role already exists on the cluster
 }
 
 // CreateResult holds the identifiers returned after datapack creation.
@@ -67,13 +70,7 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 		return nil, fmt.Errorf("datapack %q already exists", p.Name)
 	}
 
-	mcpUser := fmt.Sprintf("mcp_%s", p.Name)
-	mcpPass, err := randomHex(16)
-	if err != nil {
-		slog.Error("failed to generate mcp password", "datapack", p.Name, "error", err)
-		return nil, fmt.Errorf("failed to generate mcp password: %w", err)
-	}
-	dbUser := fmt.Sprintf("db_%s", p.Name)
+	dbUser := fmt.Sprintf("db_%s_%s", p.AccountID, p.Name)
 	dbPass, err := randomHex(16)
 	if err != nil {
 		slog.Error("failed to generate db password", "datapack", p.Name, "error", err)
@@ -83,10 +80,11 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 	dbName := fmt.Sprintf("%s_%s", p.AccountID, p.Name)
 
 	slog.Info("provisioning datapack database",
-		"datapack", p.Name, "db_name", dbName)
+		"datapack", p.Name, "db_name", dbName,
+		"mcp_user", p.MCPUserName, "mcp_user_exists", p.MCPUserExists)
 	if err := provisionDatapackDB(
 		p.YBAdminConnStr, dbName,
-		mcpUser, mcpPass,
+		p.MCPUserName, p.MCPPassword, p.MCPUserExists,
 		dbUser, dbPass,
 	); err != nil {
 		slog.Error("failed to provision datapack database",
@@ -116,13 +114,11 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 		`INSERT INTO meko_system.datapack_registry
 			(account_id, datapack_name,
 			 yb_universe_id, datapack_ysql_connection_string,
-			 mcp_user_name, mcp_user_password,
 			 db_user_name, db_user_password)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id`,
 		p.AccountID, p.Name,
 		p.YBUniverseID, dbConnStr,
-		mcpUser, mcpPass,
 		dbUser, dbPass,
 	).Scan(&datapackID)
 	if err != nil {
@@ -159,8 +155,8 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 		DatapackID:  datapackID,
 		AgentID:     agentID,
 		AccountID:   p.AccountID,
-		MCPUserName: mcpUser,
-		MCPPassword: mcpPass,
+		MCPUserName: p.MCPUserName,
+		MCPPassword: p.MCPPassword,
 		DBUserName:  dbUser,
 		DBPassword:  dbPass,
 		DBConnStr:   dbConnStr,
@@ -195,17 +191,23 @@ func connStrWithDB(adminConnStr, dbName string) (string, error) {
 	return u.String(), nil
 }
 
-// var rolesAndGrantsTmpl = template.Must(template.New("roles").Parse(`
-// CREATE ROLE {{.MCP}} WITH LOGIN PASSWORD {{.MCPPass}};
-// CREATE ROLE {{.User}} WITH LOGIN PASSWORD {{.UserPass}};
-// GRANT ALL PRIVILEGES ON DATABASE {{.DB}} TO {{.User}};
-// GRANT CONNECT ON DATABASE {{.DB}} TO {{.MCP}};
-// `))
+// createMCPUserTmpl idempotently creates the account-level MCP YSQL role.
+// Runs once per (account, universe); skipped when the role already exists.
+var createMCPUserTmpl = template.Must(template.New("createMCP").Parse(`
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {{.MCPRaw}}) THEN
+    CREATE USER {{.MCP}} WITH PASSWORD {{.MCPPass}};
+  END IF;
+END $$;
+`))
 
-var rolesAndGrantsTmpl = template.Must(template.New("roles").Parse(`
+// grantDatapackAccessTmpl sets up per-datapack roles and grants.
+// The MCP user already exists; this template creates the DB user,
+// grants the MCP user access to the new database, and locks down
+// ag_catalog for the DB user.
+var grantDatapackAccessTmpl = template.Must(template.New("grants").Parse(`
 REVOKE CONNECT ON DATABASE {{.DB}} FROM PUBLIC;
 
-CREATE USER {{.MCP}} WITH PASSWORD {{.MCPPass}};
 CREATE USER {{.User}} WITH PASSWORD {{.UserPass}};
 
 GRANT CONNECT ON DATABASE {{.DB}} TO {{.MCP}};
@@ -235,11 +237,14 @@ func renderSQL(tmpl *template.Template, data map[string]string) (string, error) 
 }
 
 // provisionDatapackDB creates the database, roles, and extensions on the
-// target universe using the admin connection string.
-func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass, dbUser, dbPass string) error {
+// target universe using the admin connection string. When mcpUserExists
+// is false the account-level MCP role is created for the first time;
+// otherwise it is assumed to already exist on this cluster.
+func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass string, mcpUserExists bool, dbUser, dbPass string) error {
 
 	slog.Info("provisioning datapack database",
-		"db_name", dbName, "admin_conn_str", adminConnStr)
+		"db_name", dbName, "mcp_user", mcpUser,
+		"mcp_user_exists", mcpUserExists)
 
 	adminDB, err := sql.Open("postgres", adminConnStr)
 	if err != nil {
@@ -251,14 +256,13 @@ func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass, dbUser, dbPass 
 		return fmt.Errorf("YB universe admin connection unreachable: %w", err)
 	}
 
-	// Track whether the DB was created so we know if cleanup is needed.
 	provisionedAllSteps := false
 	defer func() {
 		if provisionedAllSteps {
 			return
 		}
 		slog.Warn("cleaning up failed provisioning", "db_name", dbName)
-		dropProvisioned(adminDB, dbName, mcpUser, dbUser)
+		dropProvisioned(adminDB, dbName, mcpUser, mcpUserExists, dbUser)
 	}()
 
 	// CREATE DATABASE cannot run inside a transaction in PostgreSQL.
@@ -269,17 +273,31 @@ func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass, dbUser, dbPass 
 	}
 	// dbCreated = true
 
-	rolesAndGrants, err := renderSQL(rolesAndGrantsTmpl, map[string]string{
+	// Ensure the account-level MCP YSQL role exists on this cluster.
+	createMCP, err := renderSQL(createMCPUserTmpl, map[string]string{
+		"MCP":    quoteIdent(mcpUser),
+		"MCPRaw": quoteLiteral(mcpUser),
+		"MCPPass": quoteLiteral(mcpPass),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to render create-MCP-user SQL: %w", err)
+	}
+	slog.Info("ensuring MCP user exists", "mcp_user", mcpUser)
+	if _, err := adminDB.Exec(createMCP); err != nil {
+		return fmt.Errorf("failed to create MCP user %s: %w", mcpUser, err)
+	}
+
+	// Grant the MCP user and new DB user access to this datapack database.
+	grants, err := renderSQL(grantDatapackAccessTmpl, map[string]string{
 		"MCP":      quoteIdent(mcpUser),
-		"MCPPass":  quoteLiteral(mcpPass),
 		"User":     quoteIdent(dbUser),
 		"UserPass": quoteLiteral(dbPass),
 		"DB":       quoteIdent(dbName),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to render roles/grants SQL: %w", err)
+		return fmt.Errorf("failed to render grants SQL: %w", err)
 	}
-	if _, err := adminDB.Exec(rolesAndGrants); err != nil {
+	if _, err := adminDB.Exec(grants); err != nil {
 		return fmt.Errorf("failed to create roles and grants for %s: %w", dbName, err)
 	}
 
@@ -308,39 +326,59 @@ func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass, dbUser, dbPass 
 	return nil
 }
 
-// DropDatapackDB drops the database and roles for a datapack, returning
-// an error if the database drop fails.
-func DropDatapackDB(adminDB *sql.DB, dbName, mcpUser, dbUser string) error {
+// DropDatapackDB drops the database and the per-datapack DB user role.
+// The shared account-level MCP role is never dropped here.
+func DropDatapackDB(adminDB *sql.DB, dbName, dbUser string) error {
+	slog.Info("dropping datapack DB and DB user role",
+		"db_name", dbName, "db_user", dbUser)
+
 	if _, err := adminDB.Exec(fmt.Sprintf(
 		`DROP DATABASE IF EXISTS %s`, quoteIdent(dbName),
 	)); err != nil {
 		return fmt.Errorf("failed to drop database %s: %w", dbName, err)
 	}
 	if _, err := adminDB.Exec(fmt.Sprintf(
-		`DROP ROLE IF EXISTS %s; DROP ROLE IF EXISTS %s`,
-		quoteIdent(mcpUser), quoteIdent(dbUser),
+		`DROP ROLE IF EXISTS %s`, quoteIdent(dbUser),
 	)); err != nil {
-		slog.Warn("dropped database but failed to drop roles",
-			"mcp_user", mcpUser, "db_user", dbUser, "error", err)
+		slog.Warn("dropped database but failed to drop DB user role",
+			"db_user", dbUser, "error", err)
 	}
 	return nil
 }
 
 // dropProvisioned is a best-effort cleanup of a partially provisioned datapack.
-func dropProvisioned(adminDB *sql.DB, dbName, mcpUser, dbUser string) {
-	_ = DropDatapackDB(adminDB, dbName, mcpUser, dbUser)
+// When mcpUserExists is true the MCP role was pre-existing and must not be dropped.
+func dropProvisioned(adminDB *sql.DB, dbName, mcpUser string, mcpUserExists bool, dbUser string) {
+	if _, err := adminDB.Exec(fmt.Sprintf(
+		`DROP DATABASE IF EXISTS %s`, quoteIdent(dbName),
+	)); err != nil {
+		slog.Warn("cleanup: failed to drop database", "db_name", dbName, "error", err)
+	}
+	if !mcpUserExists {
+		if _, err := adminDB.Exec(fmt.Sprintf(
+			`DROP ROLE IF EXISTS %s`, quoteIdent(mcpUser),
+		)); err != nil {
+			slog.Warn("cleanup: failed to drop MCP role", "mcp_user", mcpUser, "error", err)
+		}
+	}
+	if _, err := adminDB.Exec(fmt.Sprintf(
+		`DROP ROLE IF EXISTS %s`, quoteIdent(dbUser),
+	)); err != nil {
+		slog.Warn("cleanup: failed to drop DB role", "db_user", dbUser, "error", err)
+	}
 }
 
 // List returns datapacks belonging to the given account.
 func (r *DatapackRepo) List(accountID string) ([]models.Datapack, error) {
 	rows, err := r.db.Query(
-		`SELECT id, account_id, datapack_name,
-		        yb_universe_id, datapack_ysql_connection_string,
-		        mcp_user_name, db_user_name,
-		        created_at, updated_at
-		 FROM meko_system.datapack_registry
-		 WHERE account_id = $1
-		 ORDER BY created_at DESC`,
+		`SELECT d.id, d.account_id, d.datapack_name,
+		        d.yb_universe_id, d.datapack_ysql_connection_string,
+		        a.mcp_user_name, d.db_user_name,
+		        d.created_at, d.updated_at
+		 FROM meko_system.datapack_registry d
+		 JOIN meko_system.account_registry a ON a.id = d.account_id
+		 WHERE d.account_id = $1
+		 ORDER BY d.created_at DESC`,
 		accountID,
 	)
 	if err != nil {
@@ -372,12 +410,13 @@ func (r *DatapackRepo) List(accountID string) ([]models.Datapack, error) {
 func (r *DatapackRepo) GetByName(name string) (*models.Datapack, error) {
 	var d models.Datapack
 	err := r.db.QueryRow(
-		`SELECT id, account_id, datapack_name,
-		        yb_universe_id, datapack_ysql_connection_string,
-		        mcp_user_name, db_user_name,
-		        created_at, updated_at
-		 FROM meko_system.datapack_registry
-		 WHERE datapack_name = $1`,
+		`SELECT d.id, d.account_id, d.datapack_name,
+		        d.yb_universe_id, d.datapack_ysql_connection_string,
+		        a.mcp_user_name, d.db_user_name,
+		        d.created_at, d.updated_at
+		 FROM meko_system.datapack_registry d
+		 JOIN meko_system.account_registry a ON a.id = d.account_id
+		 WHERE d.datapack_name = $1`,
 		name,
 	).Scan(
 		&d.ID, &d.AccountID, &d.Name,
@@ -459,7 +498,7 @@ func (r *DatapackRepo) GetStatus(name string) (*DatapackStatus, error) {
 	err := r.db.QueryRow(
 		`SELECT d.id, d.datapack_name,
 		        d.yb_universe_id, d.datapack_ysql_connection_string,
-		        d.mcp_user_name, d.db_user_name,
+		        a.mcp_user_name, d.db_user_name,
 		        d.created_at,
 		        (SELECT COUNT(*) FROM meko_system.agent_registry
 		         WHERE datapack_id = d.id),
@@ -467,6 +506,7 @@ func (r *DatapackRepo) GetStatus(name string) (*DatapackStatus, error) {
 		         FROM meko_system.datapack_knowledge_base_registry
 		         WHERE datapack_id = d.id)
 		 FROM meko_system.datapack_registry d
+		 JOIN meko_system.account_registry a ON a.id = d.account_id
 		 WHERE d.datapack_name = $1`, name,
 	).Scan(
 		&s.ID, &s.Name,

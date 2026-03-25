@@ -58,7 +58,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 		slog.Warn("cognito config not set, auth disabled")
 	}
 
-	e.GET("/success", handlers.SuccessHandler(successCfg))
+	v1.GET("/success", handlers.SuccessHandler(successCfg))
 
 	registerDatapackRoutes(cfg, datapackGroup)
 
@@ -126,8 +126,9 @@ func registerDatapackRoutes(
 	ybaRepo := repository.NewYBARepo(cfg.DB)
 	ybaSvc := service.NewYBAService(ybaRepo)
 
+	accountRepo := repository.NewAccountRepo(cfg.DB)
 	dpRepo := repository.NewDatapackRepo(cfg.DB)
-	dpSvc := service.NewDatapackService(dpRepo, ybaSvc)
+	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo)
 	dpH := handlers.NewDatapackHandler(dpSvc)
 
 	g.POST("/datapacks", dpH.Create)

@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS meko_system.account_registry (
     account_last_name VARCHAR(255) NOT NULL,
     account_email VARCHAR(255) NOT NULL UNIQUE,
     account_type meko_system.account_type NOT NULL DEFAULT 'free',
+    mcp_user_name VARCHAR(255),
+    mcp_user_password VARCHAR(255),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -33,8 +35,6 @@ CREATE TABLE IF NOT EXISTS meko_system.datapack_registry (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     yb_universe_id UUID NOT NULL REFERENCES meko_system.yba_universe_registry(id),
     datapack_ysql_connection_string TEXT NOT NULL,
-    mcp_user_name VARCHAR(255) NOT NULL UNIQUE,
-    mcp_user_password VARCHAR(255) NOT NULL,
     db_user_name VARCHAR(255) NOT NULL UNIQUE,
     db_user_password VARCHAR(255) NOT NULL,
 

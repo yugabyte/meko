@@ -130,6 +130,82 @@ func (r *AccountRepo) EnsureAccount(
 	})
 }
 
+// MCPCredentials holds the YSQL role name and password for the
+// account-level MCP user.
+type MCPCredentials struct {
+	UserName string
+	Password string
+}
+
+// GetMCPCredentials returns the account-level MCP YSQL role credentials.
+// Returns nil when the account has no MCP user provisioned yet.
+func (r *AccountRepo) GetMCPCredentials(
+	ctx context.Context,
+	accountID string,
+) (*MCPCredentials, error) {
+	slog.Debug("looking up account MCP credentials",
+		"account_id", accountID,
+	)
+
+	var userName, password sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT mcp_user_name, mcp_user_password
+		 FROM meko_system.account_registry
+		 WHERE id = $1`,
+		accountID,
+	).Scan(&userName, &password)
+	if err != nil {
+		slog.Error("failed to look up MCP credentials",
+			"account_id", accountID, "error", err,
+		)
+		return nil, fmt.Errorf("failed to look up MCP credentials: %w", err)
+	}
+
+	if !userName.Valid || userName.String == "" {
+		slog.Debug("no MCP credentials set for account",
+			"account_id", accountID,
+		)
+		return nil, nil
+	}
+
+	return &MCPCredentials{
+		UserName: userName.String,
+		Password: password.String,
+	}, nil
+}
+
+// SetMCPCredentials stores MCP YSQL role credentials on the account.
+func (r *AccountRepo) SetMCPCredentials(
+	ctx context.Context,
+	accountID, userName, password string,
+) error {
+	slog.Info("storing MCP credentials on account",
+		"account_id", accountID, "mcp_user", userName,
+	)
+
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE meko_system.account_registry
+		 SET mcp_user_name = $1, mcp_user_password = $2, updated_at = NOW()
+		 WHERE id = $3`,
+		userName, password, accountID,
+	)
+	if err != nil {
+		slog.Error("failed to store MCP credentials",
+			"account_id", accountID, "error", err,
+		)
+		return fmt.Errorf("failed to store MCP credentials: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("account %q not found", accountID)
+	}
+	return nil
+}
+
 // VerifyEmail sets the email_verified_at timestamp for the account
 // matching the given email address.
 func (r *AccountRepo) VerifyEmail(

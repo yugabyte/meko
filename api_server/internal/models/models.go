@@ -37,6 +37,8 @@ type Account struct {
 	Email           string     `json:"email"`
 	AccountType     string     `json:"account_type"`
 	CognitoSub      string     `json:"cognito_sub,omitempty"`
+	MCPUserName     *string    `json:"mcp_user_name,omitempty"`
+	MCPUserPassword *string    `json:"-"`
 }
 
 // KnowledgeBase represents a knowledge base linked to a datapack.
