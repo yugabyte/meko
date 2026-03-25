@@ -1,12 +1,10 @@
 ---
 title: About Meko
 linkTitle: About Meko
-description: Learn what Meko is and what it can do for you
+description: "**Meko = (ME)mory + (K)nowledge + (O)bservability**"
 weight: 10
 type: docs
 ---
-**Meko = (ME)mory + (K)nowledge + (O)bservability**  
-
 Meko is an agent-native data layer for multi-agent systems that work and learn together.  It supports: 
 
 - **Collective memory**: learning that compounds across the entire system, as opposed to just per-agent memory

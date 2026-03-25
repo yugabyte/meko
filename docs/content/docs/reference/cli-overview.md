@@ -7,14 +7,6 @@ weight: 10
 
 The Meko CLI (`meko`) is the primary tool for managing datapacks, knowledge bases, and memory from the command line.
 
-## Authentication
-
-All datapack commands require a valid login session. If you are not logged in, commands will fail with:
-
-```text
-Error: not logged in - run `meko login` first
-```
-
 ### Login
 
 ```bash
@@ -42,6 +34,15 @@ meko logout
 ```
 
 Removes locally stored tokens.
+
+## Create a Datapack
+
+```bash
+meko datapack create --name my-datapack
+```
+
+This provisions a dedicated database, MCP server endpoint, and access credentials. Save the output --- you'll need the MCP server details for the next step.
+
 
 ## Global Flags
 
