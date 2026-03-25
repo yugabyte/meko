@@ -68,7 +68,6 @@ Use a dedicated datapack per project to store project-specific context:
 <!-- TODO: Add full walkthroughs with step-by-step IDE screenshots (Heather/Naveen) -->
 <!-- TODO: Add complete worked example showing a developer setting up preferences and using them across multiple projects -->
 
-## Next Steps
+## Next
 
-- [Build Software with Meko](../build-software-with-meko/) --- Use conversation history and resumability
-- [Working with Memory guide](../../guides/working-with-memory/) --- Deep dive into memory operations
+- **[Build Software with Meko](../build-software-with-meko/)** --- Use conversation history and resumability

@@ -43,7 +43,9 @@ This provisions a dedicated database, MCP server endpoint, and access credential
 
 ## Step 4: Connect Your IDE
 
-Each datapack exposes an MCP server. Add the following configuration to your IDE to connect.
+Each datapack exposes an MCP server.  Configure your IDE or development tool to connect.  
+
+TIP: if you get stuck below, see [Integrations](../integrations/_index)
 
 ### Cursor
 
@@ -64,7 +66,7 @@ Add to your Cursor MCP settings (`.cursor/mcp.json`):
 
 Add the MCP server configuration. The method depends on your Claude version:
 
-**V0.8 (Developer Mode):** Go to Claude > Settings > Developer > Edit Config. Edit the JSON file and add:
+**Developer Mode** Go to Claude > Settings > Developer > Edit Config. Edit the JSON file and add:
 
 ```json
 {
@@ -78,10 +80,6 @@ Add the MCP server configuration. The method depends on your Claude version:
 ```
 
 Then restart Claude.
-
-**V0.9 (Custom Connector):** Go to Claude > Settings > Connectors > Add Custom Connector. Add the MCP server URL from your datapack creation output with the name "meko".
-
-**V1.0 (Marketplace):** In Claude, browse Connectors and search for "Meko".
 
 ### OpenAI Codex
 
@@ -110,6 +108,6 @@ agent_id is cursor_agent and user_id is <your_username>
 
 If the connection is working, your IDE will use the Meko MCP tools to store the memory.
 
-## Next Steps
+## Next
 
-Continue to [Explore Your Datapack](../explore-your-datapack/) to see Meko in action with the Trip Planner demo.
+* Continue to **[Explore Your Datapack](../explore-your-datapack/)** to see Meko in action.

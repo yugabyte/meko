@@ -12,9 +12,13 @@ resourceDir = 'docs/resources'
 [permalinks.section]
   docs = "/:sections[1:]"
 
-# Make home pages link-only so docs section landing pages can own root URLs
-[cascade.build]
-  render = "link"
+# Suppress auto-rendered child page lists on all section pages
+[[cascade]]
+  no_list = true
 
-[cascade.target]
-  path = "/"
+# Make home pages link-only so docs section landing pages can own root URLs
+[[cascade]]
+  [cascade.build]
+    render = "link"
+  [cascade.target]
+    path = "/"

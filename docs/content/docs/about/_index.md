@@ -50,3 +50,7 @@ Conversations are fundamental to agents but expensive to store in real-time data
 ### Full Chain-of-Thought Traceability
 
 End-to-end observability shows exactly which data operations your agents performed, the latencies at each stage, and the token costs per interaction. Meko collects traces for the complete chain of thought, giving you the explainability production AI applications require. Debug performance issues and optimize costs with visibility into your data layer's actual behavior.
+
+## Next
+
+* **[Quick Start](../quick-start)** - Get up and running with Meko in minutes
