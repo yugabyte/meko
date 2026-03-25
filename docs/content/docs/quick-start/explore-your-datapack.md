@@ -89,8 +89,8 @@ Check what's happening inside your datapack:
 <!-- TODO: Add LangFuse observability walkthrough once integration details are finalized -->
 <!-- TODO: Add screenshots showing costs, calls, and timings -->
 
-## Next Steps
+## Next
 
-- [Examples](../../examples/) --- See more detailed use cases
-- [Working with Memory guide](../../guides/working-with-memory/) --- Deep dive into memory operations
-- [Working with Knowledge Bases guide](../../guides/working-with-knowledge-bases/) --- Advanced knowledge base management
+- **[Examples](../../examples/)** --- Explore more real-world use cases
+- **[Working with Memory guide](../../guides/working-with-memory/)** --- Deep dive into memory operations
+- **[Working with Knowledge Bases guide](../../guides/working-with-knowledge-bases/)** --- Advanced knowledge base management

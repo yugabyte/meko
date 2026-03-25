@@ -57,7 +57,6 @@ Meko keeps an audit trail of sub-agent operations, so the supervisor agent knows
 <!-- TODO: Add code samples showing how to configure conversation history storage -->
 <!-- TODO: Add detailed resumability example with actual MCP tool calls -->
 
-## Next Steps
+## Next
 
-- [Use Meko in Your IDE](../meko-in-your-ide/) --- Store preferences and standards
-- [Observability guide](../../guides/observability/) --- View traces and reasoning history
+- **[Integrations](../../integrations/)**
