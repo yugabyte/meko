@@ -10,13 +10,47 @@ Create a Meko account at the Meko portal. You can sign up with your Gmail or ema
 
 ## Try This without Meko
 
-Type this into your LLM chatbot:
+In the chatbot of your AI-driven IDE or development tool, enter:
 
 ```text
 Propose a 5 day vacation for me.
 ```
 
 Without any stored memories, your agent either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
+
+For example, Cursor (as of this writing) responds with:
+
+```text
+Here’s a 5-day vacation you can use as-is or swap the city for another place you like.
+
+## Option A: City + food (fits “you like ice cream”)
+
+Where: Barcelona (or substitute: Lisbon, Rome, Tokyo, Mexico City)
+
+<...>
+
+---
+
+## Option B: Nature reset
+
+Where: Banff / Lake Louise (or substitute: Pacific Northwest coast, Swiss Alps, Costa Rica cloud forest)
+
+<...>
+
+---
+
+## Quick choices so the plan fits you
+
+If you answer these, the itinerary can be tightened (budget, pace, solo/couple/family):
+
+1. Relax vs. busy (roughly 50/50 vs. mostly slow)?
+2. Fly vs. drive from home?
+3. Rough season (when you’re thinking of going)?
+4. Beach, city, or mountains as a first pick?
+
+I don’t have your travel budget or dates in Meko—once you share those, I can...
+```
+
 
 ## Connect Your IDE to Meko
 
@@ -26,7 +60,7 @@ Each Meko account has one or more Datapacks, which is a container for memory and
 
 <!-- TODO: FORMAT THE BELOW IN TABS --> 
 
-### Cursor
+#### Cursor
 
 Add to your Cursor MCP settings (`.cursor/mcp.json`):
 
@@ -43,7 +77,7 @@ Add to your Cursor MCP settings (`.cursor/mcp.json`):
 
 For troubleshooting, see [Integrations](../integrations/_index)
 
-### Claude Code
+#### Claude Code
 
 Add the MCP server configuration. The method depends on your Claude version:
 
@@ -63,7 +97,7 @@ Add the MCP server configuration. The method depends on your Claude version:
 Then restart Claude.
 
 For troubleshooting, see [Integrations](../integrations/_index)
-### OpenAI Codex
+#### OpenAI Codex
 
 Add the MCP server configuration to your Codex settings:
 
@@ -111,6 +145,31 @@ Propose a 5 day vacation for me.
 
 Compare the response to earlier response prior to connecting to and configuring Meko.   Notice how the agent retrieves your stored preferences and immediately proposes a vacation aligned to these preferences (a tropical beach vacation within budget), and how no follow-up questions were needed.
 
+For example, Cursor (as of this writing) responds with:
+
+```text
+Here’s a 5-day plan tuned to what you’ve saved: tropical beach + budget.
+
+## Pick a base: Isla Holbox or Puerto Morelos area, Mexico (Yucatán)
+
+Why it fits: Warm water, palm-lined beaches, easy buses from Cancún airport, hostels / small hotels and street food keep costs down. (Swap-ins: Koh Lanta, Thailand or Nusa Penida + Sanur, Bali if you’re already closer to Asia.)
+
+<...>
+
+---
+
+## Budget levers
+
+- Stay: hostel dorm or simple guesthouse slightly back from the sand (often half the price of beachfront).
+- Eat: markets, loncherías, set “menu del día” lunches; limit restaurant dinners.
+- Move: buses + shared shuttles; avoid private taxis except airport if needed.
+- Play: prioritize free swimming, walking, and one paid half-day trip instead of stacked tours.
+
+---
+
+## If you tell me your month, home airport region, and solo vs. group, I can narrow this to one place, rough daily spend, and a rain-day backup.
+```
+
 ## Visibility & Observability
 
 You can verify what Meko stored by checking your datapack's memories in the Meko portal. You'll see:
@@ -120,8 +179,11 @@ You can verify what Meko stored by checking your datapack's memories in the Meko
 
 ## Recap
 
-What we learned: the value of memory.
+Meko streamlined and enhanced the user experience through **personalization**.
 
+Meko can store not only personal preferences, but also personal, team, and organization preferences, standards, policies.   Meko allows empowers teams (of people or agents) to **collaborate** through its ability to manage and share these as "memories"
+
+Under the hood, memories are stored in a graph database... where the graph's entities and relationships are derived by Meko's processing of the LLM prompts.
 
 ## Next
 
