@@ -1,7 +1,7 @@
 ---
 title: All Types of alerts, tabs 
 linkTitle: Page content examples
-weight: 10
+weight: 10000
 type: docs
 ---
 
@@ -43,9 +43,9 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
 Meko is fully open-source and integrates easily with any agentic framework through MCP servers. It is serverless, multi-tenant (multi-agentic) and optimized for tiering to object stores. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
 
 {{% /tab %}}
-{{< tab header="German" lang="de" >}}
+{{% tab header="German" lang="de" %}}
 Meko is an agent-native data layer for multi-agent systems that work and learn together.  It supports:
-{{< /tab >}}
+{{% /tab %}}
 {{% tab header="Chines" lang="ch" %}}
 Meko is an agent-native data layer for multi-agent systems that work and learn together.  It supports:
 {{% /tab %}}

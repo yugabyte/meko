@@ -5,11 +5,11 @@ description: Add memories, query knowledge, and see Meko in action
 weight: 1020
 ---
 
-## Demo 2: Build a Knowledge Base
+Meko allows you add knowledge to your datapack by simply uploading documents. We do this using the [meko CLI](../../reference/cli-overview/).
 
-Add documents to your datapack and query them using RAG.
+In the following example, we'll add documents to your datapack and query them using RAG.
 
-### Upload Knowledge
+## Upload Knowledge
 
 Upload documents to your datapack's knowledge base:
 
@@ -42,6 +42,6 @@ Check what's happening inside your datapack:
 
 ## Next
 
-- **[Examples](../../examples/)** --- Explore more real-world use cases
-- **[Working with Memory guide](../../guides/working-with-memory/)** --- Deep dive into memory operations
-- **[Working with Knowledge Bases guide](../../guides/working-with-knowledge-bases/)** --- Advanced knowledge base management
+- [Examples](../../examples/). Explore more real-world use cases.
+- [Working with Memory](../../guides/working-with-memory/). Deep dive into memory operations.
+- [Working with Knowledge Bases](../../guides/working-with-knowledge-bases/). Advanced knowledge base management.

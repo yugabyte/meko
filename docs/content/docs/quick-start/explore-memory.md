@@ -9,7 +9,7 @@ Meko retains memory, based on what you have provided and on previous interaction
 
 ## Your IDE without Meko
 
-To show how this works, in the chatbot of your AI-driven IDE or development tool, before even setting up Meko, type:
+To show how this works, before even setting up Meko, in the chatbot of your AI-driven IDE or development tool, enter the following:
 
 ```text
 Propose a 5 day vacation for me.
@@ -17,7 +17,7 @@ Propose a 5 day vacation for me.
 
 Without any stored memories, your agent either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
 
-For example, Cursor (as of this writing) responds with something similar to the following:
+For example, Cursor responds with something similar to the following:
 
 ```text
 Here’s a 5-day vacation you can use as-is or swap the city for another place you like.
@@ -48,17 +48,14 @@ If you answer these questions, the itinerary can be tightened (budget, pace, sol
 4. Beach, city, or mountains as a first pick?
 ```
 
-## Your IDE with Meko
+## Connect Meko
 
 Each Meko account has one or more Datapacks, which is a container for memory and knowledge. A default Datapack is created for you when you sign up.
 
-To start using your datapack, register the MCP Server associated with this Datapack with your AI chatbot-enabled IDE or development tool.
+To start using your Datapack, register the MCP Server associated with this Datapack with your AI chatbot-enabled IDE or development tool.
 
-Register the Meko MCP Server with your IDE or Developer Tool.
-
-<!-- TODO: FORMAT THE BELOW IN TABS --> 
-
-#### Cursor
+{{< tabpane text=true right=false >}}
+{{% tab header="Cursor" lang="cursor" %}}
 
 Add to your Cursor MCP settings (`.cursor/mcp.json`):
 
@@ -73,13 +70,14 @@ Add to your Cursor MCP settings (`.cursor/mcp.json`):
 }
 ```
 
-For troubleshooting, see [Integrations](../integrations/_index)
+{{% /tab %}}
+{{% tab header="Claude Code" lang="claude" %}}
 
-#### Claude Code
+Add the MCP server configuration. The method depends on your Claude version.
 
-Add the MCP server configuration. The method depends on your Claude version:
+**Developer Mode**
 
-**Developer Mode** Go to Claude > Settings > Developer > Edit Config. Edit the JSON file and add:
+Go to **Claude>Settings>Developer>Edit Config**. Edit the JSON file and add the following:
 
 ```json
 {
@@ -94,9 +92,8 @@ Add the MCP server configuration. The method depends on your Claude version:
 
 Then restart Claude.
 
-For troubleshooting, see [Integrations](../integrations/_index)
-#### OpenAI Codex
-
+{{% /tab %}}
+{{% tab header="OpenAI Codex" lang="openai" %}}
 Add the MCP server configuration to your Codex settings:
 
 ```json
@@ -110,10 +107,15 @@ Add the MCP server configuration to your Codex settings:
 }
 ```
 
+{{% /tab %}}
+{{< /tabpane >}}
+
 For troubleshooting, see [Integrations](../integrations/_index)
 
-## Configure IDE for Meko
- 
+## Your IDE with Meko
+
+Now that you are connected, tell your AI about the new capabilities.
+
 In your IDE or dev tool, enter the following:
 
 ```text
@@ -125,25 +127,25 @@ Have Meko remember all my personal preferences.
 
 If the connection is working, your IDE will use the Meko MCP tools to store the memory.
 
-## Create a memory 
+### Create a memory
 
-Type this to persist your personal preferences as memory:
+Type the following to persist your personal preferences as memory:
 
 ```text
 Please remember that I like to take vacations at tropical beach locations, on a budget
 ```
 
-## Prompt with Meko
+### Prompt with Meko
 
-**Start a new chat session**, then type:
+Start a new chat session, then type:
 
 ```text
 Propose a 5 day vacation for me.
 ```
 
-Compare the response to earlier response prior to connecting to and configuring Meko.   Notice how the agent retrieves your stored preferences and immediately proposes a vacation aligned to these preferences (a tropical beach vacation within budget), and how no follow-up questions were needed.
+Your AI can now leverage the memory to provide a more relevant response.
 
-For example, Cursor (as of this writing) responds with:
+For example, Cursor now responds with something similar to the following:
 
 ```text
 Here’s a 5-day plan tuned to what you’ve saved: tropical beach + budget.
@@ -168,7 +170,9 @@ Why it fits: Warm water, palm-lined beaches, easy buses from Cancún airport, h
 ## If you tell me your month, home airport region, and solo vs. group, I can narrow this to one place, rough daily spend, and a rain-day backup.
 ```
 
-## Verify
+Compare the response to the earlier response prior to connecting to and configuring Meko. The agent now retrieves your stored preferences and immediately proposes a vacation aligned to these preferences (a tropical beach vacation within budget). No follow-up questions were needed.
+
+### Verify
 
 You can verify what Meko stored by checking your datapack's memories in the Meko portal. You'll see:
 
@@ -183,12 +187,12 @@ What does Meko remember about me?
 
 ## Recap
 
-We've seen how Meko uses **memory** to enhance a user experience through **personalization**.
+We've seen how Meko uses _memory_ to enhance a user experience through _personalization_.
 
-**Memory from Meko** can do much more.   Beyond personal preferences, it can also capture personal, team, and organization preferences, standards, policies, and more.  Meko's memory  empowers teams to **collaborate**.   Memories can be captured, shared, managed, and extended... and not just for human teams, but also for agent teams.   Hence, Meko is a multi-agent data layer for shared memory.
+Memory from Meko can do much more. Beyond personal preferences, it can also capture personal, team, and organization preferences, standards, policies, and more. Meko's memory empowers teams to collaborate. Memories can be captured, shared, managed, and extended... and not just for human teams, but also for agent teams. Meko is a multi-agent data layer for shared memory.
 
 Under the hood, memories are stored in a graph database... where the graph's entities and relationships are derived by Meko's processing of the LLM prompts.
 
 ## Next
 
-* Continue to **[Explore Knowledge](../explore-knowledge/)** to see Meko in action.
+[Explore Knowledge](../explore-knowledge/) to see Meko in action.
