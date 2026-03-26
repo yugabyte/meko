@@ -1,15 +1,15 @@
 ---
-title: Use Meko in Your IDE
-linkTitle: Meko in Your IDE
+title: Use Meko in your IDE
+linkTitle: In your IDE
 description: Store personal preferences, coding standards, and team policies across sessions
 weight: 2010
 ---
 
 Meko gives your IDE's AI assistant persistent memory that follows you across sessions and projects. This example shows how to use Meko for storing and recalling development preferences.
 
-## Use Cases
+## Use cases
 
-### Personal Preferences
+### Personal preferences
 
 Store your individual coding style and tool preferences:
 
@@ -27,7 +27,7 @@ Remember that I prefer 4-space indentation and single quotes in Python
 
 In a new session, when you ask the agent to write code, it will recall your preferences and apply them automatically.
 
-### Portable Developer Coding Preferences
+### Portable developer coding preferences
 
 Your preferences travel with you across projects. Create a datapack that stores your coding standards, then connect to it from any project:
 
@@ -42,7 +42,7 @@ Your preferences travel with you across projects. Create a datapack that stores 
 }
 ```
 
-### Group/Team Policies and Standards
+### Group/team policies and standards
 
 Create a shared datapack for your team's coding standards, testing policies, and architectural norms:
 
@@ -56,7 +56,7 @@ Remember our testing policy: minimum 80% code coverage, integration tests for al
 
 Multiple team members can connect to the same datapack, ensuring consistent standards across the team.
 
-### Project Storage
+### Project storage
 
 Use a dedicated datapack per project to store project-specific context:
 
@@ -70,4 +70,4 @@ Use a dedicated datapack per project to store project-specific context:
 
 ## Next
 
-- **[Build Software with Meko](../build-software-with-meko/)** --- Use conversation history and resumability
+- [Build software with Meko](../build-software-with-meko/) - Use conversation history and resumability
