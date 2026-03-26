@@ -23,7 +23,7 @@ Without Meko, agent reasoning is lost when a session ends. Try this:
 
 1. Connect to your Meko datapack and tell the agent:
 
-   ```
+   ```text
    You have access to the Meko platform through MCP server.
    Store all my conversation history and agent reasoning in Meko.
    ```
