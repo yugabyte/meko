@@ -4,13 +4,12 @@ linkTitle: Explore Memory
 description: See how to use Meko to store your memories
 weight: 1010
 ---
-## Sign up
 
-Create a Meko account at the Meko portal. You can sign up with your Gmail or email address.
+Meko retains memory, based on what you have provided and on previous interactions.
 
-## Prompt without Meko
+## Your IDE without Meko
 
-In the chatbot of your AI-driven IDE or development tool, before even setting up Meko, type:
+To show how this works, in the chatbot of your AI-driven IDE or development tool, before even setting up Meko, type:
 
 ```text
 Propose a 5 day vacation for me.
@@ -18,7 +17,7 @@ Propose a 5 day vacation for me.
 
 Without any stored memories, your agent either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
 
-For example, Cursor (as of this writing) responds with:
+For example, Cursor (as of this writing) responds with something similar to the following:
 
 ```text
 Here’s a 5-day vacation you can use as-is or swap the city for another place you like.
@@ -47,15 +46,15 @@ If you answer these questions, the itinerary can be tightened (budget, pace, sol
 2. Fly vs. drive from home?
 3. Rough season (when you’re thinking of going)?
 4. Beach, city, or mountains as a first pick?
-
 ```
 
+## Your IDE with Meko
 
-## Connect IDE to Meko
+Each Meko account has one or more Datapacks, which is a container for memory and knowledge. A default Datapack is created for you when you sign up.
 
-Let's register the Meko MCP Server with your IDE or Developer Tool
+To start using your datapack, register the MCP Server associated with this Datapack with your AI chatbot-enabled IDE or development tool.
 
-Each Meko account has one or more Datapacks, which is a container for memory and knowledge.  A default Datapack has been created for you.  Register the MCP Server associated with this Datapack with your AI chatbot-enabled IDE or development tool.    
+Register the Meko MCP Server with your IDE or Developer Tool.
 
 <!-- TODO: FORMAT THE BELOW IN TABS --> 
 
