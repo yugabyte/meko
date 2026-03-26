@@ -8,9 +8,7 @@ weight: 5000
 type: docs
 ---
 
-# Reference
-
-Complete reference documentation for Meko's CLIs, Datapacks, and Knowledge Bases. The Meko CLI is a command-line tool that allows you to manage your Meko Datapacks, and Knowledge Bases.
+The Meko CLI is a command-line tool that allows you to manage your Meko Datapacks, and Knowledge Bases.
 
 ## Meko CLI Overview (Simple introduction to the CLI)
 
