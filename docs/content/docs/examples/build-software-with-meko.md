@@ -1,48 +1,64 @@
 ---
-title: Build Software with Meko
-linkTitle: Build Software with Meko
+title: Build software with Meko
+linkTitle: Build software
 description: Leverage conversation history, reasoning traces, and resumability
 weight: 2020
 ---
 
 Meko stores conversation history and agent reasoning traces, enabling features like cross-session recall and resumability after failures.
 
-## Conversation History and Reasoning
-
-### The Problem
+## Conversation history and reasoning
 
 Without Meko, agent reasoning is lost when a session ends. Try this:
 
-1. Ask your agent: *"Create a program in Python that lists the first 10 Fibonacci numbers"*
-2. The agent generates code with reasoning along the way.
-3. **Start a new session.**
-4. Ask: *"Show me the agent's reasoning for building the Fibonacci program"*
-5. You get zero results --- the reasoning is gone.
+1. Ask your agent:
 
-### With Meko
+    ```text
+    Create a program in Python that lists the first 10 Fibonacci numbers
+    ```
+
+    The agent generates code with reasoning along the way.
+
+1. Start a new session and ask the following:
+
+    ```text
+    Show me the agent's reasoning for building the Fibonacci program
+    ```
+
+    You get zero results --- the reasoning is gone.
+
+Using Meko, agents can retain context:
 
 1. Connect to your Meko datapack and tell the agent:
 
-   ```text
-   You have access to the Meko platform through MCP server.
-   Store all my conversation history and agent reasoning in Meko.
-   ```
+    ```text
+    You have access to the Meko platform through MCP server.
+    Store all my conversation history and agent reasoning in Meko.
+    ```
 
-2. Ask: *"Create a program in Python that lists the first 10 Fibonacci numbers"*
-3. The agent generates code, and Meko stores the conversation and reasoning.
-4. **Start a new session.**
-5. Ask: *"Show me the agent's reasoning for building the Fibonacci program"*
-6. The agent retrieves the stored reasoning from Meko.
+1. Ask your agent:
+
+    ```text
+    Create a program in Python that lists the first 10 Fibonacci numbers
+    ```
+
+    The agent generates code, and Meko stores the conversation and reasoning.
+
+1. Start a new session and ask the following:
+
+    ```text
+    Show me the agent's reasoning for building the Fibonacci program
+    ```
+
+    The agent retrieves the stored reasoning from Meko.
 
 Meko keeps all conversation history queryable while transparently tiering older messages to object storage (S3-backed), keeping hot data fast and cold data cheap.
 
 ## Resumability
 
-Agents and sub-agents can persist their state in Meko for resumability after failures.
+Agents and sub-agents can persist their state in Meko so that they can resume after failures.
 
-### Scenario
-
-Imagine a supervisor agent checking in 300 files to GitHub:
+Consider the scenario of a supervisor agent checking in 300 files to GitHub:
 
 1. The agent starts processing files, storing progress in Meko.
 2. Midway through, the LLM runs out of tokens and the operation fails.
@@ -59,4 +75,4 @@ Meko keeps an audit trail of sub-agent operations, so the supervisor agent knows
 
 ## Next
 
-- **[Integrations](../../integrations/)**
+- [Integrations](../../integrations/)
