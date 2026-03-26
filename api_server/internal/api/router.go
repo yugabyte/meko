@@ -11,6 +11,7 @@ import (
 	_ "meko/api_server/docs" // registers swagger spec with swag
 	"meko/api_server/internal/auth"
 	"meko/api_server/internal/handlers"
+	"meko/api_server/internal/k8s"
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
@@ -58,7 +59,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 		slog.Warn("cognito config not set, auth disabled")
 	}
 
-	v1.GET("/success", handlers.SuccessHandler(successCfg))
+	e.GET("/success", handlers.SuccessHandler(successCfg))
 
 	registerDatapackRoutes(cfg, datapackGroup)
 
@@ -92,7 +93,12 @@ func registerAuthRoutes(
 		return nil, fmt.Errorf("initializing cognito client: %w", err)
 	}
 
-	authSvc := service.NewAuthService(cognitoClient, accountRepo)
+	var authOpts []service.AuthServiceOption
+	if provisioner := buildProvisioner(cfg); provisioner != nil {
+		authOpts = append(authOpts, service.WithProvisioner(provisioner))
+	}
+
+	authSvc := service.NewAuthService(cognitoClient, accountRepo, authOpts...)
 	authH := handlers.NewAuthHandler(authSvc)
 
 	authGroup := v1.Group("/auth")
@@ -117,6 +123,37 @@ func registerAuthRoutes(
 	}, nil
 }
 
+// buildProvisioner attempts to create a ProvisioningService. Returns
+// nil when the K8s client cannot be initialised (e.g. running outside a
+// cluster), allowing the server to start without provisioning support.
+func buildProvisioner(cfg ServerConfig) *service.ProvisioningService {
+	k8sClient, err := k8s.NewClient()
+	if err != nil {
+		slog.Warn("k8s client unavailable, post-signup provisioning disabled",
+			"error", err,
+		)
+		return nil
+	}
+
+	ybaRepo := repository.NewYBARepo(cfg.DB)
+	ybaSvc := service.NewYBAService(ybaRepo)
+	accountRepo := repository.NewAccountRepo(cfg.DB)
+	dpRepo := repository.NewDatapackRepo(cfg.DB)
+	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo)
+
+	tierRepo := repository.NewTierConfigRepo(cfg.DB)
+
+	provCfg := service.ProvisioningConfig{
+		CRDNamespace: cfg.CRDNamespace,
+	}
+
+	provSvc := service.NewProvisioningService(dpSvc, k8sClient, tierRepo, provCfg)
+	slog.Info("post-signup provisioning enabled",
+		"crd_namespace", cfg.CRDNamespace,
+	)
+	return provSvc
+}
+
 // registerDatapackRoutes wires all datapack, agent, and knowledge-base
 // routes onto the given group.
 func registerDatapackRoutes(
@@ -130,6 +167,8 @@ func registerDatapackRoutes(
 	dpRepo := repository.NewDatapackRepo(cfg.DB)
 	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo)
 	dpH := handlers.NewDatapackHandler(dpSvc)
+
+	g.GET("/internal/provision-status", handlers.ProvisionStatusHandler(dpRepo))
 
 	g.POST("/datapacks", dpH.Create)
 	g.GET("/datapacks", dpH.List)

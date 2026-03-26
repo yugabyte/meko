@@ -39,22 +39,43 @@ type AccountStore interface {
 	VerifyEmail(ctx context.Context, email string) error
 }
 
+// Provisioner abstracts post-signup account provisioning (default
+// datapack + CRD creation), enabling test doubles.
+type Provisioner interface {
+	ProvisionNewAccount(ctx context.Context, accountID string)
+}
+
 // AuthService orchestrates user authentication operations: signup,
 // email confirmation, login, and logout.
 type AuthService struct {
-	cognito  CognitoProvider
-	accounts AccountStore
+	cognito     CognitoProvider
+	accounts    AccountStore
+	provisioner Provisioner
+}
+
+// AuthServiceOption configures optional AuthService dependencies.
+type AuthServiceOption func(*AuthService)
+
+// WithProvisioner sets the provisioning service that is triggered when
+// a new account is JIT-created via EnsureAccountFromIDToken.
+func WithProvisioner(p Provisioner) AuthServiceOption {
+	return func(s *AuthService) { s.provisioner = p }
 }
 
 // NewAuthService creates a new AuthService.
 func NewAuthService(
 	cognito CognitoProvider,
 	accounts AccountStore,
+	opts ...AuthServiceOption,
 ) *AuthService {
-	return &AuthService{
+	s := &AuthService{
 		cognito:  cognito,
 		accounts: accounts,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // SignupRequest holds the input for user registration.
@@ -272,6 +293,13 @@ func (s *AuthService) EnsureAccountFromIDToken(
 		"email", claims.Email,
 		"cognito_sub", claims.Sub,
 	)
+
+	if s.provisioner != nil {
+		slog.Info("Triggering post-signup provisioning",
+			"account_id", acct.ID,
+		)
+		go s.provisioner.ProvisionNewAccount(context.Background(), acct.ID)
+	}
 }
 
 // parseIDTokenClaims extracts claims from the JWT payload without

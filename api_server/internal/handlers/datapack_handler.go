@@ -94,13 +94,19 @@ func (h *DatapackHandler) List(c echo.Context) error {
 //	@Failure	404		{object}	APIResponse
 //	@Router		/datapacks/{name} [get]
 func (h *DatapackHandler) Describe(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
 	name := c.Param("name")
 	if name == "" {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "datapack name is required")
 	}
 
-	dp, err := h.svc.Describe(name)
+	dp, err := h.svc.Describe(account.ID, name)
 	if err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
@@ -125,6 +131,12 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 //	@Failure	404		{object}	APIResponse
 //	@Router		/datapacks/{name} [patch]
 func (h *DatapackHandler) Update(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
 	name := c.Param("name")
 	if name == "" {
 		return apiError(c, http.StatusBadRequest,
@@ -137,7 +149,7 @@ func (h *DatapackHandler) Update(c echo.Context) error {
 			"INVALID_JSON", "malformed request body")
 	}
 
-	if err := h.svc.Update(name, req); err != nil {
+	if err := h.svc.Update(account.ID, name, req); err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
@@ -161,13 +173,19 @@ func (h *DatapackHandler) Update(c echo.Context) error {
 //	@Failure	404		{object}	APIResponse
 //	@Router		/datapacks/{name} [delete]
 func (h *DatapackHandler) Delete(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
 	name := c.Param("name")
 	if name == "" {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "datapack name is required")
 	}
 
-	if err := h.svc.Delete(name); err != nil {
+	if err := h.svc.Delete(account.ID, name); err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
@@ -191,13 +209,19 @@ func (h *DatapackHandler) Delete(c echo.Context) error {
 //	@Failure	404		{object}	APIResponse
 //	@Router		/datapacks/{name}/status [get]
 func (h *DatapackHandler) Status(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
 	name := c.Param("name")
 	if name == "" {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "datapack name is required")
 	}
 
-	st, err := h.svc.Status(name)
+	st, err := h.svc.Status(account.ID, name)
 	if err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
