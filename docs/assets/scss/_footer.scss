@@ -1,11 +1,19 @@
 .td-footer {
-	min-height: 120px;
-	padding-top: 0px;
-	align-items: center;
+  min-height: 120px;
+  padding-top: 0;
+  align-items: center;
 
-	.td-footer__center {
-		@media(max-width: 600px) {
-			margin-top: 15px;
-		}
-	}
+  .td-footer__center {
+    @media(max-width: 600px) {
+      margin-top: 15px;
+    }
+  }
+
+  .td-footer__links-item {
+    margin-right: 20px;
+  }
+
+  .row.mx-md-2 {
+    align-items: center;
+  }
 }
