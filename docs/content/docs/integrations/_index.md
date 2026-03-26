@@ -56,6 +56,3 @@ You follow the same basic pattern with all tools and frameworks:
   >}}
 {{< /card-group >}}
 
-
-
-
