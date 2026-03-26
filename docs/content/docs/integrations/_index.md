@@ -81,7 +81,7 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 
     The result should look like the following:
 
-    <img src="Pasted image 20260320163105.png" alt="Cursor Desktop Screenshot" style="max-width: 100%; height: auto;" />
+    ![Cursor Desktop](/images/integrations-cursor-settings.png)
 
 1. Verify the Connection by entering the following in chat.
 
@@ -93,9 +93,9 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 
 ### Cursor Web
 
-{{% pageinfo %}}
-This page is under development. Check back soon.
-{{% /pageinfo %}}
+> [!NOTE] Coming soon
+>
+> This section is under development. Check back soon.
 
 Feel free to contribute here with info!
 
@@ -124,17 +124,15 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 1. Quit and restart Claude Desktop.
 
-The result should look like the following:
+    The result should look like the following:
 
-<img src="Pasted image 20260320164527.png" alt="Claude Desktop Screenshot" style="max-width: 100%; height: auto;" />
+    ![Claude Desktop](/images/integrations-claude-desktop.png)
 
-{{% pageinfo %}}
-TIP: If you see errors when restarting Claude, examine the log file that appears. Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.
-{{% /pageinfo %}}
+> [!TIP] Handling errors
+>
+> If you see errors when restarting Claude, examine the log file that appears. Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.
 
-<!-- TODO : fix the Tip above to use proper formatting -->
-
-### Claude Code (via CLI)
+### Claude Code
 
 Run the setup command. Run this command in your terminal to add the Meko MCP server to Claude Code.
 
@@ -150,7 +148,7 @@ Is Claude configured with an MCP Server for Meko?
 
 You should see a response like the following:
 
-<img src="Pasted image 20260320172719.png" alt="Claude Desktop Screenshot" style="max-width: 100%; height: auto;" />
+![Claude Code](/images/integrations-claudecode-response.png)
 
 ### Coming Soon
 

@@ -5,9 +5,9 @@ description: Shared vs. private datapacks for multi-agent systems
 weight: 4800
 ---
 
-{{% pageinfo color="info" %}}
-This feature is planned for a future release.
-{{% /pageinfo %}}
+> [!NOTE] Coming soon
+>
+> This feature is planned for a future release.
 
 ## Overview
 
