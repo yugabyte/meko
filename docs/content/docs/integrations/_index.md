@@ -132,7 +132,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 >
 > If you see errors when restarting Claude, examine the log file that appears. Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.
 
-### Claude Code (via CLI)
+### Claude Code
 
 Run the setup command. Run this command in your terminal to add the Meko MCP server to Claude Code.
 
