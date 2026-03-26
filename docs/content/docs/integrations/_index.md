@@ -43,36 +43,19 @@ You follow the same basic pattern with all tools and frameworks:
     cta="Setup &rarr;"
   >}}
   {{< card
-    href="integrations/#langchain-and-langgraph"
+    href="integrations/connect-programatically/#langchain-and-langgraph"
     title="LangChain and LangGraph"
     desc=""
     cta="Setup &rarr;"
   >}}
   {{< card
-    href="integrations/#python"
+    href="integrations/connect-programatically/#python"
     title="Python"
     desc=""
     cta="Setup &rarr;"
   >}}
 {{< /card-group >}}
 
-## IDEs
-Step-by-step setup for Cursor, Claude, and other editors: [Connect to IDE](connect-to-ide/).
 
-## Programmatic
 
-To integrate Meko programmatically, register the Meko MCP Server with your application's internal MCP Client. Most AI frameworks include built-in clients to simplify this process.
 
-This approach enables your application to save memory and knowledge in Meko, such as conversation memory, user and team preferences, and even application state.  
-
-### LangChain and LangGraph
-
-Meko can be integrated with LangChain and LangGraph agent frameworks through MCP. This page documents the setup and usage patterns for using Meko as the data layer for LangChain-based agents.
-
-### Python
-
-You can connect to Meko's MCP server directly from Python using an MCP client library. This page documents the setup, connection pattern, and example code for interacting with Meko datapacks from Python.
-
-### Coming soon
-
-* OpenAI Agents SDK

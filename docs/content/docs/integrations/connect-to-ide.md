@@ -1,10 +1,9 @@
 ---
 title: Connect to IDE
-linkTitle: Connect to IDE
+linkTitle: Connect to an IDE
 description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and other IDEs via MCP.
 weight: 3010
 type: docs
-toc_hide: true
 ---
 
 Integrate with IDEs for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
