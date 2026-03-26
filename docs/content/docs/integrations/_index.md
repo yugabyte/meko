@@ -118,7 +118,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
             "--allow-http"
           ]
         }
-      },
+      }
     }
     ```
 
