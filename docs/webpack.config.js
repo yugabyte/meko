@@ -1,31 +1,38 @@
-const ESLintPlugin = require('eslint-webpack-plugin');
-const path = require('path');
+const ESLintPlugin = require("eslint-webpack-plugin");
+const path = require("path");
 
 module.exports = {
-  context: path.join(__dirname, 'src'),
+  context: path.join(__dirname, "src"),
+
   entry: {
-    site: './index.js',
+    site: "./index.js",
   },
+
   output: {
-    path: path.join(__dirname, 'static/js'),
-    filename: '[name].js'
+    path: path.join(__dirname, "static/js"),
+    filename: "[name].js",
   },
+
   module: {
     rules: [
       {
         test: /\.(js|jsx)$/,
-        include: path.join(__dirname, 'src'),
+        include: path.join(__dirname, "src"),
         use: {
-          loader: 'babel-loader',
+          loader: "babel-loader",
           options: {
             babelrc: true,
             cacheDirectory: true,
-          }
-        }
+          },
+        },
       },
     ],
   },
+
   plugins: [
-    new ESLintPlugin()
+    new ESLintPlugin({
+      extensions: ["js", "jsx"],
+      files: "src",
+    }),
   ],
 };
