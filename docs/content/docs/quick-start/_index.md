@@ -16,12 +16,6 @@ Get from zero to a working Meko integration in minutes.
 
 Create a Meko account at the Meko portal. You can sign up with your Gmail or email address.
 
-### Install meko CLI
-
-The Meko CLI (`meko`) is the primary tool for managing datapacks, knowledge bases, and memory from the command line.
-
-For information on how to install, see [Install meko CLI](../reference/install-cli/).
-
 ## Get started
 
 {{< card-group >}}
