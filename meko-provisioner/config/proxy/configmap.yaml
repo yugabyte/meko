@@ -23,7 +23,7 @@ data:
 
         map $host $account_id {
             default "";
-            ~^(?P<id>[a-zA-Z][a-zA-Z0-9_-]*)\. $id;
+            ~^(?P<id>[a-zA-Z0-9][a-zA-Z0-9_-]*)\. $id;
         }
 
         server {

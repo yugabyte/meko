@@ -96,7 +96,7 @@ func RequireAuth(
 // DatapackOwnershipLookup abstracts datapack lookup for the ownership
 // middleware. Typically implemented by repository.DatapackRepo.
 type DatapackOwnershipLookup interface {
-	GetByName(name string) (*models.Datapack, error)
+	GetByName(accountID, name string) (*models.Datapack, error)
 }
 
 // RequireDatapackOwnership returns Echo middleware that verifies the
@@ -124,10 +124,10 @@ func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.Middleware
 				})
 			}
 
-			dp, err := datapacks.GetByName(name)
+			dp, err := datapacks.GetByName(account.ID, name)
 			if err != nil {
 				slog.Error("ownership lookup failed",
-					"datapack", name, "error", err)
+					"datapack", name, "account_id", account.ID, "error", err)
 				return c.JSON(http.StatusInternalServerError, map[string]any{
 					"data": nil,
 					"error": map[string]any{
@@ -136,7 +136,7 @@ func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.Middleware
 					},
 				})
 			}
-			if dp == nil || dp.AccountID != account.ID {
+			if dp == nil {
 				return c.JSON(http.StatusNotFound, map[string]any{
 					"data": nil,
 					"error": map[string]any{

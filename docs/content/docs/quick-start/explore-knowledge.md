@@ -9,7 +9,7 @@ Meko allows you add knowledge to your datapack by simply uploading documents. We
 
 In the following example, we'll add documents to your datapack and query them using RAG.
 
-## Upload Knowledge
+## Upload knowledge
 
 Upload documents to your datapack's knowledge base:
 
@@ -19,7 +19,7 @@ meko datapack add_knowledge_base --name my-datapack --url s3://bucket/docs/
 
 <!-- TODO: Add details on portal-based document upload once the web portal is available -->
 
-### Query Your Knowledge
+## Query your knowledge
 
 Once your documents are indexed, query them through your IDE:
 
@@ -29,7 +29,7 @@ Search the knowledge base for information about <your topic>
 
 The MCP server performs semantic search across your indexed documents and returns relevant chunks.
 
-## Observe Your Datapack
+## Observe your datapack
 
 Check what's happening inside your datapack:
 

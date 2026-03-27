@@ -32,6 +32,7 @@ func run() error {
 	cognitoClientID := flag.String("cognito-client-id", "", "Cognito App Client ID")
 	cognitoClientSecret := flag.String("cognito-client-secret", "", "Cognito App Client secret")
 	cognitoDomain := flag.String("cognito-domain", "", "Cognito hosted UI domain (e.g. myapp.auth.us-east-2.amazoncognito.com)")
+	crdNamespace := flag.String("crd-namespace", "meko-tenants", "Kubernetes namespace for MekoUserAccount CRDs")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(
@@ -67,6 +68,8 @@ func run() error {
 		return nil
 	}
 
+	slog.Info("provisioning config", "crd_namespace", *crdNamespace)
+
 	return api.Run(api.ServerConfig{
 		DB:                  conn,
 		Port:                *port,
@@ -75,6 +78,7 @@ func run() error {
 		CognitoClientID:     *cognitoClientID,
 		CognitoClientSecret: *cognitoClientSecret,
 		CognitoDomain:       *cognitoDomain,
+		CRDNamespace:        *crdNamespace,
 	})
 }
 

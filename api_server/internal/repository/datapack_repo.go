@@ -59,7 +59,7 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 		"datapack", p.Name, "account_id", p.AccountID,
 		"yb_universe_id", p.YBUniverseID)
 
-	existing, err := r.GetByName(p.Name)
+	existing, err := r.GetByName(p.AccountID, p.Name)
 	if err != nil {
 		slog.Error("failed to check existing datapack",
 			"datapack", p.Name, "error", err)
@@ -205,27 +205,66 @@ END $$;
 // The MCP user already exists; this template creates the DB user,
 // grants the MCP user access to the new database, and locks down
 // ag_catalog for the DB user.
-var grantDatapackAccessTmpl = template.Must(template.New("grants").Parse(`
-REVOKE CONNECT ON DATABASE {{.DB}} FROM PUBLIC;
 
+// connect using yugabyte user to yugabyte database
+// CREATE USER mcpusr;
+// CREATE USER dbusr;
+// CREATE DATABASE DB1 WITH COLOCATION = true;
+// REVOKE CONNECT ON DATABASE yugabyte FROM mcpusr, dbusr;
+// REVOKE CONNECT ON DATABASE postgres FROM mcpusr, dbusr;
+// REVOKE CONNECT ON DATABASE DB1 FROM PUBLIC;
+// GRANT CONNECT ON DATABASE DB1 TO mcpusr, dbusr;
+
+// Connect using yugabyte user to db1 database
+// GRANT USAGE, CREATE ON SCHEMA public TO mcpusr, dbusr;
+// GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mcpusr, dbusr;
+// GRANT SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO mcpusr, dbusr;
+// GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO mcpusr, dbusr;
+
+// check if you're able to create extensions using the MCP user: MCP user cannot create extensions
+// connect to db1 database using the yugabyte user
+
+// CREATE EXTENSION IF NOT EXISTS vector;
+// CREATE EXTENSION IF NOT EXISTS pg_dist_rag;
+// CREATE EXTENSION IF NOT EXISTS age;
+
+// GRANT USAGE ON SCHEMA ag_catalog TO mcpusr;
+// GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ag_catalog TO mcpusr;
+// GRANT SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA ag_catalog TO mcpusr;
+// GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO mcpusr;
+
+// createUserAndConnectTmpl creates the DB user and manages CONNECT grants.
+// Runs on adminDB (admin connection to the default database).
+var createUserAndConnectTmpl = template.Must(template.New("userConnect").Parse(`
 CREATE USER {{.User}} WITH PASSWORD {{.UserPass}};
 
-GRANT CONNECT ON DATABASE {{.DB}} TO {{.MCP}};
-GRANT USAGE, CREATE ON SCHEMA public TO {{.MCP}};
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {{.MCP}};
-GRANT SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO {{.MCP}};
+REVOKE CONNECT ON DATABASE yugabyte FROM {{.User}}, {{.MCP}};
+REVOKE CONNECT ON DATABASE postgres FROM {{.User}}, {{.MCP}};
+REVOKE CONNECT ON DATABASE {{.DB}} FROM PUBLIC;
 
-GRANT {{.MCP}} TO {{.User}};
-
-REVOKE ALL ON SCHEMA ag_catalog FROM {{.User}};
-REVOKE ALL ON ALL TABLES IN SCHEMA ag_catalog FROM {{.User}};
-ALTER DEFAULT PRIVILEGES IN SCHEMA ag_catalog REVOKE ALL ON TABLES FROM {{.User}};
+GRANT CONNECT ON DATABASE {{.DB}} TO {{.MCP}}, {{.User}};
 `))
 
+// dbSchemaGrantsTmpl grants schema-level privileges to the MCP and DB users.
+// Runs on dpDB (admin connection to the new datapack database).
+var dbSchemaGrantsTmpl = template.Must(template.New("dbGrants").Parse(`
+GRANT USAGE, CREATE ON SCHEMA PUBLIC TO {{.MCP}}, {{.User}};
+GRANT SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA PUBLIC TO {{.MCP}}, {{.User}};
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {{.MCP}}, {{.User}};
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA PUBLIC TO {{.MCP}}, {{.User}};
+`))
+
+// extensionsTmpl creates required extensions and grants ag_catalog access.
+// Runs on dpDB (admin connection to the new datapack database).
 var extensionsTmpl = template.Must(template.New("extensions").Parse(`
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_dist_rag;
 CREATE EXTENSION IF NOT EXISTS age;
+
+GRANT USAGE, CREATE ON SCHEMA ag_catalog TO {{.MCP}};
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ag_catalog TO {{.MCP}};
+GRANT SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA ag_catalog TO {{.MCP}};
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO {{.MCP}};
 `))
 
 func renderSQL(tmpl *template.Template, data map[string]string) (string, error) {
@@ -275,8 +314,8 @@ func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass string, mcpUserE
 
 	// Ensure the account-level MCP YSQL role exists on this cluster.
 	createMCP, err := renderSQL(createMCPUserTmpl, map[string]string{
-		"MCP":    quoteIdent(mcpUser),
-		"MCPRaw": quoteLiteral(mcpUser),
+		"MCP":     quoteIdent(mcpUser),
+		"MCPRaw":  quoteLiteral(mcpUser),
 		"MCPPass": quoteLiteral(mcpPass),
 	})
 	if err != nil {
@@ -287,20 +326,21 @@ func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass string, mcpUserE
 		return fmt.Errorf("failed to create MCP user %s: %w", mcpUser, err)
 	}
 
-	// Grant the MCP user and new DB user access to this datapack database.
-	grants, err := renderSQL(grantDatapackAccessTmpl, map[string]string{
+	// Create DB user and manage CONNECT grants on the admin connection (default DB).
+	userConnectSQL, err := renderSQL(createUserAndConnectTmpl, map[string]string{
 		"MCP":      quoteIdent(mcpUser),
 		"User":     quoteIdent(dbUser),
 		"UserPass": quoteLiteral(dbPass),
 		"DB":       quoteIdent(dbName),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to render grants SQL: %w", err)
+		return fmt.Errorf("failed to render user-connect SQL: %w", err)
 	}
-	if _, err := adminDB.Exec(grants); err != nil {
-		return fmt.Errorf("failed to create roles and grants for %s: %w", dbName, err)
+	if _, err := adminDB.Exec(userConnectSQL); err != nil {
+		return fmt.Errorf("failed to create user and connect grants for %s: %w", dbName, err)
 	}
 
+	// Open admin connection to the new datapack database for schema-level setup.
 	dpDBConnStr, err := connStrWithDB(adminConnStr, dbName)
 	if err != nil {
 		return err
@@ -311,8 +351,21 @@ func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass string, mcpUserE
 	}
 	defer dpDB.Close()
 
+	// Grant schema-level privileges on the new database.
+	schemaGrantsSQL, err := renderSQL(dbSchemaGrantsTmpl, map[string]string{
+		"MCP":  quoteIdent(mcpUser),
+		"User": quoteIdent(dbUser),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to render schema grants SQL: %w", err)
+	}
+	if _, err := dpDB.Exec(schemaGrantsSQL); err != nil {
+		return fmt.Errorf("failed to apply schema grants for %s: %w", dbName, err)
+	}
+
+	// Install extensions and grant ag_catalog access on the new database.
 	extensionsSQL, err := renderSQL(extensionsTmpl, map[string]string{
-		"DB": quoteIdent(dbName),
+		"MCP": quoteIdent(mcpUser),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to render extensions SQL: %w", err)
@@ -406,8 +459,8 @@ func (r *DatapackRepo) List(accountID string) ([]models.Datapack, error) {
 	return result, nil
 }
 
-// GetByName returns a single datapack by name.
-func (r *DatapackRepo) GetByName(name string) (*models.Datapack, error) {
+// GetByName returns a single datapack by account and name.
+func (r *DatapackRepo) GetByName(accountID, name string) (*models.Datapack, error) {
 	var d models.Datapack
 	err := r.db.QueryRow(
 		`SELECT d.id, d.account_id, d.datapack_name,
@@ -416,8 +469,8 @@ func (r *DatapackRepo) GetByName(name string) (*models.Datapack, error) {
 		        d.created_at, d.updated_at
 		 FROM meko_system.datapack_registry d
 		 JOIN meko_system.account_registry a ON a.id = d.account_id
-		 WHERE d.datapack_name = $1`,
-		name,
+		 WHERE d.account_id = $1 AND d.datapack_name = $2`,
+		accountID, name,
 	).Scan(
 		&d.ID, &d.AccountID, &d.Name,
 		&d.YBUniverseID, &d.YBUniverseConn,
@@ -435,7 +488,7 @@ func (r *DatapackRepo) GetByName(name string) (*models.Datapack, error) {
 
 // Update modifies a datapack's mutable fields.
 func (r *DatapackRepo) Update(
-	name, ybConnStr string,
+	accountID, name, ybConnStr string,
 ) error {
 	if ybConnStr == "" {
 		return nil
@@ -444,8 +497,8 @@ func (r *DatapackRepo) Update(
 	res, err := r.db.Exec(
 		`UPDATE meko_system.datapack_registry
 		 SET datapack_ysql_connection_string = $1, updated_at = NOW()
-		 WHERE datapack_name = $2`,
-		ybConnStr, name,
+		 WHERE account_id = $2 AND datapack_name = $3`,
+		ybConnStr, accountID, name,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update datapack: %w", err)
@@ -460,11 +513,11 @@ func (r *DatapackRepo) Update(
 	return nil
 }
 
-// Delete removes a datapack by name. CASCADE handles child rows.
-func (r *DatapackRepo) Delete(name string) error {
+// Delete removes a datapack by account and name. CASCADE handles child rows.
+func (r *DatapackRepo) Delete(accountID, name string) error {
 	res, err := r.db.Exec(
 		`DELETE FROM meko_system.datapack_registry
-		 WHERE datapack_name = $1`, name,
+		 WHERE account_id = $1 AND datapack_name = $2`, accountID, name,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to delete datapack: %w", err)
@@ -477,6 +530,51 @@ func (r *DatapackRepo) Delete(name string) error {
 		return fmt.Errorf("datapack %q not found", name)
 	}
 	return nil
+}
+
+// DefaultDatapackDetails holds the full credentials returned only
+// during provisioning (the internal provision-status endpoint).
+type DefaultDatapackDetails struct {
+	DatapackID   string `json:"datapack_id"`
+	DatapackName string `json:"datapack_name"`
+	MCPServerURL string `json:"mcp_server_url"`
+	MCPAPIKey    string `json:"mcp_api_key"`
+	DBUserName   string `json:"db_user_name"`
+	DBPassword   string `json:"db_password"`
+	DBConnStr    string `json:"db_conn_str"`
+}
+
+// GetDefaultDatapackDetails returns the full credentials for the
+// default datapack belonging to the given account. Returns (nil, nil)
+// when the datapack does not exist yet (provisioning still in progress).
+func (r *DatapackRepo) GetDefaultDatapackDetails(accountID string) (*DefaultDatapackDetails, error) {
+	var d DefaultDatapackDetails
+	err := r.db.QueryRow(
+		`SELECT d.id, d.datapack_name,
+		        d.datapack_ysql_connection_string,
+		        d.db_user_name, d.db_user_password,
+		        a.mcp_user_password
+		 FROM meko_system.datapack_registry d
+		 JOIN meko_system.account_registry a ON a.id = d.account_id
+		 WHERE d.account_id = $1 AND d.datapack_name = 'meko_default_datapack'`,
+		accountID,
+	).Scan(
+		&d.DatapackID, &d.DatapackName,
+		&d.DBConnStr,
+		&d.DBUserName, &d.DBPassword,
+		&d.MCPAPIKey,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		slog.Error("failed to get default datapack details",
+			"account_id", accountID, "error", err)
+		return nil, fmt.Errorf("failed to get default datapack details: %w", err)
+	}
+
+	d.MCPServerURL = fmt.Sprintf("https://%s.mcp.mekodev.com/mcp", accountID)
+	return &d, nil
 }
 
 // DatapackStatus holds status information for a datapack.
@@ -493,7 +591,7 @@ type DatapackStatus struct {
 }
 
 // GetStatus returns a summary status for a datapack.
-func (r *DatapackRepo) GetStatus(name string) (*DatapackStatus, error) {
+func (r *DatapackRepo) GetStatus(accountID, name string) (*DatapackStatus, error) {
 	var s DatapackStatus
 	err := r.db.QueryRow(
 		`SELECT d.id, d.datapack_name,
@@ -507,7 +605,7 @@ func (r *DatapackRepo) GetStatus(name string) (*DatapackStatus, error) {
 		         WHERE datapack_id = d.id)
 		 FROM meko_system.datapack_registry d
 		 JOIN meko_system.account_registry a ON a.id = d.account_id
-		 WHERE d.datapack_name = $1`, name,
+		 WHERE d.account_id = $1 AND d.datapack_name = $2`, accountID, name,
 	).Scan(
 		&s.ID, &s.Name,
 		&s.YBUniverseID, &s.YBUniverseConn,

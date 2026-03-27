@@ -20,6 +20,8 @@ type ServerConfig struct {
 	CognitoClientSecret string
 	CognitoDomain       string
 	Port                int
+
+	CRDNamespace string
 }
 
 // Run starts the Echo server and blocks until a shutdown signal is received.

@@ -118,7 +118,7 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 		AgentID:    res.AgentID,
 		Name:       req.Name,
 		MCPServer: MCPServerInfo{
-			URL:    fmt.Sprintf("https://mekodev.com/%s/mcp", res.AccountID),
+			URL:    fmt.Sprintf("https://%s.mcp.mekodev.com/mcp", res.AccountID),
 			APIKey: res.MCPPassword,
 		},
 		DBAccess: DBAccessInfo{
@@ -137,12 +137,15 @@ func (s *DatapackService) List(accountID string) ([]models.Datapack, error) {
 	return s.repo.List(accountID)
 }
 
-// Describe returns details for a single datapack by name.
-func (s *DatapackService) Describe(name string) (*models.Datapack, error) {
+// Describe returns details for a single datapack by account and name.
+func (s *DatapackService) Describe(accountID, name string) (*models.Datapack, error) {
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	dp, err := s.repo.GetByName(name)
+	if accountID == "" {
+		return nil, fmt.Errorf("account_id is required")
+	}
+	dp, err := s.repo.GetByName(accountID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -159,22 +162,28 @@ type UpdateRequest struct {
 
 // Update modifies a datapack's configuration.
 func (s *DatapackService) Update(
-	name string, req UpdateRequest,
+	accountID, name string, req UpdateRequest,
 ) error {
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
-	return s.repo.Update(name, req.YBUniverseConnStr)
+	if accountID == "" {
+		return fmt.Errorf("account_id is required")
+	}
+	return s.repo.Update(accountID, name, req.YBUniverseConnStr)
 }
 
 // Delete tears down the underlying database, removes the registry
 // entry, and releases the universe slot.
-func (s *DatapackService) Delete(name string) error {
+func (s *DatapackService) Delete(accountID, name string) error {
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
+	if accountID == "" {
+		return fmt.Errorf("account_id is required")
+	}
 
-	dp, err := s.repo.GetByName(name)
+	dp, err := s.repo.GetByName(accountID, name)
 	if err != nil {
 		return fmt.Errorf("failed to look up datapack: %w", err)
 	}
@@ -205,7 +214,7 @@ func (s *DatapackService) Delete(name string) error {
 	slog.Info("datapack database dropped, removing registry entry",
 		"datapack", name)
 
-	if err := s.repo.Delete(name); err != nil {
+	if err := s.repo.Delete(accountID, name); err != nil {
 		return fmt.Errorf("failed to delete registry entry: %w", err)
 	}
 
@@ -220,12 +229,15 @@ func (s *DatapackService) Delete(name string) error {
 
 // Status returns summary information about a datapack.
 func (s *DatapackService) Status(
-	name string,
+	accountID, name string,
 ) (*repository.DatapackStatus, error) {
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	st, err := s.repo.GetStatus(name)
+	if accountID == "" {
+		return nil, fmt.Errorf("account_id is required")
+	}
+	st, err := s.repo.GetStatus(accountID, name)
 	if err != nil {
 		return nil, err
 	}
