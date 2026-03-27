@@ -7,7 +7,11 @@ weight: 2020
 
 Meko stores conversation history and agent reasoning traces, enabling features like cross-session recall and resumability after failures.
 
-## Conversation history and reasoning
+## Conversation and reasoning history
+
+*Retain agent reasoning traces across sessions so you have a detailed log of how your agent achieved its outcomes.*
+
+**Detailed Example**
 
 Without Meko, agent reasoning is lost when a session ends. Try this:
 
@@ -55,6 +59,8 @@ Using Meko, agents can retain context:
 Meko keeps all conversation history queryable while transparently tiering older messages to object storage (S3-backed), keeping hot data fast and cold data cheap.
 
 ## Resumability
+
+*Resume long-running agent tasks after failures by storing and retrieving agent state in Meko.*
 
 Agents and sub-agents can persist their state in Meko so that they can resume after failures.
 
