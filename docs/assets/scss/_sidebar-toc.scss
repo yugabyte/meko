@@ -1,6 +1,4 @@
 body {
-
-
   &.no-toc {
     aside.td-sidebar-toc {
       display: none !important;
@@ -14,19 +12,20 @@ body {
   }
 
   .td-toc {
-    .td-toc-title{
-      .td-toc-title__link{
-        display: none ;
+    .td-toc-title {
+      .td-toc-title__link {
+        display: none;
       }
     }
 
     #TableOfContents {
-      a{
-        display:inline-block;
-        background: none ;
+      a {
+        display: inline-block;
+        background: none;
         font-weight: 500;
-        
-        &:hover,&.active{
+
+        &:hover,
+        &.active {
           background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
           background-size: 200% 200%;
           -webkit-background-clip: text;

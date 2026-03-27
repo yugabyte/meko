@@ -1,7 +1,7 @@
 body {
   .td-content {
     .nav-tabs {
-      margin-top: 40px;
+      margin-top: 24px;
       border-bottom: 1px solid #2f2f45;
 
       .nav-link {
@@ -19,13 +19,13 @@ body {
         }
 
         &.active {
-          color: #ffffff;
+          color: #fff;
           background: transparent;
           font-weight: 500;
 
           // bottom border indicator
           &::after {
-            content: "";
+            content: '';
             position: absolute;
             left: 0;
             bottom: -1px;
@@ -43,9 +43,7 @@ body {
     }
 
     .tab-content {
-      margin-bottom: 40px;
-      //border-radius: 10px;
-      //padding: 20px;
+      margin-bottom: 24px;
 
       .tab-body.tab-pane {
         background: $background-color-primary;
@@ -53,15 +51,9 @@ body {
         color: #e5e7eb;
         font-size: 15px;
         line-height: 1.6;
-        //background: none;
         margin: 0;
         transition: all 0.2s ease-in-out;
-
       }
-
     }
   }
 }
-
-
-

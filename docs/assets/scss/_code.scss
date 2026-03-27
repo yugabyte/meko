@@ -43,11 +43,11 @@ body {
       display: flex;
       flex-direction: column;
       min-width: 0;
-      word-wrap: break-word;
+      overflow-wrap: break-word;
       background-color: $background-color-primary;
       background-clip: border-box;
-      border: 1px solid rgba(0, 0, 0, .125);
-      border-radius: .25rem;
+      border: 1px solid rgba(0, 0, 0, 12.5%);
+      border-radius: 0.25rem;
 
       pre {
         border-radius: 8px;
@@ -106,8 +106,7 @@ body {
       margin: 20px 0;
       border: 0;
       position: relative !important;
-      overflow-y: auto;
-      overflow-x: visible;
+      overflow: visible auto;
       font-weight: 400;
       font-size: 14px;
 
@@ -124,7 +123,7 @@ body {
         background: inherit !important;
         border-color: $background-color-secondary;
         white-space: pre !important;
-        word-wrap: normal;
+        overflow-wrap: normal;
         word-break: keep-all;
         overflow: auto;
         scrollbar-width: thin;
@@ -136,7 +135,6 @@ body {
             width: calc(100% + 140px);
           }
         }
-
 
         &:not(:last-child) {
           > span > span {
@@ -169,7 +167,7 @@ body {
         border: none !important;
         width: 32px;
         height: 32px;
-        background-color: rgba(229, 237, 255, 0);
+        background-color: rgba(229, 237, 255, 0%);
         background-size: 15px;
         background-repeat: no-repeat;
         background-position: center center;
@@ -180,13 +178,13 @@ body {
         box-shadow: none;
 
         &:hover {
-          background-color: rgb(229, 237, 255);
+          background-color: rgba(229, 237, 255, 0%);
 
           &::before {
-            content: "Copy";
+            content: 'Copy';
             background: #fff;
             border: 1px solid #e9edf0;
-            box-shadow: 0 0 8px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 0 8px rgba(0, 0, 0, 10%);
             border-radius: 8px;
             position: absolute;
             left: 0;
@@ -204,7 +202,7 @@ body {
         }
 
         &:not(.unclicked):hover::before {
-          content: "Copied";
+          content: 'Copied';
           left: 0;
           width: 59px;
           height: 36px;
@@ -215,7 +213,7 @@ body {
           top: 0;
           left: 0;
           font-weight: 700;
-          content: "\f00c";
+          content: '\f00c';
           color: #48ab52 !important;
           text-align: center;
           line-height: 26px;
@@ -239,7 +237,7 @@ body {
       }
     }
 
-    div.highlight pre.can-be-copied[data-code="2"] {
+    div.highlight pre.can-be-copied[data-code='2'] {
       margin-bottom: -13px;
     }
 
@@ -250,12 +248,12 @@ body {
       max-width: none;
       min-height: 85px;
 
-      &[data-code="1"] {
+      &[data-code='1'] {
         margin-bottom: -35px;
       }
 
       &::after {
-        content: "";
+        content: '';
         display: inline-block;
         background: #f7fafc;
         height: 37px;
