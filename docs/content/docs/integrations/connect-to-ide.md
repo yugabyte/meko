@@ -34,10 +34,8 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 1. Verify the Connection by entering the following in chat.
 
     ```text
-    You have access to the Meko platform through MCP server. Have Meko remember all my personal preferences.
+    Is Cursor configured with an MCP Server for Meko?
     ```
-
-    If you're connected, Cursor will respond by indicating that it will use Meko's MCP tools to store memories.
 
 ## Cursor Web
 
@@ -76,27 +74,35 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
     ![Claude Desktop](/images/integrations-claude-desktop.png)
 
-> [!TIP] Handling errors
->
-> If you see errors when restarting Claude, examine the log file that appears. Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.
+    > [!TIP] Handling errors
+    >
+    > If you see errors when restarting Claude, examine the log file that appears. Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.
+
+1. Verify the connection by entering the following in chat:
+
+    ```text
+    Is Claude configured with an MCP Server for Meko?
+    ```
 
 ## Claude Code
 
-Run the setup command. Run this command in your terminal to add the Meko MCP server to Claude Code.
+Run the setup command.
 
-```sh
-> claude mcp add --scope user --transport http meko <your-datapak-url> --header "API_KEY: <YOUR DATAPACK'S API KEY>"
-```
+1. Run this command in your terminal to add the Meko MCP server to Claude Code:
 
-To verify correct configuration, ask Claude at the command-line Console this question:
+    ```sh
+    > claude mcp add --scope user --transport http meko <your-datapak-url> --header "API_KEY: <YOUR DATAPACK'S API KEY>"
+    ```
 
-```txt
-Is Claude configured with an MCP Server for Meko?
-```
+1. Verify the connection by entering the following at the command-line console:
 
-You should see a response like the following:
+    ```txt
+    Is Claude configured with an MCP Server for Meko?
+    ```
 
-![Claude Code](/images/integrations-claudecode-response.png)
+    You should see a response like the following:
+
+    ![Claude Code](/images/integrations-claudecode-response.png)
 
 ## Coming Soon
 
