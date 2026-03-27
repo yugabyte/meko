@@ -71,7 +71,7 @@ Scale out by adding YugabyteDB nodes; scale down by removing them --- with no do
 Meko is built on proven open-source technologies:
 
 | Component | Technology |
-|-----------|-----------|
+| :-------- | :--------- |
 | Distributed database | [YugabyteDB](https://www.yugabyte.com/) |
 | Vector search | [pgvector](https://github.com/pgvector/pgvector) |
 | Graph memory | [mem0](https://github.com/mem0ai/mem0) |

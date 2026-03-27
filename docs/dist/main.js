@@ -1,0 +1,1 @@
+document.addEventListener("DOMContentLoaded",function(){document.querySelectorAll(".td-content table").forEach(e=>{if(e.parentElement.classList.contains("table-wrapper"))return;const t=document.createElement("div");t.className="table-wrapper",e.parentNode.insertBefore(t,e),t.appendChild(e)})});
