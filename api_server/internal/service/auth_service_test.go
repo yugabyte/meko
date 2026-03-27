@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -372,4 +373,110 @@ func TestAuthService_Logout_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+}
+
+// --- Provisioner spy ---
+
+type spyProvisioner struct {
+	mu        sync.Mutex
+	wg        sync.WaitGroup
+	called    bool
+	accountID string
+}
+
+func newSpyProvisioner() *spyProvisioner {
+	s := &spyProvisioner{}
+	s.wg.Add(1)
+	return s
+}
+
+func (s *spyProvisioner) ProvisionNewAccount(_ context.Context, accountID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.called = true
+	s.accountID = accountID
+	s.wg.Done()
+}
+
+// --- EnsureAccountFromIDToken provisioning tests ---
+
+func TestEnsureAccountFromIDToken_NewAccount_TriggersProvisioning(t *testing.T) {
+	idToken := fakeIDToken(
+		"new-sub-prov", "prov@example.com", "Prov", "User",
+	)
+	store := &mockAccountStore{
+		getByCognitoSubFn: func(_ context.Context, _ string) (*models.Account, error) {
+			return nil, nil
+		},
+		createFn: func(_ context.Context, params repository.CreateAccountParams) (*models.Account, error) {
+			return &models.Account{
+				ID:         "acct-prov-1",
+				Email:      params.Email,
+				CognitoSub: params.CognitoSub,
+			}, nil
+		},
+	}
+	prov := newSpyProvisioner()
+
+	svc := service.NewAuthService(nil, store, service.WithProvisioner(prov))
+	svc.EnsureAccountFromIDToken(context.Background(), idToken)
+
+	prov.wg.Wait()
+
+	prov.mu.Lock()
+	defer prov.mu.Unlock()
+	if !prov.called {
+		t.Fatal("expected provisioner to be called for new account")
+	}
+	if prov.accountID != "acct-prov-1" {
+		t.Errorf("provisioner accountID = %q, want acct-prov-1", prov.accountID)
+	}
+}
+
+func TestEnsureAccountFromIDToken_ExistingAccount_NoProvisioning(t *testing.T) {
+	idToken := fakeIDToken(
+		"existing-sub", "existing@example.com", "Ex", "User",
+	)
+	store := &mockAccountStore{
+		getByCognitoSubFn: func(_ context.Context, _ string) (*models.Account, error) {
+			return &models.Account{
+				ID:         "acct-existing",
+				CognitoSub: "existing-sub",
+			}, nil
+		},
+	}
+	prov := &spyProvisioner{}
+
+	svc := service.NewAuthService(nil, store, service.WithProvisioner(prov))
+	svc.EnsureAccountFromIDToken(context.Background(), idToken)
+
+	time.Sleep(50 * time.Millisecond)
+
+	prov.mu.Lock()
+	defer prov.mu.Unlock()
+	if prov.called {
+		t.Fatal("provisioner should NOT be called for existing account")
+	}
+}
+
+func TestEnsureAccountFromIDToken_NoProvisioner_NoPanic(t *testing.T) {
+	idToken := fakeIDToken(
+		"new-sub-nop", "nop@example.com", "No", "Prov",
+	)
+	store := &mockAccountStore{
+		getByCognitoSubFn: func(_ context.Context, _ string) (*models.Account, error) {
+			return nil, nil
+		},
+		createFn: func(_ context.Context, params repository.CreateAccountParams) (*models.Account, error) {
+			return &models.Account{
+				ID:         "acct-nop-1",
+				Email:      params.Email,
+				CognitoSub: params.CognitoSub,
+			}, nil
+		},
+	}
+
+	svc := service.NewAuthService(nil, store)
+	// Should not panic even without a provisioner.
+	svc.EnsureAccountFromIDToken(context.Background(), idToken)
 }

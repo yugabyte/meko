@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS meko_system.yba_universe_registry (
 CREATE TABLE IF NOT EXISTS meko_system.datapack_registry (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID NOT NULL REFERENCES meko_system.account_registry(id) ON DELETE CASCADE,
-    datapack_name VARCHAR(255) NOT NULL UNIQUE,
+    datapack_name VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     yb_universe_id UUID NOT NULL REFERENCES meko_system.yba_universe_registry(id),
