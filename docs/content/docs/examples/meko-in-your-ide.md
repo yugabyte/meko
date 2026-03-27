@@ -1,6 +1,6 @@
 ---
-title: Use Meko in your IDE
-linkTitle: In your IDE
+title: Meko in your development process
+linkTitle: In your development process
 description: Store personal preferences, coding standards, and team policies across sessions
 weight: 2010
 ---
@@ -70,4 +70,4 @@ Use a dedicated datapack per project to store project-specific context:
 
 ## Next
 
-- [Build software with Meko](../build-software-with-meko/) - Use conversation history and resumability
+- [Meko in your agentic application](../build-software-with-meko/) - Use conversation history and resumability
