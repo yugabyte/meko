@@ -9,10 +9,13 @@ type: docs
 layout: list
 ---
 
-Meko is the persistence layer that agents were always missing — letting them remember, share knowledge, and learn from each other across sessions.
-<!--Meko is the agent-native data layer designed to unify agent knowledge, memory, and conversations, eliminating the impedance mismatch of traditional relational and vector databases.-->
+Meko is the persistent data layer that agents were always missing — letting them remember, share knowledge, and learn from each other across sessions.
 
-*Memory, knowledge, and SQL for every AI agent with a single MCP endpoint.*
+Meko is fully open-source and integrates easily with any agentic framework through MCP servers. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
+
+<!--Meko is the agent-native data layer designed to unify agent knowledge, memory, and conversations, eliminating the impedance mismatch of traditional relational and vector databases.
+
+*Memory, knowledge, and SQL for every AI agent with a single MCP endpoint.*-->
 
 ## Get started
 
@@ -66,7 +69,7 @@ Meko is fully open-source and integrates easily with any agentic framework throu
 
 ## How Meko works
 
-Learn how Meko adds memory and knowledge to agentic applications.
+Learn how Meko adds memory, knowledge, and SQL to agentic applications.
 
 {{< card-group >}}
   {{< card
