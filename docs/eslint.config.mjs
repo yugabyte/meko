@@ -2,6 +2,7 @@ import { defineConfig } from "eslint/config";
 import js from "@eslint/js";
 import importPlugin from "eslint-plugin-import";
 import stylistic from "@stylistic/eslint-plugin";
+import globals from "globals";
 
 export default defineConfig([
   js.configs.recommended,
@@ -10,8 +11,16 @@ export default defineConfig([
     files: ["**/*.js", "**/*.mjs"],
 
     languageOptions: {
-      ecmaVersion: "latest",
-      sourceType: "module"
+      parserOptions: {
+        ecmaVersion: "latest",
+        sourceType: "module",
+        ecmaFeatures: {
+          jsx: true,
+        },
+      },
+      globals: {
+        ...globals.browser,
+      },
     },
 
     plugins: {
