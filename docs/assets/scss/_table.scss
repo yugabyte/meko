@@ -1,7 +1,15 @@
 body {
   .td-content {
     table {
-      margin: 40px  0;
+      margin: 24px  0;
+    }
+
+    .table-wrapper {
+      overflow: auto;
+
+      table {
+        min-width: max-content;
+      }
     }
 
     table:not(.acc) {
@@ -13,7 +21,6 @@ body {
       border-radius: 8px;
       overflow: hidden;
       table-layout: fixed;
-      //border: 1px solid #fff;
 
       * {
         background: transparent;
@@ -57,19 +64,15 @@ body {
           }
 
           &:hover {
-            background-color: #2f2f45 ;
+            background-color: #2f2f45;
             transition: 0.3s ease;
           }
         }
 
         td {
           padding: 12px 16px;
-
-
         }
       }
     }
-
   }
-
 }
