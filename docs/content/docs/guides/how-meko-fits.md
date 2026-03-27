@@ -5,11 +5,23 @@ description: Where Meko sits in your architecture and how it deploys
 weight: 4200
 ---
 
+Meko is an agent-native data layer for multi-agent systems that work and learn together. It supports:
+
+- **Collective memory**. Learning compounds across the entire system, not just per-agent memory.
+- **Shared knowledge**. Meko builds knowledge over time from conversations, real-time data sources, and slower-changing knowledge bases.
+- **Auditability of the learning process**. Connect execution traces to how agents process data and knowledge, learn from it, and share that learning.
+
+Meko is serverless, multi-tenant (multi-agentic), and optimized for tiering to object stores. In addition to providing memory, conversation history, shareable knowledge, and full chain-of-thought traceability, Meko also exposes PostgreSQL-compatible database models (vector, SQL, NoSQL, graph, and more).
+
 ## Architecture
+
+Meko is fully open-source and integrates easily with any agentic framework through MCP servers. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.  
 
 Meko sits between your agent SDK and the underlying database, providing a unified data layer that replaces multiple standalone systems.
 
-<img src="/images/architecture.svg" alt="Meko Architecture Diagram" style="max-width: 100%; height: auto;" />
+![Meko Architecture Diagram](/images/architecture.svg)
+
+Agents interact via MCP. Developers interact via CLI, API, or direct PostgreSQL connection. Meko runs anywhere - local, cloud, on-premises, or air-gapped - with the same configuration everywhere.
 
 ### What Meko Replaces
 
