@@ -8,7 +8,7 @@ type: docs
 
 Integrate with IDEs for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
 
-### Cursor Desktop
+## Cursor Desktop
 
 1. In Cursor Desktop, choose **Cursor>Settings>Cursor Settings>Tools & MCPs>New MCP Server**.
 
@@ -39,7 +39,7 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 
     If you're connected, Cursor will respond by indicating that it will use Meko's MCP tools to store memories.
 
-### Cursor Web
+## Cursor Web
 
 > [!NOTE] Coming soon
 >
@@ -47,7 +47,7 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 
 Feel free to contribute here with info!
 
-### Claude Desktop
+## Claude Desktop
 
 In Claude Desktop (whether used for Chat, Cowork, or Code):
 
@@ -80,7 +80,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 >
 > If you see errors when restarting Claude, examine the log file that appears. Verify that you have the correct version of node.js binaries in your path, use absolute paths, and consult online MCP Server configuration troubleshooting guides.
 
-### Claude Code
+## Claude Code
 
 Run the setup command. Run this command in your terminal to add the Meko MCP server to Claude Code.
 
@@ -98,7 +98,7 @@ You should see a response like the following:
 
 ![Claude Code](/images/integrations-claudecode-response.png)
 
-### Coming Soon
+## Coming Soon
 
 * OpenAI Codex
 * VS Code / GitHub CoPilot

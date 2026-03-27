@@ -7,7 +7,8 @@ description: Integrate Meko with AI coding tools, agent frameworks, and consumer
 weight: 3000
 type: docs
 ---
-Meko integrates via the Model Context Protocol (MCP).  Each Datapack exposes an MCP server that your AI coding tools, agent frameworks, or consumer chat applications connect to.
+
+Meko integrates via the Model Context Protocol (MCP). Each Datapack exposes an MCP server that your AI coding tools, agent frameworks, or consumer chat applications connect to.
 
 You follow the same basic pattern with all tools and frameworks:
 
