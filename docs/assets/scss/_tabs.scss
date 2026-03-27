@@ -19,13 +19,13 @@ body {
         }
 
         &.active {
-          color: #ffffff;
+          color: #fff;
           background: transparent;
           font-weight: 500;
 
           // bottom border indicator
           &::after {
-            content: "";
+            content: '';
             position: absolute;
             left: 0;
             bottom: -1px;

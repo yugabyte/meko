@@ -39,10 +39,10 @@
 
         &::after {
           font: var(--fa-font-solid);
-          content: "\f054";
+          content: '\f054';
           font-size: 0.75rem;
           line-height: 1;
-          margin-left: auto;   // 🔑 pushes arrow to right
+          margin-left: auto; // 🔑 pushes arrow to right
           padding-left: 0.5rem;
           transition: transform 0.2s ease;
         }
@@ -54,5 +54,4 @@
       }
     }
   }
-
 }

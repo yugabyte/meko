@@ -19,24 +19,21 @@
   border-radius: 0.5rem;
   text-decoration: none !important;
   color: $white !important;
-  position:relative;
-  
-  &:after{
-    content: "";
+  position: relative;
+
+  &::after {
+    content: '';
     position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    inset: 0;
     z-index: -1;
     margin: 2px;
     border-radius: inherit;
     background: linear-gradient(to right, #2d94ee 0%, #9b46d8 100%);
-    box-shadow: 0 0 6px 0 rgba(255, 255, 255, 0.50);
+    box-shadow: 0 0 6px 0 a(255, 255, 255, 50%);
     transition: all 400ms ease;
   }
 
-  &:hover:after {
+  &:hover::after {
     margin: -3px;
   }
 
