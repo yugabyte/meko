@@ -1,6 +1,6 @@
 ---
-title: Build software with Meko
-linkTitle: Build software
+title: Meko in your agentic application
+linkTitle: In your agentic application
 description: Leverage conversation history, reasoning traces, and resumability
 weight: 2020
 ---
