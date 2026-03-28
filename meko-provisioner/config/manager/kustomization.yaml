@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: 161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/meko-provisioner
-  newTag: latest
+  newTag: 0.0.6-032726

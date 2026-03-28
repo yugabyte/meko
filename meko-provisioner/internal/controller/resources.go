@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -88,8 +90,14 @@ func BuildMCPConfigMap(account *saasv1.MekoUserAccount, ns string) *corev1.Confi
 
 func BuildMCPSecret(account *saasv1.MekoUserAccount, ns string, sharedData map[string][]byte) *corev1.Secret {
 	labels := commonLabels("mcp-server", account.Spec.AccountID)
+	port := fmt.Sprintf("%d", account.Spec.GetYugabyteDBPort())
 	data := map[string][]byte{
 		"HOST":                 []byte(account.Spec.YugabyteDBHost),
+		"PORT":                 []byte(port),
+		"DBNAME":               []byte(account.Spec.YugabyteDBName),
+		"USER":                 []byte(account.Spec.GetYugabyteDBUser()),
+		"USERNAME":             []byte(account.Spec.GetYugabyteDBUser()),
+		"YUGABYTEDB_USER":     []byte(account.Spec.GetYugabyteDBUser()),
 		"YUGABYTEDB_PASSWORD":  []byte(account.Spec.YugabyteDBPassword),
 		"PASSWORD":             []byte(account.Spec.YugabyteDBPassword),
 		"YUGABYTEDB_URL":       []byte(account.Spec.YugabyteDBConnectionStringLibpq()),
@@ -133,11 +141,16 @@ func BuildMCPDeployment(account *saasv1.MekoUserAccount, ns string) *appsv1.Depl
 						Image:           account.Spec.MCPImage,
 						ImagePullPolicy: corev1.PullAlways,
 						Env: append(accountEnv(account),
-							secretEnvVar("YUGABYTEDB_PASSWORD", MCPSecretName, "YUGABYTEDB_PASSWORD", false),
-							secretEnvVar("OPENAI_API_KEY", MCPSecretName, "OPENAI_API_KEY", false),
 							secretEnvVar("HOST", MCPSecretName, "HOST", false),
+							secretEnvVar("PORT", MCPSecretName, "PORT", false),
+							secretEnvVar("DBNAME", MCPSecretName, "DBNAME", false),
+							secretEnvVar("USER", MCPSecretName, "USER", false),
+							secretEnvVar("USERNAME", MCPSecretName, "USERNAME", false),
 							secretEnvVar("PASSWORD", MCPSecretName, "PASSWORD", false),
+							secretEnvVar("YUGABYTEDB_USER", MCPSecretName, "YUGABYTEDB_USER", false),
+							secretEnvVar("YUGABYTEDB_PASSWORD", MCPSecretName, "YUGABYTEDB_PASSWORD", false),
 							secretEnvVar("YUGABYTEDB_URL", MCPSecretName, "YUGABYTEDB_URL", false),
+							secretEnvVar("OPENAI_API_KEY", MCPSecretName, "OPENAI_API_KEY", false),
 						),
 						EnvFrom: []corev1.EnvFromSource{{
 							ConfigMapRef: &corev1.ConfigMapEnvSource{

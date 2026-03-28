@@ -243,6 +243,7 @@ REVOKE CONNECT ON DATABASE postgres FROM {{.User}}, {{.MCP}};
 REVOKE CONNECT ON DATABASE {{.DB}} FROM PUBLIC;
 
 GRANT CONNECT ON DATABASE {{.DB}} TO {{.MCP}}, {{.User}};
+GRANT CREATE ON DATABASE {{.DB}} TO {{.MCP}};
 `))
 
 // dbSchemaGrantsTmpl grants schema-level privileges to the MCP and DB users.
