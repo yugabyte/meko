@@ -35,7 +35,7 @@ const (
 
 	RAGConfigMapName = "rag-agent-config"
 	RAGSecretName    = "rag-agent-secret"
- 
+
 	MCPConfigMapName = "mcp-server-config"
 	MCPSecretName    = "mcp-server-secret"
 )
@@ -84,6 +84,7 @@ func BuildMCPConfigMap(account *saasv1.MekoUserAccount, ns string) *corev1.Confi
 			"YB_LOG_LEVEL":          "DEBUG",
 			"YB_ALLOWED_HOSTS":      "all",
 			"YB_MCP_STATELESS_HTTP": "true",
+			"AWS_REGION":            "us-east-1",
 		},
 	}
 }
@@ -92,18 +93,20 @@ func BuildMCPSecret(account *saasv1.MekoUserAccount, ns string, sharedData map[s
 	labels := commonLabels("mcp-server", account.Spec.AccountID)
 	port := fmt.Sprintf("%d", account.Spec.GetYugabyteDBPort())
 	data := map[string][]byte{
-		"HOST":                 []byte(account.Spec.YugabyteDBHost),
-		"PORT":                 []byte(port),
-		"DBNAME":               []byte(account.Spec.YugabyteDBName),
-		"USER":                 []byte(account.Spec.GetYugabyteDBUser()),
-		"USERNAME":             []byte(account.Spec.GetYugabyteDBUser()),
+		"HOST":                []byte(account.Spec.YugabyteDBHost),
+		"PORT":                []byte(port),
+		"DBNAME":              []byte(account.Spec.YugabyteDBName),
+		"USER":                []byte(account.Spec.GetYugabyteDBUser()),
+		"USERNAME":            []byte(account.Spec.GetYugabyteDBUser()),
 		"YUGABYTEDB_USER":     []byte(account.Spec.GetYugabyteDBUser()),
-		"YUGABYTEDB_PASSWORD":  []byte(account.Spec.YugabyteDBPassword),
-		"PASSWORD":             []byte(account.Spec.YugabyteDBPassword),
-		"YUGABYTEDB_URL":       []byte(account.Spec.YugabyteDBConnectionStringLibpq()),
+		"YUGABYTEDB_PASSWORD": []byte(account.Spec.YugabyteDBPassword),
+		"PASSWORD":            []byte(account.Spec.YugabyteDBPassword),
+		"YUGABYTEDB_URL":      []byte(account.Spec.YugabyteDBConnectionStringLibpq()),
 	}
-	if v, ok := sharedData["OPENAI_API_KEY"]; ok && len(v) > 0 {
-		data["OPENAI_API_KEY"] = v
+	for _, key := range []string{"OPENAI_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"} {
+		if v, ok := sharedData[key]; ok && len(v) > 0 {
+			data[key] = v
+		}
 	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -151,6 +154,8 @@ func BuildMCPDeployment(account *saasv1.MekoUserAccount, ns string) *appsv1.Depl
 							secretEnvVar("YUGABYTEDB_PASSWORD", MCPSecretName, "YUGABYTEDB_PASSWORD", false),
 							secretEnvVar("YUGABYTEDB_URL", MCPSecretName, "YUGABYTEDB_URL", false),
 							secretEnvVar("OPENAI_API_KEY", MCPSecretName, "OPENAI_API_KEY", false),
+							secretEnvVar("AWS_ACCESS_KEY_ID", MCPSecretName, "AWS_ACCESS_KEY_ID", true),
+							secretEnvVar("AWS_SECRET_ACCESS_KEY", MCPSecretName, "AWS_SECRET_ACCESS_KEY", true),
 						),
 						EnvFrom: []corev1.EnvFromSource{{
 							ConfigMapRef: &corev1.ConfigMapEnvSource{
