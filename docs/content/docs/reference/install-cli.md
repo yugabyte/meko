@@ -2,8 +2,10 @@
 title: Install the CLI
 linkTitle: Install the CLI
 description: Download or build the Meko CLI
-weight: 20
+weight: 10
 ---
+
+To get started, first download the CLI on your local desktop environment.
 
 ## Download a pre-built binary
 
@@ -33,6 +35,8 @@ meko --version
 ```
 
 ## Build from Source
+
+If you decide to download the CLI source code from the github repository, you would need to build the CLI locally.
 
 Requires Go 1.25+.
 

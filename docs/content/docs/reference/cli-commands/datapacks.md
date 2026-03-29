@@ -17,7 +17,7 @@ Error: not logged in - run `meko login` first
 meko datapack create --name my-datapack
 ```
 
-This provisions a new datapack with a dedicated database, MCP server endpoint, and database access credentials. A spinner is shown while the server processes the request (typically up to 10 seconds).
+Upon login, you always get a default named datapack 'meko-default-datapack' assigned to your account.  If you need to create more than one datapacks, this CLI command provisions a new datapack with a dedicated database, MCP server endpoint, and database access credentials. A spinner is shown while the server processes the request (typically up to 10 seconds).
 
 For machine-readable output:
 
@@ -56,6 +56,9 @@ Displays a table of all datapacks with name, ID, and creation date.
 meko datapack list --json
 ```
 
+Displays a table of all datapacks with name, ID, and creation date with a response in json format.
+
+
 ## Show Datapack Status
 
 ```bash
@@ -67,6 +70,8 @@ Displays summary info: name, ID, agent count, knowledge base count, and creation
 ```bash
 meko datapack status --name my-datapack --json
 ```
+
+Displays summary info: name, ID, agent count, knowledge base count, and creation date with a response in json format.
 
 ## Delete a Datapack
 

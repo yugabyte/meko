@@ -5,6 +5,8 @@ description: Complete reference for all Meko CLI commands
 weight: 30
 ---
 
+Meko CLI is primarily used to manage your datapacks.  You can list all your datapacks, view datapack summary, create, or delte a datapack.  Here is a summary of Meko CLI commands supported as of this release.
+
 ## Command Summary
 
 | Command | Description |
@@ -19,5 +21,4 @@ weight: 30
 
 ## Detailed References
 
-- **[Datapacks](datapacks/)** --- Create, list, describe, and delete datapacks
-- **[Knowledge Bases](knowledge-bases/)** --- Add and manage knowledge bases
+- **[Datapacks](datapacks/)** --- Create, list, view summary, and delete datapacks
