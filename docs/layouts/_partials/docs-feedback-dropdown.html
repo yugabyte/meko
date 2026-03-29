@@ -1,0 +1,48 @@
+{{/* GitHub Feedback dropdown: doc issue, edit page, product issue */ -}}
+{{ $gh_repo := $.Param "github_repo" -}}
+{{ if not $gh_repo }}{{ return }}{{ end -}}
+{{ $gh_subdir := $.Param "github_subdir" | default "" -}}
+{{ $gh_branch := $.Param "github_branch" | default "main" -}}
+{{ $sourceURL := $.Permalink -}}
+{{ $docBody := printf "**Source:** %s" $sourceURL -}}
+{{ $docIssueURL := printf "%s/issues/new?%s" $gh_repo (querify "title" "[DOC]" "body" $docBody) -}}
+{{ $productIssueURL := printf "%s/issues/new?%s" $gh_repo (querify "title" "[MEKO]") -}}
+{{ $editURL := "" -}}
+{{ if .File -}}
+  {{ $path := strings.TrimPrefix (add hugo.WorkingDir "/") .File.Filename -}}
+  {{ $ghs_base := $.Param "path_base_for_github_subdir" -}}
+  {{ $ghs_rename := "" -}}
+  {{ if reflect.IsMap $ghs_base -}}
+    {{ $ghs_rename = $ghs_base.to -}}
+    {{ $ghs_base = $ghs_base.from -}}
+  {{ end -}}
+  {{ with $ghs_base -}}
+    {{ $path = replaceRE . $ghs_rename $path -}}
+  {{ end -}}
+  {{ $gh_repo_path := printf "%s/%s/%s" $gh_branch $gh_subdir $path -}}
+  {{ $gh_repo_path = replaceRE "//+" "/" $gh_repo_path -}}
+  {{ $editURL = printf "%s/edit/%s" $gh_repo $gh_repo_path -}}
+{{ end -}}
+<div class="dropdown td-page-meta__feedback d-inline-block text-start">
+  <button
+    type="button"
+    class="btn btn-sm dropdown-toggle td-docs-feedback__toggle"
+    data-bs-toggle="dropdown"
+    aria-expanded="false">
+    <i class="fa-solid fa-comment-dots fa-fw" aria-hidden="true"></i>
+    Feedback
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+    <li>
+      <a class="dropdown-item" href="{{ $docIssueURL }}" target="_blank" rel="noopener">Report a doc issue</a>
+    </li>
+    {{ if $editURL -}}
+      <li>
+        <a class="dropdown-item" href="{{ $editURL }}" target="_blank" rel="noopener">Edit this doc page</a>
+      </li>
+    {{ end -}}
+    <li>
+      <a class="dropdown-item" href="{{ $productIssueURL }}" target="_blank" rel="noopener">Report a product issue</a>
+    </li>
+  </ul>
+</div>

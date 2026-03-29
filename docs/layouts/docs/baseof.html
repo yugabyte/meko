@@ -1,0 +1,47 @@
+<!doctype html>
+<html itemscope itemtype="http://schema.org/WebPage"
+    {{- with .Site.Language.LanguageDirection }} dir="{{ . }}" {{- end -}}
+    {{ with .Site.Language.Lang }} lang="{{ . }}" {{- end }} {{/**/ -}}
+    class="no-js"
+    {{- $darkMode := partialCached "dark-mode-config.html" "dark-mode-global" -}}
+    {{- if $darkMode.enable }} data-theme-init{{ end }}>
+  <head>
+    {{ partial "head.html" . }}
+  </head>
+  {{- $isDocsHome := strings.Contains (default "" (.Param "body_class")) "docs-home" -}}
+  <body class="td-{{ .Kind }}{{ with .Page.Params.body_class }} {{ . }}{{ end }}">
+    <header>
+      {{ partial "navbar.html" . }}
+    </header>
+    <div class="container-fluid td-outer">
+      <div class="td-main" {{- partialCached "td/scrollspy-attr.txt" . .Section | safeHTMLAttr }}>
+        <div class="row flex-xl-nowrap">
+          <aside class="col-12 col-md-3 col-xl-2 td-sidebar d-print-none">
+            {{ partial "sidebar.html" . }}
+          </aside>
+          <aside class="td-sidebar-toc">
+            {{ partial "page-meta-links.html" . }}
+            {{ partial "toc.html" . }}
+            {{ partial "taxonomy_terms_clouds.html" . }}
+          </aside>
+          <main class="col-12 col-md-9 col-xl-8 ps-md-5" role="main">
+            {{ partial "version-banner.html" . }}
+            <div class="td-docs-topbar d-flex flex-wrap align-items-start justify-content-between gap-2 w-100 mb-3">
+              {{ if not (.Param "ui.breadcrumb_disable") -}}
+              <div class="td-docs-topbar__crumbs flex-grow-1 min-w-0">
+                {{ partial "breadcrumb.html" . -}}
+              </div>
+              {{- end }}
+              <div class="td-docs-topbar__feedback flex-shrink-0 ms-auto text-end d-print-none{{ if not $isDocsHome }} d-xl-none{{ end }}">
+                {{ partial "docs-feedback-dropdown.html" . }}
+              </div>
+            </div>
+            {{ block "main" . }}{{ end }}
+          </main>
+        </div>
+      </div>
+      {{ partial "footer.html" . }}
+    </div>
+    {{ partial "scripts.html" . }}
+  </body>
+</html>

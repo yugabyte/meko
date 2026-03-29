@@ -4,7 +4,8 @@ headerTitle: Meko Documentation
 linkTitle: Docs Home
 headcontent: Simplify the Agent-Native Data Layer
 description: Build AI agents with persistent, portable, shareable memory and knowledge using Meko
-body_class: no-toc
+body_class: docs-home
+notoc: true
 type: docs
 layout: list
 ---

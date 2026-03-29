@@ -1,12 +1,57 @@
+// Feedback dropdown: match site gradient hover (avoid Bootstrap outline hover → white / lost text)
+.td-page-meta__feedback {
+  .td-docs-feedback__toggle {
+    position: relative;
+    color: $white;
+    background: $black;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    transition:
+      color 0.2s ease,
+      background 0.25s ease,
+      border-color 0.2s ease;
+
+    &:hover,
+    &:focus-visible,
+    &.show {
+      color: $white;
+      border-color: transparent;
+      background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+      background-size: 200% 200%;
+    }
+
+    &:focus-visible {
+      box-shadow: 0 0 0 2px rgba(45, 148, 238, 0.45);
+    }
+  }
+
+  .dropdown-menu {
+    background-color: $dark;
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .dropdown-item {
+    color: rgba(255, 255, 255, 0.85);
+
+    &:hover,
+    &:focus {
+      color: $white;
+      background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+      background-size: 200% 200%;
+    }
+  }
+}
+
 body {
-  &.no-toc {
+  // Docs landing: hide right rail entirely (no TOC column border/line). Feedback uses top bar (all breakpoints).
+  &.docs-home {
     aside.td-sidebar-toc {
       display: none !important;
     }
 
     @media (min-width: 1200px) {
-      main.col-12 {
-        width: 80% !important;
+      main.col-xl-8[role='main'] {
+        flex: 1 1 auto;
+        max-width: none;
       }
     }
   }
