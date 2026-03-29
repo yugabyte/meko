@@ -1,13 +1,13 @@
 ---
 title: API Reference
 linkTitle: API Reference
-description: REST API endpoint documentation for the Meko platform
-weight: 40
+description: API Reference description
+weight: 100
 ---
 
-The Meko Datapack API provides REST endpoints for managing datapacks, agents, and knowledge bases.
+(PLAN TO DELETE THIS FILE as No APIs are to be exposed except for MCP Server)
 
-**Base URL:** `/api/v1`
+**Base URL:** `/mcp/v1`
 
 ## Authentication
 

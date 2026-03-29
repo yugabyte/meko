@@ -11,16 +11,11 @@ weight: 30
 |---------|-------------|
 | `meko login` | Authenticate with the Meko API server |
 | `meko logout` | Remove locally stored tokens |
+| `meko help` | Help with Meko CLI |
 | `meko datapack create` | Create a new datapack |
 | `meko datapack list` | List all datapacks |
 | `meko datapack status` | View datapack summary |
 | `meko datapack delete` | Permanently delete a datapack |
-| `meko datapack connect` | Open a database shell to a datapack |
-| `meko datapack add_knowledge_base` | Add a knowledge base to a datapack |
-| `meko datapack search_memories` | Search memories in a datapack |
-| `meko datapack clear_memories` | Clear all memories in a datapack |
-| `meko datapack compress_memories` | Compress redundant memories |
-| `meko mcp serve` | Start an MCP server for a datapack |
 
 ## Detailed References
 
