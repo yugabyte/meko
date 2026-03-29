@@ -2,6 +2,7 @@
 title: All Types of alerts, tabs 
 linkTitle: Page content examples
 weight: 10000
+body_class: docs-home
 type: docs
 ---
 
