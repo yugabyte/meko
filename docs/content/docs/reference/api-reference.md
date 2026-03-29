@@ -5,7 +5,7 @@ description: API Reference description
 weight: 100
 ---
 
-(PLAN TO DELETE THIS FILE as No APIs are to be exposed except for MCP Server)
+(PLAN TO DELETE THIS FILE as No APIs are to be exposed except for MCP Server.  Shall we save this file for future use?  If yes, can we hide it)
 
 **Base URL:** `/mcp/v1`
 

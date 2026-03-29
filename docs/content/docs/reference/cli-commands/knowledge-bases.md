@@ -5,6 +5,8 @@ description: CLI commands for managing knowledge bases
 weight: 20
 ---
 
+(TO BE DELETED as these commands are not yet supported in the CLI. Shall we save this file for future use.  If yes, can we hide it?)
+
 ## Add a Knowledge Base
 
 ```bash
