@@ -21,10 +21,4 @@ type: docs
     desc=""
     cta="Reference &rarr;"
   >}}
-  {{< card
-    href="reference/api-reference"
-    title="REST API"
-    desc=""
-    cta="Reference &rarr;"
-  >}}
 {{< /card-group >}}

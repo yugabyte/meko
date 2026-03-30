@@ -18,9 +18,9 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
     {
       "mcpServers": {
         "meko": {
-          "url": "<YOUR DATAPACK'S URL>",
+          "url": "<datapack-url>",
           "headers": {
-            "API_KEY": "<YOUR DATAPACK'S API KEY>"
+            "API_KEY": "<datapack-api-token>"
           }
         }
       }
@@ -60,7 +60,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
           "args": [
             "-y",
             "mcp-remote",
-            "<YOUR DATAPACK'S URL>",
+            "<datapack-url>",
             "--allow-http"
           ]
         }
@@ -88,10 +88,10 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 Run the setup command.
 
-1. Run this command in your terminal to add the Meko MCP server to Claude Code:
+1. Run this command in your shell to add the Meko MCP server to Claude Code:
 
     ```sh
-    > claude mcp add --scope user --transport http meko <your-datapak-url> --header "API_KEY: <YOUR DATAPACK'S API KEY>"
+    > claude mcp add --scope user --transport http meko <datapak-url> --header "API_KEY: <datapack-api-token>"
     ```
 
 1. Verify the connection by entering the following at the command-line console:
