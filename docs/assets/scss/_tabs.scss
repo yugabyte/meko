@@ -2,7 +2,17 @@ body {
   .td-content {
     .nav-tabs {
       margin-top: 24px;
+      padding-bottom: 3px;
       border-bottom: 1px solid #2f2f45;
+      overflow: hidden;
+      overflow-x: auto;
+      scrollbar-width: none;
+      display: flex;
+      flex-flow: row;
+
+      @media (max-width: 599px) {
+        padding-bottom: 5px;
+      }
 
       .nav-link {
         background: transparent;
@@ -12,6 +22,7 @@ body {
         font-size: 14px;
         position: relative;
         transition: color 0.2s ease;
+        white-space: nowrap;
 
         &:hover {
           color: #e4e4e7;

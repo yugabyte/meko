@@ -13,7 +13,12 @@ $background-color-secondary: #20202c;
 $code-background: #030712;
 $link-color: $white;
 $link-hover-color: $orange;
-$td-enable-google-fonts: true;
-$td-google-font-name: 'IBM Plex Sans';
-$td-google-font-family: 'IBM Plex Sans:300,400,500,600,700';
+$td-enable-google-fonts: false;
+$font-family-sans-serif:
+  'IBM Plex Sans',
+  system-ui,
+  -apple-system,
+  'Segoe UI',
+  'Roboto',
+  sans-serif;
 $td-navbar-min-height: 6rem;
