@@ -53,10 +53,58 @@
     }
   }
 
-  h3 {
+  // Grid keeps logo/icon and title on one row (flex + h3 width quirks can stack them).
+  .meko-card-heading {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 0.65rem;
     margin: 0 0 0.5rem;
-    font-size: 1.1rem;
-    color: $white;
+    width: 100%;
+    min-width: 0;
+
+    h3 {
+      margin: 0;
+      font-size: 1.1rem;
+      color: $white;
+      min-width: 0;
+      line-height: 1.25;
+      grid-column: 2;
+    }
+
+    // Title-only cards (no :has in very old browsers: h3 stays in col 2, still readable).
+    &:not(:has(> .meko-card-logo)):not(:has(> .meko-card-icon)) h3 {
+      grid-column: 1 / -1;
+    }
+
+    > .meko-card-logo,
+    > .meko-card-icon {
+      grid-column: 1;
+    }
+  }
+
+  .meko-card-logo {
+    line-height: 0;
+
+    img {
+      height: 1.5rem;
+      width: auto;
+      max-width: 2.25rem;
+      display: block;
+      object-fit: contain;
+    }
+  }
+
+  .meko-card-icon {
+    line-height: 1;
+    color: #c8c8d8;
+    justify-self: start;
+
+    i {
+      font-size: 1.35rem;
+      vertical-align: middle;
+      display: block;
+    }
   }
 
   p {
@@ -101,10 +149,13 @@
     padding: 1rem 1.1rem;
     box-sizing: border-box;
 
-    h3 {
-      text-align: left;
+    .meko-card-heading {
       align-self: flex-start;
       width: 100%;
+    }
+
+    h3 {
+      text-align: left;
     }
 
     p {

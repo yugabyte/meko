@@ -5,7 +5,17 @@
   <div class="meko-card">
 {{- end -}}
 
+<div class="meko-card-heading">
+{{- if .Get "logo" -}}
+  {{- $logoPath := strings.TrimPrefix "/" (.Get "logo") -}}
+  <span class="meko-card-logo" aria-hidden="true">
+    <img src="{{ printf "/%s" $logoPath | relURL }}" alt="" width="28" height="28" decoding="async" />
+  </span>
+{{- else if .Get "icon" -}}
+  <span class="meko-card-icon" aria-hidden="true"><i class="{{ .Get "icon" }}"></i></span>
+{{- end -}}
 <h3>{{- .Get "title" -}}</h3>
+</div>
 <p>{{- .Get "desc" -}}</p>
 
 {{- with .Get "cta" -}}

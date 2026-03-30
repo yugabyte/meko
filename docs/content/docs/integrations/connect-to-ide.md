@@ -1,5 +1,5 @@
 ---
-title: Connect to IDE
+title: Connect to an IDE
 linkTitle: Connect to an IDE
 description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and other IDEs via MCP.
 weight: 3010
