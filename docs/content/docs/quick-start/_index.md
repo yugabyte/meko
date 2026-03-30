@@ -89,9 +89,12 @@ bearer_token_env_var = "<datapack-api-token>"
 ```
 
 {{% /tab %}}
-{{< /tabpane >}}
+{{% tab header="More" lang="more" %}}
+More integrations are available, and others are coming soon.
 
-More integrations are available, and others are coming soon. See [Integrations](../integrations/).
+See [Integrations](../integrations/).
+{{% /tab %}}
+{{< /tabpane >}}
 
 ## Explore
 
