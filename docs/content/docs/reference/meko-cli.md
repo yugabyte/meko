@@ -36,6 +36,8 @@ sudo mv meko /usr/local/bin/
 meko --version
 ```
 
+## Basics
+
 ### Login
 
 Before you can use the Meko CLI, you must sign in to the meko platform.
@@ -69,6 +71,20 @@ meko logout
 ```
 
 Removes locally stored tokens.
+
+### Help
+
+Access command-line help for meko by running the following command:
+
+```sh
+meko help
+```
+
+For help with specific meko commands, use the --help or -h flag, in the following form:
+
+```sh
+meko [ <command> ] -h
+```
 
 ## Commands
 
