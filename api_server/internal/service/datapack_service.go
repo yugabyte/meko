@@ -49,11 +49,12 @@ type DBAccessInfo struct {
 
 // CreateResponse holds the result of creating a datapack.
 type CreateResponse struct {
-	DatapackID string        `json:"datapack_id"`
-	AgentID    string        `json:"agent_id"`
-	Name       string        `json:"name"`
-	MCPServer  MCPServerInfo `json:"mcp_server"`
-	DBAccess   DBAccessInfo  `json:"db_access"`
+	DatapackID  string        `json:"datapack_id"`
+	AgentID     string        `json:"agent_id"`
+	Name        string        `json:"name"`
+	MCPUserName string        `json:"mcp_user_name"`
+	MCPServer   MCPServerInfo `json:"mcp_server"`
+	DBAccess    DBAccessInfo  `json:"db_access"`
 }
 
 // Create validates the request, assigns a YBA universe, and creates a new datapack.
@@ -114,9 +115,10 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 	}
 
 	return &CreateResponse{
-		DatapackID: res.DatapackID,
-		AgentID:    res.AgentID,
-		Name:       req.Name,
+		DatapackID:  res.DatapackID,
+		AgentID:     res.AgentID,
+		Name:        req.Name,
+		MCPUserName: res.MCPUserName,
 		MCPServer: MCPServerInfo{
 			URL:    fmt.Sprintf("https://%s.mcp.mekodev.com/mcp", res.AccountID),
 			APIKey: res.MCPPassword,

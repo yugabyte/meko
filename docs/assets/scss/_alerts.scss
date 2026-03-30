@@ -1,5 +1,6 @@
 body {
   .td-content {
+    .pageinfo,
     .td-alert {
       border-radius: 10px;
       padding: 16px 18px;
@@ -31,38 +32,47 @@ body {
           margin-top: 8px;
         }
       }
+
+      > p {
+        margin: 0;
+      }
     }
 
-    .alert-tip {
+    .alert-tip,
+    .pageinfo-primary,
+    .pageinfo-tip {
       border-color: #3b82f6;
-      background: rgba(59, 130, 246, 10%);
+      background: #3b82f619;
 
       .td-alert-heading {
         color: #60a5fa;
       }
     }
 
-    .alert-warning {
+    .alert-warning,
+    .pageinfo-warning {
       border-color: #facc15;
-      background: rgba(250, 204, 21, 10%);
+      background: #facc141a;
 
       .td-alert-heading {
         color: #fde047;
       }
     }
 
-    .alert-note {
+    .alert-note,
+    .pageinfo-note {
       border-color: #a855f7;
-      background: rgba(168, 85, 247, 10%);
+      background: #a855f719;
 
       .td-alert-heading {
         color: #c084fc;
       }
     }
 
-    .alert-danger {
+    .alert-danger,
+    .pageinfo-danger {
       border-color: #ef4444;
-      background: rgba(239, 68, 68, 10%);
+      background: #ef444419;
 
       .td-alert-heading {
         color: #f87171;

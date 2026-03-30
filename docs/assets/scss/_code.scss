@@ -10,7 +10,7 @@ body {
       font-size: inherit !important;
       line-height: 110%;
       max-width: 100%;
-      background: $background-color-primary !important;
+      background: $code-background;
       border: 1px solid #2f2d3e;
       border-radius: 4px;
       padding: 3px 5px;
@@ -44,19 +44,27 @@ body {
       flex-direction: column;
       min-width: 0;
       overflow-wrap: break-word;
-      background-color: $background-color-primary;
+      background-color: $code-background;
       background-clip: border-box;
-      border: 1px solid rgba(0, 0, 0, 12.5%);
-      border-radius: 0.25rem;
+      border: 1px solid #2f2d3e;
+      box-shadow: 0 1px 3px #00000059;
+      border-radius: 8px;
 
       pre {
-        border-radius: 8px;
+        border: 0;
+        border-radius: 0;
+
+        code {
+          border: 0;
+          background-color: inherit;
+        }
 
         .click-to-copy {
           position: absolute;
+          background-color: $code-background;
           right: 0;
-          background: $background-color-primary;
           top: 0;
+          border-radius: 8px;
 
           button.td-click-to-copy {
             position: static;
@@ -115,13 +123,10 @@ body {
         font-size: 100%;
         display: block;
         width: 100% !important;
-        border-radius: 7px;
         padding: 20px 47px 15px 15px;
         margin: 0;
-        border-width: 1px;
-        border-style: solid;
-        background: inherit !important;
-        border-color: $background-color-secondary;
+        background: inherit;
+        border-radius: 0;
         white-space: pre !important;
         overflow-wrap: normal;
         word-break: keep-all;
@@ -159,72 +164,6 @@ body {
         > pre {
           margin-top: 1rem;
           margin-bottom: 1rem;
-        }
-      }
-
-      button.copy {
-        position: absolute;
-        border: none !important;
-        width: 32px;
-        height: 32px;
-        background-color: rgba(229, 237, 255, 0%);
-        background-size: 15px;
-        background-repeat: no-repeat;
-        background-position: center center;
-        right: 3px;
-        top: 6.7px;
-        border-radius: 8px;
-        z-index: 1;
-        box-shadow: none;
-
-        &:hover {
-          background-color: rgba(229, 237, 255, 0%);
-
-          &::before {
-            content: 'Copy';
-            background: #fff;
-            border: 1px solid #e9edf0;
-            box-shadow: 0 0 8px rgba(0, 0, 0, 10%);
-            border-radius: 8px;
-            position: absolute;
-            left: 0;
-            z-index: 9999999;
-            width: 49px;
-            height: 36px;
-            font-weight: 400;
-            font-size: 11.5px;
-            line-height: 16px;
-            color: #4e5f6d;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          }
-        }
-
-        &:not(.unclicked):hover::before {
-          content: 'Copied';
-          left: 0;
-          width: 59px;
-          height: 36px;
-        }
-
-        &:not(.unclicked)::after {
-          position: absolute;
-          top: 0;
-          left: 0;
-          font-weight: 700;
-          content: '\f00c';
-          color: #48ab52 !important;
-          text-align: center;
-          line-height: 26px;
-          opacity: 1;
-          width: 32px;
-          height: 32px;
-          background: #e5edff !important;
-          border-radius: 8px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
         }
       }
     }

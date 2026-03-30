@@ -5,22 +5,19 @@ description: Real-world scenarios and sample solutions built with Meko
 weight: 2000
 type: docs
 ---
-
-Explore practical examples of using Meko. Each example walks through a realistic scenario that demonstrates Meko's capabilities.
-
 ## Meko in your development process
 
 {{< card-group >}}
   {{< card
     href="examples/meko-in-your-ide/#personal-preferences"
-    title="Personal preferences"
-    desc="Store your individual coding style and tool preferences so your AI assistant applies them automatically."
+    title="Tool-independent dev preferences & standards"
+    desc="Use best-of-breed tools with consistent templates & standards."
     cta="Explore &rarr;"
   >}}
   {{< card
     href="examples/meko-in-your-ide/#portable-developer-coding-preferences"
     title="Portable coding preferences"
-    desc="Carry your coding standards across projects by connecting any project to your personal datapack."
+    desc="Take coding preferences with you across sessions, projects, and even teams."
     cta="Explore &rarr;"
   >}}
   {{< card
@@ -42,8 +39,8 @@ Explore practical examples of using Meko. Each example walks through a realistic
 {{< card-group >}}
   {{< card
     href="examples/build-software-with-meko/#conversation-history-and-reasoning"
-    title="Conversation history and reasoning"
-    desc="Retain agent reasoning traces across sessions so you can query what your agent was thinking."
+    title="Conversation and reasoning history"
+    desc="Retain agent reasoning traces across sessions so you have a detailed log of how your agent achieved its outcomes."
     cta="Explore &rarr;"
   >}}
   {{< card

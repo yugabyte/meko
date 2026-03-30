@@ -41,7 +41,7 @@ Add to your Cursor MCP settings (`.cursor/mcp.json`):
 ```
 
 {{% /tab %}}
-{{% tab header="Claude Code" lang="claude" %}}
+{{% tab header="Claude Desktop" lang="claude" %}}
 
 Add the MCP server configuration. The method depends on your Claude version.
 
