@@ -1,0 +1,113 @@
+body {
+  .td-content {
+    img:not(.icon) {
+      cursor: pointer;
+    }
+  }
+
+  .image-zoom {
+    position: fixed;
+    inset: 50%;
+    z-index: -1;
+    opacity: 0;
+    transition: opacity 500ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &.open {
+      opacity: 1;
+      z-index: 9999;
+      inset: 0;
+    }
+
+    .img-preview {
+      position: relative;
+      max-width: 90vw;
+      max-height: 90vh;
+      min-width: 50px;
+      min-height: 50px;
+      overflow: auto;
+
+      img {
+        width: auto;
+        height: auto;
+        max-width: 90vw;
+        max-height: 90vh;
+        position: relative;
+        z-index: 2;
+        object-fit: contain;
+
+        &[src$='.svg']:not([width]) {
+          width: 90vw;
+          max-width: 1200px;
+        }
+      }
+    }
+
+    i {
+      &.close-btn {
+        position: absolute;
+        width: 40px;
+        height: 40px;
+        top: 20px;
+        right: 20px;
+        border-radius: 50%;
+        background: #fff;
+        z-index: 3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        opacity: 0.8;
+        transition: all 250ms ease;
+
+        &:hover {
+          opacity: 1;
+        }
+
+        &::before {
+          content: 'X';
+          font-style: normal;
+          font-family: cursive;
+          font-size: 18px;
+          color: #000;
+        }
+      }
+
+      &.bg-drop {
+        position: absolute;
+        inset: 0;
+        background: #000000b3;
+        backdrop-filter: blur(2px);
+        cursor: pointer;
+        opacity: 0;
+        transition: all 500ms ease;
+      }
+    }
+  }
+
+  &.image-zoom {
+    overflow: hidden;
+
+    .image-zoom {
+      img {
+        animation: img-siz 1s ease forwards;
+      }
+
+      i.bg-drop {
+        opacity: 1;
+      }
+    }
+  }
+}
+
+@keyframes img-siz {
+  0% {
+    transform: scale(0);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}

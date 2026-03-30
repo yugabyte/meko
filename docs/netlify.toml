@@ -54,17 +54,15 @@
         ;
 
         script-src 'self' 'unsafe-eval' 'unsafe-inline'
-						https://code.jquery.com/jquery-3.7.1.min.js
+            https://code.jquery.com/jquery-3.7.1.min.js
             https://netlify-cdp-loader.netlify.app/
             https://netlify-rum.netlify.app
         ;
 
         style-src 'self' 'unsafe-inline'
-            https://fonts.googleapis.com
         ;
 
         font-src 'self'
-            https://docs.yugabyte.com/fonts/
         ;
 
         object-src 'none'

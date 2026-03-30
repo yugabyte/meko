@@ -13,7 +13,6 @@ body {
     }
 
     table:not(.acc) {
-      box-shadow: 0 0 20px rgba(0, 0, 0, 50%);
       width: 100%;
       border-collapse: collapse;
       background-color: $background-color-primary;
@@ -34,9 +33,6 @@ body {
 
       thead {
         background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        -webkit-mask:
-          linear-gradient(#fff 0 0) content-box,
-          linear-gradient(#fff 0 0);
         width: 100%;
 
         th {
