@@ -54,12 +54,8 @@ body {
         margin: 0;
         transition: all 0.2s ease-in-out;
 
-        // Docsy sets `border: none` on `.tab-content .tab-pane .highlight`, which makes code
-        // blocks visually merge with the tab panel. Restore a clear frame so copy targets are obvious.
         .highlight {
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          background-color: $background-color-secondary;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+          margin: 20px 0;
         }
       }
     }
