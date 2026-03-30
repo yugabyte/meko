@@ -11,6 +11,8 @@ layout: list
 
 Meko is an agent-native data layer for multi-agent systems that work and learn together.
 
+Meko is the persistent data layer that agents working together were always missing — letting them remember, share knowledge, and learn from each other across sessions.  Observe agentic conversations and conversation history, LLMs' chains of thought, traces of agents processing memory and knowledge to build rich context, all the way down to the API executions that deliver results back to the LLM.
+
 Meko provides:
 
 - Collective memory. Learning compounds across the whole system, not just per-agent.

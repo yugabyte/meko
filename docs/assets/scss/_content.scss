@@ -13,13 +13,15 @@ body {
   }
 
   .td-max-width-on-larger-screens {
-    max-width: calc(100% - 40px);
-    @media (max-width: 767px) {
-      max-width: 100%;
-    }
+    max-width: 100%;
   }
 
   .td-content {
+    max-width: calc(100% - 40px);
+    @media (max-width: 1199px) {
+      max-width: 100%;
+    }
+
     li,
     p,
     strong,
