@@ -9,7 +9,7 @@ type: docs
 layout: list
 ---
 
-Meko is the persistent data layer that agents were always missing — letting them remember, share knowledge, and learn from each other across sessions.
+Meko is the persistent data layer that agents working together were always missing — letting them remember, share knowledge, and learn from each other across sessions.  Observe agentic conversations and conversation history, LLMs' chains of thought, traces of agents processing memory and knowledge to build rich context, all the way down to the API executions that deliver results back to the LLM.
 
 Meko is fully open-source and integrates easily with any agentic framework through MCP servers. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
 
