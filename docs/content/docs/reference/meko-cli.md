@@ -62,7 +62,9 @@ To authenticate against a different API server:
 meko login --api-server https://my-server.example.com
 ```
 
-The default API server is `https://mekodev.com`. Credentials are stored locally in `~/var/meko/credentials.json`.
+The default API server is `https://mekodev.com`.
+
+Credentials are stored locally in `~/var/meko/credentials.json`.
 
 ### Logout
 
@@ -109,7 +111,7 @@ These flags can be used with any `meko datapack` subcommand.
 
 ### Datapack commands
 
-All `meko datapack` subcommands require a valid login session. If you are not logged in, they will fail with:
+All `meko datapack` subcommands require you to be [signed in](#login). If you are not signed in, they will fail with:
 
 ```text
 Error: not logged in - run `meko login` first
@@ -117,11 +119,15 @@ Error: not logged in - run `meko login` first
 
 #### datapack create
 
+When you sign in, a default datapack named `meko-default-datapack` is automatically assigned to your account.
+
+If you need to create more than one datapacks, use `datapack create` to provision a new datapack with a dedicated database, MCP server endpoint, and database access credentials.
+
 ```bash
 meko datapack create --name my-datapack
 ```
 
-After login, you always get a default named datapack 'meko-default-datapack' assigned to your account.  If you need to create more than one datapacks, use this command to provision a new datapack with a dedicated database, MCP server endpoint, and database access credentials. A spinner is shown while the server processes the request (typically up to 10 seconds).
+The request typically takes up to 10 seconds.
 
 For machine-readable output:
 
@@ -137,52 +143,54 @@ Example JSON output:
   "agent_id": "18311fce-36c5-40fe-bd45-67f5913b0b52",
   "name": "my-datapack",
   "mcp_server": {
-    "url": "https://mekodev.com/<account_id>/mcp",
+    "url": "https://mekodev.com/<account-id>/mcp",
     "api_key": "318ce1c589d08edb11e24b0a781fe675"
   },
   "db_access": {
     "user_name": "db_my-datapack",
     "password": "d28a0d1498c1ab9692184dd9c9cd1a79",
-    "conn_str": "postgresql://db_my-datapack:d28a0d14...@host:5433/account_id_my-datapack"
+    "conn_str": "postgresql://db_my-datapack:d28a0d14...@host:5433/account-id_my-datapack"
   }
 }
 ```
 
 #### datapack list
 
+Display a table of all datapacks with name, ID, and creation date.
+
 ```bash
 meko datapack list
 ```
 
-Displays a table of all datapacks with name, ID, and creation date.
+For machine-readable output:
 
 ```bash
 meko datapack list --json
 ```
 
-Displays a table of all datapacks with name, ID, and creation date with a response in json format.
-
 #### datapack status
+
+Display summary info: name, ID, agent count, knowledge base count, and creation date.
 
 ```bash
 meko datapack status --name my-datapack
 ```
 
-Displays summary info: name, ID, agent count, knowledge base count, and creation date.
+Display summary info in json format:
 
 ```bash
 meko datapack status --name my-datapack --json
 ```
 
-Displays summary info in json format.
-
 #### datapack delete
+
+Delete the specified datapack. This permanently destroys the datapack and its underlying database.
 
 ```bash
 meko datapack delete --name my-datapack
 ```
 
-You will be prompted to re-type the datapack name as confirmation, since this permanently destroys the datapack and its underlying database.
+You will be prompted to re-type the datapack name as confirmation.
 
 To skip the confirmation prompt (for scripts):
 
