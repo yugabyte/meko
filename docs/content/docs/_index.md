@@ -12,12 +12,14 @@ layout: list
 Meko is the persistent data layer that agents working together were always missing — letting them remember, share knowledge, and learn from each other across sessions.  Observe agentic conversations and conversation history, LLMs' chains of thought, traces of agents processing memory and knowledge to build rich context, all the way down to the API executions that deliver results back to the LLM.
 
 &nbsp;
-{{< card-group variant="square" >}}
+{{< card-group variant="full" >}}
   {{< card
     href="quick-start/"
     title="Quick Start"
     desc="Sign up, connect, and see Meko in action in under 5 minutes."
     cta="Get started &rarr;"
+image="images/voyager.svg"
+
   >}}
 {{< /card-group >}}
 

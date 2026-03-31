@@ -107,8 +107,6 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
 
 ## Cards
 
----
-
 ### Cards without Variants
 
 #### Cards with all available options
@@ -134,6 +132,29 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
     cta="View examples &rarr;"
   >}}
+  {{< card
+    href="quick-start/"
+    logo="logos/integrations/claude.svg"
+    title="Quick Start (With Logo)"
+    desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    cta="Get started &rarr;"
+    image="images/database.svg"
+  >}}
+  {{< card
+    href="examples/"
+    icon="fa-brands fa-python"
+    title="Examples (With FA Icon)"
+    desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
+    cta="View examples &rarr;"
+    image="images/database.svg"
+  >}}
+  {{< card
+    href="examples/"
+    title="Examples"
+    desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
+    cta="View examples &rarr;"
+    image="images/database.svg"
+  >}}
 {{< /card-group >}}
 
 ```md
@@ -158,10 +179,33 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
     cta="View examples &rarr;"
   */>}}
+  {{</* card
+    href="quick-start/"
+    logo="logos/integrations/claude.svg"
+    title="Quick Start (With Logo)"
+    desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    cta="Get started &rarr;"
+    image="images/database.svg"
+  */>}}
+  {{</* card
+    href="examples/"
+    icon="fa-brands fa-python"
+    title="Examples (With FA Icon)"
+    desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
+    cta="View examples &rarr;"
+    image="images/database.svg"
+  */>}}
+  {{</* card
+    href="examples/"
+    title="Examples"
+    desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
+    cta="View examples &rarr;"
+    image="images/database.svg"
+  */>}}
 {{</* /card-group */>}}
 ```
 
-#### Cards without Description
+#### Cards without Description and Image
 
 {{< card-group >}}
   {{< card
@@ -211,19 +255,21 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
   {{< card
     href="quick-start/"
     logo="logos/integrations/claude.svg"
-    title="Quick Start (With Logo)"
+    title="Quick Start"
     desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    image="images/database.svg"
   >}}
   {{< card
     href="examples/"
     icon="fa-brands fa-python"
-    title="Examples (With FA Icon)"
+    title="Example"
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
   >}}
   {{< card
     href="examples/"
     title="Examples"
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
+    image="images/database.svg"
   >}}
 {{< /card-group >}}
 
@@ -232,24 +278,26 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
   {{</* card
     href="quick-start/"
     logo="logos/integrations/claude.svg"
-    title="Quick Start (With Logo)"
+    title="Quick Start"
     desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    image="images/database.svg"
   */>}}
   {{</* card
     href="examples/"
     icon="fa-brands fa-python"
-    title="Examples (With FA Icon)"
+    title="Examples"
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
   */>}}
   {{</* card
     href="examples/"
     title="Examples"
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
+    image="images/database.svg"
   */>}}
 {{</* /card-group */>}}
 ```
 
-#### Cards without Description & CTA
+#### Cards without Description, CTA & Image
 
 {{< card-group >}}
   {{< card
@@ -296,6 +344,7 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
     title="Quick Start (With Logo)"
     desc="Sign up, connect, and see Meko in action in under 5 minutes."
     cta="Get started &rarr;"
+    image="images/database.svg"
   >}}
   {{< card
     href="examples/"
@@ -303,12 +352,14 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
     title="Examples (With FA Icon)"
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
     cta="View examples &rarr;"
+    image="images/database.svg"
   >}}
   {{< card
     href="examples/"
     title="Examples"
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
     cta="View examples &rarr;"
+    image="images/database.svg"
   >}}
   {{< card
     href="examples/"
@@ -318,7 +369,6 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
   >}}
 {{< /card-group >}}
 
-
 ```md
 {{</* card-group variant="half" */>}}
   {{</* card
@@ -327,6 +377,7 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
     title="Quick Start (With Logo)"
     desc="Sign up, connect, and see Meko in action in under 5 minutes."
     cta="Get started &rarr;"
+    image="images/database.svg"
   */>}}
   {{</* card
     href="examples/"
@@ -334,12 +385,14 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
     title="Examples (With FA Icon)"
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
     cta="View examples &rarr;"
+    image="images/database.svg"
   */>}}
   {{</* card
     href="examples/"
     title="Examples"
     desc="Try patterns for coding preferences, knowledge bases, and resumable agents."
     cta="View examples &rarr;"
+    image="images/database.svg"
   */>}}
   {{</* card
     href="examples/"
@@ -355,10 +408,10 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
 {{< card-group variant="full" >}}
   {{< card
     href="quick-start/"
-    logo="logos/integrations/claude.svg"
-    title="Quick Start (With Logo)"
-    desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    title="Quick Start"
+    desc="Meko is fully open-source and integrates easily with any agentic framework through MCP servers. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search."
     cta="Get started &rarr;"
+    image="images/database.svg"
   >}}
 {{< /card-group >}}
 
@@ -366,10 +419,10 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
 {{</* card-group variant="full" */>}}
   {{</* card
     href="quick-start/"
-    logo="logos/integrations/claude.svg"
-    title="Quick Start (With Logo)"
-    desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    title="Quick Start"
+    desc="Meko is fully open-source and integrates easily with any agentic framework through MCP servers. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search."
     cta="Get started &rarr;"
+    image="images/database.svg"
   */>}}
 {{</* /card-group */>}}
 ```
