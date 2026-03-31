@@ -43,8 +43,6 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 >
 > This section is under development. Check back soon.
 
-Feel free to contribute here with info!
-
 ## Claude Desktop
 
 In Claude Desktop (whether used for Chat, Cowork, or Code):
@@ -62,9 +60,12 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
             "mcp-remote",
             "<YOUR DATAPACK'S URL>",
             "--allow-http"
-          ]
+          ],
+          "env": {
+            "API_KEY": "<YOUR DATAPACK'S API KEY>"
+          }
         }
-      },
+      }
     }
     ```
 
@@ -113,5 +114,3 @@ Run the setup command.
 * OpenAI chatgpt Desktop
 * Lovable
 * Replit
-
-Feel free to contribute here with info!
