@@ -62,7 +62,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
             "--allow-http"
           ],
           "env": {
-            "API_KEY": "<YOUR DATAPACK'S API KEY>"
+            "API_KEY": "<datapack-api-token>"
           }
         }
       }
