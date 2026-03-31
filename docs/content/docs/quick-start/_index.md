@@ -78,7 +78,7 @@ Add the MCP server configuration. The method depends on your Claude version.
 Run the following command in your shell to add the Meko MCP server to Claude Code:
 
 ```sh
-> claude mcp add --scope user --transport http meko <datapak-url> --header "API_KEY: <datapack-api-token>"
+claude mcp add --scope user --transport http meko <datapak-url> --header "API_KEY: <datapack-api-token>"
 ```
 
 {{% /tab %}}
@@ -106,7 +106,7 @@ Meko uses _memory_ to enhance user experience through _personalization_.
 Ask this question of your AI IDE or development tool without Meko:
 
 ```text
-    Propose a 5 day vacation for me.  Do not use Meko or any prior recollection of my preferences in generating your response.
+Propose a 5 day vacation for me.  Do not use Meko or any prior recollection of my preferences in generating your response.
 ```
 
 Your AI either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
