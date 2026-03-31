@@ -1,22 +1,31 @@
-{{ $href := .Get "href" }}
+{{- $href     := .Get "href" -}}
+{{- $title    := .Get "title" -}}
+{{- $logo     := .Get "logo" -}}
+{{- $icon     := .Get "icon" -}}
+{{- $desc     := .Get "desc" -}}
+{{- $logoPath := strings.TrimPrefix "/" ($logo) -}}
+
 {{- if $href -}}
   <a class="meko-card" href="{{ $href | relURL }}">
 {{- else -}}
   <div class="meko-card">
 {{- end -}}
 
-<div class="meko-card-heading">
-{{- if .Get "logo" -}}
-  {{- $logoPath := strings.TrimPrefix "/" (.Get "logo") -}}
-  <span class="meko-card-logo" aria-hidden="true">
-    <img src="{{ printf "/%s" $logoPath | relURL }}" alt="" width="28" height="28" decoding="async" />
-  </span>
-{{- else if .Get "icon" -}}
-  <span class="meko-card-icon" aria-hidden="true"><i class="{{ .Get "icon" }}"></i></span>
-{{- end -}}
-<h3>{{- .Get "title" -}}</h3>
+{{- if $title -}}
+  <div class="meko-card-heading">
+  {{- if $logo -}}
+    <div class="meko-card-logo" aria-hidden="true"><img src="{{- $logoPath | relURL -}}" alt="{{- $title -}}" width="28" height="28" decoding="async" /></div>
+  {{- else if $icon -}}
+    <span class="meko-card-icon" aria-hidden="true"><i class="{{- $icon -}}"></i></span>
+  {{- end -}}
+
+  <h3>{{- $title -}}</h3>
 </div>
-<p>{{- .Get "desc" -}}</p>
+{{- end -}}
+
+{{- with $desc -}}
+  <p>{{ . }}</p>
+{{- end -}}
 
 {{- with .Get "cta" -}}
   <span class="meko-card-link">{{ . | safeHTML }}</span>

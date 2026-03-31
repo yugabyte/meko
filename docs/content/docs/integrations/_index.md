@@ -18,52 +18,40 @@ You follow the same basic pattern with all tools and frameworks:
 
 ## Connect to an IDE
 
-{{< card-group >}}
+{{< card-group variant="half" >}}
   {{< card
     href="integrations/connect-to-ide/#cursor-desktop"
     title="Cursor Desktop"
     logo="logos/integrations/cursor.svg"
-    desc=""
-    cta="Setup &rarr;"
   >}}
   {{< card
     href="integrations/connect-to-ide/#cursor-web"
     title="Cursor Web"
     logo="logos/integrations/cursor.svg"
-    desc=""
-    cta="Setup &rarr;"
   >}}
   {{< card
     href="integrations/connect-to-ide/#claude-desktop"
     title="Claude Desktop"
     logo="logos/integrations/claude.svg"
-    desc=""
-    cta="Setup &rarr;"
   >}}
   {{< card
     href="integrations/connect-to-ide/#claude-code"
     title="Claude Code"
     logo="logos/integrations/claude.svg"
-    desc=""
-    cta="Setup &rarr;"
   >}}
 {{< /card-group >}}
 
 ## Connect programmatically
 
-{{< card-group >}}
+{{< card-group variant="half" >}}
   {{< card
     href="integrations/connect-programatically/#langchain-and-langgraph"
     title="LangChain and LangGraph"
     logo="logos/integrations/langchain.svg"
-    desc=""
-    cta="Setup &rarr;"
   >}}
   {{< card
     href="integrations/connect-programatically/#python"
     title="Python"
     icon="fa-brands fa-python"
-    desc=""
-    cta="Setup &rarr;"
   >}}
 {{< /card-group >}}

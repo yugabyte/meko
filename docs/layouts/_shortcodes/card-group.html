@@ -1,7 +1,8 @@
-{{- $extra := "" -}}
-{{- if eq (.Get "variant") "square" -}}
-  {{- $extra = "meko-cards--square" -}}
+{{- $parentClass := "meko-cards" -}}
+{{- if eq (.Get "variant") "full" -}}
+  {{- $parentClass = print $parentClass " full" -}}
+{{- else if eq (.Get "variant") "half" -}}
+  {{- $parentClass = print $parentClass " half" -}}
 {{- end -}}
-<div class="meko-cards{{ if $extra }} {{ $extra }}{{ end }}{{ with .Get "class" }} {{ . }}{{ end }}">
-  {{- .Inner -}}
-</div>
+
+<div class="{{- $parentClass -}}">{{- .Inner -}}</div>
