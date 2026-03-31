@@ -185,6 +185,11 @@
     margin-left: 0;
     margin-right: auto;
 
+    @media (max-width: 1023px) {
+      max-width: 100%;
+      margin-right: 0;
+    }
+
     .meko-card {
       width: 100%;
       padding: 20px;
