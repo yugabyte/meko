@@ -1,34 +1,47 @@
-{{- $href     := .Get "href" -}}
-{{- $title    := .Get "title" -}}
-{{- $logo     := .Get "logo" -}}
-{{- $icon     := .Get "icon" -}}
-{{- $desc     := .Get "desc" -}}
-{{- $logoPath := strings.TrimPrefix "/" ($logo) -}}
+{{- $href      := .Get "href" -}}
+{{- $title     := .Get "title" -}}
+{{- $logo      := .Get "logo" -}}
+{{- $image     := .Get "image" -}}
+{{- $icon      := .Get "icon" -}}
+{{- $desc      := .Get "desc" -}}
+{{- $logoPath  := strings.TrimPrefix "/" ($logo) -}}
+{{- $imagePath := strings.TrimPrefix "/" ($image) -}}
+
+{{- $cardClass := "meko-card" -}}
+{{- if $image -}}
+  {{- $cardClass = print $cardClass " have-image" -}}
+{{- end -}}
 
 {{- if $href -}}
-  <a class="meko-card" href="{{ $href | relURL }}">
+  <a class="{{- $cardClass -}}" href="{{ $href | relURL }}">
 {{- else -}}
-  <div class="meko-card">
+  <div class="{{- $cardClass -}}">
 {{- end -}}
 
-{{- if $title -}}
-  <div class="meko-card-heading">
-  {{- if $logo -}}
-    <div class="meko-card-logo" aria-hidden="true"><img src="{{- $logoPath | relURL -}}" alt="{{- $title -}}" width="28" height="28" decoding="async" /></div>
-  {{- else if $icon -}}
-    <span class="meko-card-icon" aria-hidden="true"><i class="{{- $icon -}}"></i></span>
+<div class="meko-card-content">
+  {{- if $title -}}
+    <div class="meko-card-heading">
+    {{- if $logo -}}
+      <div class="meko-card-logo" aria-hidden="true"><img src="{{- $logoPath | relURL -}}" alt="{{- $title -}}" width="28" height="28" decoding="async" /></div>
+    {{- else if $icon -}}
+      <span class="meko-card-icon" aria-hidden="true"><i class="{{- $icon -}}"></i></span>
+    {{- end -}}
+
+    <h3>{{- $title -}}</h3>
+  </div>
   {{- end -}}
 
-  <h3>{{- $title -}}</h3>
+  {{- with $desc -}}
+    <p>{{ . }}</p>
+  {{- end -}}
+
+  {{- with .Get "cta" -}}
+    <span class="meko-card-link">{{ . | safeHTML }}</span>
+  {{- end -}}
 </div>
-{{- end -}}
 
-{{- with $desc -}}
-  <p>{{ . }}</p>
-{{- end -}}
-
-{{- with .Get "cta" -}}
-  <span class="meko-card-link">{{ . | safeHTML }}</span>
+{{- if $image -}}
+  <div class="meko-card-thumbnail"><img src="{{- $imagePath | relURL -}}" alt="{{- $title -}}"    /></div>
 {{- end -}}
 
 {{- if $href -}}

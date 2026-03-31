@@ -6,7 +6,7 @@
 
   .meko-card {
     display: flex;
-    flex-direction: column;
+    flex-flow: row wrap;
     align-items: flex-start;
     padding: 12px 16px;
     background: $background-color-primary;
@@ -50,71 +50,120 @@
       }
     }
 
-    .meko-card-link {
-      font-size: 14px;
-      font-weight: 600;
-      background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-      background-size: 200% 200%;
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      display: inline-block;
-      margin-top: auto;
+    .meko-card-content {
+      display: flex;
+      flex-flow: column;
+      align-items: flex-start;
+
+      .meko-card-link {
+        font-size: 14px;
+        font-weight: 600;
+        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+        background-size: 200% 200%;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        display: inline-block;
+        margin-top: auto;
+      }
+
+      .meko-card-heading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 0 8px;
+
+        &:only-child {
+          margin: auto 0;
+
+          @media (max-width: 599px) {
+            text-align: center;
+          }
+        }
+
+        .meko-card-logo {
+          line-height: 0;
+
+          img {
+            height: 1.5rem;
+            width: auto;
+            max-width: 2.25rem;
+            display: block;
+            object-fit: contain;
+          }
+        }
+
+        .meko-card-icon {
+          line-height: 1;
+          color: inherit;
+          justify-self: start;
+
+          i {
+            font-size: 1.35rem;
+            vertical-align: middle;
+            display: block;
+          }
+        }
+
+        h3 {
+          margin: 0;
+          font-size: 18px;
+          color: $white;
+          min-width: 0;
+          line-height: 1.25;
+        }
+
+        + .meko-card-link {
+          margin-top: 22px;
+        }
+      }
+
+      p {
+        font-size: 14px;
+        color: #b0b0c0;
+        margin: 0;
+
+        &:not(:last-child) {
+          margin: 0 0 12px;
+        }
+
+        &:only-child {
+          margin: auto 0;
+
+          @media (max-width: 599px) {
+            text-align: center;
+          }
+        }
+      }
     }
 
-    .meko-card-heading {
-      display: flex;
+    &:not(.have-image) {
+      .meko-card-content {
+        height: 100%;
+      }
+    }
+
+    &.have-image {
+      justify-content: space-between;
       align-items: center;
       gap: 10px;
-      margin: 0 0 8px;
+      flex-flow: row;
 
-      &:only-child {
-        margin: 0;
+      .meko-card-content {
+        width: 70%;
       }
 
-      .meko-card-logo {
-        line-height: 0;
+      .meko-card-thumbnail {
+        width: 30%;
+        text-align: center;
+      }
 
-        img {
-          height: 1.5rem;
-          width: auto;
-          max-width: 2.25rem;
-          display: block;
-          object-fit: contain;
+      @media (max-width: 599px) {
+        flex-flow: column;
+
+        .meko-card-content,
+        .meko-card-thumbnail {
+          width: 100%;
         }
-      }
-
-      .meko-card-icon {
-        line-height: 1;
-        color: inherit;
-        justify-self: start;
-
-        i {
-          font-size: 1.35rem;
-          vertical-align: middle;
-          display: block;
-        }
-      }
-
-      h3 {
-        margin: 0;
-        font-size: 18px;
-        color: $white;
-        min-width: 0;
-        line-height: 1.25;
-      }
-
-      + .meko-card-link {
-        margin-top: 22px;
-      }
-    }
-
-    p {
-      font-size: 14px;
-      color: #b0b0c0;
-      margin: 0;
-
-      &:not(:last-child) {
-        margin: 0 0 12px;
       }
     }
   }
@@ -130,8 +179,60 @@
   }
 
   &.full {
+    $full-card-gap: 16px;
+
+    max-width: 75%;
+    margin-left: 0;
+    margin-right: auto;
+
+    @media (max-width: 1023px) {
+      max-width: 100%;
+      margin-right: 0;
+    }
+
     .meko-card {
       width: 100%;
+      padding: 20px;
+
+      .meko-card-content {
+        p {
+          font-size: 16px;
+
+          &:not(:last-child) {
+            margin-bottom: $full-card-gap * 2;
+          }
+        }
+
+        .meko-card-link {
+          margin-top: 0;
+          padding: 10px 20px;
+          border-radius: 6px;
+          line-height: 1.2;
+          color: $white !important;
+          -webkit-text-fill-color: currentColor;
+          background: linear-gradient(90deg, #2d94ee 0%, #9b46d8 100%);
+          background-size: 100% 100%;
+          -webkit-background-clip: border-box;
+          background-clip: border-box;
+          transition: filter 200ms ease;
+
+          @media (prefers-reduced-motion: reduce) {
+            transition: none;
+          }
+
+          &:hover {
+            filter: brightness(1.08);
+          }
+        }
+      }
+
+      .meko-card-heading {
+        margin: 0 0 $full-card-gap;
+      }
+
+      &.have-image {
+        align-items: flex-start;
+      }
     }
   }
 
