@@ -5,7 +5,7 @@ description: MCP SERVER and MCP Tools description
 weight: 40
 ---
 
-The Meko Datapack MCP Server provides the primary tools for managing datapacks, agents, knowledge bases, and connecting to the postgreSQL compatible database YugabyteDB for executing database commands
+The Meko Datapack MCP Server provides the primary tools for managing datapacks, agents, knowledge bases, and connecting to the PostgreSQL compatible database YugabyteDB for executing database commands
 
 **Base URL:** `/mcp/v1`
 

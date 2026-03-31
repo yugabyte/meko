@@ -16,7 +16,7 @@ Get from zero to a working Meko integration in minutes.
 
 1. Sign in to your account.
 
-1. [Get connection details - URL? API token? Maybe a screen shot?]
+1. Copy your MCP server URL and API key.
 
 ## Connect your IDE
 
@@ -33,9 +33,9 @@ Add to your Cursor MCP settings (`.cursor/mcp.json`):
 {
   "mcpServers": {
     "meko": {
-      "url": "<datapack-url>",
+      "url": "<mcp-server-url>",
       "headers": {
-        "API_KEY": "<datapack-api-token>"
+        "API_KEY": "<mcp-server-api-key>"
       }
     }
   }
@@ -59,11 +59,11 @@ Add the MCP server configuration. The method depends on your Claude version.
           "args": [
             "-y",
             "mcp-remote",
-            "<datapack-url>",
+            "<mcp-server-url>",
             "--allow-http"
           ],
           "env": {
-            "API_KEY": "<datapack-api-token>"
+            "API_KEY": "<mcp-server-api-key>"
           }
         }
       },
@@ -78,7 +78,7 @@ Add the MCP server configuration. The method depends on your Claude version.
 Run the following command in your shell to add the Meko MCP server to Claude Code:
 
 ```sh
-claude mcp add --scope user --transport http meko <datapak-url> --header "API_KEY: <datapack-api-token>"
+claude mcp add --scope user --transport http meko <mcp-server-url> --header "API_KEY: <mcp-server-api-key>"
 ```
 
 {{% /tab %}}
@@ -87,8 +87,8 @@ Add the MCP server configuration to your Codex config.toml settings:
 
 ```toml
 [mcp_servers.meko]
-url = "<datapack-url>"
-bearer_token_env_var = "<datapack-api-token>"
+url = "<mcp-server-url>"
+bearer_token_env_var = "<mcp-server-api-key>"
 ```
 
 {{% /tab %}}
@@ -106,7 +106,7 @@ Meko uses _memory_ to enhance user experience through _personalization_.
 Ask this question of your AI IDE or development tool without Meko:
 
 ```text
-Propose a 5 day vacation for me.  Do not use Meko or any prior recollection of my preferences in generating your response.
+Propose a 5 day vacation for me. Do not use Meko or any prior recollection of my preferences in generating your response.
 ```
 
 Your AI either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
@@ -145,7 +145,9 @@ Here’s a 5-day plan tuned to what you’ve saved: tropical beach + budget
 
 ## Pick a base: Isla Holbox or Puerto Morelos area, Mexico (Yucatán)
 
-Why it fits: Warm water, palm-lined beaches, easy buses from Cancún airport, hostels / small hotels and street food keep costs down. (Swap-ins: Koh Lanta, Thailand or Nusa Penida + Sanur, Bali if you’re already closer to Asia.)
+Why it fits: Warm water, palm-lined beaches, easy buses from Cancún airport,
+hostels / small hotels and street food keep costs down. (Swap-ins: Koh Lanta,
+Thailand or Nusa Penida + Sanur, Bali if you’re already closer to Asia.)
 
 <...>
 
@@ -153,14 +155,17 @@ Why it fits: Warm water, palm-lined beaches, easy buses from Cancún airport, h
 
 ## Budget levers
 
-- Stay: hostel dorm or simple guesthouse slightly back from the sand (often half the price of beachfront).
+- Stay: hostel dorm or simple guesthouse slightly back from the sand (often 
+  half the price of beachfront).
 - Eat: markets, loncherías, set “menu del día” lunches; limit restaurant dinners.
 - Move: buses + shared shuttles; avoid private taxis except airport if needed.
-- Play: prioritize free swimming, walking, and one paid half-day trip instead of stacked tours.
+- Play: prioritize free swimming, walking, and one paid half-day trip instead
+  of stacked tours.
 
 ---
 
-## If you tell me your month, home airport region, and solo vs. group, I can narrow this to one place, rough daily spend, and a rain-day backup.
+## If you tell me your month, home airport region, and solo vs. group, I can
+## narrow this to one place, rough daily spend, and a rain-day backup.
 ```
 
 The agent retrieves your stored preferences and immediately proposes a vacation aligned to these preferences (a tropical beach vacation within budget). No follow-up questions were needed.
