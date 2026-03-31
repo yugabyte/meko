@@ -10,7 +10,11 @@ body {
 
   .container-fluid {
     padding: 0 24px;
-  }
+    @media (max-width: 767px) {
+      padding: 0 15px;
+    }
+
+    }
 
   .td-max-width-on-larger-screens {
     max-width: 100%;

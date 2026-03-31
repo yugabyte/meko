@@ -1,5 +1,5 @@
 ---
-title: Connect to IDE
+title: Connect to an IDE
 linkTitle: Connect to an IDE
 description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and other IDEs via MCP.
 weight: 3010
@@ -43,8 +43,6 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 >
 > This section is under development. Check back soon.
 
-Feel free to contribute here with info!
-
 ## Claude Desktop
 
 In Claude Desktop (whether used for Chat, Cowork, or Code):
@@ -62,9 +60,12 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
             "mcp-remote",
             "<datapack-url>",
             "--allow-http"
-          ]
+          ],
+          "env": {
+            "API_KEY": "<YOUR DATAPACK'S API KEY>"
+          }
         }
-      },
+      }
     }
     ```
 
@@ -136,5 +137,3 @@ Modify the config.toml file from Codex desktop
 * OpenAI chatgpt Desktop
 * Lovable
 * Replit
-
-Feel free to contribute here with info!

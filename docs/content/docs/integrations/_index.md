@@ -16,33 +16,34 @@ You follow the same basic pattern with all tools and frameworks:
 2. **Register the Meko MCP server** with your coding tool or with your application's MCP Client.
 3. **Start using Meko** through natural language prompts.
 
-<!-- TODO: create cards here that link to the different sections below for Cursor Desktop, Claude Desktop, Claude Code, LangGraph/LangChain, etc. -->
+## Connect to an IDE
 
-{{< card-group >}}
+{{< card-group variant="half" >}}
   {{< card
     href="integrations/connect-to-ide/#cursor-desktop"
     title="Cursor Desktop"
-    desc=""
-    cta="Setup &rarr;"
+    logo="logos/integrations/cursor.svg"
   >}}
   {{< card
     href="integrations/connect-to-ide/#cursor-web"
     title="Cursor Web"
-    desc=""
-    cta="Setup &rarr;"
+    logo="logos/integrations/cursor.svg"
   >}}
   {{< card
     href="integrations/connect-to-ide/#claude-desktop"
     title="Claude Desktop"
-    desc=""
-    cta="Setup &rarr;"
+    logo="logos/integrations/claude.svg"
   >}}
   {{< card
     href="integrations/connect-to-ide/#claude-code"
     title="Claude Code"
-    desc=""
-    cta="Setup &rarr;"
+    logo="logos/integrations/claude.svg"
   >}}
+{{< /card-group >}}
+
+## Connect programmatically
+
+{{< card-group variant="half" >}}
   {{< card
     href="integrations/connect-to-ide/#codex-desktop"
     title="Codex Desktop"
@@ -52,14 +53,11 @@ You follow the same basic pattern with all tools and frameworks:
   {{< card
     href="integrations/connect-programatically/#langchain-and-langgraph"
     title="LangChain and LangGraph"
-    desc=""
-    cta="Setup &rarr;"
+    logo="logos/integrations/langchain.svg"
   >}}
   {{< card
     href="integrations/connect-programatically/#python"
     title="Python"
-    desc=""
-    cta="Setup &rarr;"
+    icon="fa-brands fa-python"
   >}}
 {{< /card-group >}}
-
