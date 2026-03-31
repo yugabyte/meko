@@ -61,7 +61,10 @@ Add the MCP server configuration. The method depends on your Claude version.
             "mcp-remote",
             "<datapack-url>",
             "--allow-http"
-          ]
+          ],
+          "env": {
+            "API_KEY": "<datapack-api-token>"
+          }
         }
       },
     }
