@@ -44,6 +44,12 @@ You follow the same basic pattern with all tools and frameworks:
     cta="Setup &rarr;"
   >}}
   {{< card
+    href="integrations/connect-to-ide/#codex-desktop"
+    title="Codex Desktop"
+    desc=""
+    cta="Setup &rarr;"
+  >}}
+  {{< card
     href="integrations/connect-programatically/#langchain-and-langgraph"
     title="LangChain and LangGraph"
     desc=""

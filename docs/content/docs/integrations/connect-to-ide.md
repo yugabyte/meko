@@ -104,6 +104,29 @@ Run the setup command.
 
     ![Claude Code](/images/integrations-claudecode-response.png)
 
+
+## Open AI Codex Desktop
+
+Modify the config.toml file from Codex desktop
+
+1. In Codex Desktop, choose **Codex > Settings > MCP servers > Add server > Streamable HTTP **.
+
+  ```txt
+   1. Enter URL for the Meko MCP server
+   2. Enter a name such as 'MEKO_MCP_TOKEN' for the bearer_token_env variable
+   3. Set MEKO_MCP_TOKEN in your environment that launches Codex by executing a command in your terminal
+      launchctl setenv MEKO_MCP_TOKEN <MEKO_SERVER_API_KEY>
+   4. Fully quit Codex
+   5. Reopen Codex
+    ```
+
+1. Verify that Codex is now aware of the Meko MCP server token by entering the following at the command-line console:
+
+    ```txt
+    lanchctl getenv MEKO_MCP_TOKEN
+    ```
+
+
 ## Coming Soon
 
 * OpenAI Codex
