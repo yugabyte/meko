@@ -4,7 +4,7 @@ headerTitle: Meko Integrations
 linkTitle: Integrations
 headcontent: Connect Meko to your tools and frameworks
 description: Integrate Meko with AI coding tools, agent frameworks, and consumer AI applications
-body_class: docs-home
+body_class: full-width
 weight: 3000
 type: docs
 ---
@@ -57,4 +57,3 @@ You follow the same basic pattern with all tools and frameworks:
     cta="Setup &rarr;"
   >}}
 {{< /card-group >}}
-

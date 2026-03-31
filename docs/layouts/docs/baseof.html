@@ -8,7 +8,6 @@
   <head>
     {{ partial "head.html" . }}
   </head>
-  {{- $isDocsHome := strings.Contains (default "" (.Param "body_class")) "docs-home" -}}
   <body class="td-{{ .Kind }}{{ with .Page.Params.body_class }} {{ . }}{{ end }}">
     <header>
       {{ partial "navbar.html" . }}
@@ -28,12 +27,13 @@
             {{ partial "version-banner.html" . }}
             <div class="td-docs-topbar d-flex flex-wrap align-items-start justify-content-between gap-2 w-100 mb-3">
               {{ if not (.Param "ui.breadcrumb_disable") -}}
-              <div class="td-docs-topbar__crumbs flex-grow-1 min-w-0">
-                {{ partial "breadcrumb.html" . -}}
-              </div>
-              {{- end }}
-              <div class="td-docs-topbar__feedback flex-shrink-0 ms-auto text-end d-print-none{{ if not $isDocsHome }} d-xl-none{{ end }}">
-                {{ partial "docs-feedback-dropdown.html" . }}
+                <div class="td-docs-topbar__crumbs flex-grow-1 min-w-0">
+                  {{ partial "breadcrumb.html" . -}}
+                </div>
+              {{ end -}}
+              {{- $isFullWidth := strings.Contains (default "" (.Param "body_class")) "full-width" -}}
+              <div class="td-docs-topbar__feedback flex-shrink-0 ms-auto text-end d-print-none{{ if not $isFullWidth }} d-xl-none{{ end }}">
+                {{ partial "feedback-dropdown.html" . -}}
               </div>
             </div>
             {{ block "main" . }}{{ end }}

@@ -1,8 +1,8 @@
 ---
-title: All Types of alerts, tabs 
+title: All Types of alerts, tabs
 linkTitle: Page content examples
 weight: 10000
-body_class: docs-home
+body_class: full-width
 type: docs
 ---
 
@@ -28,7 +28,7 @@ type: docs
 
 
 
- 
+
 
 
 
