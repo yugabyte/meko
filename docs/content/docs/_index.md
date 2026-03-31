@@ -16,7 +16,7 @@ Meko is the persistent data layer that agents working together were always missi
   {{< card
     href="quick-start/"
     title="Quick Start"
-    desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    desc="Sign up for free, connect your IDE, and explore your Meko datapack in under 5 minutes."
     cta="Get started &rarr;"
     image="images/database.svg"
   >}}

@@ -179,8 +179,55 @@
   }
 
   &.full {
+    $full-card-gap: 16px;
+
+    max-width: 75%;
+    margin-left: 0;
+    margin-right: auto;
+
     .meko-card {
       width: 100%;
+      padding: 20px;
+
+      .meko-card-content {
+        p {
+          font-size: 16px;
+
+          &:not(:last-child) {
+            margin-bottom: $full-card-gap * 2;
+          }
+        }
+
+        .meko-card-link {
+          margin-top: 0;
+          padding: 10px 20px;
+          border-radius: 6px;
+          line-height: 1.2;
+          color: $white !important;
+          -webkit-text-fill-color: currentColor;
+          background: linear-gradient(90deg, #2d94ee 0%, #9b46d8 100%);
+          background-size: 100% 100%;
+          -webkit-background-clip: border-box;
+          background-clip: border-box;
+          transition: filter 200ms ease;
+
+          @media (prefers-reduced-motion: reduce) {
+            transition: none;
+          }
+
+          &:hover {
+            filter: brightness(1.08);
+          }
+        }
+      }
+
+      .meko-card-heading {
+        margin: 0 0 $full-card-gap;
+      }
+
+      &.have-image {
+        align-items: flex-start;
+      }
     }
   }
 
