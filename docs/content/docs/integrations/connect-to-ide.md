@@ -1,5 +1,5 @@
 ---
-title: Connect to IDE
+title: Connect to an IDE
 linkTitle: Connect to an IDE
 description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and other IDEs via MCP.
 weight: 3010
@@ -18,9 +18,9 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
     {
       "mcpServers": {
         "meko": {
-          "url": "<YOUR DATAPACK'S URL>",
+          "url": "<datapack-url>",
           "headers": {
-            "API_KEY": "<YOUR DATAPACK'S API KEY>"
+            "API_KEY": "<datapack-api-token>"
           }
         }
       }
@@ -43,8 +43,6 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 >
 > This section is under development. Check back soon.
 
-Feel free to contribute here with info!
-
 ## Claude Desktop
 
 In Claude Desktop (whether used for Chat, Cowork, or Code):
@@ -60,11 +58,14 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
           "args": [
             "-y",
             "mcp-remote",
-            "<YOUR DATAPACK'S URL>",
+            "<datapack-url>",
             "--allow-http"
-          ]
+          ],
+          "env": {
+            "API_KEY": "<datapack-api-token>"
+          }
         }
-      },
+      }
     }
     ```
 
@@ -88,10 +89,10 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 Run the setup command.
 
-1. Run this command in your terminal to add the Meko MCP server to Claude Code:
+1. Run this command in your shell to add the Meko MCP server to Claude Code:
 
     ```sh
-    > claude mcp add --scope user --transport http meko <your-datapak-url> --header "API_KEY: <YOUR DATAPACK'S API KEY>"
+    > claude mcp add --scope user --transport http meko <datapak-url> --header "API_KEY: <datapack-api-token>"
     ```
 
 1. Verify the connection by entering the following at the command-line console:
@@ -104,6 +105,29 @@ Run the setup command.
 
     ![Claude Code](/images/integrations-claudecode-response.png)
 
+
+## Open AI Codex Desktop
+
+Modify the config.toml file from Codex desktop
+
+1. In Codex Desktop, choose **Codex > Settings > MCP servers > Add server > Streamable HTTP **.
+
+  ```txt
+   1. Enter URL for the Meko MCP server
+   2. Enter a name such as 'MEKO_MCP_TOKEN' for the bearer_token_env variable
+   3. Set MEKO_MCP_TOKEN in your environment that launches Codex by executing a command in your terminal
+      launchctl setenv MEKO_MCP_TOKEN <MEKO_SERVER_API_KEY>
+   4. Fully quit Codex
+   5. Reopen Codex
+    ```
+
+1. Verify that Codex is now aware of the Meko MCP server token by entering the following at the command-line console:
+
+    ```txt
+    lanchctl getenv MEKO_MCP_TOKEN
+    ```
+
+
 ## Coming Soon
 
 * OpenAI Codex
@@ -113,5 +137,3 @@ Run the setup command.
 * OpenAI chatgpt Desktop
 * Lovable
 * Replit
-
-Feel free to contribute here with info!

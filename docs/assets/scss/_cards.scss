@@ -1,62 +1,147 @@
-// Landing page cards
 .meko-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1rem;
-  margin: 1.5rem 0;
-
-  @media (max-width: 768px) {
-    grid-template-columns: 1fr;
-  }
-}
-
-.meko-card {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 1.25rem 1.5rem;
-  background: $background-color-primary;
-  border-radius: 0.5rem;
-  text-decoration: none !important;
-  color: $white !important;
-  position: relative;
+  gap: 12px;
+  margin: 18px 0;
+  flex-flow: row wrap;
 
-  &::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    margin: 2px;
-    border-radius: inherit;
-    background: linear-gradient(to right, #2d94ee 0%, #9b46d8 100%);
-    box-shadow: 0 0 6px 0 a(255, 255, 255, 50%);
-    transition: all 400ms ease;
+  .meko-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 12px 16px;
+    background: $background-color-primary;
+    border-radius: 8px;
+    text-decoration: none !important;
+    color: $white !important;
+    position: relative;
+    width: calc((100% / 3) - 8px);
+
+    @media (min-width: 1200px) and (max-width: 1379px) {
+      width: calc(50% - 6px);
+    }
+
+    @media (max-width: 1023px) {
+      width: calc(50% - 6px);
+    }
+
+    @media (max-width: 599px) {
+      width: 100%;
+    }
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      margin: 2px;
+      border-radius: inherit;
+      background: linear-gradient(to right, #2d94ee 0%, #9b46d8 100%);
+      box-shadow: 0 0 6px 0 a(255, 255, 255, 50%);
+      transition: all 400ms ease;
+    }
+
+    &:hover::after {
+      margin: -3px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      &::after {
+        transition: none;
+      }
+    }
+
+    .meko-card-link {
+      font-size: 14px;
+      font-weight: 600;
+      background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+      background-size: 200% 200%;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+      margin-top: auto;
+    }
+
+    .meko-card-heading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 8px;
+
+      &:only-child {
+        margin: 0;
+      }
+
+      .meko-card-logo {
+        line-height: 0;
+
+        img {
+          height: 1.5rem;
+          width: auto;
+          max-width: 2.25rem;
+          display: block;
+          object-fit: contain;
+        }
+      }
+
+      .meko-card-icon {
+        line-height: 1;
+        color: inherit;
+        justify-self: start;
+
+        i {
+          font-size: 1.35rem;
+          vertical-align: middle;
+          display: block;
+        }
+      }
+
+      h3 {
+        margin: 0;
+        font-size: 18px;
+        color: $white;
+        min-width: 0;
+        line-height: 1.25;
+      }
+
+      + .meko-card-link {
+        margin-top: 22px;
+      }
+    }
+
+    p {
+      font-size: 14px;
+      color: #b0b0c0;
+      margin: 0;
+
+      &:not(:last-child) {
+        margin: 0 0 12px;
+      }
+    }
   }
 
-  &:hover::after {
-    margin: -3px;
+  &:not(.full, .half) {
+    .meko-card {
+      &:nth-child(1):nth-last-child(2),
+      &:nth-child(2):nth-last-child(1),
+      &:only-child {
+        width: calc(50% - 6px);
+      }
+    }
   }
 
-  h3 {
-    margin: 0 0 0.5rem;
-    font-size: 1.1rem;
-    color: $white;
+  &.full {
+    .meko-card {
+      width: 100%;
+    }
   }
 
-  p {
-    margin: 0 0 0.75rem;
-    font-size: 0.9rem;
-    color: #b0b0c0;
-    flex-grow: 1;
-  }
+  &.half {
+    .meko-card {
+      width: calc(50% - 6px);
 
-  .meko-card-link {
-    font-size: 0.85rem;
-    font-weight: 600;
-    background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-    background-size: 200% 200%;
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    display: inline-block;
+      @media (max-width: 599px) {
+        width: 100%;
+      }
+    }
   }
 }

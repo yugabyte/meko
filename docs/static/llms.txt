@@ -1,0 +1,45 @@
+# Meko
+
+> Meko is an open-source, agent-native data layer that gives AI agents persistent memory, knowledge bases, and direct database access — all unified on a distributed PostgreSQL backend (YugabyteDB).  Meko enables multi-agent systems, as wells as multi-person teams, to collaborate.
+
+Meko exposes everything through the Model Context Protocol (MCP), making it compatible with any MCP-enabled IDE or framework. Agents connect to a **datapack** — an isolated unit that bundles a database, MCP server, and credentials — to store memories and store knowledge (i.e. store document chunks), index documents for RAG, run SQL queries, and capture observability traces across sessions.  
+
+## Getting Started
+
+- [Quick Start](/docs/quick-start/): Sign up for Meko, connect your IDE, create your first memory and knowledge base, and explore the Meko portal
+
+## Core Concepts
+
+- [Datapacks](/docs/guides/core-concepts/datapacks/): Isolation units that bundle a YugabyteDB database, MCP server, and credentials into a single deployable unit
+- [Memory](/docs/guides/core-concepts/memory/): Persistent agent memory using semantic search (pgvector) and graph relationships (Apache AGE via mem0)
+- [Knowledge Bases](/docs/guides/core-concepts/knowledgebase/): RAG pipelines for chunking, embedding, and indexing documents using pg_dist_rag
+- [Graph RAG](/docs/guides/core-concepts/graph-rag/): Entity-relationship queries over documents using Apache AGE
+- [OLTP Data](/docs/guides/core-concepts/oltp-data/): Direct PostgreSQL-compatible access to structured data via YugabyteDB YSQL
+- [Traces](/docs/guides/core-concepts/traces/): Full observability of agent operations, conversation history, and chain-of-thought reasoning
+- [Connectors](/docs/guides/core-concepts/connectors/): Data source connectors for ingesting content into knowledge bases
+
+## Guides
+
+- [How Meko Fits](/docs/guides/how-meko-fits/): Architecture overview, deployment models, and where Meko sits in an agentic stack
+- [Working with Memory](/docs/guides/working-with-memory/): Add, search, update, manage, and compress agent memories
+- [Working with Knowledge Bases](/docs/guides/working-with-knowledge-bases/): Build and query document collections for retrieval-augmented generation
+- [Database Access](/docs/guides/database-access/): Connect directly to a datapack's PostgreSQL database for custom queries
+- [Observability](/docs/guides/observability/): View traces, conversation history, and performance metrics
+- [Multi-Agent Patterns](/docs/guides/multi-agent-patterns/): Share or isolate datapacks across agents for team and single-user deployments
+
+## Integrations
+
+- [Connect via IDE](/docs/integrations/connect-to-ide/): Configure Meko in Cursor Desktop, Cursor Web, Claude Desktop, Claude Code, and more
+- [Connect Programmatically](/docs/integrations/connect-programatically/): Use Meko with LangChain, LangGraph, and the Python SDK
+
+## Examples
+
+- [Meko in Your IDE](/docs/examples/meko-in-your-ide/): Store personal preferences, portable coding standards, team policies, and project-specific context
+- [Build Software with Meko](/docs/examples/build-software-with-meko/): Persist conversation history, reasoning traces, and resumable task state in agentic applications
+
+## Reference
+
+- [Install the CLI](/docs/reference/install-cli/): Install the Meko CLI binary on Linux and macOS
+- [CLI Overview](/docs/reference/cli-overview/): Authentication, global flags, and logging options
+- [CLI: Datapacks](/docs/reference/cli-commands/datapacks/): Commands for creating and managing datapacks
+- [CLI: Knowledge Bases](/docs/reference/cli-commands/knowledge-bases/): Commands for building and querying knowledge bases

@@ -10,9 +10,20 @@ type: docs
 layout: list
 ---
 
-Meko is an agent-native data layer for multi-agent systems that work and learn together.
-
 Meko is the persistent data layer that agents working together were always missing — letting them remember, share knowledge, and learn from each other across sessions.  Observe agentic conversations and conversation history, LLMs' chains of thought, traces of agents processing memory and knowledge to build rich context, all the way down to the API executions that deliver results back to the LLM.
+
+&nbsp;
+{{< card-group variant="square" >}}
+  {{< card
+    href="quick-start/"
+    title="Quick Start"
+    desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    cta="Get started &rarr;"
+  >}}
+{{< /card-group >}}
+
+<!--
+Meko is an agent-native data layer for agents that work and learn together.
 
 Meko provides:
 
@@ -23,26 +34,9 @@ Meko provides:
 
 Meko is fully open-source and integrates easily with any agentic framework through MCP servers. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
 
-<!--Meko is the agent-native data layer designed to unify agent knowledge, memory, and conversations, eliminating the impedance mismatch of traditional relational and vector databases.
+Meko is the agent-native data layer designed to unify agent knowledge, memory, and conversations, eliminating the impedance mismatch of traditional relational and vector databases.
 
 *Memory, knowledge, and SQL for every AI agent with a single MCP endpoint.*-->
-
-## Get started
-
-{{< card-group >}}
-  {{< card
-    href="quick-start/"
-    title="Quick Start"
-    desc="Sign up, connect, and see Meko in action in under 5 minutes."
-    cta="Get started &rarr;"
-  >}}
-  {{< card
-    href="examples/"
-    title="Examples"
-    desc="See real-world scenarios: coding preferences, knowledge bases, and resumable agents."
-    cta="View examples &rarr;"
-  >}}
-{{< /card-group >}}
 
 
 <!--

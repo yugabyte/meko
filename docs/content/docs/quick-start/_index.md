@@ -20,9 +20,9 @@ Get from zero to a working Meko integration in minutes.
 
 ## Connect your IDE
 
-Each Meko account has one or more Datapacks, which is a container for memory and knowledge. A default Datapack is created for you when you sign up.
+Each Meko account has one or more datapacks, which is a container for memory and knowledge. A default datapack is created for you when you sign up.
 
-To start using your Datapack, register the MCP Server associated with this Datapack with your AI chatbot-enabled IDE or development tool.
+To start using your datapack, register the MCP Server associated with this datapack with your AI chatbot-enabled IDE or development tool.
 
 {{< tabpane text=true right=false >}}
 {{% tab header="Cursor Desktop" lang="cursor" %}}
@@ -32,9 +32,11 @@ Add to your Cursor MCP settings (`.cursor/mcp.json`):
 ```json
 {
   "mcpServers": {
-    "my-datapack": {
-      "command": "meko",
-      "args": ["mcp", "serve", "--name", "my-datapack"]
+    "meko": {
+      "url": "<datapack-url>",
+      "headers": {
+        "API_KEY": "<datapack-api-token>"
+      }
     }
   }
 }
@@ -52,43 +54,64 @@ Add the MCP server configuration. The method depends on your Claude version.
     ```json
     {
       "mcpServers": {
-        "my-datapack": {
-          "command": "meko",
-          "args": ["mcp", "serve", "--name", "my-datapack"]
+        "meko": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "mcp-remote",
+            "<datapack-url>",
+            "--allow-http"
+          ],
+          "env": {
+            "API_KEY": "<datapack-api-token>"
+          }
         }
-      }
+      },
     }
     ```
 
 1. Restart Claude.
 
 {{% /tab %}}
-{{% tab header="OpenAI Codex" lang="openai" %}}
-Add the MCP server configuration to your Codex settings:
+{{% tab header="Claude Code" lang="claudecode" %}}
 
-```json
-{
-  "mcpServers": {
-    "my-datapack": {
-      "command": "meko",
-      "args": ["mcp", "serve", "--name", "my-datapack"]
-    }
-  }
-}
+Run the following command in your shell to add the Meko MCP server to Claude Code:
+
+```sh
+> claude mcp add --scope user --transport http meko <datapak-url> --header "API_KEY: <datapack-api-token>"
 ```
 
 {{% /tab %}}
-{{< /tabpane >}}
+{{% tab header="OpenAI Codex" lang="openai" %}}
+Add the MCP server configuration to your Codex config.toml settings:
 
-More integrations are available, and others are coming soon. See [Integrations](../integrations/).
+```toml
+[mcp_servers.meko]
+url = "<datapack-url>"
+bearer_token_env_var = "<datapack-api-token>"
+```
+
+{{% /tab %}}
+{{% tab header="More" lang="more" %}}
+More integrations are available, and others are coming soon.
+
+See [Integrations](../integrations/).
+{{% /tab %}}
+{{< /tabpane >}}
 
 ## Explore
 
 Meko uses _memory_ to enhance user experience through _personalization_.
 
-Without Meko, when asking a question like `Propose a 5 day vacation for me.` your agent either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
+Ask this question of your AI IDE or development tool without Meko:
 
-With Meko connected, however, you can for example tell the agent your vacation preferences, and it will remember them.
+```text
+    Propose a 5 day vacation for me.  Do not use Meko or any prior recollection of my preferences in generating your response.
+```
+
+Your AI either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
+
+With Meko, however, your AI can remember your vacation preferences, and use them to generate better responses.
 
 ### Create a memory
 
