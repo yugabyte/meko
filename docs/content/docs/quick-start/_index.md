@@ -100,9 +100,15 @@ See [Integrations](../integrations/).
 
 Meko uses _memory_ to enhance user experience through _personalization_.
 
-Without Meko, when asking a question like `Propose a 5 day vacation for me.` your agent either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
+Ask this question of your AI IDE or development tool without Meko:
 
-With Meko connected, however, you can for example tell the agent your vacation preferences, and it will remember them.
+```text
+    Propose a 5 day vacation for me.  Do not use Meko or any prior recollection of my preferences in generating your response.
+```
+
+Your AI either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
+
+With Meko, however, your AI can remember your vacation preferences, and use them to generate better responses.
 
 ### Create a memory
 
