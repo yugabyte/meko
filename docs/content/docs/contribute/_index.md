@@ -2,6 +2,7 @@
 title: Docs style guide
 linkTitle: Docs style guide
 weight: 10000
+body_class: full-width
 type: docs
 ---
 

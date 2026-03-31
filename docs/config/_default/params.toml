@@ -2,6 +2,10 @@ author = "Team meko"
 copyright = 'meko. All Rights Reserved'
 version = false
 
+# Docsy page-meta-links: Feedback dropdown + “Edit this doc page” on GitHub
+github_repo = "https://github.com/yugabyte/meko"
+github_subdir = "docs"
+
 [ui]
   navbar_logo = true
   sidebar_menu_compact = true

@@ -1,5 +1,6 @@
 baseURL = 'https://docs.mekodata.ai/'
 languageCode = 'en-us'
+title = 'Meko Docs'
 resourceDir = 'docs/resources'
 
 # Publish docs pages/sections at site root (no /docs prefix).
