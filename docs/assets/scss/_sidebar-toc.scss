@@ -39,17 +39,17 @@
     }
 
     &:focus-visible {
-      box-shadow: 0 0 0 2px #2D94EE73;
+      box-shadow: 0 0 0 2px #2d94ee73;
     }
   }
 
   .dropdown-menu {
     background-color: $dark;
-    border-color: #FFFFFF1F;
+    border-color: #ffffff1f;
   }
 
   .dropdown-item {
-    color: #FFFFFFD9;
+    color: #ffffffd9;
 
     &:hover,
     &:focus {

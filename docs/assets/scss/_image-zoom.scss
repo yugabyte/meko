@@ -67,11 +67,16 @@ body {
         }
 
         &::before {
-          content: 'X';
+          content: '\f00d';
           font-style: normal;
-          font-family: cursive;
+          font-family: $td-font-awesome-font-name;
           font-size: 18px;
           color: #000;
+        }
+
+        @media (max-width: 599px) {
+          width: 25px;
+          height: 25px;
         }
       }
 

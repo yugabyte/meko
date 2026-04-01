@@ -19,7 +19,7 @@ You follow the same basic pattern with all tools and frameworks:
 
 ## Connect to an IDE
 
-{{< card-group variant="half" >}}
+{{< card-group variant="third" >}}
   {{< card
     href="integrations/connect-to-ide/#cursor-desktop"
     title="Cursor Desktop"
@@ -44,7 +44,7 @@ You follow the same basic pattern with all tools and frameworks:
 
 ## Connect programmatically
 
-{{< card-group variant="half" >}}
+{{< card-group variant="third" >}}
   {{< card
     href="integrations/connect-to-ide/#codex-desktop"
     title="Codex Desktop"

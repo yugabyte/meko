@@ -8,17 +8,13 @@ weight: 5000
 type: docs
 ---
 
-{{< card-group >}}
+{{< card-group variant="third">}}
   {{< card
     href="reference/meko-cli"
     title="meko CLI"
-    desc=""
-    cta="Reference &rarr;"
   >}}
   {{< card
     href="reference/mcp-server"
     title="Meko MCP server"
-    desc=""
-    cta="Reference &rarr;"
   >}}
 {{< /card-group >}}
