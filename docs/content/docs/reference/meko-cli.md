@@ -18,25 +18,32 @@ Pre-built binaries are published as GitHub Releases for every tagged version. Vi
 | Linux x86_64 | `meko_<VERSION>_linux_amd64.tar.gz` |
 | Linux ARM64 | `meko_<VERSION>_linux_arm64.tar.gz` |
 
-### Example install
+### Example install on macOS
 
-To install on macOS (Apple Silicon):
+**Step 1 Download the meko binary tarball**  
+To install on macOS (Apple Silicon), dowload the compiled meko binary tarball file that's compatible with your machine from the [Releases](https://github.com/yugabyte/meko/releases/latest) website.
 
+**Step 2 : Unzip the file** 
+Double clicking the tar file on a macOS, from the Download folder.
+
+**Step 3 : Move it to /usr/local/bin**
 ```bash
-curl -Lo meko.tar.gz \
-  https://github.com/yugabyte/meko/releases/latest/download/meko_0.1.0_darwin_arm64.tar.gz
-tar xzf meko.tar.gz
-chmod +x meko
 sudo mv meko /usr/local/bin/
 ```
+This will require you to enter the Mac login password.
 
-### Verify
+**Step 4 : Ensure it is Executable**
+```bash
+sudo chmod +x /usr/local/bin/meko
+```
+
+**Step 5 : Verify the installation**
 
 ```bash
 meko --version
 ```
 
-## Basics
+## Basics of Meko CLI
 
 ### Login
 
@@ -56,15 +63,6 @@ Alternatively, pass them as flags:
 meko login --email user@example.com --password secret
 ```
 
-To authenticate against a different API server:
-
-```bash
-meko login --api-server https://my-server.example.com
-```
-
-The default API server is `https://mekodev.com`.
-
-Credentials are stored locally in `~/var/meko/credentials.json`.
 
 ### Logout
 
@@ -245,3 +243,13 @@ cd cli_app
 go mod download
 go build -o meko .
 ```
+
+To authenticate against a different API server that you may build from the GitHub repository, you can login using the following command:
+
+```bash
+meko login --api-server https://my-server.example.com
+```
+
+The default API server is `https://mekodev.com`.
+
+Credentials are stored locally in `~/var/meko/credentials.json`.
