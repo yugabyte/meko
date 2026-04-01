@@ -123,6 +123,30 @@ meko datapack create --name my-datapack
 
 The request typically takes a few seconds.
 
+You should see an output similar to the following:
+
+```output
+ ✅ Datapack Created
+
+  Name             my-datapack
+  Datapack ID      e02a7107-c79e-451d-b360-9cd1e13f175d
+  Agent ID         18311fce-36c5-40fe-bd45-67f5913b0b52
+
+  ────────────────────────────────────────────────────────
+  MCP Server
+  ────────────────────────────────────────────────────────
+  URL              https://d81bff68-2659-4d9e-a3a3-26ce6e0fb4de.mcp.mekodev.com/mcp
+  API Key          318ce1c589d08edb11e24b0a781fe675
+
+  ────────────────────────────────────────────────────────
+  Database Access
+  ────────────────────────────────────────────────────────
+  User             db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack
+  Password         40ab21c8637c088862f70fa4503ce7ff
+
+  postgresql://db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack1:40ab21c8637c088862f70fa4503ce7ff@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack
+```
+
 For machine-readable output, use the `--json` flag:
 
 ```bash
@@ -138,13 +162,13 @@ Example JSON output:
   "name": "my-datapack",
   "mcp_user_name": "mcp_h66hkj87-4567-6y7u-b7b7-12gg5y7h8jj",
   "mcp_server": {
-    "url": "https://mekodev.com/<account-id>/mcp",
+    "url": "https://d81bff68-2659-4d9e-a3a3-26ce6e0fb4de.mcp.mekodev.com/mcp",
     "api_key": "318ce1c589d08edb11e24b0a781fe675"
   },
   "db_access": {
-    "user_name": "db_my-datapack",
-    "password": "d28a0d1498c1ab9692184dd9c9cd1a79",
-    "conn_str": "postgresql://db_my-datapack:d28a0d14...@host:5433/account-id_my-datapack"
+    "user_name": "db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack",
+    "password": "40ab21c8637c088862f70fa4503ce7ff",
+    "conn_str": "postgresql://db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack1:40ab21c8637c088862f70fa4503ce7ff@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack"
   }
 }
 ```
