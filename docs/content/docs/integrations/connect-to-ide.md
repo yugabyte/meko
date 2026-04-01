@@ -129,7 +129,6 @@ Modify the config.toml file from Codex desktop
 
 ## Coming Soon
 
-* OpenAI Codex
 * VS Code / GitHub CoPilot
 * Opencode
 * Google Anti-gravity
