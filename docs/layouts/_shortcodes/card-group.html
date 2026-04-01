@@ -1,8 +1,6 @@
 {{- $parentClass := "meko-cards" -}}
-{{- if eq (.Get "variant") "full" -}}
-  {{- $parentClass = print $parentClass " full" -}}
-{{- else if eq (.Get "variant") "half" -}}
-  {{- $parentClass = print $parentClass " half" -}}
+{{- with .Get "variant" -}}
+	{{- $parentClass = printf "%s %s" $parentClass . -}}
 {{- end -}}
 
 <div class="{{- $parentClass -}}">{{- .Inner -}}</div>
