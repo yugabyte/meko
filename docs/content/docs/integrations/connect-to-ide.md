@@ -112,25 +112,23 @@ Modify the config.toml file from Codex desktop
 
 1. In Codex Desktop, choose **Codex > Settings > MCP servers > Add server > Streamable HTTP **.
 
-  ```txt
-   1. Enter URL for the Meko MCP server
-   2. Enter a name such as 'MEKO_MCP_TOKEN' for the bearer_token_env variable
-   3. Set MEKO_MCP_TOKEN in your environment that launches Codex by executing a command in your terminal
-      launchctl setenv MEKO_MCP_TOKEN <MEKO_SERVER_API_KEY>
-   4. Fully quit Codex
-   5. Reopen Codex
+   1. Enter a name for the meko MCP server
+   2. Enter URL for the Meko MCP server
+   3. Enter a name such as 'MEKO_MCP_TOKEN' for the bearer_token_env variable
+   4. Set MEKO_MCP_TOKEN in your environment that launches Codex by executing a command in your terminal
+    ```txt
+    launchctl setenv MEKO_MCP_TOKEN <MEKO_SERVER_API_KEY>
     ```
-
-1. Verify that Codex is now aware of the Meko MCP server token by entering the following at the command-line console:
-
+   5. Verify that you did set the MEKO_MCP_TOKEN correctly with your Meko MCP Server API Key
     ```txt
     lanchctl getenv MEKO_MCP_TOKEN
     ```
+   5. Fully quit Codex
+   6. Reopen Codex
 
 
 ## Coming Soon
 
-* OpenAI Codex
 * VS Code / GitHub CoPilot
 * Opencode
 * Google Anti-gravity
