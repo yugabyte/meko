@@ -32,6 +32,10 @@ To install Meko CLI on macOS (Apple Silicon), do the following:
     sudo mv meko /usr/local/bin/ && sudo chmod +x /usr/local/bin/meko
     ```
 
+    > [!TIP]
+    >
+    > Ensure /usr/local/bin/ is in your PATH to run `meko` from anywhere.
+
 1. Verify the installation:
 
     ```bash
@@ -55,8 +59,6 @@ To install Meko CLI on macOS (Apple Silicon), do the following:
 ### Login
 
 You must sign in to the Meko platform before you can use the CLI.
-
-To sign in, navigate to the directory on your terminal where you downloaded the CLI binary and run the following command:
 
 ```bash
 meko login
@@ -179,7 +181,10 @@ meko datapack status --name my-datapack --json
 
 Delete a specific datapack.
 
-**Note** that this action permanently destroys the datapack and its underlying database.
+> [!WARNING]
+>
+> This action permanently destroys the datapack and its underlying database.
+>
 
 ```bash
 meko datapack delete --name my-datapack
