@@ -40,15 +40,15 @@ You follow the same basic pattern with all tools and frameworks:
     title="Claude Code"
     logo="logos/integrations/claude.svg"
   >}}
+  {{< card
+    href="integrations/connect-to-ide/#codex-desktop"
+    title="Codex Desktop"
+  >}}
 {{< /card-group >}}
 
 ## Connect programmatically
 
 {{< card-group variant="half" >}}
-  {{< card
-    href="integrations/connect-to-ide/#codex-desktop"
-    title="Codex Desktop"
-  >}}
   {{< card
     href="integrations/connect-programatically/#langchain-and-langgraph"
     title="LangChain and LangGraph"
