@@ -11,8 +11,6 @@ Meko stores conversation history and agent reasoning traces, enabling features l
 
 *Retain agent reasoning traces across sessions so you have a detailed log of how your agent achieved its outcomes.*
 
-**Detailed Example**
-
 Without Meko, agent reasoning is lost when a session ends. Try this:
 
 1. Ask your agent:
