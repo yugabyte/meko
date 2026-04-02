@@ -1,9 +1,10 @@
 ---
 title: Meko in your development process
-linkTitle: In your development process
+linkTitle: IDEs
 description: Store personal preferences, coding standards, and team policies across sessions
 weight: 2010
 ---
+
 Meko gives your IDE's AI assistant persistent memory that follows you across sessions and projects. This example shows how to use Meko for storing and recalling development preferences.
 
 ## Use cases

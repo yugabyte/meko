@@ -7,10 +7,32 @@ body_class: full-width
 type: docs
 ---
 
-These guides walk you through key concepts and workflows for Meko.
+Use the following guides to learn key concepts and workflows for Meko.
 
-- **[Working with Memory](working-with-memory/)** --- Add, search, and manage agent memories
-- **[Working with Knowledge Bases](working-with-knowledge-bases/)** --- Build and query knowledge bases from your documents
-- **[Database Access](database-access/)** --- Connect directly to your datapack's PostgreSQL database
-- **[Observability](observability/)** --- Traces, conversation history, and chain-of-thought visibility
-- **[Multi-Agent Patterns](multi-agent-patterns/)** --- Shared vs. private datapacks for multi-agent systems
+{{< card-group >}}
+  {{< card
+    href="guides/working-with-memory/"
+    title="Working with memory"
+    desc="Add, search, and manage agent memories."
+  >}}
+  {{< card
+    href="guides/working-with-knowledge-bases/"
+    title="Working with knowledge bases"
+    desc="Build and query knowledge bases from your documents."
+  >}}
+  {{< card
+    href="guides/database-access/"
+    title="Access your database"
+    desc="Connect directly to your datapack's PostgreSQL database."
+  >}}
+  {{< card
+    href="guides/observability/"
+    title="Observability"
+    desc="Traces, conversation history, and chain-of-thought visibility."
+  >}}
+  {{< card
+    href="guides/multi-agent-patterns/"
+    title="Multi-agent patterns"
+    desc="Shared vs. private datapacks for multi-agent systems."
+  >}}
+{{< /card-group >}}
