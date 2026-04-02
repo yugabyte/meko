@@ -34,11 +34,14 @@ import (
 )
 
 const (
-	testDBHost     = "yb-tserver.yb-system.svc.cluster.local"
-	testDBPort     = int32(5433)
-	testDBUser     = "yugabyte"
-	testDBPassword = "testpass"
-	testDBName     = "testdb"
+	testDBHost            = "yb-tserver.yb-system.svc.cluster.local"
+	testDBPort            = int32(5433)
+	testDBUser            = "yugabyte"
+	testDBPassword        = "testpass"
+	testDBName            = "testdb"
+	testLangfuseSecretKey = "sk-lf-test-secret"
+	testLangfusePublicKey = "pk-lf-test-public"
+	testLangfuseBaseURL   = "http://langfuse:3000"
 )
 
 func newAccount(name, accountID string, tier saasv1.AccountTier) *saasv1.MekoUserAccount {
@@ -52,7 +55,6 @@ func newAccount(name, accountID string, tier saasv1.AccountTier) *saasv1.MekoUse
 			AccountTier:        tier,
 			MCPImage:           "mcp:" + string(tier),
 			RAGImage:           "rag:" + string(tier),
-			LangfuseImage:      "langfuse:" + string(tier),
 			YugabyteDBHost:     testDBHost,
 			YugabyteDBPort:     testDBPort,
 			YugabyteDBUser:     testDBUser,
@@ -60,6 +62,9 @@ func newAccount(name, accountID string, tier saasv1.AccountTier) *saasv1.MekoUse
 			YugabyteDBName:     testDBName,
 			MCPReplicas:        1,
 			RAGReplicas:        1,
+			LangfuseSecretKey:  testLangfuseSecretKey,
+			LangfusePublicKey:  testLangfusePublicKey,
+			LangfuseBaseURL:    testLangfuseBaseURL,
 		},
 	}
 }
@@ -142,7 +147,7 @@ var _ = Describe("MekoUserAccount Controller", func() {
 			Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: TenantNamespace(accountID)}, ns)).To(Succeed())
 		})
 
-		It("should create 3 Deployments with correct images and env vars", func() {
+		It("should create 2 Deployments with correct images and env vars", func() {
 			reconcileOnce(testCtx, reconciler, nn)
 			reconcileOnce(testCtx, reconciler, nn)
 
@@ -154,7 +159,6 @@ var _ = Describe("MekoUserAccount Controller", func() {
 			}{
 				{"mcp-server", "mcp:free"},
 				{"rag-worker", "rag:free"},
-				{"langfuse", "langfuse:free"},
 			} {
 				dep := &appsv1.Deployment{}
 				Expect(k8sClient.Get(testCtx, types.NamespacedName{
@@ -175,37 +179,31 @@ var _ = Describe("MekoUserAccount Controller", func() {
 			}
 		})
 
-		It("should create 2 ClusterIP Services (mcp-server, langfuse)", func() {
+		It("should create 1 ClusterIP Service (mcp-server)", func() {
 			reconcileOnce(testCtx, reconciler, nn)
 			reconcileOnce(testCtx, reconciler, nn)
 
 			tenantNS := TenantNamespace(accountID)
 
-			for _, tc := range []struct {
-				name string
-				port int32
-			}{
-				{"mcp-server", 8000},
-				{"langfuse", 3000},
-			} {
-				svc := &corev1.Service{}
-				Expect(k8sClient.Get(testCtx, types.NamespacedName{
-					Name: tc.name, Namespace: tenantNS,
-				}, svc)).To(Succeed(), "service %s should exist", tc.name)
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(testCtx, types.NamespacedName{
+				Name: "mcp-server", Namespace: tenantNS,
+			}, svc)).To(Succeed())
 
-				Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
-				Expect(svc.Spec.Ports).To(HaveLen(1))
-				Expect(svc.Spec.Ports[0].Port).To(Equal(tc.port))
-				Expect(svc.Spec.Selector).To(HaveKeyWithValue(LabelApp, tc.name))
-				Expect(svc.Spec.Selector).To(HaveKeyWithValue(LabelAccountID, accountID))
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+			Expect(svc.Spec.Ports).To(HaveLen(1))
+			Expect(svc.Spec.Ports[0].Port).To(Equal(int32(8000)))
+			Expect(svc.Spec.Selector).To(HaveKeyWithValue(LabelApp, "mcp-server"))
+			Expect(svc.Spec.Selector).To(HaveKeyWithValue(LabelAccountID, accountID))
+
+			// rag-worker and langfuse should NOT have services.
+			for _, name := range []string{"rag-worker", "langfuse"} {
+				noSvc := &corev1.Service{}
+				err := k8sClient.Get(testCtx, types.NamespacedName{
+					Name: name, Namespace: tenantNS,
+				}, noSvc)
+				Expect(apierrors.IsNotFound(err)).To(BeTrue(), "%s should have no service", name)
 			}
-
-			// rag-worker should NOT have a service.
-			ragSvc := &corev1.Service{}
-			err := k8sClient.Get(testCtx, types.NamespacedName{
-				Name: "rag-worker", Namespace: tenantNS,
-			}, ragSvc)
-			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "rag-worker should have no service")
 		})
 
 		It("should set status to Active with namespace name and MCP endpoint", func() {
@@ -348,6 +346,8 @@ var _ = Describe("MekoUserAccount Controller", func() {
 			Expect(cm.Data).To(HaveKeyWithValue("YB_LOG_LEVEL", "DEBUG"))
 			Expect(cm.Data).To(HaveKeyWithValue("YB_ALLOWED_HOSTS", "all"))
 			Expect(cm.Data).To(HaveKeyWithValue("YB_MCP_STATELESS_HTTP", "true"))
+			Expect(cm.Data).To(HaveKeyWithValue("LANGFUSE_BASE_URL", testLangfuseBaseURL))
+			Expect(cm.Data).To(HaveKeyWithValue("LANGFUSE_HOST", testLangfuseBaseURL))
 			Expect(cm.Labels).To(HaveKeyWithValue(LabelApp, "mcp-server"))
 		})
 
@@ -369,6 +369,8 @@ var _ = Describe("MekoUserAccount Controller", func() {
 			Expect(string(secret.Data["YUGABYTEDB_URL"])).To(Equal(expectedLibpq))
 			Expect(secret.Data).To(HaveKey("OPENAI_API_KEY"))
 			Expect(string(secret.Data["OPENAI_API_KEY"])).To(Equal("sk-test-key"))
+			Expect(string(secret.Data["LANGFUSE_SECRET_KEY"])).To(Equal(testLangfuseSecretKey))
+			Expect(string(secret.Data["LANGFUSE_PUBLIC_KEY"])).To(Equal(testLangfusePublicKey))
 		})
 
 		It("should create the mcp-server Deployment with full production spec", func() {
@@ -421,6 +423,8 @@ var _ = Describe("MekoUserAccount Controller", func() {
 			Expect(envNames).To(HaveKey("HOST"))
 			Expect(envNames).To(HaveKey("PASSWORD"))
 			Expect(envNames).To(HaveKey("YUGABYTEDB_URL"))
+			Expect(envNames).To(HaveKey("LANGFUSE_SECRET_KEY"))
+			Expect(envNames).To(HaveKey("LANGFUSE_PUBLIC_KEY"))
 		})
 	})
 
@@ -500,13 +504,13 @@ var _ = Describe("MekoUserAccount Controller", func() {
 			Expect(k8sClient.List(testCtx, depList, &client.ListOptions{
 				Namespace: tenantNS,
 			})).To(Succeed())
-			Expect(depList.Items).To(HaveLen(3))
+			Expect(depList.Items).To(HaveLen(2))
 
 			svcList := &corev1.ServiceList{}
 			Expect(k8sClient.List(testCtx, svcList, &client.ListOptions{
 				Namespace: tenantNS,
 			})).To(Succeed())
-			Expect(svcList.Items).To(HaveLen(2))
+			Expect(svcList.Items).To(HaveLen(1))
 
 			cmList := &corev1.ConfigMapList{}
 			Expect(k8sClient.List(testCtx, cmList, &client.ListOptions{

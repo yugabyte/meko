@@ -28,14 +28,16 @@ type MekoUserAccountParams struct {
 	AccountTier    string
 	MCPImage       string
 	RAGImage       string
-	LangfuseImage  string
 	YugabyteDBHost string
 	YugabyteDBPort int32
 	YugabyteDBUser string
 	YugabyteDBPass string
 	YugabyteDBName string
-	MCPReplicas    int32
-	RAGReplicas    int32
+	MCPReplicas       int32
+	RAGReplicas       int32
+	LangfuseSecretKey string
+	LangfusePublicKey string
+	LangfuseBaseURL   string
 }
 
 // Client wraps a Kubernetes dynamic client scoped to MekoUserAccount
@@ -107,7 +109,6 @@ func buildMekoUserAccount(p MekoUserAccountParams) *unstructured.Unstructured {
 				"accountTier":        p.AccountTier,
 				"mcpImage":           p.MCPImage,
 				"ragImage":           p.RAGImage,
-				"langfuseImage":      p.LangfuseImage,
 				"yugabyteDBHost":     p.YugabyteDBHost,
 				"yugabyteDBPort":     int64(p.YugabyteDBPort),
 				"yugabyteDBUser":     p.YugabyteDBUser,
@@ -115,6 +116,9 @@ func buildMekoUserAccount(p MekoUserAccountParams) *unstructured.Unstructured {
 				"yugabyteDBName":     p.YugabyteDBName,
 				"mcpReplicas":        int64(p.MCPReplicas),
 				"ragReplicas":        int64(p.RAGReplicas),
+				"langfuseSecretKey":  p.LangfuseSecretKey,
+				"langfusePublicKey":  p.LangfusePublicKey,
+				"langfuseBaseURL":    p.LangfuseBaseURL,
 			},
 		},
 	}
