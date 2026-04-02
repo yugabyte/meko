@@ -16,10 +16,10 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
 
 **Shared knowledge:** building knowledge over time from conversations, real-time data sources and slower-changing knowledge bases
 
-**Auditability of the learning process:** connect execution traces to how agents process data and knowledge, learn from it and share that learning
+**Auditability of the learning process:** connect execution traces to the raw conversations, to LLM's chanin of thought, how agents process data, build collective memories and shared knowledge, and learn from them to deliver contextual responses
 
 
-Meko is fully open-source and integrates easily with any agentic framework through MCP servers. It is serverless, multi-tenant (multi-agentic) and optimized for tiering to object stores. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
+Meko integrates easily with any agentic framework through MCP servers. It is serverless, multi-tenant (multi-agentic) and optimized for tiering to object stores. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
 
 
 Meko builds the trust in your multi-agentic applications by tracking conversations, conversation history, LLMs' chains of thought, traces of agents processing memory and knowledge to build a rich context, all the way down to the API executions that deliver results back to the LLM.
