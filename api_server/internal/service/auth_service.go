@@ -130,6 +130,13 @@ func (s *AuthService) Signup(
 		"email", req.Email,
 	)
 
+	if s.provisioner != nil {
+		slog.Info("Triggering post-signup provisioning",
+			"account_id", acct.ID,
+		)
+		go s.provisioner.ProvisionNewAccount(context.Background(), acct.ID)
+	}
+
 	return &SignupResponse{
 		AccountID: acct.ID,
 		Email:     acct.Email,

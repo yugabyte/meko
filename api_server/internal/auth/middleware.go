@@ -22,6 +22,7 @@ const (
 // GetAccount extracts the authenticated account from the Echo context.
 // Returns ErrNoAccount if the account is missing (i.e. RequireAuth did not run).
 func GetAccount(c echo.Context) (*models.Account, error) {
+	slog.Info("getting account", "context", c.Get(ContextKeyAccount))
 	account, ok := c.Get(ContextKeyAccount).(*models.Account)
 	if !ok || account == nil {
 		return nil, ErrNoAccount
@@ -181,6 +182,13 @@ func DevAuth(accounts AccountLookup) echo.MiddlewareFunc {
 func extractBearerToken(r *http.Request) (string, error) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
+		// Cookie fallback for browser-based auth flows.
+		if c, err := r.Cookie("access_token"); err == nil {
+			token := strings.TrimSpace(c.Value)
+			if token != "" {
+				return token, nil
+			}
+		}
 		return "", ErrMissingAuthHeader
 	}
 

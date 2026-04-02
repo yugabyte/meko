@@ -156,20 +156,21 @@ func registerAuthRoutes(
 	authSvc := service.NewAuthService(cognitoClient, reg.accountRepo, authOpts...)
 	authH := handlers.NewAuthHandler(authSvc)
 
-	authGroup := v1.Group("/auth")
-	authGroup.POST("/signup", authH.Signup)
-	authGroup.POST("/confirm-signup", authH.ConfirmSignup)
-	authGroup.POST("/login", authH.Login)
-	authGroup.POST("/logout", authH.Logout)
-
 	jwtValidator := auth.NewJWTValidator(
 		cfg.CognitoRegion,
 		cfg.CognitoPoolID,
 		cfg.CognitoClientID,
 	)
-	*datapackGroup = v1.Group("",
-		auth.RequireAuth(jwtValidator, reg.accountRepo),
-	)
+	requireAuth := auth.RequireAuth(jwtValidator, reg.accountRepo)
+
+	authGroup := v1.Group("/auth")
+	authGroup.POST("/signup", authH.Signup)
+	authGroup.POST("/confirm-signup", authH.ConfirmSignup)
+	authGroup.POST("/login", authH.Login)
+	authGroup.POST("/logout", authH.Logout)
+	authGroup.GET("/me", authH.Me, requireAuth)
+
+	*datapackGroup = v1.Group("", requireAuth)
 	slog.Info("auth routes registered")
 	return &authRouteDeps{
 		cognitoClient: cognitoClient,
