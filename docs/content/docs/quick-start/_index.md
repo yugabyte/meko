@@ -227,7 +227,6 @@ With your first datapack live, you can transition from a basic demo to a robust,
 - **Build resilient Multi-agent systems**. Preserve context across long-running tasks and multiple tools. Meko lowers costs by archiving old history and allows agents to resume work immediately after failures or session resets. See [Meko in your agentic application](../examples/build-software-with-meko/).
 - **Grow knowledge bases.** Add more sources and combine document RAG with memory-driven assistants. See [Working with Knowledge Bases](../guides/working-with-knowledge-bases/).
 
-
 ## Learn more
 
 - [Core Concepts](../guides/core-concepts/).
