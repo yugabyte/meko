@@ -20,3 +20,11 @@ resourceDir = 'docs/resources'
     render = "link"
   [cascade.target]
     path = "/"
+
+[outputFormats.Markdown]
+  mediaType = "text/markdown"
+  isPlainText = true
+
+[outputs]
+  page = ["HTML", "Markdown"]
+  section = ["HTML", "Markdown"]
