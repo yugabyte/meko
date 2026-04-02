@@ -218,16 +218,11 @@ Check what's happening inside your datapack:
 <!-- TODO: Add LangFuse observability walkthrough once integration details are finalized -->
 <!-- TODO: Add screenshots showing costs, calls, and timings -->
 
-## Recap
+## Next steps
 
-We've seen how Meko uses _memory_ to enhance a user experience through _personalization_.
+With your first datapack live, you can transition from a basic demo to a robust, context-aware development environment. Explore these advanced capabilities to fully leverage Meko's persistent memory and knowledge graph:
 
-Memory from Meko can do much more. Beyond personal preferences, it can also capture personal, team, and organization preferences, standards, policies, and more. Meko's memory empowers teams to collaborate. Memories can be captured, shared, managed, and extended... and not just for human teams, but also for agent teams. Meko is a multi-agent data layer for shared memory.
-
-Under the hood, memories are stored in a graph database... where the graph's entities and relationships are derived by Meko's processing of the LLM prompts.
-
-## Next
-
-- [Examples](../examples/). Explore more real-world use cases.
-- [Working with Memory](../guides/working-with-memory/). Deep dive into memory operations.
-- [Working with Knowledge Bases](../guides/working-with-knowledge-bases/). Advanced knowledge base management.
+- **Manage and curate memories.** Search and list what is stored, compress overlapping facts, or clear a datapack when you need a reset. See [Working with Memory](../guides/working-with-memory/).
+- **Share context across people and tools.** Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across IDEs. See [Meko in your development process](../examples/meko-in-your-ide/) and [Datapacks](../guides/core-concepts/datapacks/).
+- **Build resilient multi-agent systems**. Preserve context across long-running tasks and multiple tools. Meko lowers costs by archiving old history and allows agents to resume work immediately after failures or session resets. See [Meko in your agentic application](../examples/build-software-with-meko/).
+- **Grow knowledge bases.** Add more sources and combine document RAG with memory-driven assistants. See [Working with Knowledge Bases](../guides/working-with-knowledge-bases/).
