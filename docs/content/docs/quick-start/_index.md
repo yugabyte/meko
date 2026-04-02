@@ -226,9 +226,3 @@ With your first datapack live, you can transition from a basic demo to a robust,
 - **Share context across people and tools.** Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across IDEs. See [Meko in your development process](../examples/meko-in-your-ide/) and [Datapacks](../guides/core-concepts/datapacks/).
 - **Build resilient multi-agent systems**. Preserve context across long-running tasks and multiple tools. Meko lowers costs by archiving old history and allows agents to resume work immediately after failures or session resets. See [Meko in your agentic application](../examples/build-software-with-meko/).
 - **Grow knowledge bases.** Add more sources and combine document RAG with memory-driven assistants. See [Working with Knowledge Bases](../guides/working-with-knowledge-bases/).
-
-## Learn more
-
-- [Core Concepts](../guides/core-concepts/).
-- [How Meko fits in your stack](../guides/how-meko-fits/).
-- Browse all scenarios and deep dives using the [Examples](../examples/).
