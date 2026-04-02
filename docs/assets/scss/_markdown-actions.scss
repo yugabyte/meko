@@ -2,8 +2,11 @@
   position: relative;
   display: inline-flex !important;
   padding: 3px 10px;
-  top: -5px;
   left: 10px;
+
+  @media (min-width: 1024px) {
+    top: -5px;
+  }
 
   &::before {
     content: '';
