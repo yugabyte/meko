@@ -218,9 +218,34 @@ Check what's happening inside your datapack:
 
 ## Next steps
 
-With your first datapack live, you can transition from a basic demo to a robust, context-aware development environment. Explore these advanced capabilities to fully leverage Meko's persistent memory and knowledge graph:
+With your first datapack live, you can transition from a basic demo to a robust, context-aware development environment. Explore the following advanced capabilities to fully leverage Meko's persistent memory and knowledge graph.
 
+{{< card-group >}}
+  {{< card
+    href="guides/working-with-memory/"
+    title="Manage and curate memories"
+    desc="Search and list what is stored, compress overlapping facts, or clear a datapack when you need a reset."
+  >}}
+  {{< card
+    href="guides/working-with-knowledge-bases/"
+    title="Grow your knowledge base"
+    desc="Add more sources and combine document RAG with memory-driven assistants."
+  >}}
+  {{< card
+    href="examples/meko-in-your-ide/"
+    title="Share context across people and tools"
+    desc="Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across IDEs."
+  >}}
+  {{< card
+    href="examples/build-software-with-meko/"
+    title="Build resilient multi-agent systems"
+    desc="Store conversation history and agent reasoning traces, enabling features like cross-session recall and resumability after failures."
+  >}}
+{{< /card-group >}}
+
+<!--
 - **Manage and curate memories.** Search and list what is stored, compress overlapping facts, or clear a datapack when you need a reset. See [Working with Memory](../guides/working-with-memory/).
 - **Share context across people and tools.** Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across IDEs. See [Meko in your development process](../examples/meko-in-your-ide/) and [Datapacks](../architecture/core-concepts/datapacks/).
 - **Build resilient multi-agent systems**. Preserve context across long-running tasks and multiple tools. Meko lowers costs by archiving old history and allows agents to resume work immediately after failures or session resets. See [Meko in your agentic application](../examples/build-software-with-meko/).
 - **Grow knowledge bases.** Add more sources and combine document RAG with memory-driven assistants. See [Working with Knowledge Bases](../guides/working-with-knowledge-bases/).
+-->
