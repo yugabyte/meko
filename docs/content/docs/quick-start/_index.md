@@ -1,14 +1,12 @@
 ---
-title: Quick Start
-headerTitle: Meko Quick Start
-linkTitle: Quick Start
-headcontent: Get up and running with Meko in minutes
-description: Sign up, connect your IDE, and explore your first datapack
+title: Quick start
+linkTitle: Quick start
+description: Sign up, connect any AI tool, and explore your first datapack
 weight: 1000
 type: docs
 ---
 
-Get from zero to a working Meko integration in minutes.
+Get from zero to a working Meko integration in 60 seconds.
 
 ## Sign up
 
@@ -18,11 +16,11 @@ Get from zero to a working Meko integration in minutes.
 
 1. Copy your MCP server URL and API key.
 
-## Connect your IDE
+## Connect any AI client
 
 Each Meko account has one or more datapacks, which is a container for memory and knowledge. A default datapack is created for you when you sign up.
 
-To start using your datapack, register the MCP Server associated with this datapack with your AI chatbot-enabled IDE or development tool.
+To start using your datapack, register the MCP Server associated with this datapack with any AI chatbot-enabled IDE or development tool.
 
 {{< tabpane text=true right=false >}}
 {{% tab header="Cursor Desktop" lang="cursor" %}}

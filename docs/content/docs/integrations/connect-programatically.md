@@ -1,7 +1,7 @@
 ---
 title: Connect programmatically
-linkTitle: Connect programmatically
-description: Integrate Meko with LangChain, LangGraph, Python, and other frameworks via MCP.
+linkTitle: Frameworks
+description: Integrate Meko with LangChain, LangGraph, Python, and other frameworks via MCP
 weight: 3020
 type: docs
 ---

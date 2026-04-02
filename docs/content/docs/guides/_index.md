@@ -9,8 +9,6 @@ type: docs
 
 These guides walk you through key concepts and workflows for Meko.
 
-- **[Core Concepts](core-concepts/)** --- Understand the foundational building blocks of Meko
-- **[How Meko Fits](how-meko-fits)** --- Where Meko sits in your architecture and how it deploys
 - **[Working with Memory](working-with-memory/)** --- Add, search, and manage agent memories
 - **[Working with Knowledge Bases](working-with-knowledge-bases/)** --- Build and query knowledge bases from your documents
 - **[Database Access](database-access/)** --- Connect directly to your datapack's PostgreSQL database
