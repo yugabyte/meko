@@ -1,6 +1,6 @@
 ---
 title: Meko in your agentic application
-linkTitle: In your agentic application
+linkTitle: Agentic apps
 description: Leverage conversation history, reasoning traces, and resumability
 weight: 2020
 ---
@@ -10,8 +10,6 @@ Meko stores conversation history and agent reasoning traces, enabling features l
 ## Conversation and reasoning history
 
 *Retain agent reasoning traces across sessions so you have a detailed log of how your agent achieved its outcomes.*
-
-**Detailed Example**
 
 Without Meko, agent reasoning is lost when a session ends. Try this:
 

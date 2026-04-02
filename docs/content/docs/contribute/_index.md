@@ -117,7 +117,7 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
     href="quick-start/"
     logo="logos/integrations/claude.svg"
     title="Quick Start (With Logo)"
-    desc="Sign up, connect, and see Meko in action in under 5 minutes."
+    desc="Sign up, connect, and see Meko in action in under 60 seconds."
     cta="Get started &rarr;"
   >}}
   {{< card

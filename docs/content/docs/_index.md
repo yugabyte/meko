@@ -25,6 +25,7 @@ Meko integrates easily with any agentic framework through MCP servers. It is ser
 Meko builds the trust in your multi-agentic applications by tracking conversations, conversation history, LLMs' chains of thought, traces of agents processing memory and knowledge to build a rich context, all the way down to the API executions that deliver results back to the LLM.
 
 &nbsp;
+
 {{< card-group variant="three-quarter" >}}
   {{< card
     href="quick-start/"
@@ -32,6 +33,25 @@ Meko builds the trust in your multi-agentic applications by tracking conversatio
     desc="Sign up for free, connect and start using Meko with your agents in less than 60 seconds"
     cta="Get started &rarr;"
     image="images/database.svg"
+  >}}
+{{< /card-group >}}
+
+&nbsp;
+
+### Learn more about Meko
+
+{{< card-group >}}
+  {{< card
+    href="architecture/how-meko-fits/"
+    title="How Meko fits"
+    desc="Where Meko sits in your architecture and how it deploys."
+    cta="Learn more &rarr;"
+  >}}
+  {{< card
+    href="architecture/core-concepts/"
+    title="Core concepts"
+    desc="Understand the foundational building blocks of Meko."
+    cta="Learn more &rarr;"
   >}}
 {{< /card-group >}}
 
@@ -93,18 +113,4 @@ Meko is fully open-source and integrates easily with any agentic framework throu
 
 Learn how Meko adds memory, knowledge, and SQL to agentic applications.
 
-{{< card-group >}}
-  {{< card
-    href="guides/core-concepts/"
-    title="Core concepts"
-    desc="Understand the foundational building blocks of Meko."
-    cta="Learn more &rarr;"
-  >}}
-  {{< card
-    href="guides/how-meko-fits/"
-    title="How Meko fits"
-    desc="Where Meko sits in your architecture and how it deploys."
-    cta="Learn more &rarr;"
-  >}}
-{{< /card-group >}}
 -->

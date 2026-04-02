@@ -1,25 +1,28 @@
 ---
 title: Meko in your development process
-linkTitle: In your development process
+linkTitle: IDEs
 description: Store personal preferences, coding standards, and team policies across sessions
 weight: 2010
 ---
+
 Meko gives your IDE's AI assistant persistent memory that follows you across sessions and projects. This example shows how to use Meko for storing and recalling development preferences.
 
 ## Use cases
 
-### Tool-independent dev preferences & standards
+### Share development preferences and standards
 
-*Use best-of-breed tools with consistent templates & standards.* 
+*Use best-of-breed tools with consistent templates & standards.*
 
-Use Cursor to write code, Claude to review it, and Gemini to write the test plan... while following consistent coding conventions, document templates (for PRDs, specs, review feedback, test plans), and shared project knowledge.   
+Use Cursor to write code, Claude to review it, and Gemini to write the test plan - all while following consistent coding conventions, document templates (for PRDs, specs, review feedback, test plans), and shared project knowledge.
 
-**Motivations** 
-* Play to each tools' strengths or 
-* Reuse existing tooling that's locked to an LLM vendor
-... while maintaining consistency & portability.
+With Meko, you can:
 
-**Detailed example**
+- Play to each tool's strengths
+- Reuse existing tooling that's locked to an LLM vendor
+
+All while maintaining consistency and portability.
+
+**Example**
 
 Store your individual coding style and tool preferences:
 
@@ -35,7 +38,7 @@ Remember that I use pytest with fixtures for all testing
 Remember that I prefer 4-space indentation and single quotes in Python
 ```
 
-In a new tool, new session, or new phase of the engineering lifecycle, all such preferences will be remembered and applied automatically.
+In a new tool, new session, or new phase of the engineering lifecycle, all your preferences will be remembered and applied automatically.
 
 ### Portable developer coding preferences
 
@@ -43,14 +46,15 @@ In a new tool, new session, or new phase of the engineering lifecycle, all such 
 
 Have you ever created a coding practice or pattern, only to have to re-teach it to your AI agent or coding tool on the next project, or even in the next session?
 
-While AI dev tools do have mechanisms for memory and skills, do they apply at the session, project, multi-project, or team level?   Do they overlap and overlay?   Which take precedence?   Cursor does this one way, while Anthropic Claude does it a different way.  Surely, there must be an end to this madness.
+While AI dev tools do have mechanisms for memory and skills, do they apply at the session, project, multi-project, or team level? Do they overlap and overlay? Which take precedence? Cursor does this one way, while Anthropic Claude does it a different way. Surely, there must be an end to this madness.
 
-Meko solves this.  Meko enables you to define clear and customizable scoping and hierarchy for memory... and it works portably across projects and tools.
+Meko solves this. Using Meko, you can define clear and customizable scoping and hierarchy for memory... and it works across all your projects and tools.
+
 ### Group/team policies and standards
 
 *Share a datapack across your team to enforce consistent coding standards and testing policies.*
 
-**Detailed Example**
+**Example**
 
 Create a shared datapack for your team's coding standards, testing policies, and architectural norms:
 

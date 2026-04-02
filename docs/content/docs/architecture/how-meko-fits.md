@@ -1,8 +1,8 @@
 ---
-title: How Meko Fits in Your Stack
-linkTitle: How Meko Fits
+title: How Meko fits in your stack
+linkTitle: How Meko fits
 description: Where Meko sits in your architecture and how it deploys
-weight: 4200
+weight: 10
 ---
 
 Meko is an agent-native data layer for multi-agent systems that work and learn together. It supports:

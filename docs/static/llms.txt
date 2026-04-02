@@ -10,17 +10,20 @@ Meko exposes everything through the Model Context Protocol (MCP), making it comp
 
 ## Core Concepts
 
-- [Datapacks](/docs/guides/core-concepts/datapacks/): Isolation units that bundle a YugabyteDB database, MCP server, and credentials into a single deployable unit
-- [Memory](/docs/guides/core-concepts/memory/): Persistent agent memory using semantic search (pgvector) and graph relationships (Apache AGE via mem0)
-- [Knowledge Bases](/docs/guides/core-concepts/knowledgebase/): RAG pipelines for chunking, embedding, and indexing documents using pg_dist_rag
-- [Graph RAG](/docs/guides/core-concepts/graph-rag/): Entity-relationship queries over documents using Apache AGE
-- [OLTP Data](/docs/guides/core-concepts/oltp-data/): Direct PostgreSQL-compatible access to structured data via YugabyteDB YSQL
-- [Traces](/docs/guides/core-concepts/traces/): Full observability of agent operations, conversation history, and chain-of-thought reasoning
-- [Connectors](/docs/guides/core-concepts/connectors/): Data source connectors for ingesting content into knowledge bases
+- [Datapacks](/docs/architecture/core-concepts/datapacks/): Isolation units that bundle a YugabyteDB database, MCP server, and credentials into a single deployable unit
+- [Memory](/docs/architecture/core-concepts/memory/): Persistent agent memory using semantic search (pgvector) and graph relationships (Apache AGE via mem0)
+- [Knowledge Bases](/docs/architecture/core-concepts/knowledgebase/): RAG pipelines for chunking, embedding, and indexing documents using pg_dist_rag
+- [Graph RAG](/docs/architecture/core-concepts/graph-rag/): Entity-relationship queries over documents using Apache AGE
+- [OLTP Data](/docs/architecture/core-concepts/oltp-data/): Direct PostgreSQL-compatible access to structured data via YugabyteDB YSQL
+- [Traces](/docs/architecture/core-concepts/traces/): Full observability of agent operations, conversation history, and chain-of-thought reasoning
+- [Connectors](/docs/architecture/core-concepts/connectors/): Data source connectors for ingesting content into knowledge bases
+
+## Architecture
+
+- [How Meko Fits](/docs/architecture/how-meko-fits/): Architecture overview, deployment models, and where Meko sits in an agentic stack
 
 ## Guides
 
-- [How Meko Fits](/docs/guides/how-meko-fits/): Architecture overview, deployment models, and where Meko sits in an agentic stack
 - [Working with Memory](/docs/guides/working-with-memory/): Add, search, update, manage, and compress agent memories
 - [Working with Knowledge Bases](/docs/guides/working-with-knowledge-bases/): Build and query document collections for retrieval-augmented generation
 - [Database Access](/docs/guides/database-access/): Connect directly to a datapack's PostgreSQL database for custom queries

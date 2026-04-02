@@ -1,7 +1,7 @@
 ---
 title: Connect to an IDE
-linkTitle: Connect to an IDE
-description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and other IDEs via MCP.
+linkTitle: AI tools
+description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and more
 weight: 3010
 type: docs
 ---
@@ -87,9 +87,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 ## Claude Code
 
-Run the setup command.
-
-1. Run this command in your shell to add the Meko MCP server to Claude Code:
+1. Run the setup command in your shell to add the Meko MCP server to Claude Code:
 
     ```sh
     > claude mcp add --scope user --transport http meko <mcp-server-url> --header "API_KEY: <mcp-server-api-key>"
@@ -105,27 +103,28 @@ Run the setup command.
 
     ![Claude Code](/images/integrations-claudecode-response.png)
 
-
 ## Open AI Codex Desktop
 
 Modify the config.toml file from Codex desktop
 
-1. In Codex Desktop, choose **Codex > Settings > MCP servers > Add server > Streamable HTTP **.
+1. In Codex Desktop, choose **Codex > Settings > MCP servers > Add server > Streamable HTTP**.
 
-   1. Enter a name for the meko MCP server
-   2. Enter URL for the Meko MCP server
-   3. Enter a name such as 'MEKO_MCP_TOKEN' for the bearer_token_env variable
-   4. Set MEKO_MCP_TOKEN in your environment that launches Codex by executing a command in your terminal
+1. Enter a name for the Meko MCP server.
+1. Enter URL of the Meko MCP server.
+1. Enter a name such as 'MEKO_MCP_TOKEN' for the bearer_token_env variable.
+1. Set MEKO_MCP_TOKEN in your environment that launches Codex by executing a command in your terminal:
+
     ```txt
-    launchctl setenv MEKO_MCP_TOKEN <MEKO_SERVER_API_KEY>
+    launchctl setenv MEKO_MCP_TOKEN <mcp-server-api-key>
     ```
-   5. Verify that you did set the MEKO_MCP_TOKEN correctly with your Meko MCP Server API Key
+
+1. Verify that you set the MEKO_MCP_TOKEN correctly with your Meko MCP Server API Key.
+
     ```txt
     lanchctl getenv MEKO_MCP_TOKEN
     ```
-   5. Fully quit Codex
-   6. Reopen Codex
 
+1. Restart Codex.
 
 ## Coming Soon
 
