@@ -106,6 +106,34 @@ func (r *AccountRepo) GetByCognitoSub(
 	return &acct, nil
 }
 
+// GetByID looks up an account by its internal UUID.
+// Returns (nil, nil) if no matching account exists.
+func (r *AccountRepo) GetByID(
+	ctx context.Context,
+	id string,
+) (*models.Account, error) {
+	var acct models.Account
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, account_first_name, account_last_name,
+			account_email, account_type, cognito_sub,
+			email_verified_at, created_at, updated_at
+		 FROM meko_system.account_registry
+		 WHERE id = $1`,
+		id,
+	).Scan(
+		&acct.ID, &acct.FirstName, &acct.LastName,
+		&acct.Email, &acct.AccountType, &acct.CognitoSub,
+		&acct.EmailVerifiedAt, &acct.CreatedAt, &acct.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up account by id: %w", err)
+	}
+	return &acct, nil
+}
+
 // EnsureAccount returns the existing account for the given Cognito sub,
 // or auto-creates one when no local account exists yet (e.g. users who
 // signed up through the Cognito Hosted UI).

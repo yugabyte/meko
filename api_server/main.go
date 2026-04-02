@@ -33,6 +33,8 @@ func run() error {
 	cognitoClientSecret := flag.String("cognito-client-secret", "", "Cognito App Client secret")
 	cognitoDomain := flag.String("cognito-domain", "", "Cognito hosted UI domain (e.g. myapp.auth.us-east-2.amazoncognito.com)")
 	crdNamespace := flag.String("crd-namespace", "meko-tenants", "Kubernetes namespace for MekoUserAccount CRDs")
+	langfuseHost := flag.String("langfuse-host", os.Getenv("LANGFUSE_HOST"), "Langfuse base URL (e.g. http://localhost:3000)")
+	langfuseAdminAPIKey := flag.String("langfuse-admin-api-key", os.Getenv("LANGFUSE_ADMIN_API_KEY"), "Langfuse admin API key used for per-account org/project provisioning")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(
@@ -79,6 +81,8 @@ func run() error {
 		CognitoClientSecret: *cognitoClientSecret,
 		CognitoDomain:       *cognitoDomain,
 		CRDNamespace:        *crdNamespace,
+		LangfuseHost:        *langfuseHost,
+		LangfuseAdminAPIKey: *langfuseAdminAPIKey,
 	})
 }
 

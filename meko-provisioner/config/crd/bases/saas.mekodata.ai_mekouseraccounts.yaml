@@ -48,7 +48,11 @@ spec:
                 - pro
                 - enterprise
                 type: string
-              langfuseImage:
+              langfuseBaseURL:
+                type: string
+              langfusePublicKey:
+                type: string
+              langfuseSecretKey:
                 type: string
               mcpImage:
                 type: string
@@ -81,7 +85,6 @@ spec:
             required:
             - accountId
             - accountTier
-            - langfuseImage
             - mcpImage
             - ragImage
             - yugabyteDBHost

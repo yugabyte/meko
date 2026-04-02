@@ -13,12 +13,16 @@ import (
 
 // DatapackHandler holds Echo handlers for datapack endpoints.
 type DatapackHandler struct {
-	svc *service.DatapackService
+	svc      *service.DatapackService
+	langfuse *service.LangfuseService
 }
 
 // NewDatapackHandler creates a new DatapackHandler.
-func NewDatapackHandler(svc *service.DatapackService) *DatapackHandler {
-	return &DatapackHandler{svc: svc}
+func NewDatapackHandler(
+	svc *service.DatapackService,
+	langfuse *service.LangfuseService,
+) *DatapackHandler {
+	return &DatapackHandler{svc: svc, langfuse: langfuse}
 }
 
 // Create handles POST /api/v1/datapacks.
@@ -232,6 +236,53 @@ func (h *DatapackHandler) Status(c echo.Context) error {
 	}
 
 	return ok(c, http.StatusOK, st)
+}
+
+// GenerateLangfuseProjectKeys handles
+// POST /api/v1/datapacks/:name/langfuse/project-keys.
+func (h *DatapackHandler) GenerateLangfuseProjectKeys(c echo.Context) error {
+	if h.langfuse == nil || !h.langfuse.Enabled() {
+		return apiError(c, http.StatusServiceUnavailable,
+			"SERVICE_UNAVAILABLE",
+			"langfuse is not configured")
+	}
+
+	name := c.Param("name")
+	if name == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "datapack name is required")
+	}
+
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
+	dp, err := h.svc.Describe(account.ID, name)
+	if err != nil {
+		if isNotFoundErr(err) {
+			return apiError(c, http.StatusNotFound,
+				"NOT_FOUND", err.Error())
+		}
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", err.Error())
+	}
+
+	keys, err := h.langfuse.GenerateProjectKeysForDatapack(
+		account.ID,
+		account.Email,
+		account.FirstName,
+		account.LastName,
+		dp.ID,
+		dp.Name,
+	)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", err.Error())
+	}
+
+	return ok(c, http.StatusOK, keys)
 }
 
 func isValidationErr(err error) bool {
