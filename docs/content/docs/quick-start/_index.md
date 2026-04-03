@@ -128,19 +128,21 @@ Meko allows management of and collaboration around "knowledge" and "memory".
 
 Note: conversation history is also considered a "raw document"
 
-### Upload knowledge (coming soon to the web portal... please skip unless you want to try the CLI approach)
+### Upload knowledge 
+**(This is coming soon to the web portal... Skip this section unless you want to try the CLI approach)**
 
-Meko allows you add knowledge to your datapack by simply uploading documents.  In your IDE, you can attach a document to your prompt, and type 
+We'll add documents to your datapack and query them using RAG.   
 
-```bash
+In your IDE, type the below, and attach a text file: 
+
+```text
 Store the attached document as long-term knowledge.
+<attach a document>
 ```
 
 ##### CLI approach
 
-We can also do this using the [meko CLI](../../reference/cli-overview/).
-
-In the following example, we'll add documents to your datapack and query them using RAG.
+We can also do this using the Meko CLI.  Install the Meko CLI using instructions [here](../../reference/cli-overview/) 
 
 Upload documents to your datapack's knowledge base:
 
@@ -150,7 +152,8 @@ meko datapack add_knowledge_base --name my-datapack --url s3://bucket/docs/
 
 <!-- TODO: Add details on portal-based document upload once the web portal is available -->
 
-### Query your knowledge (coming soon to the web portal... please skip unless you want to try the CLI approach)
+### Query your knowledge 
+**(This is coming soon to the web portal... Skip this section unless you want to try the CLI approach mentioned above)**
 
 Once your documents are parsed, chunked, and indexed by Meko, query them through your IDE:
 
