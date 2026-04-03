@@ -1,9 +1,10 @@
 ---
-title: Core Concepts
-linkTitle: Core Concepts
+title: Core concepts
+linkTitle: Core concepts
 description: Understand the foundational building blocks of Meko
-weight: 4100
+weight: 50
 ---
+
 ## Why Meko?
 
 Building agentic applications with traditional databases often forces you to use and maintain a patchwork architecture. Developers bolt together PostgreSQL, pgvector for semantic search, separate graph databases for memory, and object stores for conversations. This creates data silos, drives up costs, introduces latency from cross-system queries, and leaves you building custom logic for tiering, caching, and observability.

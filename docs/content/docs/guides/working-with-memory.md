@@ -1,6 +1,6 @@
 ---
-title: Working with Memory
-linkTitle: Working with Memory
+title: Working with memory
+linkTitle: Using memory
 description: Add, search, and manage agent memories in Meko
 weight: 4300
 ---

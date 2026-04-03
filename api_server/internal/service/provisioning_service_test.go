@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"meko/api_server/internal/k8s"
+	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
 )
 
@@ -61,14 +62,76 @@ func (m *mockTierConfigStore) GetByTier(_ context.Context, _ string) (*repositor
 	return m.cfg, m.err
 }
 
+type mockAccountLookup struct {
+	acct *models.Account
+	err  error
+
+	mu     sync.Mutex
+	called bool
+}
+
+func (m *mockAccountLookup) GetByID(_ context.Context, _ string) (*models.Account, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.called = true
+	return m.acct, m.err
+}
+
+type mockLangfuseProvisioner struct {
+	enabled bool
+	err     error
+
+	mu               sync.Mutex
+	called           bool
+	lastAccountID    string
+	lastDatapackID   string
+	lastDatapackName string
+}
+
+func (m *mockLangfuseProvisioner) Enabled() bool {
+	return m.enabled
+}
+
+func (m *mockLangfuseProvisioner) GenerateProjectKeysForDatapack(
+	accountID string,
+	_ string,
+	_ string,
+	_ string,
+	datapackID string,
+	datapackName string,
+) (*ProjectKeys, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.called = true
+	m.lastAccountID = accountID
+	m.lastDatapackID = datapackID
+	m.lastDatapackName = datapackName
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &ProjectKeys{
+		ProjectID:   "proj-1",
+		ProjectName: "proj",
+		PublicKey:   "pk",
+		SecretKey:   "sk",
+	}, nil
+}
+
+func (m *mockLangfuseProvisioner) GetOrgKeysForAccount(_ string) (string, string, error) {
+	return "org-pk", "org-sk", nil
+}
+
+func (m *mockLangfuseProvisioner) Host() string {
+	return "http://localhost:3000"
+}
+
 func testTierStore() *mockTierConfigStore {
 	return &mockTierConfigStore{
 		cfg: &repository.TierConfig{
 			Tier:          "free",
 			MCPImage:      "registry/mcp:latest",
-			RAGImage:      "registry/rag:0.1.0",
-			LangfuseImage: "langfuse/langfuse:latest",
-			MCPReplicas:   1,
+			RAGImage:    "registry/rag:0.1.0",
+			MCPReplicas: 1,
 			RAGReplicas:   1,
 		},
 	}
@@ -100,7 +163,14 @@ func TestProvisionNewAccount_HappyPath(t *testing.T) {
 	}
 	crd := &mockCRDCreator{}
 	ts := testTierStore()
-	svc := NewProvisioningService(dp, crd, ts, testConfig())
+	acct := &mockAccountLookup{acct: &models.Account{
+		ID:        "acc1",
+		Email:     "acc1@example.com",
+		FirstName: "Acc",
+		LastName:  "One",
+	}}
+	lf := &mockLangfuseProvisioner{enabled: true}
+	svc := NewProvisioningService(dp, crd, ts, acct, lf, testConfig())
 
 	svc.ProvisionNewAccount(context.Background(), "acc1")
 
@@ -120,6 +190,15 @@ func TestProvisionNewAccount_HappyPath(t *testing.T) {
 
 	if !crd.called {
 		t.Fatal("expected CRDCreator.CreateMekoUserAccount to be called")
+	}
+	if !lf.called {
+		t.Fatal("expected Langfuse provisioning to be called")
+	}
+	if lf.lastDatapackID != "dp-1" {
+		t.Errorf("langfuse datapack id = %q, want dp-1", lf.lastDatapackID)
+	}
+	if lf.lastDatapackName != "meko_default_datapack" {
+		t.Errorf("langfuse datapack name = %q, want meko_default_datapack", lf.lastDatapackName)
 	}
 	p := crd.lastParams
 	if p.AccountID != "acc1" {
@@ -155,6 +234,15 @@ func TestProvisionNewAccount_HappyPath(t *testing.T) {
 	if p.RAGReplicas != 1 {
 		t.Errorf("CRD ragReplicas = %d, want 1", p.RAGReplicas)
 	}
+	if p.LangfuseSecretKey != "sk" {
+		t.Errorf("CRD langfuseSecretKey = %q, want sk", p.LangfuseSecretKey)
+	}
+	if p.LangfusePublicKey != "pk" {
+		t.Errorf("CRD langfusePublicKey = %q, want pk", p.LangfusePublicKey)
+	}
+	if p.LangfuseBaseURL != "http://localhost:3000" {
+		t.Errorf("CRD langfuseBaseURL = %q, want http://localhost:3000", p.LangfuseBaseURL)
+	}
 }
 
 func TestProvisionNewAccount_DatapackFails(t *testing.T) {
@@ -162,7 +250,7 @@ func TestProvisionNewAccount_DatapackFails(t *testing.T) {
 		err: errors.New("universe full"),
 	}
 	crd := &mockCRDCreator{}
-	svc := NewProvisioningService(dp, crd, testTierStore(), testConfig())
+	svc := NewProvisioningService(dp, crd, testTierStore(), nil, nil, testConfig())
 
 	svc.ProvisionNewAccount(context.Background(), "acc2")
 
@@ -190,7 +278,7 @@ func TestProvisionNewAccount_CRDFails(t *testing.T) {
 	crd := &mockCRDCreator{
 		err: errors.New("k8s api unreachable"),
 	}
-	svc := NewProvisioningService(dp, crd, testTierStore(), testConfig())
+	svc := NewProvisioningService(dp, crd, testTierStore(), nil, nil, testConfig())
 
 	svc.ProvisionNewAccount(context.Background(), "acc3")
 
@@ -217,7 +305,7 @@ func TestProvisionNewAccount_TierConfigFails(t *testing.T) {
 	}
 	crd := &mockCRDCreator{}
 	ts := &mockTierConfigStore{err: errors.New("tier not found")}
-	svc := NewProvisioningService(dp, crd, ts, testConfig())
+	svc := NewProvisioningService(dp, crd, ts, nil, nil, testConfig())
 
 	svc.ProvisionNewAccount(context.Background(), "acc_tc")
 
@@ -288,7 +376,7 @@ func TestProvisionNewAccount_AccountIDTooLong(t *testing.T) {
 	longID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	dp := &mockDatapackCreator{}
 	crd := &mockCRDCreator{}
-	svc := NewProvisioningService(dp, crd, testTierStore(), testConfig())
+	svc := NewProvisioningService(dp, crd, testTierStore(), nil, nil, testConfig())
 
 	svc.ProvisionNewAccount(context.Background(), longID)
 
@@ -316,7 +404,7 @@ func TestProvisionNewAccount_AccountIDMaxLength(t *testing.T) {
 		},
 	}
 	crd := &mockCRDCreator{}
-	svc := NewProvisioningService(dp, crd, testTierStore(), testConfig())
+	svc := NewProvisioningService(dp, crd, testTierStore(), nil, nil, testConfig())
 
 	svc.ProvisionNewAccount(context.Background(), maxID)
 

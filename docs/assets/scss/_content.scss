@@ -25,6 +25,10 @@ body {
       max-width: 100%;
     }
 
+    h1 {
+      display: inline;
+    }
+
     li,
     p,
     strong,
@@ -33,7 +37,7 @@ body {
     h4,
     h5,
     h6 {
-      > a {
+      > a:not(.copy-item) {
         font-weight: 400;
         background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
         background-size: 200% 200%;

@@ -11,19 +11,21 @@ import (
 
 func testParams() MekoUserAccountParams {
 	return MekoUserAccountParams{
-		AccountID:      "abc123",
-		Namespace:      "meko-tenants",
-		AccountTier:    "free",
-		MCPImage:       "registry/mcp:latest",
-		RAGImage:       "registry/rag:0.1.0",
-		LangfuseImage:  "langfuse/langfuse:latest",
-		YugabyteDBHost: "yb-tserver.yb-system.svc.cluster.local",
-		YugabyteDBPort: 5433,
-		YugabyteDBUser: "db_default_abc123",
-		YugabyteDBPass: "secret-pass",
-		YugabyteDBName: "abc123_default_abc123",
-		MCPReplicas:    1,
-		RAGReplicas:    1,
+		AccountID:         "abc123",
+		Namespace:         "meko-tenants",
+		AccountTier:       "free",
+		MCPImage:          "registry/mcp:latest",
+		RAGImage:          "registry/rag:0.1.0",
+		YugabyteDBHost:    "yb-tserver.yb-system.svc.cluster.local",
+		YugabyteDBPort:    5433,
+		YugabyteDBUser:    "db_default_abc123",
+		YugabyteDBPass:    "secret-pass",
+		YugabyteDBName:    "abc123_default_abc123",
+		MCPReplicas:       1,
+		RAGReplicas:       1,
+		LangfuseSecretKey: "sk-lf-test",
+		LangfusePublicKey: "pk-lf-test",
+		LangfuseBaseURL:   "http://langfuse:3000",
 	}
 }
 
@@ -54,7 +56,6 @@ func TestBuildMekoUserAccount(t *testing.T) {
 		"accountTier":        "free",
 		"mcpImage":           "registry/mcp:latest",
 		"ragImage":           "registry/rag:0.1.0",
-		"langfuseImage":      "langfuse/langfuse:latest",
 		"yugabyteDBHost":     "yb-tserver.yb-system.svc.cluster.local",
 		"yugabyteDBPort":     int64(5433),
 		"yugabyteDBUser":     "db_default_abc123",
@@ -62,6 +63,9 @@ func TestBuildMekoUserAccount(t *testing.T) {
 		"yugabyteDBName":     "abc123_default_abc123",
 		"mcpReplicas":        int64(1),
 		"ragReplicas":        int64(1),
+		"langfuseSecretKey":  "sk-lf-test",
+		"langfusePublicKey":  "pk-lf-test",
+		"langfuseBaseURL":    "http://langfuse:3000",
 	}
 	for key, want := range checks {
 		got, exists := spec[key]

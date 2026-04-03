@@ -1,0 +1,123 @@
+.markdown-actions {
+  position: relative;
+  display: inline-flex !important;
+  padding: 3px 10px;
+  left: 10px;
+
+  @media (min-width: 1024px) {
+    top: -8px;
+  }
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    padding: 3px;
+    border-radius: 40px;
+    background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: destination-out;
+    mask-composite: exclude;
+    z-index: -1;
+  }
+
+  button {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    background: transparent !important;
+    border: none;
+
+    &:hover {
+      background-color: transparent;
+      border: none;
+    }
+
+    &.copy-link {
+      position: relative;
+
+      span {
+        position: absolute;
+        top: calc(100% + 15px);
+        left: -40px;
+        padding: 0;
+        height: 0;
+        width: 0;
+        overflow: hidden;
+        border-radius: 4px;
+        color: #fff;
+        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+        background-size: 200% 200%;
+        font-size: 15px;
+        white-space: nowrap;
+        transition: opacity 250ms 300ms ease;
+        opacity: 0;
+
+        &::before {
+          content: '';
+          position: absolute;
+          z-index: -1;
+          width: 15px;
+          height: 15px;
+          background: linear-gradient(270deg, #5e72e6, #587ae9);
+          transform: rotate(45deg);
+          top: -5px;
+          left: 42px;
+          transition: opacity 250ms 300ms ease;
+        }
+
+        @media (max-width: 599px) {
+          font-size: 11px;
+        }
+      }
+
+      &:hover {
+        span {
+          padding: 4px 10px;
+          overflow: visible;
+          width: auto;
+          height: auto;
+          opacity: 1;
+          transition: opacity 250ms ease;
+
+          &::before {
+            opacity: 1;
+            transition: opacity 250ms ease;
+          }
+        }
+      }
+    }
+  }
+
+  .dropdown-menu {
+    background-color: #1a1a2e;
+    border-color: #ffffff1f;
+    margin-top: 6px !important;
+
+    li {
+      margin: 0;
+    }
+
+    .copy-item {
+      color: #ffffffd9;
+      border-radius: 4px;
+      padding: 4px 10px;
+      text-decoration: none;
+
+      &:hover {
+        color: #fff;
+        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+        background-size: 200% 200%;
+      }
+
+      &::after {
+        display: none;
+      }
+    }
+  }
+}

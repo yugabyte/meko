@@ -9,10 +9,10 @@ The Meko CLI (`meko`) is the primary tool for managing datapacks from the comman
 
 ## Install meko CLI
 
-Pre-built binaries are published as GitHub Releases for every tagged version. Visit [Releases](https://github.com/yugabyte/meko/releases/latest) to download the archive for your platform.
+Pre-built binaries are published as GitHub Releases for every tagged version. Download the archive for your platform from the latest [GitHub Releases](https://github.com/yugabyte/meko/releases/latest).
 
 | Platform | Archive |
-|----------|---------|
+| :------- | :-------|
 | macOS (Apple Silicon) | `meko_<VERSION>_darwin_arm64.tar.gz` |
 | macOS (Intel) | `meko_<VERSION>_darwin_amd64.tar.gz` |
 | Linux x86_64 | `meko_<VERSION>_linux_amd64.tar.gz` |
@@ -20,83 +20,79 @@ Pre-built binaries are published as GitHub Releases for every tagged version. Vi
 
 ### Example install on macOS
 
-**Step 1 Download the meko binary tarball**  
-To install on macOS (Apple Silicon), dowload the compiled meko binary tarball file that's compatible with your machine from the [Releases](https://github.com/yugabyte/meko/releases/latest) website.
+To install Meko CLI on macOS (Apple Silicon), do the following:
 
-**Step 2 : Unzip the file** 
-Double clicking the tar file on a macOS, from the Download folder.
+1. Download the compiled Meko binary tar file that's compatible with your machine from the [Releases](https://github.com/yugabyte/meko/releases/latest) website.
 
-**Step 3 : Move it to /usr/local/bin**
-```bash
-sudo mv meko /usr/local/bin/
-```
-This will require you to enter the Mac login password.
+1. Unzip the file (double click the tar file).
 
-**Step 4 : Ensure it is Executable**
-```bash
-sudo chmod +x /usr/local/bin/meko
-```
+1. Move `meko` to `/usr/local/bin/`, and make it executable as follows:
 
-**Step 5 : Verify the installation**
+    ```bash
+    sudo mv meko /usr/local/bin/ && sudo chmod +x /usr/local/bin/meko
+    ```
 
-```bash
-meko --version
-```
+    > [!TIP]
+    >
+    > Ensure /usr/local/bin/ is in your PATH to run `meko` from anywhere.
 
-## Basics of Meko CLI
+1. Verify the installation:
 
-### Login
-
-Before you can use the Meko CLI, you must sign in to the meko platform.
-
-To sign in, navigate to the directory on your terminal where you downloaded the CLI binary and use the following command:
-
-```bash
-meko login
-```
-
-You will be prompted for your email and password.
-
-Alternatively, pass them as flags:
-
-```bash
-meko login --email user@example.com --password secret
-```
-
-
-### Logout
-
-```bash
-meko logout
-```
-
-Removes locally stored tokens.
-
-### Help
-
-Access command-line help for meko by running the following command:
-
-```sh
-meko help
-```
-
-For help with specific meko commands, use the --help or -h flag, in the following form:
-
-```sh
-meko [ <command> ] -h
-```
+    ```bash
+    meko --version
+    ```
 
 ## Commands
 
 | Command | Description |
 | :------ | :---------- |
-| `meko login` | Authenticate with the Meko API server. |
-| `meko logout` | Remove locally stored tokens. |
-| `meko help` | Help with Meko CLI command or sub-command. |
-| `meko datapack create` | Create a new datapack. |
-| `meko datapack list` | List all datapacks. |
-| `meko datapack status` | View datapack summary. |
-| `meko datapack delete` | Permanently delete a datapack. |
+| [`meko login`](#login) | Authenticate with the Meko API server. |
+| [`meko logout`](#logout) | Remove locally stored tokens. |
+| [`meko help`](#help) | Help with Meko CLI command or sub-command. |
+| [`meko datapack create`](#datapack-create) | Create a new datapack. |
+| [`meko datapack list`](#datapack-list) | List all datapacks. |
+| [`meko datapack status`](#datapack-status) | View datapack summary. |
+| [`meko datapack delete`](#datapack-delete) | Permanently delete a datapack. |
+
+## Basics of Meko CLI
+
+### Login
+
+You must sign in to the Meko platform before you can use the CLI.
+
+```bash
+meko login
+```
+
+Enter your email and password when prompted. Alternatively, you can use flags:
+
+```bash
+meko login --email user@example.com --password secret
+```
+
+### Logout
+
+To end your session, run:
+
+```bash
+meko logout
+```
+
+This removes locally stored tokens.
+
+### Help
+
+To view all available commands and options, run:
+
+```sh
+meko help
+```
+
+For help with a specific command, use the `--help` or `-h` flag:
+
+```sh
+meko [ <command> ] -h
+```
 
 ### Global flags
 
@@ -109,7 +105,7 @@ These flags can be used with any `meko datapack` subcommand.
 
 ### Datapack commands
 
-All `meko datapack` subcommands require you to be [signed in](#login). If you are not signed in, they will fail with:
+All `meko datapack` subcommands require you to be [signed in](#login). If you are not signed in, the commands will fail with the following error:
 
 ```text
 Error: not logged in - run `meko login` first
@@ -117,17 +113,41 @@ Error: not logged in - run `meko login` first
 
 #### datapack create
 
-When you sign in, a default datapack named `meko-default-datapack` is automatically assigned to your account.
+When you sign in, a default datapack named `meko_default_datapack` is automatically assigned to your account.
 
-If you need to create more than one datapacks, use `datapack create` to provision a new datapack with a dedicated database, MCP server endpoint, and database access credentials.
+To create more, use `datapack create` to provision a new datapack with a dedicated database, MCP server endpoint, and database access credentials as follows:
 
 ```bash
 meko datapack create --name my-datapack
 ```
 
-The request typically takes up to 10 seconds.
+The request typically takes a few seconds.
 
-For machine-readable output:
+You should see an output similar to the following:
+
+```output
+ ✅ Datapack Created
+
+  Name             my-datapack
+  Datapack ID      e02a7107-c79e-451d-b360-9cd1e13f175d
+  Agent ID         18311fce-36c5-40fe-bd45-67f5913b0b52
+
+  ────────────────────────────────────────────────────────
+  MCP Server
+  ────────────────────────────────────────────────────────
+  URL              https://d81bff68-2659-4d9e-a3a3-26ce6e0fb4de.mcp.mekodev.com/mcp
+  API Key          318ce1c589d08edb11e24b0a781fe675
+
+  ────────────────────────────────────────────────────────
+  Database Access
+  ────────────────────────────────────────────────────────
+  User             db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack
+  Password         40ab21c8637c088862f70fa4503ce7ff
+
+  postgresql://db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack1:40ab21c8637c088862f70fa4503ce7ff@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack
+```
+
+For machine-readable output, use the `--json` flag:
 
 ```bash
 meko datapack create --name my-datapack --json
@@ -140,27 +160,28 @@ Example JSON output:
   "datapack_id": "e02a7107-c79e-451d-b360-9cd1e13f175d",
   "agent_id": "18311fce-36c5-40fe-bd45-67f5913b0b52",
   "name": "my-datapack",
+  "mcp_user_name": "mcp_h66hkj87-4567-6y7u-b7b7-12gg5y7h8jj",
   "mcp_server": {
-    "url": "https://mekodev.com/<account-id>/mcp",
+    "url": "https://d81bff68-2659-4d9e-a3a3-26ce6e0fb4de.mcp.mekodev.com/mcp",
     "api_key": "318ce1c589d08edb11e24b0a781fe675"
   },
   "db_access": {
-    "user_name": "db_my-datapack",
-    "password": "d28a0d1498c1ab9692184dd9c9cd1a79",
-    "conn_str": "postgresql://db_my-datapack:d28a0d14...@host:5433/account-id_my-datapack"
+    "user_name": "db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack",
+    "password": "40ab21c8637c088862f70fa4503ce7ff",
+    "conn_str": "postgresql://db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack1:40ab21c8637c088862f70fa4503ce7ff@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack"
   }
 }
 ```
 
 #### datapack list
 
-Display a table of all datapacks with name, ID, and creation date.
+Display a table of all datapacks, including their name, ID, and creation date:
 
 ```bash
 meko datapack list
 ```
 
-For machine-readable output:
+For machine-readable output, use the `--json` flag:
 
 ```bash
 meko datapack list --json
@@ -168,13 +189,13 @@ meko datapack list --json
 
 #### datapack status
 
-Display summary info: name, ID, agent count, knowledge base count, and creation date.
+Display summary information including name, ID, agent count, knowledge base count, and creation date:
 
 ```bash
 meko datapack status --name my-datapack
 ```
 
-Display summary info in json format:
+For machine-readable output, use the `--json` flag:
 
 ```bash
 meko datapack status --name my-datapack --json
@@ -182,15 +203,20 @@ meko datapack status --name my-datapack --json
 
 #### datapack delete
 
-Delete the specified datapack. This permanently destroys the datapack and its underlying database.
+Delete a specific datapack.
+
+> [!WARNING]
+>
+> This action permanently destroys the datapack and its underlying database.
+>
 
 ```bash
 meko datapack delete --name my-datapack
 ```
 
-You will be prompted to re-type the datapack name as confirmation.
+You will be prompted to re-type the datapack name to confirm.
 
-To skip the confirmation prompt (for scripts):
+To skip the confirmation prompt (useful for scripts), use the `--force` flag:
 
 ```bash
 meko datapack delete --name my-datapack --force
@@ -231,6 +257,10 @@ meko datapack add_knowledge_base --name my-datapack \
 ## Logging
 
 The CLI writes structured logs to `~/var/meko/logs/`. Use `--verbose` to enable debug-level output. Log files are useful for diagnosing authentication or network errors.
+
+```sh
+meko [command] --verbose
+```
 
 ## Build from Source
 

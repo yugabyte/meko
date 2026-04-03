@@ -19,6 +19,8 @@ type ServerConfig struct {
 	CognitoClientID     string
 	CognitoClientSecret string
 	CognitoDomain       string
+	LangfuseHost        string
+	LangfuseAdminAPIKey string
 	Port                int
 
 	CRDNamespace string

@@ -10,16 +10,48 @@ type: docs
 layout: list
 ---
 
-Meko is the persistent data layer that agents working together were always missing — letting them remember, share knowledge, and learn from each other across sessions.  Observe agentic conversations and conversation history, LLMs' chains of thought, traces of agents processing memory and knowledge to build rich context, all the way down to the API executions that deliver results back to the LLM.
+Meko is an agent-native data layer for multi-agent systems that work and learn together. It supports:
+
+**Collective memory:** learning that compounds across the agents working together, as opposed to just per-agent memory
+
+**Shared knowledge:** building knowledge over time from conversations, real-time data sources and slower-changing knowledge bases
+
+**Auditability of the learning process:** connect execution traces to the raw conversations, to LLM's chanin of thought, how agents process data, build collective memories and shared knowledge, and learn from them to deliver contextual responses
+
+
+Meko integrates easily with any agentic framework through MCP servers. It is serverless, multi-tenant (multi-agentic) and optimized for tiering to object stores. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
+
+
+Meko builds the trust in your multi-agentic applications by tracking conversations, conversation history, LLMs' chains of thought, traces of agents processing memory and knowledge to build a rich context, all the way down to the API executions that deliver results back to the LLM.
 
 &nbsp;
+
 {{< card-group variant="three-quarter" >}}
   {{< card
     href="quick-start/"
     title="Quick Start"
-    desc="Sign up for free, connect your IDE, and explore your Meko datapack in under 5 minutes."
+    desc="Sign up for free, connect and start using Meko with your agents in less than 60 seconds"
     cta="Get started &rarr;"
     image="images/database.svg"
+  >}}
+{{< /card-group >}}
+
+&nbsp;
+
+### Learn more about Meko
+
+{{< card-group >}}
+  {{< card
+    href="architecture/how-meko-fits/"
+    title="How Meko fits"
+    desc="Where Meko sits in your architecture and how it deploys."
+    cta="Learn more &rarr;"
+  >}}
+  {{< card
+    href="architecture/core-concepts/"
+    title="Core concepts"
+    desc="Understand the foundational building blocks of Meko."
+    cta="Learn more &rarr;"
   >}}
 {{< /card-group >}}
 
@@ -81,18 +113,4 @@ Meko is fully open-source and integrates easily with any agentic framework throu
 
 Learn how Meko adds memory, knowledge, and SQL to agentic applications.
 
-{{< card-group >}}
-  {{< card
-    href="guides/core-concepts/"
-    title="Core concepts"
-    desc="Understand the foundational building blocks of Meko."
-    cta="Learn more &rarr;"
-  >}}
-  {{< card
-    href="guides/how-meko-fits/"
-    title="How Meko fits"
-    desc="Where Meko sits in your architecture and how it deploys."
-    cta="Learn more &rarr;"
-  >}}
-{{< /card-group >}}
 -->

@@ -1,6 +1,6 @@
 ---
-title: Working with Knowledge Bases
-linkTitle: Working with Knowledge Bases
+title: Working with knowledge bases
+linkTitle: Knowledge bases
 description: Build, query, and manage knowledge bases in Meko
 weight: 4400
 ---

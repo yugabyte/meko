@@ -30,7 +30,7 @@ POST /auth/signup
 **Request body:**
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
+| :---- | :--- | :------- | :---------- |
 | `email` | string | Yes | User email address |
 | `password` | string | Yes | Account password |
 | `first_name` | string | Yes | First name |
@@ -49,7 +49,7 @@ POST /auth/confirm-signup
 **Request body:**
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
+| :---- | :--- | :------- | :---------- |
 | `email` | string | Yes | User email address |
 | `code` | string | Yes | Verification code |
 
@@ -66,14 +66,14 @@ POST /auth/login
 **Request body:**
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
+| :---- | :--- | :------- | :---------- |
 | `email` | string | Yes | User email address |
 | `password` | string | Yes | Account password |
 
 **Response body (200):**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :---- | :--- | :---------- |
 | `access_token` | string | JWT access token |
 | `refresh_token` | string | Refresh token |
 | `id_token` | string | ID token |
@@ -118,7 +118,7 @@ POST /datapacks
 **Request body:**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :---- | :--- | :---------- |
 | `name` | string | Datapack name |
 | `account_id` | string | Account ID |
 
@@ -135,7 +135,7 @@ GET /datapacks/{name}
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Responses:** `200 OK`, `404 Not Found`
@@ -151,13 +151,13 @@ PATCH /datapacks/{name}
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Request body:**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :---- | :--- | :---------- |
 | `datapack_ysql_connection_string` | string | Updated connection string |
 
 **Responses:** `200 OK`, `404 Not Found`
@@ -173,7 +173,7 @@ DELETE /datapacks/{name}
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Responses:** `200 OK`, `404 Not Found`
@@ -189,7 +189,7 @@ GET /datapacks/{name}/status
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Responses:** `200 OK`, `404 Not Found`
@@ -209,7 +209,7 @@ GET /datapacks/{name}/agents
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Responses:** `200 OK`
@@ -225,13 +225,13 @@ POST /datapacks/{name}/agents
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Request body:**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :---- | :--- | :---------- |
 | `agent_name` | string | Agent name |
 | `agent_metadata` | string | Optional agent metadata |
 
@@ -248,7 +248,7 @@ DELETE /datapacks/{name}/agents/{agent}
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 | `agent` | string | Agent name |
 
@@ -269,7 +269,7 @@ GET /datapacks/{name}/knowledge-bases
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Responses:** `200 OK`
@@ -285,13 +285,13 @@ POST /datapacks/{name}/knowledge-bases
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Request body:**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :---- | :--- | :---------- |
 | `url` | string | Source URL (S3, local path, NFS) |
 
 **Responses:** `201 Created`, `400 Bad Request`, `404 Not Found`
@@ -307,13 +307,13 @@ DELETE /datapacks/{name}/knowledge-bases
 **Path parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| :-------- | :--- | :---------- |
 | `name` | string | Datapack name |
 
 **Request body:**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| :---- | :--- | :---------- |
 | `url` | string | URL of knowledge base to delete |
 
 **Responses:** `200 OK`, `400 Bad Request`, `404 Not Found`

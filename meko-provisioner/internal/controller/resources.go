@@ -85,6 +85,8 @@ func BuildMCPConfigMap(account *saasv1.MekoUserAccount, ns string) *corev1.Confi
 			"YB_ALLOWED_HOSTS":      "all",
 			"YB_MCP_STATELESS_HTTP": "true",
 			"AWS_REGION":            "us-east-1",
+			"LANGFUSE_BASE_URL":     account.Spec.LangfuseBaseURL,
+			"LANGFUSE_HOST":         account.Spec.LangfuseBaseURL,
 		},
 	}
 }
@@ -102,6 +104,8 @@ func BuildMCPSecret(account *saasv1.MekoUserAccount, ns string, sharedData map[s
 		"YUGABYTEDB_PASSWORD": []byte(account.Spec.YugabyteDBPassword),
 		"PASSWORD":            []byte(account.Spec.YugabyteDBPassword),
 		"YUGABYTEDB_URL":      []byte(account.Spec.YugabyteDBConnectionStringLibpq()),
+		"LANGFUSE_SECRET_KEY": []byte(account.Spec.LangfuseSecretKey),
+		"LANGFUSE_PUBLIC_KEY": []byte(account.Spec.LangfusePublicKey),
 	}
 	for _, key := range []string{"OPENAI_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"} {
 		if v, ok := sharedData[key]; ok && len(v) > 0 {
@@ -156,6 +160,8 @@ func BuildMCPDeployment(account *saasv1.MekoUserAccount, ns string) *appsv1.Depl
 							secretEnvVar("OPENAI_API_KEY", MCPSecretName, "OPENAI_API_KEY", false),
 							secretEnvVar("AWS_ACCESS_KEY_ID", MCPSecretName, "AWS_ACCESS_KEY_ID", true),
 							secretEnvVar("AWS_SECRET_ACCESS_KEY", MCPSecretName, "AWS_SECRET_ACCESS_KEY", true),
+							secretEnvVar("LANGFUSE_SECRET_KEY", MCPSecretName, "LANGFUSE_SECRET_KEY", true),
+							secretEnvVar("LANGFUSE_PUBLIC_KEY", MCPSecretName, "LANGFUSE_PUBLIC_KEY", true),
 						),
 						EnvFrom: []corev1.EnvFromSource{{
 							ConfigMapRef: &corev1.ConfigMapEnvSource{
@@ -329,32 +335,6 @@ func BuildRAGDeployment(account *saasv1.MekoUserAccount, ns string) *appsv1.Depl
 						},
 					}},
 					RestartPolicy: corev1.RestartPolicyAlways,
-				},
-			},
-		},
-	}
-}
-
-func BuildLangfuseDeployment(account *saasv1.MekoUserAccount, ns string) *appsv1.Deployment {
-	labels := commonLabels("langfuse", account.Spec.AccountID)
-	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "langfuse",
-			Namespace: ns,
-			Labels:    labels,
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec: corev1.PodSpec{
-					AutomountServiceAccountToken: ptr.To(false),
-					Containers: []corev1.Container{{
-						Name:  "langfuse",
-						Image: account.Spec.LangfuseImage,
-						Env:   accountEnv(account),
-					}},
 				},
 			},
 		},

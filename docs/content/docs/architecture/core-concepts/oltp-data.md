@@ -1,6 +1,6 @@
 ---
-title: OLTP Data
-linkTitle: OLTP Data
+title: OLTP data
+linkTitle: OLTP data
 description: Direct PostgreSQL access via YugabyteDB YSQL for structured data
 weight: 50
 ---

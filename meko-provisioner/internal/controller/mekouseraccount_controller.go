@@ -108,7 +108,6 @@ func (r *MekoUserAccountReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	deployments := []*appsv1.Deployment{
 		BuildMCPDeployment(account, ns),
 		BuildRAGDeployment(account, ns),
-		BuildLangfuseDeployment(account, ns),
 	}
 	for _, dep := range deployments {
 		if err := r.ensureDeployment(ctx, dep); err != nil {
@@ -116,10 +115,9 @@ func (r *MekoUserAccountReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	// 4. Create services (mcp-server:8080, langfuse:3000).
+	// 4. Create services.
 	services := []*corev1.Service{
 		BuildService("mcp-server", ns, accountID, 8000),
-		BuildService("langfuse", ns, accountID, 3000),
 	}
 	for _, svc := range services {
 		if err := r.ensureService(ctx, svc); err != nil {

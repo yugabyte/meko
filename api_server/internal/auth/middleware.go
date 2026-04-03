@@ -152,6 +152,30 @@ func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.Middleware
 	}
 }
 
+// DevAuth returns middleware that injects a dev account into the request
+// context, auto-creating one in the database on first use. This enables
+// local testing without Cognito. Must only be used when auth is disabled.
+func DevAuth(accounts AccountLookup) echo.MiddlewareFunc {
+	const devSub = "dev-local"
+	const devEmail = "dev@localhost"
+
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			account, err := accounts.EnsureAccount(
+				c.Request().Context(), devSub, devEmail,
+			)
+			if err != nil {
+				slog.Error("dev auth: failed to ensure dev account", "error", err)
+				return authError(c, "dev account setup failed")
+			}
+			c.Set(ContextKeyAccount, account)
+			c.Set(ContextKeyCognitoSub, devSub)
+			slog.Debug("dev auth injected", "account_id", account.ID)
+			return next(c)
+		}
+	}
+}
+
 // extractBearerToken pulls the token from the "Authorization: Bearer <token>"
 // header. Returns an error if the header is missing or malformed.
 func extractBearerToken(r *http.Request) (string, error) {

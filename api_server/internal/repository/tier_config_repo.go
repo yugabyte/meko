@@ -10,11 +10,10 @@ import (
 // TierConfig holds the container images and replica counts for a
 // specific account tier.
 type TierConfig struct {
-	Tier          string
-	MCPImage      string
-	RAGImage      string
-	LangfuseImage string
-	MCPReplicas   int32
+	Tier        string
+	MCPImage    string
+	RAGImage    string
+	MCPReplicas int32
 	RAGReplicas   int32
 }
 
@@ -35,13 +34,13 @@ func (r *TierConfigRepo) GetByTier(ctx context.Context, tier string) (*TierConfi
 
 	var tc TierConfig
 	err := r.db.QueryRowContext(ctx,
-		`SELECT tier, mcp_image, rag_image, langfuse_image,
+		`SELECT tier, mcp_image, rag_image,
 		        mcp_replicas, rag_replicas
 		 FROM meko_system.tier_config
 		 WHERE tier = $1`,
 		tier,
 	).Scan(
-		&tc.Tier, &tc.MCPImage, &tc.RAGImage, &tc.LangfuseImage,
+		&tc.Tier, &tc.MCPImage, &tc.RAGImage,
 		&tc.MCPReplicas, &tc.RAGReplicas,
 	)
 	if err == sql.ErrNoRows {

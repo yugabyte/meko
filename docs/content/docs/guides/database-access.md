@@ -1,6 +1,6 @@
 ---
-title: Database Access
-linkTitle: Database Access
+title: Database access
+linkTitle: Database access
 description: Connect directly to your datapack's PostgreSQL database
 weight: 4500
 ---

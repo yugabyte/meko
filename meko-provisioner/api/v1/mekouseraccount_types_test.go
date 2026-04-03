@@ -33,7 +33,6 @@ func TestMekoUserAccountDeepCopy(t *testing.T) {
 			AccountTier:        TierPro,
 			MCPImage:           "mcp:latest",
 			RAGImage:           "rag:latest",
-			LangfuseImage:      "langfuse:latest",
 			YugabyteDBHost:     "yb-tserver.yb-system.svc.cluster.local",
 			YugabyteDBPort:     5433,
 			YugabyteDBUser:     "yugabyte",
