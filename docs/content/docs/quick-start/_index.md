@@ -10,11 +10,13 @@ Get from zero to a working Meko integration in 60 seconds.
 
 ## Sign up
 
-1. Create a Meko account at the Meko portal. You can sign up with your Gmail or email address.
+1. Create a Meko account at the Meko portal.
 
-1. Sign in to your account.
+2. Sign in to your account.
 
-1. Copy your MCP server URL and API key.
+3. Obtain these and store them in a safe place:
+	* Your MCP server URL
+	* Your API key
 
 ## Connect any AI client
 
@@ -97,7 +99,40 @@ See [Integrations](../integrations/).
 {{% /tab %}}
 {{< /tabpane >}}
 
-## Explore
+## Explore knowledge
+
+Meko allows management of and collaboration around "knowledge" and "memory".   
+
+* Knowledge = raw documents    
+* Memory = derived information from documents
+
+Note: conversation history is also considered a "raw document"
+
+### Upload knowledge
+
+Meko allows you add knowledge to your datapack by simply uploading documents. We do this using the [meko CLI](../../reference/cli-overview/).
+
+In the following example, we'll add documents to your datapack and query them using RAG.
+
+Upload documents to your datapack's knowledge base:
+
+```bash
+meko datapack add_knowledge_base --name my-datapack --url s3://bucket/docs/
+```
+
+<!-- TODO: Add details on portal-based document upload once the web portal is available -->
+
+### Query your knowledge
+
+Once your documents are parsed, chunked, and indexed by Meko, query them through your IDE:
+
+```text
+Search the knowledge base for information about <your topic>
+```
+
+The MCP server performs semantic search across your indexed documents and returns relevant chunks.  In short, Meko has automated the retrieval augmented generation (RAG) pre-processing pipeline by reading, parsing, chunking, vectorizing/indexing the documents, and by providing a semantic search capability.
+
+## Explore memory
 
 Meko uses _memory_ to enhance user experience through _personalization_.
 
@@ -110,7 +145,6 @@ Propose a 5 day vacation for me. Do not use Meko or any prior recollection of my
 Your AI either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
 
 With Meko, however, your AI can remember your vacation preferences, and use them to generate better responses.
-
 ### Create a memory
 
 In your IDE or dev tool, do the following:
@@ -180,30 +214,6 @@ Type:
 ```text
 What does Meko remember about me?
 ```
-
-### Upload knowledge
-
-Meko allows you add knowledge to your datapack by simply uploading documents. We do this using the [meko CLI](../../reference/cli-overview/).
-
-In the following example, we'll add documents to your datapack and query them using RAG.
-
-Upload documents to your datapack's knowledge base:
-
-```bash
-meko datapack add_knowledge_base --name my-datapack --url s3://bucket/docs/
-```
-
-<!-- TODO: Add details on portal-based document upload once the web portal is available -->
-
-### Query your knowledge
-
-Once your documents are indexed, query them through your IDE:
-
-```text
-Search the knowledge base for information about <your topic>
-```
-
-The MCP server performs semantic search across your indexed documents and returns relevant chunks.
 
 ### Observe your datapack
 
