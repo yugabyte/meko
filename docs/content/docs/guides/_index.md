@@ -12,12 +12,12 @@ Use the following guides to learn key concepts and workflows for Meko.
 {{< card-group >}}
   {{< card
     href="guides/working-with-memory/"
-    title="Working with memory"
+    title="Work with memory"
     desc="Add, search, and manage agent memories."
   >}}
   {{< card
     href="guides/working-with-knowledge-bases/"
-    title="Working with knowledge bases"
+    title="Work with knowledge bases"
     desc="Build and query knowledge bases from your documents."
   >}}
   {{< card

@@ -7,7 +7,7 @@ weight: 30
 
 A **knowledge base** in Meko is a RAG (Retrieval-Augmented Generation) pipeline that ingests your documents, breaks them into chunks, generates vector embeddings, and indexes them for semantic search. Agents can then query the knowledge base to find relevant information from your documents.
 
-## How It Works
+## How it works
 
 When you add a knowledge base to a datapack, Meko's `pg_dist_rag` pipeline:
 
@@ -19,7 +19,7 @@ When you add a knowledge base to a datapack, Meko's `pg_dist_rag` pipeline:
 
 All of this happens within your datapack's database --- there's no separate vector database to manage.
 
-## Supported Document Formats
+## Supported document formats
 
 Meko supports documents in:
 
@@ -32,7 +32,7 @@ Meko supports documents in:
 
 Documents can be loaded from S3, local filesystem, or NFS.
 
-## Adding a Knowledge Base
+## Add a knowledge base
 
 Using the CLI:
 
@@ -60,20 +60,20 @@ POST /api/v1/datapacks/{name}/knowledge-bases
 }
 ```
 
-## Querying Knowledge
+## Query knowledge
 
 Once indexed, agents can query the knowledge base through the MCP server. The MCP tools handle embedding the query, performing similarity search, and returning relevant chunks.
 
-## Managing Knowledge Bases
+## Manage knowledge bases
 
 | Method | Endpoint / Command | Description |
-|--------|-------------------|-------------|
+| :----- | :----------------- | :---------- |
 | CLI | `meko datapack add_knowledge_base --name <n> --url <path>` | Add a new knowledge base |
 | API | `GET /api/v1/datapacks/{name}/knowledge-bases` | List knowledge bases |
 | API | `POST /api/v1/datapacks/{name}/knowledge-bases` | Add a knowledge base |
 | API | `DELETE /api/v1/datapacks/{name}/knowledge-bases` | Delete a knowledge base |
 
-## Next Steps
+## Next steps
 
-- [Working with Knowledge Bases guide](../../guides/working-with-knowledge-bases/) --- Step-by-step guide for building and querying knowledge bases
-- [Datapacks](../datapacks/) --- Understand the isolation model
+- [Work with knowledge bases](../../../guides/working-with-knowledge-bases/) - How to build and query knowledge bases
+- [Learn about datapacks](../datapacks/)

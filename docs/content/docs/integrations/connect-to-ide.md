@@ -1,6 +1,6 @@
 ---
 title: Connect to an IDE
-linkTitle: AI tools
+linkTitle: IDEs
 description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and more
 weight: 3010
 type: docs

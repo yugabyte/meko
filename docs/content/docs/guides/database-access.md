@@ -7,7 +7,7 @@ weight: 4500
 
 Every datapack includes a dedicated YugabyteDB (YSQL) database that you can access directly using standard PostgreSQL tools.
 
-## Connecting
+## Connect
 
 ### Via CLI
 
@@ -17,7 +17,7 @@ meko datapack connect --name my-datapack
 
 This opens an interactive database shell connected to your datapack.
 
-### Via Connection String
+### Via connection string
 
 Each datapack provides a PostgreSQL connection string when created:
 
@@ -27,9 +27,9 @@ postgresql://db_my-datapack:password@host:5433/account_id_my-datapack
 
 Use this with any PostgreSQL client: `psql`, pgAdmin, DBeaver, or your application's database driver.
 
-## What You Can Do
+## What you can do
 
-### Read-Only Queries
+### Read-only queries
 
 Query your datapack's data directly:
 
@@ -41,7 +41,7 @@ SELECT * FROM conversations ORDER BY created_at DESC LIMIT 10;
 SELECT * FROM memories WHERE user_id = 'my-user';
 ```
 
-### Write Queries
+### Write queries
 
 You can also write data directly to your datapack's database:
 
@@ -55,7 +55,7 @@ CREATE TABLE project_notes (
 );
 ```
 
-### Schema Summary
+### Schema summary
 
 Query the database schema to understand what tables are available:
 
@@ -68,7 +68,7 @@ WHERE table_schema = 'public';
 <!-- TODO: Add detailed table schema documentation for each datapack table -->
 <!-- TODO: Add examples of combining direct SQL with MCP tool operations -->
 
-## Next Steps
+## Next steps
 
-- [OLTP Data concept](../../about/core-concepts/oltp-data/) --- YugabyteDB YSQL details
-- [Working with Knowledge Bases](../working-with-knowledge-bases/) --- RAG pipeline operations
+- [Learn about OLTP data](../../architecture/core-concepts/oltp-data/)
+- [Work with knowledge bases](../working-with-knowledge-bases/)

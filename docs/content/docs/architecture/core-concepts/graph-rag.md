@@ -7,7 +7,7 @@ weight: 40
 
 **Graph RAG** in Meko uses [Apache AGE](https://age.apache.org/) (A Graph Extension) to store and query entity-relationship data extracted from agent conversations. This complements the vector-based memory by providing structured relationship traversal.
 
-## How It Works
+## How it works
 
 When memories are added, Meko's mem0 integration extracts entities and their relationships:
 
@@ -21,7 +21,7 @@ For example, the memory *"I like tropical beach vacations on a budget"* might cr
 - Nodes: **User**, **Tropical Beaches**, **Budget Travel**
 - Edges: **User --prefers--> Tropical Beaches**, **User --prefers--> Budget Travel**
 
-## Why Graph + Vector
+## Why graph + vector
 
 Vector search alone finds memories that are semantically similar to a query. Graph traversal adds the ability to:
 
