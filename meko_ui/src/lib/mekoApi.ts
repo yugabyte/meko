@@ -142,6 +142,7 @@ const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(
   /\/$/,
   "",
 );
+const PROVISION_STATUS_PATH = "/internal/provision-status";
 
 const apiClient = axios.create({
   baseURL: API_BASE,
@@ -247,5 +248,5 @@ export async function ensureLangfuseProjectKeys(datapackName: string) {
 }
 
 export async function getProvisionStatus() {
-  return request<ProvisionStatus>("/internal/provision-status", "GET");
+  return request<ProvisionStatus>(PROVISION_STATUS_PATH, "GET");
 }

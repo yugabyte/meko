@@ -30,11 +30,22 @@ const MEMORIES = [
   { id: "m_5", agentId: "agt_3f2e1d", context: "Set alarm for 7am on weekdays", createdAt: "2023-10-24T20:00:00Z" },
 ];
 
-const KNOWLEDGE_BASES = [
-  { id: "kb_1", source: "Stripe API Documentation", vectorIndex: "stripe_docs_idx_v1", docsCount: 540, embeddingsCount: 1250 },
-  { id: "kb_2", source: "Internal Engineering Wiki", vectorIndex: "internal_wiki_idx_prod", docsCount: 12400, embeddingsCount: 36000 },
-  { id: "kb_3", source: "Customer Support Tickets 2023", vectorIndex: "zendesk_archive_2023", docsCount: 45000, embeddingsCount: 135000 },
-];
+type ProvisionStatusCache = Record<string, ProvisionStatus>;
+
+function readProvisionStatusCache(): ProvisionStatusCache {
+  const raw = sessionStorage.getItem(PROVISION_STATUS_CACHE_KEY);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as ProvisionStatusCache;
+  } catch {
+    sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
+    return {};
+  }
+}
+
+function writeProvisionStatusCache(cache: ProvisionStatusCache) {
+  sessionStorage.setItem(PROVISION_STATUS_CACHE_KEY, JSON.stringify(cache));
+}
 
 export default function Home() {
   const [datapacks, setDatapacks] = useState<Datapack[]>([]);
@@ -190,21 +201,15 @@ export default function Home() {
   useEffect(() => {
     if (!isConnectOpen) return;
     let mounted = true;
-    const cachedRaw = sessionStorage.getItem(PROVISION_STATUS_CACHE_KEY);
-    if (cachedRaw) {
-      try {
-        const cached = JSON.parse(cachedRaw) as ProvisionStatus;
-        if (mounted) {
-          setProvisionStatus(cached);
-          setConnectLoading(false);
-          setConnectError(null);
-          return () => {
-            mounted = false;
-          };
-        }
-      } catch {
-        sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
-      }
+    const cache = readProvisionStatusCache();
+    const cached = activeDatapack ? cache[activeDatapack] : undefined;
+    if (cached && mounted) {
+      setProvisionStatus(cached);
+      setConnectLoading(false);
+      setConnectError(null);
+      return () => {
+        mounted = false;
+      };
     }
 
     const loadProvisionStatus = async () => {
@@ -214,11 +219,26 @@ export default function Home() {
         const details = await getProvisionStatus();
         if (!mounted) return;
         setProvisionStatus(details);
-        sessionStorage.setItem(PROVISION_STATUS_CACHE_KEY, JSON.stringify(details));
+        const nextCache = readProvisionStatusCache();
+        if (activeDatapack) {
+          nextCache[activeDatapack] = details;
+        }
+        if (details.datapack_name) {
+          nextCache[details.datapack_name] = details;
+        }
+        writeProvisionStatusCache(nextCache);
       } catch (err) {
         if (!mounted) return;
         setProvisionStatus(null);
-        sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
+        if (activeDatapack) {
+          const nextCache = readProvisionStatusCache();
+          delete nextCache[activeDatapack];
+          if (Object.keys(nextCache).length === 0) {
+            sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
+          } else {
+            writeProvisionStatusCache(nextCache);
+          }
+        }
         setConnectError(
           err instanceof Error ? err.message : "Failed to load connection details",
         );
@@ -230,7 +250,7 @@ export default function Home() {
     return () => {
       mounted = false;
     };
-  }, [isConnectOpen]);
+  }, [isConnectOpen, activeDatapack]);
 
   const handleCreateDatapack = async () => {
     const name = window.prompt("Datapack name (unique)");
