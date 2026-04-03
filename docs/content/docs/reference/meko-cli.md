@@ -262,7 +262,7 @@ The CLI writes structured logs to `~/var/meko/logs/`. Use `--verbose` to enable 
 meko [command] --verbose
 ```
 
-## Build from Source
+## Build from source
 
 If you decide to download the CLI source code from the GitHub repository, you need to build the CLI locally.
 

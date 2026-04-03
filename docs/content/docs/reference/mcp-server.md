@@ -17,9 +17,9 @@ Most endpoints require a Bearer token obtained from the login endpoint.
 Authorization: Bearer {access_token}
 ```
 
-## Auth Endpoints
+## Auth endpoints
 
-### Sign Up
+### Sign up
 
 Register a new user account.
 
@@ -38,7 +38,7 @@ POST /auth/signup
 
 **Responses:** `201 Created`, `400 Bad Request`, `409 Conflict`
 
-### Confirm Sign Up
+### Confirm sign up
 
 Confirm email with verification code.
 
@@ -95,19 +95,21 @@ POST /auth/logout
 
 ---
 
-# Meko MCP Server Tools Reference
+# Meko MCP Server tools reference
 
 This document summarizes the Meko MCP Server tools available in this session, including what each tool does, the inputs it typically expects, and when to use it.
 
-## Tool Selection Guide
+## Tool selection
 
-- Use `memory_*` for durable facts, preferences, decisions, and useful outcomes you want to recall across agents.
-- Use `knowledgebase_*` for reusable indexed documents and document retrieval across agents.
-- Use `db_*` for structured operational data you want to query or modify with SQL.
-- Use `conversation_*` for full saved chat history and thread replay.
-- Use `datapack_*` for provisioning and managing Meko workspaces/environments.
+| Use | For |
+| :--- | :--- |
+| `memory_*` | Durable facts, preferences, decisions, and useful outcomes you want to recall across agents. |
+| `knowledgebase_*` | Reusable indexed documents and document retrieval across agents. |
+| `db_*` | Structured operational data you want to query or modify with SQL. |
+| `conversation_*` | Full saved chat history and thread replay. |
+| `datapack_*` | Provisioning and managing Meko workspaces/environments. |
 
-## Conversation Tools
+## Conversation tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -118,7 +120,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `conversation_update` | Updates a conversation title or metadata. | `conversation_id`, `agent_id`, `title`, `metadata` | When organizing or relabeling stored conversations. |
 | `conversation_delete` | Permanently deletes a stored conversation. | `conversation_id`, `agent_id` | When you intentionally want to remove saved chat history. |
 
-## Memory Tools
+## Memory tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -130,7 +132,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `memory_delete_by_id` | Deletes one memory. | `agent_id`, `conversation_id`, `memory_id` | When a specific stored memory is no longer wanted. |
 | `memory_delete_all` | Deletes all memories in a scope. | `agent_id`, `conversation_id`, `user_id`, `app_id`, `run_id` | When doing a full reset or broad cleanup. |
 
-## Knowledgebase Tools
+## Knowledgebase tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -138,7 +140,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `knowledgebase_add_source_to_index` | Adds another document source to an existing index. | `conversation_id`, `index_name`, `source_id`, `chunk_size`, `chunk_overlap`, `datapack_id` | When expanding an existing knowledgebase instead of creating a duplicate. |
 | `knowledgebase_check_index_status` | Checks indexing/build progress and readiness. | `conversation_id`, `index_name`, `datapack_id` | Before assuming a knowledgebase is ready for retrieval. |
 
-## Database Tools
+## Database tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -146,7 +148,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `db_run_write_query` | Runs a write SQL statement in a transaction. | `conversation_id`, `query`, `datapack_id` | When inserting, updating, or deleting structured data. |
 | `db_summarize_database` | Summarizes tables, schema, and row counts. | `conversation_id`, `schema`, `datapack_id` | When exploring a datapack database before writing queries. |
 
-## Datapack Tools
+## Datapack tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -156,7 +158,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `datapack_update` | Updates a datapack's database connection string. | `name`, `connection_string` | When repointing a datapack to a new database connection. |
 | `datapack_delete` | Permanently deletes a datapack. | `name` | When removing an environment entirely. |
 
-## Fast Rule of Thumb
+## Fast rule of thumb
 
 - "Remember this about me or the project" -> `memory_*`
 - "Index these docs for reuse" -> `knowledgebase_*`
@@ -167,7 +169,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 
 ## Health
 
-### Health Check
+### Health check
 
 ```text
 GET /health
@@ -179,7 +181,7 @@ GET /health
 
 ---
 
-## Common Response Format
+## Common response format
 
 All endpoints return responses in the following format:
 

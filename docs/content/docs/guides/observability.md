@@ -7,18 +7,18 @@ weight: 4600
 
 Meko provides end-to-end observability into your agents' data operations, giving you the visibility production AI applications require.
 
-## What You Can Observe
+## What you can observe
 
 ### Traces
 
 Every data operation your agent performs is traced:
 
-- **Memory operations** --- When memories are added, searched, or cleared
-- **Knowledge base queries** --- Document retrieval operations and their results
-- **Database operations** --- SQL queries and their execution times
-- **MCP tool invocations** --- Each tool call and its result
+- **Memory operations** - When memories are added, searched, or cleared.
+- **Knowledge base queries** - Document retrieval operations and their results.
+- **Database operations** - SQL queries and their execution times.
+- **MCP tool invocations** - Each tool call and its result.
 
-### Conversation History
+### Conversation history
 
 Meko stores the full conversation history between users and agents:
 
@@ -26,7 +26,7 @@ Meko stores the full conversation history between users and agents:
 - Timestamps and session identifiers
 - S3-backed tiering for cost-effective long-term storage
 
-### Chain of Thought
+### Chain of thought
 
 For agents that produce reasoning traces, Meko captures the complete chain of thought:
 
@@ -34,7 +34,7 @@ For agents that produce reasoning traces, Meko captures the complete chain of th
 - Sub-agent orchestration audit trails
 - Decision points and the data that informed them
 
-## Key Metrics
+## Key metrics
 
 For each datapack, you can view:
 
@@ -44,7 +44,7 @@ For each datapack, you can view:
 - Token costs per interaction
 - Latency at each pipeline stage
 
-## LangFuse Integration
+## LangFuse integration
 
 Meko integrates with [LangFuse](https://github.com/langfuse/langfuse) for trace collection and visualization.
 
@@ -53,7 +53,7 @@ Meko integrates with [LangFuse](https://github.com/langfuse/langfuse) for trace 
 <!-- TODO: Add documentation for trace-related MCP tools and API endpoints -->
 <!-- TODO: Add guide for common debugging patterns using traces -->
 
-## Next Steps
+## Next steps
 
-- [Traces concept](../../about/core-concepts/traces/) --- How tracing works under the hood
-- [Working with Memory](../working-with-memory/) --- Memory operations that generate traces
+- [Learn about traces](../../about/core-concepts/traces/)
+- [Work with memory](../working-with-memory/)
