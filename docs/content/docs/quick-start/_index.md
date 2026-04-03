@@ -22,12 +22,12 @@ Get from zero to a working Meko integration in 60 seconds.
 
 1. Clone the meko-mcp-server repo
 ```sh
-git clone git@github.com:yugabyte/yugabytedb-mcp-server.git
+git clone https://github.com/yugabyte/meko-mcp-server.git
 ```
 
 2. Switch to the branch add-skills
 ```sh
-<TBD>
+ git checkout add-skills
 ```
 
 3. From the meko-mcp-server directory run the following command: 
