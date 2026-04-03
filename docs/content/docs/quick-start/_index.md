@@ -18,6 +18,26 @@ Get from zero to a working Meko integration in 60 seconds.
 	* Your MCP server URL
 	* Your API key
 
+## Add skills to your agent (temporary instructions during Tech Preview):
+
+1. Clone the meko-mcp-server repo
+```sh
+git clone git@github.com:yugabyte/yugabytedb-mcp-server.git
+```
+
+2. Switch to the branch add-skills
+```sh
+<TBD>
+```
+
+3. From the meko-mcp-server directory run the following command: 
+
+```sh
+npx skills add ./skills -g
+```
+
+3. You will be prompted to select the skills you want to install, select both meko-mcp-tools as well as ysql.
+4. Next you will be prompted to select the agent you want to install the skills to, select your agent, and it should install both the skills to the agents.
 ## Connect any AI client
 
 Each Meko account has one or more datapacks, which is a container for memory and knowledge. A default datapack is created for you when you sign up.
@@ -108,9 +128,17 @@ Meko allows management of and collaboration around "knowledge" and "memory".
 
 Note: conversation history is also considered a "raw document"
 
-### Upload knowledge
+### Upload knowledge (coming soon to the web portal... please skip unless you want to try the CLI approach)
 
-Meko allows you add knowledge to your datapack by simply uploading documents. We do this using the [meko CLI](../../reference/cli-overview/).
+Meko allows you add knowledge to your datapack by simply uploading documents.  In your IDE, you can attach a document to your prompt, and type 
+
+```bash
+Store the attached document as long-term knowledge.
+```
+
+##### CLI approach
+
+We can also do this using the [meko CLI](../../reference/cli-overview/).
 
 In the following example, we'll add documents to your datapack and query them using RAG.
 
@@ -122,7 +150,7 @@ meko datapack add_knowledge_base --name my-datapack --url s3://bucket/docs/
 
 <!-- TODO: Add details on portal-based document upload once the web portal is available -->
 
-### Query your knowledge
+### Query your knowledge (coming soon to the web portal... please skip unless you want to try the CLI approach)
 
 Once your documents are parsed, chunked, and indexed by Meko, query them through your IDE:
 
