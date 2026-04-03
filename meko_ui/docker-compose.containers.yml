@@ -20,6 +20,27 @@ services:
     networks:
       - meko_net
 
+  # # Meko application container (served on internal port 5000)
+  # meko-ui:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     args:
+  #       VITE_COGNITO_DOMAIN: ${VITE_COGNITO_DOMAIN:-https://auth.mekodev.com}
+  #       VITE_COGNITO_CLIENT_ID: ${VITE_COGNITO_CLIENT_ID:-4kipguff8t7fphhee3dktt9ihn}
+  #       VITE_COGNITO_REDIRECT_URI: ${VITE_COGNITO_REDIRECT_URI:-http://localhost:5000/signin}
+  #       VITE_OBSERVE_EMBED_PATH: ${VITE_OBSERVE_EMBED_PATH:-/observe/}
+  #   image: meko-ui:local
+  #   container_name: meko-ui
+  #   restart: unless-stopped
+  #   expose:
+  #     - "5000"
+  #   environment:
+  #     NODE_ENV: dev
+  #     PORT: 5000
+  #   networks:
+  #     - meko_net
+
   # Single entrypoint reverse proxy:
   # / -> meko-ui, /observe + Langfuse paths -> langfuse-web
   meko-proxy:

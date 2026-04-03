@@ -10,7 +10,8 @@ type ApiEnvelope<T> = {
   error?: ApiError | null;
 };
 
-const AUTH_EXPIRED_EVENT = "meko:auth-expired";
+export const AUTH_EXPIRED_EVENT = "meko:auth-expired";
+export const PROVISION_STATUS_CACHE_KEY = "meko:provision-status:v1";
 let authExpiredNotified = false;
 const AUTH_PUBLIC_ENDPOINTS = new Set([
   "/auth/me",
@@ -127,6 +128,16 @@ export type LangfuseProjectKeys = {
   secret_key: string;
 };
 
+export type ProvisionStatus = {
+  datapack_id: string;
+  datapack_name: string;
+  mcp_server_url: string;
+  mcp_api_key: string;
+  db_user_name: string;
+  db_password: string;
+  db_conn_str: string;
+};
+
 const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(
   /\/$/,
   "",
@@ -233,4 +244,8 @@ export async function ensureLangfuseProjectKeys(datapackName: string) {
     `/datapacks/${encodeURIComponent(datapackName)}/langfuse/project-keys`,
     "POST",
   );
+}
+
+export async function getProvisionStatus() {
+  return request<ProvisionStatus>("/internal/provision-status", "GET");
 }

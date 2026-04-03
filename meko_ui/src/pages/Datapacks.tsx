@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { cn } from "@/lib/utils";
 import {
   createDatapack,
+  getProvisionStatus,
   listAgents,
   listDatapacks,
   listKnowledgeBases,
@@ -17,6 +18,8 @@ import {
   type Datapack,
   type DatapackStatus,
   type KnowledgeBase,
+  PROVISION_STATUS_CACHE_KEY,
+  type ProvisionStatus,
 } from "@/lib/mekoApi";
 
 const MEMORIES = [
@@ -47,6 +50,10 @@ export default function Home() {
   const [memoriesSortOrder, setMemoriesSortOrder] = useState<"asc" | "desc">("desc");
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isExplanationExpanded, setIsExplanationExpanded] = useState(true);
+  const [isConnectOpen, setIsConnectOpen] = useState(false);
+  const [connectLoading, setConnectLoading] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [provisionStatus, setProvisionStatus] = useState<ProvisionStatus | null>(null);
 
   const selectedDatapack = useMemo(
     () => datapacks.find((dp) => dp.name === activeDatapack),
@@ -180,6 +187,51 @@ export default function Home() {
     };
   }, [activeDatapack]);
 
+  useEffect(() => {
+    if (!isConnectOpen) return;
+    let mounted = true;
+    const cachedRaw = sessionStorage.getItem(PROVISION_STATUS_CACHE_KEY);
+    if (cachedRaw) {
+      try {
+        const cached = JSON.parse(cachedRaw) as ProvisionStatus;
+        if (mounted) {
+          setProvisionStatus(cached);
+          setConnectLoading(false);
+          setConnectError(null);
+          return () => {
+            mounted = false;
+          };
+        }
+      } catch {
+        sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
+      }
+    }
+
+    const loadProvisionStatus = async () => {
+      try {
+        setConnectLoading(true);
+        setConnectError(null);
+        const details = await getProvisionStatus();
+        if (!mounted) return;
+        setProvisionStatus(details);
+        sessionStorage.setItem(PROVISION_STATUS_CACHE_KEY, JSON.stringify(details));
+      } catch (err) {
+        if (!mounted) return;
+        setProvisionStatus(null);
+        sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
+        setConnectError(
+          err instanceof Error ? err.message : "Failed to load connection details",
+        );
+      } finally {
+        if (mounted) setConnectLoading(false);
+      }
+    };
+    loadProvisionStatus();
+    return () => {
+      mounted = false;
+    };
+  }, [isConnectOpen]);
+
   const handleCreateDatapack = async () => {
     const name = window.prompt("Datapack name (unique)");
     if (!name) return;
@@ -262,7 +314,16 @@ export default function Home() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Dialog>
+            <Dialog
+              open={isConnectOpen}
+              onOpenChange={(open) => {
+                setIsConnectOpen(open);
+                if (!open) {
+                  setConnectError(null);
+                  setConnectLoading(false);
+                }
+              }}
+            >
               <DialogTrigger asChild>
                 <Button variant="outline" className="gap-2 border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
                   <LinkIcon className="w-4 h-4" />
@@ -273,38 +334,82 @@ export default function Home() {
                 <DialogHeader>
                   <DialogTitle className="text-xl text-white">Connect to Datapack</DialogTitle>
                   <DialogDescription className="text-muted-foreground">
-                    Use these credentials to connect your MCP server. Keep your API key secure.
+                    Use these credentials to connect your MCP server and database.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground">Account ID</label>
-                    <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                      <code className="text-sm text-white">acc_prod_9f8e7d</code>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy("acc_prod_9f8e7d", "account")}>
-                        {copiedField === "account" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                      </Button>
+                {connectLoading ? (
+                  <div className="py-8 text-sm text-muted-foreground text-center">
+                    Loading connection details...
+                  </div>
+                ) : connectError ? (
+                  <div className="py-6">
+                    <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                      {connectError}
+                    </p>
+                  </div>
+                ) : provisionStatus ? (
+                  <div className="space-y-4 py-4">
+                    <h3 className="text-lg font-semibold text-white">Datapack</h3>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-muted-foreground">Datapack</label>
+                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-sm text-white break-all">{provisionStatus.datapack_name}</code>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.datapack_name, "dp")}>
+                          {copiedField === "dp" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </div>
+
+                    <h3 className="pt-2 text-lg font-semibold text-white">MCP Server</h3>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-muted-foreground">URL</label>
+                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-xs text-white break-all">{provisionStatus.mcp_server_url}</code>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.mcp_server_url, "mcpurl")}>
+                          {copiedField === "mcpurl" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-muted-foreground">API Key</label>
+                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-sm text-white break-all">{provisionStatus.mcp_api_key}</code>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.mcp_api_key, "mcpkey")}>
+                          {copiedField === "mcpkey" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </div>
+
+                    <h3 className="pt-2 text-lg font-semibold text-white">Database Access</h3>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-muted-foreground">Username</label>
+                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-sm text-white break-all">{provisionStatus.db_user_name}</code>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.db_user_name, "dbuser")}>
+                          {copiedField === "dbuser" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-muted-foreground">Password</label>
+                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-sm text-white break-all">{provisionStatus.db_password}</code>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.db_password, "dbpass")}>
+                          {copiedField === "dbpass" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-muted-foreground">Conn String</label>
+                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-xs text-blue-300 break-all">{provisionStatus.db_conn_str}</code>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.db_conn_str, "dbconn")}>
+                          {copiedField === "dbconn" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
                     </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground">API Key</label>
-                    <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                      <code className="text-sm text-white">meko_dp_live_abc123xyz890</code>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy("meko_dp_live_abc123xyz890", "apikey")}>
-                        {copiedField === "apikey" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-muted-foreground">MCP Connect String</label>
-                    <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                      <code className="text-xs text-blue-300 break-all">{`mcp://acc_prod_9f8e7d:meko_dp_live_abc123xyz890@api.meko.com/datapacks/${activeDatapack}`}</code>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white flex-shrink-0" onClick={() => handleCopy(`mcp://acc_prod_9f8e7d:meko_dp_live_abc123xyz890@api.meko.com/datapacks/${activeDatapack}`, "connect")}>
-                        {copiedField === "connect" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+                ) : null}
               </DialogContent>
             </Dialog>
             <Button
@@ -380,51 +485,52 @@ export default function Home() {
 
         {/* Dashboard Overview Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card 
-            className={cn("cursor-pointer transition-all hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/10", activeTab === "agents" ? "border-blue-500 bg-blue-500/5" : "border-border bg-[#1C2333]")}
-            onClick={() => setActiveTab("agents")}
-          >
+          <Card className="relative border-blue-500 bg-blue-500/5 overflow-hidden">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <Users className="w-4 h-4" />
                 Agents Connected
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="blur-md opacity-35 select-none">
               <div className="text-3xl font-semibold text-white">
                 {datapackStatus?.agent_count ?? agents.length}
               </div>
               <p className="text-xs text-muted-foreground mt-1">Active across this datapack</p>
             </CardContent>
+            <div className="absolute inset-0 flex items-center justify-center bg-[#0E1525]/45">
+              <span className="rounded-full border border-blue-500/30 bg-blue-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-blue-200">
+                Coming Soon
+              </span>
+            </div>
           </Card>
 
-          <Card 
-            className={cn("cursor-pointer transition-all hover:border-purple-500/50 hover:shadow-lg hover:shadow-purple-500/10", activeTab === "memories" ? "border-purple-500 bg-purple-500/5" : "border-border bg-[#1C2333]")}
-            onClick={() => setActiveTab("memories")}
-          >
+          <Card className="relative border-border bg-[#1C2333] overflow-hidden">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <BrainCircuit className="w-4 h-4" />
                 Total Memories
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="blur-sm opacity-60 select-none">
               <div className="text-3xl font-semibold text-white">{sortedMemories.length}</div>
               <p className="text-xs text-muted-foreground mt-1">Stored interactions & context</p>
             </CardContent>
+            <div className="absolute inset-0 flex items-center justify-center bg-[#1C2333]/35">
+              <span className="rounded-full border border-purple-500/30 bg-purple-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-purple-200">
+                Coming Soon
+              </span>
+            </div>
           </Card>
 
-          <Card 
-            className={cn("cursor-pointer transition-all hover:border-amber-500/50 hover:shadow-lg hover:shadow-amber-500/10", activeTab === "knowledge" ? "border-amber-500 bg-amber-500/5" : "border-border bg-[#1C2333]")}
-            onClick={() => setActiveTab("knowledge")}
-          >
+          <Card className="relative border-border bg-[#1C2333] overflow-hidden">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <Library className="w-4 h-4" />
                 Knowledge Bases
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="blur-sm opacity-60 select-none">
               <div className="flex items-end gap-3">
                 <div className="text-3xl font-semibold text-white">
                   {datapackStatus?.knowledge_base_count ?? knowledgeBases.length}{" "}
@@ -433,47 +539,59 @@ export default function Home() {
               </div>
               <p className="text-xs text-muted-foreground mt-1">Knowledge sources mapped to this datapack</p>
             </CardContent>
+            <div className="absolute inset-0 flex items-center justify-center bg-[#1C2333]/35">
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-amber-200">
+                Coming Soon
+              </span>
+            </div>
           </Card>
         </div>
 
         {/* Detail Views */}
         <div className="mt-8 border border-border rounded-xl bg-[#0E1525] overflow-hidden">
           {activeTab === "agents" && (
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="px-6 py-5 border-b border-border bg-[#1C2333]">
-                <h3 className="text-lg font-medium text-white flex items-center gap-2">
-                  <Users className="w-5 h-5 text-blue-400" />
-                  Agents Dashboard
-                </h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Manage agents utilizing {selectedDatapack?.name || "selected datapack"}.
-                </p>
+            <div className="relative animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="blur-sm opacity-60 select-none">
+                <div className="px-6 py-5 border-b border-border bg-[#1C2333]">
+                  <h3 className="text-lg font-medium text-white flex items-center gap-2">
+                    <Users className="w-5 h-5 text-blue-400" />
+                    Agents Dashboard
+                  </h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Manage agents utilizing {selectedDatapack?.name || "selected datapack"}.
+                  </p>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent border-border">
+                      <TableHead className="w-[150px]">Agent ID</TableHead>
+                      <TableHead className="w-[240px]">Agent Name</TableHead>
+                      <TableHead>Metadata</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {agents.map((agent) => (
+                      <TableRow key={agent.id} className="border-border hover:bg-white/5">
+                        <TableCell className="font-medium text-white">{agent.id}</TableCell>
+                        <TableCell className="text-muted-foreground">{agent.agent_name}</TableCell>
+                        <TableCell className="text-muted-foreground">{agent.agent_metadata || "{}"}</TableCell>
+                      </TableRow>
+                    ))}
+                    {agents.length === 0 && !isLoading && (
+                      <TableRow className="border-border">
+                        <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                          No agents available for this datapack.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
               </div>
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent border-border">
-                    <TableHead className="w-[150px]">Agent ID</TableHead>
-                    <TableHead className="w-[240px]">Agent Name</TableHead>
-                    <TableHead>Metadata</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {agents.map((agent) => (
-                    <TableRow key={agent.id} className="border-border hover:bg-white/5">
-                      <TableCell className="font-medium text-white">{agent.id}</TableCell>
-                      <TableCell className="text-muted-foreground">{agent.agent_name}</TableCell>
-                      <TableCell className="text-muted-foreground">{agent.agent_metadata || "{}"}</TableCell>
-                    </TableRow>
-                  ))}
-                  {agents.length === 0 && !isLoading && (
-                    <TableRow className="border-border">
-                      <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
-                        No agents available for this datapack.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+              <div className="absolute inset-0 flex items-center justify-center bg-[#0E1525]/35">
+                <span className="rounded-full border border-blue-500/30 bg-blue-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-blue-200">
+                  Coming Soon
+                </span>
+              </div>
             </div>
           )}
 

@@ -1,10 +1,7 @@
 import { Link, useLocation } from "wouter";
 import {
   Database,
-  Play,
   Activity,
-  Settings,
-  CreditCard,
   Box,
   ChevronLeft,
   ChevronRight,
@@ -13,7 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { Button } from "./ui/button";
-import { logout } from "@/lib/mekoApi";
+import { logout, PROVISION_STATUS_CACHE_KEY } from "@/lib/mekoApi";
 
 export default function Sidebar() {
   const [location] = useLocation();
@@ -27,16 +24,12 @@ export default function Sidebar() {
     { name: "Observe", href: "/observe-hub", icon: Activity },
   ];
 
-  const bottomItems = [
-    { name: "Settings", href: "/settings", icon: Settings },
-    { name: "Usage and Billing", href: "/billing", icon: CreditCard },
-  ];
-
   const handleLogout = async () => {
     setLogoutError(null);
     setLoggingOut(true);
     try {
       await logout();
+      sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
       window.location.replace("/login");
     } catch (err) {
       setLogoutError(err instanceof Error ? err.message : "logout failed");
@@ -91,18 +84,6 @@ export default function Sidebar() {
       </div>
 
       <div className="p-3 flex flex-col gap-1">
-        {!isCollapsed && <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider animate-in fade-in">Account</div>}
-        {bottomItems.map((item) => (
-          <Link key={item.name} href={item.href} className={cn(
-              "flex items-center rounded-md text-sm font-medium text-gray-400 hover:bg-white/5 hover:text-white transition-colors",
-              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2"
-            )}
-            title={isCollapsed ? item.name : undefined}
-          >
-              <item.icon className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-              {!isCollapsed && <span className="animate-in fade-in truncate">{item.name}</span>}
-          </Link>
-        ))}
         <button
           type="button"
           className={cn(
