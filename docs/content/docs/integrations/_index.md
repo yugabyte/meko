@@ -41,7 +41,7 @@ You follow the same basic pattern with all tools and frameworks:
     logo="logos/integrations/claude.svg"
   >}}
   {{< card
-    href="integrations/connect-to-ide/#codex-desktop"
+    href="integrations/connect-to-ide/#open-ai-codex-desktop"
     title="Codex Desktop"
   >}}
 {{< /card-group >}}

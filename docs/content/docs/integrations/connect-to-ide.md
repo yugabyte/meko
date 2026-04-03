@@ -105,14 +105,16 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 ## Open AI Codex Desktop
 
-Modify the config.toml file from Codex desktop
-
-1. In Codex Desktop, choose **Codex > Settings > MCP servers > Add server > Streamable HTTP**.
-
+1. In Codex Desktop, choose **Codex>Settings>MCP servers>Add server>Streamable HTTP**.
 1. Enter a name for the Meko MCP server.
-1. Enter URL of the Meko MCP server.
-1. Enter a name such as 'MEKO_MCP_TOKEN' for the bearer_token_env variable.
-1. Set MEKO_MCP_TOKEN in your environment that launches Codex by executing a command in your terminal:
+1. Enter the URL of the Meko MCP server.
+1. Enter a name such as 'MEKO_MCP_TOKEN' for the Bearer token env var, and click **Save**.
+
+   The result should look like the following:
+
+    ![Codex Desktop](/images/integrations-codex-desktop.png)
+
+1. Set the MEKO_MCP_TOKEN environment variable with your Meko API key in your terminal using the following command:
 
     ```txt
     launchctl setenv MEKO_MCP_TOKEN <mcp-server-api-key>
@@ -121,10 +123,16 @@ Modify the config.toml file from Codex desktop
 1. Verify that you set the MEKO_MCP_TOKEN correctly with your Meko MCP Server API Key.
 
     ```txt
-    lanchctl getenv MEKO_MCP_TOKEN
+    launchctl getenv MEKO_MCP_TOKEN
     ```
 
-1. Restart Codex.
+1. Quit and restart Codex Desktop.
+
+1. Verify the connection by entering the following in chat:
+
+    ```text
+    Is Codex Desktop configured with an MCP Server for Meko?
+    ```
 
 ## Coming Soon
 
