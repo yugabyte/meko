@@ -93,13 +93,9 @@ POST /auth/logout
 
 **Responses:** `200 OK`, `401 Unauthorized`
 
----
+## Tool reference
 
-# Meko MCP Server tools reference
-
-This document summarizes the Meko MCP Server tools available in this session, including what each tool does, the inputs it typically expects, and when to use it.
-
-## Tool selection
+This section summarizes the available Meko MCP Server tools, including what each tool does, the inputs it typically expects, and when to use it.
 
 | Use | For |
 | :--- | :--- |
@@ -109,7 +105,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `conversation_*` | Full saved chat history and thread replay. |
 | `datapack_*` | Provisioning and managing Meko workspaces/environments. |
 
-## Conversation tools
+### Conversation tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -120,7 +116,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `conversation_update` | Updates a conversation title or metadata. | `conversation_id`, `agent_id`, `title`, `metadata` | When organizing or relabeling stored conversations. |
 | `conversation_delete` | Permanently deletes a stored conversation. | `conversation_id`, `agent_id` | When you intentionally want to remove saved chat history. |
 
-## Memory tools
+### Memory tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -132,7 +128,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `memory_delete_by_id` | Deletes one memory. | `agent_id`, `conversation_id`, `memory_id` | When a specific stored memory is no longer wanted. |
 | `memory_delete_all` | Deletes all memories in a scope. | `agent_id`, `conversation_id`, `user_id`, `app_id`, `run_id` | When doing a full reset or broad cleanup. |
 
-## Knowledgebase tools
+### Knowledgebase tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -140,7 +136,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `knowledgebase_add_source_to_index` | Adds another document source to an existing index. | `conversation_id`, `index_name`, `source_id`, `chunk_size`, `chunk_overlap`, `datapack_id` | When expanding an existing knowledgebase instead of creating a duplicate. |
 | `knowledgebase_check_index_status` | Checks indexing/build progress and readiness. | `conversation_id`, `index_name`, `datapack_id` | Before assuming a knowledgebase is ready for retrieval. |
 
-## Database tools
+### Database tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -148,7 +144,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 | `db_run_write_query` | Runs a write SQL statement in a transaction. | `conversation_id`, `query`, `datapack_id` | When inserting, updating, or deleting structured data. |
 | `db_summarize_database` | Summarizes tables, schema, and row counts. | `conversation_id`, `schema`, `datapack_id` | When exploring a datapack database before writing queries. |
 
-## Datapack tools
+### Datapack tools
 
 | Tool | What it does | Typical inputs | When to use it |
 |---|---|---|---|
@@ -166,10 +162,7 @@ This document summarizes the Meko MCP Server tools available in this session, in
 - "Save or retrieve this chat" -> `conversation_*`
 - "Create or manage a workspace" -> `datapack_*`
 
-
-## Health
-
-### Health check
+## Health check
 
 ```text
 GET /health
@@ -178,8 +171,6 @@ GET /health
 **Auth:** Not required
 
 **Responses:** `200 OK`
-
----
 
 ## Common response format
 
