@@ -12,7 +12,7 @@ The Meko CLI (`meko`) is the primary tool for managing datapacks from the comman
 Pre-built binaries are published as GitHub Releases for every tagged version. Download the archive for your platform from the latest [GitHub Releases](https://github.com/yugabyte/meko/releases/latest).
 
 | Platform | Archive |
-| :------- | :-------|
+| :------- | :------ |
 | macOS (Apple Silicon) | `meko_<VERSION>_darwin_arm64.tar.gz` |
 | macOS (Intel) | `meko_<VERSION>_darwin_amd64.tar.gz` |
 | Linux x86_64 | `meko_<VERSION>_linux_amd64.tar.gz` |

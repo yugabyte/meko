@@ -108,7 +108,7 @@ This section summarizes the available Meko MCP Server tools, including what each
 ### Conversation tools
 
 | Tool | What it does | Typical inputs | When to use it |
-|---|---|---|---|
+| :--- | :----------- | :------------- | :------------- |
 | `conversation_create` | Creates a stored conversation container. | `agent_id`, `title`, `user_id`, `app_id`, `run_id`, `metadata` | When you want to save a chat/thread, not just a fact or document. |
 | `conversation_add_message` | Adds a user/assistant turn to a stored conversation. | `conversation_id`, `agent_id`, `input`, `output`, `reasoning`, `metadata` | When preserving full exchanges rather than storing long-term facts. |
 | `conversation_get` | Fetches a stored conversation, optionally with messages. | `conversation_id`, `agent_id`, `include_messages` | When reviewing or replaying a past conversation. |
@@ -119,7 +119,7 @@ This section summarizes the available Meko MCP Server tools, including what each
 ### Memory tools
 
 | Tool | What it does | Typical inputs | When to use it |
-|---|---|---|---|
+| :--- | :----------- | :------------- | :------------- |
 | `memory_add` | Stores durable facts, preferences, decisions, or useful outcomes. | `agent_id`, `conversation_id`, `text`, `user_id`, `app_id`, `run_id`, `metadata` | When you want long-term reusable memory across threads. |
 | `memory_search` | Searches stored memories semantically and returns related graph relations. | `agent_id`, `conversation_id`, `query`, `user_id`, `limit` | When recalling prior facts, preferences, or decisions. |
 | `memory_get_all` | Lists all memories for an agent or user scope. | `agent_id`, `conversation_id`, `user_id`, `app_id`, `run_id` | When auditing or inspecting what has been remembered. |
@@ -131,15 +131,15 @@ This section summarizes the available Meko MCP Server tools, including what each
 ### Knowledgebase tools
 
 | Tool | What it does | Typical inputs | When to use it |
-|---|---|---|---|
-| `knowledgebase_trigger_index_creation` | Creates a new indexed document knowledgebase and starts ingestion. | `conversation_id`, `source_uris`, `index_name`, `ai_provider`, `embedding_model`, `embedding_dimensions`, `chunk_size`, `chunk_overlap`, `datapack_id` | When you want reusable document retrieval across threads. |
-| `knowledgebase_add_source_to_index` | Adds another document source to an existing index. | `conversation_id`, `index_name`, `source_id`, `chunk_size`, `chunk_overlap`, `datapack_id` | When expanding an existing knowledgebase instead of creating a duplicate. |
-| `knowledgebase_check_index_status` | Checks indexing/build progress and readiness. | `conversation_id`, `index_name`, `datapack_id` | Before assuming a knowledgebase is ready for retrieval. |
+| :--- | :----------- | :------------- | :------------- |
+| `knowledgebase_trigger_index_creation` | Creates a new indexed document knowledge base and starts ingestion. | `conversation_id`, `source_uris`, `index_name`, `ai_provider`, `embedding_model`, `embedding_dimensions`, `chunk_size`, `chunk_overlap`, `datapack_id` | When you want reusable document retrieval across threads. |
+| `knowledgebase_add_source_to_index` | Adds another document source to an existing index. | `conversation_id`, `index_name`, `source_id`, `chunk_size`, `chunk_overlap`, `datapack_id` | When expanding an existing knowledge base instead of creating a duplicate. |
+| `knowledgebase_check_index_status` | Checks indexing/build progress and readiness. | `conversation_id`, `index_name`, `datapack_id` | Before assuming a knowledge base is ready for retrieval. |
 
 ### Database tools
 
 | Tool | What it does | Typical inputs | When to use it |
-|---|---|---|---|
+| :--- | :----------- | :------------- | :------------- |
 | `db_run_read_only_query` | Runs a read-only SQL query and returns JSON results. | `conversation_id`, `query`, `datapack_id` | When you need direct structured data access and know the SQL to run. |
 | `db_run_write_query` | Runs a write SQL statement in a transaction. | `conversation_id`, `query`, `datapack_id` | When inserting, updating, or deleting structured data. |
 | `db_summarize_database` | Summarizes tables, schema, and row counts. | `conversation_id`, `schema`, `datapack_id` | When exploring a datapack database before writing queries. |
@@ -147,7 +147,7 @@ This section summarizes the available Meko MCP Server tools, including what each
 ### Datapack tools
 
 | Tool | What it does | Typical inputs | When to use it |
-|---|---|---|---|
+| :--- | :----------- | :------------- | :------------- |
 | `datapack_create` | Provisions a new datapack/workspace with DB and MCP details. | `name` | When setting up a new isolated Meko environment. |
 | `datapack_describe` | Returns datapack details and optional status. | `name`, `include_status` | When inspecting an existing datapack. |
 | `datapack_list` | Lists available datapacks. | None | When you want to see all workspaces/environments. |
