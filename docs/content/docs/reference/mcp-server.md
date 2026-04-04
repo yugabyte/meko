@@ -97,13 +97,13 @@ POST /auth/logout
 
 This section summarizes the available Meko MCP Server tools, including what each tool does, the inputs it typically expects, and when to use it.
 
-| Use | For |
-| :--- | :--- |
-| `memory_*` | Durable facts, preferences, decisions, and useful outcomes you want to recall across agents. |
-| `knowledgebase_*` | Reusable indexed documents and document retrieval across agents. |
-| `db_*` | Structured operational data you want to query or modify with SQL. |
-| `conversation_*` | Full saved chat history and thread replay. |
-| `datapack_*` | Provisioning and managing Meko workspaces/environments. |
+| Use | | For |
+| :--- | :--- | :--- |
+| Conversation | `conversation_*` | Full saved chat history and thread replay. |
+| Memory | `memory_*` | Durable facts, preferences, decisions, and useful outcomes you want to recall across agents. |
+| Knowledge base | `knowledgebase_*` | Reusable indexed documents and document retrieval across agents. |
+| Database | `db_*` | Structured operational data you want to query or modify with SQL. |
+| Datapack | `datapack_*` | Provisioning and managing Meko workspaces/environments. |
 
 ### Conversation tools
 

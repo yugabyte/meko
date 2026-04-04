@@ -10,23 +10,18 @@ type: docs
 layout: list
 ---
 
-
 Meko offers
 
+- **Collective memory:** learning that compounds across the agents working together, as opposed to just per-agent memory
 
-**Collective memory:** learning that compounds across the agents working together, as opposed to just per-agent memory
+- **Shared knowledge:** building shared knowledge over time from conversations, real-time data sources and slower-changing knowledge bases
 
-**Shared knowledge:** building shared knowledge over time from conversations, real-time data sources and slower-changing knowledge bases
+- **Auditability of the learning process:** connect execution traces to how agents process data and knowledge, learn from it and share that learning
 
-
-**Auditability of the learning process:** connect execution traces to how agents process data and knowledge, learn from it and share that learning
-
-
-Meko integrates easily with any agentic framework through MCP servers. It is serverless, multi-tenant (multi-agentic) and optimized for tiering to object stores. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
+Meko integrates easily with any agentic framework through MCP servers. It is serverless, multi-tenant (multi-agentic), and optimized for tiering to object stores. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
 
 &nbsp;
 &nbsp;
-
 
 {{< card-group variant="three-quarter" >}}
   {{< card
@@ -38,9 +33,8 @@ Meko integrates easily with any agentic framework through MCP servers. It is ser
   >}}
 {{< /card-group >}}
 
-&nbsp;
 
-### Learn more about Meko
+## Learn more about Meko
 
 {{< card-group >}}
   {{< card
