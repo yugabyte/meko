@@ -11,10 +11,10 @@ A **datapack** is Meko's fundamental unit of isolation. Each datapack provides a
 
 When you create a datapack, Meko provisions:
 
-- **A dedicated database** --- An isolated YugabyteDB (YSQL) database with pgvector enabled, scoped to your agent.
-- **An MCP server endpoint** --- A unique URL that your agent uses to discover and interact with its data.
-- **Database credentials** --- A username, password, and connection string for direct PostgreSQL access.
-- **An API key** --- For authenticating MCP requests.
+- **An MCP server endpoint**. A unique URL that your agent uses to discover and interact with the datapack.
+- **An MCP server API key**. For authenticating MCP requests.
+- **A dedicated database**. An isolated YugabyteDB (YSQL) database with pgvector enabled, scoped to your agent.
+- **Database credentials**. A username, password, and connection string for direct PostgreSQL access.
 
 ## Create a datapack
 
