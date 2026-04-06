@@ -1,56 +1,64 @@
-.td-sidebar-nav {
-  .ul-1 > li {
-    padding-left: 0 !important;
-  }
-
-  .td-sidebar-link.tree-root {
-    border: none;
-    margin-bottom: 0;
-  }
-
-  .td-sidebar-link__page {
-    color: $white;
-    font-weight: 400;
-  }
-
-  a:focus,
-  a:hover,
-  a.active {
-    background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-    background-size: 200% 200%;
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    display: inline-block;
-  }
-
-  .td-sidebar-nav__section {
-    label {
-      display: flex;
-      align-items: center;
-      width: 100%;
+body {
+  .td-sidebar {
+    @media (min-width: 1401px) {
+      width: 289px;
     }
 
-    &.with-child {
-      > label {
-        &::before {
-          display: none !important;
-          content: none !important;
-        }
-
-        &::after {
-          font: var(--fa-font-solid);
-          content: '\f054';
-          font-size: 0.75rem;
-          line-height: 1;
-          margin-left: auto; // 🔑 pushes arrow to right
-          padding-left: 0.5rem;
-          transition: transform 0.2s ease;
-        }
+    .td-sidebar-nav {
+      .ul-1 > li {
+        padding-left: 0 !important;
       }
 
-      /* Rotate when expanded */
-      input:checked + label::after {
-        transform: rotate(90deg);
+      .td-sidebar-link.tree-root {
+        border: none;
+        margin-bottom: 0;
+      }
+
+      .td-sidebar-link__page {
+        color: $white;
+        font-weight: 400;
+      }
+
+      a:focus,
+      a:hover,
+      a.active {
+        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+        background-size: 200% 200%;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        display: inline-block;
+      }
+
+      .td-sidebar-nav__section {
+        label {
+          display: flex;
+          align-items: center;
+          width: 100%;
+        }
+
+        &.with-child {
+          > label {
+            &::before {
+              display: none !important;
+              content: none !important;
+            }
+
+            &::after {
+              font: var(--fa-font-solid);
+              content: '\f054';
+              font-size: 0.75rem;
+              line-height: 1;
+              margin-left: auto; // 🔑 pushes arrow to right
+              padding-left: 0.5rem;
+              transition: transform 0.2s ease;
+            }
+          }
+
+          /* Rotate when expanded */
+          input:checked + label::after {
+            transform: rotate(90deg);
+          }
+        }
       }
     }
   }
