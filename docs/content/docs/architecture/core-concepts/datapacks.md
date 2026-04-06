@@ -7,16 +7,16 @@ weight: 10
 
 A **datapack** is Meko's fundamental unit of isolation. Each datapack provides a self-contained environment for an agent, bundling together a dedicated database, MCP server endpoint, and access credentials.
 
-## What's in a Datapack
+## What's in a datapack
 
 When you create a datapack, Meko provisions:
 
-- **A dedicated database** --- An isolated YugabyteDB (YSQL) database with pgvector enabled, scoped to your agent.
-- **An MCP server endpoint** --- A unique URL that your agent uses to discover and interact with its data.
-- **Database credentials** --- A username, password, and connection string for direct PostgreSQL access.
-- **An API key** --- For authenticating MCP requests.
+- **An MCP server endpoint**. A unique URL that your agent uses to discover and interact with the datapack.
+- **An MCP server API key**. For authenticating MCP requests.
+- **A dedicated database**. An isolated YugabyteDB (YSQL) database with pgvector enabled, scoped to your agent.
+- **Database credentials**. A username, password, and connection string for direct PostgreSQL access.
 
-## Creating a Datapack
+## Create a datapack
 
 Using the CLI:
 
@@ -43,15 +43,15 @@ This returns the datapack's MCP server URL, API key, and database connection det
 }
 ```
 
-## Isolation Model
+## Isolation model
 
 Each datapack is fully isolated:
 
-- **Data isolation** --- Separate database per datapack. One agent cannot access another's data.
-- **Credential isolation** --- Unique credentials per datapack.
-- **MCP isolation** --- Each datapack's MCP server only exposes that datapack's tools and data.
+- **Data isolation**. Separate database per datapack. One agent cannot access another's data.
+- **Credential isolation**. Unique credentials per datapack.
+- **MCP isolation**. Each datapack's MCP server only exposes that datapack's tools and data.
 
-## Connecting via MCP
+## Connect via MCP
 
 Each datapack exposes an MCP server that agents use to interact with their data:
 
@@ -68,12 +68,12 @@ Each datapack exposes an MCP server that agents use to interact with their data:
 
 Add this configuration to your IDE or agent framework to connect.
 
-## Managing Datapacks
+## Manage datapacks
 
 | Command | Description |
-|---------|-------------|
+| :------ | :---------- |
 | `meko datapack list` | List all your datapacks |
 | `meko datapack status --name <n>` | View datapack summary |
 | `meko datapack delete --name <n>` | Permanently delete a datapack |
 
-See the [CLI Commands reference](../../reference/cli-commands/datapacks/) for full details.
+See the [CLI reference](../../../reference/meko-cli/) for full details.

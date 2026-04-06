@@ -1,5 +1,5 @@
 ---
-title: Working with knowledge bases
+title: Work with knowledge bases
 linkTitle: Knowledge bases
 description: Build, query, and manage knowledge bases in Meko
 weight: 4400
@@ -7,7 +7,7 @@ weight: 4400
 
 Knowledge bases let you load documents into your datapack and query them using semantic search (RAG). Meko handles chunking, embedding, and indexing automatically.
 
-## Adding a Knowledge Base
+## Add a knowledge base
 
 ### Via CLI
 
@@ -35,19 +35,19 @@ POST /api/v1/datapacks/{name}/knowledge-bases
 }
 ```
 
-## Supported Sources
+## Supported sources
 
 | Source | Example URL |
-|--------|-----------|
+| :----- | :---------- |
 | S3 | `s3://bucket/docs/` |
 | Local filesystem | `/path/to/docs/` |
 | NFS | NFS mount path |
 
-## Supported Document Formats
+## Supported document formats
 
 PDF, Parquet, Iceberg, JSON, images, and video.
 
-## Querying Knowledge
+## Query knowledge
 
 Once your documents are indexed, query them through the MCP server from your IDE:
 
@@ -57,7 +57,7 @@ Search the knowledge base for information about deployment procedures
 
 The MCP server embeds your query, performs similarity search against the indexed chunks, and returns the most relevant results.
 
-## Listing Knowledge Bases
+## List knowledge bases
 
 ### Via CLI
 
@@ -73,7 +73,7 @@ Shows knowledge base count as part of the datapack summary.
 GET /api/v1/datapacks/{name}/knowledge-bases
 ```
 
-## Deleting a Knowledge Base
+## Delete a knowledge base
 
 ### Via API
 
@@ -93,5 +93,5 @@ DELETE /api/v1/datapacks/{name}/knowledge-bases
 
 ## Next Steps
 
-- [Knowledge Base concept](../../about/core-concepts/knowledgebase/) --- How the RAG pipeline works
-- [Database Access](../database-access/) --- Query your datapack directly via SQL
+- [Learn about knowledge bases](../../about/core-concepts/knowledgebase/)
+- [Access your database](../database-access/)

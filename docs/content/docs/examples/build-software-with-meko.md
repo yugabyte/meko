@@ -1,6 +1,6 @@
 ---
 title: Meko in your agentic application
-linkTitle: Agentic apps
+linkTitle: Frameworks
 description: Leverage conversation history, reasoning traces, and resumability
 weight: 2020
 ---
@@ -27,7 +27,7 @@ Without Meko, agent reasoning is lost when a session ends. Try this:
     Show me the agent's reasoning for building the Fibonacci program
     ```
 
-    You get zero results --- the reasoning is gone.
+    You get zero results - the reasoning is gone.
 
 Using Meko, agents can retain context:
 

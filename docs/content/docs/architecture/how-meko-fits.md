@@ -23,7 +23,24 @@ Meko sits between your agent SDK and the underlying database, providing a unifie
 
 Agents interact via MCP. Developers interact via CLI, API, or direct PostgreSQL connection. Meko runs anywhere - local, cloud, on-premises, or air-gapped - with the same configuration everywhere.
 
-### What Meko Replaces
+### What you get
+
+Each agent gets an isolated [datapack](../core-concepts/datapacks/) with:
+
+| Capability | Description |
+| :--------- | :---------- |
+| PostgreSQL (YugabyteDB YSQL) | Structured data and conversation history |
+| Vector search (pgvector, hnswlib, scaNN) | Embeddings and similarity search |
+| Graph memory (mem0) | Long-term entity and relationship extraction from conversations |
+| RAG pipeline<br>(pg_dist_rag + unstructured + LangChain) | Document chunking, embedding, indexing with built-in data preprocessing |
+| Inference caching (LMCache / KDN) | Reduces redundant LLM calls without a separate cache layer |
+| MCP server | Agents discover and query their own datapack |
+| Audit trails | LLM reasoning traces and execution logs |
+| Observability, security, RBAC | Spans the full stack, not bolted on per-component |
+
+The inference, knowledge, and database layers share state, and they operate as one system, not three isolated tiers.
+
+### What meko replaces
 
 Without Meko, building an agentic application typically requires wiring together:
 
@@ -37,17 +54,17 @@ Without Meko, building an agentic application typically requires wiring together
 
 Meko replaces all of this with a single system. The inference, knowledge, and database layers share state and operate as one.
 
-### How Agents Connect
+### How agents connect
 
 Agents interact with Meko via **MCP** (Model Context Protocol). Each datapack exposes an MCP server that provides tools for memory, knowledge, database access, and more.
 
 Developers can also interact via:
 
-- **CLI** --- `meko` commands for datapack management, memory operations, and knowledge base administration.
-- **REST API** --- Programmatic access to all datapack operations.
-- **Direct PostgreSQL** --- Connect to your datapack's YugabyteDB YSQL database with standard PostgreSQL tools.
+- **CLI**: `meko` commands for datapack management, memory operations, and knowledge base administration.
+- **REST API**: Programmatic access to all datapack operations.
+- **Direct PostgreSQL**: Connect to your datapack's YugabyteDB YSQL database with standard PostgreSQL tools.
 
-### Framework Compatibility
+### Framework compatibility
 
 Meko works with any agent framework that supports MCP:
 
@@ -58,15 +75,17 @@ Meko works with any agent framework that supports MCP:
 
 ## Deployment
 
-Meko runs anywhere --- local, cloud, on-prem, air-gapped. The same configuration works everywhere, with no architectural rewrites between development and production.
+Meko runs anywhere:
 
-- **Local development** --- `meko start` to run everything on your machine.
-- **Cloud** --- Deploy as a managed service or self-hosted on any cloud provider.
-- **On-prem / air-gapped** --- Same system, no external dependencies required.
+- **Local development**: `meko start` to run everything on your machine.
+- **Cloud**: Deploy as a managed service or self-hosted on any cloud provider.
+- **On-premises / air-gapped**: Same system, no external dependencies required.
 
-Scale out by adding YugabyteDB nodes; scale down by removing them --- with no downtime.
+The same configuration works everywhere, with no architectural rewrites between development and production.
 
-## Built On
+Scale out by adding YugabyteDB nodes, and scale down by removing them, with no downtime.
+
+## Built on
 
 Meko is built on proven open-source technologies:
 

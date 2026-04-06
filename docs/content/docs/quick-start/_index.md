@@ -10,24 +10,56 @@ Get from zero to a working Meko integration in 60 seconds.
 
 ## Sign up
 
-1. Create a Meko account at the Meko portal.
+1. Create a Meko account at the [Meko portal](https://app.mekodev.com/).
 
-2. Sign in to your account.
+1. Sign in to your account.
 
-3. Obtain these and store them in a safe place:
-	* Your MCP server URL
-	* Your API key
+    Your default [datapack](../../architecture/core-concepts/datapacks/) (`meko_default_datapack`), is displayed. A datapack is a container for memory and knowledge.
+
+1. Click **Connect**.
+
+1. Copy the following MCP Server details and store them in a safe place:
+
+    - Your MCP server **URL**.
+    - Your MCP server **API key**.
+
+## Add skills to your agent
+
+> [!NOTE] Temporary instructions
+>
+> These instructions are temporary, and apply during Tech Preview only.
+
+1. Clone the meko-mcp-server repository:
+
+    ```sh
+    git clone https://github.com/yugabyte/meko-mcp-server.git
+    cd meko-mcp-server
+    ```
+
+1. Switch to the branch add-skills:
+
+    ```sh
+    git checkout add-skills
+    ```
+
+1. From the meko-mcp-server directory, run the following command:
+
+    ```sh
+    npx skills add ./skills -g
+    ```
+
+1. When prompted to select the skills you want to install, select both **meko-mcp-tools** and **ysql**.
+
+1. When prompted to select the agent you want to install the skills to, select your agent. This should install both skills.
 
 ## Connect any AI client
-
-Each Meko account has one or more datapacks, which is a container for memory and knowledge. A default datapack is created for you when you sign up.
 
 To start using your datapack, register the MCP Server associated with this datapack with any AI chatbot-enabled IDE or development tool.
 
 {{< tabpane text=true right=false >}}
 {{% tab header="Cursor Desktop" lang="cursor" %}}
 
-Add to your Cursor MCP settings (`.cursor/mcp.json`):
+Add the following to your Cursor MCP settings (`.cursor/mcp.json`):
 
 ```json
 {
@@ -45,7 +77,7 @@ Add to your Cursor MCP settings (`.cursor/mcp.json`):
 {{% /tab %}}
 {{% tab header="Claude Desktop" lang="claude" %}}
 
-Add the MCP server configuration. The method depends on your Claude version.
+Add the MCP server to your configuration. (The method depends on your Claude version.)
 
 1. Go to **Claude>Settings>Developer>Edit Config**.
 
@@ -83,7 +115,7 @@ claude mcp add --scope user --transport http meko <mcp-server-url> --header "API
 
 {{% /tab %}}
 {{% tab header="OpenAI Codex" lang="openai" %}}
-Add the MCP server configuration to your Codex config.toml settings:
+Add the MCP server configuration to your Codex `config.toml` settings:
 
 ```toml
 [mcp_servers.meko]
@@ -101,28 +133,45 @@ See [Integrations](../integrations/).
 
 ## Explore knowledge
 
-Meko allows management of and collaboration around "knowledge" and "memory".   
+Meko allows management of and collaboration around _knowledge_ and _memory_:
 
-* Knowledge = raw documents    
-* Memory = derived information from documents
+- _Knowledge_ is the raw documents you make available to Meko.
+- _Memory_ is the information Meko derives from these documents.
 
-Note: conversation history is also considered a "raw document"
+In Meko, conversation history is also considered a "raw document".
 
 ### Upload knowledge
 
-Meko allows you add knowledge to your datapack by simply uploading documents. We do this using the [meko CLI](../../reference/cli-overview/).
+To see how Meko stores knowledge, add documents to your datapack and query them using RAG.
 
-In the following example, we'll add documents to your datapack and query them using RAG.
+> [!NOTE] Coming soon
+>
+> Document upload is coming soon to the web portal. Skip this section unless you want to use the CLI.
 
-Upload documents to your datapack's knowledge base:
+In your IDE, type the following, and attach a text file:
+
+```text
+Store the attached document as long-term knowledge.
+<attach a document>
+```
+
+##### Use the CLI
+
+You can also upload knowledge using the Meko CLI. See [Meko CLI](../../reference/meko-cli/) for installation instructions.
+
+Upload documents to your datapack's knowledge base as follows:
 
 ```bash
-meko datapack add_knowledge_base --name my-datapack --url s3://bucket/docs/
+meko datapack add_knowledge_base --name meko_default_datapack --url s3://bucket/docs/
 ```
 
 <!-- TODO: Add details on portal-based document upload once the web portal is available -->
 
 ### Query your knowledge
+
+> [!NOTE] Coming soon
+>
+> Document upload is coming soon to the web portal. Skip this section unless you added your knowledge using the CLI.
 
 Once your documents are parsed, chunked, and indexed by Meko, query them through your IDE:
 
@@ -145,6 +194,7 @@ Propose a 5 day vacation for me. Do not use Meko or any prior recollection of my
 Your AI either recommends a randomly-selected vacation, or perhaps asks generic follow-up questions such as "What kind of vacation?", "What budget?", or "To where?"
 
 With Meko, however, your AI can remember your vacation preferences, and use them to generate better responses.
+
 ### Create a memory
 
 In your IDE or dev tool, do the following:
@@ -219,9 +269,9 @@ What does Meko remember about me?
 
 Check what's happening inside your datapack:
 
-- **Memories** --- View stored memories and their extracted entities
-- **Knowledge bases** --- See indexed document sources and their status
-- **Traces** --- Review LLM reasoning traces and execution logs
+- **Memories**: View stored memories and their extracted entities.
+- **Knowledge bases**: See indexed document sources and their status.
+- **Traces**: Review LLM reasoning traces and execution logs.
 
 <!-- TODO: Add LangFuse observability walkthrough once integration details are finalized -->
 <!-- TODO: Add screenshots showing costs, calls, and timings -->
