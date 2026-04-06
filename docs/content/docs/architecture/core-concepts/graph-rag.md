@@ -25,9 +25,9 @@ For example, the memory *"I like tropical beach vacations on a budget"* might cr
 
 Vector search alone finds memories that are semantically similar to a query. Graph traversal adds the ability to:
 
-- **Follow relationships** --- "What else does this user prefer?" can traverse edges from the user node.
-- **Discover indirect connections** --- Two memories might not be similar by embedding, but connected through shared entities.
-- **Provide structured context** --- Graph edges carry relationship types, giving the LLM more structured context than raw text similarity.
+- **Follow relationships**: "What else does this user prefer?" can traverse edges from the user node.
+- **Discover indirect connections**: Two memories might not be similar by embedding, but connected through shared entities.
+- **Provide structured context**: Graph edges carry relationship types, giving the LLM more structured context than raw text similarity.
 
 Meko's memory search combines results from both pgvector (semantic) and Apache AGE (graph) to provide comprehensive recall.
 
@@ -36,7 +36,7 @@ Meko's memory search combines results from both pgvector (semantic) and Apache A
 The graph store is configured with connection details to the Apache AGE instance and a similarity threshold for node matching:
 
 | Setting | Description | Default |
-|---------|-------------|---------|
+| :------ | :---------- | :------ |
 | `graph_name` | Name of the graph in Apache AGE | Configured per deployment |
 | `threshold` | Similarity threshold for node matching (0.0 to 1.0) | 0.7 |
 

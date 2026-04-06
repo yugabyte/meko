@@ -47,9 +47,9 @@ This returns the datapack's MCP server URL, API key, and database connection det
 
 Each datapack is fully isolated:
 
-- **Data isolation** --- Separate database per datapack. One agent cannot access another's data.
-- **Credential isolation** --- Unique credentials per datapack.
-- **MCP isolation** --- Each datapack's MCP server only exposes that datapack's tools and data.
+- **Data isolation**. Separate database per datapack. One agent cannot access another's data.
+- **Credential isolation**. Unique credentials per datapack.
+- **MCP isolation**. Each datapack's MCP server only exposes that datapack's tools and data.
 
 ## Connect via MCP
 

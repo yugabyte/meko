@@ -162,7 +162,7 @@ You can also upload knowledge using the Meko CLI. See [Meko CLI](../../reference
 Upload documents to your datapack's knowledge base as follows:
 
 ```bash
-meko datapack add_knowledge_base --name my-datapack --url s3://bucket/docs/
+meko datapack add_knowledge_base --name meko_default_datapack --url s3://bucket/docs/
 ```
 
 <!-- TODO: Add details on portal-based document upload once the web portal is available -->
@@ -269,9 +269,9 @@ What does Meko remember about me?
 
 Check what's happening inside your datapack:
 
-- **Memories** --- View stored memories and their extracted entities
-- **Knowledge bases** --- See indexed document sources and their status
-- **Traces** --- Review LLM reasoning traces and execution logs
+- **Memories**: View stored memories and their extracted entities.
+- **Knowledge bases**: See indexed document sources and their status.
+- **Traces**: Review LLM reasoning traces and execution logs.
 
 <!-- TODO: Add LangFuse observability walkthrough once integration details are finalized -->
 <!-- TODO: Add screenshots showing costs, calls, and timings -->

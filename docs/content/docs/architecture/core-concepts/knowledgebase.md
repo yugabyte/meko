@@ -17,7 +17,7 @@ When you add a knowledge base to a datapack, Meko's `pg_dist_rag` pipeline:
 4. **Embeds** each chunk using the configured embedding model.
 5. **Indexes** the embeddings in pgvector for fast similarity search.
 
-All of this happens within your datapack's database --- there's no separate vector database to manage.
+All of this happens within your datapack's database; there's no separate vector database to manage.
 
 ## Supported document formats
 
