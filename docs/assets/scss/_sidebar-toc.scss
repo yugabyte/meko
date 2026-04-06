@@ -97,6 +97,13 @@ body {
       }
     }
   }
+
+  @media (min-width: 1401px) {
+    .td-sidebar-toc {
+      width: 252px;
+      margin-right: auto;
+    }
+  }
 }
 
 @media (max-width: 767px) {
