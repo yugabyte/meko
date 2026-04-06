@@ -10,14 +10,18 @@ Get from zero to a working Meko integration in 60 seconds.
 
 ## Sign up
 
-1. Create a Meko account at the Meko portal.
+1. Create a Meko account at the [Meko portal](https://app.mekodev.com/).
 
 1. Sign in to your account.
 
-1. Obtain the following and store them in a safe place:
+    Your default [datapack](../../architecture/core-concepts/datapacks/) (`meko_default_datapack`), is displayed. A datapack is a container for memory and knowledge.
 
-    - Your MCP server URL.
-    - Your API key.
+1. Click **Connect**.
+
+1. Copy the following MCP Server details and store them in a safe place:
+
+    - Your MCP server **URL**.
+    - Your MCP server **API key**.
 
 ## Add skills to your agent
 
@@ -29,6 +33,7 @@ Get from zero to a working Meko integration in 60 seconds.
 
     ```sh
     git clone https://github.com/yugabyte/meko-mcp-server.git
+    cd meko-mcp-server
     ```
 
 1. Switch to the branch add-skills:
@@ -48,8 +53,6 @@ Get from zero to a working Meko integration in 60 seconds.
 1. When prompted to select the agent you want to install the skills to, select your agent. This should install both skills.
 
 ## Connect any AI client
-
-Each Meko account has one or more datapacks, which is a container for memory and knowledge. A default datapack is created for you when you sign up.
 
 To start using your datapack, register the MCP Server associated with this datapack with any AI chatbot-enabled IDE or development tool.
 
@@ -130,10 +133,10 @@ See [Integrations](../integrations/).
 
 ## Explore knowledge
 
-Meko allows management of and collaboration around "knowledge" and "memory":
+Meko allows management of and collaboration around _knowledge_ and _memory_:
 
-- Knowledge is the raw documents you make available to Meko.
-- Memory is the information Meko derives from these documents.
+- _Knowledge_ is the raw documents you make available to Meko.
+- _Memory_ is the information Meko derives from these documents.
 
 In Meko, conversation history is also considered a "raw document".
 
@@ -159,7 +162,7 @@ You can also upload knowledge using the Meko CLI. See [Meko CLI](../../reference
 Upload documents to your datapack's knowledge base as follows:
 
 ```bash
-meko datapack add_knowledge_base --name my-datapack --url s3://bucket/docs/
+meko datapack add_knowledge_base --name meko_default_datapack --url s3://bucket/docs/
 ```
 
 <!-- TODO: Add details on portal-based document upload once the web portal is available -->
@@ -266,9 +269,9 @@ What does Meko remember about me?
 
 Check what's happening inside your datapack:
 
-- **Memories** --- View stored memories and their extracted entities
-- **Knowledge bases** --- See indexed document sources and their status
-- **Traces** --- Review LLM reasoning traces and execution logs
+- **Memories**: View stored memories and their extracted entities.
+- **Knowledge bases**: See indexed document sources and their status.
+- **Traces**: Review LLM reasoning traces and execution logs.
 
 <!-- TODO: Add LangFuse observability walkthrough once integration details are finalized -->
 <!-- TODO: Add screenshots showing costs, calls, and timings -->

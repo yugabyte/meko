@@ -47,7 +47,7 @@ Retrieve every memory stored for a given user or agent. Useful for debugging or 
 
 ### Clear memories
 
-Remove all memories for a user or agent. This is a destructive operation --- cleared memories cannot be recovered.
+Remove all memories for a user or agent. This is a destructive operation - cleared memories cannot be recovered.
 
 ## Memory vs. conversation history
 
