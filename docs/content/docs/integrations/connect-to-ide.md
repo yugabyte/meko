@@ -108,7 +108,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 1. In Codex Desktop, choose **Codex>Settings>MCP servers>Add server>Streamable HTTP**.
 1. Enter a name for the Meko MCP server.
 1. Enter the URL of the Meko MCP server.
-1. Enter a name such as 'MEKO_MCP_TOKEN' for the Bearer token env var, and click **Save**.
+1. Enter a name (such as 'MEKO_MCP_TOKEN') for the Bearer token env var, and click **Save**.
 
    The result should look like the following:
 
@@ -116,13 +116,13 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 1. Set the MEKO_MCP_TOKEN environment variable with your Meko API key in your terminal using the following command:
 
-    ```txt
+    ```sh
     launchctl setenv MEKO_MCP_TOKEN <mcp-server-api-key>
     ```
 
 1. Verify that you set the MEKO_MCP_TOKEN correctly with your Meko MCP Server API Key.
 
-    ```txt
+    ```sh
     launchctl getenv MEKO_MCP_TOKEN
     ```
 
