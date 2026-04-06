@@ -350,30 +350,30 @@ export default function Home() {
                   Connect
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-md bg-[#1C2333] border-border text-foreground">
-                <DialogHeader>
+              <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-xl max-h-[calc(100vh-4rem)] bg-[#1C2333] border-border text-foreground p-0 flex flex-col">
+                <DialogHeader className="px-6 pt-6 pb-3 shrink-0">
                   <DialogTitle className="text-xl text-white">Connect to Datapack</DialogTitle>
                   <DialogDescription className="text-muted-foreground">
                     Use these credentials to connect your MCP server and database.
                   </DialogDescription>
                 </DialogHeader>
                 {connectLoading ? (
-                  <div className="py-8 text-sm text-muted-foreground text-center">
+                  <div className="px-6 pb-6 py-8 text-sm text-muted-foreground text-center overflow-y-auto">
                     Loading connection details...
                   </div>
                 ) : connectError ? (
-                  <div className="py-6">
+                  <div className="px-6 pb-6 py-6 overflow-y-auto">
                     <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
                       {connectError}
                     </p>
                   </div>
                 ) : provisionStatus ? (
-                  <div className="space-y-4 py-4">
+                  <div className="space-y-4 px-6 pb-6 py-4 overflow-y-auto min-h-0">
                     <h3 className="text-lg font-semibold text-white">Datapack</h3>
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-muted-foreground">Datapack</label>
-                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                        <code className="text-sm text-white break-all">{provisionStatus.datapack_name}</code>
+                      <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-sm text-white break-all flex-1 pr-4">{provisionStatus.datapack_name}</code>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.datapack_name, "dp")}>
                           {copiedField === "dp" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                         </Button>
@@ -383,8 +383,8 @@ export default function Home() {
                     <h3 className="pt-2 text-lg font-semibold text-white">MCP Server</h3>
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-muted-foreground">URL</label>
-                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                        <code className="text-xs text-white break-all">{provisionStatus.mcp_server_url}</code>
+                      <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-xs text-white break-all flex-1 pr-4">{provisionStatus.mcp_server_url}</code>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.mcp_server_url, "mcpurl")}>
                           {copiedField === "mcpurl" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                         </Button>
@@ -392,8 +392,8 @@ export default function Home() {
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-muted-foreground">API Key</label>
-                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                        <code className="text-sm text-white break-all">{provisionStatus.mcp_api_key}</code>
+                      <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-sm text-white break-all flex-1 pr-4">{provisionStatus.mcp_api_key}</code>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.mcp_api_key, "mcpkey")}>
                           {copiedField === "mcpkey" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                         </Button>
@@ -403,8 +403,8 @@ export default function Home() {
                     <h3 className="pt-2 text-lg font-semibold text-white">Database Access</h3>
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-muted-foreground">Username</label>
-                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                        <code className="text-sm text-white break-all">{provisionStatus.db_user_name}</code>
+                      <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-sm text-white break-all flex-1 pr-4">{provisionStatus.db_user_name}</code>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.db_user_name, "dbuser")}>
                           {copiedField === "dbuser" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                         </Button>
@@ -412,8 +412,8 @@ export default function Home() {
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-muted-foreground">Password</label>
-                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                        <code className="text-sm text-white break-all">{provisionStatus.db_password}</code>
+                      <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-sm text-white break-all flex-1 pr-4">{provisionStatus.db_password}</code>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.db_password, "dbpass")}>
                           {copiedField === "dbpass" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                         </Button>
@@ -421,8 +421,8 @@ export default function Home() {
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-muted-foreground">Conn String</label>
-                      <div className="flex items-center justify-between p-3 rounded-md bg-[#0E1525] border border-border">
-                        <code className="text-xs text-blue-300 break-all">{provisionStatus.db_conn_str}</code>
+                      <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
+                        <code className="text-xs text-blue-300 break-all flex-1 pr-4">{provisionStatus.db_conn_str}</code>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={() => handleCopy(provisionStatus.db_conn_str, "dbconn")}>
                           {copiedField === "dbconn" ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                         </Button>
