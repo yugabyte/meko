@@ -3,24 +3,12 @@
   display: inline-flex !important;
   padding: 3px 10px;
   left: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 40px;
+  box-sizing: border-box;
 
   @media (min-width: 1024px) {
     top: -8px;
-  }
-
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    padding: 3px;
-    border-radius: 40px;
-    background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-    -webkit-mask:
-      linear-gradient(#fff 0 0) content-box,
-      linear-gradient(#fff 0 0);
-    -webkit-mask-composite: destination-out;
-    mask-composite: exclude;
-    z-index: -1;
   }
 
   button {
@@ -29,13 +17,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
+    color: rgba(255, 255, 255, 0.55);
     background: transparent !important;
     border: none;
+    transition: color 0.15s ease;
 
     &:hover {
       background-color: transparent;
       border: none;
+      color: rgba(255, 255, 255, 0.88);
     }
 
     &.copy-link {
