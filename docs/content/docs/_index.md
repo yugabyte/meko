@@ -12,9 +12,9 @@ layout: list
 
 Meko offers
 
-- **Collective memory:** learning that compounds across the agents working together, as opposed to just per-agent memory
-
 - **Shared knowledge:** building shared knowledge over time from conversations, real-time data sources and slower-changing knowledge bases
+
+- **Collective memory:** learning that compounds across the agents working together, as opposed to just per-agent memory
 
 - **Auditability of the learning process:** connect execution traces to how agents process data and knowledge, learn from it and share that learning
 
