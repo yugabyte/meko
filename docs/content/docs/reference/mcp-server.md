@@ -95,7 +95,7 @@ POST /auth/logout
 
 ## Tools
 
-This section summarizes the tools available via the Meko MCP Server, including what each tool does, the inputs it typically expects, and when to use it.
+The Meko MCP Server provides the following tools.
 
 | Use | For |
 | :--- | :--- |

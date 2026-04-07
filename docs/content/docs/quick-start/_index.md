@@ -29,6 +29,8 @@ Get from zero to a working Meko integration in 60 seconds.
 >
 > These instructions are temporary, and apply during Tech Preview only.
 
+The skills file packages guidelines for agents to use when accessing Meko. Do the following to install Meko and YSQL skills:
+
 1. Clone the meko-mcp-server repository:
 
     ```sh
@@ -179,7 +181,7 @@ Once your documents are parsed, chunked, and indexed by Meko, query them through
 Search the knowledge base for information about <your topic>
 ```
 
-The MCP server performs semantic search across your indexed documents and returns relevant chunks.  In short, Meko has automated the retrieval augmented generation (RAG) pre-processing pipeline by reading, parsing, chunking, vectorizing/indexing the documents, and by providing a semantic search capability.
+The MCP server performs semantic search across your indexed documents and returns relevant chunks. In short, Meko has automated the retrieval augmented generation (RAG) pre-processing pipeline by reading, parsing, chunking, vectorizing/indexing the documents, and by providing a semantic search capability.
 
 ## Explore memory
 
@@ -212,9 +214,12 @@ In your IDE or dev tool, do the following:
     Please remember that I like to take vacations at tropical beach locations, on a budget
     ```
 
-1. Start a new chat session, then type:
+    Using the Meko MCP server, the agent will create a conversation in your datapack and assign an agent ID, for example, `cursor_assistant`. The agent should let you know what the agent ID is; you can also ask it.
+
+1. Start a new chat session, then type the following (use the agent ID the other agent provided):
 
     ```text
+    Access my preferences using agent ID cursor_assistant.
     Propose a 5 day vacation for me.
     ```
 
