@@ -7,12 +7,16 @@ type: docs
 ---
 
 Integrate with IDEs for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
-
 ## Cursor Desktop
+
+### Automated setup
+
+See the [Quick Start](/quick-start/#connect-any-ai-client). 
+### Manual setup
 
 1. In Cursor Desktop, choose **Cursor>Settings>Cursor Settings>Tools & MCPs>New MCP Server**.
 
-1. Modify the `mcp.json` file that Cursor opens to add the following MCP server configuration.
+2. Modify the `mcp.json` file that Cursor opens to add the following MCP server configuration.
 
     ```json
     {
@@ -31,7 +35,7 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 
     ![Cursor Desktop](/images/integrations-cursor-settings.png)
 
-1. Verify the Connection by entering the following in chat.
+3. Verify the Connection by entering the following in chat.
 
     ```text
     Is Cursor configured with an MCP Server for Meko?
@@ -45,6 +49,9 @@ Integrate with IDEs for interactive use cases, such as saving personal, team, an
 
 ## Claude Desktop
 
+### Automated setup
+See the [Quick Start](/quick-start/#connect-any-ai-client).  
+### Manual setup
 In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 1. On a Mac, choose **Claude>Settings>Developer>Edit Config**.
@@ -86,6 +93,9 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
     ```
 
 ## Claude Code
+### Automated setup
+See the [Quick Start](/quick-start/#connect-any-ai-client).  
+### Manual setup
 
 1. Run the setup command in your shell to add the Meko MCP server to Claude Code:
 
@@ -93,7 +103,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
     > claude mcp add --scope user --transport http meko <mcp-server-url> --header "API_KEY: <mcp-server-api-key>"
     ```
 
-1. Verify the connection by entering the following at the command-line console:
+2. Verify the connection by entering the following at the command-line console:
 
     ```txt
     Is Claude configured with an MCP Server for Meko?
@@ -105,40 +115,48 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 ## Open AI Codex Desktop
 
+### Automated setup
+See the [Quick Start](/quick-start/#connect-any-ai-client).  
+### Manual setup
+
 1. In Codex Desktop, choose **Codex>Settings>MCP servers>Add server>Streamable HTTP**.
-1. Enter a name for the Meko MCP server.
-1. Enter the URL of the Meko MCP server.
-1. Enter a name (such as 'MEKO_MCP_TOKEN') for the Bearer token env var, and click **Save**.
+2. Enter a name for the Meko MCP server.
+3. Enter the URL of the Meko MCP server.
+4. Enter a name (such as 'MEKO_MCP_TOKEN') for the Bearer token env var, and click **Save**.
 
    The result should look like the following:
 
     ![Codex Desktop](/images/integrations-codex-desktop.png)
 
-1. Set the MEKO_MCP_TOKEN environment variable with your Meko API key in your terminal using the following command:
+5. Set the MEKO_MCP_TOKEN environment variable with your Meko API key in your terminal using the following command:
 
     ```sh
     launchctl setenv MEKO_MCP_TOKEN <mcp-server-api-key>
     ```
 
-1. Verify that you set the MEKO_MCP_TOKEN correctly with your Meko MCP Server API Key.
+6. Verify that you set the MEKO_MCP_TOKEN correctly with your Meko MCP Server API Key.
 
     ```sh
     launchctl getenv MEKO_MCP_TOKEN
     ```
 
-1. Quit and restart Codex Desktop.
+7. Quit and restart Codex Desktop.
 
-1. Verify the connection by entering the following in chat:
+8. Verify the connection by entering the following in chat:
 
     ```text
     Is Codex Desktop configured with an MCP Server for Meko?
     ```
 
-## Coming Soon
+## VS Code
+### Automated setup
+See the [Quick Start](/quick-start/#connect-any-ai-client).  
+## Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, and others
 
-* VS Code / GitHub CoPilot
+For Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, Continue, Goose, OpenCode, and Windsurf, use the "Automated Setup" described in the [Quick Start](/quick-start/#connect-any-ai-client).  
+
+Additional support for the below is coming soon
 * Opencode
-* Google Anti-gravity
 * OpenAI chatgpt Desktop
 * Lovable
 * Replit

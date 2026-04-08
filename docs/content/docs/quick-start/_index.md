@@ -23,6 +23,33 @@ Get from zero to a working Meko integration in 60 seconds.
     - Your MCP server **URL**.
     - Your MCP server **API key**.
 
+## Connect any AI client
+
+Register the MCP Server associated with this datapack with any AI chatbot-enabled IDE or development tool.
+
+Connect Claude Desktop, Claude Code, Cursor, VS Code, Codex or any MCP-compatible client to Meko using a single command.  If you're using continue, copilot cli, gemini, goose, opencode, and windsurf, modify the "--clients" command-line option to include one or more of these keywords.
+
+```sh
+npx mcp-add@latest \
+  --name meko \
+  --type stdio \
+  --command 'npx -y mcp-remote <meko-mcp-url> --allow-http' \
+  --env 'MEKO_API_KEY=<meko-mcp-api-key>' \
+  --headers 'MEKO_API_KEY=<meko-api-key>' \
+  --scope global \
+  --clients 'claude desktop,claude code,cursor,codex,vscode'
+```
+
+Note that `npx` requires Node.js 14+.  If you don't already have Node.js installed, install it with:
+
+```sh 
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
+source ~/.$(basename $SHELL)rc  # This sources .bashrc or .zhsrc
+nvm install --lts                                                                
+```
+
+For alternative approaches for registering the Meko MCP Server, see [Integrations](../integrations/).
+
 ## Add skills to your agent
 
 > [!NOTE] Temporary instructions
@@ -38,100 +65,21 @@ The skills file packages guidelines for agents to use when accessing Meko. Do th
     cd meko-mcp-server
     ```
 
-1. Switch to the branch add-skills:
+2. Switch to the branch add-skills:
 
     ```sh
     git checkout add-skills
     ```
 
-1. From the meko-mcp-server directory, run the following command:
+3. From the meko-mcp-server directory, run the following command:
 
     ```sh
     npx skills add ./skills -g
     ```
 
-1. When prompted to select the skills you want to install, select both **meko-mcp-tools** and **ysql**.
+4. When prompted to select the skills you want to install, select both **meko-mcp-tools** and **ysql**.
 
-1. When prompted to select the agent you want to install the skills to, select your agent. This should install both skills.
-
-## Connect any AI client
-
-To start using your datapack, register the MCP Server associated with this datapack with any AI chatbot-enabled IDE or development tool.
-
-{{< tabpane text=true right=false >}}
-{{% tab header="Cursor Desktop" lang="cursor" %}}
-
-Add the following to your Cursor MCP settings (`.cursor/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "meko": {
-      "url": "<mcp-server-url>",
-      "headers": {
-        "API_KEY": "<mcp-server-api-key>"
-      }
-    }
-  }
-}
-```
-
-{{% /tab %}}
-{{% tab header="Claude Desktop" lang="claude" %}}
-
-Add the MCP server to your configuration. (The method depends on your Claude version.)
-
-1. Go to **Claude>Settings>Developer>Edit Config**.
-
-1. Edit the JSON file and add the following:
-
-    ```json
-    {
-      "mcpServers": {
-        "meko": {
-          "command": "npx",
-          "args": [
-            "-y",
-            "mcp-remote",
-            "<mcp-server-url>",
-            "--allow-http"
-          ],
-          "env": {
-            "API_KEY": "<mcp-server-api-key>"
-          }
-        }
-      },
-    }
-    ```
-
-1. Restart Claude.
-
-{{% /tab %}}
-{{% tab header="Claude Code" lang="claudecode" %}}
-
-Run the following command in your shell to add the Meko MCP server to Claude Code:
-
-```sh
-claude mcp add --scope user --transport http meko <mcp-server-url> --header "API_KEY: <mcp-server-api-key>"
-```
-
-{{% /tab %}}
-{{% tab header="OpenAI Codex" lang="openai" %}}
-Add the MCP server configuration to your Codex `config.toml` settings:
-
-```toml
-[mcp_servers.meko]
-url = "<mcp-server-url>"
-bearer_token_env_var = "<mcp-server-api-key>"
-```
-
-{{% /tab %}}
-{{% tab header="More" lang="more" %}}
-More integrations are available, and others are coming soon.
-
-See [Integrations](../integrations/).
-{{% /tab %}}
-{{< /tabpane >}}
+5. When prompted to select the agent you want to install the skills to, select your agent. This should install both skills.
 
 ## Explore knowledge
 

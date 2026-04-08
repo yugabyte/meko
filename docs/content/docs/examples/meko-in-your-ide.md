@@ -7,6 +7,8 @@ weight: 2010
 
 Meko gives your IDE's AI assistant persistent memory that follows you across sessions and projects. This example shows how to use Meko for storing and recalling development preferences.
 
+If you have not connected an IDE yet, see [Connect any AI client](../quick-start/#connect-any-ai-client).
+
 ## Use cases
 
 ### Share development preferences and standards
@@ -84,4 +86,5 @@ Use a dedicated datapack per project to store project-specific context:
 
 ## Next
 
+- [Quick start — Connect any AI client](../quick-start/#connect-any-ai-client) — Register Meko with your editors and agents
 - [Meko in your agentic application](../build-software-with-meko/) - Use conversation history and resumability
