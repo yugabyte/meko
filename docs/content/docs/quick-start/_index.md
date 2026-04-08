@@ -25,14 +25,16 @@ Get from zero to a working Meko integration in 60 seconds.
 
 ## Connect your AI client
 
-Next, connect Claude Desktop, Claude Code, Cursor, VS Code, Codex or any MCP-compatible client** to your Meko datapack.  At the Linux prompt, enter the below text with replacement values for  <meko-mcp-api-key> and <meko-api-key> from the previous step.
+Next, connect Claude Desktop, Claude Code, Cursor, VS Code, Codex or any MCP-compatible client** to your Meko datapack.  
+
+Copy and paste the below text into your Linux prompt.   Replace   <meko-mcp-api-key> and <meko-api-key> with values from the previous step before executing.
 
 ```sh
-#### Install the latest Node.js 
+echo "### Installing the latest Node.js ###"
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
-source ~/.$(basename $SHELL)rc  # This sources .bashrc or .zhsrc
+source ~/.$(basename $SHELL)rc
 nvm install --lts
-#### Run mcp-add to register the Meko MCP server
+echo "### Registering the Meko MCP server ###"
 npx mcp-add@latest \
   --name meko \
   --type stdio \
