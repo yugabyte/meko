@@ -55,7 +55,7 @@ For manual instructions, and for guidance on registering the Meko MCP Server wit
 >
 > These instructions are temporary, and apply during Tech Preview only.
 
-The Meko Skills package provides guidelines to agents about when and how to use Meko's MCP tools.  They describe Meko's range of capabilities regarding memory, knowledge, and conversation management, and indicate to the AI agent when (in the course of a conversation or AI prompt/response interaction) to trigger Meko's tools and how to utilize them.  Do the following to install Meko and YSQL skills:
+The Meko Skills package tells agents when and how to use Meko's MCP tools for memory, knowledge, and conversation management. To install Meko and YSQL skills:
 
 1. Clone the meko-mcp-server repository:
 
