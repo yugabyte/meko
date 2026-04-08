@@ -55,30 +55,20 @@ For manual instructions, and for guidance on registering the Meko MCP Server wit
 >
 > These instructions are temporary, and apply during Tech Preview only.
 
-The Meko Skills package tells agents when and how to use Meko's MCP tools for memory, knowledge, and conversation management. To install Meko and YSQL skills:
+The Meko Skills package tells agents when and how to use Meko's MCP tools for memory, knowledge, conversation management, and SQL database access. To install it:
 
-1. Clone the meko-mcp-server repository:
+1. Download the skills package and start the skills installer
 
     ```sh
     git clone https://github.com/yugabyte/meko-mcp-server.git
     cd meko-mcp-server
-    ```
-
-2. Switch to the branch add-skills:
-
-    ```sh
     git checkout add-skills
-    ```
-
-3. From the meko-mcp-server directory, run the following command:
-
-    ```sh
     npx skills add ./skills -g
     ```
 
-4. When prompted to select the skills you want to install, select both **meko-mcp-tools** and **ysql**.
+2. When prompted to select the skills to install, select both **meko-mcp-tools** and **ysql**.
 
-5. When prompted to select the agent you want to install the skills to, select your agent. This should install both skills.
+3. When prompted to select the agent to install the skills to, select your agent.
 
 ## Explore knowledge
 
