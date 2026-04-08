@@ -23,12 +23,9 @@ Get from zero to a working Meko integration in 60 seconds.
     - Your MCP server **URL**.
     - Your MCP server **API key**.
 
-## Connect any AI client
+## Connect your AI client
 
-Register the MCP Server associated with this datapack with any AI chatbot-enabled IDE or development tool.
-
-Connect Claude Desktop, Claude Code, Cursor, VS Code, Codex or any MCP-compatible client to Meko using a single command.  If you're using continue, copilot cli, gemini, goose, opencode, and windsurf, modify the "--clients" command-line option to include one or more of these keywords.
-
+Next, connect Claude Desktop, Claude Code, Cursor, VS Code, Codex or any MCP-compatible client** to your Meko datapack.  At the Linux prompt, type:
 ```sh
 npx mcp-add@latest \
   --name meko \
@@ -40,6 +37,8 @@ npx mcp-add@latest \
   --clients 'claude desktop,claude code,cursor,codex,vscode'
 ```
 
+** If you're using continue, copilot cli, gemini, goose, opencode, and windsurf, modify the "--clients" command-line option to include one or more of these keywords.
+
 Note that `npx` requires Node.js 14+.  If you don't already have Node.js installed, install it with:
 
 ```sh 
@@ -48,7 +47,7 @@ source ~/.$(basename $SHELL)rc  # This sources .bashrc or .zhsrc
 nvm install --lts                                                                
 ```
 
-For alternative approaches for registering the Meko MCP Server, see [Integrations](../integrations/).
+For manual instructions, and for guidance on registering the Meko MCP Server with your own AI framework (e.g. LangChain, Llama Index, etc.) in an application development scenario, see [Integrations](../integrations/). 
 
 ## Add skills to your agent
 
@@ -56,7 +55,7 @@ For alternative approaches for registering the Meko MCP Server, see [Integration
 >
 > These instructions are temporary, and apply during Tech Preview only.
 
-The skills file packages guidelines for agents to use when accessing Meko. Do the following to install Meko and YSQL skills:
+The Meko Skills package provides guidelines to agents about when and how to use Meko's MCP tools.  They describe Meko's range of capabilities regarding memory, knowledge, and conversation management, and indicate to the AI agent when (in the course of a conversation or AI prompt/response interaction) to trigger Meko's tools and how to utilize them.  Do the following to install Meko and YSQL skills:
 
 1. Clone the meko-mcp-server repository:
 
