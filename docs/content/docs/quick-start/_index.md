@@ -58,80 +58,22 @@ The skills file packages guidelines for agents to use when accessing Meko. Do th
 
 To start using your datapack, register the MCP Server associated with this datapack with any AI chatbot-enabled IDE or development tool.
 
-{{< tabpane text=true right=false >}}
-{{% tab header="Cursor Desktop" lang="cursor" %}}
-
-Add the following to your Cursor MCP settings (`.cursor/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "meko": {
-      "url": "<mcp-server-url>",
-      "headers": {
-        "API_KEY": "<mcp-server-api-key>"
-      }
-    }
-  }
-}
-```
-
-{{% /tab %}}
-{{% tab header="Claude Desktop" lang="claude" %}}
-
-Add the MCP server to your configuration. (The method depends on your Claude version.)
-
-1. Go to **Claude>Settings>Developer>Edit Config**.
-
-1. Edit the JSON file and add the following:
-
-    ```json
-    {
-      "mcpServers": {
-        "meko": {
-          "command": "npx",
-          "args": [
-            "-y",
-            "mcp-remote",
-            "<mcp-server-url>",
-            "--allow-http"
-          ],
-          "env": {
-            "API_KEY": "<mcp-server-api-key>"
-          }
-        }
-      },
-    }
-    ```
-
-1. Restart Claude.
-
-{{% /tab %}}
-{{% tab header="Claude Code" lang="claudecode" %}}
-
-Run the following command in your shell to add the Meko MCP server to Claude Code:
+Connect Claude Desktop, Claude Code, Cursor, VS Code, Codex or any MCP-compatible client to Meko using a single command:
 
 ```sh
-claude mcp add --scope user --transport http meko <mcp-server-url> --header "API_KEY: <mcp-server-api-key>"
+npx mcp-add@latest \
+  --name meko \
+  --type stdio \
+  --command 'npx -y mcp-remote <meko-mcp-url> --allow-http' \
+  --env 'MEKO_API_KEY=<meko-mcp-api-key>' \
+  --headers 'MEKO_API_KEY=<meko-api-key>' \
+  --scope global \
+  --clients 'claude desktop,claude code,cursor,codex,vscode'
 ```
 
-{{% /tab %}}
-{{% tab header="OpenAI Codex" lang="openai" %}}
-Add the MCP server configuration to your Codex `config.toml` settings:
+Note that `npx` requires Node.js 14+.
 
-```toml
-[mcp_servers.meko]
-url = "<mcp-server-url>"
-bearer_token_env_var = "<mcp-server-api-key>"
-```
-
-{{% /tab %}}
-{{% tab header="More" lang="more" %}}
-More integrations are available, and others are coming soon.
-
-See [Integrations](../integrations/).
-{{% /tab %}}
-{{< /tabpane >}}
+For per-client setup and other frameworks, see [Integrations](../integrations/).
 
 ## Explore knowledge
 

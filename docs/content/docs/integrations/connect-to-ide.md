@@ -8,6 +8,10 @@ type: docs
 
 Integrate with IDEs for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
 
+> [!TIP] Connect every supported client at once
+>
+> To register Meko with Cursor, Claude Desktop, Claude Code, VS Code, Codex, and other MCP clients in one step, see [Quick start — Connect any AI client](../quick-start/#connect-any-ai-client). Use the following sections for manual configuration, and verification prompts of individual tools.
+
 ## Cursor Desktop
 
 1. In Cursor Desktop, choose **Cursor>Settings>Cursor Settings>Tools & MCPs>New MCP Server**.
@@ -134,9 +138,23 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
     Is Codex Desktop configured with an MCP Server for Meko?
     ```
 
+## VS Code
+
+Use the following command to add Meko MCP server to VS Code:
+
+```sh
+npx mcp-add@latest \
+  --name meko \
+  --type stdio \
+  --command 'npx -y mcp-remote <meko-mcp-url> --allow-http' \
+  --env 'MEKO_API_KEY=<meko-mcp-api-key>' \
+  --headers 'MEKO_API_KEY=<meko-api-key>' \
+  --scope global \
+  --clients 'vscode'
+```
+
 ## Coming Soon
 
-* VS Code / GitHub CoPilot
 * Opencode
 * Google Anti-gravity
 * OpenAI chatgpt Desktop

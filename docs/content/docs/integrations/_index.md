@@ -17,6 +17,8 @@ You follow the same basic pattern with all tools and frameworks:
 2. **Register the Meko MCP server** with your coding tool or with your application's MCP Client.
 3. **Start using Meko** through natural language prompts.
 
+To register the hosted MCP server (using the URL and API key from the portal or CLI) across multiple IDEs and agents in a single command, see [Connect any AI client](../quick-start/#connect-any-ai-client).
+
 ## Connect to an IDE
 
 {{< card-group variant="third" >}}
@@ -43,6 +45,12 @@ You follow the same basic pattern with all tools and frameworks:
   {{< card
     href="integrations/connect-to-ide/#open-ai-codex-desktop"
     title="Codex Desktop"
+    logo="logos/integrations/codex.svg"
+  >}}
+  {{< card
+    href="integrations/connect-to-ide/#vs-code"
+    title="VS Code"
+    logo="logos/integrations/vscode.svg"
   >}}
 {{< /card-group >}}
 
