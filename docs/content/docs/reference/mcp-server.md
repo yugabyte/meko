@@ -5,7 +5,7 @@ description: MCP server and tools reference
 weight: 40
 ---
 
-The Meko MCP Server provides the primary tools for managing datapacks, agents, knowledge bases, and connecting to the PostgreSQL-compatible YugabyteDB database for executing database commands.
+The Meko MCP Server provides the primary tools for managing datapacks, conversations, memories, knowledge bases, and connecting to the PostgreSQL-compatible YugabyteDB database for executing database commands.
 
 To connect from IDEs and MCP-compatible clients using your datapack URL and API key, see [Quick start — Connect any AI client](../quick-start/#connect-any-ai-client).
 
