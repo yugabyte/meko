@@ -1,4 +1,5 @@
 import axios from "axios";
+import { dispatchAppEvent } from "@/lib/browserEvents";
 
 type ApiError = {
   code?: string;
@@ -11,7 +12,10 @@ type ApiEnvelope<T> = {
 };
 
 export const AUTH_EXPIRED_EVENT = "meko:auth-expired";
+export const AUTH_LOGIN_SUCCESS_EVENT = "meko:auth-login-success";
 export const PROVISION_STATUS_CACHE_KEY = "meko:provision-status:v1";
+export const ONBOARDING_STATUS_CACHE_KEY = "meko:onboarding-status:v1";
+export const ONBOARDING_STATUS_UPDATED_EVENT = "meko:onboarding-status-updated";
 let authExpiredNotified = false;
 const AUTH_PUBLIC_ENDPOINTS = new Set([
   "/auth/me",
@@ -23,7 +27,7 @@ const AUTH_PUBLIC_ENDPOINTS = new Set([
 function notifyAuthExpiredOnce() {
   if (authExpiredNotified) return;
   authExpiredNotified = true;
-  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  dispatchAppEvent(AUTH_EXPIRED_EVENT);
 }
 
 export function resetAuthExpiredState() {
@@ -119,6 +123,7 @@ export type CurrentUser = {
   email: string;
   first_name: string;
   last_name: string;
+  has_completed_onboarding: boolean;
 };
 
 export type LangfuseProjectKeys = {
@@ -154,7 +159,7 @@ const apiClient = axios.create({
 
 async function request<T>(
   path: string,
-  method: "GET" | "POST" = "GET",
+  method: "GET" | "POST" | "PATCH" = "GET",
   body?: unknown,
 ): Promise<T> {
   try {
@@ -225,7 +230,9 @@ export async function confirmSignup(payload: ConfirmSignupPayload) {
 }
 
 export async function login(payload: LoginPayload) {
-  return request<LoginResponse>("/auth/login", "POST", payload);
+  const data = await request<LoginResponse>("/auth/login", "POST", payload);
+  dispatchAppEvent(AUTH_LOGIN_SUCCESS_EVENT);
+  return data;
 }
 
 export async function logout() {
@@ -234,6 +241,14 @@ export async function logout() {
 
 export async function getCurrentUser() {
   return request<CurrentUser>("/auth/me", "GET");
+}
+
+export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
+  return request<{ message: string; has_completed_onboarding: boolean }>(
+    "/auth/me",
+    "PATCH",
+    { has_completed_onboarding: hasCompletedOnboarding },
+  );
 }
 
 export async function bootstrapObserveSession() {

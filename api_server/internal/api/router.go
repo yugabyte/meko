@@ -169,6 +169,7 @@ func registerAuthRoutes(
 	authGroup.POST("/login", authH.Login)
 	authGroup.POST("/logout", authH.Logout)
 	authGroup.GET("/me", authH.Me, requireAuth)
+	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
 
 	*datapackGroup = v1.Group("", requireAuth)
 	slog.Info("auth routes registered")

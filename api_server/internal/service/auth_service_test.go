@@ -73,6 +73,7 @@ type mockAccountStore struct {
 	createFn          func(ctx context.Context, params repository.CreateAccountParams) (*models.Account, error)
 	getByCognitoSubFn func(ctx context.Context, sub string) (*models.Account, error)
 	verifyEmailFn     func(ctx context.Context, email string) error
+	setOnboardingFn   func(ctx context.Context, accountID string, completed bool) error
 }
 
 func (m *mockAccountStore) Create(
@@ -91,6 +92,15 @@ func (m *mockAccountStore) VerifyEmail(
 	ctx context.Context, email string,
 ) error {
 	return m.verifyEmailFn(ctx, email)
+}
+
+func (m *mockAccountStore) SetHasCompletedOnboarding(
+	ctx context.Context, accountID string, completed bool,
+) error {
+	if m.setOnboardingFn == nil {
+		return nil
+	}
+	return m.setOnboardingFn(ctx, accountID, completed)
 }
 
 // --- Signup tests ---

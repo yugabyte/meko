@@ -46,13 +46,13 @@ func (r *AccountRepo) Create(
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id, account_first_name, account_last_name,
 			account_email, account_type, cognito_sub,
-			email_verified_at, created_at, updated_at`,
+			email_verified_at, has_completed_onboarding, created_at, updated_at`,
 		params.FirstName, params.LastName,
 		params.Email, params.CognitoSub,
 	).Scan(
 		&acct.ID, &acct.FirstName, &acct.LastName,
 		&acct.Email, &acct.AccountType, &acct.CognitoSub,
-		&acct.EmailVerifiedAt, &acct.CreatedAt, &acct.UpdatedAt,
+		&acct.EmailVerifiedAt, &acct.HasCompletedOnboarding, &acct.CreatedAt, &acct.UpdatedAt,
 	)
 	if err != nil {
 		slog.Error("failed to create account",
@@ -82,14 +82,14 @@ func (r *AccountRepo) GetByCognitoSub(
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, account_first_name, account_last_name,
 			account_email, account_type, cognito_sub,
-			email_verified_at, created_at, updated_at
+			email_verified_at, has_completed_onboarding, created_at, updated_at
 		 FROM meko_system.account_registry
 		 WHERE cognito_sub = $1`,
 		sub,
 	).Scan(
 		&acct.ID, &acct.FirstName, &acct.LastName,
 		&acct.Email, &acct.AccountType, &acct.CognitoSub,
-		&acct.EmailVerifiedAt, &acct.CreatedAt, &acct.UpdatedAt,
+		&acct.EmailVerifiedAt, &acct.HasCompletedOnboarding, &acct.CreatedAt, &acct.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -116,14 +116,14 @@ func (r *AccountRepo) GetByID(
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, account_first_name, account_last_name,
 			account_email, account_type, cognito_sub,
-			email_verified_at, created_at, updated_at
+			email_verified_at, has_completed_onboarding, created_at, updated_at
 		 FROM meko_system.account_registry
 		 WHERE id = $1`,
 		id,
 	).Scan(
 		&acct.ID, &acct.FirstName, &acct.LastName,
 		&acct.Email, &acct.AccountType, &acct.CognitoSub,
-		&acct.EmailVerifiedAt, &acct.CreatedAt, &acct.UpdatedAt,
+		&acct.EmailVerifiedAt, &acct.HasCompletedOnboarding, &acct.CreatedAt, &acct.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -270,5 +270,31 @@ func (r *AccountRepo) VerifyEmail(
 	}
 
 	slog.Info("email verified", "email", email)
+	return nil
+}
+
+// SetHasCompletedOnboarding updates onboarding completion status for an account.
+func (r *AccountRepo) SetHasCompletedOnboarding(
+	ctx context.Context,
+	accountID string,
+	completed bool,
+) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE meko_system.account_registry
+		 SET has_completed_onboarding = $1, updated_at = NOW()
+		 WHERE id = $2`,
+		completed, accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update onboarding completion status: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("account %q not found", accountID)
+	}
 	return nil
 }

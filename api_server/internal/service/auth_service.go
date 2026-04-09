@@ -37,6 +37,7 @@ type AccountStore interface {
 		ctx context.Context, sub string,
 	) (*models.Account, error)
 	VerifyEmail(ctx context.Context, email string) error
+	SetHasCompletedOnboarding(ctx context.Context, accountID string, completed bool) error
 }
 
 // Provisioner abstracts post-signup account provisioning (default
@@ -195,6 +196,11 @@ type LoginResponse struct {
 	ExpiresIn    int32  `json:"expires_in"`
 }
 
+// UpdateOnboardingRequest holds the input for updating onboarding completion.
+type UpdateOnboardingRequest struct {
+	HasCompletedOnboarding bool `json:"has_completed_onboarding"`
+}
+
 // Login authenticates a user via Cognito and returns tokens. If the
 // user signed up through the Cognito Hosted UI and has no local
 // account yet, one is created automatically from the ID token claims.
@@ -242,6 +248,23 @@ func (s *AuthService) Logout(
 	}
 
 	slog.Info("user logout succeeded")
+	return nil
+}
+
+// UpdateOnboardingStatus sets onboarding completion flag for the account.
+func (s *AuthService) UpdateOnboardingStatus(
+	ctx context.Context,
+	accountID string,
+	req UpdateOnboardingRequest,
+) error {
+	if accountID == "" {
+		return fmt.Errorf("account id is required")
+	}
+	if err := s.accounts.SetHasCompletedOnboarding(
+		ctx, accountID, req.HasCompletedOnboarding,
+	); err != nil {
+		return fmt.Errorf("updating onboarding status: %w", err)
+	}
 	return nil
 }
 

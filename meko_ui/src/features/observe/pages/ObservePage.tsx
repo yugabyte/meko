@@ -6,6 +6,32 @@ import {
 } from "@/lib/mekoApi";
 
 const OBSERVE_EMBED_PATH_RAW = (import.meta.env.VITE_OBSERVE_EMBED_PATH || "").trim();
+const OBSERVE_BOOTSTRAP_CACHE_KEY = "meko:observe-bootstrap-cache:v1";
+const OBSERVE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60_000;
+
+type ObserveBootstrapCache = {
+  langfuseRelPath: string;
+  updatedAt: number;
+};
+
+function readObserveBootstrapCache(): ObserveBootstrapCache | null {
+  const raw = sessionStorage.getItem(OBSERVE_BOOTSTRAP_CACHE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as ObserveBootstrapCache;
+  } catch {
+    sessionStorage.removeItem(OBSERVE_BOOTSTRAP_CACHE_KEY);
+    return null;
+  }
+}
+
+function writeObserveBootstrapCache(cache: ObserveBootstrapCache) {
+  sessionStorage.setItem(OBSERVE_BOOTSTRAP_CACHE_KEY, JSON.stringify(cache));
+}
+
+function isObserveBootstrapFresh(updatedAt: number) {
+  return Date.now() - updatedAt <= OBSERVE_BOOTSTRAP_CACHE_TTL_MS;
+}
 
 function normalizeObserveEmbedPath(rawPath: string): string {
   const value = rawPath.trim();
@@ -40,7 +66,7 @@ function observeIframeSrc(embedBase: string, langfusePath: string, retry: number
   return `${beforeQuery}${sep}r=${retry}`;
 }
 
-export default function Observe() {
+export default function ObservePage() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [embedRetry, setEmbedRetry] = useState(0);
@@ -58,6 +84,16 @@ export default function Observe() {
       };
     }
 
+    const cached = readObserveBootstrapCache();
+    if (cached && isObserveBootstrapFresh(cached.updatedAt)) {
+      setLangfuseRelPath(cached.langfuseRelPath);
+      setError(null);
+      setBootstrapping(false);
+      return () => {
+        mounted = false;
+      };
+    }
+
     const prepareObserve = async () => {
       const datapacks = await listDatapacks();
       if (!datapacks.length) {
@@ -66,7 +102,12 @@ export default function Observe() {
       await ensureLangfuseProjectKeys(datapacks[0].name);
       const bootstrap = await bootstrapObserveSession();
       if (mounted && bootstrap.org_id) {
-        setLangfuseRelPath(`organization/${bootstrap.org_id}`);
+        const rel = `organization/${bootstrap.org_id}`;
+        setLangfuseRelPath(rel);
+        writeObserveBootstrapCache({
+          langfuseRelPath: rel,
+          updatedAt: Date.now(),
+        });
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
     };
@@ -99,14 +140,6 @@ export default function Observe() {
             Langfuse traces embedded in Meko shell
           </p>
         </div>
-        <a
-          href={window.location.pathname}
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs text-blue-400 hover:text-blue-300"
-        >
-          Open in new tab
-        </a>
       </header>
 
       <div className="flex-1 min-h-0">

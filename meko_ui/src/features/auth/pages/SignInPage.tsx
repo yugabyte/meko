@@ -1,9 +1,12 @@
 import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { login } from "@/lib/mekoApi";
+import { ROUTES } from "@/app/routes/paths";
 
-export default function SignIn() {
+export default function SignInPage() {
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,7 +18,7 @@ export default function SignIn() {
     setError(null);
     try {
       await login({ email: email.trim(), password });
-      window.location.replace("/datapacks");
+      navigate(ROUTES.datapacks, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "signin failed");
     } finally {
@@ -58,16 +61,9 @@ export default function SignIn() {
         {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
         <p className="mt-5 text-center text-sm text-muted-foreground">
           New to Meko?{" "}
-          <a
-            href="/signup"
-            className="font-medium text-blue-400"
-            onClick={(e) => {
-              e.preventDefault();
-              window.location.replace("/signup");
-            }}
-          >
+          <Link to={ROUTES.signup} className="font-medium text-blue-400">
             Sign up
-          </a>
+          </Link>
         </p>
       </div>
     </div>
