@@ -87,11 +87,45 @@ To see how Meko stores knowledge, add documents to your datapack and query them 
 >
 > Document upload is coming soon to the web portal. Skip this section unless you want to use the CLI.
 
-In your IDE, type the following, and attach a text file:
+In your IDE issue a prompt to add to the knowledge base a document and attach a file in CSV, JSON, markdown, or PDF format. 
+
+As an example, for Claude Code, the standard for providing project knowledge and coding practices is a CLAUDE.md file. Here is an example of markdown content that you can use in Claude Code to try this out. Feel free to copy and modify the contents below in a Claude.md file locally. 
+
 
 ```text
-Store the attached document as long-term knowledge.
-<attach a document>
+# Project Guidelines: Building agents to triage issues being logged by customers
+
+## Overview
+ Build agents to triage issues being logged by Zendesk and create a Root Cause Analysis for it
+
+## Tech Stack
+- **Framework**: Next.js 15 (App Router)
+- **Language**: TypeScript (Strict Mode)
+- **Styling**: Tailwind CSS
+- **Database**: Meko
+
+## Core Coding Standards
+- **Strict Typing**: Never use `any`. Define interfaces for all API responses.
+- **Functional Style**: Prefer pure functions and immutable data patterns over classes.
+- **Components**: Place reusable UI in `src/components/ui` and feature-specific logic in `src/features/*`.
+- **Naming**: Use camelCase for variables/functions and PascalCase for components/types.
+
+## Critical Commands
+Specific bash commands Claude should use to verify its work:
+- **Build**: `npm run build`
+- **Lint**: `npm run lint`
+- **Test**: `npm test` or `npm run test:watch`
+- **Format**: `npm run format`
+
+## Quality Check Workflow
+IMPORTANT: After every significant code change, you MUST follow this sequence:
+1. Run `npm run format` to ensure style consistency.
+2. Run `npm run lint` to check for type errors or warnings.
+3. Run `npm test` and fix any regressions before reporting completion.
+
+## Project Gotchas & Patterns
+- **Auth**: Always use the `useAuth()` hook; do not access session tokens directly from local storage.
+- **API**: All external service calls must include a 3-second timeout and explicit error handling.
 ```
 
 ##### Use the CLI
