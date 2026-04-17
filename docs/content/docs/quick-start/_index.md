@@ -1,7 +1,7 @@
 ---
 title: Quick start
 linkTitle: Quick start
-description: Sign up, connect any AI tool, and explore your first datapack
+description: Sign up, connect an AI coding agent, and explore your first datapack
 weight: 1000
 type: docs
 ---
@@ -25,7 +25,7 @@ Get from zero to a working Meko integration in 60 seconds.
 
 ## Connect your AI client
 
-Next, connect Claude Desktop, Claude Code, Cursor, VS Code, Codex or any MCP-compatible client** to your Meko datapack.  
+Next, connect Claude Desktop, Claude Code, Cursor, VS Code, Codex, any other coding agent** or any MCP-client application (e.g. Claude Desktop)** to your Meko datapack.  
 
 Copy and paste the below text into your Linux prompt.   Replace   <meko-mcp-api-key> and <meko-api-key> with values from the previous step before executing.
 
@@ -72,12 +72,13 @@ The Meko Skills package tells agents when and how to use Meko's MCP tools for me
 
 ## Explore knowledge
 
-Meko allows management of and collaboration around _knowledge_ and _memory_:
+Meko provides a persistent datastore for the full spectrum of information that AI agents need — from raw to refined:
 
-- _Knowledge_ is the raw documents you make available to Meko.
-- _Memory_ is the information Meko derives from these documents.
+- **Conversations** are one example of episodic information: raw, verbatim records of events, unfiltered and comprehensive. Episodic information captures everything that happened, relevant or not.
+- **Memory** is derived from episodic information: extracted, condensed, and stored for associative retrieval. Memory trades completeness for efficiency and recallability.
+- **Knowledge** is confirmed information — curated documents and facts that agents can rely on with confidence. Knowledge may be loaded directly or promoted from memory and conversations over time.
 
-In Meko, conversation history is also considered a "raw document".
+We'll start by exploring knowledge, then move on to memory — and in a later guide, see how conversation history can drive updates to both.
 
 ### Upload knowledge
 
