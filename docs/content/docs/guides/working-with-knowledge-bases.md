@@ -49,7 +49,7 @@ PDF, Parquet, Iceberg, JSON, images, and video.
 
 ## Query knowledge
 
-Once your documents are indexed, query them through the MCP server from your IDE:
+Once your documents are indexed, query them through the MCP server from your coding agent:
 
 ```text
 Search the knowledge base for information about deployment procedures

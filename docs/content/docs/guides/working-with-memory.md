@@ -9,9 +9,9 @@ Meko's memory system gives your agents persistent recall across sessions. Memori
 
 ## Add memories
 
-### Via MCP (from your IDE)
+### Via MCP (from your coding agent)
 
-The simplest way to add memories is through natural language in your IDE:
+The simplest way to add memories is through natural language in your coding agent:
 
 ```text
 Please remember that I like to take vacations at tropical beach locations, on a budget
@@ -31,7 +31,7 @@ meko datapack search_memories --name my-datapack --user_prompt "query text"
 
 ## Search memories
 
-### Via MCP (from your IDE)
+### Via MCP (from your coding agent)
 
 Ask your agent to recall information:
 

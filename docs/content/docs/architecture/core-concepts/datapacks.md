@@ -66,7 +66,7 @@ Each datapack exposes an MCP server that agents use to interact with their data:
 }
 ```
 
-Add this configuration to your IDE or agent framework to connect.
+Add this configuration to your coding agent or agent framework to connect.
 
 For the hosted MCP URL and API key (from the portal or `meko datapack` output), register multiple clients at once with [Connect any AI client](../../quick-start/#connect-any-ai-client).
 

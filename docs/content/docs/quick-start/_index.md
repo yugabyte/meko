@@ -87,7 +87,7 @@ To see how Meko stores knowledge, add documents to your datapack and query them 
 >
 > Document upload is coming soon to the web portal. Skip this section unless you want to use the CLI.
 
-In your IDE, type the following, and attach a text file:
+In your coding agent, type the following, and attach a text file:
 
 ```text
 Store the attached document as long-term knowledge.
@@ -112,7 +112,7 @@ meko datapack add_knowledge_base --name meko_default_datapack --url s3://bucket/
 >
 > Document upload is coming soon to the web portal. Skip this section unless you added your knowledge using the CLI.
 
-Once your documents are parsed, chunked, and indexed by Meko, query them through your IDE:
+Once your documents are parsed, chunked, and indexed by Meko, query them through your coding agent:
 
 ```text
 Search the knowledge base for information about <your topic>
@@ -124,7 +124,7 @@ The MCP server performs semantic search across your indexed documents and return
 
 Meko uses _memory_ to enhance user experience through _personalization_.
 
-Ask this question of your AI IDE or development tool without Meko:
+Ask this question of your coding agent without Meko:
 
 ```text
 Propose a 5 day vacation for me. Do not use Meko or any prior recollection of my preferences in generating your response.
@@ -136,7 +136,7 @@ With Meko, however, your AI can remember your vacation preferences, and use them
 
 ### Create a memory
 
-In your IDE or dev tool, do the following:
+In your coding agent, do the following:
 
 1. Tell the agent to store your preferences:
 
@@ -236,7 +236,7 @@ With your first datapack live, you can transition from a basic demo to a robust,
   {{< card
     href="examples/meko-in-your-ide/"
     title="Share context across people and tools"
-    desc="Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across IDEs."
+    desc="Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across coding agents."
   >}}
   {{< card
     href="examples/build-software-with-meko/"
@@ -247,7 +247,7 @@ With your first datapack live, you can transition from a basic demo to a robust,
 
 <!--
 - **Manage and curate memories.** Search and list what is stored, compress overlapping facts, or clear a datapack when you need a reset. See [Working with Memory](../guides/working-with-memory/).
-- **Share context across people and tools.** Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across IDEs. See [Meko in your development process](../examples/meko-in-your-ide/) and [Datapacks](../architecture/core-concepts/datapacks/).
+- **Share context across people and tools.** Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across coding agents. See [Meko in your development process](../examples/meko-in-your-ide/) and [Datapacks](../architecture/core-concepts/datapacks/).
 - **Build resilient multi-agent systems**. Preserve context across long-running tasks and multiple tools. Meko lowers costs by archiving old history and allows agents to resume work immediately after failures or session resets. See [Meko in your agentic application](../examples/build-software-with-meko/).
 - **Grow knowledge bases.** Add more sources and combine document RAG with memory-driven assistants. See [Working with Knowledge Bases](../guides/working-with-knowledge-bases/).
 -->
