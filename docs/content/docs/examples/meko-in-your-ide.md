@@ -1,13 +1,13 @@
 ---
 title: Meko in your development process
-linkTitle: IDEs
+linkTitle: Coding agents
 description: Store personal preferences, coding standards, and team policies across sessions
 weight: 2010
 ---
 
-Meko gives your IDE's AI assistant persistent memory that follows you across sessions and projects. This example shows how to use Meko for storing and recalling development preferences.
+Meko gives your coding agent persistent memory that follows you across sessions and projects. This example shows how to use Meko for storing and recalling development preferences.
 
-If you have not connected an IDE yet, see [Connect any AI client](../quick-start/#connect-any-ai-client).
+If you have not connected a coding agent yet, see [Connect any AI client](../quick-start/#connect-any-ai-client).
 
 ## Use cases
 
@@ -19,7 +19,7 @@ Use Cursor to write code, Claude to review it, and Gemini to write the test plan
 
 With Meko, you can:
 
-- Play to each tool's strengths
+- Play to each coding agent's strengths
 - Reuse existing tooling that's locked to an LLM vendor
 
 All while maintaining consistency and portability.
@@ -40,13 +40,13 @@ Remember that I use pytest with fixtures for all testing
 Remember that I prefer 4-space indentation and single quotes in Python
 ```
 
-In a new tool, new session, or new phase of the engineering lifecycle, all your preferences will be remembered and applied automatically.
+In a new coding agent, new session, or new phase of the engineering lifecycle, all your preferences will be remembered and applied automatically.
 
 ### Portable developer coding preferences
 
 *Take coding preferences with you across sessions, projects, and teams.*
 
-Have you ever created a coding practice or pattern, only to have to re-teach it to your AI agent or coding tool on the next project, or even in the next session?
+Have you ever created a coding practice or pattern, only to have to re-teach it to your coding agent on the next project, or even in the next session?
 
 While AI dev tools do have mechanisms for memory and skills, do they apply at the session, project, multi-project, or team level? Do they overlap and overlay? Which take precedence? Cursor does this one way, while Anthropic Claude does it a different way. Surely, there must be an end to this madness.
 
