@@ -1,13 +1,13 @@
 ---
 title: Meko in your development process
-linkTitle: Coding agents
+linkTitle: AI agents
 description: Store personal preferences, coding standards, and team policies across sessions
 weight: 2010
 ---
 
-Meko gives your coding agent persistent memory that follows you across sessions and projects. This example shows how to use Meko for storing and recalling development preferences.
+Meko gives your AI agent persistent memory that follows you across sessions and projects. This example shows how to use Meko for storing and recalling development preferences.
 
-If you have not connected a coding agent yet, see [Connect any AI client](../quick-start/#connect-any-ai-client).
+If you have not connected an AI agent yet, see [Connect any AI client](../quick-start/#connect-any-ai-client).
 
 ## Use cases
 

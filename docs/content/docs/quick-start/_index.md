@@ -271,7 +271,7 @@ With your first datapack live, you can transition from a basic demo to a robust,
   {{< card
     href="examples/meko-in-your-ide/"
     title="Share context across people and tools"
-    desc="Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across coding agents."
+    desc="Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across AI agents."
   >}}
   {{< card
     href="examples/build-software-with-meko/"
@@ -282,7 +282,7 @@ With your first datapack live, you can transition from a basic demo to a robust,
 
 <!--
 - **Manage and curate memories.** Search and list what is stored, compress overlapping facts, or clear a datapack when you need a reset. See [Working with Memory](../guides/working-with-memory/).
-- **Share context across people and tools.** Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across coding agents. See [Meko in your development process](../examples/meko-in-your-ide/) and [Datapacks](../architecture/core-concepts/datapacks/).
+- **Share context across people and tools.** Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across AI agents. See [Meko in your development process](../examples/meko-in-your-ide/) and [Datapacks](../architecture/core-concepts/datapacks/).
 - **Build resilient multi-agent systems**. Preserve context across long-running tasks and multiple tools. Meko lowers costs by archiving old history and allows agents to resume work immediately after failures or session resets. See [Meko in your agentic application](../examples/build-software-with-meko/).
 - **Grow knowledge bases.** Add more sources and combine document RAG with memory-driven assistants. See [Working with Knowledge Bases](../guides/working-with-knowledge-bases/).
 -->
