@@ -49,7 +49,7 @@ Replace `<mcp-server-url>` and `<mcp-server-api-key>` with the URL and API key y
 
 If you're using continue, copilot cli, gemini, goose, opencode, or windsurf, change the `--clients` option to include one or more of those keywords.
 
-For manual instructions, and guidance on registering the Meko MCP Server with your own AI framework (such as LangChain, Llama Index, and more) in an application development scenario, see [Integrations](../integrations/). 
+For manual instructions, and guidance on registering the Meko MCP Server with your own AI framework (such as LangChain, Llama Index, and more) in an application development scenario, see [Integrations](../integrations/).
 
 ## Add skills to your agent
 
@@ -93,7 +93,6 @@ To see how Meko stores knowledge, add documents to your datapack and query them 
 In your coding agent, issue a prompt to add to the knowledge base a document and attach a file in CSV, JSON, markdown, or PDF format. 
 
 As an example, for Claude Code, the standard for providing project knowledge and coding practices is a `CLAUDE.md` file. Use the following markdown content in Claude Code to try this out by copying and modifying the contents to a local `CLAUDE.md` file.
-
 
 ```text
 # Project Guidelines: Building agents to triage issues being logged by customers

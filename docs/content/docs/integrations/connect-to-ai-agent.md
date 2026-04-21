@@ -11,7 +11,7 @@ Integrate with AI agents for interactive use cases, such as saving personal, tea
 
 ### Automated setup
 
-See the [Quick Start](/quick-start/#connect-any-ai-client). 
+See the [Quick Start](/quick-start/#connect-your-ai-client). 
 ### Manual setup
 
 1. In Cursor Desktop, choose **Cursor>Settings>Cursor Settings>Tools & MCPs>New MCP Server**.
@@ -50,7 +50,7 @@ See the [Quick Start](/quick-start/#connect-any-ai-client).
 ## Claude Desktop
 
 ### Automated setup
-See the [Quick Start](/quick-start/#connect-any-ai-client).  
+See the [Quick Start](/quick-start/#connect-your-ai-client).  
 ### Manual setup
 In Claude Desktop (whether used for Chat, Cowork, or Code):
 
@@ -94,7 +94,7 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 ## Claude Code
 ### Automated setup
-See the [Quick Start](/quick-start/#connect-any-ai-client).  
+See the [Quick Start](/quick-start/#connect-your-ai-client).  
 ### Manual setup
 
 1. Run the setup command in your shell to add the Meko MCP server to Claude Code:
@@ -116,7 +116,7 @@ See the [Quick Start](/quick-start/#connect-any-ai-client).
 ## Open AI Codex Desktop
 
 ### Automated setup
-See the [Quick Start](/quick-start/#connect-any-ai-client).  
+See the [Quick Start](/quick-start/#connect-your-ai-client).  
 ### Manual setup
 
 1. In Codex Desktop, choose **Codex>Settings>MCP servers>Add server>Streamable HTTP**.
@@ -150,10 +150,10 @@ See the [Quick Start](/quick-start/#connect-any-ai-client).
 
 ## VS Code
 ### Automated setup
-See the [Quick Start](/quick-start/#connect-any-ai-client).  
+See the [Quick Start](/quick-start/#connect-your-ai-client).  
 ## Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, and others
 
-For Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, Continue, Goose, OpenCode, and Windsurf, use the "Automated Setup" described in the [Quick Start](/quick-start/#connect-any-ai-client).  
+For Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, Continue, Goose, OpenCode, and Windsurf, use the "Automated Setup" described in the [Quick Start](/quick-start/#connect-your-ai-client).  
 
 Additional support for the below is coming soon
 * Opencode

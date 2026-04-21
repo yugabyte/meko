@@ -17,7 +17,7 @@ You follow the same basic pattern with all tools and frameworks:
 2. **Register the Meko MCP server** with your AI agent or with your application's MCP Client.
 3. **Start using Meko** through natural language prompts.
 
-To register the hosted MCP server (using the URL and API key from the portal or CLI) with multiple AI agents in a single command, see [Connect any AI client](../quick-start/#connect-any-ai-client).
+To register the hosted MCP server (using the URL and API key from the portal or CLI) with multiple coding agents in a single command, see [Connect your AI client](../../quick-start/#connect-your-ai-client).
 
 ## Connect to an AI agent
 
