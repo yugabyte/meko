@@ -1,22 +1,56 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Check, Copy, ArrowRight, Terminal, MessageSquare, Sparkles, Map } from "lucide-react";
+import {
+  ONBOARDING_STATUS_CACHE_KEY,
+  ONBOARDING_STATUS_UPDATED_EVENT,
+  updateOnboardingStatus,
+} from "@/lib/mekoApi";
+import { copyToClipboard } from "@/lib/clipboard";
+import { dispatchAppEvent } from "@/lib/browserEvents";
+import { ROUTES } from "@/app/routes/paths";
 
-export default function Onboarding() {
-  const [, setLocation] = useLocation();
+export default function OnboardingPage() {
+  const navigate = useNavigate();
   const [copiedStep, setCopiedField] = useState<string | null>(null);
+  const [completing, setCompleting] = useState(false);
+  const [completeError, setCompleteError] = useState<string | null>(null);
 
-  const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(id);
-    setTimeout(() => setCopiedField(null), 2000);
+  const handleCopy = async (text: string, id: string) => {
+    try {
+      const copied = await copyToClipboard(text);
+      if (!copied) return;
+      setCopiedField(id);
+      setTimeout(() => setCopiedField(null), 2000);
+    } catch {}
   };
 
-  const handleComplete = () => {
-    setLocation("/agent");
+  const handleComplete = async () => {
+    setCompleteError(null);
+    setCompleting(true);
+    const previous = localStorage.getItem(ONBOARDING_STATUS_CACHE_KEY);
+    localStorage.setItem(ONBOARDING_STATUS_CACHE_KEY, "true");
+    dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
+      has_completed_onboarding: true,
+    });
+    try {
+      await updateOnboardingStatus(true);
+      navigate(ROUTES.datapacks, { replace: true });
+    } catch (err) {
+      if (previous == null) {
+        localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
+      } else {
+        localStorage.setItem(ONBOARDING_STATUS_CACHE_KEY, previous);
+      }
+      dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
+        has_completed_onboarding: previous === "true",
+      });
+      setCompleteError(err instanceof Error ? err.message : "Failed to save onboarding status");
+      setCompleting(false);
+    }
   };
 
   return (
@@ -35,7 +69,6 @@ export default function Onboarding() {
         </div>
 
         <div className="grid gap-6">
-          {/* Step 1 */}
           <Card className="border-border bg-[#1C2333] overflow-hidden">
             <div className="flex border-b border-border bg-[#0E1525] p-4 items-center gap-4">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold shrink-0">1</div>
@@ -86,9 +119,9 @@ export default function Onboarding() {
                       variant="ghost" 
                       size="icon" 
                       className="absolute top-3 right-3 text-muted-foreground hover:text-white bg-[#1C2333] border border-border"
-                      onClick={() => handleCopy(`{\n  "mcpServers": {\n    "meko": {\n      "command": "npx",\n      "args": ["-y", "@meko/mcp-server"],\n      "env": {\n        "MEKO_API_KEY": "meko_dp_default_secret_key"\n      }\n    }\n  }\n}`, 'claude')}
+                      onClick={() => handleCopy(`{\n  "mcpServers": {\n    "meko": {\n      "command": "npx",\n      "args": ["-y", "@meko/mcp-server"],\n      "env": {\n        "MEKO_API_KEY": "meko_dp_default_secret_key"\n      }\n    }\n  }\n}`, "claude")}
                     >
-                      {copiedStep === 'claude' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                      {copiedStep === "claude" ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                     </Button>
                   </div>
                 </TabsContent>
@@ -104,9 +137,9 @@ npx @meko/mcp-server start`}
                       variant="ghost" 
                       size="icon" 
                       className="absolute top-3 right-3 text-muted-foreground hover:text-white bg-[#1C2333] border border-border"
-                      onClick={() => handleCopy(`export MEKO_API_KEY="meko_dp_default_secret_key"\nnpx @meko/mcp-server start`, 'openai')}
+                      onClick={() => handleCopy(`export MEKO_API_KEY="meko_dp_default_secret_key"\nnpx @meko/mcp-server start`, "openai")}
                     >
-                      {copiedStep === 'openai' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                      {copiedStep === "openai" ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                     </Button>
                   </div>
                 </TabsContent>
@@ -124,9 +157,9 @@ Env: MEKO_API_KEY=meko_dp_default_secret_key`}
                       variant="ghost" 
                       size="icon" 
                       className="absolute top-3 right-3 text-muted-foreground hover:text-white bg-[#1C2333] border border-border"
-                      onClick={() => handleCopy(`Name: Meko Datapack\nType: command\nCommand: npx -y @meko/mcp-server\nEnv: MEKO_API_KEY=meko_dp_default_secret_key`, 'cursor')}
+                      onClick={() => handleCopy(`Name: Meko Datapack\nType: command\nCommand: npx -y @meko/mcp-server\nEnv: MEKO_API_KEY=meko_dp_default_secret_key`, "cursor")}
                     >
-                      {copiedStep === 'cursor' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                      {copiedStep === "cursor" ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                     </Button>
                   </div>
                 </TabsContent>
@@ -134,7 +167,6 @@ Env: MEKO_API_KEY=meko_dp_default_secret_key`}
             </CardContent>
           </Card>
 
-          {/* Step 2 & 3 */}
           <Card className="border-border bg-[#1C2333] overflow-hidden">
             <div className="flex border-b border-border bg-[#0E1525] p-4 items-center gap-4">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold shrink-0">2</div>
@@ -152,16 +184,15 @@ Env: MEKO_API_KEY=meko_dp_default_secret_key`}
                   variant="outline" 
                   size="sm" 
                   className="gap-2 border-border bg-[#1C2333] hover:bg-muted text-muted-foreground"
-                  onClick={() => handleCopy("Please remember that I like to take vacations at tropical beach locations, on a budget.", 'memory')}
+                  onClick={() => handleCopy("Please remember that I like to take vacations at tropical beach locations, on a budget.", "memory")}
                 >
-                  {copiedStep === 'memory' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                  {copiedStep === "memory" ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                   Copy
                 </Button>
               </div>
             </CardContent>
           </Card>
 
-          {/* Step 4 & 5 */}
           <Card className="border-border bg-[#1C2333] overflow-hidden">
             <div className="flex border-b border-border bg-[#0E1525] p-4 items-center gap-4">
               <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold shrink-0">3</div>
@@ -171,12 +202,10 @@ Env: MEKO_API_KEY=meko_dp_default_secret_key`}
               <p className="text-sm text-muted-foreground">Start a new chat session and ask your AI to propose a vacation. Notice how the response improves when memory is used through Meko.</p>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Without Meko */}
                 <div className="rounded-xl border border-border bg-[#0E1525] p-4 flex flex-col gap-4 relative overflow-hidden">
                   <div className="absolute top-0 right-0 px-3 py-1 bg-muted/50 rounded-bl-lg text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-l border-border">
                     Without Meko
                   </div>
-                  
                   <div className="flex gap-3 mt-4">
                     <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center shrink-0 mt-1">
                       <span className="text-[10px] text-white font-medium">You</span>
@@ -200,7 +229,6 @@ Env: MEKO_API_KEY=meko_dp_default_secret_key`}
                   </div>
                 </div>
 
-                {/* With Meko */}
                 <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4 flex flex-col gap-4 relative overflow-hidden">
                   <div className="absolute top-0 right-0 px-3 py-1 bg-blue-500 text-[10px] font-semibold text-white uppercase tracking-wider rounded-bl-lg shadow-lg">
                     With Meko
@@ -244,9 +272,9 @@ Env: MEKO_API_KEY=meko_dp_default_secret_key`}
                   variant="outline" 
                   size="sm" 
                   className="gap-2 border-border bg-[#1C2333] hover:bg-muted text-muted-foreground"
-                  onClick={() => handleCopy("Propose a 5 day vacation for me.", 'vacation')}
+                  onClick={() => handleCopy("Propose a 5 day vacation for me.", "vacation")}
                 >
-                  {copiedStep === 'vacation' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                  {copiedStep === "vacation" ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                   Copy Prompt
                 </Button>
               </div>
@@ -254,11 +282,19 @@ Env: MEKO_API_KEY=meko_dp_default_secret_key`}
           </Card>
         </div>
 
-        <div className="flex justify-center pt-4 pb-12">
-          <Button size="lg" className="gap-2 bg-white text-black hover:bg-gray-200 px-8 py-6 text-lg font-semibold rounded-full" onClick={handleComplete}>
-            Go to Meko Agent Dashboard
+        <div className="flex flex-col items-center gap-3 pt-4 pb-12">
+          <Button
+            size="lg"
+            className="gap-2 bg-white text-black hover:bg-gray-200 px-8 py-6 text-lg font-semibold rounded-full"
+            onClick={handleComplete}
+            disabled={completing}
+          >
+            {completing ? "Saving..." : "Go to Datapacks"}
             <ArrowRight className="w-5 h-5" />
           </Button>
+          {completeError ? (
+            <p className="text-sm text-red-400">{completeError}</p>
+          ) : null}
         </div>
 
       </div>

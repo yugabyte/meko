@@ -154,10 +154,49 @@ func (h *AuthHandler) Me(c echo.Context) error {
 	}
 
 	return ok(c, http.StatusOK, map[string]any{
-		"account_id": account.ID,
-		"email":      account.Email,
-		"first_name": account.FirstName,
-		"last_name":  account.LastName,
+		"account_id":               account.ID,
+		"email":                    account.Email,
+		"first_name":               account.FirstName,
+		"last_name":                account.LastName,
+		"has_completed_onboarding": account.HasCompletedOnboarding,
+	})
+}
+
+// UpdateOnboardingStatus handles PATCH /api/v1/auth/me.
+//
+//	@Summary	Update onboarding completion status
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.UpdateOnboardingRequest	true	"Onboarding status payload"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Router		/auth/me [patch]
+func (h *AuthHandler) UpdateOnboardingStatus(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
+	var req service.UpdateOnboardingRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+
+	if err := h.svc.UpdateOnboardingStatus(
+		c.Request().Context(),
+		account.ID,
+		req,
+	); err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+
+	return ok(c, http.StatusOK, map[string]any{
+		"message":                  "onboarding status updated",
+		"has_completed_onboarding": req.HasCompletedOnboarding,
 	})
 }
 

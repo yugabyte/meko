@@ -1,7 +1,9 @@
 import { FormEvent, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { signup, confirmSignup } from "@/lib/mekoApi";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { ROUTES } from "@/app/routes/paths";
 
 function getPasswordPolicyError(password: string): string | null {
   if (password.length < 8) return "Password must be at least 8 characters long.";
@@ -16,7 +18,8 @@ function getPasswordPolicyError(password: string): string | null {
   return null;
 }
 
-export default function SignUp() {
+export default function SignUpPage() {
+  const navigate = useNavigate();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -57,7 +60,7 @@ export default function SignUp() {
     setError(null);
     try {
       await confirmSignup({ email: email.trim(), code: code.trim() });
-      window.location.replace("/login");
+      navigate(ROUTES.login, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "confirmation failed");
     } finally {
@@ -150,16 +153,9 @@ export default function SignUp() {
           <>
             <p className="mt-5 text-center text-sm text-muted-foreground">
               Already have an account?{" "}
-              <a
-                href="/login"
-                className="font-medium text-blue-400"
-                onClick={(e) => {
-                  e.preventDefault();
-                  window.location.replace("/login");
-                }}
-              >
+              <Link to={ROUTES.login} className="font-medium text-blue-400">
                 Sign in
-              </a>
+              </Link>
             </p>
           </>
         ) : null}

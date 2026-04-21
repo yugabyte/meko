@@ -1,4 +1,4 @@
-import { Link, useLocation } from "wouter";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   Database,
   Activity,
@@ -9,19 +9,27 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
-import { Button } from "./ui/button";
-import { logout, PROVISION_STATUS_CACHE_KEY } from "@/lib/mekoApi";
+import { Button } from "@/components/ui/button";
+import {
+  logout,
+  ONBOARDING_STATUS_CACHE_KEY,
+  ONBOARDING_STATUS_UPDATED_EVENT,
+  PROVISION_STATUS_CACHE_KEY,
+} from "@/lib/mekoApi";
+import { dispatchAppEvent } from "@/lib/browserEvents";
+import { ROUTES } from "@/app/routes/paths";
 
 export default function Sidebar() {
-  const [location] = useLocation();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
 
   const navItems = [
     // { name: "Meko Agent", href: "/agent", icon: Play },
-    { name: "Datapacks", href: "/datapacks", icon: Database },
-    { name: "Observe", href: "/observe-hub", icon: Activity },
+    { name: "Datapacks", href: ROUTES.datapacks, icon: Database },
+    { name: "Observe", href: ROUTES.observeHub, icon: Activity },
   ];
 
   const handleLogout = async () => {
@@ -30,7 +38,11 @@ export default function Sidebar() {
     try {
       await logout();
       sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
-      window.location.replace("/login");
+      localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
+      dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
+        has_completed_onboarding: false,
+      });
+      navigate(ROUTES.login, { replace: true });
     } catch (err) {
       setLogoutError(err instanceof Error ? err.message : "logout failed");
       setLoggingOut(false);
@@ -59,8 +71,8 @@ export default function Sidebar() {
       <div className="flex-1 overflow-y-auto py-4 flex flex-col gap-1 px-3">
         {navItems.map((item) => {
           const isActive =
-            location === item.href ||
-            location.startsWith(`${item.href}/`);
+            location.pathname === item.href ||
+            location.pathname.startsWith(`${item.href}/`);
           const itemClassName = cn(
             "flex items-center rounded-md text-sm font-medium transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
@@ -70,15 +82,15 @@ export default function Sidebar() {
           );
 
           return (
-            <Link
+            <NavLink
               key={item.name}
-              href={item.href}
+              to={item.href}
               className={itemClassName}
               title={isCollapsed ? item.name : undefined}
             >
               <item.icon className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
               {!isCollapsed && <span className="animate-in fade-in truncate">{item.name}</span>}
-            </Link>
+            </NavLink>
           );
         })}
       </div>

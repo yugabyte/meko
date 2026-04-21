@@ -21,6 +21,7 @@ import {
   PROVISION_STATUS_CACHE_KEY,
   type ProvisionStatus,
 } from "@/lib/mekoApi";
+import { copyToClipboard } from "@/lib/clipboard";
 
 const MEMORIES = [
   { id: "m_1", agentId: "agt_9a8b7c", context: "User prefers dark mode for all dashboards", createdAt: "2023-10-26T10:00:00Z" },
@@ -31,6 +32,27 @@ const MEMORIES = [
 ];
 
 type ProvisionStatusCache = Record<string, ProvisionStatus>;
+const LANGFUSE_PROJECT_KEYS_CACHE_KEY = "meko:langfuse-project-keys-cache:v1";
+const LANGFUSE_PROJECT_KEYS_TTL_MS = 5 * 60_000;
+
+function isFresh(updatedAt: number, ttlMs: number) {
+  return Date.now() - updatedAt <= ttlMs;
+}
+
+function readLangfuseProjectKeysCache(): Record<string, number> {
+  const raw = sessionStorage.getItem(LANGFUSE_PROJECT_KEYS_CACHE_KEY);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, number>;
+  } catch {
+    sessionStorage.removeItem(LANGFUSE_PROJECT_KEYS_CACHE_KEY);
+    return {};
+  }
+}
+
+function writeLangfuseProjectKeysCache(cache: Record<string, number>) {
+  sessionStorage.setItem(LANGFUSE_PROJECT_KEYS_CACHE_KEY, JSON.stringify(cache));
+}
 
 function readProvisionStatusCache(): ProvisionStatusCache {
   const raw = sessionStorage.getItem(PROVISION_STATUS_CACHE_KEY);
@@ -47,7 +69,7 @@ function writeProvisionStatusCache(cache: ProvisionStatusCache) {
   sessionStorage.setItem(PROVISION_STATUS_CACHE_KEY, JSON.stringify(cache));
 }
 
-export default function Home() {
+export default function DatapacksPage() {
   const [datapacks, setDatapacks] = useState<Datapack[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
@@ -73,13 +95,8 @@ export default function Home() {
 
   const handleCopy = async (text: string, field: string) => {
     try {
-      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-        await navigator.clipboard.writeText(text);
-      } else {
-        // Avoid deprecated execCommand fallback.
-        window.prompt("Clipboard API unavailable. Copy manually:", text);
-        return;
-      }
+      const copied = await copyToClipboard(text);
+      if (!copied) return;
       setCopiedField(field);
       setTimeout(() => setCopiedField(null), 2000);
     } catch {
@@ -149,18 +166,19 @@ export default function Home() {
       }
     };
 
-    const intervalId = window.setInterval(poll, 2000);
+    const intervalId = globalThis.setInterval(poll, 2000);
     void poll();
 
     return () => {
       mounted = false;
-      window.clearInterval(intervalId);
+      globalThis.clearInterval(intervalId);
       setIsProvisioningDefaultDatapack(false);
     };
   }, [isLoading, datapacks.length]);
 
   useEffect(() => {
     if (!activeDatapack) return;
+
     const loadDatapackDetails = async () => {
       try {
         setError(null);
@@ -187,7 +205,20 @@ export default function Home() {
       return;
     }
     let mounted = true;
+    const cache = readLangfuseProjectKeysCache();
+    const updatedAt = cache[activeDatapack];
+    if (updatedAt && isFresh(updatedAt, LANGFUSE_PROJECT_KEYS_TTL_MS)) {
+      return () => {
+        mounted = false;
+      };
+    }
+
     ensureLangfuseProjectKeys(activeDatapack)
+      .then(() => {
+        const next = readLangfuseProjectKeysCache();
+        next[activeDatapack] = Date.now();
+        writeLangfuseProjectKeysCache(next);
+      })
       .catch((err) => {
         if (!mounted) return;
         // Keep creation best-effort and avoid surfacing secrets/errors in Datapacks UI.
@@ -253,9 +284,9 @@ export default function Home() {
   }, [isConnectOpen, activeDatapack]);
 
   const handleCreateDatapack = async () => {
-    const name = window.prompt("Datapack name (unique)");
+    const name = globalThis.prompt("Datapack name (unique)");
     if (!name) return;
-    const seedUrl = window.prompt("Seed knowledge base URL", "https://example.com/docs");
+    const seedUrl = globalThis.prompt("Seed knowledge base URL", "https://example.com/docs");
     if (!seedUrl) return;
 
     try {
@@ -460,7 +491,7 @@ export default function Home() {
           <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl translate-y-1/3 -translate-x-1/3" />
           
           <div className="relative z-10">
-            <div 
+            <div
               className="flex items-center justify-between p-4 sm:px-10 cursor-pointer hover:bg-white/5 transition-colors"
               onClick={() => setIsExplanationExpanded(!isExplanationExpanded)}
             >
@@ -647,8 +678,8 @@ export default function Home() {
                       <TableCell className="font-medium text-white">{memory.agentId}</TableCell>
                       <TableCell className="text-muted-foreground">{memory.context}</TableCell>
                       <TableCell className="text-right text-muted-foreground tabular-nums">
-                        {new Date(memory.createdAt).toLocaleString(undefined, { 
-                          year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+                        {new Date(memory.createdAt).toLocaleString(undefined, {
+                          year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
                         })}
                       </TableCell>
                     </TableRow>

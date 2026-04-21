@@ -28,17 +28,18 @@ type Agent struct {
 
 // Account represents a user account in the meko system.
 type Account struct {
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty"`
-	ID              string     `json:"id"`
-	FirstName       string     `json:"first_name"`
-	LastName        string     `json:"last_name"`
-	Email           string     `json:"email"`
-	AccountType     string     `json:"account_type"`
-	CognitoSub      string     `json:"cognito_sub,omitempty"`
-	MCPUserName     *string    `json:"mcp_user_name,omitempty"`
-	MCPUserPassword *string    `json:"-"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+	EmailVerifiedAt        *time.Time `json:"email_verified_at,omitempty"`
+	HasCompletedOnboarding bool       `json:"has_completed_onboarding"`
+	ID                     string     `json:"id"`
+	FirstName              string     `json:"first_name"`
+	LastName               string     `json:"last_name"`
+	Email                  string     `json:"email"`
+	AccountType            string     `json:"account_type"`
+	CognitoSub             string     `json:"cognito_sub,omitempty"`
+	MCPUserName            *string    `json:"mcp_user_name,omitempty"`
+	MCPUserPassword        *string    `json:"-"`
 }
 
 // KnowledgeBase represents a knowledge base linked to a datapack.
