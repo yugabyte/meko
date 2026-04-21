@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"log/slog"
 
 	"github.com/labstack/echo/v4"
 
@@ -96,6 +97,10 @@ func (h *AuthHandler) Login(c echo.Context) error {
 		return h.classifyAuthErr(c, err)
 	}
 
+	setAuthCookie(c, "access_token", resp.AccessToken)
+	setAuthCookie(c, "id_token", resp.IDToken)
+	setAuthCookie(c, "refresh_token", resp.RefreshToken)
+
 	return ok(c, http.StatusOK, resp)
 }
 
@@ -108,30 +113,51 @@ func (h *AuthHandler) Login(c echo.Context) error {
 //	@Failure	401	{object}	APIResponse
 //	@Router		/auth/logout [post]
 func (h *AuthHandler) Logout(c echo.Context) error {
-	header := c.Request().Header.Get("Authorization")
-	if header == "" {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "authorization header is required")
+	accessToken := ""
+	if cookie, err := c.Cookie("access_token"); err == nil {
+		accessToken = strings.TrimSpace(cookie.Value)
 	}
-
-	parts := strings.SplitN(header, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "malformed authorization header")
+	if accessToken == "" {
+		header := c.Request().Header.Get("Authorization")
+		if header != "" {
+			parts := strings.SplitN(header, " ", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+				accessToken = strings.TrimSpace(parts[1])
+			}
+		}
 	}
-
-	accessToken := strings.TrimSpace(parts[1])
 	if accessToken == "" {
 		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "access token is empty")
+			"UNAUTHORIZED", "access token is required")
 	}
 
 	if err := h.svc.Logout(c.Request().Context(), accessToken); err != nil {
 		return h.classifyAuthErr(c, err)
 	}
 
+	clearAuthCookie(c, "access_token")
+	clearAuthCookie(c, "id_token")
+	clearAuthCookie(c, "refresh_token")
+
 	return ok(c, http.StatusOK, map[string]string{
 		"message": "logged out",
+	})
+}
+
+// Me handles GET /api/v1/auth/me.
+func (h *AuthHandler) Me(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		slog.Error("error getting account", "error", err)
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
+	return ok(c, http.StatusOK, map[string]any{
+		"account_id": account.ID,
+		"email":      account.Email,
+		"first_name": account.FirstName,
+		"last_name":  account.LastName,
 	})
 }
 
@@ -174,4 +200,31 @@ func (h *AuthHandler) classifyAuthErr(
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", err.Error())
 	}
+}
+
+func setAuthCookie(c echo.Context, name, value string) {
+	secure := c.Scheme() == "https"
+	cookie := &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+	}
+	c.SetCookie(cookie)
+}
+
+func clearAuthCookie(c echo.Context, name string) {
+	secure := c.Scheme() == "https"
+	cookie := &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+	}
+	c.SetCookie(cookie)
 }
