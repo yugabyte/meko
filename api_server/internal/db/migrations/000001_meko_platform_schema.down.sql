@@ -24,4 +24,5 @@ DROP TABLE IF EXISTS meko_system.organization_registry;
 DROP TYPE IF EXISTS meko_system.access_permission;
 DROP TYPE IF EXISTS meko_system.access_object_type;
 DROP TYPE IF EXISTS meko_system.account_type;
+DROP SCHEMA IF EXISTS datapacks;
 DROP SCHEMA IF EXISTS meko_system;
