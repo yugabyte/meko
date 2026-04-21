@@ -1,12 +1,12 @@
 ---
-title: Connect to a coding agent
-linkTitle: Coding agents
+title: Connect to an AI agent
+linkTitle: AI agents
 description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and more
 weight: 3010
 type: docs
 ---
 
-Integrate with coding agents for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
+Integrate with AI agents for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
 ## Cursor Desktop
 
 ### Automated setup

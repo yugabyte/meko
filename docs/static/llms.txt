@@ -32,12 +32,12 @@ Meko exposes everything through the Model Context Protocol (MCP), making it comp
 
 ## Integrations
 
-- [Connect via IDE](/integrations/connect-to-ide/): Configure Meko in Cursor Desktop, Cursor Web, Claude Desktop, Claude Code, and more
+- [Connect via IDE](/integrations/connect-to-ai-agent/): Configure Meko in Cursor Desktop, Cursor Web, Claude Desktop, Claude Code, and more
 - [Connect Programmatically](/integrations/connect-programatically/): Use Meko with LangChain, LangGraph, and the Python SDK
 
 ## Examples
 
-- [Meko in Your IDE](/examples/meko-in-your-ide/): Store personal preferences, portable coding standards, team policies, and project-specific context
+- [Meko in Your IDE](/examples/meko-in-your-ai-agent/): Store personal preferences, portable coding standards, team policies, and project-specific context
 - [Build Software with Meko](/examples/build-software-with-meko/): Persist conversation history, reasoning traces, and resumable task state in agentic applications
 
 ## Reference
