@@ -25,9 +25,9 @@ Get from zero to a working Meko integration in 60 seconds.
 
 ## Connect your AI client
 
-Next, connect Claude Desktop, Claude Code, Cursor, VS Code, Codex, any other coding agent** or any MCP-client application (e.g. Claude Desktop)** to your Meko datapack.  
+Next, connect Claude Code, Cursor, VS Code, Codex, any other coding agent or any MCP-compatible client application (such as Claude Desktop) to your Meko datapack.  
 
-Copy and paste the below text into your Linux prompt.   Replace   <meko-mcp-api-key> and <meko-api-key> with values from the previous step before executing.
+Run the following command:
 
 ```sh
 echo "### Installing the latest Node.js ###"
@@ -38,16 +38,18 @@ echo "### Registering the Meko MCP server ###"
 npx mcp-add@latest \
   --name meko \
   --type stdio \
-  --command 'npx -y mcp-remote <meko-mcp-url> --allow-http' \
-  --env 'MEKO_API_KEY=<meko-mcp-api-key>' \
-  --headers 'MEKO_API_KEY=<meko-api-key>' \
+  --command 'npx -y mcp-remote <mcp-server-url> --allow-http' \
+  --env 'MEKO_API_KEY=<mcp-server-api-key>' \
+  --headers 'MEKO_API_KEY=<mcp-server-api-key>' \
   --scope global \
   --clients 'claude desktop,claude code,cursor,codex,vscode'
 ```
 
-** If you're using continue, copilot cli, gemini, goose, opencode, and windsurf, modify the "--clients" command-line option to include one or more of these keywords.
+Replace `<mcp-server-url>` and `<mcp-server-api-key>` with the URL and API key you saved.
 
-For manual instructions, and for guidance on registering the Meko MCP Server with your own AI framework (e.g. LangChain, Llama Index, etc.) in an application development scenario, see [Integrations](../integrations/). 
+If you're using continue, copilot cli, gemini, goose, opencode, or windsurf, change the `--clients` option to include one or more of those keywords.
+
+For manual instructions, and guidance on registering the Meko MCP Server with your own AI framework (such as LangChain, Llama Index, and more) in an application development scenario, see [Integrations](../integrations/). 
 
 ## Add skills to your agent
 
@@ -66,13 +68,13 @@ The Meko Skills package tells agents when and how to use Meko's MCP tools for me
     npx skills add ./skills -g
     ```
 
-2. When prompted to select the skills to install, select both **meko-mcp-tools** and **ysql**.
+1. When prompted to select the skills to install, select both **meko-mcp-tools** and **ysql**.
 
-3. When prompted to select the agent to install the skills to, select your agent.
+1. When prompted to select the agent to install the skills to, select your agent.
 
 ## Explore knowledge
 
-Meko provides a persistent datastore for the full spectrum of information that AI agents need — from raw to refined:
+Meko provides a persistent datastore for the full spectrum of information that AI agents need, from raw to refined:
 
 - **Conversations** are one example of episodic information: raw, verbatim records of events, unfiltered and comprehensive. Episodic information captures everything that happened, relevant or not.
 - **Memory** is derived from episodic information: extracted, condensed, and stored for associative retrieval. Memory trades completeness for efficiency and recallability.
@@ -90,14 +92,14 @@ To see how Meko stores knowledge, add documents to your datapack and query them 
 
 In your coding agent, issue a prompt to add to the knowledge base a document and attach a file in CSV, JSON, markdown, or PDF format. 
 
-As an example, for Claude Code, the standard for providing project knowledge and coding practices is a CLAUDE.md file. Here is an example of markdown content that you can use in Claude Code to try this out. Feel free to copy and modify the contents below in a Claude.md file locally. 
+As an example, for Claude Code, the standard for providing project knowledge and coding practices is a `CLAUDE.md` file. Use the following markdown content in Claude Code to try this out by copying and modifying the contents to a local `CLAUDE.md` file.
 
 
 ```text
 # Project Guidelines: Building agents to triage issues being logged by customers
 
 ## Overview
- Build agents to triage issues being logged by Zendesk and create a Root Cause Analysis for it
+Build agents to triage issues being logged by Zendesk and create a Root Cause Analysis for it
 
 ## Tech Stack
 - **Framework**: Next.js 15 (App Router)
@@ -227,7 +229,7 @@ Thailand or Nusa Penida + Sanur, Bali if you’re already closer to Asia.)
 ## narrow this to one place, rough daily spend, and a rain-day backup.
 ```
 
-The agent retrieves your stored preferences and immediately proposes a vacation aligned to these preferences (a tropical beach vacation within budget). No follow-up questions were needed.
+The agent retrieves your stored preferences and immediately proposes a vacation aligned to these preferences (a tropical beach vacation within budget). No follow-up questions are needed.
 
 ### Check your memories
 
@@ -270,8 +272,8 @@ With your first datapack live, you can transition from a basic demo to a robust,
   >}}
   {{< card
     href="examples/meko-in-your-ai-agent/"
-    title="Share context across people and tools"
-    desc="Collaborate by sharing datapacks with your team, so that every agent follows the same project standards, or carry personal preferences across AI agents."
+    title="Share context"
+    desc="Share datapacks with your team so that every agent follows the same project standards, or carry personal preferences across AI agents."
   >}}
   {{< card
     href="examples/build-software-with-meko/"
