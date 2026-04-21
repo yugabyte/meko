@@ -9,22 +9,22 @@ type: docs
 
 {{< card-group >}}
   {{< card
-    href="examples/meko-in-your-ide/#personal-preferences"
+    href="examples/meko-in-your-ai-agent/#personal-preferences"
     title="Tool-independent dev preferences & standards"
     desc="Use best-of-breed tools with consistent templates & standards."
   >}}
   {{< card
-    href="examples/meko-in-your-ide/#portable-developer-coding-preferences"
+    href="examples/meko-in-your-ai-agent/#portable-developer-coding-preferences"
     title="Portable coding preferences"
     desc="Take coding preferences with you across sessions, projects, and even teams."
   >}}
   {{< card
-    href="examples/meko-in-your-ide/#groupteam-policies-and-standards"
+    href="examples/meko-in-your-ai-agent/#groupteam-policies-and-standards"
     title="Team policies and standards"
     desc="Share a datapack across your team to enforce consistent coding standards and testing policies."
   >}}
   {{< card
-    href="examples/meko-in-your-ide/#project-storage"
+    href="examples/meko-in-your-ai-agent/#project-storage"
     title="Project storage"
     desc="Store project-specific context like architecture decisions, API contracts, and known workarounds."
   >}}

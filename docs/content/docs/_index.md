@@ -84,19 +84,19 @@ Meko is fully open-source and integrates easily with any agentic framework throu
 
 {{< card-group >}}
   {{< card
-    href="integrations/connect-to-ide/#cursor-desktop"
+    href="integrations/connect-to-ai-agent/#cursor-desktop"
     title="Cursor Desktop"
     desc=""
     cta="Setup &rarr;"
   >}}
   {{< card
-    href="integrations/connect-to-ide/#claude-desktop"
+    href="integrations/connect-to-ai-agent/#claude-desktop"
     title="Claude Desktop"
     desc=""
     cta="Setup &rarr;"
   >}}
   {{< card
-    href="integrations/connect-to-ide/#claude-code"
+    href="integrations/connect-to-ai-agent/#claude-code"
     title="Claude Code"
     desc=""
     cta="Setup &rarr;"

@@ -23,32 +23,32 @@ To register the hosted MCP server (using the URL and API key from the portal or 
 
 {{< card-group variant="third" >}}
   {{< card
-    href="integrations/connect-to-ide/#cursor-desktop"
+    href="integrations/connect-to-ai-agent/#cursor-desktop"
     title="Cursor Desktop"
     logo="logos/integrations/cursor.svg"
   >}}
   {{< card
-    href="integrations/connect-to-ide/#cursor-web"
+    href="integrations/connect-to-ai-agent/#cursor-web"
     title="Cursor Web"
     logo="logos/integrations/cursor.svg"
   >}}
   {{< card
-    href="integrations/connect-to-ide/#claude-desktop"
+    href="integrations/connect-to-ai-agent/#claude-desktop"
     title="Claude Desktop"
     logo="logos/integrations/claude.svg"
   >}}
   {{< card
-    href="integrations/connect-to-ide/#claude-code"
+    href="integrations/connect-to-ai-agent/#claude-code"
     title="Claude Code"
     logo="logos/integrations/claude.svg"
   >}}
   {{< card
-    href="integrations/connect-to-ide/#open-ai-codex-desktop"
+    href="integrations/connect-to-ai-agent/#open-ai-codex-desktop"
     title="Codex Desktop"
     logo="logos/integrations/codex.svg"
   >}}
   {{< card
-    href="integrations/connect-to-ide/#vs-code"
+    href="integrations/connect-to-ai-agent/#vs-code"
     title="VS Code"
     logo="logos/integrations/vscode.svg"
   >}}
