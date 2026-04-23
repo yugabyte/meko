@@ -181,6 +181,9 @@ func quoteLiteral(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
 }
 
+// QuoteIdent quotes a SQL identifier (exported for reuse by handlers).
+func QuoteIdent(s string) string { return quoteIdent(s) }
+
 // connStrWithDB rewrites a postgres URI to point at a different database.
 func connStrWithDB(adminConnStr, dbName string) (string, error) {
 	u, err := url.Parse(adminConnStr)
@@ -255,7 +258,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {{.MCP}},
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA PUBLIC TO {{.MCP}}, {{.User}};
 `))
 
-// extensionsTmpl creates required extensions and grants ag_catalog access.
+// extensionsTmpl creates required extensions and grants ag_catalog + dist_rag access.
 // Runs on dpDB (admin connection to the new datapack database).
 var extensionsTmpl = template.Must(template.New("extensions").Parse(`
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -266,6 +269,10 @@ GRANT USAGE, CREATE ON SCHEMA ag_catalog TO {{.MCP}};
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ag_catalog TO {{.MCP}};
 GRANT SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA ag_catalog TO {{.MCP}};
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO {{.MCP}};
+
+GRANT USAGE ON SCHEMA dist_rag TO {{.MCP}}, {{.User}};
+GRANT SELECT ON ALL TABLES IN SCHEMA dist_rag TO {{.MCP}}, {{.User}};
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA dist_rag TO {{.MCP}}, {{.User}};
 `))
 
 func renderSQL(tmpl *template.Template, data map[string]string) (string, error) {
@@ -364,9 +371,10 @@ func provisionDatapackDB(adminConnStr, dbName, mcpUser, mcpPass string, mcpUserE
 		return fmt.Errorf("failed to apply schema grants for %s: %w", dbName, err)
 	}
 
-	// Install extensions and grant ag_catalog access on the new database.
+	// Install extensions and grant ag_catalog + dist_rag access on the new database.
 	extensionsSQL, err := renderSQL(extensionsTmpl, map[string]string{
-		"MCP": quoteIdent(mcpUser),
+		"MCP":  quoteIdent(mcpUser),
+		"User": quoteIdent(dbUser),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to render extensions SQL: %w", err)

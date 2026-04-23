@@ -1,0 +1,38 @@
+services:
+  meko-minio:
+    image: minio/minio:latest
+    container_name: meko-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: meko
+      MINIO_ROOT_PASSWORD: mekosecret
+    ports:
+      - "19094:9000"
+      - "19095:9001"
+    volumes:
+      - meko_minio_data:/data
+    networks:
+      - meko_net
+
+  meko-minio-init:
+    image: minio/mc:latest
+    container_name: meko-minio-init
+    depends_on:
+      - meko-minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://meko-minio:9000 meko mekosecret;
+      mc mb --ignore-existing local/meko-kb-uploads;
+      echo 'Bucket meko-kb-uploads ready';
+      "
+    networks:
+      - meko_net
+
+volumes:
+  meko_minio_data:
+
+networks:
+  meko_net:
+    driver: bridge

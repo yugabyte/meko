@@ -28,6 +28,9 @@ type serviceRegistry struct {
 	tierRepo    *repository.TierConfigRepo
 	agentSvc    *service.AgentService
 	kbSvc       *service.KnowledgeBaseService
+	memoriesSvc *service.MemoriesService
+	tenantKBSvc *service.TenantKBService
+	s3Svc       *service.S3Service
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -49,6 +52,27 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	kbRepo := repository.NewKnowledgeBaseRepo(cfg.DB)
 	kbSvc := service.NewKnowledgeBaseService(kbRepo)
 
+	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.TenantKBTable, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel)
+	memoriesSvc := service.NewMemoriesService(memoriesRepo)
+
+	tenantKBRepo := repository.NewTenantKBRepo(cfg.DB, cfg.TenantKBTable)
+	tenantKBSvc := service.NewTenantKBService(tenantKBRepo)
+	var s3Svc *service.S3Service
+	if cfg.S3Bucket != "" {
+		var err error
+		s3Svc, err = service.NewS3Service(service.S3Config{
+			AuthMode:  service.S3AuthMode(cfg.S3AuthMode),
+			Endpoint:  cfg.S3Endpoint,
+			AccessKey: cfg.S3AccessKey,
+			SecretKey: cfg.S3SecretKey,
+			Bucket:    cfg.S3Bucket,
+			Region:    cfg.S3Region,
+		})
+		if err != nil {
+			slog.Error("failed to initialize S3 service", "error", err)
+		}
+	}
+
 	langfuseSvc := service.NewLangfuseService(service.LangfuseConfig{
 		DB:          cfg.DB,
 		Host:        cfg.LangfuseHost,
@@ -69,6 +93,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		tierRepo:    tierRepo,
 		agentSvc:    agentSvc,
 		kbSvc:       kbSvc,
+		memoriesSvc: memoriesSvc,
+		tenantKBSvc: tenantKBSvc,
+		s3Svc:       s3Svc,
 	}
 }
 
@@ -91,6 +118,12 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 	v1 := e.Group("/api/v1", ManagementRateLimiter())
 
 	v1.GET("/health", handlers.HealthHandler(cfg.DB))
+
+	memoriesHTTPHandler := handlers.NewMemoriesHandler(reg.memoriesSvc)
+	v1.GET("/memories", memoriesHTTPHandler.ListGET)
+
+	tenantKBHandler := handlers.NewTenantKBHandler(reg.tenantKBSvc)
+	v1.POST("/tenant-kb/sync", tenantKBHandler.Sync)
 
 	authEnabled := cfg.CognitoRegion != "" &&
 		cfg.CognitoPoolID != "" &&
@@ -260,10 +293,14 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named.GET("/agents", agentH.List)
 	named.DELETE("/agents/:agent", agentH.Delete)
 
-	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc)
+	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.s3Svc, reg.ybaSvc)
 	named.POST("/knowledge-bases", kbH.Add)
 	named.GET("/knowledge-bases", kbH.List)
 	named.DELETE("/knowledge-bases", kbH.Delete)
+	named.POST("/knowledge-bases/upload-url", kbH.RequestUploadURL)
+	named.POST("/knowledge-bases/upload-complete", kbH.ConfirmUpload)
+	named.POST("/knowledge-bases/create", kbH.CreateKB)
+	named.GET("/knowledge-bases/status", kbH.KBStatus)
 
 	slog.Info("datapack routes registered")
 }

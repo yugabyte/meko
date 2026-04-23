@@ -36,7 +36,7 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
   const onOnboardingRoute = isOnboardingRoute(location);
 
   if (authenticated && onAuthRoute) {
-    return hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding;
+    return hasCompletedOnboarding ? ROUTES.home : ROUTES.onboarding;
   }
 
   if (authenticated && !hasCompletedOnboarding && !onOnboardingRoute) {
@@ -44,7 +44,7 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
   }
 
   if (authenticated && hasCompletedOnboarding && onOnboardingRoute) {
-    return ROUTES.datapacks;
+    return ROUTES.home;
   }
 
   if (!authenticated && onProtectedRoute) {

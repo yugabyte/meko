@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import axios from "axios";
 import { getCurrentUser, ONBOARDING_STATUS_CACHE_KEY } from "@/lib/mekoApi";
 
 type Args = {
@@ -22,12 +23,12 @@ export function useAuthBootstrap({
   setHasCompletedOnboarding,
 }: Args) {
   useEffect(() => {
-    let mounted = true;
+    const controller = new AbortController();
     setAuthLoading(true);
 
-    getCurrentUser()
+    getCurrentUser({ signal: controller.signal })
       .then((user) => {
-        if (!mounted) return;
+        if (controller.signal.aborted) return;
         setAuthenticated(true);
         setHasCompletedOnboarding(user.has_completed_onboarding);
         localStorage.setItem(
@@ -35,18 +36,21 @@ export function useAuthBootstrap({
           String(user.has_completed_onboarding),
         );
       })
-      .catch(() => {
-        if (!mounted) return;
+      .catch((err) => {
+        // Ignore aborts triggered by the cleanup below; the component is
+        // unmounting (or the effect is re-running) so state updates would
+        // be stale.
+        if (controller.signal.aborted || axios.isCancel(err)) return;
         setAuthenticated(false);
         localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
       })
       .finally(() => {
-        if (!mounted) return;
+        if (controller.signal.aborted) return;
         setAuthLoading(false);
       });
 
     return () => {
-      mounted = false;
+      controller.abort();
     };
   }, [setAuthLoading, setAuthenticated, setHasCompletedOnboarding]);
 }

@@ -106,14 +106,14 @@ export async function registerRoutes(
     ];
     kbByDatapack[name] = req.body?.seed_knowledge_base
       ? [
-          {
-            id: `kb_${Date.now()}`,
-            datapack_id: id,
-            knowledge_base_url: String(req.body.seed_knowledge_base),
-            created_at: createdAt,
-            updated_at: createdAt,
-          },
-        ]
+        {
+          id: `kb_${Date.now()}`,
+          datapack_id: id,
+          knowledge_base_url: String(req.body.seed_knowledge_base),
+          created_at: createdAt,
+          updated_at: createdAt,
+        },
+      ]
       : [];
 
     return res.status(201).json(

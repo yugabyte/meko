@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Check, Copy, ArrowRight, Terminal, MessageSquare, Sparkles, Map } from "lucide-react";
 import {
+  getApiErrorMessage,
   ONBOARDING_STATUS_CACHE_KEY,
   ONBOARDING_STATUS_UPDATED_EVENT,
   updateOnboardingStatus,
@@ -38,7 +39,7 @@ export default function OnboardingPage() {
     });
     try {
       await updateOnboardingStatus(true);
-      navigate(ROUTES.datapacks, { replace: true });
+      navigate(ROUTES.home, { replace: true });
     } catch (err) {
       if (previous == null) {
         localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
@@ -48,7 +49,7 @@ export default function OnboardingPage() {
       dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
         has_completed_onboarding: previous === "true",
       });
-      setCompleteError(err instanceof Error ? err.message : "Failed to save onboarding status");
+      setCompleteError(getApiErrorMessage(err, "Failed to save onboarding status."));
       setCompleting(false);
     }
   };

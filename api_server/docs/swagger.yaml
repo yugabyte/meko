@@ -17,6 +17,18 @@ definitions:
       error:
         $ref: '#/definitions/handlers.APIError'
     type: object
+  models.TenantKBSyncRequest:
+    properties:
+      datapack_id:
+        type: string
+      memory_ids:
+        items:
+          type: string
+        type: array
+      user_id:
+        description: Optional.
+        type: string
+    type: object
   service.AddRequest:
     properties:
       url:
@@ -549,4 +561,66 @@ securityDefinitions:
     in: header
     name: Authorization
     type: apiKey
+  /memories:
+    get:
+      parameters:
+      - description: User ID (optional)
+        in: query
+        name: user_id
+        type: string
+      - description: Agent ID
+        in: query
+        name: agent_id
+        type: string
+      - description: Datapack ID
+        in: query
+        name: datapack_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: List memories (query)
+      tags:
+      - memories
+  /tenant-kb/sync:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: optional user_id + optional agent_id + datapack_id + list of mem0 memory IDs to sync
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/models.TenantKBSyncRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Sync mem0 memories into meko_tenants_kb
+      tags:
+      - tenant-kb
 swagger: "2.0"

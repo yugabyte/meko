@@ -13,6 +13,7 @@ type ApiEnvelope<T> = {
 
 export const AUTH_EXPIRED_EVENT = "meko:auth-expired";
 export const AUTH_LOGIN_SUCCESS_EVENT = "meko:auth-login-success";
+export const AUTH_LOGOUT_EVENT = "meko:auth-logout";
 export const PROVISION_STATUS_CACHE_KEY = "meko:provision-status:v1";
 export const ONBOARDING_STATUS_CACHE_KEY = "meko:onboarding-status:v1";
 export const ONBOARDING_STATUS_UPDATED_EVENT = "meko:onboarding-status-updated";
@@ -38,6 +39,8 @@ export type Datapack = {
   id: string;
   name: string;
   account_id?: string;
+  /** When set (e.g. from API), owner is shown as the agent rather than the account holder. */
+  agent_id?: string;
   llm_model?: string;
   embedding_model?: string;
   created_at?: string;
@@ -161,12 +164,14 @@ async function request<T>(
   path: string,
   method: "GET" | "POST" | "PATCH" = "GET",
   body?: unknown,
+  options: { signal?: AbortSignal } = {},
 ): Promise<T> {
   try {
     const res = await apiClient.request<ApiEnvelope<T>>({
       url: path,
       method,
       data: body,
+      signal: options.signal,
     });
 
     const payload = res.data;
@@ -178,9 +183,18 @@ async function request<T>(
     }
     return payload.data;
   } catch (err) {
+    if (axios.isCancel(err)) {
+      throw err;
+    }
     if (axios.isAxiosError<ApiEnvelope<T>>(err)) {
-      const status = err.response?.status;
-      const apiMessage = err.response?.data?.error?.message;
+      if (!err.response) {
+        if (err.code === "ECONNABORTED" || /timeout/i.test(err.message || "")) {
+          throw new Error("Request timed out. Please try again.");
+        }
+        throw new Error("Network error. Unable to reach the server.");
+      }
+      const status = err.response.status;
+      const apiMessage = err.response.data?.error?.message;
       if (status === 401) {
         if (AUTH_PUBLIC_ENDPOINTS.has(path)) {
           throw new Error(apiMessage || "Unauthorized");
@@ -191,12 +205,52 @@ async function request<T>(
       if (apiMessage) {
         throw new Error(apiMessage);
       }
-      throw new Error(
-        `${status || 500} ${err.response?.statusText || "Request failed"}`,
-      );
+      throw new Error(`${status} ${err.response.statusText || "Request failed"}`);
     }
     throw err;
   }
+}
+
+/**
+ * Maps errors from {@link request} (and raw axios failures) to a string safe to show in UI.
+ * Prefer this over `err instanceof Error ? err.message : "…"` so network and HTTP cases read clearly.
+ */
+export function getApiErrorMessage(err: unknown, fallback = "Something went wrong. Please try again."): string {
+  if (axios.isCancel(err)) {
+    return "Request was cancelled.";
+  }
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as ApiEnvelope<unknown> | undefined;
+    const apiMessage = data?.error?.message;
+    if (typeof apiMessage === "string" && apiMessage.trim()) {
+      return apiMessage.trim();
+    }
+    if (!err.response) {
+      if (err.code === "ECONNABORTED" || /timeout/i.test(err.message || "")) {
+        return "Request timed out. Please try again.";
+      }
+      return "Network error. Unable to reach the server.";
+    }
+    const status = err.response.status;
+    const text = err.response.statusText || "Request failed";
+    if (status === 404) {
+      return `Not found (${text}).`;
+    }
+    if (status === 403) {
+      return "You don't have permission to do that.";
+    }
+    if (status >= 500) {
+      return "Server error. Please try again later.";
+    }
+    return `${status} ${text}`.trim();
+  }
+  if (err instanceof Error && err.message.trim()) {
+    return err.message.trim();
+  }
+  if (typeof err === "string" && err.trim()) {
+    return err.trim();
+  }
+  return fallback;
 }
 
 export async function listDatapacks() {
@@ -239,8 +293,8 @@ export async function logout() {
   return request<{ message: string }>("/auth/logout", "POST");
 }
 
-export async function getCurrentUser() {
-  return request<CurrentUser>("/auth/me", "GET");
+export async function getCurrentUser(options: { signal?: AbortSignal } = {}) {
+  return request<CurrentUser>("/auth/me", "GET", undefined, options);
 }
 
 export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
@@ -265,3 +319,174 @@ export async function ensureLangfuseProjectKeys(datapackName: string) {
 export async function getProvisionStatus() {
   return request<ProvisionStatus>(PROVISION_STATUS_PATH, "GET");
 }
+
+// --- Knowledge Base file upload & RAG APIs ---
+
+export async function requestUploadURL(
+  datapackName: string,
+  filename: string,
+  contentType: string,
+  size: number,
+) {
+  return request<{ url: string; key: string }>(
+    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/upload-url`,
+    "POST",
+    { filename, content_type: contentType, size },
+  );
+}
+
+export async function confirmUpload(
+  datapackName: string,
+  key: string,
+  filename: string,
+  size: number,
+) {
+  return request<{ message: string; key: string }>(
+    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/upload-complete`,
+    "POST",
+    { key, filename, size },
+  );
+}
+
+export async function createKnowledgeBase(datapackName: string) {
+  return request<{
+    source_id: string;
+    index_name: string;
+    source_uri: string;
+    status: string;
+  }>(
+    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/create`,
+    "POST",
+  );
+}
+
+export type SourceStatus = {
+  source_id: string;
+  source_uri: string;
+  status: string;
+};
+
+export type PipelineDetail = {
+  index_name: string;
+  source_uri: string;
+  document_name: string;
+  document_status: string;
+  chunks_processed: number | null;
+};
+
+export type KBPipelineStatus = {
+  index_name: string;
+  source_statuses: SourceStatus[] | null;
+  pipeline_details: PipelineDetail[] | null;
+};
+
+export async function getKBStatus(datapackName: string) {
+  return request<KBPipelineStatus>(
+    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/status`,
+  );
+}
+
+// --- Memories + tenant-KB promotion APIs ---
+
+export type MemoryPayload = {
+  data?: string;
+  user_id?: string;
+  agent_id?: string;
+  datapack_id?: string;
+  [key: string]: unknown;
+};
+
+export type Memory = {
+  id: string;
+  payload: MemoryPayload;
+};
+
+/**
+ * Filter for GET /api/v1/memories.
+ *
+ * Identifier semantics (server-side contract):
+ * - `user_id`:     Meko `account_id` of the currently logged-in user
+ *                  (`CurrentUser.account_id`, == `meko_system.account_registry.id`).
+ *                  The backend filters mem0 rows on `payload->>'user_id'` with
+ *                  this value, and every memory SDKs write now stamps the
+ *                  account_id into `payload.user_id`. Pass `""` to skip the
+ *                  row-level filter and return memories for every account
+ *                  under this datapack (admin/debug use).
+ * - `datapack_id`: Datapack UUID (`meko_system.datapack_registry.id`).
+ *                  Required — picks which tenant DB to connect to.
+ * - `agent_id`:    Agent name. When set, only that agent's
+ *                  `{agent_id}_mem0_collection` table is read; when empty,
+ *                  every `*_mem0_collection` table is unioned.
+ * - `free_user`:   If true, skip vector similarity ranking (plain SELECT
+ *                  ordered by id). Use for free-tier users to avoid the
+ *                  embedding/LLM summarization cost.
+ * - `page`:        1-based page number. Defaults to 1 on the server.
+ * - `page_size`:   Items per page. Defaults to 20, capped at 100 by the server.
+ */
+export type MemoryListFilter = {
+  user_id: string;
+  datapack_id: string;
+  agent_id?: string;
+  free_user?: boolean;
+  page?: number;
+  page_size?: number;
+};
+
+export type MemoryListResponse = {
+  criteria: MemoryListFilter;
+  memories: Memory[];
+  top_k: number;
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
+export async function listMemories(params: MemoryListFilter) {
+  const qs = new URLSearchParams();
+  qs.set("user_id", params.user_id);
+  qs.set("datapack_id", params.datapack_id);
+  if (params.agent_id) qs.set("agent_id", params.agent_id);
+  if (params.free_user) qs.set("free_user", "true");
+  if (params.page && params.page > 0) qs.set("page", String(params.page));
+  if (params.page_size && params.page_size > 0)
+    qs.set("page_size", String(params.page_size));
+  return request<MemoryListResponse>(`/memories?${qs.toString()}`);
+}
+
+/**
+ * Body for POST /api/v1/tenant-kb/sync.
+ *
+ * Identifier semantics:
+ * - `user_id`:     Meko `account_id` of the logged-in user (same semantics
+ *                  as `MemoryListFilter.user_id`). The backend both filters
+ *                  the mem0 fetch on `payload->>'user_id' = user_id` and
+ *                  writes this value into `knowledge_base.user_id`.
+ * - `datapack_id`: Datapack UUID; routes the sync to the correct tenant DB
+ *                  and is written into `knowledge_base.datapack_id`.
+ * - `agent_id`:    Optional; when set, narrows the mem0 source table to
+ *                  `{agent_id}_mem0_collection`.
+ * - `memory_ids`:  IDs from `{agent}_mem0_collection.id` that should be
+ *                  upserted into `knowledge_base`. Rows whose source
+ *                  `memory_id` already exists (matched via
+ *                  `metadata_filters->>'memory_id'`) are UPDATEd; others
+ *                  are INSERTed. Rows missing from mem0 or with NULL
+ *                  vectors are reported in `not_found_ids`.
+ */
+export type TenantKBSyncRequest = {
+  user_id: string;
+  datapack_id: string;
+  agent_id?: string;
+  memory_ids: string[];
+};
+
+export type TenantKBSyncResult = {
+  inserted_ids: string[];
+  updated_ids: string[];
+  not_found_ids: string[];
+};
+
+export async function syncMemoriesToKB(payload: TenantKBSyncRequest) {
+  return request<TenantKBSyncResult>("/tenant-kb/sync", "POST", payload);
+}
+

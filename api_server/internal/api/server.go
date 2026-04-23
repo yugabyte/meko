@@ -13,17 +13,26 @@ import (
 
 // ServerConfig holds the configuration for the API server.
 type ServerConfig struct {
-	DB                  *sql.DB
-	CognitoRegion       string
-	CognitoPoolID       string
-	CognitoClientID     string
-	CognitoClientSecret string
-	CognitoDomain       string
-	LangfuseHost        string
-	LangfuseAdminAPIKey string
-	Port                int
-
-	CRDNamespace string
+	DB                   *sql.DB
+	CognitoRegion        string
+	CognitoPoolID        string
+	CognitoClientID      string
+	CognitoClientSecret  string
+	CognitoDomain        string
+	LangfuseHost         string
+	LangfuseAdminAPIKey  string
+	OpenAIAPIKey         string
+	OpenAILLMModel       string
+	OpenAIEmbeddingModel string
+	Port                 int
+	CRDNamespace         string
+	TenantKBTable        string
+	S3AccessKey         string
+	S3AuthMode          string
+	S3Bucket            string
+	S3Endpoint          string
+	S3Region            string
+	S3SecretKey         string
 }
 
 // Run starts the Echo server and blocks until a shutdown signal is received.

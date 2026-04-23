@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { signup, confirmSignup } from "@/lib/mekoApi";
+import { getApiErrorMessage, signup, confirmSignup } from "@/lib/mekoApi";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ROUTES } from "@/app/routes/paths";
@@ -48,7 +48,7 @@ export default function SignUpPage() {
       });
       setAwaitingCode(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "signup failed");
+      setError(getApiErrorMessage(err, "Sign up failed. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -62,7 +62,7 @@ export default function SignUpPage() {
       await confirmSignup({ email: email.trim(), code: code.trim() });
       navigate(ROUTES.login, { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "confirmation failed");
+      setError(getApiErrorMessage(err, "Confirmation failed. Please try again."));
     } finally {
       setLoading(false);
     }

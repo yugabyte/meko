@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import {
   bootstrapObserveSession,
   ensureLangfuseProjectKeys,
+  getApiErrorMessage,
   listDatapacks,
 } from "@/lib/mekoApi";
+import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 
 const OBSERVE_EMBED_PATH_RAW = (import.meta.env.VITE_OBSERVE_EMBED_PATH || "").trim();
 const OBSERVE_BOOTSTRAP_CACHE_KEY = "meko:observe-bootstrap-cache:v1";
@@ -119,7 +121,7 @@ export default function ObservePage() {
       })
       .catch((err) => {
         if (!mounted) return;
-        setError(err instanceof Error ? err.message : "Failed to load Observe");
+        setError(getApiErrorMessage(err, "Failed to load Observe."));
       })
       .finally(() => {
         if (!mounted) return;
@@ -133,14 +135,18 @@ export default function ObservePage() {
 
   return (
     <div className="flex-1 h-screen bg-background text-foreground flex flex-col">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div>
-          <h1 className="text-lg font-semibold text-white">Observe</h1>
-          <p className="text-xs text-muted-foreground">
-            Langfuse traces embedded in Meko shell
-          </p>
-        </div>
-      </header>
+      <AppWorkspaceHeader
+        padding="compact"
+        sticky={false}
+        showCliButton={false}
+        showUserAvatar={false}
+        leading={
+          <div>
+            <h1 className="text-lg font-semibold text-white">Observe</h1>
+            <p className="text-xs text-muted-foreground">Langfuse traces embedded in Meko shell</p>
+          </div>
+        }
+      />
 
       <div className="flex-1 min-h-0">
         {bootstrapping ? (

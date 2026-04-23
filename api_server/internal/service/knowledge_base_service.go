@@ -55,3 +55,29 @@ func (s *KnowledgeBaseService) Delete(
 	}
 	return s.repo.Delete(datapackName, req.URL)
 }
+
+// AddWithRAG inserts a KB entry with RAG source/index metadata.
+func (s *KnowledgeBaseService) AddWithRAG(
+	datapackName, url, ragSourceID, ragIndexName string,
+) (string, error) {
+	return s.repo.AddWithRAG(datapackName, url, ragSourceID, ragIndexName)
+}
+
+// GetSourceURIs returns source URIs for a datapack's RAG KBs.
+func (s *KnowledgeBaseService) GetSourceURIs(
+	datapackName string,
+) ([]string, error) {
+	return s.repo.GetSourceURIs(datapackName)
+}
+
+// GetSourceIDs returns the dist_rag source IDs for a datapack.
+func (s *KnowledgeBaseService) GetSourceIDs(
+	datapackName string,
+) ([]string, error) {
+	return s.repo.GetSourceIDs(datapackName)
+}
+
+// DeleteByDatapack removes all KB entries for a datapack (used to clear stale cache).
+func (s *KnowledgeBaseService) DeleteByDatapack(datapackName string) error {
+	return s.repo.DeleteByDatapack(datapackName)
+}

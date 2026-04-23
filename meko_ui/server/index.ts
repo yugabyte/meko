@@ -1,7 +1,20 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { createProxyMiddleware } from "http-proxy-middleware";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+
+// MEKO_API_UPSTREAM: Go api_server base URL; empty disables. Dev default http://127.0.0.1:25433.
+function mekoApiUpstream(): string | undefined {
+  if (process.env.MEKO_API_UPSTREAM !== undefined) {
+    const trimmed = process.env.MEKO_API_UPSTREAM.trim();
+    return trimmed || undefined;
+  }
+  if (process.env.NODE_ENV === "development") {
+    return "http://127.0.0.1:25433";
+  }
+  return undefined;
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -10,6 +23,19 @@ declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
   }
+}
+
+const apiUpstream = mekoApiUpstream();
+if (apiUpstream) {
+  // Do not mount at "/api/v1" — Express strips the mount from req.url and the
+  // proxy would forward paths without the /api/v1 prefix.
+  app.use(
+    createProxyMiddleware({
+      target: apiUpstream,
+      changeOrigin: true,
+      pathFilter: "/api/v1",
+    }),
+  );
 }
 
 app.use(
@@ -60,6 +86,9 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  if (apiUpstream) {
+    log(`proxy /api/v1 -> ${apiUpstream}`);
+  }
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -94,7 +123,9 @@ app.use((req, res, next) => {
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
+      // reusePort enables SO_REUSEPORT on Linux (e.g. multiple workers on one port). macOS/Windows do not support it.
+      // Guard with platform so dev/prod on those OSes call listen with only port + host and avoid ENOTSUP.
+      ...(process.platform === "linux" ? { reusePort: true as const } : {}),
     },
     () => {
       log(`serving on port ${port}`);

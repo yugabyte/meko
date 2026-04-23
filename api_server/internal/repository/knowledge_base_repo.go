@@ -85,7 +85,8 @@ func (r *KnowledgeBaseRepo) ListByDatapack(
 ) ([]models.KnowledgeBase, error) {
 	rows, err := r.db.Query(
 		`SELECT kb.id, kb.datapack_id, kb.knowledge_base_url,
-		        kb.created_at, kb.updated_at
+		        kb.created_at, kb.updated_at,
+		        kb.rag_source_id, kb.rag_index_name
 		 FROM meko_system.datapack_knowledge_base_registry kb
 		 JOIN meko_system.datapack_registry d
 		   ON kb.datapack_id = d.id
@@ -104,6 +105,7 @@ func (r *KnowledgeBaseRepo) ListByDatapack(
 		if err := rows.Scan(
 			&kb.ID, &kb.DatapackID, &kb.URL,
 			&kb.CreatedAt, &kb.UpdatedAt,
+			&kb.RagSourceID, &kb.RagIndexName,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"failed to scan knowledge base: %w", err)
@@ -114,6 +116,110 @@ func (r *KnowledgeBaseRepo) ListByDatapack(
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 	return result, nil
+}
+
+// AddWithRAG inserts a new knowledge base with RAG source/index info.
+func (r *KnowledgeBaseRepo) AddWithRAG(
+	datapackName, url, ragSourceID, ragIndexName string,
+) (string, error) {
+	var datapackID string
+	err := r.db.QueryRow(
+		`SELECT id FROM meko_system.datapack_registry
+		 WHERE datapack_name = $1`, datapackName,
+	).Scan(&datapackID)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("datapack %q not found", datapackName)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to look up datapack: %w", err)
+	}
+
+	var kbID string
+	err = r.db.QueryRow(
+		`INSERT INTO meko_system.datapack_knowledge_base_registry
+			(datapack_id, knowledge_base_url, rag_source_id, rag_index_name)
+		 VALUES ($1, $2, $3::UUID, $4)
+		 RETURNING id`,
+		datapackID, url, ragSourceID, ragIndexName,
+	).Scan(&kbID)
+	if err != nil {
+		return "", fmt.Errorf("failed to insert knowledge base: %w", err)
+	}
+	return kbID, nil
+}
+
+// GetSourceURIs returns the S3 source URIs for a datapack's RAG KBs.
+func (r *KnowledgeBaseRepo) GetSourceURIs(
+	datapackName string,
+) ([]string, error) {
+	rows, err := r.db.Query(
+		`SELECT kb.knowledge_base_url
+		 FROM meko_system.datapack_knowledge_base_registry kb
+		 JOIN meko_system.datapack_registry d ON kb.datapack_id = d.id
+		 WHERE d.datapack_name = $1
+		   AND kb.rag_source_id IS NOT NULL
+		 ORDER BY kb.created_at DESC`,
+		datapackName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get source URIs: %w", err)
+	}
+	defer rows.Close()
+
+	var uris []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, fmt.Errorf("scan source URI: %w", err)
+		}
+		uris = append(uris, u)
+	}
+	return uris, rows.Err()
+}
+
+// GetSourceIDs returns the rag_source_id values for a datapack's KB entries.
+func (r *KnowledgeBaseRepo) GetSourceIDs(
+	datapackName string,
+) ([]string, error) {
+	rows, err := r.db.Query(
+		`SELECT kb.rag_source_id
+		 FROM meko_system.datapack_knowledge_base_registry kb
+		 JOIN meko_system.datapack_registry d ON kb.datapack_id = d.id
+		 WHERE d.datapack_name = $1
+		   AND kb.rag_source_id IS NOT NULL
+		 ORDER BY kb.created_at DESC`,
+		datapackName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get source IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan source ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// DeleteByDatapack removes all knowledge-base entries for a datapack.
+func (r *KnowledgeBaseRepo) DeleteByDatapack(datapackName string) error {
+	_, err := r.db.Exec(
+		`DELETE FROM meko_system.datapack_knowledge_base_registry
+		 WHERE datapack_id IN (
+		     SELECT id FROM meko_system.datapack_registry
+		     WHERE datapack_name = $1
+		 )`,
+		datapackName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete KB entries for %s: %w", datapackName, err)
+	}
+	return nil
 }
 
 // Delete removes a knowledge base by its URL within a datapack. The CASCADE

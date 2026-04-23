@@ -1,0 +1,174 @@
+package service
+
+import (
+	"database/sql"
+	"log/slog"
+	"strings"
+	"time"
+
+	"meko/api_server/internal/repository"
+)
+
+const DatapackIndexName = "knowledge_base"
+
+// RagService wraps dist_rag operations on a per-datapack database.
+type RagService struct {
+	repo      *repository.RagRepo
+	indexName string
+}
+
+func NewRagService(db *sql.DB) *RagService {
+	return &RagService{
+		repo:      repository.NewRagRepo(db, DatapackIndexName),
+		indexName: DatapackIndexName,
+	}
+}
+
+func (s *RagService) IndexName() string { return s.indexName }
+
+// EnsureVectorIndex creates the vector index if it is missing. Idempotent:
+// a no-op (no error) when the index already exists.
+func (s *RagService) EnsureVectorIndex() error {
+	exists, err := s.repo.IndexExists()
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	slog.Info("vector index does not exist, creating lazily",
+		"index_name", s.indexName)
+	indexID, err := s.repo.InitVectorIndex()
+	if err != nil {
+		return err
+	}
+	slog.Info("vector index created",
+		"index_name", s.indexName, "index_id", indexID)
+	return nil
+}
+
+func (s *RagService) LookupIndexID() (string, error) {
+	return s.repo.LookupIndexID()
+}
+
+func (s *RagService) LookupSourceByURI(sourceURI string) (string, error) {
+	return s.repo.LookupSourceByURI(sourceURI)
+}
+
+func (s *RagService) SourceExists(sourceID string) (bool, error) {
+	return s.repo.SourceExists(sourceID)
+}
+
+func (s *RagService) CreateSource(sourceURI string) (string, error) {
+	sourceID, err := s.repo.CreateSource(sourceURI)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("dist_rag source created",
+		"source_id", sourceID, "source_uri", sourceURI)
+	return sourceID, nil
+}
+
+func (s *RagService) AddSourceToIndex(sourceID string) error {
+	indexID, err := s.repo.LookupIndexID()
+	if err != nil {
+		return err
+	}
+
+	chunkParams := `{"chunk_size": 1024, "chunk_overlap": 256}`
+
+	if err := s.repo.AddSourceToIndex(indexID, sourceID, chunkParams); err != nil {
+		return err
+	}
+	slog.Info("source added to index",
+		"index_name", s.indexName, "index_id", indexID, "source_id", sourceID)
+	return nil
+}
+
+func (s *RagService) GetExistingDocURIs(sourceID string) (map[string]bool, error) {
+	return s.repo.GetExistingDocURIs(sourceID)
+}
+
+func (s *RagService) InsertDocument(sourceID, documentName, documentURI, checksum string) error {
+	return s.repo.InsertDocument(sourceID, documentName, documentURI, checksum)
+}
+
+func (s *RagService) BuildIndex() error {
+	if err := s.repo.BuildIndex(); err != nil {
+		return err
+	}
+	slog.Info("index build triggered", "index_name", s.indexName)
+	return nil
+}
+
+// WaitAndBuild polls until the source is ready, then triggers build_index.
+// Runs synchronously — callers should invoke via goroutine if needed.
+func (s *RagService) WaitAndBuild(sourceID string) {
+	const pollInterval = 2 * time.Second
+	const maxWait = 5 * time.Minute
+	deadline := time.Now().Add(maxWait)
+
+	for {
+		status, err := s.repo.GetSourceStatus(sourceID)
+		if err != nil {
+			slog.Error("WaitAndBuild: check source status failed",
+				"source_id", sourceID, "error", err)
+			return
+		}
+		switch status {
+		case "COMPLETED":
+			slog.Info("WaitAndBuild: source ready, triggering build_index",
+				"source_id", sourceID)
+			if err := s.BuildIndex(); err != nil {
+				slog.Error("WaitAndBuild: build_index failed",
+					"source_id", sourceID, "error", err)
+			}
+			return
+		case "FAILED":
+			slog.Error("WaitAndBuild: source failed", "source_id", sourceID)
+			return
+		case "QUEUED", "DISCOVERING", "PROCESSING":
+			slog.Info("WaitAndBuild: source not ready yet",
+				"source_id", sourceID, "status", status)
+		default:
+			slog.Warn("WaitAndBuild: unexpected source status",
+				"source_id", sourceID, "status", status)
+		}
+		if time.Now().After(deadline) {
+			slog.Error("WaitAndBuild: timed out",
+				"source_id", sourceID, "status", status)
+			return
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
+// WaitAndBuildAsync opens its own connection to the datapack DB so it can
+// run as a background goroutine that outlives the HTTP request.
+func WaitAndBuildAsync(datapackConnStr, sourceID string) {
+	if !strings.Contains(datapackConnStr, "sslmode=") {
+		if strings.Contains(datapackConnStr, "?") {
+			datapackConnStr += "&sslmode=disable"
+		} else {
+			datapackConnStr += "?sslmode=disable"
+		}
+	}
+	db, err := sql.Open("postgres", datapackConnStr)
+	if err != nil {
+		slog.Error("WaitAndBuildAsync: failed to open datapack DB",
+			"source_id", sourceID, "error", err)
+		return
+	}
+	defer db.Close()
+
+	svc := NewRagService(db)
+	svc.WaitAndBuild(sourceID)
+}
+
+func (s *RagService) GetSourceStatuses(sourceIDs []string) ([]repository.SourceStatus, error) {
+	return s.repo.GetSourceStatuses(sourceIDs)
+}
+
+func (s *RagService) GetPipelineStatus(sourceURIs []string) (*repository.PipelineStatus, error) {
+	return s.repo.GetPipelineStatus(sourceURIs)
+}

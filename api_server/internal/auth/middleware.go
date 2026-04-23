@@ -30,6 +30,16 @@ func GetAccount(c echo.Context) (*models.Account, error) {
 	return account, nil
 }
 
+// GetDatapack extracts the resolved datapack from the Echo context.
+// Returns an error if RequireDatapackOwnership middleware did not run.
+func GetDatapack(c echo.Context) (*models.Datapack, error) {
+	datapack, ok := c.Get(ContextKeyDatapack).(*models.Datapack)
+	if !ok || datapack == nil {
+		return nil, fmt.Errorf("datapack not found in context")
+	}
+	return datapack, nil
+}
+
 // AccountLookup abstracts account resolution for the auth middleware.
 // EnsureAccount must return an existing account or auto-create one for
 // the given Cognito sub (just-in-time provisioning for users who signed
