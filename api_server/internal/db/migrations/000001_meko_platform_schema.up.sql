@@ -1,5 +1,4 @@
 CREATE SCHEMA IF NOT EXISTS meko_system;
-CREATE SCHEMA IF NOT EXISTS datapacks;
 
 /*
  * The types (tiers) of accounts
@@ -31,6 +30,7 @@ CREATE TABLE IF NOT EXISTS meko_system.users (
     user_details        JSONB DEFAULT '{"user_preferences": {}, "mcp_credentials": {"mcp_user_name": null, "mcp_user_password": null}}'::jsonb,
     cognito_sub         VARCHAR UNIQUE,
     email_verified_at   TIMESTAMPTZ,
+    has_completed_onboarding BOOLEAN NOT NULL DEFAULT FALSE
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 ) SPLIT INTO 12 TABLETS;
@@ -67,6 +67,41 @@ CREATE TABLE IF NOT EXISTS meko_system.yb_universes (
     updated_at                      TIMESTAMPTZ DEFAULT NOW()
 );
 
+
+-- **karthik's feedback:**
+-- rename to agents
+-- account_id, primary as hash. agent_id will be range shareed.
+-- agent_name will be meko_agent by default. User can change or add more agents for a datapack.
+-- add default value to agent_name column
+
+-- **changes made:**
+-- renamed table from agent_registry to agents
+-- removed the id column as we have composite primary key
+-- create a new composite primary key on account_id (hash) and agent_id (range)
+-- created a new column called agent_name
+-- created a new column called agent_details
+
+-- NIkhil has a datapack foo1 and foo2
+-- Nikhil has 2 unregistered agents: n1, n2 (assumption is any unregistered agent will use default memory_tenant_id)
+-- Nikhil wants n1 and n2 to have access to foo1 and foo2 - same memories and knowledge bases.
+-- Advanced Flow: Nikhil creates a registered agent n3 with restricted access to foo1.
+-- Nikhil wants n3 have its own memory. 
+-- Nikhil shares foo1 with Amogh.
+-- Amogh has agent a1 which should get seperated memories for foo1.
+-- agent a1 may be able to see memories of n1, n2, n3 for datapack foo1.
+
+-- users connects cursor and claude code to meko, each workbench sets a different agent_id. 
+-- If the agent_id is provided, it will be not registered and will use default memory
+
+CREATE TABLE IF NOT EXISTS meko_system.agents (
+    user_id             UUID NOT NULL,
+    agent_id            VARCHAR NOT NULL DEFAULT 'meko_agent',
+    agent_details       JSONB,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (user_id HASH, agent_id ASC)
+);
+
 -- **karthik's feedback:**
 --  rename the table to datapacks
 -- column datapack_name should be of fixed lenght 22 charecters..prefix account UUID + default or unique 7 charecter string
@@ -95,7 +130,7 @@ CREATE TABLE IF NOT EXISTS meko_system.yb_universes (
  */
 CREATE TABLE IF NOT EXISTS meko_system.datapacks (                -- todo: add agent info column to the table
     datapack_id                         UUID DEFAULT gen_random_uuid(),
-    account_id                          UUID NOT NULL,            -- owning account id for this datapack
+    user_id                             UUID NOT NULL,            -- owning user id for this datapack
     agent_id                            VARCHAR,                  -- agent id who created this datapack, maps to agents.agent_id
     datapack_name                       VARCHAR NOT NULL,
     created_at                          TIMESTAMPTZ DEFAULT NOW(),
@@ -135,59 +170,44 @@ CREATE TABLE IF NOT EXISTS meko_system.knowledge_bases (
 );
 
 
--- **karthik's feedback:**
--- rename to agents
--- account_id, primary as hash. agent_id will be range shareed.
--- agent_name will be meko_agent by default. User can change or add more agents for a datapack.
--- add default value to agent_name column
+-- **Datapack sharing flow**:
+-- User1: has datapack default_datapack(UUID1) and Agent default_agent
+-- User 2: Has datapack default_datapack(UUID2) and agent default_datapack
 
--- **changes made:**
--- renamed table from agent_registry to agents
--- removed the id column as we have composite primary key
--- create a new composite primary key on account_id (hash) and agent_id (range)
--- created a new column called agent_name
--- created a new column called agent_details
+-- user 1: Shares default_datapack(UUID1) with user 2, only knowledge bases are shared with read permission.
+    -- Insert a row into agent_datapacks table with user_id = user 2, agent_id = default_agent, datapack_id = UUID1
+    -- Insert a row into agent_access table with user_id = user 2, agent_id = default_agent, datapack_id = UUID1, object_type = 'knowledge_base', permisssion="read", object_id = UUID1
 
--- NIkhil has a datapack foo1 and foo2
--- Nikhil has 2 unregistered agents: n1, n2 (assumption is any unregistered agent will use default memory_tenant_id)
--- Nikhil wants n1 and n2 to have access to foo1 and foo2 - same memories and knowledge bases.
--- Advanced Flow: Nikhil creates a registered agent n3 with restricted access to foo1.
--- Nikhil wants n3 have its own memory. 
--- Nikhil shares foo1 with Amogh.
--- Amogh has agent a1 which should get seperated memories for foo1.
--- agent a1 may be able to see memories of n1, n2, n3 for datapack foo1.
+-- List Datapacks for User 2:
 
--- users connects cursor and claude code to meko, each workbench sets a different agent_id. 
--- If the agent_id is provided, it will be not registered and will use default memory
 
-CREATE TABLE IF NOT EXISTS meko_system.agents (
-    account_id          UUID NOT NULL,
-    agent_id            VARCHAR NOT NULL DEFAULT 'meko_agent',
-    agent_details       JSONB,
-    created_at          TIMESTAMPTZ DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (account_id HASH, agent_id ASC)
-);
+-- **Datapack Change Ownership**:
+-- User 1:
 
+
+-- **Datapack Unsharing**:
+
+-- **Datapack Deletion**:
 
 /*
  * Defines the list of datapacks that a user's agent(s) has access to.
  */
 CREATE TABLE IF NOT EXISTS meko_system.agent_datapacks (
-    account_id          UUID NOT NULL,
+    user_id          UUID NOT NULL,
     agent_id            VARCHAR NOT NULL,
     datapack_id         UUID NOT NULL,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (account_id HASH, agent_id HASH, datapack_id ASC)
+    PRIMARY KEY (user_id HASH, agent_id HASH, datapack_id ASC)
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_datapacks_datapack_id 
-    ON agent_datapacks (datapack_id HASH, account_id ASC, agent_id ASC);
+    ON agent_datapacks (datapack_id HASH, user_id ASC, agent_id ASC);
 
 
 CREATE TYPE meko_system.access_object_type AS ENUM ('knowledge_base', 'memory');
 CREATE TYPE meko_system.access_permission AS ENUM ('read', 'write', 'admin');
+CREATE TYPE meko_system.datapack_shared_status AS ENUM ('active', 'inactive');
 
 -- **karthik's feedback:**
 -- create a new table called agent_access
@@ -210,6 +230,9 @@ CREATE TABLE IF NOT EXISTS meko_system.agent_access (
     object_type         meko_system.access_object_type NOT NULL,
     object_id           UUID NOT NULL,      -- TODO: define what this id will be for knowledge and memory (rag_source_id or memory_id)
     permission          meko_system.access_permission NOT NULL DEFAULT 'read',
+    datapack_share_URL   TEXT,
+    datapack_shared_at   TIMESTAMPTZ DEFAULT NOW(),
+    datapack_shared_status meko_system.datapack_shared_status NOT NULL DEFAULT 'inactive',
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY  (account_id HASH, agent_id HASH, datapack_id ASC, object_type ASC, object_id ASC)
@@ -236,35 +259,6 @@ CREATE TABLE IF NOT EXISTS meko_system.langfuse_project_mapping (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-/*
-This table is used to store the knowledge base for each tenant.
-TODO: Does its schema needs to match that of dist_rag.pg_rag_default_store?
-*/
-CREATE TABLE IF NOT EXISTS datapacks.meko_tenants_kb (
-    tenant_id UUID NOT NULL,                        -- maps to datapack_id for meko
-    id UUID DEFAULT gen_random_uuid(),
-    chunk_text TEXT NOT NULL,
-    embeddings vector(' || r_vector_dimensions || ') NOT NULL,
-    document_id UUID NOT NULL,                      -- maps to conversation_id for promoted memories
-    metadata_filters JSONB NOT NULL DEFAULT ''' || '{}' || '''
-    PRIMARY KEY  (tenant_id HASH, id ASC)
-);
-
--- 128 partitions on datapack_id
-DO $$
-BEGIN
-    FOR i IN 0..127 LOOP
-        EXECUTE format(
-            'CREATE TABLE IF NOT EXISTS datapacks.meko_tenants_kb_%s 
-             PARTITION OF datapacks.meko_tenants_kb 
-             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
-            LPAD(i::text, 3, '0'),
-            i
-        );
-    END LOOP;
-END $$;
--- create indexes on partitions?
 
 
 /*************************************************************
@@ -335,105 +329,5 @@ VALUES (
     'postgresql://yugabyte:Meko%40123@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/yugabyte?sslmode=disable',
     'http://a0ea6ee2d58194693870037cb841bdbe-1826583179.us-east-2.elb.amazonaws.com/'
 ) ON CONFLICT (id) DO NOTHING;
-/**************
-TODO: check if needed
-*************************************************************/
 
-
-/*************************************************************
-mem0 tables
-**************/
--- see this mem0 change which is currently creating these tables:
-    -- https://github.com/yugabyte/meko-mem0/compare/meko-mem0/1.0.11.1...meko-mem0/1.0.11.2
-
--- Should be pre-created as part of datapack universe. But mem0 may create it if not present.
-
-CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
-                    meko_datapack_id UUID NOT NULL,
-                    meko_account_id UUID NOT NULL,
-                    meko_agent_id TEXT NOT NULL,
-                    id UUID NOT NULL,
-                    run_id UUID,                                        -- maps to conversation_id
-                    vector vector(1536),
-                    payload JSONB,
-                    meko_created_at TIMESTAMPTZ DEFAULT NOW(),
-                    meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
-                    PRIMARY KEY (meko_datapack_id HASH, meko_account_id HASH, meko_agent_id ASC, meko_created_at DESC, id DESC)
-                ) PARTITION BY HASH (datapack_id);
-
--- TODO test if this works
-CREATE INDEX IF NOT EXISTS datapacks.meko_mem0_collection_hnsw_idx
-                    ON {self.collection_name}
-                    USING hnsw (vector vector_cosine_ops)
-
--- create 128 partitions on datapack_id e.g.
-DO $$
-BEGIN
-    FOR i IN 0..127 LOOP
-        EXECUTE format(
-            'CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection_%s 
-             PARTITION OF datapacks.meko_mem0_collection 
-             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
-            LPAD(i::text, 3, '0'),
-            i
-        );
-    END LOOP;
-END $$;
--- Do we need to create indexes on the partitions?
-
--- This will be created during datapacks initialisation.
-CREATE TABLE IF NOT EXISTS datapacks.meko_memories_promoted_to_kb (
-                    meko_datapack_id UUID NOT NULL,
-                    meko_account_id UUID NOT NULL,
-                    meko_agent_id TEXT NOT NULL,
-                    id UUID NOT NULL,
-                    run_id UUID,
-                    payload JSONB,                              -- todo should we just retain "data" field from the jsonb column?
-                    meko_created_at TIMESTAMPTZ DEFAULT NOW(),
-                    meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
-                    PRIMARY KEY (meko_datapack_id HASH, meko_created_at ASC, id ASC)
-                ) SPLIT INTO 3 TABLETS;
-
-
--- graph schema
--- embeddings table: contains the embeddings for the nodes in the graph
--- Should be pre-created as part of datapack universe. But mem0 may create it if not present.
-CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_embeddings (
-                        meko_datapack_id UUID NOT NULL,
-                        meko_account_id UUID NOT NULL,
-                        meko_agent_id TEXT NOT NULL,
-                        graph_name TEXT NOT NULL,
-                        node_graphid BIGINT NOT NULL,
-                        node_name TEXT,
-                        embedding vector({self.embedding_dims}) NOT NULL,
-                        user_id TEXT NOT NULL,
-                        agent_id TEXT,
-                        run_id TEXT,
-                        created_at TIMESTAMPTZ DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ DEFAULT NOW(),
-                        PRIMARY KEY (meko_datapack_id HASH, meko_account_id HASH, meko_agent_id ASC, graph_name, node_graphid)
-                    ) SPLIT INTO 3 TABLETS;         -- or just 1 tablet
--- index is not currently created on the embeddings
-
--- Following mem0 tables will be created by mem0
-    -- Entity
-    -- CONNECTED_TO
-    -- _ag_label_vertex
-    -- _ag_label_label
-
--- Add below columns to the above tables (taken care of in mem0/Apache AGE extension):
-                -- meko_datapack_id UUID NOT NULL,
-                -- meko_account_id UUID NOT NULL,
-                -- meko_agent_id TEXT NOT NULL,
-
--- ag_catalog.ag_graph - NO changes needed
--- ag_catalog.ag_label - NO changes needed
-
-/**************
-TODO: check if needed
-*************************************************************/
-
-
--- langfuse schema changes will be handled in meko-langfuse repo
-    -- observations, tracing, etc tables
 

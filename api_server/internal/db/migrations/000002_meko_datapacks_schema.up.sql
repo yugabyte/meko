@@ -1,0 +1,253 @@
+-- mem0 tables
+-- rag tables
+-- promotions tables
+CREATE SCHEMA IF NOT EXISTS datapacks;
+
+/*
+This table is used to store the knowledge base for each tenant.
+1. This schema needs to match that of dist_rag vector index table.
+2. tenant_id will be mapped to datapack_id
+3. For promoted memories, document_id will be mapped to conversation_id
+4. Need to add entry in metadata_filters to specify source of the knowledge base. doc vs memory 
+   4.a metadata_filters can also hold the memory id for promoted memories, 
+        so we can filter out redudant memories retrieved from the memory search.
+*/
+
+CREATE TABLE IF NOT EXISTS datapacks.knowledge_bases (
+    tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000', 
+    id UUID DEFAULT gen_random_uuid(),
+    chunk_text TEXT NOT NULL,
+    embeddings vector(1536) NOT NULL, -- TODO: Make the vector dimension configurable similar to dist_rag.pg_rag_default_store?
+    document_id UUID NOT NULL,                      
+    metadata_filters JSONB NOT NULL DEFAULT '{}'::jsonb,                    
+    PRIMARY KEY  (id HASH, tenant_id ASC)
+) PARTITION BY HASH (tenant_id); -- TODO: Need to check if we need to partition by tenant_id or id?
+
+-- 128 partitions on datapack_id
+DO $$
+BEGIN
+    FOR i IN 0..127 LOOP
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS datapacks.knowledge_bases_%s 
+             PARTITION OF datapacks.knowledge_bases 
+             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
+            LPAD(i::text, 3, '0'),
+            i
+        );
+    END LOOP;
+END $$;
+
+-- Create HNSW index on embeddings for each partition
+-- DO $$
+-- BEGIN
+--     FOR i IN 0..127 LOOP
+--         EXECUTE format(
+--             'CREATE INDEX IF NOT EXISTS knowledge_bases_%s_embeddings_idx
+--              ON datapacks.knowledge_bases_%s
+--              USING hnsw (embeddings vector_cosine_ops)',
+--             LPAD(i::text, 3, '0'),
+--             LPAD(i::text, 3, '0')
+--         );
+--     END LOOP;
+-- END $$;
+
+CREATE INDEX IF NOT EXISTS knowledge_bases_embeddings_idx
+    ON datapacks.knowledge_bases
+    USING hnsw (embeddings vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+
+
+/*************************************************************
+mem0 tables
+**************/
+-- see this mem0 change which is currently creating these tables:
+    -- https://github.com/yugabyte/meko-mem0/compare/meko-mem0/1.0.11.1...meko-mem0/1.0.11.2
+
+-- Should be pre-created as part of datapack universe. But mem0 may create it if not present.
+
+-- Need to review the query pattern for mem0 collection table. 
+-- Will we need meko_created_at for getting id of each memory? 
+-- Need to track largest promoted at timestamp for processing on the latest memories. 
+    -- Assume there are 1000 memories, 900 are already processed, we need to process the latest 100 memories.
+-- run_id maps to conversation_id
+
+
+CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
+                    meko_datapack_id UUID NOT NULL,
+                    meko_account_id UUID NOT NULL,
+                    meko_agent_id TEXT NOT NULL,
+                    id UUID NOT NULL,
+                    run_id UUID,                                        
+                    vector vector(1536),
+                    payload JSONB,
+                    meko_created_at TIMESTAMPTZ DEFAULT NOW(),
+                    meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,    -- Create a partial index on this column for filtering. NOT NULL for promoted memories.
+                    PRIMARY KEY ((meko_datapack_id, meko_account_id) HASH, meko_agent_id ASC, meko_created_at DESC, id DESC)
+                ) PARTITION BY HASH (meko_datapack_id);
+
+-- create 128 partitions on datapack_id e.g.
+DO $$
+BEGIN
+    FOR i IN 0..127 LOOP
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection_%s 
+             PARTITION OF datapacks.meko_mem0_collection 
+             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
+            LPAD(i::text, 3, '0'),
+            i
+        );
+    END LOOP;
+END $$;
+
+CREATE INDEX IF NOT EXISTS meko_mem0_collection_hnsw_idx
+                    ON datapacks.meko_mem0_collection
+                    USING hnsw (vector vector_cosine_ops)
+                    WITH (m = 16, ef_construction = 64);
+
+
+-- mem0 memory search:
+-- 1. search the agents private memory in meko_mem0_collection
+-- 2. Search the globally promoted meories in meko_memories_promoted_to_kb using datapack_id for filtering.
+-- 3. Fetch
+
+-- Agent1 generated memories A B C D, KB meories = Empty
+-- Agent2 generated memories E F G H, KB meories = Empty
+-- Agent1 promotes memory A, B to kB, KB meories = A, B
+
+-- Agent 2 Searches for memories, Agent 2 memories = E F G H, KB memories = A B
+-- Agent 2 promotes memory E, F to kB, KB meories = A B E F
+
+-- Agent 1 Searches for memories, Agent 1 memories = C D, KB memories = A B E F
+
+
+-- This will be created during datapacks initialisation.
+-- CREATE TABLE IF NOT EXISTS datapacks.meko_memories_promoted_to_kb (
+--                     meko_datapack_id UUID NOT NULL,
+--                     meko_account_id UUID NOT NULL,
+--                     meko_agent_id TEXT NOT NULL,
+--                     id UUID NOT NULL,
+--                     run_id UUID,
+--                     payload JSONB,                              -- todo should we just retain "data" field from the jsonb column?
+--                     meko_created_at TIMESTAMPTZ DEFAULT NOW(),
+--                     meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
+--                     PRIMARY KEY (meko_datapack_id HASH, meko_created_at ASC, id ASC)
+--                 ) SPLIT INTO 3 TABLETS;
+
+
+-- graph schema
+-- embeddings table: contains the embeddings for the nodes in the graph
+-- Should be pre-created as part of datapack universe. But mem0 may create it if not present.
+CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_graph_vertex_embeddings (
+                        meko_datapack_id UUID NOT NULL,
+                        meko_user_id UUID NOT NULL,
+                        meko_agent_id UUID NOT NULL,
+                        graph_name TEXT NOT NULL,
+                        node_graphid BIGINT NOT NULL,
+                        node_name TEXT,
+                        embedding vector({self.embedding_dims}) NOT NULL,
+                        run_id UUID,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW(),
+                        PRIMARY KEY (meko_datapack_id HASH, meko_user_id HASH, meko_agent_id ASC, graph_name, node_graphid)
+                    ) SPLIT INTO 3 TABLETS;         -- or just 1 tablet
+
+CREATE INDEX IF NOT EXISTS meko_mem0_graph_vertex_embeddings_hnsw_idx
+                    ON datapacks.meko_mem0_graph_vertex_embeddings
+                    USING hnsw (vector vector_cosine_ops)
+                    WITH (m = 16, ef_construction = 64);
+
+-- Need to pre-create the graph tables used for multi-tenancy storage. or prime the mem0 to create these tables as part of platform initialization.
+-- Create a graph name called "meko_multi_tenant_graph"
+-- This will create a schema called "meko_multi_tenant_graph"
+
+-- Following mem0 tables will be created in the "meko_multi_tenant_graph" schema
+    -- Entity
+    -- CONNECTED_TO
+    -- _ag_label_vertex
+    -- _ag_label_label
+
+SELECT graphid FROM ag_catalog.ag_graph WHERE name = 'meko_multi_tenant_graph';
+
+SELECT * FROM ag_catalog.create_vlabel('meko_multi_tenant_graph','Entity');
+
+SELECT * FROM ag_catalog.create_elabel('meko_multi_tenant_graph','CONNECTED_TO');
+
+-- TODO: Remove the need for meko_mem0_graph_vertex_embeddings table and use a vector coloum in the Entity table.
+-- TODO: After April 30th release as this will require complete re-write of the Apache age mem0 Connector.
+-- ALTER TABLE meko_multi_tenant_graph."Entity" ADD COLUMN embeddings VECTOR(1536) NOT NULL;
+
+
+-- Add below columns to the above tables (taken care of in mem0/Apache AGE extension):
+                -- meko_datapack_id UUID NOT NULL,
+                -- meko_account_id UUID NOT NULL,
+                -- meko_agent_id TEXT NOT NULL,
+
+-- ag_catalog.ag_graph - NO changes needed
+-- ag_catalog.ag_label - NO changes needed
+
+-- Test graph creation:
+-- SET search_path = ag_catalog, test_graph1, public;
+-- SELECT * FROM ag_catalog.ag_graph WHERE name = 'test_graph1';
+
+-- SELECT * FROM ag_catalog.create_graph('test_graph1');
+-- Output:
+/*
+NOTICE:  graph "test_graph1" has been created
+ create_graph 
+--------------
+ 
+(1 row)
+*/
+
+-- SELECT graphid FROM ag_catalog.ag_graph WHERE name = 'test_graph1';
+-- Output:
+/*
+ graphid 
+---------
+   17441
+(1 row)
+*/
+
+-- SELECT 1 FROM ag_catalog.ag_label WHERE name = 'Entity' AND graph = 17441;
+-- Output:
+/*
+ ?column? 
+----------
+(0 rows)
+*/
+
+-- SELECT * FROM ag_catalog.create_vlabel('test_graph1','Entity');
+-- Output:
+/*
+NOTICE:  VLabel "Entity" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+-- SELECT 1 FROM ag_catalog.ag_label WHERE name = 'CONNECTED_TO' AND graph = 17441;
+-- Output:
+/*
+ ?column? 
+----------
+(0 rows)
+*/
+
+-- SELECT * FROM ag_catalog.create_elabel('test_graph1','CONNECTED_TO');
+-- Output:
+/*
+NOTICE:  ELabel "CONNECTED_TO" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+*/
+
+-- Warm up the graph:
+-- SELECT * FROM cypher('test_graph1', $$ MATCH (n) RETURN n LIMIT 0 $$) as (n agtype);
+-- Output:
+/*
+ n 
+---
+(0 rows)
