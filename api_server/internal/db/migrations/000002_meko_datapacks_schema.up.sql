@@ -14,11 +14,11 @@ This table is used to store the knowledge base for each tenant.
 */
 
 CREATE TABLE IF NOT EXISTS datapacks.knowledge_bases (
-    tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000', 
+    tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     id UUID DEFAULT gen_random_uuid(),
     chunk_text TEXT NOT NULL,
     embeddings vector(1536) NOT NULL, -- TODO: Make the vector dimension configurable similar to dist_rag.pg_rag_default_store?
-    document_id UUID NOT NULL,                      
+    document_id UUID NOT NULL,
     metadata_filters JSONB NOT NULL DEFAULT '{}'::jsonb,                    
     PRIMARY KEY  (id HASH, tenant_id ASC)
 ) PARTITION BY HASH (tenant_id); -- TODO: Need to check if we need to partition by tenant_id or id?
@@ -70,20 +70,21 @@ mem0 tables
 -- Will we need meko_created_at for getting id of each memory? 
 -- Need to track largest promoted at timestamp for processing on the latest memories. 
     -- Assume there are 1000 memories, 900 are already processed, we need to process the latest 100 memories.
--- run_id maps to conversation_id
-
+-- meko_conversation_id maps to run_id field in payload or properties columns of different mem0 tables.
+-- When a memory is promoted to knowledge base, we need to update the meko_promoted_to_kb_at field
+    -- When the same memory is modified, we need to reset the meko_created_at field, so it becomes visible again.
 
 CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
                     meko_datapack_id UUID NOT NULL,
-                    meko_account_id UUID NOT NULL,
+                    meko_user_id UUID NOT NULL,
                     meko_agent_id TEXT NOT NULL,
                     id UUID NOT NULL,
-                    run_id UUID,                                        
+                    meko_conversation_id UUID,
                     vector vector(1536),
                     payload JSONB,
                     meko_created_at TIMESTAMPTZ DEFAULT NOW(),
                     meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,    -- Create a partial index on this column for filtering. NOT NULL for promoted memories.
-                    PRIMARY KEY ((meko_datapack_id, meko_account_id) HASH, meko_agent_id ASC, meko_created_at DESC, id DESC)
+                    PRIMARY KEY ((meko_datapack_id, meko_user_id) HASH, meko_agent_id ASC, meko_created_at DESC, id DESC)
                 ) PARTITION BY HASH (meko_datapack_id);
 
 -- create 128 partitions on datapack_id e.g.
@@ -124,10 +125,10 @@ CREATE INDEX IF NOT EXISTS meko_mem0_collection_hnsw_idx
 -- This will be created during datapacks initialisation.
 -- CREATE TABLE IF NOT EXISTS datapacks.meko_memories_promoted_to_kb (
 --                     meko_datapack_id UUID NOT NULL,
---                     meko_account_id UUID NOT NULL,
+--                     meko_user_id UUID NOT NULL,
 --                     meko_agent_id TEXT NOT NULL,
 --                     id UUID NOT NULL,
---                     run_id UUID,
+--                     meko_conversation_id UUID,
 --                     payload JSONB,                              -- todo should we just retain "data" field from the jsonb column?
 --                     meko_created_at TIMESTAMPTZ DEFAULT NOW(),
 --                     meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
@@ -146,7 +147,7 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_graph_vertex_embeddings (
                         node_graphid BIGINT NOT NULL,
                         node_name TEXT,
                         embedding vector({self.embedding_dims}) NOT NULL,
-                        run_id UUID,
+                        meko_conversation_id UUID,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
                         PRIMARY KEY (meko_datapack_id HASH, meko_user_id HASH, meko_agent_id ASC, graph_name, node_graphid)
@@ -180,9 +181,12 @@ SELECT * FROM ag_catalog.create_elabel('meko_multi_tenant_graph','CONNECTED_TO')
 
 -- Add below columns to the above tables (taken care of in mem0/Apache AGE extension):
                 -- meko_datapack_id UUID NOT NULL,
-                -- meko_account_id UUID NOT NULL,
+                -- meko_user_id UUID NOT NULL,
                 -- meko_agent_id TEXT NOT NULL,
-
+                -- meko_conversation_id UUID NOT NULL,
+    -- REVIEW: Alternatively, we can move these columns as fields of properties column in these tables.
+        -- This will help keep the Apache AGE schema independent of the meko requirements
+        -- What will be the performance impact of this? We do support indexes on jsonb columns.
 -- ag_catalog.ag_graph - NO changes needed
 -- ag_catalog.ag_label - NO changes needed
 
