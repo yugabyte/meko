@@ -2,7 +2,6 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   Database,
   Activity,
-  Box,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -90,12 +89,11 @@ export default function Sidebar() {
         {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
       </Button>
 
-      <div className={cn("p-4 flex items-center", isCollapsed ? "justify-center px-0" : "gap-3")}>
-        <div className="w-8 h-8 rounded-md flex shrink-0 items-center justify-center bg-white text-black">
-          <Box className="w-5 h-5" />
-        </div>
-        {!isCollapsed && (
-          <span className="font-semibold text-xl tracking-tight text-white animate-in fade-in">meko</span>
+      <div className={cn("p-4 flex items-center", isCollapsed ? "justify-center px-0" : "")}>
+        {isCollapsed ? (
+          <img src="/favicons/favicon-32x32-dark.png" alt="meko" className="w-8 h-8 animate-in fade-in" />
+        ) : (
+          <img src="/meko-logo.svg" alt="meko" className="h-8 w-auto animate-in fade-in" />
         )}
       </div>
 
