@@ -14,13 +14,13 @@ This table is used to store the knowledge base for each tenant.
 */
 
 CREATE TABLE IF NOT EXISTS datapacks.knowledge_bases (
-    tenant_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    tenant_id UUID NOT NULL, --DEFAULT '00000000-0000-0000-0000-000000000000' 
     id UUID DEFAULT gen_random_uuid(),
     chunk_text TEXT NOT NULL,
     embeddings vector(1536) NOT NULL, -- TODO: Make the vector dimension configurable similar to dist_rag.pg_rag_default_store?
     document_id UUID NOT NULL,
     metadata_filters JSONB NOT NULL DEFAULT '{}'::jsonb,                    
-    PRIMARY KEY  (id HASH, tenant_id ASC)
+    PRIMARY KEY  ((tenant_id, id) HASH)
 ) PARTITION BY HASH (tenant_id); -- TODO: Need to check if we need to partition by tenant_id or id?
 
 -- 128 partitions on datapack_id
@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
                     vector vector(1536),
                     payload JSONB,
                     meko_created_at TIMESTAMPTZ DEFAULT NOW(),
+                    meko_prompotion_user_action -- ENUM: 'promoted', 'not_promoted'. If 'not_promoted' state is set, UI shouldn't surface this memory for promotion to KB again.
                     meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,    -- Create a partial index on this column for filtering. NOT NULL for promoted memories.
                     PRIMARY KEY ((meko_datapack_id, meko_user_id) HASH, meko_agent_id ASC, meko_created_at DESC, id DESC)
                 ) PARTITION BY HASH (meko_datapack_id);
@@ -147,14 +148,33 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_graph_vertex_embeddings (
                         node_graphid BIGINT NOT NULL,
                         node_name TEXT,
                         embedding vector({self.embedding_dims}) NOT NULL,
-                        meko_conversation_id UUID,
+                        run_id UUID, 
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
-                        PRIMARY KEY (meko_datapack_id HASH, meko_user_id HASH, meko_agent_id ASC, graph_name, node_graphid)
+                        PRIMARY KEY ((meko_datapack_id, meko_user_id) HASH, meko_agent_id ASC, graph_name, node_graphid)
                     ) SPLIT INTO 3 TABLETS;         -- or just 1 tablet
 
 CREATE INDEX IF NOT EXISTS meko_mem0_graph_vertex_embeddings_hnsw_idx
                     ON datapacks.meko_mem0_graph_vertex_embeddings
+                    USING hnsw (vector vector_cosine_ops)
+                    WITH (m = 16, ef_construction = 64);
+
+CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_promoted_graph_vertex_embeddings (
+                        meko_datapack_id UUID NOT NULL,
+                        meko_user_id UUID NOT NULL,
+                        meko_agent_id UUID NOT NULL,
+                        graph_name TEXT NOT NULL,
+                        node_graphid BIGINT NOT NULL,
+                        node_name TEXT,
+                        embedding vector({self.embedding_dims}) NOT NULL,
+                        run_id UUID, 
+                        created_at TIMESTAMPTZ NOT NULL,
+                        meko_prompted_at TIMESTAMPTZ DEFAULT NULL,
+                        PRIMARY KEY (meko_datapack_id HASH, meko_user_id HASH, meko_agent_id ASC, graph_name, node_graphid)
+                    ) SPLIT INTO 3 TABLETS;
+
+CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
+                    ON datapacks.meko_mem0_promoted_graph_vertex_embeddings
                     USING hnsw (vector vector_cosine_ops)
                     WITH (m = 16, ef_construction = 64);
 
@@ -168,11 +188,20 @@ CREATE INDEX IF NOT EXISTS meko_mem0_graph_vertex_embeddings_hnsw_idx
     -- _ag_label_vertex
     -- _ag_label_label
 
+-- Meko multi-teant Agent Private Graph:
 SELECT graphid FROM ag_catalog.ag_graph WHERE name = 'meko_multi_tenant_graph';
 
 SELECT * FROM ag_catalog.create_vlabel('meko_multi_tenant_graph','Entity');
 
 SELECT * FROM ag_catalog.create_elabel('meko_multi_tenant_graph','CONNECTED_TO');
+
+-- Meko multi-tenant global promoted to KB graph:
+SELECT graphid FROM ag_catalog.ag_graph WHERE name = 'meko_promoted_graph';
+
+SELECT * FROM ag_catalog.create_vlabel('meko_promoted_graph','Entity');
+
+SELECT * FROM ag_catalog.create_elabel('meko_promoted_graph','CONNECTED_TO');
+
 
 -- TODO: Remove the need for meko_mem0_graph_vertex_embeddings table and use a vector coloum in the Entity table.
 -- TODO: After April 30th release as this will require complete re-write of the Apache age mem0 Connector.

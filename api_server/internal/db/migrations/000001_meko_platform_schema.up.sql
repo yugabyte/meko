@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS meko_system.datapacks (                -- todo: add a
     datapack_ysql_connection_string     TEXT NOT NULL,            -- Database access could be given to non-free tier users
     datapack_ysql_username              VARCHAR NOT NULL,
     datapack_ysql_password              VARCHAR NOT NULL,
-    PRIMARY KEY (account_id HASH, datapack_id ASC)
+    PRIMARY KEY (user_id HASH, datapack_id ASC)
 );
 
 
@@ -224,7 +224,7 @@ CREATE TYPE meko_system.datapack_shared_status AS ENUM ('active', 'inactive');
 -- datapack_id removed; the datapack relationship is captured in the object tables themselves
 
 CREATE TABLE IF NOT EXISTS meko_system.agent_access (
-    account_id          UUID NOT NULL,
+    user_id          UUID NOT NULL,
     agent_id            VARCHAR NOT NULL,
     datapack_id         UUID NOT NULL,
     object_type         meko_system.access_object_type NOT NULL,
@@ -235,13 +235,13 @@ CREATE TABLE IF NOT EXISTS meko_system.agent_access (
     datapack_shared_status meko_system.datapack_shared_status NOT NULL DEFAULT 'inactive',
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY  (account_id HASH, agent_id HASH, datapack_id ASC, object_type ASC, object_id ASC)
+    PRIMARY KEY  ((user_id , agent_id) HASH, datapack_id ASC, object_type ASC, object_id ASC)
 );
 
 
 -- Langfuse mappings
 CREATE TABLE IF NOT EXISTS meko_system.langfuse_org_mapping (
-    account_id              UUID PRIMARY KEY,
+    user_id              UUID PRIMARY KEY,
     langfuse_org_id         TEXT NOT NULL UNIQUE,
     langfuse_org_name       TEXT NOT NULL,
     langfuse_org_public_key TEXT NOT NULL,
