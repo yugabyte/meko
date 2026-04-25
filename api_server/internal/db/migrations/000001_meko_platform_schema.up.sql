@@ -30,15 +30,15 @@ CREATE TABLE IF NOT EXISTS meko_system.users (
     user_details        JSONB DEFAULT '{"user_preferences": {}, "mcp_credentials": {"mcp_user_name": null, "mcp_user_password": null}}'::jsonb,
     cognito_sub         VARCHAR UNIQUE,
     email_verified_at   TIMESTAMPTZ,
-    has_completed_onboarding BOOLEAN NOT NULL DEFAULT FALSE
+    has_completed_onboarding BOOLEAN NOT NULL DEFAULT FALSE,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 ) SPLIT INTO 12 TABLETS;
 
 -- Create a unique index on email make them unique and to allow lookups by email
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(account_email);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON meko_system.users(user_email);
 -- TODO: review if this is needed
-CREATE INDEX IF NOT EXISTS idx_account_registry_cognito_sub ON users (cognito_sub);
+CREATE INDEX IF NOT EXISTS idx_account_registry_cognito_sub ON meko_system.users(cognito_sub);
 
 -- **karthik's feedback:**
 -- rename to yb_universes
@@ -198,11 +198,11 @@ CREATE TABLE IF NOT EXISTS meko_system.agent_datapacks (
     datapack_id         UUID NOT NULL,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (user_id HASH, agent_id HASH, datapack_id ASC)
+    PRIMARY KEY ((user_id, agent_id) HASH, datapack_id ASC)
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_datapacks_datapack_id 
-    ON agent_datapacks (datapack_id HASH, user_id ASC, agent_id ASC);
+    ON meko_system.agent_datapacks (datapack_id HASH, user_id ASC, agent_id ASC);
 
 
 CREATE TYPE meko_system.access_object_type AS ENUM ('knowledge_base', 'memory');
@@ -310,16 +310,16 @@ GRANT CONNECT ON DATABASE yugabyte TO yugabyte;
 TODO: check if needed
 **************/
 -- Seed test data
-INSERT INTO meko_system.account_registry (id, account_first_name, account_last_name, account_email, account_type)
+INSERT INTO meko_system.users (user_id, user_first_name, user_last_name, user_email, user_type)
 VALUES (
     'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
     'Meko',
     'Admin',
     'admin@meko.dev',
     'enterprise'
-) ON CONFLICT (id) DO NOTHING;
+) ON CONFLICT (user_id) DO NOTHING;
 
-INSERT INTO meko_system.yba_universe_registry (id, yb_universe_uuid, yb_universe_name, ysql_hostname, ysql_port, ysql_admin_connection_string, yba_management_url)
+INSERT INTO meko_system.yb_universes (universe_id, yb_universe_uuid, yb_universe_name, ysql_hostname, ysql_port, ysql_admin_connection_string, yb_management_url)
 VALUES (
     'b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22',
     'c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33',
@@ -328,6 +328,6 @@ VALUES (
     5433,
     'postgresql://yugabyte:Meko%40123@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/yugabyte?sslmode=disable',
     'http://a0ea6ee2d58194693870037cb841bdbe-1826583179.us-east-2.elb.amazonaws.com/'
-) ON CONFLICT (id) DO NOTHING;
+) ON CONFLICT (universe_id) DO NOTHING;
 
 

@@ -74,16 +74,18 @@ mem0 tables
 -- When a memory is promoted to knowledge base, we need to update the meko_promoted_to_kb_at field
     -- When the same memory is modified, we need to reset the meko_created_at field, so it becomes visible again.
 
+CREATE TYPE datapacks.meko_promotion_user_action AS ENUM ('promoted', 'keep_as_memory');
+
 CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
                     meko_datapack_id UUID NOT NULL,
                     meko_user_id UUID NOT NULL,
                     meko_agent_id TEXT NOT NULL,
                     id UUID NOT NULL,
                     meko_conversation_id UUID,
-                    vector vector(1536),
+                    embeddings vector(1536),
                     payload JSONB,
                     meko_created_at TIMESTAMPTZ DEFAULT NOW(),
-                    meko_prompotion_user_action -- ENUM: 'promoted', 'not_promoted'. If 'not_promoted' state is set, UI shouldn't surface this memory for promotion to KB again.
+                    meko_promotion_user_action datapacks.meko_promotion_user_action, -- If 'not_promoted', UI shouldn't surface this memory for promotion to KB again.
                     meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,    -- Create a partial index on this column for filtering. NOT NULL for promoted memories.
                     PRIMARY KEY ((meko_datapack_id, meko_user_id) HASH, meko_agent_id ASC, meko_created_at DESC, id DESC)
                 ) PARTITION BY HASH (meko_datapack_id);
@@ -104,7 +106,7 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS meko_mem0_collection_hnsw_idx
                     ON datapacks.meko_mem0_collection
-                    USING hnsw (vector vector_cosine_ops)
+                    USING hnsw (embeddings vector_cosine_ops)
                     WITH (m = 16, ef_construction = 64);
 
 
@@ -147,36 +149,38 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_graph_vertex_embeddings (
                         graph_name TEXT NOT NULL,
                         node_graphid BIGINT NOT NULL,
                         node_name TEXT,
-                        embedding vector({self.embedding_dims}) NOT NULL,
-                        run_id UUID, 
+                        embeddings vector(1536) NOT NULL, -- TODO: Make the vector dimension configurable. {self.embedding_dims}
+                        meko_conversation_id UUID, 
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
+                        meko_promotion_user_action datapacks.meko_promotion_user_action, -- ENUM: 'promoted', 'not_promoted'. If 'not_promoted' state is set, UI shouldn't surface this memory for promotion to KB again.
+                        meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
                         PRIMARY KEY ((meko_datapack_id, meko_user_id) HASH, meko_agent_id ASC, graph_name, node_graphid)
                     ) SPLIT INTO 3 TABLETS;         -- or just 1 tablet
 
 CREATE INDEX IF NOT EXISTS meko_mem0_graph_vertex_embeddings_hnsw_idx
                     ON datapacks.meko_mem0_graph_vertex_embeddings
-                    USING hnsw (vector vector_cosine_ops)
+                    USING hnsw (embeddings vector_cosine_ops)
                     WITH (m = 16, ef_construction = 64);
 
-CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_promoted_graph_vertex_embeddings (
-                        meko_datapack_id UUID NOT NULL,
-                        meko_user_id UUID NOT NULL,
-                        meko_agent_id UUID NOT NULL,
-                        graph_name TEXT NOT NULL,
-                        node_graphid BIGINT NOT NULL,
-                        node_name TEXT,
-                        embedding vector({self.embedding_dims}) NOT NULL,
-                        run_id UUID, 
-                        created_at TIMESTAMPTZ NOT NULL,
-                        meko_prompted_at TIMESTAMPTZ DEFAULT NULL,
-                        PRIMARY KEY (meko_datapack_id HASH, meko_user_id HASH, meko_agent_id ASC, graph_name, node_graphid)
-                    ) SPLIT INTO 3 TABLETS;
+-- CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_promoted_graph_vertex_embeddings (
+--                         meko_datapack_id UUID NOT NULL,
+--                         meko_user_id UUID NOT NULL,
+--                         meko_agent_id UUID NOT NULL,
+--                         graph_name TEXT NOT NULL,
+--                         node_graphid BIGINT NOT NULL,
+--                         node_name TEXT,
+--                         embedding vector({self.embedding_dims}) NOT NULL,
+--                         run_id UUID, 
+--                         created_at TIMESTAMPTZ NOT NULL,
+--                         meko_prompted_at TIMESTAMPTZ DEFAULT NULL,
+--                         PRIMARY KEY (meko_datapack_id HASH, meko_user_id HASH, meko_agent_id ASC, graph_name, node_graphid)
+--                     ) SPLIT INTO 3 TABLETS;
 
-CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
-                    ON datapacks.meko_mem0_promoted_graph_vertex_embeddings
-                    USING hnsw (vector vector_cosine_ops)
-                    WITH (m = 16, ef_construction = 64);
+-- CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
+--                     ON datapacks.meko_mem0_promoted_graph_vertex_embeddings
+--                     USING hnsw (vector vector_cosine_ops)
+--                     WITH (m = 16, ef_construction = 64);
 
 -- Need to pre-create the graph tables used for multi-tenancy storage. or prime the mem0 to create these tables as part of platform initialization.
 -- Create a graph name called "meko_multi_tenant_graph"
@@ -188,15 +192,17 @@ CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
     -- _ag_label_vertex
     -- _ag_label_label
 
+SET search_path = ag_catalog, datapacks, public;
+
 -- Meko multi-teant Agent Private Graph:
-SELECT graphid FROM ag_catalog.ag_graph WHERE name = 'meko_multi_tenant_graph';
+SELECT * FROM ag_catalog.create_graph('meko_multi_tenant_graph');
 
 SELECT * FROM ag_catalog.create_vlabel('meko_multi_tenant_graph','Entity');
 
 SELECT * FROM ag_catalog.create_elabel('meko_multi_tenant_graph','CONNECTED_TO');
 
 -- Meko multi-tenant global promoted to KB graph:
-SELECT graphid FROM ag_catalog.ag_graph WHERE name = 'meko_promoted_graph';
+SELECT * FROM ag_catalog.create_graph('meko_promoted_graph');
 
 SELECT * FROM ag_catalog.create_vlabel('meko_promoted_graph','Entity');
 
@@ -216,71 +222,5 @@ SELECT * FROM ag_catalog.create_elabel('meko_promoted_graph','CONNECTED_TO');
     -- REVIEW: Alternatively, we can move these columns as fields of properties column in these tables.
         -- This will help keep the Apache AGE schema independent of the meko requirements
         -- What will be the performance impact of this? We do support indexes on jsonb columns.
--- ag_catalog.ag_graph - NO changes needed
--- ag_catalog.ag_label - NO changes needed
 
--- Test graph creation:
--- SET search_path = ag_catalog, test_graph1, public;
--- SELECT * FROM ag_catalog.ag_graph WHERE name = 'test_graph1';
 
--- SELECT * FROM ag_catalog.create_graph('test_graph1');
--- Output:
-/*
-NOTICE:  graph "test_graph1" has been created
- create_graph 
---------------
- 
-(1 row)
-*/
-
--- SELECT graphid FROM ag_catalog.ag_graph WHERE name = 'test_graph1';
--- Output:
-/*
- graphid 
----------
-   17441
-(1 row)
-*/
-
--- SELECT 1 FROM ag_catalog.ag_label WHERE name = 'Entity' AND graph = 17441;
--- Output:
-/*
- ?column? 
-----------
-(0 rows)
-*/
-
--- SELECT * FROM ag_catalog.create_vlabel('test_graph1','Entity');
--- Output:
-/*
-NOTICE:  VLabel "Entity" has been created
- create_vlabel 
----------------
- 
-(1 row)
-
--- SELECT 1 FROM ag_catalog.ag_label WHERE name = 'CONNECTED_TO' AND graph = 17441;
--- Output:
-/*
- ?column? 
-----------
-(0 rows)
-*/
-
--- SELECT * FROM ag_catalog.create_elabel('test_graph1','CONNECTED_TO');
--- Output:
-/*
-NOTICE:  ELabel "CONNECTED_TO" has been created
- create_elabel 
----------------
- 
-(1 row)
-*/
-
--- Warm up the graph:
--- SELECT * FROM cypher('test_graph1', $$ MATCH (n) RETURN n LIMIT 0 $$) as (n agtype);
--- Output:
-/*
- n 
----
-(0 rows)
