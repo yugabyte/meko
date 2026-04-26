@@ -11,7 +11,6 @@ import (
 	_ "meko/api_server/docs" // registers swagger spec with swag
 	"meko/api_server/internal/auth"
 	"meko/api_server/internal/handlers"
-	"meko/api_server/internal/k8s"
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
@@ -25,7 +24,6 @@ type serviceRegistry struct {
 	dpRepo      *repository.DatapackRepo
 	dpSvc       *service.DatapackService
 	langfuseSvc *service.LangfuseService
-	tierRepo    *repository.TierConfigRepo
 	agentSvc    *service.AgentService
 	kbSvc       *service.KnowledgeBaseService
 	memoriesSvc *service.MemoriesService
@@ -41,7 +39,6 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	accountRepo := repository.NewAccountRepo(cfg.DB)
 	ybaRepo := repository.NewYBARepo(cfg.DB)
 	dpRepo := repository.NewDatapackRepo(cfg.DB)
-	tierRepo := repository.NewTierConfigRepo(cfg.DB)
 
 	ybaSvc := service.NewYBAService(ybaRepo)
 	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo)
@@ -90,7 +87,6 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		dpRepo:      dpRepo,
 		dpSvc:       dpSvc,
 		langfuseSvc: langfuseSvc,
-		tierRepo:    tierRepo,
 		agentSvc:    agentSvc,
 		kbSvc:       kbSvc,
 		memoriesSvc: memoriesSvc,
@@ -212,57 +208,17 @@ func registerAuthRoutes(
 	}, nil
 }
 
-// buildProvisioner attempts to create a Provisioner backed by the full
-// ProvisioningService (K8s CRD + datapack). When the K8s client is
-// unavailable it falls back to a datapack-only provisioner so that
-// default datapacks are still created on signup.
-func buildProvisioner(cfg ServerConfig, reg *serviceRegistry) service.Provisioner {
-	k8sClient, err := k8s.NewClient()
-	if err != nil {
-		slog.Warn("k8s client unavailable, falling back to datapack-only provisioner",
-			"error", err,
-		)
-		return &datapackOnlyProvisioner{dpSvc: reg.dpSvc}
-	}
-
-	provSvc := service.NewProvisioningService(
+// buildProvisioner builds the provisioner used after signup. In the
+// multi-tenant model the default datapack + agent + link rows are
+// inserted in a single transaction by DatapackService.Create; there is
+// no K8s CRD or per-datapack DB to apply, so the provisioner is just a
+// thin wrapper around the datapack service plus best-effort Langfuse
+// provisioning.
+func buildProvisioner(_ ServerConfig, reg *serviceRegistry) service.Provisioner {
+	return service.NewProvisioningService(
 		reg.dpSvc,
-		k8sClient,
-		reg.tierRepo,
 		reg.accountRepo,
 		reg.langfuseSvc,
-		service.ProvisioningConfig{CRDNamespace: cfg.CRDNamespace},
-	)
-	slog.Info("full provisioner enabled", "crd_namespace", cfg.CRDNamespace)
-	return provSvc
-}
-
-// datapackOnlyProvisioner satisfies service.Provisioner by creating a
-// default datapack without applying any K8s CRDs.
-type datapackOnlyProvisioner struct {
-	dpSvc *service.DatapackService
-}
-
-func (p *datapackOnlyProvisioner) ProvisionNewAccount(
-	ctx context.Context,
-	accountID string,
-) {
-	if p == nil || p.dpSvc == nil {
-		return
-	}
-	_, err := p.dpSvc.Create(service.CreateRequest{
-		Name:      service.DefaultDatapackName,
-		AccountID: accountID,
-	})
-	if err != nil {
-		slog.Error("failed to provision default datapack",
-			"account_id", accountID,
-			"error", err,
-		)
-		return
-	}
-	slog.Info("default datapack provisioned (datapack-only mode)",
-		"account_id", accountID,
 	)
 }
 
@@ -271,12 +227,17 @@ func (p *datapackOnlyProvisioner) ProvisionNewAccount(
 func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	dpH := handlers.NewDatapackHandler(reg.dpSvc, reg.langfuseSvc)
 	observeH := handlers.NewObserveHandler(reg.langfuseSvc)
+	agentH := handlers.NewAgentHandler(reg.agentSvc)
 
 	g.GET("/internal/provision-status", handlers.ProvisionStatusHandler(reg.dpRepo))
 
 	g.POST("/datapacks", dpH.Create)
 	g.GET("/datapacks", dpH.List)
 	g.POST("/observe/session/bootstrap", observeH.BootstrapSession)
+
+	g.POST("/agents", agentH.CreateUser)
+	g.GET("/agents", agentH.ListUser)
+	g.DELETE("/agents/:agent_id", agentH.DeleteUser)
 
 	named := g.Group("/datapacks/:name",
 		auth.RequireDatapackOwnership(reg.dpRepo),
@@ -288,10 +249,9 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named.GET("/status", dpH.Status)
 	named.POST("/langfuse/project-keys", dpH.GenerateLangfuseProjectKeys)
 
-	agentH := handlers.NewAgentHandler(reg.agentSvc)
-	named.POST("/agents", agentH.Create)
-	named.GET("/agents", agentH.List)
-	named.DELETE("/agents/:agent", agentH.Delete)
+	named.POST("/agents", agentH.Link)
+	named.GET("/agents", agentH.ListForDatapack)
+	named.DELETE("/agents/:agent_id", agentH.Unlink)
 
 	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.s3Svc, reg.ybaSvc)
 	named.POST("/knowledge-bases", kbH.Add)

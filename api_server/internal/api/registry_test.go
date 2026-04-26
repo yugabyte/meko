@@ -46,9 +46,6 @@ func TestBuildServiceRegistry_AllFieldsPopulated(t *testing.T) {
 	if reg.langfuseSvc == nil {
 		t.Error("langfuseSvc is nil")
 	}
-	if reg.tierRepo == nil {
-		t.Error("tierRepo is nil")
-	}
 	if reg.agentSvc == nil {
 		t.Error("agentSvc is nil")
 	}

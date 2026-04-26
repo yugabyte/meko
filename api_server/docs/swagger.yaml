@@ -17,8 +17,28 @@ definitions:
       error:
         $ref: '#/definitions/handlers.APIError'
     type: object
+  handlers.uploadCompleteRequest:
+    properties:
+      filename:
+        type: string
+      key:
+        type: string
+      size:
+        type: integer
+    type: object
+  handlers.uploadURLRequest:
+    properties:
+      content_type:
+        type: string
+      filename:
+        type: string
+      size:
+        type: integer
+    type: object
   models.TenantKBSyncRequest:
     properties:
+      agent_id:
+        type: string
       datapack_id:
         type: string
       memory_ids:
@@ -26,7 +46,6 @@ definitions:
           type: string
         type: array
       user_id:
-        description: Optional.
         type: string
     type: object
   service.AddRequest:
@@ -40,22 +59,23 @@ definitions:
         type: string
       email:
         type: string
-    required:
-    - email
-    - code
-    type: object
-  service.CreateAgentRequest:
-    properties:
-      agent_metadata:
-        type: string
-      agent_name:
-        type: string
     type: object
   service.CreateRequest:
     properties:
-      account_id:
+      agent_id:
         type: string
       name:
+        type: string
+      user_id:
+        type: string
+    type: object
+  service.CreateUserAgentRequest:
+    properties:
+      agent_details:
+        items:
+          type: integer
+        type: array
+      agent_id:
         type: string
     type: object
   service.DeleteRequest:
@@ -63,25 +83,16 @@ definitions:
       url:
         type: string
     type: object
+  service.LinkAgentRequest:
+    properties:
+      agent_id:
+        type: string
+    type: object
   service.LoginRequest:
     properties:
       email:
         type: string
       password:
-        type: string
-    required:
-    - email
-    - password
-    type: object
-  service.LoginResponse:
-    properties:
-      access_token:
-        type: string
-      expires_in:
-        type: integer
-      id_token:
-        type: string
-      refresh_token:
         type: string
     type: object
   service.SignupRequest:
@@ -94,20 +105,11 @@ definitions:
         type: string
       password:
         type: string
-    required:
-    - email
-    - password
-    - first_name
-    - last_name
     type: object
-  service.SignupResponse:
+  service.UpdateOnboardingRequest:
     properties:
-      account_id:
-        type: string
-      email:
-        type: string
-      message:
-        type: string
+      has_completed_onboarding:
+        type: boolean
     type: object
   service.UpdateRequest:
     properties:
@@ -122,6 +124,86 @@ info:
   title: Meko Datapack API
   version: "1.0"
 paths:
+  /agents:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List agents for the authenticated user
+      tags:
+      - agents
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Agent request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.CreateUserAgentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a user-scoped agent
+      tags:
+      - agents
+  /agents/{agent_id}:
+    delete:
+      parameters:
+      - description: Agent ID
+        in: path
+        name: agent_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a user-scoped agent
+      tags:
+      - agents
   /auth/confirm-signup:
     post:
       consumes:
@@ -178,12 +260,6 @@ paths:
       - auth
   /auth/logout:
     post:
-      parameters:
-      - description: Bearer access token
-        in: header
-        name: Authorization
-        required: true
-        type: string
       produces:
       - application/json
       responses:
@@ -195,7 +271,57 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Invalidate all sessions
+      tags:
+      - auth
+  /auth/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get the authenticated user
+      tags:
+      - auth
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Onboarding status payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.UpdateOnboardingRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Update onboarding completion status
       tags:
       - auth
   /auth/signup:
@@ -236,6 +362,10 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
       summary: List all datapacks
@@ -262,6 +392,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
       summary: Create a datapack
@@ -280,6 +414,10 @@ paths:
       responses:
         "200":
           description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "404":
@@ -303,6 +441,10 @@ paths:
       responses:
         "200":
           description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "404":
@@ -336,6 +478,10 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "404":
           description: Not Found
           schema:
@@ -360,9 +506,17 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: List agents in a datapack
+      summary: List agents linked to a datapack
       tags:
       - agents
     post:
@@ -374,12 +528,12 @@ paths:
         name: name
         required: true
         type: string
-      - description: Agent request
+      - description: Link request
         in: body
         name: body
         required: true
         schema:
-          $ref: '#/definitions/service.CreateAgentRequest'
+          $ref: '#/definitions/service.LinkAgentRequest'
       produces:
       - application/json
       responses:
@@ -391,16 +545,20 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "404":
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: Create an agent
+      summary: Link an agent to a datapack
       tags:
       - agents
-  /datapacks/{name}/agents/{agent}:
+  /datapacks/{name}/agents/{agent_id}:
     delete:
       parameters:
       - description: Datapack name
@@ -408,9 +566,9 @@ paths:
         name: name
         required: true
         type: string
-      - description: Agent name
+      - description: Agent ID
         in: path
-        name: agent
+        name: agent_id
         required: true
         type: string
       produces:
@@ -420,13 +578,17 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "404":
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: Delete an agent
+      summary: Unlink an agent from a datapack
       tags:
       - agents
   /datapacks/{name}/knowledge-bases:
@@ -439,7 +601,7 @@ paths:
         name: name
         required: true
         type: string
-      - description: KB to delete
+      - description: Delete request
         in: body
         name: body
         required: true
@@ -454,6 +616,10 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "404":
@@ -479,9 +645,17 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: List knowledge bases
+      summary: List knowledge bases for a datapack
       tags:
       - knowledge-bases
     post:
@@ -493,7 +667,7 @@ paths:
         name: name
         required: true
         type: string
-      - description: KB request
+      - description: Knowledge base URL
         in: body
         name: body
         required: true
@@ -510,15 +684,191 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "404":
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: Add a knowledge base
+      summary: Add a knowledge base URL
       tags:
       - knowledge-bases
+  /datapacks/{name}/knowledge-bases/create:
+    post:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a knowledge base from uploaded files
+      tags:
+      - knowledge-bases
+  /datapacks/{name}/knowledge-bases/status:
+    get:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get knowledge base pipeline status
+      tags:
+      - knowledge-bases
+  /datapacks/{name}/knowledge-bases/upload-complete:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Upload confirmation
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.uploadCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Confirm a completed file upload
+      tags:
+      - knowledge-bases
+  /datapacks/{name}/knowledge-bases/upload-url:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Upload request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.uploadURLRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Generate a presigned S3 upload URL
+      tags:
+      - knowledge-bases
+  /datapacks/{name}/langfuse/project-keys:
+    post:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Generate Langfuse project keys for a datapack
+      tags:
+      - datapacks
   /datapacks/{name}/status:
     get:
       parameters:
@@ -532,6 +882,10 @@ paths:
       responses:
         "200":
           description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "404":
@@ -555,12 +909,6 @@ paths:
       summary: Health check
       tags:
       - health
-securityDefinitions:
-  BearerAuth:
-    description: JWT access token from /auth/login. Format: Bearer {token}
-    in: header
-    name: Authorization
-    type: apiKey
   /memories:
     get:
       parameters:
@@ -575,7 +923,20 @@ securityDefinitions:
       - description: Datapack ID
         in: query
         name: datapack_id
+        required: true
         type: string
+      - description: Skip vector similarity ranking (free tier users)
+        in: query
+        name: free_user
+        type: boolean
+      - description: Page number (1-based, default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 100)
+        in: query
+        name: page_size
+        type: integer
       produces:
       - application/json
       responses:
@@ -599,7 +960,8 @@ securityDefinitions:
       consumes:
       - application/json
       parameters:
-      - description: optional user_id + optional agent_id + datapack_id + list of mem0 memory IDs to sync
+      - description: optional user_id + optional agent_id + datapack_id + list of
+          mem0 memory IDs to sync
         in: body
         name: body
         required: true
@@ -620,7 +982,13 @@ securityDefinitions:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.APIResponse'
-      summary: Sync mem0 memories into meko_tenants_kb
+      summary: Sync mem0 memories into knowledge_base
       tags:
       - tenant-kb
+securityDefinitions:
+  BearerAuth:
+    description: 'JWT access token from /auth/login. Format: Bearer {token}'
+    in: header
+    name: Authorization
+    type: apiKey
 swagger: "2.0"

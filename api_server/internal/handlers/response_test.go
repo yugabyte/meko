@@ -7,17 +7,12 @@ import (
 	"testing"
 
 	"meko/api_server/internal/api"
-	mekoDb "meko/api_server/internal/db"
 	"meko/api_server/internal/handlers"
 )
 
 func TestAPIResponse_SuccessEnvelope(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
-
-	if _, err := mekoDb.RunMigrations(db); err != nil {
-		t.Fatalf("failed to run migrations: %v", err)
-	}
 
 	e, routerErr := api.NewRouter(api.ServerConfig{DB: db})
 	if routerErr != nil {
@@ -48,10 +43,6 @@ func TestAPIResponse_SuccessEnvelope(t *testing.T) {
 func TestAPIResponse_ErrorEnvelope(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
-
-	if _, err := mekoDb.RunMigrations(db); err != nil {
-		t.Fatalf("failed to run migrations: %v", err)
-	}
 
 	e, routerErr := api.NewRouter(api.ServerConfig{DB: db})
 	if routerErr != nil {

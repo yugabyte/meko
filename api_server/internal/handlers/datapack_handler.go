@@ -34,6 +34,8 @@ func NewDatapackHandler(
 //	@Param		body	body		service.CreateRequest	true	"Create request"
 //	@Success	201		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks [post]
 func (h *DatapackHandler) Create(c echo.Context) error {
 	var req service.CreateRequest
@@ -43,7 +45,7 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 	}
 
 	if account, err := auth.GetAccount(c); err == nil {
-		req.AccountID = account.ID
+		req.UserID = account.ID
 	}
 
 	resp, err := h.svc.Create(req)
@@ -55,6 +57,10 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 		if isConflictErr(err) {
 			return apiError(c, http.StatusConflict,
 				"CONFLICT", err.Error())
+		}
+		if isNotFoundErr(err) {
+			return apiError(c, http.StatusNotFound,
+				"NOT_FOUND", err.Error())
 		}
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", err.Error())
@@ -69,6 +75,8 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 //	@Tags		datapacks
 //	@Produce	json
 //	@Success	200	{object}	APIResponse
+//	@Failure	401	{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks [get]
 func (h *DatapackHandler) List(c echo.Context) error {
 	account, err := auth.GetAccount(c)
@@ -95,7 +103,9 @@ func (h *DatapackHandler) List(c echo.Context) error {
 //	@Produce	json
 //	@Param		name	path		string	true	"Datapack name"
 //	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name} [get]
 func (h *DatapackHandler) Describe(c echo.Context) error {
 	account, err := auth.GetAccount(c)
@@ -132,7 +142,9 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 //	@Param		name	path		string					true	"Datapack name"
 //	@Param		body	body		service.UpdateRequest	true	"Update fields"
 //	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name} [patch]
 func (h *DatapackHandler) Update(c echo.Context) error {
 	account, err := auth.GetAccount(c)
@@ -174,7 +186,9 @@ func (h *DatapackHandler) Update(c echo.Context) error {
 //	@Produce	json
 //	@Param		name	path		string	true	"Datapack name"
 //	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name} [delete]
 func (h *DatapackHandler) Delete(c echo.Context) error {
 	account, err := auth.GetAccount(c)
@@ -210,7 +224,9 @@ func (h *DatapackHandler) Delete(c echo.Context) error {
 //	@Produce	json
 //	@Param		name	path		string	true	"Datapack name"
 //	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name}/status [get]
 func (h *DatapackHandler) Status(c echo.Context) error {
 	account, err := auth.GetAccount(c)
@@ -240,6 +256,17 @@ func (h *DatapackHandler) Status(c echo.Context) error {
 
 // GenerateLangfuseProjectKeys handles
 // POST /api/v1/datapacks/:name/langfuse/project-keys.
+//
+//	@Summary	Generate Langfuse project keys for a datapack
+//	@Tags		datapacks
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Failure	503		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{name}/langfuse/project-keys [post]
 func (h *DatapackHandler) GenerateLangfuseProjectKeys(c echo.Context) error {
 	if h.langfuse == nil || !h.langfuse.Enabled() {
 		return apiError(c, http.StatusServiceUnavailable,

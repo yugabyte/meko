@@ -5,6 +5,11 @@
 //	@description	REST API for managing datapacks, agents, and knowledge bases in the meko platform.
 //	@host			localhost:25433
 //	@BasePath		/api/v1
+//
+//	@securityDefinitions.apikey	BearerAuth
+//	@in							header
+//	@name						Authorization
+//	@description				JWT access token from /auth/login. Format: Bearer {token}
 package main
 
 import (

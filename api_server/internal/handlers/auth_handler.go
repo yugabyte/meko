@@ -111,6 +111,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 //	@Produce	json
 //	@Success	200	{object}	APIResponse
 //	@Failure	401	{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/auth/logout [post]
 func (h *AuthHandler) Logout(c echo.Context) error {
 	accessToken := ""
@@ -145,6 +146,14 @@ func (h *AuthHandler) Logout(c echo.Context) error {
 }
 
 // Me handles GET /api/v1/auth/me.
+//
+//	@Summary	Get the authenticated user
+//	@Tags		auth
+//	@Produce	json
+//	@Success	200	{object}	APIResponse
+//	@Failure	401	{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/auth/me [get]
 func (h *AuthHandler) Me(c echo.Context) error {
 	account, err := auth.GetAccount(c)
 	if err != nil {
@@ -172,6 +181,7 @@ func (h *AuthHandler) Me(c echo.Context) error {
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/auth/me [patch]
 func (h *AuthHandler) UpdateOnboardingStatus(c echo.Context) error {
 	account, err := auth.GetAccount(c)

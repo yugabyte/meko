@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS meko_system.users (
 -- Create a unique index on email make them unique and to allow lookups by email
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON meko_system.users(user_email);
 -- TODO: review if this is needed
-CREATE INDEX IF NOT EXISTS idx_account_registry_cognito_sub ON meko_system.users(cognito_sub);
+CREATE INDEX IF NOT EXISTS idx_users_cognito_sub ON meko_system.users(cognito_sub);
 
 -- **karthik's feedback:**
 -- rename to yb_universes
@@ -140,7 +140,8 @@ CREATE TABLE IF NOT EXISTS meko_system.datapacks (                -- todo: add a
     datapack_ysql_connection_string     TEXT NOT NULL,            -- Database access could be given to non-free tier users
     datapack_ysql_username              VARCHAR NOT NULL,
     datapack_ysql_password              VARCHAR NOT NULL,
-    PRIMARY KEY (user_id HASH, datapack_id ASC)
+    PRIMARY KEY (user_id HASH, datapack_id ASC),
+    CONSTRAINT uq_datapacks_user_name UNIQUE (user_id, datapack_name)
 );
 
 

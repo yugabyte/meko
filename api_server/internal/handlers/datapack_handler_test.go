@@ -11,17 +11,18 @@ import (
 	_ "github.com/lib/pq"
 
 	"meko/api_server/internal/api"
-	mekoDb "meko/api_server/internal/db"
 	"meko/api_server/internal/handlers"
 )
 
+// setupTestServer wires the API router against the externally-managed
+// test database. Migrations are NOT applied here: as a pre-req the
+// developer is expected to run the migrations once (e.g. via
+// `migrate -path ./internal/db/migrations -database <conn> up`)
+// before running integration tests. This keeps the test loop fast
+// and avoids dirty-state flakiness from concurrent migrate runs.
 func setupTestServer(t *testing.T) (*httptest.Server, *sql.DB) {
 	t.Helper()
 	db := openTestDB(t)
-
-	if _, err := mekoDb.RunMigrations(db); err != nil {
-		t.Fatalf("failed to run migrations: %v", err)
-	}
 
 	cleanupDatapacks(t, db)
 
@@ -33,17 +34,26 @@ func setupTestServer(t *testing.T) (*httptest.Server, *sql.DB) {
 	return srv, db
 }
 
+// cleanupDatapacks resets per-test state in the multi-tenant schema.
+//
+// The dev user (cognito_sub='dev-local') is also deleted so that
+// DevAuth re-creates it on the next request, which restores the
+// user's default agent in meko_system.agents alongside it.
 func cleanupDatapacks(t *testing.T, db *sql.DB) {
 	t.Helper()
-	tables := []string{
-		"meko_system.agent_knowledge_base",
-		"meko_system.agent_registry",
-		"meko_system.datapack_knowledge_base_registry",
-		"meko_system.datapack_registry",
+	stmts := []string{
+		`DELETE FROM meko_system.knowledge_bases`,
+		`DELETE FROM meko_system.agent_access`,
+		`DELETE FROM meko_system.agent_datapacks`,
+		`DELETE FROM meko_system.langfuse_project_mapping`,
+		`DELETE FROM meko_system.langfuse_org_mapping`,
+		`DELETE FROM meko_system.datapacks`,
+		`DELETE FROM meko_system.agents`,
+		`DELETE FROM meko_system.users WHERE cognito_sub = 'dev-local'`,
 	}
-	for _, tbl := range tables {
-		if _, err := db.Exec("DELETE FROM " + tbl); err != nil { //nolint:gosec // hardcoded table names
-			t.Logf("cleanup %s: %v", tbl, err)
+	for _, q := range stmts {
+		if _, err := db.Exec(q); err != nil { //nolint:gosec // hardcoded SQL
+			t.Logf("cleanup %s: %v", q, err)
 		}
 	}
 }
@@ -53,10 +63,7 @@ func TestDatapack_CreateAndList(t *testing.T) {
 	defer srv.Close()
 	defer db.Close()
 
-	body := map[string]string{
-		"name":                "test-dp-1",
-		"seed_knowledge_base": "s3://bucket/docs/",
-	}
+	body := map[string]string{"name": "test-dp-1"}
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +181,7 @@ func TestDatapack_Update(t *testing.T) {
 	createDatapack(t, srv.URL, "test-dp-update")
 
 	patchBody := map[string]string{
-		"llm_model": "DeepSeek-R1",
+		"datapack_ysql_connection_string": "postgresql://example/db",
 	}
 	b, err := json.Marshal(patchBody)
 	if err != nil {
@@ -284,16 +291,19 @@ func TestDatapack_Status(t *testing.T) {
 	if !ok {
 		t.Fatal("expected agent_count to be a number")
 	}
+	// At least the default agent should be linked to the datapack.
 	if agentCount < 1 {
-		t.Error("expected at least 1 agent")
+		t.Errorf("expected at least 1 linked agent, got %v", agentCount)
 	}
 
+	// kb_count is no longer auto-populated on datapack create in the
+	// multi-tenant schema; validate it is present and non-negative.
 	kbCount, ok := dataMap["knowledge_base_count"].(float64)
 	if !ok {
 		t.Fatal("expected knowledge_base_count to be a number")
 	}
-	if kbCount < 1 {
-		t.Error("expected at least 1 knowledge base")
+	if kbCount < 0 {
+		t.Errorf("knowledge_base_count should be >= 0, got %v", kbCount)
 	}
 }
 
@@ -325,50 +335,41 @@ func TestDatapack_CreateValidation_EmptyName(t *testing.T) {
 	}
 }
 
-func TestDatapack_CreateValidation_NoKnowledgeBase(t *testing.T) {
+// TestDatapack_CreateWithExplicitAgent verifies that POST /datapacks
+// can scope a datapack to a specific user-created agent, using the
+// new user-scoped /agents create endpoint.
+func TestDatapack_CreateWithExplicitAgent(t *testing.T) {
 	srv, db := setupTestServer(t)
 	defer srv.Close()
 	defer db.Close()
 
-	body := map[string]string{"name": "test-no-kb"}
-	b, err := json.Marshal(body)
+	agentBody := map[string]any{"agent_id": "explicit-agent-1"}
+	ab, err := json.Marshal(agentBody)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	resp, err := http.Post(
-		srv.URL+"/api/v1/datapacks", "application/json",
-		bytes.NewReader(b),
+	agentResp, err := http.Post(
+		srv.URL+"/api/v1/agents",
+		"application/json", bytes.NewReader(ab),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
+	agentResp.Body.Close()
+	if agentResp.StatusCode != http.StatusCreated {
 		t.Fatalf(
-			"expected status %d, got %d",
-			http.StatusBadRequest, resp.StatusCode,
+			"create agent: expected 201, got %d", agentResp.StatusCode,
 		)
 	}
-}
-
-func TestDatapack_CreateWithModels(t *testing.T) {
-	srv, db := setupTestServer(t)
-	defer srv.Close()
-	defer db.Close()
 
 	body := map[string]string{
-		"name":                "test-dp-with-models",
-		"embed_model":         "text-embedding-3-small",
-		"inference_model":     "GPT-4o",
-		"seed_knowledge_base": "s3://bucket/docs/",
+		"name":     "test-dp-with-agent",
+		"agent_id": "explicit-agent-1",
 	}
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	resp, err := http.Post(
 		srv.URL+"/api/v1/datapacks", "application/json",
 		bytes.NewReader(b),
@@ -377,7 +378,6 @@ func TestDatapack_CreateWithModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf(
 			"expected status %d, got %d",
@@ -385,41 +385,57 @@ func TestDatapack_CreateWithModels(t *testing.T) {
 		)
 	}
 
-	descResp, err := http.Get(
-		srv.URL + "/api/v1/datapacks/test-dp-with-models",
+	var createResp handlers.APIResponse
+	if decErr := json.NewDecoder(resp.Body).Decode(&createResp); decErr != nil {
+		t.Fatal(decErr)
+	}
+	dataMap, ok := createResp.Data.(map[string]any)
+	if !ok {
+		t.Fatal("expected data to be a map")
+	}
+	if dataMap["agent_id"] != "explicit-agent-1" {
+		t.Errorf(
+			"expected agent_id=explicit-agent-1, got %v",
+			dataMap["agent_id"],
+		)
+	}
+}
+
+// TestDatapack_CreateWithUnknownAgent verifies that creating a
+// datapack against a non-existent agent returns a 5xx body (the
+// service surfaces "not found" via fmt.Errorf, which the handler
+// maps to 404).
+func TestDatapack_CreateWithUnknownAgent(t *testing.T) {
+	srv, db := setupTestServer(t)
+	defer srv.Close()
+	defer db.Close()
+
+	body := map[string]string{
+		"name":     "test-dp-bad-agent",
+		"agent_id": "ghost-agent",
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(
+		srv.URL+"/api/v1/datapacks", "application/json",
+		bytes.NewReader(b),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer descResp.Body.Close()
-
-	var result handlers.APIResponse
-	if decErr := json.NewDecoder(descResp.Body).Decode(&result); decErr != nil {
-		t.Fatal(decErr)
-	}
-	dataMap, ok := result.Data.(map[string]any)
-	if !ok {
-		t.Fatal("expected data to be a map")
-	}
-	if dataMap["llm_model"] != "GPT-4o" {
-		t.Errorf(
-			"expected llm_model=GPT-4o, got %v", dataMap["llm_model"],
-		)
-	}
-	if dataMap["embedding_model"] != "text-embedding-3-small" {
-		t.Errorf(
-			"expected embedding_model=text-embedding-3-small, got %v",
-			dataMap["embedding_model"],
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf(
+			"expected 404 for missing agent, got %d", resp.StatusCode,
 		)
 	}
 }
 
 func createDatapack(t *testing.T, baseURL, name string) {
 	t.Helper()
-	body := map[string]string{
-		"name":                name,
-		"seed_knowledge_base": "s3://test-bucket/docs/",
-	}
+	body := map[string]string{"name": name}
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)

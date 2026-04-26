@@ -55,7 +55,7 @@ func NewKnowledgeBaseHandler(
 // Idempotent: ALTER OWNER is a no-op when already in the desired state.
 // Skips cleanly if DatapackIndexName does not yet exist.
 func (h *KnowledgeBaseHandler) fixIndexOwnership(dp *models.Datapack) error {
-	adminConnStr, err := h.ybaSvc.GetAdminConnStr(dp.YBUniverseID)
+	adminConnStr, err := h.ybaSvc.GetAdminConnStr(dp.UniverseID)
 	if err != nil {
 		return fmt.Errorf("get admin conn str: %w", err)
 	}
@@ -65,7 +65,10 @@ func (h *KnowledgeBaseHandler) fixIndexOwnership(dp *models.Datapack) error {
 		return fmt.Errorf("parse admin conn str: %w", err)
 	}
 
-	dbName := fmt.Sprintf("%s_%s", dp.AccountID, dp.Name)
+	// TODO(multi-tenant): per-datapack DB no longer exists; this handler still
+	// targets the legacy "{user_id}_{datapack_name}" database name and will
+	// need to be reworked alongside the rest of the knowledge-base flow.
+	dbName := fmt.Sprintf("%s_%s", dp.UserID, dp.Name)
 	u.Path = "/" + dbName
 	q := u.Query()
 	if q.Get("sslmode") == "" {
@@ -145,7 +148,9 @@ func openDatapackDB(dp *models.Datapack) (*sql.DB, error) {
 //	@Param		body	body		service.AddRequest	true	"Knowledge base URL"
 //	@Success	201		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name}/knowledge-bases [post]
 func (h *KnowledgeBaseHandler) Add(c echo.Context) error {
 	dpName := c.Param("name")
@@ -189,6 +194,8 @@ func (h *KnowledgeBaseHandler) Add(c echo.Context) error {
 //	@Param		name	path		string	true	"Datapack name"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name}/knowledge-bases [get]
 func (h *KnowledgeBaseHandler) List(c echo.Context) error {
 	dpName := c.Param("name")
@@ -218,7 +225,9 @@ func (h *KnowledgeBaseHandler) List(c echo.Context) error {
 //	@Param		body	body		service.DeleteRequest	true	"Delete request"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name}/knowledge-bases [delete]
 func (h *KnowledgeBaseHandler) Delete(c echo.Context) error {
 	dpName := c.Param("name")
@@ -279,6 +288,7 @@ const maxFileSizeBytes = 5 * 1024 * 1024 // 5 MB
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	503		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name}/knowledge-bases/upload-url [post]
 func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 	if h.s3Svc == nil || !h.s3Svc.Enabled() {
@@ -376,6 +386,7 @@ type uploadCompleteRequest struct {
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name}/knowledge-bases/upload-complete [post]
 func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 	dpName := c.Param("name")
@@ -436,6 +447,7 @@ func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 //     @Failure	400		{object}	APIResponse
 //     @Failure	401		{object}	APIResponse
 //     @Failure	500		{object}	APIResponse
+//     @Security	BearerAuth
 //     @Router		/datapacks/{name}/knowledge-bases/create [post]
 func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 	dpName := c.Param("name")
@@ -677,7 +689,9 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 //	@Param		name	path		string	true	"Datapack name"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	500		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/datapacks/{name}/knowledge-bases/status [get]
 func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 	dpName := c.Param("name")

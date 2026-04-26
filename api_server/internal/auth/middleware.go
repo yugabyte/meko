@@ -106,8 +106,12 @@ func RequireAuth(
 
 // DatapackOwnershipLookup abstracts datapack lookup for the ownership
 // middleware. Typically implemented by repository.DatapackRepo.
+//
+// The lookup hits meko_system.datapacks via the
+// UNIQUE (user_id, datapack_name) constraint so the URL-friendly :name
+// parameter remains a stable identifier per user.
 type DatapackOwnershipLookup interface {
-	GetByName(accountID, name string) (*models.Datapack, error)
+	GetByName(userID, name string) (*models.Datapack, error)
 }
 
 // RequireDatapackOwnership returns Echo middleware that verifies the
@@ -115,7 +119,10 @@ type DatapackOwnershipLookup interface {
 // parameter. Must run after RequireAuth.
 //
 // On success the resolved *models.Datapack is stored on the context
-// under ContextKeyDatapack so downstream handlers can reuse it.
+// under ContextKeyDatapack so downstream handlers can reuse it without
+// a second lookup. Cross-user (shared) access is intentionally not
+// considered here; sharing-aware authorization will live in a separate
+// middleware once those endpoints land.
 func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -138,7 +145,7 @@ func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.Middleware
 			dp, err := datapacks.GetByName(account.ID, name)
 			if err != nil {
 				slog.Error("ownership lookup failed",
-					"datapack", name, "account_id", account.ID, "error", err)
+					"datapack", name, "user_id", account.ID, "error", err)
 				return c.JSON(http.StatusInternalServerError, map[string]any{
 					"data": nil,
 					"error": map[string]any{

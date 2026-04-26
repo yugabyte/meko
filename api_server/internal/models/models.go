@@ -7,39 +7,46 @@ import (
 )
 
 // Datapack represents a registered datapack in the meko system.
+//
+// Backed by meko_system.datapacks. Identified by (user_id, datapack_id);
+// (user_id, datapack_name) is also unique. The connection string and
+// YSQL credentials are shared per-user (multi-tenant universe): the
+// datapack_ysql_username column carries the same value as the user's
+// MCP role and is exposed here as MCPUserName.
 type Datapack struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	AccountID      string    `json:"account_id"`
-	YBUniverseID   string    `json:"yb_universe_id"`
+	ID             string    `json:"datapack_id"`
+	Name           string    `json:"datapack_name"`
+	UserID         string    `json:"user_id"`
+	UniverseID     string    `json:"universe_id"`
 	YBUniverseConn string    `json:"datapack_ysql_connection_string"`
-	MCPUserName    string    `json:"mcp_user_name"`
-	DBUserName     string    `json:"db_user_name"`
+	MCPUserName    string    `json:"datapack_ysql_username"`
 }
 
-// Agent represents an agent within a datapack.
+// Agent represents a user-scoped agent. Backed by meko_system.agents.
+// Linked to datapacks via meko_system.agent_datapacks.
 type Agent struct {
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	ID         string    `json:"id"`
-	DatapackID string    `json:"datapack_id"`
-	Name       string    `json:"agent_name"`
-	Metadata   string    `json:"agent_metadata,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	UserID    string          `json:"user_id"`
+	AgentID   string          `json:"agent_id"`
+	Details   json.RawMessage `json:"agent_details,omitempty"`
 }
 
-// Account represents a user account in the meko system.
+// Account represents a user account in the meko system. Backed by
+// meko_system.users.
 type Account struct {
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
 	EmailVerifiedAt        *time.Time `json:"email_verified_at,omitempty"`
 	HasCompletedOnboarding bool       `json:"has_completed_onboarding"`
-	ID                     string     `json:"id"`
-	FirstName              string     `json:"first_name"`
-	LastName               string     `json:"last_name"`
-	Email                  string     `json:"email"`
-	AccountType            string     `json:"account_type"`
+	ID                     string     `json:"user_id"`
+	FirstName              string     `json:"user_first_name"`
+	LastName               string     `json:"user_last_name"`
+	Email                  string     `json:"user_email"`
+	AccountType            string     `json:"user_type"`
+	UserOrg                *string    `json:"user_org,omitempty"`
 	CognitoSub             string     `json:"cognito_sub,omitempty"`
 	MCPUserName            *string    `json:"mcp_user_name,omitempty"`
 	MCPUserPassword        *string    `json:"-"`
