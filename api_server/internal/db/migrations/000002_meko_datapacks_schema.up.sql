@@ -54,7 +54,7 @@ END $$;
 CREATE INDEX IF NOT EXISTS knowledge_bases_embeddings_idx
     ON datapacks.knowledge_bases
     USING hnsw (embeddings vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+    WITH (m = 32, ef_construction = 64);
 
 
 
@@ -222,5 +222,3 @@ SELECT * FROM ag_catalog.create_elabel('meko_promoted_graph','CONNECTED_TO');
     -- REVIEW: Alternatively, we can move these columns as fields of properties column in these tables.
         -- This will help keep the Apache AGE schema independent of the meko requirements
         -- What will be the performance impact of this? We do support indexes on jsonb columns.
-
-

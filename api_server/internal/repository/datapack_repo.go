@@ -134,7 +134,7 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 	var datapackID string
 	err = tx.QueryRow(
 		`INSERT INTO meko_system.datapacks
-			(user_id, agent_id, datapack_name, universe_id,
+			(user_id, created_by_agent_id, datapack_name, universe_id,
 			 datapack_ysql_connection_string,
 			 datapack_ysql_username, datapack_ysql_password)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)

@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS meko_system.agents (
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (user_id HASH, agent_id ASC)
-);
+) SPLIT INTO 12 TABLETS;
 
 -- **karthik's feedback:**
 --  rename the table to datapacks
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS meko_system.agents (
 CREATE TABLE IF NOT EXISTS meko_system.datapacks (                -- todo: add agent info column to the table
     datapack_id                         UUID DEFAULT gen_random_uuid(),
     user_id                             UUID NOT NULL,            -- owning user id for this datapack
-    agent_id                            VARCHAR,                  -- agent id who created this datapack, maps to agents.agent_id
+    created_by_agent_id                 VARCHAR,                  -- agent id who created this datapack, maps to agents.agent_id
     datapack_name                       VARCHAR NOT NULL,
     created_at                          TIMESTAMPTZ DEFAULT NOW(),
     updated_at                          TIMESTAMPTZ DEFAULT NOW(),
@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS meko_system.datapacks (                -- todo: add a
     datapack_ysql_password              VARCHAR NOT NULL,
     PRIMARY KEY (user_id HASH, datapack_id ASC),
     CONSTRAINT uq_datapacks_user_name UNIQUE (user_id, datapack_name)
-);
+) SPLIT INTO 12 TABLETS;
 
 
 -- **karthik's feedback:**
@@ -330,5 +330,3 @@ VALUES (
     'postgresql://yugabyte:Meko%40123@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/yugabyte?sslmode=disable',
     'http://a0ea6ee2d58194693870037cb841bdbe-1826583179.us-east-2.elb.amazonaws.com/'
 ) ON CONFLICT (universe_id) DO NOTHING;
-
-
