@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS datapacks.knowledge_bases (
     document_id UUID NOT NULL,
     metadata_filters JSONB NOT NULL DEFAULT '{}'::jsonb,                    
     PRIMARY KEY  ((tenant_id, id) HASH)
-) PARTITION BY HASH (tenant_id); -- TODO: Need to check if we need to partition by tenant_id or id?
+) PARTITION BY HASH (tenant_id);
 
 -- 128 partitions on datapack_id
 DO $$
@@ -36,20 +36,6 @@ BEGIN
         );
     END LOOP;
 END $$;
-
--- Create HNSW index on embeddings for each partition
--- DO $$
--- BEGIN
---     FOR i IN 0..127 LOOP
---         EXECUTE format(
---             'CREATE INDEX IF NOT EXISTS knowledge_bases_%s_embeddings_idx
---              ON datapacks.knowledge_bases_%s
---              USING hnsw (embeddings vector_cosine_ops)',
---             LPAD(i::text, 3, '0'),
---             LPAD(i::text, 3, '0')
---         );
---     END LOOP;
--- END $$;
 
 CREATE INDEX IF NOT EXISTS knowledge_bases_embeddings_idx
     ON datapacks.knowledge_bases
@@ -85,10 +71,18 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
                     embeddings vector(1536),
                     payload JSONB,
                     meko_created_at TIMESTAMPTZ DEFAULT NOW(),
-                    meko_promotion_user_action datapacks.meko_promotion_user_action, -- If 'not_promoted', UI shouldn't surface this memory for promotion to KB again.
+                    meko_promotion_user_action datapacks.meko_promotion_user_action NULL, -- If 'not_promoted', UI shouldn't surface this memory for promotion to KB again.
                     meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,    -- Create a partial index on this column for filtering. NOT NULL for promoted memories.
-                    PRIMARY KEY ((meko_datapack_id, meko_user_id) HASH, meko_agent_id ASC, meko_created_at DESC, id DESC)
-                ) PARTITION BY HASH (meko_datapack_id);
+                    PRIMARY KEY (meko_datapack_id HASH, meko_user_id ASC, meko_agent_id ASC, meko_created_at DESC, id DESC)
+                ) PARTITION BY HASH (meko_datapack_id, meko_user_id, meko_agent_id);
+
+/*
+1. Two table approach:
+    - Dimension on: datapack_id, user_id, agent_id
+    - Dimension on: datapack_id
+
+2. id - should be a secondary index on meko_mem0_collection
+*/
 
 -- create 128 partitions on datapack_id e.g.
 DO $$
@@ -153,7 +147,7 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_graph_vertex_embeddings (
                         meko_conversation_id UUID, 
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
-                        meko_promotion_user_action datapacks.meko_promotion_user_action, -- ENUM: 'promoted', 'not_promoted'. If 'not_promoted' state is set, UI shouldn't surface this memory for promotion to KB again.
+                        meko_promotion_user_action datapacks.meko_promotion_user_action NULL, -- ENUM: 'promoted', 'not_promoted'. If 'not_promoted' state is set, UI shouldn't surface this memory for promotion to KB again.
                         meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
                         PRIMARY KEY ((meko_datapack_id, meko_user_id) HASH, meko_agent_id ASC, graph_name, node_graphid)
                     ) SPLIT INTO 3 TABLETS;         -- or just 1 tablet

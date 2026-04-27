@@ -45,9 +45,10 @@ func NewDatapackService(
 // signup). When set it must reference an existing agent owned by the
 // same user, otherwise the create fails with a not-found error.
 type CreateRequest struct {
-	Name    string `json:"name"`
-	UserID  string `json:"user_id"`
-	AgentID string `json:"agent_id,omitempty"`
+	Name        string `json:"name"`
+	UserID      string `json:"user_id"`
+	AgentID     string `json:"agent_id,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // MCPServerInfo holds the MCP server connection details returned after
@@ -138,6 +139,7 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 		ConnStr:     universe.AdminConnStr,
 		MCPUserName: mcpUserName,
 		MCPPassword: mcpPassword,
+		Description: req.Description,
 	})
 	if err != nil {
 		_ = s.ybaSvc.ReleaseUniverse(universe.UniverseID)
@@ -196,6 +198,8 @@ func (s *DatapackService) Describe(userID, name string) (*models.Datapack, error
 // UpdateRequest holds the mutable fields for updating a datapack.
 type UpdateRequest struct {
 	YBUniverseConnStr string `json:"datapack_ysql_connection_string,omitempty"`
+	Name              string `json:"name,omitempty"`
+	Description       string `json:"description,omitempty"`
 }
 
 // Update modifies a datapack's configuration.
@@ -208,7 +212,11 @@ func (s *DatapackService) Update(
 	if userID == "" {
 		return fmt.Errorf("user_id is required")
 	}
-	return s.repo.Update(userID, name, req.YBUniverseConnStr)
+	return s.repo.Update(userID, name, repository.UpdateDatapackParams{
+		YBConnStr:   req.YBUniverseConnStr,
+		Name:        req.Name,
+		Description: req.Description,
+	})
 }
 
 // Delete removes the datapack registry entry and releases the universe

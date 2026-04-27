@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS meko_system.users (
     user_type           meko_system.account_type NOT NULL DEFAULT 'free',
     user_org            UUID,  -- References meko_system.organizations(id)
     user_details        JSONB DEFAULT '{"user_preferences": {}, "mcp_credentials": {"mcp_user_name": null, "mcp_user_password": null}}'::jsonb,
-    cognito_sub         VARCHAR UNIQUE,
+    cognito_sub         VARCHAR,
     email_verified_at   TIMESTAMPTZ,
     has_completed_onboarding BOOLEAN NOT NULL DEFAULT FALSE,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
@@ -37,8 +37,8 @@ CREATE TABLE IF NOT EXISTS meko_system.users (
 
 -- Create a unique index on email make them unique and to allow lookups by email
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON meko_system.users(user_email);
--- TODO: review if this is needed
-CREATE INDEX IF NOT EXISTS idx_users_cognito_sub ON meko_system.users(cognito_sub);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cognito_sub ON meko_system.users(cognito_sub);
 
 -- **karthik's feedback:**
 -- rename to yb_universes
@@ -140,9 +140,11 @@ CREATE TABLE IF NOT EXISTS meko_system.datapacks (                -- todo: add a
     datapack_ysql_connection_string     TEXT NOT NULL,            -- Database access could be given to non-free tier users
     datapack_ysql_username              VARCHAR NOT NULL,
     datapack_ysql_password              VARCHAR NOT NULL,
-    PRIMARY KEY (user_id HASH, datapack_id ASC),
+    PRIMARY KEY (datapack_id HASH),
     CONSTRAINT uq_datapacks_user_name UNIQUE (user_id, datapack_name)
 ) SPLIT INTO 12 TABLETS;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_datapacks_user_id ON meko_system.datapacks(user_id HASH, datapack_id ASC) INCLUDE (datapack_name);
 
 
 -- **karthik's feedback:**
@@ -193,7 +195,7 @@ CREATE TABLE IF NOT EXISTS meko_system.knowledge_bases (
 /*
  * Defines the list of datapacks that a user's agent(s) has access to.
  */
-CREATE TABLE IF NOT EXISTS meko_system.agent_datapacks (
+CREATE TABLE IF NOT EXISTS meko_system.agent_access (
     user_id          UUID NOT NULL,
     agent_id            VARCHAR NOT NULL,
     datapack_id         UUID NOT NULL,
@@ -224,7 +226,7 @@ CREATE TYPE meko_system.datapack_shared_status AS ENUM ('active', 'inactive');
 -- composite FK (account_id, agent_id) references agents composite PK
 -- datapack_id removed; the datapack relationship is captured in the object tables themselves
 
-CREATE TABLE IF NOT EXISTS meko_system.agent_access (
+CREATE TABLE IF NOT EXISTS meko_system.agent_access_permissions (
     user_id          UUID NOT NULL,
     agent_id            VARCHAR NOT NULL,
     datapack_id         UUID NOT NULL,

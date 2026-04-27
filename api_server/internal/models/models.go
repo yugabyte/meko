@@ -22,6 +22,10 @@ type Datapack struct {
 	UniverseID     string    `json:"universe_id"`
 	YBUniverseConn string    `json:"datapack_ysql_connection_string"`
 	MCPUserName    string    `json:"datapack_ysql_username"`
+	Description    string    `json:"description,omitempty"`
+	MemoryCount    int       `json:"memory_count"`
+	KnowledgeCount int       `json:"knowledge_count"`
+	LearningsCount int       `json:"learnings_count"`
 }
 
 // Agent represents a user-scoped agent. Backed by meko_system.agents.

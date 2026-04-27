@@ -79,6 +79,7 @@ func TestDatapackRepo_Create_HappyPath_StampsAgentAndLinks(t *testing.T) {
 		WithArgs(
 			"user-1", "meko_agent", "dp-1", "u-1",
 			"postgresql://...", "mcp_user_1", "secret",
+			nil,
 		).
 		WillReturnRows(
 			sqlmock.NewRows([]string{"datapack_id"}).AddRow("dp-uuid-1"),
@@ -112,6 +113,53 @@ func TestDatapackRepo_Create_HappyPath_StampsAgentAndLinks(t *testing.T) {
 	}
 }
 
+func TestDatapackRepo_Create_WithDescription(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT EXISTS \(\s*SELECT 1 FROM meko_system\.agents`).
+		WithArgs("user-1", "meko_agent").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`INSERT INTO meko_system\.datapacks`).
+		WithArgs(
+			"user-1", "meko_agent", "dp-desc", "u-1",
+			"postgresql://...", "mcp_user_1", "secret",
+			`{"description":"My awesome datapack"}`,
+		).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"datapack_id"}).AddRow("dp-uuid-2"),
+		)
+	mock.ExpectExec(`INSERT INTO meko_system\.agent_datapacks`).
+		WithArgs("user-1", "meko_agent", "dp-uuid-2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	repo := NewDatapackRepo(db)
+	res, err := repo.Create(CreateDatapackParams{
+		Name:        "dp-desc",
+		UserID:      "user-1",
+		AgentID:     "meko_agent",
+		UniverseID:  "u-1",
+		ConnStr:     "postgresql://...",
+		MCPUserName: "mcp_user_1",
+		MCPPassword: "secret",
+		Description: "My awesome datapack",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil || res.DatapackID != "dp-uuid-2" {
+		t.Errorf("got result %+v", res)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestDatapackRepo_Create_RollsBackWhenInsertDatapackFails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -124,6 +172,11 @@ func TestDatapackRepo_Create_RollsBackWhenInsertDatapackFails(t *testing.T) {
 		WithArgs("user-1", "meko_agent").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery(`INSERT INTO meko_system\.datapacks`).
+		WithArgs(
+			"user-1", "meko_agent", "dp-1", "u-1",
+			"postgresql://...", "mcp_user_1", "secret",
+			nil,
+		).
 		WillReturnError(errors.New("unique violation"))
 	mock.ExpectRollback()
 
@@ -157,6 +210,11 @@ func TestDatapackRepo_Create_RollsBackWhenLinkInsertFails(t *testing.T) {
 		WithArgs("user-1", "meko_agent").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectQuery(`INSERT INTO meko_system\.datapacks`).
+		WithArgs(
+			"user-1", "meko_agent", "dp-1", "u-1",
+			"postgresql://...", "mcp_user_1", "secret",
+			nil,
+		).
 		WillReturnRows(
 			sqlmock.NewRows([]string{"datapack_id"}).AddRow("dp-uuid-2"),
 		)
@@ -195,6 +253,7 @@ func TestDatapackRepo_GetByName_NotFound(t *testing.T) {
 			"datapack_id", "user_id", "datapack_name",
 			"universe_id", "datapack_ysql_connection_string",
 			"datapack_ysql_username", "created_at", "updated_at",
+			"description",
 		}))
 
 	repo := NewDatapackRepo(db)
@@ -224,10 +283,12 @@ func TestDatapackRepo_GetByName_Found(t *testing.T) {
 			"datapack_id", "user_id", "datapack_name",
 			"universe_id", "datapack_ysql_connection_string",
 			"datapack_ysql_username", "created_at", "updated_at",
+			"description",
 		}).AddRow(
 			"dp-uuid-1", "user-1", "dp-1",
 			"u-1", "postgresql://...",
 			"mcp_user_1", now, now,
+			"test description",
 		))
 
 	repo := NewDatapackRepo(db)
@@ -239,7 +300,8 @@ func TestDatapackRepo_GetByName_Found(t *testing.T) {
 		dp.ID != "dp-uuid-1" ||
 		dp.Name != "dp-1" ||
 		dp.UserID != "user-1" ||
-		dp.MCPUserName != "mcp_user_1" {
+		dp.MCPUserName != "mcp_user_1" ||
+		dp.Description != "test description" {
 		t.Errorf("got %+v", dp)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -296,8 +358,8 @@ func TestDatapackRepo_Update_NoChange(t *testing.T) {
 	defer db.Close()
 
 	repo := NewDatapackRepo(db)
-	if err := repo.Update("user-1", "dp-1", ""); err != nil {
-		t.Errorf("unexpected error for empty conn string: %v", err)
+	if err := repo.Update("user-1", "dp-1", UpdateDatapackParams{}); err != nil {
+		t.Errorf("unexpected error for empty params: %v", err)
 	}
 }
 
@@ -313,9 +375,35 @@ func TestDatapackRepo_Update_NotFound(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	repo := NewDatapackRepo(db)
-	err = repo.Update("user-1", "ghost", "postgresql://new")
+	err = repo.Update("user-1", "ghost", UpdateDatapackParams{
+		YBConnStr: "postgresql://new",
+	})
 	if err == nil {
 		t.Fatal("expected error for missing datapack, got nil")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestDatapackRepo_Update_NameAndDescription(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`UPDATE meko_system\.datapacks`).
+		WithArgs("new-name", `{"description":"new desc"}`, "user-1", "dp-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	repo := NewDatapackRepo(db)
+	err = repo.Update("user-1", "dp-1", UpdateDatapackParams{
+		Name:        "new-name",
+		Description: "new desc",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

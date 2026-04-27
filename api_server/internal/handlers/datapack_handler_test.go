@@ -433,6 +433,75 @@ func TestDatapack_CreateWithUnknownAgent(t *testing.T) {
 	}
 }
 
+func TestDatapack_CreateWithDescription(t *testing.T) {
+	srv, db := setupTestServer(t)
+	defer srv.Close()
+	defer db.Close()
+
+	body := map[string]string{
+		"name":        "test-dp-desc",
+		"description": "A test datapack",
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Post(
+		srv.URL+"/api/v1/datapacks", "application/json",
+		bytes.NewReader(b),
+	)
+	if err != nil {
+		t.Fatalf("POST /datapacks failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusCreated, resp.StatusCode,
+		)
+	}
+
+	var createResp handlers.APIResponse
+	if decErr := json.NewDecoder(resp.Body).Decode(&createResp); decErr != nil {
+		t.Fatalf("failed to decode create response: %v", decErr)
+	}
+	if createResp.Error != nil {
+		t.Fatalf("expected nil error, got %+v", createResp.Error)
+	}
+
+	descResp, err := http.Get(
+		srv.URL + "/api/v1/datapacks/test-dp-desc",
+	)
+	if err != nil {
+		t.Fatalf("GET /datapacks/test-dp-desc failed: %v", err)
+	}
+	defer descResp.Body.Close()
+
+	if descResp.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusOK, descResp.StatusCode,
+		)
+	}
+
+	var descResult handlers.APIResponse
+	if decErr := json.NewDecoder(descResp.Body).Decode(&descResult); decErr != nil {
+		t.Fatalf("failed to decode describe response: %v", decErr)
+	}
+	dataMap, ok := descResult.Data.(map[string]any)
+	if !ok {
+		t.Fatal("expected data to be a map")
+	}
+	if got := dataMap["description"]; got != "A test datapack" {
+		t.Errorf(
+			"expected description=%q, got %v",
+			"A test datapack", got,
+		)
+	}
+}
+
 func createDatapack(t *testing.T, baseURL, name string) {
 	t.Helper()
 	body := map[string]string{"name": name}

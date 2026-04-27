@@ -3,6 +3,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -59,6 +60,7 @@ type CreateDatapackParams struct {
 	ConnStr     string
 	MCPUserName string
 	MCPPassword string
+	Description string
 }
 
 // CreateResult holds the identifiers returned after datapack creation.
@@ -131,16 +133,27 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 			ErrAgentNotFound, p.UserID, p.AgentID)
 	}
 
+	var detailsJSON interface{}
+	if p.Description != "" {
+		b, marshalErr := json.Marshal(map[string]string{"description": p.Description})
+		if marshalErr != nil {
+			return nil, fmt.Errorf("failed to marshal datapack_details: %w", marshalErr)
+		}
+		detailsJSON = string(b)
+	}
+
 	var datapackID string
 	err = tx.QueryRow(
 		`INSERT INTO meko_system.datapacks
 			(user_id, created_by_agent_id, datapack_name, universe_id,
 			 datapack_ysql_connection_string,
-			 datapack_ysql_username, datapack_ysql_password)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 datapack_ysql_username, datapack_ysql_password,
+			 datapack_details)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING datapack_id`,
 		p.UserID, p.AgentID, p.Name, p.UniverseID,
 		p.ConnStr, p.MCPUserName, p.MCPPassword,
+		detailsJSON,
 	).Scan(&datapackID)
 	if err != nil {
 		slog.Error("failed to insert datapack",
@@ -188,7 +201,8 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 		`SELECT d.datapack_id, d.user_id, d.datapack_name,
 		        d.universe_id, d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username,
-		        d.created_at, d.updated_at
+		        d.created_at, d.updated_at,
+		        COALESCE(d.datapack_details->>'description', '')
 		 FROM meko_system.datapacks d
 		 WHERE d.user_id = $1
 		 ORDER BY d.created_at DESC`,
@@ -207,6 +221,7 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 			&d.UniverseID, &d.YBUniverseConn,
 			&d.MCPUserName,
 			&d.CreatedAt, &d.UpdatedAt,
+			&d.Description,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan datapack: %w", err)
 		}
@@ -227,7 +242,8 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 		`SELECT d.datapack_id, d.user_id, d.datapack_name,
 		        d.universe_id, d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username,
-		        d.created_at, d.updated_at
+		        d.created_at, d.updated_at,
+		        COALESCE(d.datapack_details->>'description', '')
 		 FROM meko_system.datapacks d
 		 WHERE d.user_id = $1 AND d.datapack_name = $2`,
 		userID, name,
@@ -236,6 +252,7 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 		&d.UniverseID, &d.YBUniverseConn,
 		&d.MCPUserName,
 		&d.CreatedAt, &d.UpdatedAt,
+		&d.Description,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -246,20 +263,55 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 	return &d, nil
 }
 
-// Update modifies a datapack's mutable fields.
+// UpdateDatapackParams holds the optional fields for a partial update.
+// Only non-empty fields are applied.
+type UpdateDatapackParams struct {
+	YBConnStr   string
+	Name        string
+	Description string
+}
+
+// Update modifies a datapack's mutable fields. Only non-empty params
+// are written; an all-empty request is a no-op.
 func (r *DatapackRepo) Update(
-	userID, name, ybConnStr string,
+	userID, name string, p UpdateDatapackParams,
 ) error {
-	if ybConnStr == "" {
+	setClauses := []string{}
+	args := []interface{}{}
+	idx := 1
+
+	if p.YBConnStr != "" {
+		setClauses = append(setClauses, fmt.Sprintf("datapack_ysql_connection_string = $%d", idx))
+		args = append(args, p.YBConnStr)
+		idx++
+	}
+	if p.Name != "" {
+		setClauses = append(setClauses, fmt.Sprintf("datapack_name = $%d", idx))
+		args = append(args, p.Name)
+		idx++
+	}
+	if p.Description != "" {
+		detailsJSON, marshalErr := json.Marshal(map[string]string{"description": p.Description})
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal datapack_details: %w", marshalErr)
+		}
+		setClauses = append(setClauses, fmt.Sprintf("datapack_details = $%d", idx))
+		args = append(args, string(detailsJSON))
+		idx++
+	}
+
+	if len(setClauses) == 0 {
 		return nil
 	}
 
-	res, err := r.db.Exec(
-		`UPDATE meko_system.datapacks
-		 SET datapack_ysql_connection_string = $1, updated_at = NOW()
-		 WHERE user_id = $2 AND datapack_name = $3`,
-		ybConnStr, userID, name,
+	setClauses = append(setClauses, "updated_at = NOW()")
+	query := fmt.Sprintf(
+		"UPDATE meko_system.datapacks SET %s WHERE user_id = $%d AND datapack_name = $%d",
+		strings.Join(setClauses, ", "), idx, idx+1,
 	)
+	args = append(args, userID, name)
+
+	res, err := r.db.Exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update datapack: %w", err)
 	}

@@ -790,14 +790,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
-                    "401": {
-                        "description": "Unauthorized",
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -819,7 +819,7 @@ const docTemplate = `{
                 "tags": [
                     "knowledge-bases"
                 ],
-                "summary": "Add a knowledge base URL",
+                "summary": "Add a knowledge base URL to the datapack",
                 "parameters": [
                     {
                         "type": "string",
@@ -862,64 +862,9 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
-                    }
-                }
-            },
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "knowledge-bases"
-                ],
-                "summary": "Delete a knowledge base",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Datapack name",
-                        "name": "name",
-                        "in": "path",
-                        "required": true
                     },
-                    {
-                        "description": "Delete request",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/service.DeleteRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.APIResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.APIResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.APIResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -940,7 +885,7 @@ const docTemplate = `{
                 "tags": [
                     "knowledge-bases"
                 ],
-                "summary": "Create a knowledge base from uploaded files",
+                "summary": "Create or refresh a knowledge base from uploaded files",
                 "parameters": [
                     {
                         "type": "string",
@@ -971,6 +916,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1008,12 +959,6 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.APIResponse"
-                        }
-                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
@@ -1022,6 +967,12 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1142,6 +1093,64 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/{name}/knowledge-bases/{rag_source_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge-bases"
+                ],
+                "summary": "Delete a knowledge base",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "rag_source_id (UUID)",
+                        "name": "rag_source_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1458,6 +1467,12 @@ const docTemplate = `{
         "service.AddRequest": {
             "type": "object",
             "properties": {
+                "details": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "url": {
                     "type": "string"
                 }
@@ -1480,6 +1495,9 @@ const docTemplate = `{
                 "agent_id": {
                     "type": "string"
                 },
+                "description": {
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -1498,14 +1516,6 @@ const docTemplate = `{
                     }
                 },
                 "agent_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "service.DeleteRequest": {
-            "type": "object",
-            "properties": {
-                "url": {
                     "type": "string"
                 }
             }
@@ -1558,6 +1568,12 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "datapack_ysql_connection_string": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "name": {
                     "type": "string"
                 }
             }
