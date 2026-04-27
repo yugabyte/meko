@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Plus, Database, Sparkles, Book, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
+import { Plus, Database, Sparkles, Book, ChevronDown, ChevronUp, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  createDatapack,
-  getApiErrorMessage,
-  listDatapacks,
-  listKnowledgeBases,
-  type CurrentUser,
-  type Datapack,
-} from "@/lib/mekoApi";
-import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { getApiErrorMessage, listDatapacks, listKnowledgeBases, type CurrentUser, type Datapack } from "@/lib/mekoApi";
+import { datapackDetailPath, datapackNewPath, datapackSharePath, ROUTES } from "@/app/routes/paths";
 import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTilesSection";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 
@@ -30,7 +30,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     {},
   );
   const [knowledgeBaseCountsLoading, setKnowledgeBaseCountsLoading] = useState(false);
-  const [isCreatingDatapack, setIsCreatingDatapack] = useState(false);
+  const [sharePickerOpen, setSharePickerOpen] = useState(false);
 
   useEffect(() => {
     const loadDatapacks = async () => {
@@ -129,29 +129,13 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     };
   }, [isLoading, datapacks.length]);
 
-  const handleCreateDatapack = async () => {
-    const name = globalThis.prompt("Datapack name (unique)");
-    if (!name) return;
-    const seedUrl = globalThis.prompt("Seed knowledge base URL", "https://example.com/docs");
-
-    setIsCreatingDatapack(true);
-    try {
-      setError(null);
-      const created = await createDatapack({
-        name,
-        seed_knowledge_base: seedUrl ?? "",
-      });
-      const refreshed = await listDatapacks();
-      setDatapacks(refreshed);
-      if (created.mcp_server?.api_key) {
-        localStorage.setItem("meko_latest_api_key", created.mcp_server.api_key);
-      }
-      navigate(datapackDetailPath(created.name));
-    } catch (err) {
-      setError(getApiErrorMessage(err, "Failed to create datapack."));
-    } finally {
-      setIsCreatingDatapack(false);
+  const handleShareDatapack = () => {
+    if (datapacks.length === 0) return;
+    if (datapacks.length === 1) {
+      navigate(datapackSharePath(datapacks[0].name));
+      return;
     }
+    setSharePickerOpen(true);
   };
 
   const showProvisioningScreen =
@@ -186,33 +170,56 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
               All datapacks in your workspace. Open one to manage agents, knowledge, and connection details.
             </p>
           </div>
-          <Button
-            size="lg"
-            className="gap-2 font-medium bg-white text-black hover:bg-gray-200 shrink-0 disabled:opacity-70"
-            disabled={isCreatingDatapack}
-            aria-busy={isCreatingDatapack}
-            onClick={handleCreateDatapack}
-          >
-            {isCreatingDatapack ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin shrink-0" aria-hidden />
-                Creating datapack…
-              </>
-            ) : (
-              <>
-                <Plus className="w-5 h-5 shrink-0" aria-hidden />
-                Add Datapack
-              </>
-            )}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="gap-2 font-medium border-border bg-background/80"
+              disabled={isLoading || datapacks.length === 0}
+              onClick={handleShareDatapack}
+            >
+              <Share2 className="w-5 h-5 shrink-0" aria-hidden />
+              Share datapack
+            </Button>
+            <Button
+              size="lg"
+              className="gap-2 font-medium bg-white text-black hover:bg-gray-200 disabled:opacity-70"
+              onClick={() => navigate(datapackNewPath())}
+            >
+              <Plus className="w-5 h-5 shrink-0" aria-hidden />
+              Add Datapack
+            </Button>
+          </div>
         </div>
 
-        {isCreatingDatapack ? (
-          <p className="text-sm text-muted-foreground flex items-center gap-2" role="status">
-            <Loader2 className="h-4 w-4 animate-spin shrink-0 text-blue-400" aria-hidden />
-            Provisioning your datapack and refreshing the list. This can take a moment.
-          </p>
-        ) : null}
+        <Dialog open={sharePickerOpen} onOpenChange={setSharePickerOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Share a datapack</DialogTitle>
+              <DialogDescription>
+                Choose which datapack to open sharing settings for.
+              </DialogDescription>
+            </DialogHeader>
+            <ul className="max-h-64 space-y-1 overflow-y-auto pr-1" role="listbox">
+              {datapacks.map((dp) => (
+                <li key={dp.id}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-auto w-full justify-start px-3 py-2.5 font-normal"
+                    onClick={() => {
+                      navigate(datapackSharePath(dp.name));
+                      setSharePickerOpen(false);
+                    }}
+                  >
+                    <span className="truncate text-left">{dp.name}</span>
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </DialogContent>
+        </Dialog>
 
         {error ? (
           <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">

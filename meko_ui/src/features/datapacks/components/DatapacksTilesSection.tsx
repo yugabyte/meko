@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowLeftRight, BookOpen, BrainCircuit, Database } from "lucide-react";
+import { ArrowLeftRight, BookOpen, Database, Sparkles } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -123,7 +123,7 @@ export default function DatapacksTilesSection({
                   <div className="grid grid-cols-3 gap-1.5 min-w-0 sm:gap-2">
                     <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
                       <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
-                        <BrainCircuit className="h-3 w-3 shrink-0 text-violet-400" aria-hidden />
+                        <Sparkles className="h-3 w-3 shrink-0 text-sky-400" aria-hidden />
                         <span title="Memory (ME)">ME</span>
                       </div>
                       <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
@@ -147,7 +147,7 @@ export default function DatapacksTilesSection({
                     </div>
                     <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
                       <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
-                        <ArrowLeftRight className="h-3 w-3 shrink-0 text-amber-400" aria-hidden />
+                        <ArrowLeftRight className="h-3 w-3 shrink-0 text-violet-400" aria-hidden />
                         <span title="Learnings (ME → KO)" className="truncate">
                           ME → KO
                         </span>

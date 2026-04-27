@@ -1,6 +1,5 @@
 /**
- * Horizontal tab strip for switching detail views (Overview, Agents, Knowledge, etc.).
- * Visual style matches the dark dashboard tabs; selection is fully controlled by the parent.
+ * Horizontal tab strip for switching datapack sections (Conversations, Memory, Knowledge, Learnings).
  */
 import { cn } from "@/lib/utils";
 // types.ts: tab id union + ordered labels rendered as buttons here (same list as the detail page).
@@ -10,12 +9,13 @@ import { DATAPACK_DETAIL_TAB_ITEMS } from "./types";
 type Props = {
   activeTab: DatapackDetailTab;
   onTabChange: (tab: DatapackDetailTab) => void;
+  className?: string;
 };
 
-export function DatapackDetailTabStrip({ activeTab, onTabChange }: Props) {
+export function DatapackDetailTabStrip({ activeTab, onTabChange, className }: Props) {
   return (
-    <div className="border-b border-border">
-      <div className="flex gap-1 overflow-x-auto pb-px">
+    <div className={cn("w-full min-w-0", className)}>
+      <div className="flex w-full min-w-0 gap-1 overflow-x-auto border-b border-border pb-px">
         {DATAPACK_DETAIL_TAB_ITEMS.map((tab) => (
           <button
             key={tab.id}

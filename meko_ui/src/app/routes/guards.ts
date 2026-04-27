@@ -1,4 +1,4 @@
-import { AUTH_ROUTES, PROTECTED_ROUTE_PREFIXES, ROUTES } from "./paths";
+import { AUTH_ROUTES, datapackNewPath, PROTECTED_ROUTE_PREFIXES, ROUTES } from "./paths";
 
 type GuardInput = {
   location: string;
@@ -36,7 +36,7 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
   const onOnboardingRoute = isOnboardingRoute(location);
 
   if (authenticated && onAuthRoute) {
-    return hasCompletedOnboarding ? ROUTES.home : ROUTES.onboarding;
+    return hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding;
   }
 
   if (authenticated && !hasCompletedOnboarding && !onOnboardingRoute) {
@@ -44,6 +44,10 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
   }
 
   if (authenticated && hasCompletedOnboarding && onOnboardingRoute) {
+    return datapackNewPath();
+  }
+
+  if (authenticated && hasCompletedOnboarding && location === ROUTES.home) {
     return ROUTES.home;
   }
 

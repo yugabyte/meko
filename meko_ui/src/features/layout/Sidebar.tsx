@@ -5,8 +5,9 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
-  Home,
+  Download,
   ChevronDown,
+  PlayCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
@@ -33,7 +34,9 @@ export default function Sidebar() {
   const [datapacksExpanded, setDatapacksExpanded] = useState(true);
 
   const onDatapacksRoute = location.pathname.startsWith(ROUTES.datapacks);
-
+  const onPlaygroundRoute =
+    location.pathname === ROUTES.playground ||
+    location.pathname.startsWith(`${ROUTES.playground}/`);
   useEffect(() => {
     if (!onDatapacksRoute) return;
     let cancelled = false;
@@ -54,6 +57,12 @@ export default function Sidebar() {
       setDatapacksExpanded(true);
     }
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (onPlaygroundRoute) {
+      setIsCollapsed(true);
+    }
+  }, [onPlaygroundRoute]);
 
   const handleLogout = async () => {
     setLogoutError(null);
@@ -98,7 +107,7 @@ export default function Sidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto py-4 flex flex-col gap-1 px-3">
-        {/* Home */}
+        {/* Install (MCP / client setup — same route as Home) */}
         <NavLink
           to={ROUTES.home}
           className={cn(
@@ -108,10 +117,26 @@ export default function Sidebar() {
               ? "bg-white/10 text-white"
               : "text-gray-400 hover:bg-white/5 hover:text-white",
           )}
-          title={isCollapsed ? "Home" : undefined}
+          title={isCollapsed ? "Install" : undefined}
         >
-          <Home className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Home</span>}
+          <Download className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+          {!isCollapsed && <span className="animate-in fade-in truncate">Install</span>}
+        </NavLink>
+
+        <NavLink
+          to={ROUTES.playground}
+          className={cn(
+            "flex items-center rounded-md text-sm font-medium transition-colors",
+            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+            location.pathname === ROUTES.playground ||
+              location.pathname.startsWith(`${ROUTES.playground}/`)
+              ? "bg-white/10 text-white"
+              : "text-gray-400 hover:bg-white/5 hover:text-white",
+          )}
+          title={isCollapsed ? "Playground" : undefined}
+        >
+          <PlayCircle className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+          {!isCollapsed && <span className="animate-in fade-in truncate">Playground</span>}
         </NavLink>
 
         {/* Datapacks + children */}

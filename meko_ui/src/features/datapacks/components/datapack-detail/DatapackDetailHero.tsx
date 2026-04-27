@@ -3,15 +3,15 @@
  * marketing-style description, and ID / logical DB / created metadata. Renders
  * an `actions` slot (e.g. Connect and upload dialogs) on the right on large screens.
  */
-import { Link } from "react-router-dom";
-import { ChevronRight, Database } from "lucide-react";
+import { Database } from "lucide-react";
 import { ROUTES } from "@/app/routes/paths";
+import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 type Props = {
   datapackName: string;
   displayId: string;
   createdLabel: string;
   statusLoading: boolean;
-  /** Connect + upload controls (typically dialog triggers). */
+  /** Hero actions (e.g. Add Knowledge, Connect, Configure, Share). */
   actions: React.ReactNode;
 };
 
@@ -24,13 +24,12 @@ export function DatapackDetailHero({
 }: Props) {
   return (
     <>
-      <nav className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        <Link to={ROUTES.datapacks} className="hover:text-foreground transition-colors">
-          Datapacks
-        </Link>
-        <ChevronRight className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
-        <span className="text-foreground font-medium truncate">{datapackName}</span>
-      </nav>
+      <DatapackBreadcrumbs
+        items={[
+          { label: "Datapacks", href: ROUTES.datapacks },
+          { label: datapackName },
+        ]}
+      />
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-3 min-w-0">

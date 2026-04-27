@@ -13,7 +13,7 @@ import { queryClient } from "@/lib/queryClient";
 import PublicRoutes from "@/app/routes/PublicRoutes";
 import ProtectedRoutes from "@/app/routes/ProtectedRoutes";
 import { isAuthRoute, isOnboardingRoute, isProtectedRoute } from "@/app/routes/guards";
-import { ROUTES } from "@/app/routes/paths";
+import { datapackNewPath, ROUTES } from "@/app/routes/paths";
 import { useOnboardingGuard } from "@/app/routes/OnboardingGuard";
 import {
   readOnboardingStatusCache,
@@ -29,6 +29,7 @@ import {
   ONBOARDING_STATUS_CACHE_KEY,
   resetAuthExpiredState,
 } from "@/lib/mekoApi";
+
 
 function AppRouter() {
   const location = useLocation();
@@ -135,7 +136,12 @@ function AppRouter() {
   }
 
   if (isAuthRoute(location.pathname)) {
-    return <Navigate to={ROUTES.home} replace />;
+    return (
+      <Navigate
+        to={hasCompletedOnboarding ? datapackNewPath() : ROUTES.onboarding}
+        replace
+      />
+    );
   }
 
   return <ProtectedRoutes isOnboardingRoute={isOnboardingRoute(location.pathname)} />;

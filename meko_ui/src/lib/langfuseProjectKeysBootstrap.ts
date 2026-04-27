@@ -1,9 +1,10 @@
 /**
- * Client-side JIT for Langfuse project keys on tech-preview default datapacks (`meko_default_datapack*`).
+ * Client-side JIT for Langfuse project keys on tech-preview default datapacks (`${DEFAULT_ACCOUNT_DATAPACK_NAME}*`).
  * Shared by overview (all listed packs), detail (current pack), and the legacy reference page.
  */
 import { useEffect } from "react";
 import { ensureLangfuseProjectKeys } from "@/lib/mekoApi";
+import { DEFAULT_ACCOUNT_DATAPACK_NAME } from "@/app/routes/paths";
 
 const LANGFUSE_PROJECT_KEYS_CACHE_KEY = "meko:langfuse-project-keys-cache:v1";
 const LANGFUSE_PROJECT_KEYS_TTL_MS = 5 * 60_000;
@@ -29,7 +30,7 @@ function writeLangfuseProjectKeysCache(cache: Record<string, number>) {
 
 /** Same naming rule as legacy Datapacks: default / tech-preview packs get Langfuse JIT keys. */
 export function isTechPreviewDefaultDatapackName(name: string): boolean {
-  return name === "meko_default_datapack" || name.startsWith("meko_default_datapack_");
+  return name === DEFAULT_ACCOUNT_DATAPACK_NAME || name.startsWith(`${DEFAULT_ACCOUNT_DATAPACK_NAME}_`);
 }
 
 /**

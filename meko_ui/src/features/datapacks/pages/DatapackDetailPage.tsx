@@ -1,33 +1,37 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Share2, SlidersHorizontal } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
+import { datapackConfigurePath, datapackSharePath } from "@/app/routes/paths";
+import { isDatapackWizardConfigureDone } from "@/lib/datapackConfigureStatus";
 import {
   getApiErrorMessage,
   getDatapackStatus,
   getProvisionStatus,
+  listKnowledgeBases,
   PROVISION_STATUS_CACHE_KEY,
+  type CurrentUser,
   type DatapackStatus,
   type ProvisionStatus,
 } from "@/lib/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
-// Overview pipeline (ME → Collective → KO) for the Overview tab.
+import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
+import { DatapackDetailMembersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailMembersTile";
 // Connect + upload modals (credentials UI and FileUpload wrapper).
 import { DatapackConnectDialog, DatapackKnowledgeUploadDialog } from "@/features/datapacks/components/datapack-detail/DatapackDetailDialogs";
 // Breadcrumbs, title, badges, description, metadata row, and hero action slot.
 import { DatapackDetailHero } from "@/features/datapacks/components/datapack-detail/DatapackDetailHero";
 // Tab strip driving which detail sub-view is shown.
 import { DatapackDetailTabStrip } from "@/features/datapacks/components/datapack-detail/DatapackDetailTabStrip";
-// Six-card metrics ribbon (placeholder counts until APIs exist).
-import { DatapackMetricsRibbon } from "@/features/datapacks/components/datapack-detail/DatapackMetricsRibbon";
 // Tab id union + ordered tab list for labels / “coming soon” fallback copy.
-import type { DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
-import { DATAPACK_DETAIL_TAB_ITEMS } from "@/features/datapacks/components/datapack-detail/types";
-// Memory tab: list mem0 rows for this datapack and promote selected rows into the tenant KB.
-import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
+import { DATAPACK_DETAIL_TAB, DATAPACK_DETAIL_TAB_ITEMS, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
 type Props = {
   datapackName: string;
+  currentUser: CurrentUser | null;
 };
 
 type ProvisionStatusCache = Record<string, ProvisionStatus>;
@@ -47,11 +51,12 @@ function writeProvisionStatusCache(cache: ProvisionStatusCache) {
   sessionStorage.setItem(PROVISION_STATUS_CACHE_KEY, JSON.stringify(cache));
 }
 
-export default function DatapackDetailPage({ datapackName }: Props) {
+export default function DatapackDetailPage({ datapackName, currentUser }: Props) {
+  const navigate = useNavigate();
   const [datapackStatus, setDatapackStatus] = useState<DatapackStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<DatapackDetailTab>("overview");
+  const [activeTab, setActiveTab] = useState<DatapackDetailTab>(DATAPACK_DETAIL_TAB.learnings);
 
   const [isConnectOpen, setIsConnectOpen] = useState(false);
   const [connectLoading, setConnectLoading] = useState(false);
@@ -60,7 +65,17 @@ export default function DatapackDetailPage({ datapackName }: Props) {
 
   const [isUploadOpen, setIsUploadOpen] = useState(false);
 
+  const [wizardConfigureDone, setWizardConfigureDone] = useState(() =>
+    isDatapackWizardConfigureDone(datapackName),
+  );
+
+  const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
+
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName);
+
+  useEffect(() => {
+    setWizardConfigureDone(isDatapackWizardConfigureDone(datapackName));
+  }, [datapackName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +98,24 @@ export default function DatapackDetailPage({ datapackName }: Props) {
     return () => {
       cancelled = true;
     };
+  }, [datapackName]);
+
+
+  useEffect(() => {
+    const ac = new AbortController();
+    setKnowledgeBaseCount(0);
+    const run = async () => {
+      try {
+        const list = await listKnowledgeBases(datapackName, { signal: ac.signal });
+        if (ac.signal.aborted) return;
+        setKnowledgeBaseCount(list.length);
+      } catch {
+        if (ac.signal.aborted) return;
+        setKnowledgeBaseCount(0);
+      }
+    };
+    void run();
+    return () => ac.abort();
   }, [datapackName]);
 
   useEffect(() => {
@@ -137,8 +170,8 @@ export default function DatapackDetailPage({ datapackName }: Props) {
     <div className="flex-1 h-screen overflow-y-auto bg-background text-foreground flex flex-col">
       <AppWorkspaceHeader />
 
-      <main className="flex-1 p-8 max-w-6xl mx-auto w-full space-y-8 pb-16">
-        {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/logical DB/created; actions = Connect + Upload */}
+      <main className="flex-1 pr-1 pt-6 pl-1 pb-3 max-w-7xl mx-auto w-full space-y-8">
+        {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = knowledge upload, connect, configure, share */}
         <DatapackDetailHero
           datapackName={datapackName}
           displayId={displayId}
@@ -146,7 +179,12 @@ export default function DatapackDetailPage({ datapackName }: Props) {
           statusLoading={statusLoading}
           actions={
             <>
-              {/* DatapackConnectDialog: modal with MCP URL, API key, DB user/password/conn string + copy */}
+              {/* Order: Add Knowledge → Connect → Configure → Share */}
+              <DatapackKnowledgeUploadDialog
+                datapackName={datapackName}
+                open={isUploadOpen}
+                onOpenChange={setIsUploadOpen}
+              />
               <DatapackConnectDialog
                 open={isConnectOpen}
                 onOpenChange={(open) => {
@@ -160,12 +198,23 @@ export default function DatapackDetailPage({ datapackName }: Props) {
                 error={connectError}
                 provisionStatus={provisionStatus}
               />
-              {/* DatapackKnowledgeUploadDialog: modal body uses FileUpload for this datapack */}
-              <DatapackKnowledgeUploadDialog
-                datapackName={datapackName}
-                open={isUploadOpen}
-                onOpenChange={setIsUploadOpen}
-              />
+              {!wizardConfigureDone ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2 border-border bg-background/80"
+                  onClick={() => navigate(datapackConfigurePath(datapackName))}
+                >
+                  <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden />
+                  Configure
+                </Button>
+              ) : null}
+              <Button variant="outline" className="gap-2 border-border bg-background/80" asChild>
+                <Link to={datapackSharePath(datapackName)}>
+                  <Share2 className="h-4 w-4 shrink-0" aria-hidden />
+                  Share
+                </Link>
+              </Button>
             </>
           }
         />
@@ -176,32 +225,43 @@ export default function DatapackDetailPage({ datapackName }: Props) {
           </div>
         ) : null}
 
-        {/* DatapackMetricsRibbon: six summary stat cards (placeholder zeros) */}
-        <DatapackMetricsRibbon datapackStatus={datapackStatus} />
+        <CollectiveLearningPipeline
+          currentUser={currentUser}
+          conversationsCount={0}
+          memoryCount={0}
+          learningsCount={0}
+          datapackId={datapackStatus?.id ?? null}
+          knowledgeCount={knowledgeBaseCount}
+          onSelectSection={setActiveTab}
+        />
 
-        {/* DatapackDetailTabStrip: switches Overview vs other detail sections */}
-        <DatapackDetailTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
-
-        {activeTab === "overview" ? (
-          <>
-            {/* CollectiveLearningPipeline: Overview-only ME → Collective → KO diagram + section header */}
-            <CollectiveLearningPipeline memoryCount={0} collectiveCount={0} knowledgeCount={datapackStatus?.knowledge_base_count ?? 0} />
-          </>
-        ) : activeTab === "memory" ? (
-          // Mount MemoryPromotionPanel only once we have the datapack UUID; it's required by listMemories/syncMemoriesToKB.
-          datapackStatus?.id ? (
-            <MemoryPromotionPanel datapackName={datapackName} datapackId={datapackStatus.id} />
-          ) : (
-            <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
-              {statusLoading ? "Loading datapack…" : "Datapack not available."}
+        <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,1fr)] lg:items-stretch lg:gap-6">
+          <div className="flex min-h-0 min-w-0 flex-col">
+            <DatapackDetailTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
+            <div className="mt-6 min-h-0 w-full flex-1">
+              {activeTab === DATAPACK_DETAIL_TAB.learnings ? (
+                datapackStatus?.id ? (
+                  <MemoryPromotionPanel
+                    datapackName={datapackName}
+                    datapackId={datapackStatus.id}
+                    variant="preview"
+                  />
+                ) : (
+                  <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
+                    {statusLoading ? "Loading datapack…" : "Datapack not available."}
+                  </div>
+                )
+              ) : (
+                <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
+                  {DATAPACK_DETAIL_TAB_ITEMS.find((t) => t.id === activeTab)?.label} — content coming soon.
+                </div>
+              )}
             </div>
-          )
-        ) : (
-          <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
-            {/* DATAPACK_DETAIL_TAB_ITEMS: human-readable tab label for non-Overview placeholders */}
-            {DATAPACK_DETAIL_TAB_ITEMS.find((t) => t.id === activeTab)?.label} — content coming soon.
           </div>
-        )}
+          <div className="flex min-h-0 min-w-0 flex-col lg:self-start lg:w-full">
+            <DatapackDetailMembersTile datapackName={datapackName} currentUser={currentUser} />
+          </div>
+        </div>
       </main>
     </div>
   );

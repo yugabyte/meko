@@ -74,7 +74,7 @@ export type KnowledgeBase = {
   updated_at?: string;
 };
 
-type CreateDatapackPayload = {
+export type CreateDatapackPayload = {
   name: string;
   seed_knowledge_base: string;
   embed_model?: string;
@@ -265,9 +265,15 @@ export async function listAgents(name: string) {
   return request<Agent[]>(`/datapacks/${encodeURIComponent(name)}/agents`);
 }
 
-export async function listKnowledgeBases(name: string) {
+export async function listKnowledgeBases(
+  name: string,
+  options: { signal?: AbortSignal } = {},
+) {
   return request<KnowledgeBase[]>(
     `/datapacks/${encodeURIComponent(name)}/knowledge-bases`,
+    "GET",
+    undefined,
+    options,
   );
 }
 
@@ -442,7 +448,10 @@ export type MemoryListResponse = {
   total_pages: number;
 };
 
-export async function listMemories(params: MemoryListFilter) {
+export async function listMemories(
+  params: MemoryListFilter,
+  options: { signal?: AbortSignal } = {},
+) {
   const qs = new URLSearchParams();
   qs.set("user_id", params.user_id);
   qs.set("datapack_id", params.datapack_id);
@@ -451,7 +460,7 @@ export async function listMemories(params: MemoryListFilter) {
   if (params.page && params.page > 0) qs.set("page", String(params.page));
   if (params.page_size && params.page_size > 0)
     qs.set("page_size", String(params.page_size));
-  return request<MemoryListResponse>(`/memories?${qs.toString()}`);
+  return request<MemoryListResponse>(`/memories?${qs.toString()}`, "GET", undefined, options);
 }
 
 /**

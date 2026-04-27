@@ -26,3 +26,6 @@ build/
 
 # Local notes
 .notes/
+
+# User journey UI standalone
+user-journey-ui-standalone/

@@ -216,7 +216,7 @@ export function DatapackKnowledgeUploadDialog({ datapackName, open, onOpenChange
       <DialogTrigger asChild>
         <Button type="button" variant="outline" className="gap-2 border-border text-foreground hover:bg-muted">
           <Upload className="w-4 h-4" />
-          Upload File to Knowledge Base
+          Add Knowledge
         </Button>
       </DialogTrigger>
       <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto bg-[#1C2333] border-border text-foreground p-0 gap-0">
