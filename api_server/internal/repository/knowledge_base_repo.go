@@ -2,13 +2,33 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"log/slog"
+
+	"github.com/lib/pq"
 
 	"meko/api_server/internal/models"
 )
 
-// KnowledgeBaseRepo encapsulates database operations for knowledge bases.
+// ErrKnowledgeBaseExists is returned by Insert when a row with the same
+// (datapack_id, rag_source_id) already exists. Handlers map this to
+// 409 Conflict.
+var ErrKnowledgeBaseExists = fmt.Errorf("knowledge base already exists")
+
+// ErrKnowledgeBaseNotFound is returned by Get and Delete when no row
+// matches the requested (datapack_id, rag_source_id). Handlers map this
+// to 404 Not Found.
+var ErrKnowledgeBaseNotFound = fmt.Errorf("knowledge base not found")
+
+// KnowledgeBaseRepo encapsulates database operations against
+// meko_system.knowledge_bases.
+//
+// The table has primary key (datapack_id HASH, rag_source_id ASC) so
+// rows are conceptually datapack-scoped: ownership is enforced at the
+// API boundary via the datapacks.user_id FK and RequireDatapackOwnership
+// middleware. The repo deliberately takes a *models.Datapack reference
+// at the handler layer rather than re-resolving the datapack by name.
 type KnowledgeBaseRepo struct {
 	db *sql.DB
 }
@@ -18,180 +38,257 @@ func NewKnowledgeBaseRepo(db *sql.DB) *KnowledgeBaseRepo {
 	return &KnowledgeBaseRepo{db: db}
 }
 
-// Add inserts a new knowledge base for the given datapack and links it to all
-// existing agents of that datapack. Returns the new knowledge base ID.
-func (r *KnowledgeBaseRepo) Add(
-	datapackName, url string,
+// Insert inserts a new knowledge_base row with a server-generated
+// rag_source_id (gen_random_uuid). Returns the new rag_source_id.
+// Surfaces ErrKnowledgeBaseExists on PK conflicts (extremely unlikely
+// for a freshly-generated uuid but still possible if the caller
+// supplies a fixed source_id via the URL path).
+//
+// TODO(external-kb): only called from KnowledgeBaseService.Add, which
+// is reserved for a future external-KB registration flow. The canonical
+// create path goes through InsertWithID using the dist_rag source UUID.
+func (r *KnowledgeBaseRepo) Insert(
+	datapackID, url string,
+	details json.RawMessage,
 ) (string, error) {
-	var datapackID string
+	if len(details) == 0 {
+		details = json.RawMessage(`{}`)
+	}
+
+	var ragSourceID string
 	err := r.db.QueryRow(
-		`SELECT id FROM meko_system.datapack_registry
-		 WHERE datapack_name = $1`, datapackName,
-	).Scan(&datapackID)
-	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("datapack %q not found", datapackName)
-	}
+		`INSERT INTO meko_system.knowledge_bases
+			(datapack_id, rag_source_id, knowledge_base_url, knowledge_base_details)
+		 VALUES ($1::uuid, gen_random_uuid(), $2, $3::jsonb)
+		 RETURNING rag_source_id`,
+		datapackID, url, []byte(details),
+	).Scan(&ragSourceID)
 	if err != nil {
-		return "", fmt.Errorf("failed to look up datapack: %w", err)
-	}
-
-	tx, err := r.db.Begin()
-	if err != nil {
-		return "", fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
-		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-			slog.Warn("rollback error", "error", rbErr)
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return "", fmt.Errorf("%w: datapack_id=%s",
+				ErrKnowledgeBaseExists, datapackID)
 		}
-	}()
-
-	var kbID string
-	err = tx.QueryRow(
-		`INSERT INTO meko_system.datapack_knowledge_base_registry
-			(datapack_id, knowledge_base_url)
-		 VALUES ($1, $2)
-		 RETURNING id`,
-		datapackID, url,
-	).Scan(&kbID)
-	if err != nil {
-		slog.Error("failed to insert knowledge base",
-			"datapack", datapackName, "url", url, "error", err)
-		return "", fmt.Errorf("failed to insert knowledge base: %w", err)
+		return "", fmt.Errorf("insert knowledge base: %w", err)
 	}
-
-	if _, err = tx.Exec(
-		`INSERT INTO meko_system.agent_knowledge_base (agent_id, knowledge_base_id)
-		 SELECT id, $1
-		 FROM meko_system.agent_registry
-		 WHERE datapack_id = $2`,
-		kbID, datapackID,
-	); err != nil {
-		slog.Error("failed to link knowledge base to agents",
-			"kb_id", kbID, "error", err)
-		return "", fmt.Errorf(
-			"failed to link knowledge base to agents: %w", err)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return "", fmt.Errorf("failed to commit: %w", err)
-	}
-
-	return kbID, nil
+	return ragSourceID, nil
 }
 
-// ListByDatapack returns all knowledge bases for a given datapack name.
-func (r *KnowledgeBaseRepo) ListByDatapack(
-	datapackName string,
-) ([]models.KnowledgeBase, error) {
-	rows, err := r.db.Query(
-		`SELECT kb.id, kb.datapack_id, kb.knowledge_base_url,
-		        kb.created_at, kb.updated_at,
-		        kb.rag_source_id, kb.rag_index_name
-		 FROM meko_system.datapack_knowledge_base_registry kb
-		 JOIN meko_system.datapack_registry d
-		   ON kb.datapack_id = d.id
-		 WHERE d.datapack_name = $1
-		 ORDER BY kb.created_at DESC`,
-		datapackName,
+// InsertWithID inserts a knowledge_base row using a caller-supplied
+// rag_source_id. Used by CreateKB which wants to mirror the dist_rag
+// source UUID into meko_system.knowledge_bases for stable lookup.
+// Surfaces ErrKnowledgeBaseExists on PK conflicts.
+func (r *KnowledgeBaseRepo) InsertWithID(
+	datapackID, ragSourceID, url string,
+	details json.RawMessage,
+) error {
+	if len(details) == 0 {
+		details = json.RawMessage(`{}`)
+	}
+
+	_, err := r.db.Exec(
+		`INSERT INTO meko_system.knowledge_bases
+			(datapack_id, rag_source_id, knowledge_base_url, knowledge_base_details)
+		 VALUES ($1::uuid, $2::uuid, $3, $4::jsonb)`,
+		datapackID, ragSourceID, url, []byte(details),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list knowledge bases: %w", err)
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return fmt.Errorf("%w: datapack_id=%s rag_source_id=%s",
+				ErrKnowledgeBaseExists, datapackID, ragSourceID)
+		}
+		return fmt.Errorf("insert knowledge base: %w", err)
+	}
+	return nil
+}
+
+// Upsert inserts or updates a knowledge_base row keyed by
+// (datapack_id, rag_source_id). Updates knowledge_base_url,
+// knowledge_base_details, and updated_at on conflict.
+func (r *KnowledgeBaseRepo) Upsert(
+	datapackID, ragSourceID, url string,
+	details json.RawMessage,
+) error {
+	if len(details) == 0 {
+		details = json.RawMessage(`{}`)
+	}
+
+	_, err := r.db.Exec(
+		`INSERT INTO meko_system.knowledge_bases
+			(datapack_id, rag_source_id, knowledge_base_url, knowledge_base_details)
+		 VALUES ($1::uuid, $2::uuid, $3, $4::jsonb)
+		 ON CONFLICT (datapack_id, rag_source_id) DO UPDATE SET
+		     knowledge_base_url     = EXCLUDED.knowledge_base_url,
+		     knowledge_base_details = EXCLUDED.knowledge_base_details,
+		     updated_at             = NOW()`,
+		datapackID, ragSourceID, url, []byte(details),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert knowledge base: %w", err)
+	}
+	return nil
+}
+
+// Get returns the knowledge_base row for (datapack_id, rag_source_id),
+// or ErrKnowledgeBaseNotFound when no such row exists.
+func (r *KnowledgeBaseRepo) Get(
+	datapackID, ragSourceID string,
+) (*models.KnowledgeBase, error) {
+	var kb models.KnowledgeBase
+	var details sql.NullString
+	err := r.db.QueryRow(
+		`SELECT datapack_id, rag_source_id, knowledge_base_url,
+		        COALESCE(knowledge_base_details::text, '{}'),
+		        created_at, updated_at
+		 FROM meko_system.knowledge_bases
+		 WHERE datapack_id = $1::uuid AND rag_source_id = $2::uuid`,
+		datapackID, ragSourceID,
+	).Scan(
+		&kb.DatapackID, &kb.RagSourceID, &kb.URL,
+		&details, &kb.CreatedAt, &kb.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: datapack_id=%s rag_source_id=%s",
+			ErrKnowledgeBaseNotFound, datapackID, ragSourceID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get knowledge base: %w", err)
+	}
+	if details.Valid {
+		kb.Details = json.RawMessage(details.String)
+	}
+	return &kb, nil
+}
+
+// ListByDatapack returns every knowledge_base row for the given
+// datapack_id, ordered by created_at descending.
+func (r *KnowledgeBaseRepo) ListByDatapack(
+	datapackID string,
+) ([]models.KnowledgeBase, error) {
+	rows, err := r.db.Query(
+		`SELECT datapack_id, rag_source_id, knowledge_base_url,
+		        COALESCE(knowledge_base_details::text, '{}'),
+		        created_at, updated_at
+		 FROM meko_system.knowledge_bases
+		 WHERE datapack_id = $1::uuid
+		 ORDER BY created_at DESC`,
+		datapackID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list knowledge bases: %w", err)
 	}
 	defer rows.Close()
 
 	var result []models.KnowledgeBase
 	for rows.Next() {
 		var kb models.KnowledgeBase
+		var details sql.NullString
 		if err := rows.Scan(
-			&kb.ID, &kb.DatapackID, &kb.URL,
-			&kb.CreatedAt, &kb.UpdatedAt,
-			&kb.RagSourceID, &kb.RagIndexName,
+			&kb.DatapackID, &kb.RagSourceID, &kb.URL,
+			&details, &kb.CreatedAt, &kb.UpdatedAt,
 		); err != nil {
-			return nil, fmt.Errorf(
-				"failed to scan knowledge base: %w", err)
+			return nil, fmt.Errorf("scan knowledge base: %w", err)
+		}
+		if details.Valid {
+			kb.Details = json.RawMessage(details.String)
 		}
 		result = append(result, kb)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows iteration error: %w", err)
+		return nil, fmt.Errorf("rows iteration: %w", err)
 	}
 	return result, nil
 }
 
-// AddWithRAG inserts a new knowledge base with RAG source/index info.
-func (r *KnowledgeBaseRepo) AddWithRAG(
-	datapackName, url, ragSourceID, ragIndexName string,
-) (string, error) {
-	var datapackID string
+// LookupByURL returns the knowledge_base row for the given
+// (datapack_id, knowledge_base_url) pair if present. Returns
+// (nil, nil) when no row matches; this lets callers distinguish
+// "not found" from a genuine error without using the sentinel.
+func (r *KnowledgeBaseRepo) LookupByURL(
+	datapackID, url string,
+) (*models.KnowledgeBase, error) {
+	var kb models.KnowledgeBase
+	var details sql.NullString
 	err := r.db.QueryRow(
-		`SELECT id FROM meko_system.datapack_registry
-		 WHERE datapack_name = $1`, datapackName,
-	).Scan(&datapackID)
-	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("datapack %q not found", datapackName)
+		`SELECT datapack_id, rag_source_id, knowledge_base_url,
+		        COALESCE(knowledge_base_details::text, '{}'),
+		        created_at, updated_at
+		 FROM meko_system.knowledge_bases
+		 WHERE datapack_id = $1::uuid AND knowledge_base_url = $2
+		 LIMIT 1`,
+		datapackID, url,
+	).Scan(
+		&kb.DatapackID, &kb.RagSourceID, &kb.URL,
+		&details, &kb.CreatedAt, &kb.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("failed to look up datapack: %w", err)
+		return nil, fmt.Errorf("lookup knowledge base by URL: %w", err)
 	}
-
-	var kbID string
-	err = r.db.QueryRow(
-		`INSERT INTO meko_system.datapack_knowledge_base_registry
-			(datapack_id, knowledge_base_url, rag_source_id, rag_index_name)
-		 VALUES ($1, $2, $3::UUID, $4)
-		 RETURNING id`,
-		datapackID, url, ragSourceID, ragIndexName,
-	).Scan(&kbID)
-	if err != nil {
-		return "", fmt.Errorf("failed to insert knowledge base: %w", err)
+	if details.Valid {
+		kb.Details = json.RawMessage(details.String)
 	}
-	return kbID, nil
+	return &kb, nil
 }
 
-// GetSourceURIs returns the S3 source URIs for a datapack's RAG KBs.
-func (r *KnowledgeBaseRepo) GetSourceURIs(
-	datapackName string,
-) ([]string, error) {
-	rows, err := r.db.Query(
-		`SELECT kb.knowledge_base_url
-		 FROM meko_system.datapack_knowledge_base_registry kb
-		 JOIN meko_system.datapack_registry d ON kb.datapack_id = d.id
-		 WHERE d.datapack_name = $1
-		   AND kb.rag_source_id IS NOT NULL
-		 ORDER BY kb.created_at DESC`,
-		datapackName,
+// Delete removes the knowledge_base row identified by
+// (datapack_id, rag_source_id). Returns ErrKnowledgeBaseNotFound when
+// no such row exists.
+func (r *KnowledgeBaseRepo) Delete(
+	datapackID, ragSourceID string,
+) error {
+	res, err := r.db.Exec(
+		`DELETE FROM meko_system.knowledge_bases
+		 WHERE datapack_id = $1::uuid AND rag_source_id = $2::uuid`,
+		datapackID, ragSourceID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get source URIs: %w", err)
+		return fmt.Errorf("delete knowledge base: %w", err)
 	}
-	defer rows.Close()
-
-	var uris []string
-	for rows.Next() {
-		var u string
-		if err := rows.Scan(&u); err != nil {
-			return nil, fmt.Errorf("scan source URI: %w", err)
-		}
-		uris = append(uris, u)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
 	}
-	return uris, rows.Err()
+	if n == 0 {
+		return fmt.Errorf("%w: datapack_id=%s rag_source_id=%s",
+			ErrKnowledgeBaseNotFound, datapackID, ragSourceID)
+	}
+	return nil
 }
 
-// GetSourceIDs returns the rag_source_id values for a datapack's KB entries.
+// DeleteByDatapack removes every knowledge_base row for the given
+// datapack_id. Used to clear stale RAG cache when a datapack's source
+// no longer exists in dist_rag.
+func (r *KnowledgeBaseRepo) DeleteByDatapack(datapackID string) error {
+	_, err := r.db.Exec(
+		`DELETE FROM meko_system.knowledge_bases
+		 WHERE datapack_id = $1::uuid`,
+		datapackID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete knowledge bases for datapack %s: %w",
+			datapackID, err)
+	}
+	return nil
+}
+
+// GetSourceIDs returns all rag_source_id values for a datapack, ordered
+// by created_at descending.
 func (r *KnowledgeBaseRepo) GetSourceIDs(
-	datapackName string,
+	datapackID string,
 ) ([]string, error) {
 	rows, err := r.db.Query(
-		`SELECT kb.rag_source_id
-		 FROM meko_system.datapack_knowledge_base_registry kb
-		 JOIN meko_system.datapack_registry d ON kb.datapack_id = d.id
-		 WHERE d.datapack_name = $1
-		   AND kb.rag_source_id IS NOT NULL
-		 ORDER BY kb.created_at DESC`,
-		datapackName,
+		`SELECT rag_source_id
+		 FROM meko_system.knowledge_bases
+		 WHERE datapack_id = $1::uuid
+		 ORDER BY created_at DESC`,
+		datapackID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get source IDs: %w", err)
+		return nil, fmt.Errorf("get source IDs: %w", err)
 	}
 	defer rows.Close()
 
@@ -206,48 +303,30 @@ func (r *KnowledgeBaseRepo) GetSourceIDs(
 	return ids, rows.Err()
 }
 
-// DeleteByDatapack removes all knowledge-base entries for a datapack.
-func (r *KnowledgeBaseRepo) DeleteByDatapack(datapackName string) error {
-	_, err := r.db.Exec(
-		`DELETE FROM meko_system.datapack_knowledge_base_registry
-		 WHERE datapack_id IN (
-		     SELECT id FROM meko_system.datapack_registry
-		     WHERE datapack_name = $1
-		 )`,
-		datapackName,
+// GetSourceURIs returns the knowledge_base_url values for a datapack,
+// ordered by created_at descending.
+func (r *KnowledgeBaseRepo) GetSourceURIs(
+	datapackID string,
+) ([]string, error) {
+	rows, err := r.db.Query(
+		`SELECT knowledge_base_url
+		 FROM meko_system.knowledge_bases
+		 WHERE datapack_id = $1::uuid
+		 ORDER BY created_at DESC`,
+		datapackID,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to delete KB entries for %s: %w", datapackName, err)
+		return nil, fmt.Errorf("get source URIs: %w", err)
 	}
-	return nil
-}
+	defer rows.Close()
 
-// Delete removes a knowledge base by its URL within a datapack. The CASCADE
-// on agent_knowledge_base handles unlinking from agents.
-func (r *KnowledgeBaseRepo) Delete(
-	datapackName, url string,
-) error {
-	res, err := r.db.Exec(
-		`DELETE FROM meko_system.datapack_knowledge_base_registry
-		 WHERE knowledge_base_url = $1
-		   AND datapack_id = (
-		       SELECT id FROM meko_system.datapack_registry
-		       WHERE datapack_name = $2
-		   )`,
-		url, datapackName,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to delete knowledge base: %w", err)
+	var uris []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, fmt.Errorf("scan source URI: %w", err)
+		}
+		uris = append(uris, u)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to check rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf(
-			"knowledge base %q not found in datapack %q",
-			url, datapackName,
-		)
-	}
-	return nil
+	return uris, rows.Err()
 }

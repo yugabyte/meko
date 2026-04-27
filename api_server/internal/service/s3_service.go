@@ -27,8 +27,6 @@ const (
 	S3AuthMinio   S3AuthMode = "minio"
 	S3AuthIAMUser S3AuthMode = "iam-user"
 	S3AuthIAMRole S3AuthMode = "iam-role"
-
-	S3UserUploadsPrefix = "user-uploads"
 )
 
 type S3Config struct {
@@ -117,11 +115,15 @@ type PresignedUpload struct {
 	Key string `json:"key"`
 }
 
+// GenerateUploadURL builds a presigned PUT URL for uploading a file to
+// the per-user, per-datapack S3 prefix. The resulting key is
+// "<userID>/<datapackID>/<filename>" so each user owns a top-level S3
+// namespace and each datapack a sub-folder underneath it.
 func (s *S3Service) GenerateUploadURL(
 	ctx context.Context,
-	accountID, datapackID, filename, contentType string,
+	userID, datapackID, filename, contentType string,
 ) (*PresignedUpload, error) {
-	key := fmt.Sprintf("%s/%s/%s/%s", S3UserUploadsPrefix, accountID, datapackID, sanitizeFilename(filename))
+	key := fmt.Sprintf("%s/%s/%s", userID, datapackID, sanitizeFilename(filename))
 
 	exists, err := s.ObjectExists(ctx, key)
 	if err != nil {
@@ -171,7 +173,7 @@ func (s *S3Service) ObjectExists(ctx context.Context, key string) (bool, error) 
 
 // S3Object holds metadata for a single object in S3.
 type S3Object struct {
-	Key  string // full S3 key e.g. "accountId/datapackId/1776163643189_report.pdf"
+	Key  string // full S3 key e.g. "<user_id>/<datapack_id>/report.pdf"
 	ETag string // S3 ETag (MD5 for non-multipart uploads)
 }
 

@@ -52,15 +52,18 @@ type Account struct {
 	MCPUserPassword        *string    `json:"-"`
 }
 
-// KnowledgeBase represents a knowledge base linked to a datapack.
+// KnowledgeBase represents a row from meko_system.knowledge_bases.
+//
+// Identified by the composite (DatapackID, RagSourceID) primary key.
+// URL points to the S3 prefix where uploaded files for this KB live.
+// Details carries free-form metadata as JSONB.
 type KnowledgeBase struct {
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	ID           string    `json:"id"`
-	DatapackID   string    `json:"datapack_id"`
-	URL          string    `json:"knowledge_base_url"`
-	RagSourceID  *string   `json:"rag_source_id,omitempty"`
-	RagIndexName *string   `json:"rag_index_name,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	DatapackID  string          `json:"datapack_id"`
+	RagSourceID string          `json:"rag_source_id"`
+	URL         string          `json:"knowledge_base_url"`
+	Details     json.RawMessage `json:"knowledge_base_details,omitempty"`
 }
 
 // Memory represents one row from the Mem0 vector collection table.

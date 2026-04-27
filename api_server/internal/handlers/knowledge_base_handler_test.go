@@ -9,17 +9,10 @@ import (
 	"meko/api_server/internal/handlers"
 )
 
-// skipKBHandlerTests gates the knowledge-base integration tests until
-// the handler is reworked for the multi-tenant schema (no per-datapack
-// database, no auto-seeded knowledge_base row on datapack create).
-// Tracked by TODO(multi-tenant) in knowledge_base_handler.go.
-func skipKBHandlerTests(t *testing.T) {
-	t.Helper()
-	t.Skip("knowledge-base handler pending multi-tenant rework")
-}
-
+// TestKnowledgeBase_AddAndList exercises POST/GET against the new
+// meko_system.knowledge_bases multi-tenant table. It assumes the test
+// DB has migrations applied as a pre-req.
 func TestKnowledgeBase_AddAndList(t *testing.T) {
-	skipKBHandlerTests(t)
 	srv, db := setupTestServer(t)
 	defer srv.Close()
 	defer db.Close()
@@ -57,8 +50,15 @@ func TestKnowledgeBase_AddAndList(t *testing.T) {
 	if !isMap {
 		t.Fatal("expected data to be a map")
 	}
-	if dataMap["knowledge_base_id"] == "" {
-		t.Error("expected non-empty knowledge_base_id")
+	if dataMap["rag_source_id"] == "" || dataMap["rag_source_id"] == nil {
+		t.Error("expected non-empty rag_source_id")
+	}
+	if dataMap["datapack_id"] == "" || dataMap["datapack_id"] == nil {
+		t.Error("expected non-empty datapack_id")
+	}
+	if dataMap["knowledge_base_url"] != "s3://extra-bucket/docs/" {
+		t.Errorf("expected URL to round-trip, got %v",
+			dataMap["knowledge_base_url"])
 	}
 
 	listResp, err := http.Get(
@@ -82,15 +82,15 @@ func TestKnowledgeBase_AddAndList(t *testing.T) {
 	if !isArr {
 		t.Fatal("expected data to be an array")
 	}
-	// seed KB + the one we just added
-	if len(items) < 2 {
-		t.Errorf("expected at least 2 knowledge bases, got %d",
+	if len(items) != 1 {
+		t.Errorf("expected exactly 1 KB row (no auto-seed), got %d",
 			len(items))
 	}
 }
 
+// TestKnowledgeBase_Delete creates a KB, then deletes it by
+// rag_source_id (path parameter) and verifies the response.
 func TestKnowledgeBase_Delete(t *testing.T) {
-	skipKBHandlerTests(t)
 	srv, db := setupTestServer(t)
 	defer srv.Close()
 	defer db.Close()
@@ -102,7 +102,6 @@ func TestKnowledgeBase_Delete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	addResp, err := http.Post(
 		srv.URL+"/api/v1/datapacks/dp-kb-del/knowledge-bases",
 		"application/json", bytes.NewReader(b),
@@ -114,22 +113,27 @@ func TestKnowledgeBase_Delete(t *testing.T) {
 	if addResp.StatusCode != http.StatusCreated {
 		t.Fatalf("add KB: expected 201, got %d", addResp.StatusCode)
 	}
-
-	delBody := map[string]string{"url": "s3://del-bucket/data/"}
-	b, err = json.Marshal(delBody)
-	if err != nil {
-		t.Fatal(err)
+	var addResult handlers.APIResponse
+	if decErr := json.NewDecoder(addResp.Body).Decode(&addResult); decErr != nil {
+		t.Fatal(decErr)
+	}
+	addMap, isMap := addResult.Data.(map[string]any)
+	if !isMap {
+		t.Fatal("expected create body to be a map")
+	}
+	ragSourceID, _ := addMap["rag_source_id"].(string)
+	if ragSourceID == "" {
+		t.Fatal("expected non-empty rag_source_id in create response")
 	}
 
 	req, err := http.NewRequest(
 		http.MethodDelete,
-		srv.URL+"/api/v1/datapacks/dp-kb-del/knowledge-bases",
-		bytes.NewReader(b),
+		srv.URL+"/api/v1/datapacks/dp-kb-del/knowledge-bases/"+ragSourceID,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -143,29 +147,24 @@ func TestKnowledgeBase_Delete(t *testing.T) {
 	}
 }
 
+// TestKnowledgeBase_DeleteNotFound verifies a delete against a
+// non-existent rag_source_id returns 404.
 func TestKnowledgeBase_DeleteNotFound(t *testing.T) {
-	skipKBHandlerTests(t)
 	srv, db := setupTestServer(t)
 	defer srv.Close()
 	defer db.Close()
 
 	createDatapack(t, srv.URL, "dp-kb-delnf")
 
-	delBody := map[string]string{"url": "s3://nonexistent/"}
-	b, err := json.Marshal(delBody)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	req, err := http.NewRequest(
 		http.MethodDelete,
-		srv.URL+"/api/v1/datapacks/dp-kb-delnf/knowledge-bases",
-		bytes.NewReader(b),
+		srv.URL+"/api/v1/datapacks/dp-kb-delnf/knowledge-bases/"+
+			"00000000-0000-0000-0000-000000000000",
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -179,8 +178,9 @@ func TestKnowledgeBase_DeleteNotFound(t *testing.T) {
 	}
 }
 
+// TestKnowledgeBase_AddValidation_EmptyURL ensures the service-layer
+// "url is required" validation surfaces a 400 to the client.
 func TestKnowledgeBase_AddValidation_EmptyURL(t *testing.T) {
-	skipKBHandlerTests(t)
 	srv, db := setupTestServer(t)
 	defer srv.Close()
 	defer db.Close()
@@ -208,8 +208,10 @@ func TestKnowledgeBase_AddValidation_EmptyURL(t *testing.T) {
 	}
 }
 
+// TestKnowledgeBase_AddDatapackNotFound ensures requests against an
+// unknown datapack name short-circuit at RequireDatapackOwnership
+// with a 404 before reaching the KB handler.
 func TestKnowledgeBase_AddDatapackNotFound(t *testing.T) {
-	skipKBHandlerTests(t)
 	srv, db := setupTestServer(t)
 	defer srv.Close()
 	defer db.Close()
@@ -235,38 +237,37 @@ func TestKnowledgeBase_AddDatapackNotFound(t *testing.T) {
 	}
 }
 
-func TestKnowledgeBase_DeleteValidation_EmptyURL(t *testing.T) {
-	skipKBHandlerTests(t)
+// TestKnowledgeBase_ListEmpty verifies an empty list response on a
+// freshly-created datapack (no KB is auto-seeded in the multi-tenant
+// model).
+func TestKnowledgeBase_ListEmpty(t *testing.T) {
 	srv, db := setupTestServer(t)
 	defer srv.Close()
 	defer db.Close()
 
-	createDatapack(t, srv.URL, "dp-kb-delval")
+	createDatapack(t, srv.URL, "dp-kb-empty")
 
-	delBody := map[string]string{"url": ""}
-	b, err := json.Marshal(delBody)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req, err := http.NewRequest(
-		http.MethodDelete,
-		srv.URL+"/api/v1/datapacks/dp-kb-delval/knowledge-bases",
-		bytes.NewReader(b),
+	resp, err := http.Get(
+		srv.URL + "/api/v1/datapacks/dp-kb-empty/knowledge-bases",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected status %d, got %d",
-			http.StatusBadRequest, resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var listResult handlers.APIResponse
+	if decErr := json.NewDecoder(resp.Body).Decode(&listResult); decErr != nil {
+		t.Fatal(decErr)
+	}
+	items, isArr := listResult.Data.([]any)
+	if !isArr {
+		t.Fatal("expected data to be an array")
+	}
+	if len(items) != 0 {
+		t.Errorf("expected 0 KB rows on a fresh datapack, got %d",
+			len(items))
 	}
 }

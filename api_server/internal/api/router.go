@@ -26,6 +26,7 @@ type serviceRegistry struct {
 	langfuseSvc *service.LangfuseService
 	agentSvc    *service.AgentService
 	kbSvc       *service.KnowledgeBaseService
+	ragSvc      *service.RagService
 	memoriesSvc *service.MemoriesService
 	tenantKBSvc *service.TenantKBService
 	s3Svc       *service.S3Service
@@ -47,7 +48,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	agentSvc := service.NewAgentService(agentRepo)
 
 	kbRepo := repository.NewKnowledgeBaseRepo(cfg.DB)
-	kbSvc := service.NewKnowledgeBaseService(kbRepo)
+	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
+	ragSvc := service.NewRagService(cfg.DB)
 
 	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.TenantKBTable, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel)
 	memoriesSvc := service.NewMemoriesService(memoriesRepo)
@@ -89,6 +91,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		langfuseSvc: langfuseSvc,
 		agentSvc:    agentSvc,
 		kbSvc:       kbSvc,
+		ragSvc:      ragSvc,
 		memoriesSvc: memoriesSvc,
 		tenantKBSvc: tenantKBSvc,
 		s3Svc:       s3Svc,
@@ -253,10 +256,13 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named.GET("/agents", agentH.ListForDatapack)
 	named.DELETE("/agents/:agent_id", agentH.Unlink)
 
-	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.s3Svc, reg.ybaSvc)
+	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.ragSvc, reg.s3Svc)
+	// TODO(external-kb): POST /knowledge-bases is reserved for a future
+	// "register an external KB URL" flow. The canonical per-datapack KB
+	// row is created/refreshed via POST /knowledge-bases/create.
 	named.POST("/knowledge-bases", kbH.Add)
 	named.GET("/knowledge-bases", kbH.List)
-	named.DELETE("/knowledge-bases", kbH.Delete)
+	named.DELETE("/knowledge-bases/:rag_source_id", kbH.Delete)
 	named.POST("/knowledge-bases/upload-url", kbH.RequestUploadURL)
 	named.POST("/knowledge-bases/upload-complete", kbH.ConfirmUpload)
 	named.POST("/knowledge-bases/create", kbH.CreateKB)
