@@ -17,6 +17,8 @@ export const AUTH_LOGOUT_EVENT = "meko:auth-logout";
 export const PROVISION_STATUS_CACHE_KEY = "meko:provision-status:v1";
 export const ONBOARDING_STATUS_CACHE_KEY = "meko:onboarding-status:v1";
 export const ONBOARDING_STATUS_UPDATED_EVENT = "meko:onboarding-status-updated";
+/** Fired after a datapack is deleted or renamed so the sidebar can refresh its list. */
+export const DATAPACKS_LIST_UPDATED_EVENT = "meko:datapacks-list-updated";
 let authExpiredNotified = false;
 const AUTH_PUBLIC_ENDPOINTS = new Set([
   "/auth/me",
@@ -36,25 +38,28 @@ export function resetAuthExpiredState() {
 }
 
 export type Datapack = {
-  id: string;
-  name: string;
-  account_id?: string;
-  /** When set (e.g. from API), owner is shown as the agent rather than the account holder. */
-  agent_id?: string;
-  llm_model?: string;
-  embedding_model?: string;
+  datapack_id: string;
+  datapack_name: string;
+  user_id: string;
+  universe_id?: string;
+  datapack_ysql_connection_string?: string;
+  datapack_ysql_username?: string;
   created_at?: string;
   updated_at?: string;
 };
 
 export type DatapackStatus = {
-  id: string;
-  name: string;
-  llm_model?: string;
-  embedding_model?: string;
+  datapack_id: string;
+  datapack_name: string;
   created_at?: string;
+  universe_id?: string;
+  datapack_ysql_connection_string?: string;
+  datapack_ysql_username?: string;
   agent_count?: number;
   knowledge_base_count?: number;
+  memories_count?: number;
+  learnings_count?: number;
+  conversations_count?: number;
 };
 
 export type Agent = {
@@ -162,7 +167,7 @@ const apiClient = axios.create({
 
 async function request<T>(
   path: string,
-  method: "GET" | "POST" | "PATCH" = "GET",
+  method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
   body?: unknown,
   options: { signal?: AbortSignal } = {},
 ): Promise<T> {
@@ -170,7 +175,7 @@ async function request<T>(
     const res = await apiClient.request<ApiEnvelope<T>>({
       url: path,
       method,
-      data: body,
+      data: method === "GET" ? undefined : body,
       signal: options.signal,
     });
 
@@ -279,6 +284,24 @@ export async function listKnowledgeBases(
 
 export async function createDatapack(payload: CreateDatapackPayload) {
   return request<CreatedDatapack>("/datapacks", "POST", payload);
+}
+
+/** PATCH /datapacks/:name — server accepts fields it implements (e.g. connection string). */
+export type UpdateDatapackPayload = {
+  datapack_name?: string;
+  datapack_ysql_connection_string?: string;
+};
+
+export async function updateDatapack(name: string, payload: UpdateDatapackPayload) {
+  return request<{ message: string }>(
+    `/datapacks/${encodeURIComponent(name)}`,
+    "PATCH",
+    payload,
+  );
+}
+
+export async function deleteDatapack(name: string) {
+  return request<{ message: string }>(`/datapacks/${encodeURIComponent(name)}`, "DELETE");
 }
 
 export async function signup(payload: SignupPayload) {

@@ -69,9 +69,9 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
 
     void Promise.all(
       datapacks.map((dp) =>
-        listKnowledgeBases(dp.name)
-          .then((kbs) => ({ name: dp.name, count: kbs.length }))
-          .catch(() => ({ name: dp.name, count: 0 })),
+        listKnowledgeBases(dp.datapack_name)
+          .then((kbs) => ({ name: dp.datapack_name, count: kbs.length }))
+          .catch(() => ({ name: dp.datapack_name, count: 0 })),
       ),
     ).then((rows) => {
       if (cancelled) return;
@@ -132,7 +132,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
   const handleShareDatapack = () => {
     if (datapacks.length === 0) return;
     if (datapacks.length === 1) {
-      navigate(datapackSharePath(datapacks[0].name));
+      navigate(datapackSharePath(datapacks[0].datapack_name));
       return;
     }
     setSharePickerOpen(true);
@@ -203,17 +203,17 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
             </DialogHeader>
             <ul className="max-h-64 space-y-1 overflow-y-auto pr-1" role="listbox">
               {datapacks.map((dp) => (
-                <li key={dp.id}>
+                <li key={dp.datapack_id}>
                   <Button
                     type="button"
                     variant="ghost"
                     className="h-auto w-full justify-start px-3 py-2.5 font-normal"
                     onClick={() => {
-                      navigate(datapackSharePath(dp.name));
+                      navigate(datapackSharePath(dp.datapack_name));
                       setSharePickerOpen(false);
                     }}
                   >
-                    <span className="truncate text-left">{dp.name}</span>
+                    <span className="truncate text-left">{dp.datapack_name}</span>
                   </Button>
                 </li>
               ))}
@@ -294,7 +294,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           currentUser={currentUser}
           knowledgeBaseCountByName={knowledgeBaseCountByName}
           knowledgeBaseCountsLoading={knowledgeBaseCountsLoading}
-          onOpenDatapack={(dp) => navigate(datapackDetailPath(dp.name))}
+          onOpenDatapack={(dp) => navigate(datapackDetailPath(dp.datapack_name))}
         />
       </main>
     </div>

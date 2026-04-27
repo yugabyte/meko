@@ -11,6 +11,12 @@ import {
   type PipelineDetail,
   type SourceStatus,
 } from "@/lib/mekoApi";
+import {
+  KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
+  KNOWLEDGE_UPLOAD_MAX_BATCH,
+  KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
+  filterFilesForKnowledgeUploadBatch,
+} from "@/lib/knowledgeFileUploadRules";
 
 type FileEntry = {
   file: File;
@@ -22,10 +28,6 @@ type FileEntry = {
 type Props = {
   datapackName: string;
 };
-
-const ACCEPTED_EXTENSIONS = ".pdf,.txt,.md,.json,.mp4";
-const MAX_FILE_SIZE_MB = 5;
-const MAX_BATCH = 10;
 
 export default function FileUpload({ datapackName }: Props) {
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -53,34 +55,15 @@ export default function FileUpload({ datapackName }: Props) {
   const pendingCount = files.filter((f) => f.status === "pending").length;
   const isUploading = files.some((f) => f.status === "uploading");
   const batchUsed = files.filter((f) => f.status === "pending" || f.status === "uploading").length;
-  const batchRemaining = MAX_BATCH - batchUsed;
+  const batchRemaining = KNOWLEDGE_UPLOAD_MAX_BATCH - batchUsed;
   const batchFull = batchRemaining <= 0;
 
   const addFiles = useCallback((incoming: FileList | File[]) => {
     const all = Array.from(incoming);
-    const valid: File[] = [];
-    let skippedSize = 0;
-    let skippedType = 0;
-
-    for (const f of all) {
-      if (f.size > MAX_FILE_SIZE_MB * 1024 * 1024) { skippedSize++; continue; }
-      const ext = `.${f.name.split(".").pop()?.toLowerCase()}`;
-      if (!ACCEPTED_EXTENSIONS.includes(ext)) { skippedType++; continue; }
-      valid.push(f);
-    }
-
     setFiles((prev) => {
       const currentBatch = prev.filter((f) => f.status === "pending" || f.status === "uploading").length;
-      const slots = MAX_BATCH - currentBatch;
-      const skippedLimit = Math.max(0, valid.length - slots);
-      const accepted = valid.slice(0, Math.max(0, slots));
-
-      const msgs: string[] = [];
-      if (skippedType > 0) msgs.push(`${skippedType} skipped (unsupported type)`);
-      if (skippedSize > 0) msgs.push(`${skippedSize} skipped (over ${MAX_FILE_SIZE_MB}MB)`);
-      if (skippedLimit > 0) msgs.push(`${skippedLimit} skipped (max ${MAX_BATCH} per batch)`);
-      if (msgs.length > 0) showWarning(msgs.join(". "));
-
+      const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(all, currentBatch);
+      if (warningParts.length > 0) showWarning(warningParts.join(". "));
       if (accepted.length === 0) return prev;
       return [...prev, ...accepted.map((f) => ({ file: f, status: "pending" as const, progress: 0 }))];
     });
@@ -270,7 +253,8 @@ export default function FileUpload({ datapackName }: Props) {
             <div>
               <h3 className="text-sm font-medium text-white">Upload files to Knowledge Base</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                PDF, TXT, MD, JSON, MP4 — up to {MAX_FILE_SIZE_MB}MB each, {MAX_BATCH} per batch.
+                PDF, TXT, MD, JSON, MP4 — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}MB each,{" "}
+                {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch.
                 {totalUploaded > 0 && ` ${totalUploaded} uploaded so far.`}
               </p>
             </div>
@@ -320,14 +304,14 @@ export default function FileUpload({ datapackName }: Props) {
           </p>
           {!batchFull && !kbBusy && batchUsed > 0 && (
             <p className="text-xs text-muted-foreground/60 mt-1">
-              {batchRemaining} of {MAX_BATCH} slots available
+              {batchRemaining} of {KNOWLEDGE_UPLOAD_MAX_BATCH} slots available
             </p>
           )}
           <input
             ref={inputRef}
             type="file"
             multiple
-            accept={ACCEPTED_EXTENSIONS}
+            accept={KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS}
             disabled={batchFull || kbBusy}
             className="hidden"
             onChange={(e) => {

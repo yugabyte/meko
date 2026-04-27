@@ -73,8 +73,8 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
           </div>
         ) : null}
 
-        {datapackStatus?.id ? (
-          <MemoryPromotionPanel datapackName={datapackName} datapackId={datapackStatus.id} variant="full" />
+        {datapackStatus?.datapack_id ? (
+          <MemoryPromotionPanel datapackName={datapackName} datapackId={datapackStatus.datapack_id} variant="full" />
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
             {statusLoading ? "Loading datapack…" : "Datapack not available."}

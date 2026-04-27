@@ -1,44 +1,59 @@
 /**
- * Final wizard step: confirms basic setup and marks configure-complete in localStorage on mount.
- * Status narrative uses the same “Coming Soon” overlay pattern as link sharing until telemetry exists.
+ * Import step: explains ingest, shows the same summary strip as the former sync footer, and starts KB creation.
  */
-import { useEffect } from "react";
-import { CheckCircle2 } from "lucide-react";
-import { markDatapackWizardConfigureDone } from "@/lib/datapackConfigureStatus";
+import { Database } from "lucide-react";
+import { ConfigureWizardFooterBar } from "@/features/datapacks/components/configure-wizard/ConfigureWizardFooterBar";
+import { useKbImportJobDetail } from "@/hooks/useKbImportJob";
 
 type Props = {
   datapackName: string;
+  knowledgeCount: number;
+  conversationsCount: number;
+  skillsCount: number;
+  canImportKnowledge: boolean;
+  onSkip: () => void;
+  onStartImport: () => void;
 };
 
-export function ConfigureWizardStatusStep({ datapackName }: Props) {
-  useEffect(() => {
-    markDatapackWizardConfigureDone(datapackName);
-  }, [datapackName]);
+export function ConfigureWizardStatusStep({
+  datapackName,
+  knowledgeCount,
+  conversationsCount,
+  skillsCount,
+  canImportKnowledge,
+  onSkip,
+  onStartImport,
+}: Props) {
+  const job = useKbImportJobDetail();
+  const importBusy = job.phase === "creating" || job.phase === "polling";
 
   return (
-    <div
-      className="relative min-h-[140px] overflow-hidden rounded-xl border border-dashed border-border bg-muted/5"
-      role="status"
-      aria-label="Configuration status — coming soon"
-    >
-      <div className="pointer-events-none select-none p-6 blur-[3px] opacity-60 sm:p-8">
+    <div className="space-y-6">
+      <div className="rounded-xl border border-border bg-card/30 p-4 sm:p-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
-          <CheckCircle2 className="h-10 w-10 shrink-0 text-emerald-500/90" aria-hidden />
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 border border-emerald-500/25">
+            <Database className="h-5 w-5 text-emerald-400" aria-hidden />
+          </div>
           <div className="min-w-0 space-y-2">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Datapack successfully configured</h2>
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">Import knowledge</h2>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Basic setup for <span className="font-medium text-foreground">{datapackName}</span> is complete. You can
-              open the datapack to connect clients, upload knowledge, and invite collaborators.
+              Start indexing the files you uploaded into this datapack&apos;s knowledge base. You can leave this page
+              while import runs; progress appears in the bar at the top of the app.
             </p>
           </div>
         </div>
       </div>
 
-      <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-[2px]">
-        <p className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold tracking-tight text-foreground shadow-sm">
-          Coming Soon
-        </p>
-      </div>
+      <ConfigureWizardFooterBar
+        datapackName={datapackName}
+        knowledgeCount={knowledgeCount}
+        conversationsCount={conversationsCount}
+        skillsCount={skillsCount}
+        onSkip={onSkip}
+        canImportKnowledge={canImportKnowledge}
+        onImportSelected={onStartImport}
+        importBusy={importBusy}
+      />
     </div>
   );
 }

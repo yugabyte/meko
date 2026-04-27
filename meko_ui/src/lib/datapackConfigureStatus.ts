@@ -1,5 +1,5 @@
 /**
- * Tracks whether the user finished the post-create configure wizard (Status step), per datapack.
+ * Tracks whether the user finished the post-create configure wizard (Import step), per datapack.
  * Stored in localStorage until a server flag exists; keys are namespaced by encoded datapack name.
  */
 const STORAGE_PREFIX = "meko_datapack_configure_done:";

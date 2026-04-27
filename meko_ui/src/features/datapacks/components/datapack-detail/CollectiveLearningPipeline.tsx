@@ -280,7 +280,7 @@ export function CollectiveLearningPipeline({
                   Loading…
                 </span>
               ) : (
-                <>Review {learningsDisplay.toLocaleString()} promotions →</>
+                <>Review {learningsDisplay?.toLocaleString()} promotions →</>
               )}
             </Button>
           </StageShell>

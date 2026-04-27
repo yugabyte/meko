@@ -7,14 +7,11 @@ import type { CurrentUser, Datapack } from "@/lib/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 
 function formatDatapackOwnerLabel(dp: Datapack, currentUser: CurrentUser | null): string {
-  if (dp.agent_id != null && String(dp.agent_id).trim() !== "") {
-    return "Agent";
-  }
   if (
     currentUser &&
-    dp.account_id != null &&
-    dp.account_id !== "" &&
-    dp.account_id === currentUser.account_id
+    dp.user_id != null &&
+    dp.user_id !== "" &&
+    dp.user_id === currentUser.account_id
   ) {
     const fullName = `${currentUser.first_name ?? ""} ${currentUser.last_name ?? ""}`.trim();
     if (fullName) return fullName;
@@ -28,7 +25,7 @@ type Props = {
   datapacks: Datapack[];
   isLoading: boolean;
   currentUser: CurrentUser | null;
-  /** `listKnowledgeBases(name).length` per datapack name (filled by parent). */
+  /** `listKnowledgeBases(datapack_name).length` per route name (filled by parent). */
   knowledgeBaseCountByName: Record<string, number>;
   knowledgeBaseCountsLoading?: boolean;
   onOpenDatapack: (datapack: Datapack) => void;
@@ -51,7 +48,7 @@ export default function DatapacksTilesSection({
   const filteredDatapacks = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return datapacks;
-    return datapacks.filter((dp) => dp.name.toLowerCase().includes(q));
+    return datapacks.filter((dp) => dp.datapack_name.toLowerCase().includes(q));
   }, [datapacks, searchQuery]);
 
   return (
@@ -80,7 +77,7 @@ export default function DatapacksTilesSection({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredDatapacks.map((dp) => (
             <Card
-              key={dp.id}
+              key={dp.datapack_id}
               role="button"
               tabIndex={0}
               className={cn(
@@ -101,8 +98,8 @@ export default function DatapacksTilesSection({
                     <Database className="h-5 w-5 text-blue-400" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="font-semibold text-white truncate" title={dp.name}>
-                      {dp.name}
+                    <h3 className="font-semibold text-white truncate" title={dp.datapack_name}>
+                      {dp.datapack_name}
                     </h3>
                     <p className="text-xs text-muted-foreground mt-1 leading-snug">
                       Created:{" "}
@@ -141,7 +138,7 @@ export default function DatapacksTilesSection({
                             …
                           </span>
                         ) : (
-                          knowledgeBaseCountByName[dp.name] ?? 0
+                          knowledgeBaseCountByName[dp.datapack_name] ?? 0
                         )}
                       </p>
                     </div>

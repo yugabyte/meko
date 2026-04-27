@@ -1,27 +1,57 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { Share2, SlidersHorizontal } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import {
+  ChevronDown,
+  Link as LinkIcon,
+  Pencil,
+  Share2,
+  SlidersHorizontal,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
-import { datapackConfigurePath, datapackSharePath } from "@/app/routes/paths";
+import {
+  DEFAULT_ACCOUNT_DATAPACK_NAME,
+  ROUTES,
+  datapackConfigurePath,
+  datapackDetailPath,
+  datapackSharePath,
+} from "@/app/routes/paths";
 import { isDatapackWizardConfigureDone } from "@/lib/datapackConfigureStatus";
 import {
+  DATAPACKS_LIST_UPDATED_EVENT,
+  deleteDatapack,
   getApiErrorMessage,
   getDatapackStatus,
   getProvisionStatus,
-  listKnowledgeBases,
   PROVISION_STATUS_CACHE_KEY,
+  updateDatapack,
   type CurrentUser,
   type DatapackStatus,
   type ProvisionStatus,
 } from "@/lib/mekoApi";
+import { dispatchAppEvent } from "@/lib/browserEvents";
+import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
 import { DatapackDetailMembersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailMembersTile";
 // Connect + upload modals (credentials UI and FileUpload wrapper).
-import { DatapackConnectDialog, DatapackKnowledgeUploadDialog } from "@/features/datapacks/components/datapack-detail/DatapackDetailDialogs";
+import {
+  DatapackConnectDialog,
+  DatapackDeleteConfirmDialog,
+  DatapackEditNameDialog,
+  DatapackKnowledgeUploadDialog,
+} from "@/features/datapacks/components/datapack-detail/dialogs";
 // Breadcrumbs, title, badges, description, metadata row, and hero action slot.
 import { DatapackDetailHero } from "@/features/datapacks/components/datapack-detail/DatapackDetailHero";
 // Tab strip driving which detail sub-view is shown.
@@ -64,12 +94,17 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [provisionStatus, setProvisionStatus] = useState<ProvisionStatus | null>(null);
 
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isEditNameOpen, setIsEditNameOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
   const [wizardConfigureDone, setWizardConfigureDone] = useState(() =>
     isDatapackWizardConfigureDone(datapackName),
   );
 
   const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
+  const [memoriesCount, setMemoriesCount] = useState(0);
+  const [learningsCount, setLearningsCount] = useState(0);
+  const [conversationsCount, setConversationsCount] = useState(0);
 
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName);
 
@@ -83,8 +118,14 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const s = await getDatapackStatus(datapackName);
-        if (!cancelled) setDatapackStatus(s);
+        const datapackDetails = await getDatapackStatus(datapackName);
+        if (!cancelled) {
+          setDatapackStatus(datapackDetails);
+          setKnowledgeBaseCount(datapackDetails.knowledge_base_count ?? 0);
+          setMemoriesCount(datapackDetails.memories_count ?? 0);
+          setLearningsCount(datapackDetails.learnings_count ?? 0);
+          setConversationsCount(datapackDetails.conversations_count ?? 0);
+        };
       } catch (e) {
         if (!cancelled) {
           setDatapackStatus(null);
@@ -101,22 +142,22 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   }, [datapackName]);
 
 
-  useEffect(() => {
-    const ac = new AbortController();
-    setKnowledgeBaseCount(0);
-    const run = async () => {
-      try {
-        const list = await listKnowledgeBases(datapackName, { signal: ac.signal });
-        if (ac.signal.aborted) return;
-        setKnowledgeBaseCount(list.length);
-      } catch {
-        if (ac.signal.aborted) return;
-        setKnowledgeBaseCount(0);
-      }
-    };
-    void run();
-    return () => ac.abort();
-  }, [datapackName]);
+  // useEffect(() => {
+  //   const ac = new AbortController();
+  //   setKnowledgeBaseCount(0);
+  //   const run = async () => {
+  //     try {
+  //       const list = await listKnowledgeBases(datapackName, { signal: ac.signal });
+  //       if (ac.signal.aborted) return;
+  //       setKnowledgeBaseCount(list.length);
+  //     } catch {
+  //       if (ac.signal.aborted) return;
+  //       setKnowledgeBaseCount(0);
+  //     }
+  //   };
+  //   void run();
+  //   return () => ac.abort();
+  // }, [datapackName]);
 
   useEffect(() => {
     if (!isConnectOpen) return;
@@ -163,8 +204,40 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     };
   }, [isConnectOpen, datapackName]);
 
-  const displayId = datapackStatus?.id ?? "—";
+  const displayId = datapackStatus?.datapack_id ?? "—";
   const createdLabel = formatDatapackCreatedAtUtc(datapackStatus?.created_at);
+  const isDefaultDatapack = datapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
+
+  const handleRename = async (newName: string) => {
+    await updateDatapack(datapackName, { datapack_name: newName });
+    try {
+      const st = await getDatapackStatus(newName);
+      if (st.datapack_name === newName) {
+        dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+        toast({
+          title: "Datapack renamed",
+          description: `This datapack is now "${newName}".`,
+        });
+        navigate(datapackDetailPath(newName), { replace: true });
+        return;
+      }
+    } catch {
+      /* fall through */
+    }
+    throw new Error(
+      "The server did not apply this rename. The API may not support changing the datapack name yet.",
+    );
+  };
+
+  const handleDeleteConfirm = async () => {
+    await deleteDatapack(datapackName);
+    dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+    toast({
+      title: "Datapack deleted",
+      description: `"${datapackName}" was removed.`,
+    });
+    navigate(ROUTES.datapacks, { replace: true });
+  };
 
   return (
     <div className="flex-1 h-screen overflow-y-auto bg-background text-foreground flex flex-col">
@@ -179,7 +252,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           statusLoading={statusLoading}
           actions={
             <>
-              {/* Order: Add Knowledge → Connect → Configure → Share */}
               <DatapackKnowledgeUploadDialog
                 datapackName={datapackName}
                 open={isUploadOpen}
@@ -198,23 +270,86 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                 error={connectError}
                 provisionStatus={provisionStatus}
               />
-              {!wizardConfigureDone ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="gap-2 border-border bg-background/80"
-                  onClick={() => navigate(datapackConfigurePath(datapackName))}
-                >
-                  <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden />
-                  Configure
-                </Button>
-              ) : null}
-              <Button variant="outline" className="gap-2 border-border bg-background/80" asChild>
-                <Link to={datapackSharePath(datapackName)}>
-                  <Share2 className="h-4 w-4 shrink-0" aria-hidden />
-                  Share
-                </Link>
-              </Button>
+              <DatapackEditNameDialog
+                open={isEditNameOpen}
+                onOpenChange={setIsEditNameOpen}
+                currentName={datapackName}
+                onRename={handleRename}
+              />
+              <DatapackDeleteConfirmDialog
+                open={isDeleteOpen}
+                onOpenChange={setIsDeleteOpen}
+                datapackName={datapackName}
+                onConfirm={handleDeleteConfirm}
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-2 border-border bg-background/80"
+                    aria-label="Datapack actions"
+                  >
+                    Actions
+                    <ChevronDown className="h-4 w-4 shrink-0 opacity-70" aria-hidden />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[14rem] bg-[#1C2333] border-border text-foreground">
+                  <DropdownMenuItem
+                    className="gap-2 cursor-pointer focus:bg-muted/20"
+                    onSelect={() => setIsUploadOpen(true)}
+                  >
+                    <Upload className="h-4 w-4 shrink-0" aria-hidden />
+                    Add Knowledge
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="gap-2 cursor-pointer focus:bg-muted/20"
+                    onSelect={() => setIsConnectOpen(true)}
+                  >
+                    <LinkIcon className="h-4 w-4 shrink-0" aria-hidden />
+                    Connect
+                  </DropdownMenuItem>
+                  {!wizardConfigureDone ? (
+                    <DropdownMenuItem
+                      className="gap-2 cursor-pointer focus:bg-muted/20"
+                      onSelect={() => navigate(datapackConfigurePath(datapackName))}
+                    >
+                      <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden />
+                      Configure
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem
+                    className="gap-2 cursor-pointer focus:bg-muted/20"
+                    onSelect={() => navigate(datapackSharePath(datapackName))}
+                  >
+                    <Share2 className="h-4 w-4 shrink-0" aria-hidden />
+                    Share
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator className="bg-border" />
+                  <DropdownMenuItem
+                    className="gap-2 cursor-pointer focus:bg-muted/20"
+                    disabled={isDefaultDatapack}
+                    title={isDefaultDatapack ? "The default account datapack cannot be renamed." : undefined}
+                    onSelect={() => {
+                      if (!isDefaultDatapack) setIsEditNameOpen(true);
+                    }}
+                  >
+                    <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+                    Edit {datapackName}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="gap-2 cursor-pointer text-red-300 focus:bg-red-950/40 focus:text-red-200"
+                    disabled={isDefaultDatapack}
+                    title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
+                    onSelect={() => {
+                      if (!isDefaultDatapack) setIsDeleteOpen(true);
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                    Delete {datapackName}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           }
         />
@@ -227,10 +362,10 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
 
         <CollectiveLearningPipeline
           currentUser={currentUser}
-          conversationsCount={0}
-          memoryCount={0}
-          learningsCount={0}
-          datapackId={datapackStatus?.id ?? null}
+          conversationsCount={conversationsCount}
+          memoryCount={memoriesCount}
+          learningsCount={learningsCount}
+          datapackId={datapackStatus?.datapack_id ?? null}
           knowledgeCount={knowledgeBaseCount}
           onSelectSection={setActiveTab}
         />
@@ -240,10 +375,10 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             <DatapackDetailTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
             <div className="mt-6 min-h-0 w-full flex-1">
               {activeTab === DATAPACK_DETAIL_TAB.learnings ? (
-                datapackStatus?.id ? (
+                datapackStatus?.datapack_id ? (
                   <MemoryPromotionPanel
                     datapackName={datapackName}
-                    datapackId={datapackStatus.id}
+                    datapackId={datapackStatus.datapack_id}
                     variant="preview"
                   />
                 ) : (

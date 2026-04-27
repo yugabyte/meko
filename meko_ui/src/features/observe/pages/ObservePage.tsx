@@ -101,7 +101,7 @@ export default function ObservePage() {
       if (!datapacks.length) {
         throw new Error("No datapacks found for this account");
       }
-      await ensureLangfuseProjectKeys(datapacks[0].name);
+      await ensureLangfuseProjectKeys(datapacks[0].datapack_name);
       const bootstrap = await bootstrapObserveSession();
       if (mounted && bootstrap.org_id) {
         const rel = `organization/${bootstrap.org_id}`;

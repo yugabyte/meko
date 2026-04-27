@@ -1,6 +1,5 @@
 /**
- * Summary strip on Sync Data and Status: datapack name, selection counts, skip, and disabled import.
- * Import stays disabled with a tooltip until backend import exists (“Coming Soon”).
+ * Summary strip on Sync Knowledge: datapack name, selection counts, skip, and import when uploads exist.
  */
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -11,6 +10,10 @@ type Props = {
   conversationsCount: number;
   skillsCount: number;
   onSkip: () => void;
+  canImportKnowledge: boolean;
+  onImportSelected: () => void;
+  /** True while createKnowledgeBase / pipeline poll is running from this flow. */
+  importBusy?: boolean;
 };
 
 export function ConfigureWizardFooterBar({
@@ -19,8 +22,23 @@ export function ConfigureWizardFooterBar({
   conversationsCount,
   skillsCount,
   onSkip,
+  canImportKnowledge,
+  onImportSelected,
+  importBusy = false,
 }: Props) {
   const total = knowledgeCount + conversationsCount + skillsCount;
+  const importDisabled = !canImportKnowledge || importBusy;
+  const importButton = (
+    <Button
+      type="button"
+      disabled={importDisabled}
+      className="bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50"
+      onClick={onImportSelected}
+    >
+      {importBusy ? "Importing…" : "Import knowledge →"}
+    </Button>
+  );
+
   return (
     <div className="mt-8 flex flex-col gap-4 rounded-xl border border-border bg-card/60 px-4 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-6">
       <div className="space-y-1">
@@ -42,16 +60,20 @@ export function ConfigureWizardFooterBar({
         <Button type="button" variant="ghost" className="text-muted-foreground hover:text-foreground" onClick={onSkip}>
           Skip for now
         </Button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">
-              <Button type="button" disabled className="bg-emerald-600 text-white hover:bg-emerald-500">
-                Import selected →
-              </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top">Coming Soon</TooltipContent>
-        </Tooltip>
+        {!importDisabled ? (
+          importButton
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">{importButton}</span>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {importBusy
+                ? "Import is running. You can keep browsing; we will notify you when it finishes."
+                : "Upload knowledge files on the previous step, then return here to import."}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </div>
   );

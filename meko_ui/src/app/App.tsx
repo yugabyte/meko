@@ -13,7 +13,7 @@ import { queryClient } from "@/lib/queryClient";
 import PublicRoutes from "@/app/routes/PublicRoutes";
 import ProtectedRoutes from "@/app/routes/ProtectedRoutes";
 import { isAuthRoute, isOnboardingRoute, isProtectedRoute } from "@/app/routes/guards";
-import { datapackNewPath, ROUTES } from "@/app/routes/paths";
+import { ROUTES } from "@/app/routes/paths";
 import { useOnboardingGuard } from "@/app/routes/OnboardingGuard";
 import {
   readOnboardingStatusCache,
@@ -138,7 +138,7 @@ function AppRouter() {
   if (isAuthRoute(location.pathname)) {
     return (
       <Navigate
-        to={hasCompletedOnboarding ? datapackNewPath() : ROUTES.onboarding}
+        to={ROUTES.onboarding}
         replace
       />
     );

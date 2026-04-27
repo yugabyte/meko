@@ -1,9 +1,5 @@
-/**
- * Modal dialogs for a datapack detail page: Connect (provisioned MCP + DB credentials with copy)
- * and knowledge-base upload (wraps FileUpload). Open state and provision loading stay on the parent.
- */
 import { useState } from "react";
-import { Check, Copy, Link as LinkIcon, Upload } from "lucide-react";
+import { Check, Copy, Link as LinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,13 +7,11 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { copyToClipboard } from "@/lib/clipboard";
 import type { ProvisionStatus } from "@/lib/mekoApi";
-import FileUpload from "@/features/datapacks/components/FileUpload";
 
-type ConnectProps = {
+export type DatapackConnectDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   loading: boolean;
@@ -31,7 +25,7 @@ export function DatapackConnectDialog({
   loading,
   error,
   provisionStatus,
-}: ConnectProps) {
+}: DatapackConnectDialogProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const handleCopy = async (text: string, field: string) => {
@@ -51,19 +45,12 @@ export function DatapackConnectDialog({
         }
       }}
     >
-      <DialogTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          className="gap-2 border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-        >
-          <LinkIcon className="w-4 h-4" />
-          Connect
-        </Button>
-      </DialogTrigger>
       <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-xl max-h-[calc(100vh-4rem)] bg-[#1C2333] border-border text-foreground p-0 flex flex-col">
         <DialogHeader className="px-6 pt-6 pb-3 shrink-0">
-          <DialogTitle className="text-xl text-white">Connect to Datapack</DialogTitle>
+          <div className="flex items-center gap-2">
+            <LinkIcon className="h-5 w-5 shrink-0 text-blue-400" aria-hidden />
+            <DialogTitle className="text-xl text-white">Connect to Datapack</DialogTitle>
+          </div>
           <DialogDescription className="text-muted-foreground">
             Use these credentials to connect your MCP server and database.
           </DialogDescription>
@@ -199,37 +186,6 @@ export function DatapackConnectDialog({
             </div>
           </div>
         ) : null}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-type UploadProps = {
-  datapackName: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-};
-
-export function DatapackKnowledgeUploadDialog({ datapackName, open, onOpenChange }: UploadProps) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger asChild>
-        <Button type="button" variant="outline" className="gap-2 border-border text-foreground hover:bg-muted">
-          <Upload className="w-4 h-4" />
-          Add Knowledge
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto bg-[#1C2333] border-border text-foreground p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-2 shrink-0 border-b border-border">
-          <DialogTitle className="text-xl text-white">Upload to knowledge base</DialogTitle>
-          <DialogDescription className="text-muted-foreground">
-            Add documents for <span className="text-foreground font-medium">{datapackName}</span>. Supported types and
-            limits follow the uploader below.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="px-4 py-4 sm:px-6 sm:pb-6">
-          <FileUpload datapackName={datapackName} />
-        </div>
       </DialogContent>
     </Dialog>
   );

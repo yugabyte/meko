@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   getApiErrorMessage,
+  getCurrentUser,
   ONBOARDING_STATUS_CACHE_KEY,
   ONBOARDING_STATUS_UPDATED_EVENT,
   updateOnboardingStatus,
@@ -18,6 +19,22 @@ export default function OnboardingPage() {
   const navigate = useNavigate();
   const [action, setAction] = useState<"playground" | "datapacks" | "skip" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** From server: returning users choose “Choose your tool” → /datapacks; first-time → default datapack configure. */
+  const [serverOnboardingDone, setServerOnboardingDone] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getCurrentUser()
+      .then((u) => {
+        if (!cancelled) setServerOnboardingDone(u.has_completed_onboarding);
+      })
+      .catch(() => {
+        if (!cancelled) setServerOnboardingDone(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const finishAndGo = async (target: "playground" | "datapacks" | "skip") => {
     setError(null);
@@ -31,7 +48,9 @@ export default function OnboardingPage() {
       target === "playground"
         ? ROUTES.playground
         : target === "datapacks"
-          ? datapackConfigurePath(DEFAULT_ACCOUNT_DATAPACK_NAME)
+          ? serverOnboardingDone
+            ? ROUTES.datapacks
+            : datapackConfigurePath(DEFAULT_ACCOUNT_DATAPACK_NAME)
           : ROUTES.datapacks;
     try {
       await updateOnboardingStatus(true);
@@ -51,6 +70,7 @@ export default function OnboardingPage() {
   };
 
   const busy = action != null;
+  const chooseToolDisabled = busy || serverOnboardingDone === null;
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
@@ -146,7 +166,7 @@ export default function OnboardingPage() {
               <Button
                 type="button"
                 className="w-full gap-2 bg-emerald-600 text-white hover:bg-emerald-500"
-                disabled={busy}
+                disabled={chooseToolDisabled}
                 onClick={() => void finishAndGo("datapacks")}
               >
                 {action === "datapacks" ? "Loading…" : "Choose your tool"}

@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   AUTH_LOGOUT_EVENT,
+  DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
   listDatapacks,
   logout,
@@ -21,7 +22,7 @@ import {
   PROVISION_STATUS_CACHE_KEY,
   type Datapack,
 } from "@/lib/mekoApi";
-import { dispatchAppEvent } from "@/lib/browserEvents";
+import { addAppEventListener, dispatchAppEvent, removeAppEventListener } from "@/lib/browserEvents";
 import { ROUTES, datapackDetailPath } from "@/app/routes/paths";
 
 export default function Sidebar() {
@@ -37,6 +38,8 @@ export default function Sidebar() {
   const onPlaygroundRoute =
     location.pathname === ROUTES.playground ||
     location.pathname.startsWith(`${ROUTES.playground}/`);
+  // Fetch once when entering the datapacks area, not on every `/datapacks/...` subpath change
+  // (otherwise opening a datapack from overview triggers an extra listDatapacks call).
   useEffect(() => {
     if (!onDatapacksRoute) return;
     let cancelled = false;
@@ -50,7 +53,17 @@ export default function Sidebar() {
     return () => {
       cancelled = true;
     };
-  }, [onDatapacksRoute, location.pathname]);
+  }, [onDatapacksRoute]);
+
+  useEffect(() => {
+    const refresh = () => {
+      void listDatapacks()
+        .then((items) => setDatapackList(items))
+        .catch(() => setDatapackList([]));
+    };
+    addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refresh);
+    return () => removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refresh);
+  }, []);
 
   useEffect(() => {
     if (location.pathname.startsWith(`${ROUTES.datapacks}/`)) {
@@ -194,9 +207,9 @@ export default function Sidebar() {
               <div className="flex flex-col gap-0.5 border-l border-white/10 ml-4 pl-2 mt-0.5">
                 {datapackList.map((dp) => (
                   <NavLink
-                    key={dp.id}
-                    to={datapackDetailPath(dp.name)}
-                    title={dp.name}
+                    key={dp.datapack_id}
+                    to={datapackDetailPath(dp.datapack_name)}
+                    title={dp.datapack_name}
                     className={({ isActive }) =>
                       cn(
                         "flex items-center rounded-md py-1.5 pl-2 pr-2 text-xs font-medium transition-colors min-w-0",
@@ -206,7 +219,7 @@ export default function Sidebar() {
                       )
                     }
                   >
-                    <span className="truncate">{dp.name}</span>
+                    <span className="truncate">{dp.datapack_name}</span>
                   </NavLink>
                 ))}
               </div>

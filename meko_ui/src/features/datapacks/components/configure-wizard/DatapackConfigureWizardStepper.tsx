@@ -1,5 +1,5 @@
 /**
- * Visual progress strip for the configure wizard (four steps with connectors).
+ * Visual progress strip for the configure wizard (steps with connectors).
  * Completed steps show a check; the current step is highlighted for orientation.
  */
 import { Check } from "lucide-react";

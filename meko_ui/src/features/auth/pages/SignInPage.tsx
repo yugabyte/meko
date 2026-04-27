@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getApiErrorMessage, login } from "@/lib/mekoApi";
-import { datapackNewPath, ROUTES } from "@/app/routes/paths";
+import { ROUTES } from "@/app/routes/paths";
 
 export default function SignInPage() {
   const navigate = useNavigate();
@@ -18,7 +18,7 @@ export default function SignInPage() {
     setError(null);
     try {
       await login({ email: email.trim(), password });
-      navigate(datapackNewPath(), { replace: true });
+      navigate(ROUTES.onboarding, { replace: true });
     } catch (err) {
       setError(getApiErrorMessage(err, "Sign in failed. Please try again."));
     } finally {

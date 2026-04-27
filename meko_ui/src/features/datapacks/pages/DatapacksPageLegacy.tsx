@@ -76,7 +76,7 @@ export default function DatapacksPageLegacy() {
   const [provisionStatus, setProvisionStatus] = useState<ProvisionStatus | null>(null);
 
   const selectedDatapack = useMemo(
-    () => datapacks.find((dp) => dp.name === activeDatapack),
+    () => datapacks.find((dp) => dp.datapack_name === activeDatapack),
     [datapacks, activeDatapack],
   );
 
@@ -109,7 +109,7 @@ export default function DatapacksPageLegacy() {
         const items = await listDatapacks();
         setDatapacks(items);
         if (items.length > 0) {
-          setActiveDatapack(items[0].name);
+          setActiveDatapack(items[0].datapack_name);
         }
       } catch (err) {
         setError(getApiErrorMessage(err, "Failed to load datapacks."));
@@ -140,7 +140,7 @@ export default function DatapacksPageLegacy() {
         if (!mounted) return;
         if (items.length > 0) {
           setDatapacks(items);
-          setActiveDatapack((current) => current || items[0].name);
+          setActiveDatapack((current) => current || items[0].datapack_name);
           setIsProvisioningDefaultDatapack(false);
           return;
         }
@@ -295,8 +295,8 @@ export default function DatapacksPageLegacy() {
                 </SelectTrigger>
                 <SelectContent>
                   {datapacks.map(dp => (
-                    <SelectItem key={dp.id} value={dp.name} className="font-medium">
-                      {dp.name}
+                    <SelectItem key={dp.datapack_id} value={dp.datapack_name} className="font-medium">
+                      {dp.datapack_name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -564,7 +564,7 @@ export default function DatapacksPageLegacy() {
                     Agents Dashboard
                   </h3>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Manage agents utilizing {selectedDatapack?.name || "selected datapack"}.
+                    Manage agents utilizing {selectedDatapack?.datapack_name || "selected datapack"}.
                   </p>
                 </div>
                 <Table>
