@@ -46,19 +46,12 @@ export type Datapack = {
   datapack_ysql_username?: string;
   created_at?: string;
   updated_at?: string;
-};
-
-export type DatapackStatus = {
-  datapack_id: string;
-  datapack_name: string;
-  created_at?: string;
-  universe_id?: string;
-  datapack_ysql_connection_string?: string;
-  datapack_ysql_username?: string;
-  agent_count?: number;
-  knowledge_base_count?: number;
-  memories_count?: number;
+  /** From `datapack_details` / list+describe responses when present. */
+  description?: string;
+  memory_count?: number;
+  knowledge_count?: number;
   learnings_count?: number;
+  /** Optional; included when the API aggregates pipeline-style counts. */
   conversations_count?: number;
 };
 
@@ -79,20 +72,37 @@ export type KnowledgeBase = {
   updated_at?: string;
 };
 
+/**
+ * Body for POST /datapacks — mirrors `api_server/internal/service.CreateRequest` JSON.
+ *
+ * - **name** — required (non-empty after trim).
+ * - **description** — optional; omit, `null`, or blank if you have none (stored in `datapack_details` when non-empty).
+ * - **agent_id** — optional; omit, `null`, or `""` to use the default agent (`meko_agent`). Any other value must already exist for the user (create via `POST /agents` first).
+ * - **user_id** — not part of the client contract: the handler always sets it from the authenticated account, so do not send it from the browser.
+ */
 export type CreateDatapackPayload = {
   name: string;
-  seed_knowledge_base: string;
-  embed_model?: string;
-  inference_model?: string;
+  user_id: string;
+  description?: string | null;
+  agent_id?: string | null;
 };
 
+/**
+ * `data` from POST /datapacks — matches `api_server/internal/service.CreateResponse`.
+ */
 export type CreatedDatapack = {
   datapack_id: string;
   agent_id: string;
   name: string;
-  mcp_server?: {
-    url?: string;
-    api_key?: string;
+  mcp_user_name: string;
+  mcp_server: {
+    url: string;
+    api_key: string;
+  };
+  db_access: {
+    user_name: string;
+    password: string;
+    conn_str: string;
   };
 };
 
@@ -262,8 +272,9 @@ export async function listDatapacks() {
   return request<Datapack[]>("/datapacks");
 }
 
-export async function getDatapackStatus(name: string) {
-  return request<DatapackStatus>(`/datapacks/${encodeURIComponent(name)}/status`);
+/** GET /datapacks/:name — full datapack row (includes `description` when set). */
+export async function getDatapack(name: string, options: { signal?: AbortSignal } = {}) {
+  return request<Datapack>(`/datapacks/${encodeURIComponent(name)}`, "GET", undefined, options);
 }
 
 export async function listAgents(name: string) {
@@ -283,17 +294,37 @@ export async function listKnowledgeBases(
 }
 
 export async function createDatapack(payload: CreateDatapackPayload) {
-  return request<CreatedDatapack>("/datapacks", "POST", payload);
+  const body: Record<string, unknown> = { name: payload.name.trim() };
+  if (payload.description != null && String(payload.description).trim() !== "") {
+    body.description = String(payload.description).trim();
+  }
+  body.user_id = payload.user_id;
+  body.agent_id = payload.agent_id ?? null;
+  return request<CreatedDatapack>("/datapacks", "POST", body);
 }
 
-/** PATCH /datapacks/:name — server accepts fields it implements (e.g. connection string). */
+/**
+ * Body for PATCH /datapacks/:name — matches `api_server/internal/service.UpdateRequest` JSON tags.
+ * Only send fields you want to change; omitted keys are left unchanged on the server.
+ */
 export type UpdateDatapackPayload = {
-  datapack_name?: string;
+  name?: string;
+  description?: string;
   datapack_ysql_connection_string?: string;
 };
 
+/** `data` from PATCH /datapacks/:name — matches handler `ok(..., map[string]string{message})`. */
+export type UpdateDatapackResponse = {
+  message: string;
+};
+
+/** `data` from DELETE /datapacks/:name. */
+export type DeleteDatapackResponse = {
+  message: string;
+};
+
 export async function updateDatapack(name: string, payload: UpdateDatapackPayload) {
-  return request<{ message: string }>(
+  return request<UpdateDatapackResponse>(
     `/datapacks/${encodeURIComponent(name)}`,
     "PATCH",
     payload,
@@ -301,7 +332,7 @@ export async function updateDatapack(name: string, payload: UpdateDatapackPayloa
 }
 
 export async function deleteDatapack(name: string) {
-  return request<{ message: string }>(`/datapacks/${encodeURIComponent(name)}`, "DELETE");
+  return request<DeleteDatapackResponse>(`/datapacks/${encodeURIComponent(name)}`, "DELETE");
 }
 
 export async function signup(payload: SignupPayload) {

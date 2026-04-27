@@ -30,13 +30,14 @@ import {
   DATAPACKS_LIST_UPDATED_EVENT,
   deleteDatapack,
   getApiErrorMessage,
-  getDatapackStatus,
+  getDatapack,
   getProvisionStatus,
   PROVISION_STATUS_CACHE_KEY,
   updateDatapack,
   type CurrentUser,
-  type DatapackStatus,
+  type Datapack,
   type ProvisionStatus,
+  type UpdateDatapackPayload,
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { toast } from "@/hooks/use-toast";
@@ -83,7 +84,7 @@ function writeProvisionStatusCache(cache: ProvisionStatusCache) {
 
 export default function DatapackDetailPage({ datapackName, currentUser }: Props) {
   const navigate = useNavigate();
-  const [datapackStatus, setDatapackStatus] = useState<DatapackStatus | null>(null);
+  const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DatapackDetailTab>(DATAPACK_DETAIL_TAB.learnings);
@@ -118,17 +119,17 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const datapackDetails = await getDatapackStatus(datapackName);
+        const dp = await getDatapack(datapackName);
         if (!cancelled) {
-          setDatapackStatus(datapackDetails);
-          setKnowledgeBaseCount(datapackDetails.knowledge_base_count ?? 0);
-          setMemoriesCount(datapackDetails.memories_count ?? 0);
-          setLearningsCount(datapackDetails.learnings_count ?? 0);
-          setConversationsCount(datapackDetails.conversations_count ?? 0);
-        };
+          setDatapack(dp);
+          setKnowledgeBaseCount(dp.knowledge_count ?? 0);
+          setMemoriesCount(dp.memory_count ?? 0);
+          setLearningsCount(dp.learnings_count ?? 0);
+          setConversationsCount(dp.conversations_count ?? 0);
+        }
       } catch (e) {
         if (!cancelled) {
-          setDatapackStatus(null);
+          setDatapack(null);
           setStatusError(getApiErrorMessage(e, "Failed to load datapack."));
         }
       } finally {
@@ -204,37 +205,73 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     };
   }, [isConnectOpen, datapackName]);
 
-  const displayId = datapackStatus?.datapack_id ?? "—";
-  const createdLabel = formatDatapackCreatedAtUtc(datapackStatus?.created_at);
+  const displayId = datapack?.datapack_id ?? "—";
+  const createdLabel = formatDatapackCreatedAtUtc(datapack?.created_at);
   const isDefaultDatapack = datapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
 
-  const handleRename = async (newName: string) => {
-    await updateDatapack(datapackName, { datapack_name: newName });
-    try {
-      const st = await getDatapackStatus(newName);
-      if (st.datapack_name === newName) {
-        dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
-        toast({
-          title: "Datapack renamed",
-          description: `This datapack is now "${newName}".`,
-        });
-        navigate(datapackDetailPath(newName), { replace: true });
-        return;
-      }
-    } catch {
-      /* fall through */
+  const handleDatapackEditSave = async ({ name, description }: { name: string; description: string }) => {
+    const trimmedName = name.trim();
+    const trimmedDesc = description.trim();
+    const prevDesc = (datapack?.description ?? "").trim();
+
+    if (!trimmedName) {
+      throw new Error("Name is required.");
     }
-    throw new Error(
-      "The server did not apply this rename. The API may not support changing the datapack name yet.",
-    );
+
+    const payload: UpdateDatapackPayload = {};
+    if (trimmedName !== datapackName) {
+      payload.name = trimmedName;
+    }
+    if (trimmedDesc !== prevDesc) {
+      payload.description = trimmedDesc;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      return;
+    }
+
+    await updateDatapack(datapackName, payload);
+
+    const renamed = trimmedName !== datapackName;
+    if (renamed) {
+      try {
+        const st = await getDatapack(trimmedName);
+        if (st.datapack_name !== trimmedName) {
+          throw new Error("rename mismatch");
+        }
+      } catch {
+        throw new Error(
+          "The server did not apply this rename. The API may not support changing the datapack name yet.",
+        );
+      }
+      dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+      toast({
+        title: "Datapack updated",
+        description: `Renamed to "${trimmedName}".`,
+      });
+      navigate(datapackDetailPath(trimmedName), { replace: true });
+      return;
+    }
+
+    const next = await getDatapack(datapackName);
+    setDatapack(next);
+    setKnowledgeBaseCount(next.knowledge_count ?? 0);
+    setMemoriesCount(next.memory_count ?? 0);
+    setLearningsCount(next.learnings_count ?? 0);
+    setConversationsCount(next.conversations_count ?? 0);
+    dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+    toast({
+      title: "Datapack updated",
+      description: "Your changes were saved.",
+    });
   };
 
   const handleDeleteConfirm = async () => {
-    await deleteDatapack(datapackName);
+    const { message } = await deleteDatapack(datapackName);
     dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
     toast({
       title: "Datapack deleted",
-      description: `"${datapackName}" was removed.`,
+      description: message || `"${datapackName}" was removed.`,
     });
     navigate(ROUTES.datapacks, { replace: true });
   };
@@ -274,7 +311,8 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                 open={isEditNameOpen}
                 onOpenChange={setIsEditNameOpen}
                 currentName={datapackName}
-                onRename={handleRename}
+                currentDescription={datapack?.description ?? ""}
+                onSave={handleDatapackEditSave}
               />
               <DatapackDeleteConfirmDialog
                 open={isDeleteOpen}
@@ -365,7 +403,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           conversationsCount={conversationsCount}
           memoryCount={memoriesCount}
           learningsCount={learningsCount}
-          datapackId={datapackStatus?.datapack_id ?? null}
+          datapackId={datapack?.datapack_id ?? null}
           knowledgeCount={knowledgeBaseCount}
           onSelectSection={setActiveTab}
         />
@@ -375,10 +413,10 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             <DatapackDetailTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
             <div className="mt-6 min-h-0 w-full flex-1">
               {activeTab === DATAPACK_DETAIL_TAB.learnings ? (
-                datapackStatus?.datapack_id ? (
+                datapack?.datapack_id ? (
                   <MemoryPromotionPanel
                     datapackName={datapackName}
-                    datapackId={datapackStatus.datapack_id}
+                    datapackId={datapack.datapack_id}
                     variant="preview"
                   />
                 ) : (

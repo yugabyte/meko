@@ -7,14 +7,14 @@ import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import MemoryPromotionPanel from "@/features/datapacks/components/memory-promotion/MemoryPromotionPanel";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
-import { getApiErrorMessage, getDatapackStatus, type DatapackStatus } from "@/lib/mekoApi";
+import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/mekoApi";
 
 type Props = {
   datapackName: string;
 };
 
 export default function DatapackLearningsPage({ datapackName }: Props) {
-  const [datapackStatus, setDatapackStatus] = useState<DatapackStatus | null>(null);
+  const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
 
@@ -24,11 +24,11 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const s = await getDatapackStatus(datapackName);
-        if (!cancelled) setDatapackStatus(s);
+        const d = await getDatapack(datapackName);
+        if (!cancelled) setDatapack(d);
       } catch (e) {
         if (!cancelled) {
-          setDatapackStatus(null);
+          setDatapack(null);
           setStatusError(getApiErrorMessage(e, "Failed to load datapack."));
         }
       } finally {
@@ -73,8 +73,8 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
           </div>
         ) : null}
 
-        {datapackStatus?.datapack_id ? (
-          <MemoryPromotionPanel datapackName={datapackName} datapackId={datapackStatus.datapack_id} variant="full" />
+        {datapack?.datapack_id ? (
+          <MemoryPromotionPanel datapackName={datapackName} datapackId={datapack.datapack_id} variant="full" />
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
             {statusLoading ? "Loading datapack…" : "Datapack not available."}

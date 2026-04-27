@@ -11,10 +11,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
-import { createDatapack, getApiErrorMessage } from "@/lib/mekoApi";
+import { createDatapack, CurrentUser, getApiErrorMessage } from "@/lib/mekoApi";
 import { datapackConfigurePath, ROUTES } from "@/app/routes/paths";
 
-export default function DatapackNewPage() {
+export default function DatapackNewPage({ currentUser }: { currentUser: CurrentUser }) {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -34,9 +34,11 @@ export default function DatapackNewPage() {
     setIsSubmitting(true);
     setError(null);
     try {
+      const desc = description.trim();
       const created = await createDatapack({
         name: trimmed,
-        seed_knowledge_base: "",
+        user_id: currentUser.account_id,
+        ...(desc ? { description: desc } : {}),
       });
       if (created.mcp_server?.api_key) {
         localStorage.setItem("meko_latest_api_key", created.mcp_server.api_key);

@@ -37,7 +37,7 @@ export default function DatapacksPage() {
     const segments = rest.split("/").filter(Boolean);
 
     if (segments[0] === "new" && segments.length === 1) {
-      return <DatapackNewPage />;
+      return <DatapackNewPage currentUser={currentUser as CurrentUser} />;
     }
 
     const nameEncoded = segments[0];

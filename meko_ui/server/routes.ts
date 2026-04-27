@@ -10,6 +10,7 @@ type Datapack = {
   datapack_ysql_username: string;
   created_at: string;
   updated_at: string;
+  description?: string;
 };
 
 type Agent = {
@@ -42,6 +43,7 @@ const datapacks: Datapack[] = [
     datapack_ysql_username: "mcp_user",
     created_at: nowIso(),
     updated_at: nowIso(),
+    description: "",
   },
 ];
 
@@ -74,6 +76,27 @@ export async function registerRoutes(
     res.json(ok(datapacks));
   });
 
+  app.get("/api/v1/datapacks/:name", (req, res) => {
+    const name = req.params.name;
+    const dp = datapacks.find((item) => item.datapack_name === name);
+    if (!dp) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    return res.json(
+      ok({
+        ...dp,
+        description: dp.description ?? "",
+        memory_count: 0,
+        knowledge_count: (kbByDatapack[name] || []).length,
+        learnings_count: 0,
+        conversations_count: 0,
+      }),
+    );
+  });
+
   app.post("/api/v1/datapacks", (req, res) => {
     const name = String(req.body?.name || "").trim();
     if (!name) {
@@ -92,6 +115,8 @@ export async function registerRoutes(
 
     const id = `dp_${Date.now()}`;
     const createdAt = nowIso();
+    const desc =
+      typeof req.body?.description === "string" ? String(req.body.description).trim() : "";
     const created: Datapack = {
       datapack_id: id,
       datapack_name: name,
@@ -101,6 +126,7 @@ export async function registerRoutes(
       datapack_ysql_username: "mcp_user",
       created_at: createdAt,
       updated_at: createdAt,
+      description: desc,
     };
     datapacks.unshift(created);
     agentsByDatapack[name] = [
@@ -130,9 +156,15 @@ export async function registerRoutes(
         datapack_id: id,
         agent_id: agentsByDatapack[name][0].id,
         name,
+        mcp_user_name: "mcp_user",
         mcp_server: {
           url: `https://mekodev.com/${accountId}/mcp`,
           api_key: `meko_dp_${id}_secret_key`,
+        },
+        db_access: {
+          user_name: "mcp_user",
+          password: "mock",
+          conn_str: "postgresql://localhost:5433/yb",
         },
       }),
     );
@@ -148,33 +180,6 @@ export async function registerRoutes(
     res.json(ok(kbByDatapack[name] || []));
   });
 
-  app.get("/api/v1/datapacks/:name/status", (req, res) => {
-    const name = req.params.name;
-    const dp = datapacks.find((item) => item.datapack_name === name);
-    if (!dp) {
-      return res.status(404).json({
-        data: null,
-        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
-      });
-    }
-
-    return res.json(
-      ok({
-        datapack_id: dp.datapack_id,
-        datapack_name: dp.datapack_name,
-        universe_id: dp.universe_id,
-        datapack_ysql_connection_string: dp.datapack_ysql_connection_string,
-        datapack_ysql_username: dp.datapack_ysql_username,
-        created_at: dp.created_at,
-        agent_count: (agentsByDatapack[name] || []).length,
-        knowledge_base_count: (kbByDatapack[name] || []).length,
-        memories_count: 0, // TODO: Once BE supports it, need to update
-        learnings_count: 0, // TODO: Once BE supports it, need to update
-        conversations_count: 0, // TODO: Once BE supports it, need to update
-      }),
-    );
-  });
-
   app.patch("/api/v1/datapacks/:name", (req, res) => {
     const name = req.params.name;
     const dp = datapacks.find((item) => item.datapack_name === name);
@@ -184,12 +189,17 @@ export async function registerRoutes(
         error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
       });
     }
-    const newName = typeof req.body?.datapack_name === "string" ? req.body.datapack_name.trim() : "";
+    const body = req.body as Record<string, unknown> | undefined;
+    const fromName = typeof body?.name === "string" ? body.name.trim() : "";
+    const legacyDatapackName =
+      typeof body?.datapack_name === "string" ? String(body.datapack_name).trim() : "";
+    const newName = fromName || legacyDatapackName;
     const newConn =
-      typeof req.body?.datapack_ysql_connection_string === "string"
-        ? req.body.datapack_ysql_connection_string.trim()
+      typeof body?.datapack_ysql_connection_string === "string"
+        ? String(body.datapack_ysql_connection_string).trim()
         : "";
-    if (!newName && !newConn) {
+    const newDesc = typeof body?.description === "string" ? String(body.description).trim() : "";
+    if (!newName && !newConn && !newDesc) {
       return res.status(400).json({
         data: null,
         error: { code: "VALIDATION_ERROR", message: "no fields to update" },
@@ -215,6 +225,10 @@ export async function registerRoutes(
     }
     if (newConn) {
       dp.datapack_ysql_connection_string = newConn;
+      dp.updated_at = nowIso();
+    }
+    if (newDesc) {
+      dp.description = newDesc;
       dp.updated_at = nowIso();
     }
     return res.json(ok({ message: "datapack updated" }));
