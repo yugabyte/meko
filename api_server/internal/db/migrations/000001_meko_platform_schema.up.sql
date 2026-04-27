@@ -204,8 +204,8 @@ CREATE TABLE IF NOT EXISTS meko_system.agent_access (
     PRIMARY KEY ((user_id, agent_id) HASH, datapack_id ASC)
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_datapacks_datapack_id 
-    ON meko_system.agent_datapacks (datapack_id HASH, user_id ASC, agent_id ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_access_datapack_id 
+    ON meko_system.agent_access (datapack_id HASH, user_id ASC, agent_id ASC);
 
 
 CREATE TYPE meko_system.access_object_type AS ENUM ('knowledge_base', 'memory');
