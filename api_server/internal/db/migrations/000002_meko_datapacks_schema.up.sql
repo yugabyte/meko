@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS datapacks.promoted_collection (
                     payload JSONB,
                     meko_created_at TIMESTAMPTZ NOT NULL,
                     meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
-                    PRIMARY KEY (meko_datapack_id HASH)
+                    PRIMARY KEY (meko_datapack_id HASH, id ASC)
                 ) SPLIT INTO 3 TABLETS;
 
 
@@ -173,16 +173,16 @@ CREATE INDEX IF NOT EXISTS meko_mem0_graph_vertex_embeddings_hnsw_idx
 
 CREATE TABLE IF NOT EXISTS datapacks.meko_promoted_graph_vertex_embeddings (
                         meko_datapack_id UUID NOT NULL,
+                        node_graphid BIGINT NOT NULL,
                         meko_user_id UUID,
                         meko_agent_id UUID,
                         graph_name TEXT NOT NULL,
-                        node_graphid BIGINT NOT NULL,
                         node_name TEXT,
                         embeddings vector(1536) NOT NULL,
                         meko_conversation_id UUID, 
                         created_at TIMESTAMPTZ NOT NULL,
                         meko_prompted_at TIMESTAMPTZ DEFAULT NULL,
-                        PRIMARY KEY (meko_datapack_id HASH)
+                        PRIMARY KEY (meko_datapack_id HASH, node_graphid ASC)
                     ) SPLIT INTO 3 TABLETS; -- verify this needs have 128 partitions.
 
 CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
