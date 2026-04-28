@@ -3,7 +3,8 @@
 
 import type { Memory } from "@/lib/mekoApi";
 
-export const PROMOTED_STORAGE_PREFIX = "meko:promoted-memories:v2";
+/** Bumped when persisted {@link Memory} JSON shape changes (v3: flat `data` / `agent_id`). */
+export const PROMOTED_STORAGE_PREFIX = "meko:promoted-memories:v3";
 
 export type PromotedMemory = {
   memory: Memory;

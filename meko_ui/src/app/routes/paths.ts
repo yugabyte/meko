@@ -38,6 +38,10 @@ export function datapackLearningsPath(datapackName: string): string {
   return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/learnings`;
 }
 
+export function datapackMemorySummaryPath(datapackName: string): string {
+  return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/memory-summary`;
+}
+
 export const AUTH_ROUTES = [
   ROUTES.root,
   ROUTES.login,

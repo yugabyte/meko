@@ -28,6 +28,7 @@ import {
   useMemoryPromotion,
   type MemoryPromotionVariant,
 } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
+import { MemoryRowBody } from "@/features/datapacks/components/memory-promotion/memoryRowBody";
 
 type Props = {
   datapackName: string;
@@ -94,7 +95,7 @@ export default function MemoryPromotionPanel({
             </div>
             <div className="min-w-0">
               <h3 className="text-base font-semibold tracking-tight text-white">
-                <span>Learnings Session summary</span>
+                <span>Learnings Summary</span>
                 {sessionSummaryReady ? (
                   <span>
                     {" "}
@@ -277,36 +278,23 @@ export default function MemoryPromotionPanel({
             <ul className="space-y-2">
               {unpromotedMemories.map((m) => {
                 const checked = selected.has(m.id);
-                const data = m.payload?.data ?? "";
-                const agent = m.payload?.agent_id ?? "";
                 return (
                   <li
                     key={m.id}
                     className={cn(
-                      "rounded-lg border bg-[#0E1525] px-4 py-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-3",
+                      "flex items-start gap-3 rounded-lg border bg-[#0E1525] px-4 py-3",
                       checked ? "border-purple-500/50 bg-purple-500/5" : "border-border",
                     )}
                   >
                     <Checkbox
                       checked={checked}
                       onCheckedChange={() => toggleOne(m.id)}
-                      className="mt-0.5 row-start-1"
+                      className="mt-0.5 shrink-0"
                     />
-                    <div className="min-w-0 space-y-1 row-start-1">
-                      <p className="text-sm text-white break-words">
-                        {data || (
-                          <span className="italic text-muted-foreground">(empty payload.data)</span>
-                        )}
-                      </p>
-                      {agent ? (
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-                          <span>
-                            agent: <code className="text-blue-300">{agent}</code>
-                          </span>
-                        </div>
-                      ) : null}
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <MemoryRowBody memory={m} />
                     </div>
-                    <div className="col-start-2 flex flex-wrap justify-end gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                       <Button
                         type="button"
                         size="sm"
@@ -351,37 +339,27 @@ export default function MemoryPromotionPanel({
                 </li>
               )}
 
-              {promotedMemories.map((m) => {
-                const data = m.payload?.data ?? "";
-                const agent = m.payload?.agent_id ?? "";
-                return (
-                  <li
-                    key={m.id}
-                    className="rounded-lg border border-dashed border-border/60 bg-[#0E1525]/40 px-4 py-3 flex items-start gap-3 opacity-50"
-                    aria-label="Already promoted to knowledge base"
-                  >
-                    <Checkbox checked={false} disabled className="mt-0.5 cursor-not-allowed" />
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <p className="text-sm text-white break-words line-through decoration-muted-foreground/40">
-                        {data || (
-                          <span className="italic text-muted-foreground">(empty payload.data)</span>
-                        )}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-                        <span className="inline-flex items-center gap-1 rounded-full border border-green-500/30 bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-300">
-                          <CheckCircle2 className="w-3 h-3" />
-                          Promoted to KB
-                        </span>
-                        {agent ? (
-                          <span>
-                            agent: <code className="text-blue-300">{agent}</code>
-                          </span>
-                        ) : null}
-                      </div>
+              {promotedMemories.map((m) => (
+                <li
+                  key={m.id}
+                  className="flex items-start gap-3 rounded-lg border border-dashed border-border/60 bg-[#0E1525]/40 px-4 py-3 opacity-50"
+                  aria-label="Already promoted to knowledge base"
+                >
+                  <Checkbox checked={false} disabled className="mt-0.5 cursor-not-allowed" />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <MemoryRowBody
+                      memory={m}
+                      textClassName="line-through decoration-muted-foreground/40"
+                    />
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                      <span className="inline-flex items-center gap-1 rounded-full border border-green-500/30 bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-300">
+                        <CheckCircle2 className="w-3 h-3" />
+                        Promoted to KB
+                      </span>
                     </div>
-                  </li>
-                );
-              })}
+                  </div>
+                </li>
+              ))}
             </ul>
 
             {showViewAll ? (

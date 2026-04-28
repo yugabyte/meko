@@ -446,54 +446,95 @@ export async function getKBStatus(datapackName: string) {
   );
 }
 
-// --- Memories + tenant-KB promotion APIs ---
-
-export type MemoryPayload = {
-  data?: string;
-  user_id?: string;
-  agent_id?: string;
-  datapack_id?: string;
-  [key: string]: unknown;
+/** One row from GET /datapacks/:name/knowledge-bases/documents (`data` array). */
+export type KnowledgeBaseDocument = {
+  document_name: string;
+  status: string;
 };
 
+const KB_DOCS_MOCK_ON =
+  import.meta.env.VITE_MOCK_KB_DOCUMENTS === "true" ||
+  import.meta.env.VITE_MOCK_KB_DOCUMENTS === "1";
+const KB_DOCS_MOCK_OFF = import.meta.env.VITE_MOCK_KB_DOCUMENTS === "false";
+
+const MOCK_KB_DOCUMENTS_SAMPLE: KnowledgeBaseDocument[] = [
+  { document_name: "policies/refunds.pdf", status: "QUEUED" },
+  { document_name: "policies/shipping.pdf", status: "PROCESSING" },
+  { document_name: "faq.md", status: "COMPLETED" },
+  { document_name: "legacy-notes.txt", status: "FAILED" },
+];
+
+function useMockKnowledgeBaseDocuments(): boolean {
+  if (KB_DOCS_MOCK_OFF) return false;
+  if (KB_DOCS_MOCK_ON) return true;
+  // Local UI work without the GET handler yet; set VITE_MOCK_KB_DOCUMENTS=false to hit the real API in dev.
+  return import.meta.env.DEV;
+}
+
+/**
+ * GET /datapacks/:name/knowledge-bases/documents — `data`: `{ document_name, status }[]`.
+ * - Dev: returns {@link MOCK_KB_DOCUMENTS_SAMPLE} unless `VITE_MOCK_KB_DOCUMENTS=false`.
+ * - Prod: calls the API unless `VITE_MOCK_KB_DOCUMENTS=true`.
+ */
+export async function getKnowledgeBaseDocuments(
+  datapackName: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<KnowledgeBaseDocument[]> {
+  if (useMockKnowledgeBaseDocuments()) {
+    return Promise.resolve([...MOCK_KB_DOCUMENTS_SAMPLE]);
+  }
+  return request<KnowledgeBaseDocument[]>(
+    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/documents`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+// --- Memories + tenant-KB promotion APIs ---
+
+/** Tier sent as `user_type` on GET /memories. */
+export type MemoryUserType = "free" | "pro" | "enterprise";
+
+/** Default tier when callers omit `user_type` (product default). */
+export const MEMORY_LIST_DEFAULT_USER_TYPE: MemoryUserType = "pro";
+
+/**
+ * One row in GET /memories `data.memories` (same shape used in UI + promoted cache).
+ */
 export type Memory = {
   id: string;
-  payload: MemoryPayload;
+  data: string;
+  agent_id?: string;
 };
 
 /**
- * Filter for GET /api/v1/memories.
+ * GET /memories query params — only these keys are sent:
+ * `datapack_id`, `user_id`, `user_type`, `page`, `page_size`.
  *
- * Identifier semantics (server-side contract):
- * - `user_id`:     Meko `account_id` of the currently logged-in user
- *                  (`CurrentUser.account_id`, == `meko_system.account_registry.id`).
- *                  The backend filters mem0 rows on `payload->>'user_id'` with
- *                  this value, and every memory SDKs write now stamps the
- *                  account_id into `payload.user_id`. Pass `""` to skip the
- *                  row-level filter and return memories for every account
- *                  under this datapack (admin/debug use).
- * - `datapack_id`: Datapack UUID (`meko_system.datapack_registry.id`).
- *                  Required — picks which tenant DB to connect to.
- * - `agent_id`:    Agent name. When set, only that agent's
- *                  `{agent_id}_mem0_collection` table is read; when empty,
- *                  every `*_mem0_collection` table is unioned.
- * - `free_user`:   If true, skip vector similarity ranking (plain SELECT
- *                  ordered by id). Use for free-tier users to avoid the
- *                  embedding/LLM summarization cost.
- * - `page`:        1-based page number. Defaults to 1 on the server.
- * - `page_size`:   Items per page. Defaults to 20, capped at 100 by the server.
+ * `user_type` defaults to {@link MEMORY_LIST_DEFAULT_USER_TYPE} when omitted.
  */
 export type MemoryListFilter = {
-  user_id: string;
   datapack_id: string;
-  agent_id?: string;
-  free_user?: boolean;
+  user_id: string;
+  user_type?: MemoryUserType;
+  page: number;
+  page_size: number;
+};
+
+/** Echoed inside GET /memories `data.criteria` (shape may grow server-side). */
+export type MemoryListCriteria = {
+  datapack_id?: string;
   page?: number;
   page_size?: number;
 };
 
+/**
+ * GET /memories `data` payload. The HTTP envelope `{ data, error }` is handled by {@link request},
+ * which returns this object as `T` (i.e. `data` only).
+ */
 export type MemoryListResponse = {
-  criteria: MemoryListFilter;
+  criteria: MemoryListCriteria;
   memories: Memory[];
   top_k: number;
   total: number;
@@ -502,18 +543,72 @@ export type MemoryListResponse = {
   total_pages: number;
 };
 
+const MEMORIES_MOCK_ON =
+  import.meta.env.VITE_MOCK_MEMORIES === "true" || import.meta.env.VITE_MOCK_MEMORIES === "1";
+const MEMORIES_MOCK_OFF = import.meta.env.VITE_MOCK_MEMORIES === "false";
+
+function useMockMemoriesList(): boolean {
+  if (MEMORIES_MOCK_OFF) return false;
+  if (MEMORIES_MOCK_ON) return true;
+  return import.meta.env.DEV;
+}
+
+/** Fixed rows for local UI when {@link useMockMemoriesList} is active. */
+const MOCK_MEMORIES_ALL: Memory[] = [
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e101", data: "Sample memory text number 1", agent_id: "agent_alpha" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e102", data: "Sample memory text number 2", agent_id: "agent_beta" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e103", data: "Sample memory text number 3", agent_id: "agent_gamma" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e104", data: "Sample memory text number 4" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e105", data: "Sample memory text number 5", agent_id: "agent_alpha" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e106", data: "Sample memory text number 6", agent_id: "agent_beta" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e107", data: "Sample memory text number 7", agent_id: "agent_gamma" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e108", data: "Sample memory text number 8", agent_id: "agent_gamma" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e109", data: "Sample memory text number 9", agent_id: "agent_gamma" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e110", data: "Sample memory text number 10", agent_id: "agent_gamma" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e111", data: "Sample memory text number 11", agent_id: "agent_gamma" },
+  { id: "122405bb-5ff9-4030-9b72-fcb996d1e112", data: "Sample memory text number 12", agent_id: "agent_gamma" },
+];
+
+function buildMockMemoryListResponse(params: MemoryListFilter): MemoryListResponse {
+  const total = MOCK_MEMORIES_ALL.length;
+  const page = Math.max(1, params.page);
+  const pageSize = Math.max(1, params.page_size);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  const memories = MOCK_MEMORIES_ALL.slice(start, start + pageSize);
+  return {
+    criteria: {
+      datapack_id: params.datapack_id,
+      page: safePage,
+      page_size: pageSize,
+    },
+    memories,
+    top_k: 0,
+    total,
+    page: safePage,
+    page_size: pageSize,
+    total_pages: totalPages,
+  };
+}
+
+/**
+ * GET /memories. In dev, returns {@link buildMockMemoryListResponse} unless `VITE_MOCK_MEMORIES=false`;
+ * set `VITE_MOCK_MEMORIES=true` in any mode to force mock; omit both to use the real API in production.
+ */
 export async function listMemories(
   params: MemoryListFilter,
   options: { signal?: AbortSignal } = {},
-) {
+): Promise<MemoryListResponse> {
+  if (useMockMemoriesList()) {
+    return Promise.resolve(buildMockMemoryListResponse(params));
+  }
   const qs = new URLSearchParams();
-  qs.set("user_id", params.user_id);
   qs.set("datapack_id", params.datapack_id);
-  if (params.agent_id) qs.set("agent_id", params.agent_id);
-  if (params.free_user) qs.set("free_user", "true");
-  if (params.page && params.page > 0) qs.set("page", String(params.page));
-  if (params.page_size && params.page_size > 0)
-    qs.set("page_size", String(params.page_size));
+  qs.set("user_id", params.user_id);
+  qs.set("user_type", params.user_type ?? MEMORY_LIST_DEFAULT_USER_TYPE);
+  qs.set("page", String(params.page));
+  qs.set("page_size", String(params.page_size));
   return request<MemoryListResponse>(`/memories?${qs.toString()}`, "GET", undefined, options);
 }
 

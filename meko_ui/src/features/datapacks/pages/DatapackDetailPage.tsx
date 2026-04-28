@@ -44,6 +44,8 @@ import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
+import { MemoryReadOnlySummaryPanel } from "@/features/datapacks/components/memory-promotion/MemoryReadOnlySummaryPanel";
+import { KnowledgeDocumentsPanel } from "@/features/datapacks/components/knowledge-documents/KnowledgeDocumentsPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
 import { DatapackDetailMembersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailMembersTile";
@@ -164,23 +166,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       cancelled = true;
     };
   }, [datapackName, datapack?.datapack_id]);
-
-  // useEffect(() => {
-  //   const ac = new AbortController();
-  //   setKnowledgeBaseCount(0);
-  //   const run = async () => {
-  //     try {
-  //       const list = await listKnowledgeBases(datapackName, { signal: ac.signal });
-  //       if (ac.signal.aborted) return;
-  //       setKnowledgeBaseCount(list.length);
-  //     } catch {
-  //       if (ac.signal.aborted) return;
-  //       setKnowledgeBaseCount(0);
-  //     }
-  //   };
-  //   void run();
-  //   return () => ac.abort();
-  // }, [datapackName]);
 
   useEffect(() => {
     if (!isConnectOpen) return;
@@ -440,6 +425,24 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               {activeTab === DATAPACK_DETAIL_TAB.learnings ? (
                 datapack?.datapack_id ? (
                   <MemoryPromotionPanel
+                    datapackName={datapackName}
+                    datapackId={datapack.datapack_id}
+                    variant="preview"
+                  />
+                ) : (
+                  <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
+                    {statusLoading ? "Loading datapack…" : "Datapack not available."}
+                  </div>
+                )
+              ) : activeTab === DATAPACK_DETAIL_TAB.knowledge ? (
+                <KnowledgeDocumentsPanel
+                  datapackName={datapackName}
+                  knowledgeBaseCount={knowledgeBaseCount}
+                  datapackSummaryReady={!statusLoading && datapack != null}
+                />
+              ) : activeTab === DATAPACK_DETAIL_TAB.memory ? (
+                datapack?.datapack_id ? (
+                  <MemoryReadOnlySummaryPanel
                     datapackName={datapackName}
                     datapackId={datapack.datapack_id}
                     variant="preview"

@@ -7,7 +7,12 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { ArrowLeftRight, BookOpen, ChevronRight, Loader2, MessageSquare, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { CurrentUser, getCurrentUser, listMemories } from "@/lib/mekoApi";
+import {
+  CurrentUser,
+  getCurrentUser,
+  listMemories,
+  MEMORY_LIST_DEFAULT_USER_TYPE,
+} from "@/lib/mekoApi";
 import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
 const toneStyles: Record<DatapackDetailTab, string> = {
@@ -176,9 +181,9 @@ export function CollectiveLearningPipeline({
         const user = currentUser ?? await getCurrentUser({ signal: ac.signal });
         const resp = await listMemories(
           {
-            user_id: user.account_id,
             datapack_id: datapackId,
-            free_user: true,
+            user_id: user.account_id,
+            user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
             page: 1,
             page_size: 1,
           },

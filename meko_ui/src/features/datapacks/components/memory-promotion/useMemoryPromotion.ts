@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getCurrentUser,
   listMemories,
+  MEMORY_LIST_DEFAULT_USER_TYPE,
   syncMemoriesToKB,
   type Memory,
   type TenantKBSyncResult,
@@ -97,9 +98,9 @@ export function useMemoryPromotion({
     setPromoteError(null);
     try {
       const resp = await listMemories({
-        user_id: accountId,
         datapack_id: datapackId,
-        free_user: true,
+        user_id: accountId,
+        user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
         page: effectivePage,
         page_size: effectivePageSize,
       });
