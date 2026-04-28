@@ -1,5 +1,8 @@
+// Placeholder card for org-scoped link sharing on the datapack share page (feature not enabled yet).
+// Uses ShareComingSoonPlaceholder with a blurred mock toggle so the section matches the rest of the layout.
 import { Link2 } from "lucide-react";
 import { DatapackShareSectionCard } from "@/features/datapacks/components/datapack-share/DatapackShareSectionCard";
+import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/datapack-share/ShareComingSoonPlaceholder";
 
 export function LinkSharingSection() {
   return (
@@ -12,13 +15,9 @@ export function LinkSharingSection() {
         </span>
       }
     >
-      <div
-        className="relative min-h-[112px] overflow-hidden rounded-lg border border-dashed border-border bg-muted/5"
-        role="status"
+      <ShareComingSoonPlaceholder
         aria-label="Link sharing — coming soon"
-      >
-        {/* Placeholder UI (blurred), similar spirit to non-Overview tabs on DatapackDetailPage */}
-        <div className="pointer-events-none select-none px-4 py-5 blur-[3px] opacity-60">
+        blurredPreview={
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 space-y-1">
               <p className="text-sm font-medium text-foreground">
@@ -33,14 +32,8 @@ export function LinkSharingSection() {
               aria-hidden
             />
           </div>
-        </div>
-
-        <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-[2px]">
-          <p className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold tracking-tight text-foreground shadow-sm">
-            Coming Soon
-          </p>
-        </div>
-      </div>
+        }
+      />
     </DatapackShareSectionCard>
   );
 }

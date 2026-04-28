@@ -331,6 +331,167 @@ export async function deleteDatapack(name: string) {
   return request<DeleteDatapackResponse>(`/datapacks/${encodeURIComponent(name)}`, "DELETE");
 }
 
+// --- Datapack share / invites (paths are under `API_BASE`, typically `/api/v1`) ---
+
+/** Role granted on a shared datapack. */
+export type DatapackShareGrant = "viewer" | "contributor" | "maintainer";
+
+/** Recipient action on a pending invite. */
+export type DatapackInviteUserAction = "accept" | "decline";
+
+/** Body for POST /datapacks/:name/share */
+export type InviteDatapackSharePayload = {
+  recipient_email: string;
+  grant: DatapackShareGrant;
+};
+
+/** `data` from POST /datapacks/:name/share */
+export type InviteDatapackShareResponse = {
+  status: string;
+  invite_id: string;
+  recipient_email: string;
+  grant: DatapackShareGrant;
+};
+
+/**
+ * Invite someone to a datapack.
+ * POST /datapacks/:name/share
+ */
+export async function inviteDatapackShare(datapackName: string, payload: InviteDatapackSharePayload) {
+  return request<InviteDatapackShareResponse>(
+    `/datapacks/${encodeURIComponent(datapackName)}/share`,
+    "POST",
+    payload,
+  );
+}
+
+/** One row from GET /datapacks/incoming-shares */
+export type DatapackIncomingShare = {
+  invite_id: string;
+  owner_user_id: string;
+  owner_name: string;
+  grant: DatapackShareGrant;
+  datapack_name: string;
+  datapack_id: string;
+};
+
+/**
+ * Invites for the signed-in recipient (pending shares to accept or decline).
+ * GET /datapacks/incoming-shares — `data` is an array (empty when none).
+ */
+export async function listDatapackIncomingShares(options: { signal?: AbortSignal } = {}) {
+  return request<DatapackIncomingShare[]>("/datapacks/incoming-shares", "GET", undefined, options);
+}
+
+/** Body for POST /datapacks/invite-action */
+export type DatapackInviteActionPayload = {
+  invite_id: string;
+  recipient_user_id: string;
+  user_action: DatapackInviteUserAction;
+};
+
+/**
+ * Accept or decline a datapack share invite.
+ * POST /datapacks/invite-action
+ */
+export async function postDatapackInviteAction(payload: DatapackInviteActionPayload) {
+  return request<unknown>("/datapacks/invite-action", "POST", payload);
+}
+
+/** Active member on an outgoing share listing */
+export type DatapackOutgoingMember = {
+  user_id: string;
+  is_owner: boolean;
+  user_name: string;
+  user_email_id: string;
+  grant: DatapackShareGrant;
+};
+
+/** Pending invite on an outgoing share listing */
+export type DatapackOutgoingPendingInvite = {
+  invite_id: string;
+  grant: DatapackShareGrant;
+  recipient_user_id: string;
+  recipient_user_name: string;
+  recipient_email_id: string;
+};
+
+/** `data` from GET /datapacks/:name/outgoing-shares */
+export type DatapackOutgoingSharesResponse = {
+  members: DatapackOutgoingMember[];
+  pending_invites: DatapackOutgoingPendingInvite[];
+};
+
+/**
+ * List members and pending invites for a datapack (owner view).
+ * GET /datapacks/:name/outgoing-shares
+ */
+export async function listDatapackOutgoingShares(
+  datapackName: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<DatapackOutgoingSharesResponse>(
+    `/datapacks/${encodeURIComponent(datapackName)}/outgoing-shares`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+/**
+ * Resend a pending invite (owner).
+ * POST /datapacks/:name/invite/:inviteId/resend
+ */
+export async function resendDatapackInvite(datapackName: string, inviteId: string) {
+  return request<unknown>(
+    `/datapacks/${encodeURIComponent(datapackName)}/invite/${encodeURIComponent(inviteId)}/resend`,
+    "POST",
+  );
+}
+
+/**
+ * Revoke a pending invite before acceptance (owner).
+ * DELETE /datapacks/:name/invite/:inviteId
+ */
+export async function revokeDatapackInvite(datapackName: string, inviteId: string) {
+  return request<unknown>(
+    `/datapacks/${encodeURIComponent(datapackName)}/invite/${encodeURIComponent(inviteId)}`,
+    "DELETE",
+  );
+}
+
+/** Body for PATCH /datapacks/:name/share/:shareUserId */
+export type UpdateDatapackMemberGrantPayload = {
+  grant: DatapackShareGrant;
+};
+
+/**
+ * Update an active member’s grant (owner).
+ * PATCH /datapacks/:name/share/:shareUserId
+ */
+export async function updateDatapackMemberGrant(
+  datapackName: string,
+  shareUserId: string,
+  payload: UpdateDatapackMemberGrantPayload,
+) {
+  return request<unknown>(
+    `/datapacks/${encodeURIComponent(datapackName)}/share/${encodeURIComponent(shareUserId)}`,
+    "PATCH",
+    payload,
+  );
+}
+
+/**
+ * Remove a member’s access / delete active share (owner).
+ * DELETE /datapacks/:name/share/:shareUserId
+ */
+export async function removeDatapackMemberShare(datapackName: string, shareUserId: string) {
+  return request<unknown>(
+    `/datapacks/${encodeURIComponent(datapackName)}/share/${encodeURIComponent(shareUserId)}`,
+    "DELETE",
+  );
+}
+
 export async function signup(payload: SignupPayload) {
   return request<SignupResponse>("/auth/signup", "POST", payload);
 }
