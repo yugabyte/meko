@@ -170,6 +170,90 @@ func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.Middleware
 	}
 }
 
+// DatapackAccessLookup abstracts datapack lookup for the access
+// middleware: ownership first, then shared access via agent_access.
+type DatapackAccessLookup interface {
+	GetByName(userID, name string) (*models.Datapack, error)
+	GetByNameForSharedAccess(userID, name string) (*models.Datapack, error)
+}
+
+// ContextKeyAccessLevel is set by RequireDatapackAccess to "owner" or
+// "shared" so handlers can branch on access level.
+const ContextKeyAccessLevel = "access_level"
+
+// RequireDatapackAccess returns Echo middleware that verifies the
+// authenticated user either owns the datapack or has shared access to
+// it via agent_access. Must run after RequireAuth.
+//
+// On success the resolved *models.Datapack is stored under
+// ContextKeyDatapack and the access level ("owner" or "shared") under
+// ContextKeyAccessLevel.
+func RequireDatapackAccess(datapacks DatapackAccessLookup) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			account, err := GetAccount(c)
+			if err != nil {
+				return authError(c, "missing account context")
+			}
+
+			name := c.Param("name")
+			if name == "" {
+				return c.JSON(http.StatusBadRequest, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "VALIDATION_ERROR",
+						"message": "datapack name is required",
+					},
+				})
+			}
+
+			dp, err := datapacks.GetByName(account.ID, name)
+			if err != nil {
+				slog.Error("access lookup failed",
+					"datapack", name, "user_id", account.ID, "error", err)
+				return c.JSON(http.StatusInternalServerError, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "INTERNAL_ERROR",
+						"message": "failed to verify datapack access",
+					},
+				})
+			}
+			if dp != nil {
+				c.Set(ContextKeyDatapack, dp)
+				c.Set(ContextKeyAccessLevel, "owner")
+				return next(c)
+			}
+
+			dp, err = datapacks.GetByNameForSharedAccess(account.ID, name)
+			if err != nil {
+				slog.Error("shared access lookup failed",
+					"datapack", name, "user_id", account.ID, "error", err)
+				return c.JSON(http.StatusInternalServerError, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "INTERNAL_ERROR",
+						"message": "failed to verify datapack access",
+					},
+				})
+			}
+			if dp == nil {
+				return c.JSON(http.StatusNotFound, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "NOT_FOUND",
+						"message": fmt.Sprintf("datapack %q not found", name),
+					},
+				})
+			}
+
+			c.Set(ContextKeyDatapack, dp)
+			c.Set(ContextKeyAccessLevel, "shared")
+			return next(c)
+		}
+	}
+}
+
 // DevAuth returns middleware that injects a dev account into the request
 // context, auto-creating one in the database on first use. This enables
 // local testing without Cognito. Must only be used when auth is disabled.

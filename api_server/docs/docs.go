@@ -459,6 +459,92 @@ const docTemplate = `{
                 }
             }
         },
+        "/datapacks/incoming-shares": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "List incoming share invites for the authenticated user",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/invite-action": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Accept or decline a pending invite",
+                "parameters": [
+                    {
+                        "description": "Action request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.InviteActionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/datapacks/{name}": {
             "get": {
                 "security": [
@@ -760,6 +846,98 @@ const docTemplate = `{
                 }
             }
         },
+        "/datapacks/{name}/invite/{invite_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Revoke a pending invite",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Invite ID",
+                        "name": "invite_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/{name}/invite/{invite_id}/resend": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Resend a pending invite",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Invite ID",
+                        "name": "invite_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/datapacks/{name}/knowledge-bases": {
             "get": {
                 "security": [
@@ -872,6 +1050,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/datapacks/{name}/knowledge-bases/counts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge-bases"
+                ],
+                "summary": "Knowledge base counts breakdown for a datapack",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/datapacks/{name}/knowledge-bases/create": {
             "post": {
                 "security": [
@@ -922,6 +1145,51 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/{name}/knowledge-bases/documents": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge-bases"
+                ],
+                "summary": "List uploaded documents for a datapack",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1202,6 +1470,178 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/{name}/outgoing-shares": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "List outgoing shares for a datapack",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/{name}/share": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Invite a person to a datapack",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Invite request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.InviteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/{name}/share/{share_user_id}": {
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Update a member's grant level",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Member user ID",
+                        "name": "share_user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New grant",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.UpdateGrantRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1554,6 +1994,31 @@ const docTemplate = `{
                 }
             }
         },
+        "service.InviteActionRequest": {
+            "type": "object",
+            "properties": {
+                "invite_id": {
+                    "type": "string"
+                },
+                "recipient_user_id": {
+                    "type": "string"
+                },
+                "user_action": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.InviteRequest": {
+            "type": "object",
+            "properties": {
+                "grant": {
+                    "type": "string"
+                },
+                "recipient_email": {
+                    "type": "string"
+                }
+            }
+        },
         "service.LinkAgentRequest": {
             "type": "object",
             "properties": {
@@ -1586,6 +2051,14 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "password": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.UpdateGrantRequest": {
+            "type": "object",
+            "properties": {
+                "grant": {
                     "type": "string"
                 }
             }

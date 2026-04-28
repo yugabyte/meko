@@ -233,15 +233,42 @@ CREATE TABLE IF NOT EXISTS meko_system.agent_access_permissions (
     agent_id            VARCHAR NOT NULL,
     datapack_id         UUID NOT NULL,
     object_type         meko_system.access_object_type NOT NULL,
-    object_id           UUID NOT NULL,      -- TODO: define what this id will be for knowledge and memory (rag_source_id or memory_id)
+    -- object_id           UUID NOT NULL,      -- TODO: define what this id will be for knowledge and memory (rag_source_id or memory_id)
     permission          meko_system.access_permission NOT NULL DEFAULT 'read',
     datapack_share_URL   TEXT,
     datapack_shared_at   TIMESTAMPTZ DEFAULT NOW(),
     datapack_shared_status meko_system.datapack_shared_status NOT NULL DEFAULT 'inactive',
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY  ((user_id , agent_id) HASH, datapack_id ASC, object_type ASC, object_id ASC)
+    PRIMARY KEY  ((user_id , agent_id) HASH, datapack_id ASC, object_type ASC) -- TODO: Removed object_id from the primary key. It will be re-added when we have granular access control.
 );
+
+
+-- Datapack sharing invites
+CREATE TYPE meko_system.invite_status AS ENUM ('pending', 'accepted', 'declined', 'revoked');
+
+CREATE TABLE IF NOT EXISTS meko_system.datapack_invites (
+    invite_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    datapack_id          UUID NOT NULL,
+    owner_user_id        UUID NOT NULL,
+    recipient_email      VARCHAR NOT NULL,
+    recipient_user_id    UUID,
+    grant_role           VARCHAR NOT NULL,
+    status               meko_system.invite_status NOT NULL DEFAULT 'pending',
+    created_at           TIMESTAMPTZ DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_invites_recipient_email_status
+    ON meko_system.datapack_invites (recipient_email, status)
+    WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_invites_datapack_id
+    ON meko_system.datapack_invites (datapack_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_datapack_email_pending
+    ON meko_system.datapack_invites (datapack_id, recipient_email)
+    WHERE status = 'pending';
 
 
 -- Langfuse mappings

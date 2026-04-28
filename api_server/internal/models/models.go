@@ -140,6 +140,72 @@ type PromoteMemoriesResult struct {
 	NotFoundIDs []string `json:"not_found_ids"`
 }
 
+// GrantRole represents the API-level share role. The backend translates
+// each role into two agent_access_permissions rows (one per object_type).
+type GrantRole string
+
+const (
+	GrantViewer      GrantRole = "viewer"
+	GrantContributor GrantRole = "contributor"
+	GrantMaintainer  GrantRole = "maintainer"
+)
+
+// ValidGrantRole reports whether s is a recognised grant role.
+func ValidGrantRole(s string) bool {
+	switch GrantRole(s) {
+	case GrantViewer, GrantContributor, GrantMaintainer:
+		return true
+	}
+	return false
+}
+
+// DatapackInvite represents a row from meko_system.datapack_invites.
+type DatapackInvite struct {
+	InviteID        string    `json:"invite_id"`
+	DatapackID      string    `json:"datapack_id"`
+	OwnerUserID     string    `json:"owner_user_id"`
+	RecipientEmail  string    `json:"recipient_email"`
+	RecipientUserID *string   `json:"recipient_user_id,omitempty"`
+	GrantRole       string    `json:"grant"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// IncomingShare is returned by GET /datapacks/incoming-shares.
+type IncomingShare struct {
+	InviteID     string `json:"invite_id"`
+	OwnerUserID  string `json:"owner_user_id"`
+	OwnerName    string `json:"owner_name"`
+	GrantRole    string `json:"grant"`
+	DatapackID   string `json:"datapack_id"`
+	DatapackName string `json:"datapack_name"`
+}
+
+// OutgoingShareMember is a user who has accepted and has active access.
+type OutgoingShareMember struct {
+	UserID    string `json:"user_id"`
+	IsOwner   bool   `json:"is_owner"`
+	UserName  string `json:"user_name"`
+	UserEmail string `json:"user_email_id"`
+	GrantRole string `json:"grant"`
+}
+
+// OutgoingSharePendingInvite is an invite that has not been accepted yet.
+type OutgoingSharePendingInvite struct {
+	InviteID           string  `json:"invite_id"`
+	GrantRole          string  `json:"grant"`
+	RecipientUserID    *string `json:"recipient_user_id"`
+	RecipientUserName  *string `json:"recipient_user_name"`
+	RecipientEmailID   string  `json:"recipient_email_id"`
+}
+
+// OutgoingSharesResponse is returned by GET /datapacks/:name/outgoing-shares.
+type OutgoingSharesResponse struct {
+	Members        []OutgoingShareMember      `json:"members"`
+	PendingInvites []OutgoingSharePendingInvite `json:"pending_invites"`
+}
+
 // EmbeddingDims returns the vector dimension for a given embedding model name.
 // Defaults to 1536 for unrecognized models.
 func EmbeddingDims(embedModel string) int {

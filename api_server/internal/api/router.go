@@ -30,6 +30,8 @@ type serviceRegistry struct {
 	memoriesSvc        *service.MemoriesService
 	promoteMemoriesSvc *service.PromoteMemoriesService
 	s3Svc              *service.S3Service
+	sharingRepo *repository.SharingRepo
+	sharingSvc  *service.SharingService
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -56,6 +58,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	promoteMemoriesRepo := repository.NewPromoteMemoriesRepo(cfg.DB)
 	promoteMemoriesSvc := service.NewPromoteMemoriesService(promoteMemoriesRepo)
+
+	sharingRepo := repository.NewSharingRepo(cfg.DB)
+	sharingSvc := service.NewSharingService(sharingRepo, nil)
 	var s3Svc *service.S3Service
 	if cfg.S3Bucket != "" {
 		var err error
@@ -96,6 +101,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		memoriesSvc:        memoriesSvc,
 		promoteMemoriesSvc: promoteMemoriesSvc,
 		s3Svc:              s3Svc,
+		sharingRepo: sharingRepo,
+		sharingSvc:  sharingSvc,
 	}
 }
 
@@ -186,6 +193,13 @@ func registerAuthRoutes(
 	if provisioner := buildProvisioner(cfg, reg); provisioner != nil {
 		authOpts = append(authOpts, service.WithProvisioner(provisioner))
 	}
+	if reg.sharingRepo != nil {
+		authOpts = append(authOpts, service.WithInviteBackfiller(reg.sharingRepo))
+	}
+
+	// Late-bind the cognito client into the sharing service now that
+	// it has been initialized.
+	reg.sharingSvc.SetCognito(cognitoClient)
 
 	authSvc := service.NewAuthService(cognitoClient, reg.accountRepo, authOpts...)
 	authH := handlers.NewAuthHandler(authSvc)
@@ -242,6 +256,10 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	g.GET("/agents", agentH.ListUser)
 	g.DELETE("/agents/:agent_id", agentH.DeleteUser)
 
+	shareH := handlers.NewSharingHandler(reg.sharingSvc)
+	g.GET("/datapacks/incoming-shares", shareH.IncomingShares)
+	g.POST("/datapacks/invite-action", shareH.InviteAction)
+
 	named := g.Group("/datapacks/:name",
 		auth.RequireDatapackOwnership(reg.dpRepo),
 	)
@@ -281,6 +299,12 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 
 	named.GET("/knowledge-bases/counts", kbH.Counts)
 	named.GET("/knowledge-bases/documents", kbH.Documents)
+
+	named.POST("/share", shareH.Invite)
+	named.GET("/outgoing-shares", shareH.OutgoingShares)
+	named.POST("/invite/:invite_id/resend", shareH.ResendInvite)
+	named.DELETE("/invite/:invite_id", shareH.RevokeInvite)
+	named.PATCH("/share/:share_user_id", shareH.UpdateGrant)
 
 	slog.Info("datapack routes registered")
 }

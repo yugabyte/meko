@@ -46,12 +46,20 @@ type Provisioner interface {
 	ProvisionNewAccount(ctx context.Context, accountID string)
 }
 
+// InviteBackfiller sets recipient_user_id on pending datapack_invites
+// that match the new user's email. Called after account creation so
+// the new user can see and accept their pending invites.
+type InviteBackfiller interface {
+	BackfillRecipientUserID(email, userID string) (int64, error)
+}
+
 // AuthService orchestrates user authentication operations: signup,
 // email confirmation, login, and logout.
 type AuthService struct {
-	cognito     CognitoProvider
-	accounts    AccountStore
-	provisioner Provisioner
+	cognito          CognitoProvider
+	accounts         AccountStore
+	provisioner      Provisioner
+	inviteBackfiller InviteBackfiller
 }
 
 // AuthServiceOption configures optional AuthService dependencies.
@@ -61,6 +69,12 @@ type AuthServiceOption func(*AuthService)
 // a new account is JIT-created via EnsureAccountFromIDToken.
 func WithProvisioner(p Provisioner) AuthServiceOption {
 	return func(s *AuthService) { s.provisioner = p }
+}
+
+// WithInviteBackfiller sets the invite backfiller that updates pending
+// invites with the new user's ID after account creation.
+func WithInviteBackfiller(b InviteBackfiller) AuthServiceOption {
+	return func(s *AuthService) { s.inviteBackfiller = b }
 }
 
 // NewAuthService creates a new AuthService.
@@ -130,6 +144,8 @@ func (s *AuthService) Signup(
 		"account_id", acct.ID,
 		"email", req.Email,
 	)
+
+	s.backfillInvites(acct.Email, acct.ID)
 
 	if s.provisioner != nil {
 		slog.Info("Triggering post-signup provisioning",
@@ -324,6 +340,8 @@ func (s *AuthService) EnsureAccountFromIDToken(
 		"cognito_sub", claims.Sub,
 	)
 
+	s.backfillInvites(claims.Email, acct.ID)
+
 	if s.provisioner != nil {
 		slog.Info("Triggering post-signup provisioning",
 			"account_id", acct.ID,
@@ -355,6 +373,27 @@ func parseIDTokenClaims(rawToken string) (*idTokenClaims, error) {
 		return nil, fmt.Errorf("id token missing sub claim")
 	}
 	return &claims, nil
+}
+
+// backfillInvites updates pending datapack_invites that match the
+// user's email with their newly created user ID. Best-effort: errors
+// are logged but do not block the signup/login flow.
+func (s *AuthService) backfillInvites(email, userID string) {
+	if s.inviteBackfiller == nil {
+		return
+	}
+	n, err := s.inviteBackfiller.BackfillRecipientUserID(email, userID)
+	if err != nil {
+		slog.Warn("invite backfill failed (non-fatal)",
+			"email", email, "error", err,
+		)
+		return
+	}
+	if n > 0 {
+		slog.Info("backfilled pending invites for new user",
+			"email", email, "user_id", userID, "count", n,
+		)
+	}
 }
 
 func validateSignupRequest(req SignupRequest) error {

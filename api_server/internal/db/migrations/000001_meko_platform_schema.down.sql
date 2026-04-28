@@ -11,6 +11,10 @@ DROP TABLE IF EXISTS meko_system.langfuse_org_mapping;
 -- Drop tier config
 DROP TABLE IF EXISTS meko_system.tier_config;
 
+-- Drop sharing tables
+DROP TABLE IF EXISTS meko_system.datapack_invites;
+DROP TYPE IF EXISTS meko_system.invite_status;
+
 -- Drop core tables in reverse dependency order
 DROP TABLE IF EXISTS meko_system.agent_access_permissions;
 DROP TABLE IF EXISTS meko_system.agent_access;

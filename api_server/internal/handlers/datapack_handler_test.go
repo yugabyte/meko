@@ -42,6 +42,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *sql.DB) {
 func cleanupDatapacks(t *testing.T, db *sql.DB) {
 	t.Helper()
 	stmts := []string{
+		`DELETE FROM meko_system.datapack_invites`,
 		`DELETE FROM meko_system.knowledge_bases`,
 		`DELETE FROM meko_system.agent_access_permissions`,
 		`DELETE FROM meko_system.agent_access`,

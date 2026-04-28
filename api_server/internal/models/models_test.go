@@ -33,3 +33,19 @@ func TestEmbeddingDims_UnknownModel(t *testing.T) {
 		)
 	}
 }
+
+func TestValidGrantRole(t *testing.T) {
+	valid := []string{"viewer", "contributor", "maintainer"}
+	for _, v := range valid {
+		if !models.ValidGrantRole(v) {
+			t.Errorf("ValidGrantRole(%q) = false, want true", v)
+		}
+	}
+
+	invalid := []string{"", "admin", "can_view", "can_edit_memories", "owner", "superadmin"}
+	for _, v := range invalid {
+		if models.ValidGrantRole(v) {
+			t.Errorf("ValidGrantRole(%q) = true, want false", v)
+		}
+	}
+}

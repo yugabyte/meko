@@ -84,6 +84,22 @@ definitions:
       agent_id:
         type: string
     type: object
+  service.InviteActionRequest:
+    properties:
+      invite_id:
+        type: string
+      recipient_user_id:
+        type: string
+      user_action:
+        type: string
+    type: object
+  service.InviteRequest:
+    properties:
+      grant:
+        type: string
+      recipient_email:
+        type: string
+    type: object
   service.LinkAgentRequest:
     properties:
       agent_id:
@@ -105,6 +121,11 @@ definitions:
       last_name:
         type: string
       password:
+        type: string
+    type: object
+  service.UpdateGrantRequest:
+    properties:
+      grant:
         type: string
     type: object
   service.UpdateOnboardingRequest:
@@ -596,6 +617,64 @@ paths:
       summary: Unlink an agent from a datapack
       tags:
       - agents
+  /datapacks/{name}/invite/{invite_id}:
+    delete:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Invite ID
+        in: path
+        name: invite_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Revoke a pending invite
+      tags:
+      - sharing
+  /datapacks/{name}/invite/{invite_id}/resend:
+    post:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Invite ID
+        in: path
+        name: invite_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Resend a pending invite
+      tags:
+      - sharing
   /datapacks/{name}/knowledge-bases:
     get:
       parameters:
@@ -704,6 +783,34 @@ paths:
       summary: Delete a knowledge base
       tags:
       - knowledge-bases
+  /datapacks/{name}/knowledge-bases/counts:
+    get:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Knowledge base counts breakdown for a datapack
+      tags:
+      - knowledge-bases
   /datapacks/{name}/knowledge-bases/create:
     post:
       parameters:
@@ -738,6 +845,34 @@ paths:
       security:
       - BearerAuth: []
       summary: Create or refresh a knowledge base from uploaded files
+      tags:
+      - knowledge-bases
+  /datapacks/{name}/knowledge-bases/documents:
+    get:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List uploaded documents for a datapack
       tags:
       - knowledge-bases
   /datapacks/{name}/knowledge-bases/status:
@@ -880,6 +1015,115 @@ paths:
       summary: Generate Langfuse project keys for a datapack
       tags:
       - datapacks
+  /datapacks/{name}/outgoing-shares:
+    get:
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List outgoing shares for a datapack
+      tags:
+      - sharing
+  /datapacks/{name}/share:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Invite request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.InviteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Invite a person to a datapack
+      tags:
+      - sharing
+  /datapacks/{name}/share/{share_user_id}:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Datapack name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Member user ID
+        in: path
+        name: share_user_id
+        required: true
+        type: string
+      - description: New grant
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.UpdateGrantRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Update a member's grant level
+      tags:
+      - sharing
   /datapacks/{name}/status:
     get:
       parameters:
@@ -908,6 +1152,59 @@ paths:
       summary: Get datapack status
       tags:
       - datapacks
+  /datapacks/incoming-shares:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List incoming share invites for the authenticated user
+      tags:
+      - sharing
+  /datapacks/invite-action:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Action request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.InviteActionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Accept or decline a pending invite
+      tags:
+      - sharing
   /health:
     get:
       produces:

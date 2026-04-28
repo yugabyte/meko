@@ -267,6 +267,42 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 	return &d, nil
 }
 
+// GetByNameForSharedAccess looks up a datapack by name where the given
+// user has shared access via agent_access. Used by RequireDatapackAccess
+// as a fallback when ownership lookup fails. Returns (nil, nil) if no
+// matching shared datapack is found.
+func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Datapack, error) {
+	var d models.Datapack
+	err := r.db.QueryRow(
+		`SELECT d.datapack_id, d.user_id, d.datapack_name,
+		        COALESCE(d.created_by_agent_id, ''),
+		        d.universe_id, d.datapack_ysql_connection_string,
+		        d.datapack_ysql_username,
+		        d.created_at, d.updated_at,
+		        COALESCE(d.datapack_details->>'description', '')
+		 FROM meko_system.datapacks d
+		 JOIN meko_system.agent_access aa
+		      ON aa.datapack_id = d.datapack_id AND aa.user_id = $1
+		 WHERE d.datapack_name = $2
+		 LIMIT 1`,
+		userID, name,
+	).Scan(
+		&d.ID, &d.UserID, &d.Name,
+		&d.CreatedByAgentID,
+		&d.UniverseID, &d.YBUniverseConn,
+		&d.MCPUserName,
+		&d.CreatedAt, &d.UpdatedAt,
+		&d.Description,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shared datapack: %w", err)
+	}
+	return &d, nil
+}
+
 // UpdateDatapackParams holds the optional fields for a partial update.
 // Only non-empty fields are applied.
 type UpdateDatapackParams struct {

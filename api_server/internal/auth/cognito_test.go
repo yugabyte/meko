@@ -34,6 +34,11 @@ type mockCognitoAPI struct {
 		ctx context.Context, params *cip.GlobalSignOutInput,
 		optFns ...cipOpt,
 	) (*cip.GlobalSignOutOutput, error)
+
+	adminCreateUserFn func(
+		ctx context.Context, params *cip.AdminCreateUserInput,
+		optFns ...cipOpt,
+	) (*cip.AdminCreateUserOutput, error)
 }
 
 func (m *mockCognitoAPI) SignUp(
@@ -66,6 +71,17 @@ func (m *mockCognitoAPI) GlobalSignOut(
 	optFns ...func(*cip.Options),
 ) (*cip.GlobalSignOutOutput, error) {
 	return m.globalSignOutFn(ctx, params, optFns...)
+}
+
+func (m *mockCognitoAPI) AdminCreateUser(
+	ctx context.Context,
+	params *cip.AdminCreateUserInput,
+	optFns ...func(*cip.Options),
+) (*cip.AdminCreateUserOutput, error) {
+	if m.adminCreateUserFn != nil {
+		return m.adminCreateUserFn(ctx, params, optFns...)
+	}
+	return &cip.AdminCreateUserOutput{}, nil
 }
 
 func strPtr(s string) *string { return &s }

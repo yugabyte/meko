@@ -48,6 +48,12 @@ type CognitoAPI interface {
 		params *cip.GlobalSignOutInput,
 		optFns ...func(*cip.Options),
 	) (*cip.GlobalSignOutOutput, error)
+
+	AdminCreateUser(
+		ctx context.Context,
+		params *cip.AdminCreateUserInput,
+		optFns ...func(*cip.Options),
+	) (*cip.AdminCreateUserOutput, error)
 }
 
 // Result holds the tokens returned by a successful login.
@@ -321,6 +327,49 @@ func (c *CognitoClient) ExchangeCode(
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresIn:    tokenResp.ExpiresIn,
 	}, nil
+}
+
+// InviteUser creates (or re-invites) a user in the Cognito User Pool
+// via AdminCreateUser. Cognito sends them a signup invitation email
+// with a temporary password. Set resend=true to re-deliver the invite
+// for an already-created user.
+func (c *CognitoClient) InviteUser(
+	ctx context.Context,
+	email string,
+	resend bool,
+) error {
+	input := &cip.AdminCreateUserInput{
+		UserPoolId:            &c.poolID,
+		Username:              &email,
+		DesiredDeliveryMediums: []types.DeliveryMediumType{types.DeliveryMediumTypeEmail},
+		UserAttributes: []types.AttributeType{
+			{Name: strPtr("email"), Value: &email},
+			{Name: strPtr("email_verified"), Value: strPtr("true")},
+		},
+	}
+	if resend {
+		input.MessageAction = types.MessageActionTypeResend
+	}
+
+	_, err := c.api.AdminCreateUser(ctx, input)
+	if err != nil {
+		var usernameExistsErr *types.UsernameExistsException
+		if errors.As(err, &usernameExistsErr) {
+			slog.Info("cognito invite: user already exists, skipping",
+				"email", email,
+			)
+			return nil
+		}
+		slog.Error("cognito invite user failed",
+			"email", email, "resend", resend, "error", err,
+		)
+		return fmt.Errorf("cognito admin create user: %w", err)
+	}
+
+	slog.Info("cognito invite user succeeded",
+		"email", email, "resend", resend,
+	)
+	return nil
 }
 
 // secretHash computes the HMAC-SHA256 SECRET_HASH required when the
