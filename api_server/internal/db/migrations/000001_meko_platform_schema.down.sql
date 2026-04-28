@@ -12,6 +12,7 @@ DROP TABLE IF EXISTS meko_system.langfuse_org_mapping;
 DROP TABLE IF EXISTS meko_system.tier_config;
 
 -- Drop core tables in reverse dependency order
+DROP TABLE IF EXISTS meko_system.agent_access_permissions;
 DROP TABLE IF EXISTS meko_system.agent_access;
 DROP TABLE IF EXISTS meko_system.agents;
 DROP TABLE IF EXISTS meko_system.knowledge_bases;

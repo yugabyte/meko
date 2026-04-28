@@ -34,7 +34,7 @@ func NewAccountRepo(db *sql.DB) *AccountRepo {
 //
 // The default agent is the only row ever inserted into
 // meko_system.agents at signup. Subsequent datapack creates link an
-// existing agent into meko_system.agent_datapacks but never write to
+// existing agent into meko_system.agent_access but never write to
 // meko_system.agents themselves.
 func (r *AccountRepo) Create(
 	ctx context.Context,

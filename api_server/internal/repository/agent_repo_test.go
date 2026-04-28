@@ -171,7 +171,7 @@ func TestAgentRepo_LinkAgentToDatapack_Success(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec(`INSERT INTO meko_system\.agent_datapacks`).
+	mock.ExpectExec(`INSERT INTO meko_system\.agent_access`).
 		WithArgs("user-1", "agent-a", "dp-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -197,11 +197,11 @@ func TestAgentRepo_LinkAgentToDatapack_AgentMissing(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec(`INSERT INTO meko_system\.agent_datapacks`).
+	mock.ExpectExec(`INSERT INTO meko_system\.agent_access`).
 		WithArgs("user-1", "ghost", "dp-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(
-		`SELECT 1 FROM meko_system\.agent_datapacks`).
+		`SELECT 1 FROM meko_system\.agent_access`).
 		WithArgs("user-1", "ghost", "dp-1").
 		WillReturnRows(sqlmock.NewRows([]string{"?column?"}))
 
@@ -227,11 +227,11 @@ func TestAgentRepo_LinkAgentToDatapack_AlreadyLinked(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec(`INSERT INTO meko_system\.agent_datapacks`).
+	mock.ExpectExec(`INSERT INTO meko_system\.agent_access`).
 		WithArgs("user-1", "agent-a", "dp-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(
-		`SELECT 1 FROM meko_system\.agent_datapacks`).
+		`SELECT 1 FROM meko_system\.agent_access`).
 		WithArgs("user-1", "agent-a", "dp-1").
 		WillReturnRows(sqlmock.NewRows([]string{"?column?"}).AddRow(1))
 
@@ -257,7 +257,7 @@ func TestAgentRepo_UnlinkAgentFromDatapack_Success(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec(`DELETE FROM meko_system\.agent_datapacks`).
+	mock.ExpectExec(`DELETE FROM meko_system\.agent_access`).
 		WithArgs("user-1", "agent-a", "dp-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -279,7 +279,7 @@ func TestAgentRepo_UnlinkAgentFromDatapack_NotLinked(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec(`DELETE FROM meko_system\.agent_datapacks`).
+	mock.ExpectExec(`DELETE FROM meko_system\.agent_access`).
 		WithArgs("user-1", "agent-a", "dp-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -337,7 +337,7 @@ func TestAgentRepo_ListAgentsForDatapack(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now()
-	mock.ExpectQuery(`FROM meko_system\.agents a\s+JOIN meko_system\.agent_datapacks ad`).
+	mock.ExpectQuery(`FROM meko_system\.agents a\s+JOIN meko_system\.agent_access ad`).
 		WithArgs("dp-1", "user-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"user_id", "agent_id", "agent_details",
@@ -366,7 +366,7 @@ func TestAgentRepo_DeleteAgent_RemovesLinksAndAgent(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`DELETE FROM meko_system\.agent_datapacks\s+WHERE user_id`).
+	mock.ExpectExec(`DELETE FROM meko_system\.agent_access\s+WHERE user_id`).
 		WithArgs("user-1", "agent-a").
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(`DELETE FROM meko_system\.agents\s+WHERE user_id`).
@@ -391,7 +391,7 @@ func TestAgentRepo_DeleteAgent_NotFound(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`DELETE FROM meko_system\.agent_datapacks\s+WHERE user_id`).
+	mock.ExpectExec(`DELETE FROM meko_system\.agent_access\s+WHERE user_id`).
 		WithArgs("user-1", "ghost").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`DELETE FROM meko_system\.agents\s+WHERE user_id`).

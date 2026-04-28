@@ -14,22 +14,23 @@ import (
 // datapack_ysql_username column carries the same value as the user's
 // MCP role and is exposed here as MCPUserName.
 type Datapack struct {
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	ID             string    `json:"datapack_id"`
-	Name           string    `json:"datapack_name"`
-	UserID         string    `json:"user_id"`
-	UniverseID     string    `json:"universe_id"`
-	YBUniverseConn string    `json:"datapack_ysql_connection_string"`
-	MCPUserName    string    `json:"datapack_ysql_username"`
-	Description    string    `json:"description,omitempty"`
-	MemoryCount    int       `json:"memory_count"`
-	KnowledgeCount int       `json:"knowledge_count"`
-	LearningsCount int       `json:"learnings_count"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string    `json:"datapack_id"`
+	Name             string    `json:"datapack_name"`
+	UserID           string    `json:"user_id"`
+	CreatedByAgentID string    `json:"created_by_agent_id,omitempty"`
+	UniverseID       string    `json:"universe_id"`
+	YBUniverseConn   string    `json:"datapack_ysql_connection_string"`
+	MCPUserName      string    `json:"datapack_ysql_username"`
+	Description      string    `json:"description,omitempty"`
+	MemoryCount      int       `json:"memory_count"`
+	KnowledgeCount   int       `json:"knowledge_count"`
+	LearningsCount   int       `json:"learnings_count"`
 }
 
 // Agent represents a user-scoped agent. Backed by meko_system.agents.
-// Linked to datapacks via meko_system.agent_datapacks.
+// Linked to datapacks via meko_system.agent_access.
 type Agent struct {
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`

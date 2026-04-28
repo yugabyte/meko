@@ -13,7 +13,7 @@ import (
 //
 // Agents are user-scoped: meko_system.agents has primary key
 // (user_id HASH, agent_id ASC). Datapack association lives on
-// meko_system.agent_datapacks (user_id, agent_id, datapack_id).
+// meko_system.agent_access (user_id, agent_id, datapack_id).
 type AgentRepo struct {
 	db *sql.DB
 }
@@ -102,7 +102,7 @@ func (r *AgentRepo) GetAgent(userID, agentID string) (*models.Agent, error) {
 	return &a, nil
 }
 
-// LinkAgentToDatapack adds a row in meko_system.agent_datapacks
+// LinkAgentToDatapack adds a row in meko_system.agent_access
 // connecting an existing user-scoped agent to a datapack the same user
 // owns. Returns (false, nil) if no row was inserted because the agent
 // does not exist (strict link-only semantics).
@@ -110,7 +110,7 @@ func (r *AgentRepo) LinkAgentToDatapack(
 	userID, agentID, datapackID string,
 ) (bool, error) {
 	res, err := r.db.Exec(
-		`INSERT INTO meko_system.agent_datapacks
+		`INSERT INTO meko_system.agent_access
 			(user_id, agent_id, datapack_id)
 		 SELECT $1::uuid, $2::varchar, $3::uuid
 		 WHERE EXISTS (
@@ -145,7 +145,7 @@ func (r *AgentRepo) LinkAgentToDatapack(
 func (r *AgentRepo) linkExists(userID, agentID, datapackID string) (bool, error) {
 	var one int
 	err := r.db.QueryRow(
-		`SELECT 1 FROM meko_system.agent_datapacks
+		`SELECT 1 FROM meko_system.agent_access
 		 WHERE user_id = $1 AND agent_id = $2 AND datapack_id = $3`,
 		userID, agentID, datapackID,
 	).Scan(&one)
@@ -153,18 +153,18 @@ func (r *AgentRepo) linkExists(userID, agentID, datapackID string) (bool, error)
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("failed to check agent_datapacks link: %w", err)
+		return false, fmt.Errorf("failed to check agent_access link: %w", err)
 	}
 	return true, nil
 }
 
 // UnlinkAgentFromDatapack removes the (user_id, agent_id, datapack_id)
-// row from meko_system.agent_datapacks. The agent itself is left intact.
+// row from meko_system.agent_access. The agent itself is left intact.
 func (r *AgentRepo) UnlinkAgentFromDatapack(
 	userID, agentID, datapackID string,
 ) error {
 	res, err := r.db.Exec(
-		`DELETE FROM meko_system.agent_datapacks
+		`DELETE FROM meko_system.agent_access
 		 WHERE user_id = $1 AND agent_id = $2 AND datapack_id = $3`,
 		userID, agentID, datapackID,
 	)
@@ -192,7 +192,7 @@ func (r *AgentRepo) ListAgentsForDatapack(
 		        COALESCE(a.agent_details::text, '{}'),
 		        a.created_at, a.updated_at
 		 FROM meko_system.agents a
-		 JOIN meko_system.agent_datapacks ad
+		 JOIN meko_system.agent_access ad
 		   ON ad.user_id = a.user_id AND ad.agent_id = a.agent_id
 		 WHERE ad.datapack_id = $1 AND a.user_id = $2
 		 ORDER BY a.created_at DESC`,
@@ -224,7 +224,7 @@ func (r *AgentRepo) ListAgentsForUser(userID string) ([]models.Agent, error) {
 }
 
 // DeleteAgent removes a user-scoped agent. Also removes any
-// agent_datapacks rows for the same (user_id, agent_id) so callers do
+// agent_access rows for the same (user_id, agent_id) so callers do
 // not leak link rows when no FK cascade is in place.
 func (r *AgentRepo) DeleteAgent(userID, agentID string) error {
 	tx, err := r.db.Begin()
@@ -239,11 +239,11 @@ func (r *AgentRepo) DeleteAgent(userID, agentID string) error {
 	}()
 
 	if _, err := tx.Exec(
-		`DELETE FROM meko_system.agent_datapacks
+		`DELETE FROM meko_system.agent_access
 		 WHERE user_id = $1 AND agent_id = $2`,
 		userID, agentID,
 	); err != nil {
-		return fmt.Errorf("failed to delete agent_datapacks rows: %w", err)
+		return fmt.Errorf("failed to delete agent_access rows: %w", err)
 	}
 
 	res, err := tx.Exec(

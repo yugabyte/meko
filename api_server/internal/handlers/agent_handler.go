@@ -19,7 +19,7 @@ import (
 //   - User-scoped CRUD on /api/v1/agents (CreateUser, ListUser,
 //     DeleteUser) backed by meko_system.agents.
 //   - Link-only operations on /api/v1/datapacks/:name/agents (Link,
-//     ListForDatapack, Unlink) backed by meko_system.agent_datapacks.
+//     ListForDatapack, Unlink) backed by meko_system.agent_access.
 type AgentHandler struct {
 	svc *service.AgentService
 }

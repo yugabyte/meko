@@ -78,7 +78,7 @@ type CreateResponse struct {
 }
 
 // Create assigns a universe slot, ensures the user's MCP credentials
-// exist, and inserts the datapack + agent_datapacks link in a single
+// exist, and inserts the datapack + agent_access link in a single
 // transaction. No per-datapack database is provisioned.
 //
 // The agent referenced by AgentID (or DefaultAgentID when empty) must

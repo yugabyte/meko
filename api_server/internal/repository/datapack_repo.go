@@ -75,7 +75,7 @@ type CreateResult struct {
 
 // ErrAgentNotFound is returned when a datapack create references an
 // agent_id that doesn't exist for the user. There is no FK between
-// meko_system.datapacks / agent_datapacks and meko_system.agents (YB
+// meko_system.datapacks / agent_access and meko_system.agents (YB
 // avoids cross-tablet FKs), so this is enforced at the app layer.
 var ErrAgentNotFound = fmt.Errorf("agent not found for user")
 
@@ -83,9 +83,9 @@ var ErrAgentNotFound = fmt.Errorf("agent not found for user")
 // in a single transaction:
 //
 //  1. Verify (user_id, agent_id) exists in meko_system.agents.
-//  2. INSERT into meko_system.datapacks with the agent_id stamped on
-//     the row (records the creator agent).
-//  3. INSERT into meko_system.agent_datapacks linking the agent to
+//  2. INSERT into meko_system.datapacks with the created_by_agent_id
+//     column stamped on the row (records the creator agent).
+//  3. INSERT into meko_system.agent_access linking the agent to
 //     the new datapack so it shows up in access lists.
 //
 // meko_system.agents is never written here — the user's default agent
@@ -162,7 +162,7 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 	}
 
 	if _, err = tx.Exec(
-		`INSERT INTO meko_system.agent_datapacks
+		`INSERT INTO meko_system.agent_access
 			(user_id, agent_id, datapack_id)
 		 VALUES ($1, $2, $3)
 		 ON CONFLICT DO NOTHING`,
@@ -199,6 +199,7 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 	rows, err := r.db.Query(
 		`SELECT d.datapack_id, d.user_id, d.datapack_name,
+		        COALESCE(d.created_by_agent_id, ''),
 		        d.universe_id, d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
@@ -218,6 +219,7 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 		var d models.Datapack
 		if err := rows.Scan(
 			&d.ID, &d.UserID, &d.Name,
+			&d.CreatedByAgentID,
 			&d.UniverseID, &d.YBUniverseConn,
 			&d.MCPUserName,
 			&d.CreatedAt, &d.UpdatedAt,
@@ -240,6 +242,7 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 	var d models.Datapack
 	err := r.db.QueryRow(
 		`SELECT d.datapack_id, d.user_id, d.datapack_name,
+		        COALESCE(d.created_by_agent_id, ''),
 		        d.universe_id, d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
@@ -249,6 +252,7 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 		userID, name,
 	).Scan(
 		&d.ID, &d.UserID, &d.Name,
+		&d.CreatedByAgentID,
 		&d.UniverseID, &d.YBUniverseConn,
 		&d.MCPUserName,
 		&d.CreatedAt, &d.UpdatedAt,
@@ -326,8 +330,8 @@ func (r *DatapackRepo) Update(
 }
 
 // Delete removes a datapack by user and name. Child rows in
-// agent_datapacks / agent_access / knowledge_bases must either be
-// cascaded by FK or handled separately by the caller.
+// agent_access / agent_access_permissions / knowledge_bases must
+// either be cascaded by FK or handled separately by the caller.
 func (r *DatapackRepo) Delete(userID, name string) error {
 	res, err := r.db.Exec(
 		`DELETE FROM meko_system.datapacks
@@ -400,29 +404,31 @@ func (r *DatapackRepo) GetDefaultDatapackDetails(userID string) (*DefaultDatapac
 
 // DatapackStatus holds status information for a datapack.
 type DatapackStatus struct {
-	CreatedAt      time.Time `json:"created_at"`
-	Name           string    `json:"datapack_name"`
-	ID             string    `json:"datapack_id"`
-	UniverseID     string    `json:"universe_id"`
-	YBUniverseConn string    `json:"datapack_ysql_connection_string"`
-	MCPUserName    string    `json:"datapack_ysql_username"`
-	AgentCount     int       `json:"agent_count"`
-	KBCount        int       `json:"knowledge_base_count"`
+	CreatedAt        time.Time `json:"created_at"`
+	Name             string    `json:"datapack_name"`
+	ID               string    `json:"datapack_id"`
+	CreatedByAgentID string    `json:"created_by_agent_id,omitempty"`
+	UniverseID       string    `json:"universe_id"`
+	YBUniverseConn   string    `json:"datapack_ysql_connection_string"`
+	MCPUserName      string    `json:"datapack_ysql_username"`
+	AgentCount       int       `json:"agent_count"`
+	KBCount          int       `json:"knowledge_base_count"`
 }
 
 // GetStatus returns a summary status for a datapack.
 //
 // agent_count is the number of agents linked to the datapack via
-// agent_datapacks. knowledge_base_count comes from
+// agent_access. knowledge_base_count comes from
 // meko_system.knowledge_bases keyed on datapack_id.
 func (r *DatapackRepo) GetStatus(userID, name string) (*DatapackStatus, error) {
 	var s DatapackStatus
 	err := r.db.QueryRow(
 		`SELECT d.datapack_id, d.datapack_name,
+		        COALESCE(d.created_by_agent_id, ''),
 		        d.universe_id, d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username,
 		        d.created_at,
-		        (SELECT COUNT(*) FROM meko_system.agent_datapacks ad
+		        (SELECT COUNT(*) FROM meko_system.agent_access ad
 		           WHERE ad.user_id = d.user_id
 		             AND ad.datapack_id = d.datapack_id),
 		        (SELECT COUNT(*) FROM meko_system.knowledge_bases kb
@@ -432,6 +438,7 @@ func (r *DatapackRepo) GetStatus(userID, name string) (*DatapackStatus, error) {
 		userID, name,
 	).Scan(
 		&s.ID, &s.Name,
+		&s.CreatedByAgentID,
 		&s.UniverseID, &s.YBUniverseConn,
 		&s.MCPUserName,
 		&s.CreatedAt, &s.AgentCount, &s.KBCount,

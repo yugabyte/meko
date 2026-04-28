@@ -43,8 +43,8 @@ func cleanupDatapacks(t *testing.T, db *sql.DB) {
 	t.Helper()
 	stmts := []string{
 		`DELETE FROM meko_system.knowledge_bases`,
+		`DELETE FROM meko_system.agent_access_permissions`,
 		`DELETE FROM meko_system.agent_access`,
-		`DELETE FROM meko_system.agent_datapacks`,
 		`DELETE FROM meko_system.langfuse_project_mapping`,
 		`DELETE FROM meko_system.langfuse_org_mapping`,
 		`DELETE FROM meko_system.datapacks`,

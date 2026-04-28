@@ -178,8 +178,10 @@ CREATE TABLE IF NOT EXISTS meko_system.knowledge_bases (
 -- User 2: Has datapack default_datapack(UUID2) and agent default_datapack
 
 -- user 1: Shares default_datapack(UUID1) with user 2, only knowledge bases are shared with read permission.
-    -- Insert a row into agent_datapacks table with user_id = user 2, agent_id = default_agent, datapack_id = UUID1
-    -- Insert a row into agent_access table with user_id = user 2, agent_id = default_agent, datapack_id = UUID1, object_type = 'knowledge_base', permisssion="read", object_id = UUID1
+    -- Insert a row into agent_access table with user_id = user 2, agent_id = default_agent, datapack_id = UUID1
+    --   (renamed from the old agent_datapacks link table)
+    -- Insert a row into agent_access_permissions table with user_id = user 2, agent_id = default_agent, datapack_id = UUID1, object_type = 'knowledge_base', permisssion="read", object_id = UUID1
+    --   (renamed from the old agent_access permissions table)
 
 -- List Datapacks for User 2:
 
@@ -213,7 +215,7 @@ CREATE TYPE meko_system.access_permission AS ENUM ('read', 'write', 'admin');
 CREATE TYPE meko_system.datapack_shared_status AS ENUM ('active', 'inactive');
 
 -- **karthik's feedback:**
--- create a new table called agent_access
+-- create a new table called agent_access_permissions
 -- account_id, agent_id (range), datapack_id(range), object_type(enum: 'memory', 'knowledge_base'..), object_id (enum: 'memory_id', 'knowledge_base_id'..)
     -- this will be the primary key
 -- object_permissions, create_at, updated_at 

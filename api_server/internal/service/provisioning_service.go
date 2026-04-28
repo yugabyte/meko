@@ -42,7 +42,7 @@ type LangfuseProvisioner interface {
 
 // ProvisioningService orchestrates post-signup provisioning. In the
 // multi-tenant model this is just three things:
-//  1. Insert default datapack + default agent + agent_datapacks link
+//  1. Insert default datapack + default agent + agent_access link
 //     atomically via DatapackCreator.
 //  2. Provision Langfuse project keys (best-effort, fire-and-forget).
 //

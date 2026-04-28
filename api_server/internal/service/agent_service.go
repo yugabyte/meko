@@ -14,7 +14,7 @@ import (
 // The service exposes two surfaces:
 //   - User-scoped CRUD on meko_system.agents (CreateUserAgent /
 //     ListUserAgents / DeleteUserAgent).
-//   - Link-only operations on meko_system.agent_datapacks
+//   - Link-only operations on meko_system.agent_access
 //     (LinkAgentToDatapack, UnlinkAgentFromDatapack,
 //     ListAgentsForDatapack).
 type AgentService struct {
@@ -78,7 +78,7 @@ type LinkAgentRequest struct {
 	AgentID string `json:"agent_id"`
 }
 
-// LinkAgentToDatapack inserts a row into meko_system.agent_datapacks.
+// LinkAgentToDatapack inserts a row into meko_system.agent_access.
 // Returns false when the agent does not exist for the user (so handlers
 // can map this to a 404).
 func (s *AgentService) LinkAgentToDatapack(
@@ -96,7 +96,7 @@ func (s *AgentService) LinkAgentToDatapack(
 	return s.repo.LinkAgentToDatapack(userID, agentID, datapackID)
 }
 
-// UnlinkAgentFromDatapack removes only the agent_datapacks row; the
+// UnlinkAgentFromDatapack removes only the agent_access row; the
 // agent itself remains.
 func (s *AgentService) UnlinkAgentFromDatapack(
 	userID, agentID, datapackID string,

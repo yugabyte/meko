@@ -84,7 +84,7 @@ func TestDatapackRepo_Create_HappyPath_StampsAgentAndLinks(t *testing.T) {
 		WillReturnRows(
 			sqlmock.NewRows([]string{"datapack_id"}).AddRow("dp-uuid-1"),
 		)
-	mock.ExpectExec(`INSERT INTO meko_system\.agent_datapacks`).
+	mock.ExpectExec(`INSERT INTO meko_system\.agent_access`).
 		WithArgs("user-1", "meko_agent", "dp-uuid-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -133,7 +133,7 @@ func TestDatapackRepo_Create_WithDescription(t *testing.T) {
 		WillReturnRows(
 			sqlmock.NewRows([]string{"datapack_id"}).AddRow("dp-uuid-2"),
 		)
-	mock.ExpectExec(`INSERT INTO meko_system\.agent_datapacks`).
+	mock.ExpectExec(`INSERT INTO meko_system\.agent_access`).
 		WithArgs("user-1", "meko_agent", "dp-uuid-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -218,7 +218,7 @@ func TestDatapackRepo_Create_RollsBackWhenLinkInsertFails(t *testing.T) {
 		WillReturnRows(
 			sqlmock.NewRows([]string{"datapack_id"}).AddRow("dp-uuid-2"),
 		)
-	mock.ExpectExec(`INSERT INTO meko_system\.agent_datapacks`).
+	mock.ExpectExec(`INSERT INTO meko_system\.agent_access`).
 		WillReturnError(errors.New("link insert failed"))
 	mock.ExpectRollback()
 
@@ -251,6 +251,7 @@ func TestDatapackRepo_GetByName_NotFound(t *testing.T) {
 		WithArgs("user-1", "missing").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"datapack_id", "user_id", "datapack_name",
+			"created_by_agent_id",
 			"universe_id", "datapack_ysql_connection_string",
 			"datapack_ysql_username", "created_at", "updated_at",
 			"description",
@@ -281,11 +282,13 @@ func TestDatapackRepo_GetByName_Found(t *testing.T) {
 		WithArgs("user-1", "dp-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"datapack_id", "user_id", "datapack_name",
+			"created_by_agent_id",
 			"universe_id", "datapack_ysql_connection_string",
 			"datapack_ysql_username", "created_at", "updated_at",
 			"description",
 		}).AddRow(
 			"dp-uuid-1", "user-1", "dp-1",
+			"meko_agent",
 			"u-1", "postgresql://...",
 			"mcp_user_1", now, now,
 			"test description",
@@ -300,6 +303,7 @@ func TestDatapackRepo_GetByName_Found(t *testing.T) {
 		dp.ID != "dp-uuid-1" ||
 		dp.Name != "dp-1" ||
 		dp.UserID != "user-1" ||
+		dp.CreatedByAgentID != "meko_agent" ||
 		dp.MCPUserName != "mcp_user_1" ||
 		dp.Description != "test description" {
 		t.Errorf("got %+v", dp)
@@ -420,7 +424,9 @@ func TestDatapackRepo_GetStatus_NotFound(t *testing.T) {
 	mock.ExpectQuery(`FROM meko_system\.datapacks d\s+WHERE d\.user_id`).
 		WithArgs("user-1", "ghost").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"datapack_id", "datapack_name", "universe_id",
+			"datapack_id", "datapack_name",
+			"created_by_agent_id",
+			"universe_id",
 			"datapack_ysql_connection_string",
 			"datapack_ysql_username", "created_at",
 			"agent_count", "kb_count",
