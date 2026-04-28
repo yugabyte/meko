@@ -72,7 +72,6 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
                     payload JSONB,
                     meko_created_at TIMESTAMPTZ DEFAULT NOW(),
                     meko_promotion_user_action datapacks.meko_promotion_user_action NULL, -- If 'not_promoted', UI shouldn't surface this memory for promotion to KB again.
-                    meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,    -- Create a partial index on this column for filtering. NOT NULL for promoted memories.
                     PRIMARY KEY (meko_datapack_id HASH, meko_user_id ASC, meko_agent_id ASC, meko_created_at DESC, id DESC)
                 ) PARTITION BY HASH (meko_datapack_id, meko_user_id, meko_agent_id);
 
@@ -102,6 +101,22 @@ CREATE INDEX IF NOT EXISTS meko_mem0_collection_hnsw_idx
                     ON datapacks.meko_mem0_collection
                     USING hnsw (embeddings vector_cosine_ops)
                     WITH (m = 16, ef_construction = 64);
+
+/*
+1. This table will soley be used for displaying the promoted memories in the UI.
+*/
+CREATE TABLE IF NOT EXISTS datapacks.promoted_collection (
+                    meko_datapack_id UUID NOT NULL,
+                    meko_user_id UUID,
+                    meko_agent_id TEXT,
+                    id UUID NOT NULL,
+                    meko_conversation_id UUID,
+                    payload JSONB,
+                    meko_created_at TIMESTAMPTZ NOT NULL,
+                    meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
+                    PRIMARY KEY (meko_datapack_id HASH)
+                ) SPLIT INTO 3 TABLETS;
+
 
 
 -- mem0 memory search:
@@ -147,34 +162,33 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_graph_vertex_embeddings (
                         meko_conversation_id UUID, 
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
-                        meko_promotion_user_action datapacks.meko_promotion_user_action NULL, -- ENUM: 'promoted', 'not_promoted'. If 'not_promoted' state is set, UI shouldn't surface this memory for promotion to KB again.
-                        meko_promoted_to_kb_at TIMESTAMPTZ DEFAULT NULL,
+                        meko_promotion_user_action datapacks.meko_promotion_user_action NULL,
                         PRIMARY KEY ((meko_datapack_id, meko_user_id) HASH, meko_agent_id ASC, graph_name, node_graphid)
-                    ) SPLIT INTO 3 TABLETS;         -- or just 1 tablet
+                    ) SPLIT INTO 3 TABLETS;         -- or just 1 tablet -- verify this needs have 128 partitions.
 
 CREATE INDEX IF NOT EXISTS meko_mem0_graph_vertex_embeddings_hnsw_idx
                     ON datapacks.meko_mem0_graph_vertex_embeddings
                     USING hnsw (embeddings vector_cosine_ops)
-                    WITH (m = 16, ef_construction = 64);
+                    WITH (m = 32, ef_construction = 64);
 
--- CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_promoted_graph_vertex_embeddings (
---                         meko_datapack_id UUID NOT NULL,
---                         meko_user_id UUID NOT NULL,
---                         meko_agent_id UUID NOT NULL,
---                         graph_name TEXT NOT NULL,
---                         node_graphid BIGINT NOT NULL,
---                         node_name TEXT,
---                         embedding vector({self.embedding_dims}) NOT NULL,
---                         run_id UUID, 
---                         created_at TIMESTAMPTZ NOT NULL,
---                         meko_prompted_at TIMESTAMPTZ DEFAULT NULL,
---                         PRIMARY KEY (meko_datapack_id HASH, meko_user_id HASH, meko_agent_id ASC, graph_name, node_graphid)
---                     ) SPLIT INTO 3 TABLETS;
+CREATE TABLE IF NOT EXISTS datapacks.meko_promoted_graph_vertex_embeddings (
+                        meko_datapack_id UUID NOT NULL,
+                        meko_user_id UUID,
+                        meko_agent_id UUID,
+                        graph_name TEXT NOT NULL,
+                        node_graphid BIGINT NOT NULL,
+                        node_name TEXT,
+                        embeddings vector(1536) NOT NULL,
+                        meko_conversation_id UUID, 
+                        created_at TIMESTAMPTZ NOT NULL,
+                        meko_prompted_at TIMESTAMPTZ DEFAULT NULL,
+                        PRIMARY KEY (meko_datapack_id HASH)
+                    ) SPLIT INTO 3 TABLETS; -- verify this needs have 128 partitions.
 
--- CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
---                     ON datapacks.meko_mem0_promoted_graph_vertex_embeddings
---                     USING hnsw (vector vector_cosine_ops)
---                     WITH (m = 16, ef_construction = 64);
+CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
+                    ON datapacks.meko_promoted_graph_vertex_embeddings
+                    USING hnsw (embeddings vector_cosine_ops)
+                    WITH (m = 32, ef_construction = 64);
 
 -- Need to pre-create the graph tables used for multi-tenancy storage. or prime the mem0 to create these tables as part of platform initialization.
 -- Create a graph name called "meko_multi_tenant_graph"
@@ -203,7 +217,7 @@ SELECT * FROM ag_catalog.create_vlabel('meko_promoted_graph','Entity');
 SELECT * FROM ag_catalog.create_elabel('meko_promoted_graph','CONNECTED_TO');
 
 
--- TODO: Remove the need for meko_mem0_graph_vertex_embeddings table and use a vector coloum in the Entity table.
+-- TODO: Remove the need for meko_mem0_graph_vertex_embeddings table and use a vector coloum in the Entity tables.
 -- TODO: After April 30th release as this will require complete re-write of the Apache age mem0 Connector.
 -- ALTER TABLE meko_multi_tenant_graph."Entity" ADD COLUMN embeddings VECTOR(1536) NOT NULL;
 
