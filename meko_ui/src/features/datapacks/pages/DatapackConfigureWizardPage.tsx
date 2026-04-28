@@ -1,12 +1,14 @@
 /**
- * Route `/datapacks/:name/configure`: post-create wizard (install → add knowledge → finish).
- * Composes modular step components; keeps sync list state and navigation here so steps stay presentational.
+ * Configure wizard:
+ * - `/datapacks/new/configure` — create flow (Configure creates datapack, then Install → Add Knowledge → Finish).
+ * - `/datapacks/:name/configure` — existing datapack (same steps; Configure can be skipped).
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { DatapackConfigureWizardStepper } from "@/features/datapacks/components/configure-wizard/DatapackConfigureWizardStepper";
+import { ConfigureWizardConfigureStep } from "@/features/datapacks/components/configure-wizard/ConfigureWizardConfigureStep";
 import { ConfigureWizardStatusStep } from "@/features/datapacks/components/configure-wizard/ConfigureWizardStatusStep";
 import { ConfigureWizardInstallStep } from "@/features/datapacks/components/configure-wizard/ConfigureWizardInstallStep";
 import { ConfigureWizardNavBar } from "@/features/datapacks/components/configure-wizard/ConfigureWizardNavBar";
@@ -20,7 +22,15 @@ import {
 } from "@/features/datapacks/components/configure-wizard/wizardSteps";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import { markDatapackWizardConfigureDone } from "@/lib/datapackConfigureStatus";
-import { confirmUpload, getApiErrorMessage, requestUploadURL } from "@/lib/mekoApi";
+import {
+  confirmUpload,
+  createDatapack,
+  getApiErrorMessage,
+  getDatapack,
+  requestUploadURL,
+  updateDatapack,
+  type CurrentUser,
+} from "@/lib/mekoApi";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
   filterFilesForKnowledgeUploadBatch,
@@ -59,17 +69,38 @@ function uploadFileToS3(
   });
 }
 
-type Props = {
-  datapackName: string;
+type DatapackConfigureWizardPageProps = {
+  currentUser: CurrentUser | null;
+  /** `/datapacks/new/configure` */
+  isCreateFlow?: boolean;
+  /** `/datapacks/:name/configure` */
+  datapackName?: string;
 };
 
-export default function DatapackConfigureWizardPage({ datapackName }: Props) {
+export default function DatapackConfigureWizardPage({
+  currentUser,
+  isCreateFlow = false,
+  datapackName: routeDatapackName,
+}: DatapackConfigureWizardPageProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const descriptionFromState = (location.state as { description?: string } | null)?.description;
 
-  const [stepId, setStepId] = useState<WizardStepId>(WIZARD_STEP_ID.install);
+  const [stepId, setStepId] = useState<WizardStepId>(WIZARD_STEP_ID.configure);
   const currentIndex = wizardStepIndex(stepId);
+
+  /** Resolved server name for API calls (set after create, or from route / load for existing). */
+  const [apiDatapackName, setApiDatapackName] = useState<string | null>(() =>
+    isCreateFlow ? null : routeDatapackName ?? null,
+  );
+
+  const [configureDraftName, setConfigureDraftName] = useState("");
+  const [configureDraftDescription, setConfigureDraftDescription] = useState(() => descriptionFromState ?? "");
+  const [configureInitialName, setConfigureInitialName] = useState("");
+  const [configureInitialDescription, setConfigureInitialDescription] = useState("");
+  const [configureLoading, setConfigureLoading] = useState(!isCreateFlow);
+  const [configureError, setConfigureError] = useState<string | null>(null);
+  const [configureSubmitting, setConfigureSubmitting] = useState(false);
 
   const [knowledgeItems, setKnowledgeItems] = useState<ListedSource[]>([]);
   const [knowledgeUploading, setKnowledgeUploading] = useState(false);
@@ -79,6 +110,38 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
   const conversationInputRef = useRef<HTMLInputElement>(null);
   const skillsInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isCreateFlow) {
+      setConfigureLoading(false);
+      setApiDatapackName(null);
+      return;
+    }
+    if (!routeDatapackName) return;
+    let cancelled = false;
+    setConfigureLoading(true);
+    setConfigureError(null);
+    void getDatapack(routeDatapackName)
+      .then((dp) => {
+        if (cancelled) return;
+        const n = dp.datapack_name ?? routeDatapackName;
+        const d = dp.description ?? "";
+        setConfigureDraftName(n);
+        setConfigureDraftDescription(d);
+        setConfigureInitialName(n);
+        setConfigureInitialDescription(d);
+        setApiDatapackName(n);
+      })
+      .catch((err) => {
+        if (!cancelled) setConfigureError(getApiErrorMessage(err, "Could not load datapack."));
+      })
+      .finally(() => {
+        if (!cancelled) setConfigureLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateFlow, routeDatapackName]);
 
   const showSyncWarning = useCallback((msg: string) => {
     setSyncFileWarning(msg);
@@ -128,6 +191,8 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
   }, []);
 
   const handleUploadKnowledgeFiles = useCallback(async () => {
+    const pack = apiDatapackName;
+    if (!pack) return;
     setKnowledgeUploading(true);
     try {
       const pending = knowledgeItems.filter(
@@ -148,7 +213,7 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
         );
         try {
           const { url, key } = await requestUploadURL(
-            datapackName,
+            pack,
             file.name,
             file.type || "application/octet-stream",
             file.size,
@@ -158,7 +223,7 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
               prev.map((x) => (x.id === item.id ? { ...x, uploadProgress: pct } : x)),
             );
           });
-          await confirmUpload(datapackName, key, file.name, file.size);
+          await confirmUpload(pack, key, file.name, file.size);
           setKnowledgeItems((prev) =>
             prev.map((x) =>
               x.id === item.id ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE, uploadProgress: 100 } : x,
@@ -169,11 +234,11 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
             prev.map((x) =>
               x.id === item.id
                 ? {
-                  ...x,
-                  uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
-                  uploadProgress: 0,
-                  uploadError: getApiErrorMessage(err, "Upload failed."),
-                }
+                    ...x,
+                    uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
+                    uploadProgress: 0,
+                    uploadError: getApiErrorMessage(err, "Upload failed."),
+                  }
                 : x,
             ),
           );
@@ -182,47 +247,190 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
     } finally {
       setKnowledgeUploading(false);
     }
-  }, [datapackName, knowledgeItems]);
+  }, [apiDatapackName, knowledgeItems]);
 
-  const goNext = () => {
-    const next = WIZARD_STEPS[currentIndex + 1];
-    if (next) setStepId(next.id);
-  };
+  const syncAllKnowledgeUploaded =
+    knowledgeItems.length > 0 &&
+    knowledgeItems.every((it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE);
+
+  const handleConfigureStepNext = useCallback(async () => {
+    const trimmed = configureDraftName.trim();
+    if (!trimmed) {
+      setConfigureError("Enter a datapack name.");
+      return;
+    }
+    if (!currentUser?.account_id) {
+      setConfigureError("You must be signed in to continue.");
+      return;
+    }
+    setConfigureSubmitting(true);
+    setConfigureError(null);
+    const descTrim = configureDraftDescription.trim();
+    try {
+      if (isCreateFlow) {
+        if (apiDatapackName) {
+          const dirty =
+            trimmed !== configureInitialName ||
+            configureDraftDescription.trim() !== configureInitialDescription.trim();
+          if (dirty) {
+            await updateDatapack(apiDatapackName, {
+              name: trimmed,
+              description: configureDraftDescription,
+            });
+            setApiDatapackName(trimmed);
+            setConfigureInitialName(trimmed);
+            setConfigureInitialDescription(configureDraftDescription);
+          }
+          setStepId(WIZARD_STEP_ID.install);
+          return;
+        }
+        const created = await createDatapack({
+          name: trimmed,
+          user_id: currentUser.account_id,
+          ...(descTrim ? { description: configureDraftDescription } : {}),
+        });
+        if (created.mcp_server?.api_key) {
+          localStorage.setItem("meko_latest_api_key", created.mcp_server.api_key);
+        }
+        const resolved = created.name;
+        setApiDatapackName(resolved);
+        setConfigureDraftName(resolved);
+        setConfigureInitialName(resolved);
+        setConfigureInitialDescription(configureDraftDescription);
+        setStepId(WIZARD_STEP_ID.install);
+        return;
+      }
+      const routeName = routeDatapackName;
+      if (!routeName) return;
+      const dirty =
+        trimmed !== configureInitialName ||
+        configureDraftDescription.trim() !== configureInitialDescription.trim();
+      if (dirty) {
+        await updateDatapack(routeName, {
+          name: trimmed,
+          description: configureDraftDescription,
+        });
+        setApiDatapackName(trimmed);
+        setConfigureInitialName(trimmed);
+        setConfigureInitialDescription(configureDraftDescription);
+      }
+      setStepId(WIZARD_STEP_ID.install);
+    } catch (err) {
+      setConfigureError(getApiErrorMessage(err, "Failed to save datapack."));
+    } finally {
+      setConfigureSubmitting(false);
+    }
+  }, [
+    apiDatapackName,
+    configureDraftDescription,
+    configureDraftName,
+    configureInitialDescription,
+    configureInitialName,
+    currentUser?.account_id,
+    isCreateFlow,
+    routeDatapackName,
+  ]);
+
+  const skipConfigureStep = useCallback(() => {
+    setConfigureError(null);
+    setStepId(WIZARD_STEP_ID.install);
+  }, []);
+
+  const handleWizardNext = useCallback(async () => {
+    if (stepId === WIZARD_STEP_ID.configure) {
+      await handleConfigureStepNext();
+      return;
+    }
+    if (stepId === WIZARD_STEP_ID.install) {
+      setStepId(WIZARD_STEP_ID.sync);
+      return;
+    }
+    if (stepId === WIZARD_STEP_ID.sync && syncAllKnowledgeUploaded) {
+      setStepId(WIZARD_STEP_ID.import);
+    }
+  }, [handleConfigureStepNext, stepId, syncAllKnowledgeUploaded]);
+
+  /** After create, do not return to Configure (datapack already exists); exit to overview instead. */
+  const createFlowCommitted = isCreateFlow && Boolean(apiDatapackName);
+  const backExitsCreateWizardToDatapacks =
+    createFlowCommitted && stepId !== WIZARD_STEP_ID.configure;
 
   const goBack = () => {
+    if (backExitsCreateWizardToDatapacks) {
+      navigate(ROUTES.datapacks);
+      return;
+    }
+    if (currentIndex === 0) {
+      if (isCreateFlow) {
+        navigate(ROUTES.datapacks);
+      } else if (routeDatapackName) {
+        navigate(datapackDetailPath(routeDatapackName));
+      } else {
+        navigate(ROUTES.datapacks);
+      }
+      return;
+    }
     const prev = WIZARD_STEPS[currentIndex - 1];
     if (prev) setStepId(prev.id);
-    else navigate(ROUTES.datapacks);
   };
+
+  const backButtonLabel = backExitsCreateWizardToDatapacks
+    ? "Back to datapacks"
+    : currentIndex === 0
+      ? isCreateFlow
+        ? "Back to datapacks"
+        : "Back"
+      : "Back";
 
   const hasUploadedKnowledge = knowledgeItems.some((it) => it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE);
   const knowledgeDoneCount = knowledgeItems.filter(
     (it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE,
   ).length;
 
-  const completeSetupWithoutImport = useCallback(() => {
-    markDatapackWizardConfigureDone(datapackName);
-    toast({
-      title: "Finished setup",
-      description: `You're all set with ${datapackName}.`,
-      duration: 4000,
-    });
-    navigate(datapackDetailPath(datapackName));
-  }, [datapackName, navigate]);
-
+  const finishPackName = apiDatapackName ?? "";
   const handleWizardFinish = useCallback(() => {
+    if (!finishPackName) return;
+    markDatapackWizardConfigureDone(finishPackName);
     if (!hasUploadedKnowledge) {
-      completeSetupWithoutImport();
-      return;
+      toast({
+        title: "Finished setup",
+        description: `You're all set with ${finishPackName}.`,
+        duration: 4000,
+      });
+    } else {
+      startKnowledgeBaseImport(finishPackName);
     }
-    startKnowledgeBaseImport(datapackName);
-  }, [hasUploadedKnowledge, datapackName, completeSetupWithoutImport]);
-
-  const syncAllKnowledgeUploaded =
-    knowledgeItems.length > 0 &&
-    knowledgeItems.every((it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE);
+    navigate(datapackDetailPath(finishPackName));
+  }, [finishPackName, hasUploadedKnowledge, navigate]);
 
   const canGoNextFromSync = stepId !== WIZARD_STEP_ID.sync || syncAllKnowledgeUploaded;
+
+  const canProceedFromConfigure =
+    Boolean(configureDraftName.trim()) &&
+    !configureSubmitting &&
+    !configureLoading &&
+    Boolean(currentUser?.account_id);
+
+  const canWizardNext =
+    stepId === WIZARD_STEP_ID.configure
+      ? canProceedFromConfigure
+      : stepId === WIZARD_STEP_ID.sync
+        ? canGoNextFromSync
+        : true;
+
+  const displayTitleName = apiDatapackName ?? (isCreateFlow ? "new datapack" : routeDatapackName ?? "");
+
+  const breadcrumbItems = isCreateFlow
+    ? [
+        { label: "Datapacks", href: ROUTES.datapacks },
+        { label: "New datapack", href: ROUTES.datapacks },
+        { label: "configure" },
+      ]
+    : [
+        { label: "Datapacks", href: ROUTES.datapacks },
+        { label: routeDatapackName ?? "", href: datapackDetailPath(routeDatapackName ?? "") },
+        { label: "configure" },
+      ];
 
   return (
     <div className="flex h-screen flex-1 flex-col overflow-y-auto bg-background text-foreground">
@@ -230,23 +438,18 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col space-y-8 p-8 pb-32">
         <div className="mx-auto w-full max-w-5xl space-y-8">
-          <DatapackBreadcrumbs
-            items={[
-              { label: "Datapacks", href: ROUTES.datapacks },
-              { label: datapackName, href: datapackDetailPath(datapackName) },
-              { label: "configure" },
-            ]}
-          />
+          <DatapackBreadcrumbs items={breadcrumbItems} />
 
           <div className="space-y-2">
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-              Configure <span className="text-foreground">{datapackName}</span>
+              Configure <span className="text-foreground">{displayTitleName}</span>
             </h1>
-            {descriptionFromState ? (
+            {descriptionFromState && isCreateFlow && !apiDatapackName ? (
               <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">{descriptionFromState}</p>
             ) : (
               <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                Finish setup: install the client, add knowledge files, then review and finish.
+                Finish setup: configure the datapack, install the client, add knowledge files, then review and
+                finish.
               </p>
             )}
           </div>
@@ -257,6 +460,18 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
             </div>
           </div>
 
+          {stepId === WIZARD_STEP_ID.configure ? (
+            <ConfigureWizardConfigureStep
+              isCreateFlow={isCreateFlow}
+              name={configureDraftName}
+              description={configureDraftDescription}
+              onNameChange={setConfigureDraftName}
+              onDescriptionChange={setConfigureDraftDescription}
+              loading={configureLoading}
+              submitting={configureSubmitting}
+              error={configureError}
+            />
+          ) : null}
           {stepId === WIZARD_STEP_ID.install ? <ConfigureWizardInstallStep /> : null}
           {stepId === WIZARD_STEP_ID.sync ? (
             <ConfigureWizardSyncStep
@@ -267,7 +482,7 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
               conversationInputRef={conversationInputRef}
               skillsInputRef={skillsInputRef}
               onPickFiles={addFiles}
-              onAddUrl={() => { }}
+              onAddUrl={() => {}}
               onRemove={removeItem}
               knowledgeUploading={knowledgeUploading}
               onUploadKnowledgeFiles={handleUploadKnowledgeFiles}
@@ -276,9 +491,9 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
               syncFileWarning={syncFileWarning}
             />
           ) : null}
-          {stepId === WIZARD_STEP_ID.import ? (
+          {stepId === WIZARD_STEP_ID.import && finishPackName ? (
             <ConfigureWizardStatusStep
-              datapackName={datapackName}
+              datapackName={finishPackName}
               knowledgeItems={knowledgeItems}
               knowledgeCount={knowledgeDoneCount}
               conversationsCount={0}
@@ -291,16 +506,20 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
           <ConfigureWizardNavBar
             stepId={stepId}
             currentIndex={currentIndex}
+            backButtonLabel={backButtonLabel}
             onBack={goBack}
-            onNext={goNext}
+            onNext={() => void handleWizardNext()}
             onSkipStep={
-              stepId === WIZARD_STEP_ID.install || stepId === WIZARD_STEP_ID.sync
-                ? goNext
-                : hasUploadedKnowledge
-                  ? completeSetupWithoutImport
+              stepId === WIZARD_STEP_ID.configure && !isCreateFlow
+                ? skipConfigureStep
+                : stepId === WIZARD_STEP_ID.install || stepId === WIZARD_STEP_ID.sync
+                  ? () => {
+                      if (stepId === WIZARD_STEP_ID.install) setStepId(WIZARD_STEP_ID.sync);
+                      else if (stepId === WIZARD_STEP_ID.sync) setStepId(WIZARD_STEP_ID.import);
+                    }
                   : undefined
             }
-            canGoNext={canGoNextFromSync}
+            canGoNext={canWizardNext}
             nextDisabledTooltip="Upload knowledge files successfully before continuing, or use Skip step."
           />
         </div>

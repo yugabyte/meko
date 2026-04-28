@@ -5,10 +5,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
+import { DatapackNameDescriptionFields } from "@/features/datapacks/components/DatapackNameDescriptionFields";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import {
   datapackConfigurePath,
@@ -130,50 +128,34 @@ export default function DatapackEditPage({ datapackName, currentUser }: Props) {
             </p>
           </div>
 
-          <div className="space-y-6 rounded-xl border border-border bg-card/40 p-6 shadow-sm">
-            <div className="flex flex-col gap-3">
-              <Label htmlFor="datapack-edit-page-name">Name</Label>
-              <Input
-                id="datapack-edit-page-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoComplete="off"
-                disabled={submitting || loading}
-                className="h-10 border-border bg-background shadow-sm"
-              />
-            </div>
-            <div className="flex flex-col gap-3">
-              <Label htmlFor="datapack-edit-page-description">Description</Label>
-              <Textarea
-                id="datapack-edit-page-description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional — shown where this datapack is summarized."
-                rows={4}
-                disabled={submitting || loading}
-                className="min-h-[100px] resize-y border-border bg-background shadow-sm"
-              />
-            </div>
+          <DatapackNameDescriptionFields
+            name={name}
+            description={description}
+            onNameChange={setName}
+            onDescriptionChange={setDescription}
+            disabled={submitting || loading}
+            nameInputId="datapack-edit-page-name"
+            descriptionInputId="datapack-edit-page-description"
+          />
 
-            {error ? (
-              <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-                {error}
-              </div>
-            ) : null}
-
-            <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" onClick={handleCancel} disabled={submitting}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                className="bg-white text-black hover:bg-gray-200"
-                onClick={() => void handleUpdate()}
-                disabled={submitting || loading}
-              >
-                {submitting ? "Saving…" : "Update"}
-              </Button>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+              {error}
             </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={handleCancel} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="bg-white text-black hover:bg-gray-200"
+              onClick={() => void handleUpdate()}
+              disabled={submitting || loading}
+            >
+              {submitting ? "Saving…" : "Update"}
+            </Button>
           </div>
         </div>
       </main>

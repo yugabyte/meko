@@ -1,18 +1,17 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
-import { ROUTES } from "@/app/routes/paths";
+import { Navigate, useLocation } from "react-router-dom";
+import { datapackNewConfigurePath, ROUTES } from "@/app/routes/paths";
 import DatapackConfigureWizardPage from "@/features/datapacks/pages/DatapackConfigureWizardPage";
 import DatapackDetailPage from "@/features/datapacks/pages/DatapackDetailPage";
 import DatapackEditPage from "@/features/datapacks/pages/DatapackEditPage";
 import DatapackLearningsPage from "@/features/datapacks/pages/DatapackLearningsPage";
 import DatapackMemorySummaryPage from "@/features/datapacks/pages/DatapackMemorySummaryPage";
-import DatapackNewPage from "@/features/datapacks/pages/DatapackNewPage";
 import DatapackSharePage from "@/features/datapacks/pages/DatapackSharePage";
 import DatapacksOverviewPage from "@/features/datapacks/pages/DatapacksOverviewPage";
 import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
 
 /**
- * Datapacks area: overview at `/datapacks`, new at `/datapacks/new`, edit at `/datapacks/:name/edit`,
+ * Datapacks area: overview at `/datapacks`, new datapack wizard at `/datapacks/new/configure`, edit at `/datapacks/:name/edit`,
  * configure at `/datapacks/:name/configure`, learnings at `/datapacks/:name/learnings`,
  * memory-summary at `/datapacks/:name/memory-summary`, detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
  */
@@ -39,8 +38,12 @@ export default function DatapacksPage() {
     const rest = location.pathname.slice(prefix.length);
     const segments = rest.split("/").filter(Boolean);
 
+    if (segments[0] === "new" && segments[1] === "configure") {
+      return <DatapackConfigureWizardPage isCreateFlow currentUser={currentUser} />;
+    }
+
     if (segments[0] === "new" && segments.length === 1) {
-      return <DatapackNewPage currentUser={currentUser as CurrentUser} />;
+      return <Navigate to={datapackNewConfigurePath()} replace />;
     }
 
     const nameEncoded = segments[0];
@@ -49,11 +52,11 @@ export default function DatapacksPage() {
       if (segments[1] === "share") {
         return <DatapackSharePage datapackName={datapackName} currentUser={currentUser} />;
       }
-      if (segments[1] === "configure") {
-        return <DatapackConfigureWizardPage datapackName={datapackName} />;
-      }
       if (segments[1] === "edit" && segments.length === 2) {
         return <DatapackEditPage datapackName={datapackName} currentUser={currentUser} />;
+      }
+      if (segments[1] === "configure") {
+        return <DatapackConfigureWizardPage datapackName={datapackName} currentUser={currentUser} />;
       }
       if (segments[1] === "memory-summary" && segments.length === 2) {
         return <DatapackMemorySummaryPage datapackName={datapackName} />;

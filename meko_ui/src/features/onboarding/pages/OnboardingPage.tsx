@@ -10,7 +10,7 @@ import {
   updateOnboardingStatus,
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
-import { DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES, datapackEditPath } from "@/app/routes/paths";
+import { DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES, datapackConfigurePath } from "@/app/routes/paths";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { ArrowRight, Check, Play, Sparkles, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -50,7 +50,7 @@ export default function OnboardingPage() {
         : target === "datapacks"
           ? serverOnboardingDone
             ? ROUTES.datapacks
-            : datapackEditPath(DEFAULT_ACCOUNT_DATAPACK_NAME)
+            : datapackConfigurePath(DEFAULT_ACCOUNT_DATAPACK_NAME)
           : ROUTES.datapacks;
     try {
       await updateOnboardingStatus(true);

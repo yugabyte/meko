@@ -10,6 +10,8 @@ import { WIZARD_STEP_ID, type WizardStepId } from "./wizardSteps";
 type Props = {
   stepId: WizardStepId;
   currentIndex: number;
+  /** Overrides default “Back” / “Back to datapacks” label from the parent when needed. */
+  backButtonLabel?: string;
   onBack: () => void;
   onNext: () => void;
   /** Underlined control to the left of Next (install/sync: next step; finish: exit without KB when uploads exist). */
@@ -22,6 +24,7 @@ type Props = {
 export function ConfigureWizardNavBar({
   stepId,
   currentIndex,
+  backButtonLabel,
   onBack,
   onNext,
   onSkipStep,
@@ -56,7 +59,7 @@ export function ConfigureWizardNavBar({
   return (
     <div className="sticky bottom-0 z-[1] mt-4 flex w-full flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       <Button type="button" variant="outline" onClick={onBack}>
-        {currentIndex === 0 ? "Back to datapacks" : "Back"}
+        {backButtonLabel ?? (currentIndex === 0 ? "Back to datapacks" : "Back")}
       </Button>
       <div className="flex flex-wrap items-center justify-end gap-4">
         {showSkipLink ? (

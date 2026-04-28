@@ -25,7 +25,7 @@ import {
   datapackDetailPath,
   datapackSharePath,
 } from "@/app/routes/paths";
-import { isDatapackWizardConfigureDone } from "@/lib/datapackConfigureStatus";
+import { useDatapackWizardConfigureDone } from "@/lib/useDatapackWizardConfigureDone";
 import {
   DATAPACKS_LIST_UPDATED_EVENT,
   deleteDatapack,
@@ -105,9 +105,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [isEditNameOpen, setIsEditNameOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
-  const [wizardConfigureDone, setWizardConfigureDone] = useState(() =>
-    isDatapackWizardConfigureDone(datapackName),
-  );
+  const wizardConfigureDone = useDatapackWizardConfigureDone(datapackName);
 
   const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
   const [memoriesCount, setMemoriesCount] = useState(0);
@@ -115,10 +113,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [conversationsCount, setConversationsCount] = useState(0);
 
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName);
-
-  useEffect(() => {
-    setWizardConfigureDone(isDatapackWizardConfigureDone(datapackName));
-  }, [datapackName]);
 
   useEffect(() => {
     let cancelled = false;

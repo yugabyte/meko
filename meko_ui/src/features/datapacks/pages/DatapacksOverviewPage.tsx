@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { getApiErrorMessage, listDatapacks, listKnowledgeBases, type CurrentUser, type Datapack } from "@/lib/mekoApi";
-import { datapackDetailPath, datapackNewPath, datapackSharePath, ROUTES } from "@/app/routes/paths";
+import { datapackDetailPath, datapackNewConfigurePath, datapackSharePath, ROUTES } from "@/app/routes/paths";
 import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTilesSection";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 
@@ -185,7 +185,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
             <Button
               size="lg"
               className="gap-2 font-medium bg-white text-black hover:bg-gray-200 disabled:opacity-70"
-              onClick={() => navigate(datapackNewPath())}
+              onClick={() => navigate(datapackNewConfigurePath())}
             >
               <Plus className="w-5 h-5 shrink-0" aria-hidden />
               Add Datapack

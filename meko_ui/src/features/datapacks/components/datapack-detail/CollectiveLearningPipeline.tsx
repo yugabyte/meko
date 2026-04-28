@@ -267,7 +267,7 @@ export function CollectiveLearningPipeline({
           <StageShell
             tone={DATAPACK_DETAIL_TAB.conversations}
             eyebrow=""
-            title="Conversations"
+            title="conversations"
             value={conversationsCount}
             delta=""
             subtitle=""
@@ -285,7 +285,7 @@ export function CollectiveLearningPipeline({
           <StageShell
             tone={DATAPACK_DETAIL_TAB.memory}
             eyebrow=""
-            title="ME (Memories)"
+            title="me (memories)"
             value={memoryCount}
             delta=""
             subtitle=""
@@ -300,7 +300,7 @@ export function CollectiveLearningPipeline({
           <StageShell
             tone={DATAPACK_DETAIL_TAB.learnings}
             eyebrow=""
-            title="ME->KO (Learnings)"
+            title="me->ko (learnings)"
             value={learningsDisplay ?? learningsCount}
             subtitle=""
             titleIcon={<ArrowLeftRight className="h-4 w-4 text-violet-400" aria-hidden />}
@@ -335,7 +335,7 @@ export function CollectiveLearningPipeline({
           <StageShell
             tone={DATAPACK_DETAIL_TAB.knowledge}
             eyebrow=""
-            title="KO (Knowledge)"
+            title="ko (knowledge)"
             value={knowledgeCount}
             delta=""
             subtitle=""

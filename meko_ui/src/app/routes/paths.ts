@@ -10,7 +10,7 @@ export const ROUTES = {
   observeHub: "/observe-hub",
 } as const;
 
-/** Default datapack provisioned for new accounts; used from onboarding (“Choose your tool” → edit). */
+/** Default datapack provisioned for new accounts; used from onboarding (“Choose your tool” → configure). */
 export const DEFAULT_ACCOUNT_DATAPACK_NAME = "meko_default_datapack" as const;
 
 export function datapackDetailPath(datapackName: string): string {
@@ -25,9 +25,14 @@ export function datapackSharePath(datapackName: string): string {
   return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/share`;
 }
 
-/** Create-datapack form (reserved segment; not a datapack name). */
+/** Legacy `/datapacks/new` — prefer {@link datapackNewConfigurePath} (wizard includes create step). */
 export function datapackNewPath(): string {
   return `${ROUTES.datapacks}/new`;
+}
+
+/** New datapack: opens configure wizard with create flow (`/datapacks/new/configure`). */
+export function datapackNewConfigurePath(): string {
+  return `${ROUTES.datapacks}/new/configure`;
 }
 
 export function datapackConfigurePath(datapackName: string): string {

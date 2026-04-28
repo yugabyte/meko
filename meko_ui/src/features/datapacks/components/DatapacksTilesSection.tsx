@@ -121,7 +121,7 @@ export default function DatapacksTilesSection({
                     <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
                       <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
                         <Sparkles className="h-3 w-3 shrink-0 text-sky-400" aria-hidden />
-                        <span title="Memory (ME)">ME</span>
+                        <span title="Memory (me)">me</span>
                       </div>
                       <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
                         {MEMORY_PLACEHOLDER_COUNT}
@@ -130,7 +130,7 @@ export default function DatapacksTilesSection({
                     <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
                       <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
                         <BookOpen className="h-3 w-3 shrink-0 text-emerald-400" aria-hidden />
-                        <span title="Knowledge (KO)">KO</span>
+                        <span title="Knowledge (ko)">ko</span>
                       </div>
                       <p className="mt-1 min-h-[1.75rem] flex items-center text-lg font-semibold tabular-nums tracking-tight text-white sm:min-h-[2rem] sm:text-xl">
                         {knowledgeBaseCountsLoading ? (
@@ -146,7 +146,7 @@ export default function DatapacksTilesSection({
                       <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
                         <ArrowLeftRight className="h-3 w-3 shrink-0 text-violet-400" aria-hidden />
                         <span title="Learnings (ME → KO)" className="truncate">
-                          ME → KO
+                          me → ko
                         </span>
                       </div>
                       <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
