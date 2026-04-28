@@ -12,8 +12,8 @@ export type WizardStepId = (typeof WIZARD_STEP_ID)[keyof typeof WIZARD_STEP_ID];
 
 export const WIZARD_STEPS: readonly { id: WizardStepId; label: string }[] = [
   { id: WIZARD_STEP_ID.install, label: "Install" },
-  { id: WIZARD_STEP_ID.sync, label: "Sync Knowledge" },
-  { id: WIZARD_STEP_ID.import, label: "Import" },
+  { id: WIZARD_STEP_ID.sync, label: "Add Knowledge" },
+  { id: WIZARD_STEP_ID.import, label: "Finish" },
 ];
 
 export function wizardStepIndex(stepId: WizardStepId): number {

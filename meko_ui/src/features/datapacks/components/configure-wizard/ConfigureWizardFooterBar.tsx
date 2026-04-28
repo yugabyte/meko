@@ -1,5 +1,5 @@
 /**
- * Summary strip on Sync Knowledge: datapack name, selection counts, skip, and import when uploads exist.
+ * Summary strip on the Finish step: datapack name, selection counts, and primary Finish action.
  */
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,11 +9,10 @@ type Props = {
   knowledgeCount: number;
   conversationsCount: number;
   skillsCount: number;
-  onSkip: () => void;
-  canImportKnowledge: boolean;
-  onImportSelected: () => void;
+  hasUploadedKnowledge: boolean;
+  onFinish: () => void;
   /** True while createKnowledgeBase / pipeline poll is running from this flow. */
-  importBusy?: boolean;
+  finishBusy?: boolean;
 };
 
 export function ConfigureWizardFooterBar({
@@ -21,21 +20,20 @@ export function ConfigureWizardFooterBar({
   knowledgeCount,
   conversationsCount,
   skillsCount,
-  onSkip,
-  canImportKnowledge,
-  onImportSelected,
-  importBusy = false,
+  hasUploadedKnowledge,
+  onFinish,
+  finishBusy = false,
 }: Props) {
   const total = knowledgeCount + conversationsCount + skillsCount;
-  const importDisabled = !canImportKnowledge || importBusy;
-  const importButton = (
+  const finishDisabled = finishBusy;
+  const finishButton = (
     <Button
       type="button"
-      disabled={importDisabled}
+      disabled={finishDisabled}
       className="bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50"
-      onClick={onImportSelected}
+      onClick={onFinish}
     >
-      {importBusy ? "Importing…" : "Import knowledge →"}
+      {finishBusy ? "Finishing…" : "Finish"}
     </Button>
   );
 
@@ -54,25 +52,28 @@ export function ConfigureWizardFooterBar({
         {conversationsCount === 1 ? "" : "s"}
         {", "}
         <span className="text-foreground/90">{skillsCount}</span> skill{skillsCount === 1 ? "" : "s"}
-        {total === 0 ? <span className="block pt-1 text-muted-foreground/80">Nothing selected yet.</span> : null}
+        {total === 0 ? (
+          <span className="block pt-1 text-muted-foreground/80">
+            No files staged — Finish will complete setup without creating a knowledge base.
+          </span>
+        ) : !hasUploadedKnowledge ? (
+          <span className="block pt-1 text-muted-foreground/80">
+            Upload files on the previous step, or Finish to skip knowledge base creation.
+          </span>
+        ) : null}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-3">
-        <Button type="button" variant="ghost" className="text-muted-foreground hover:text-foreground" onClick={onSkip}>
-          Skip for now
-        </Button>
-        {!importDisabled ? (
-          importButton
-        ) : (
+        {finishDisabled ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="inline-flex">{importButton}</span>
+              <span className="inline-flex">{finishButton}</span>
             </TooltipTrigger>
             <TooltipContent side="top">
-              {importBusy
-                ? "Import is running. You can keep browsing; we will notify you when it finishes."
-                : "Upload knowledge files on the previous step, then return here to import."}
+              Import is running. You can keep browsing; we will notify you when it finishes.
             </TooltipContent>
           </Tooltip>
+        ) : (
+          finishButton
         )}
       </div>
     </div>

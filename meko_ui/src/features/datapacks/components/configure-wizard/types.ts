@@ -2,7 +2,9 @@
  * Shared types for the post-create datapack configure wizard (especially the Sync Knowledge step).
  * ListedSource tracks staged files or URLs; knowledge files may carry upload lifecycle for S3 ingest.
  */
-export type KnowledgeUploadStatus = "pending" | "uploading" | "done" | "error";
+import type { KnowledgeUploadStatus } from "@/lib/knowledgeUploadStatus";
+
+export type { KnowledgeUploadStatus };
 
 export type ListedSource = {
   id: string;

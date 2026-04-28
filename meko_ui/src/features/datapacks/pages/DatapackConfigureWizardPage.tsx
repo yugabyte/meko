@@ -1,5 +1,5 @@
 /**
- * Route `/datapacks/:name/configure`: post-create wizard (install → sync knowledge → import).
+ * Route `/datapacks/:name/configure`: post-create wizard (install → add knowledge → finish).
  * Composes modular step components; keeps sync list state and navigation here so steps stay presentational.
  */
 import { useCallback, useRef, useState } from "react";
@@ -18,13 +18,16 @@ import {
   type WizardStepId,
   wizardStepIndex,
 } from "@/features/datapacks/components/configure-wizard/wizardSteps";
-import { datapackDetailPath, datapackNewPath, ROUTES } from "@/app/routes/paths";
+import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
+import { markDatapackWizardConfigureDone } from "@/lib/datapackConfigureStatus";
 import { confirmUpload, getApiErrorMessage, requestUploadURL } from "@/lib/mekoApi";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
   filterFilesForKnowledgeUploadBatch,
 } from "@/lib/knowledgeFileUploadRules";
 import { startKnowledgeBaseImport } from "@/lib/knowledgeBaseImportJob";
+import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
+import { toast } from "@/hooks/use-toast";
 
 const UPLOAD_TIMEOUT_MS = 30000;
 
@@ -77,8 +80,6 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
   const conversationInputRef = useRef<HTMLInputElement>(null);
   const skillsInputRef = useRef<HTMLInputElement>(null);
 
-  const goDetail = () => navigate(datapackDetailPath(datapackName));
-
   const showSyncWarning = useCallback((msg: string) => {
     setSyncFileWarning(msg);
     clearTimeout(syncWarningTimer.current);
@@ -89,13 +90,14 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
     id: `${f.name}-${f.size}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
     label: f.name,
     kind: "file",
-    ...(includeUploadMeta ? { file: f, uploadStatus: "pending" as const } : {}),
+    ...(includeUploadMeta ? { file: f, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.PENDING } : {}),
   });
 
   const addFiles = (section: SyncSectionId, files: FileList | null) => {
     if (section !== "knowledge" || !files?.length) return;
     setKnowledgeItems((prev) => {
-      const staging = prev.filter((it) => it.kind === "file" && it.uploadStatus !== "done").length;
+      const staging = prev.filter((it) => it.kind === "file" && it.uploadStatus !== KNOWLEDGE_UPLOAD_STATUS.DONE)
+        .length;
       const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(Array.from(files), staging);
       if (warningParts.length > 0) {
         const text = warningParts.join(". ");
@@ -113,8 +115,13 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
   const retryKnowledgeUpload = useCallback((id: string) => {
     setKnowledgeItems((prev) =>
       prev.map((x) =>
-        x.id === id && x.uploadStatus === "error"
-          ? { ...x, uploadStatus: "pending", uploadProgress: undefined, uploadError: undefined }
+        x.id === id && x.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR
+          ? {
+              ...x,
+              uploadStatus: KNOWLEDGE_UPLOAD_STATUS.PENDING,
+              uploadProgress: undefined,
+              uploadError: undefined,
+            }
           : x,
       ),
     );
@@ -124,14 +131,18 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
     setKnowledgeUploading(true);
     try {
       const pending = knowledgeItems.filter(
-        (it) => it.kind === "file" && it.file && (it.uploadStatus === "pending" || it.uploadStatus === "error"),
+        (it) =>
+          it.kind === "file" &&
+          it.file &&
+          (it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+            it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR),
       );
       for (const item of pending) {
         const file = item.file!;
         setKnowledgeItems((prev) =>
           prev.map((x) =>
             x.id === item.id
-              ? { ...x, uploadStatus: "uploading", uploadProgress: 0, uploadError: undefined }
+              ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.UPLOADING, uploadProgress: 0, uploadError: undefined }
               : x,
           ),
         );
@@ -149,7 +160,9 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
           });
           await confirmUpload(datapackName, key, file.name, file.size);
           setKnowledgeItems((prev) =>
-            prev.map((x) => (x.id === item.id ? { ...x, uploadStatus: "done", uploadProgress: 100 } : x)),
+            prev.map((x) =>
+              x.id === item.id ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE, uploadProgress: 100 } : x,
+            ),
           );
         } catch (err) {
           setKnowledgeItems((prev) =>
@@ -157,7 +170,7 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
               x.id === item.id
                 ? {
                   ...x,
-                  uploadStatus: "error",
+                  uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
                   uploadProgress: 0,
                   uploadError: getApiErrorMessage(err, "Upload failed."),
                 }
@@ -182,11 +195,32 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
     else navigate(ROUTES.datapacks);
   };
 
-  const canImportKnowledge = knowledgeItems.some((it) => it.uploadStatus === "done");
+  const hasUploadedKnowledge = knowledgeItems.some((it) => it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE);
+  const knowledgeDoneCount = knowledgeItems.filter(
+    (it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE,
+  ).length;
+
+  const completeSetupWithoutImport = useCallback(() => {
+    markDatapackWizardConfigureDone(datapackName);
+    toast({
+      title: "Finished setup",
+      description: `You're all set with ${datapackName}.`,
+      duration: 4000,
+    });
+    navigate(datapackDetailPath(datapackName));
+  }, [datapackName, navigate]);
+
+  const handleWizardFinish = useCallback(() => {
+    if (!hasUploadedKnowledge) {
+      completeSetupWithoutImport();
+      return;
+    }
+    startKnowledgeBaseImport(datapackName);
+  }, [hasUploadedKnowledge, datapackName, completeSetupWithoutImport]);
 
   const syncAllKnowledgeUploaded =
     knowledgeItems.length > 0 &&
-    knowledgeItems.every((it) => it.kind === "file" && it.uploadStatus === "done");
+    knowledgeItems.every((it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE);
 
   const canGoNextFromSync = stepId !== WIZARD_STEP_ID.sync || syncAllKnowledgeUploaded;
 
@@ -199,7 +233,7 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
           <DatapackBreadcrumbs
             items={[
               { label: "Datapacks", href: ROUTES.datapacks },
-              { label: "new", href: datapackNewPath() },
+              { label: datapackName, href: datapackDetailPath(datapackName) },
               { label: "configure" },
             ]}
           />
@@ -212,7 +246,7 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
               <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">{descriptionFromState}</p>
             ) : (
               <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                Finish setup: install the client, add knowledge to sync, then review import.
+                Finish setup: install the client, add knowledge files, then review and finish.
               </p>
             )}
           </div>
@@ -245,12 +279,12 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
           {stepId === WIZARD_STEP_ID.import ? (
             <ConfigureWizardStatusStep
               datapackName={datapackName}
-              knowledgeCount={knowledgeItems.length}
+              knowledgeItems={knowledgeItems}
+              knowledgeCount={knowledgeDoneCount}
               conversationsCount={0}
               skillsCount={0}
-              canImportKnowledge={canImportKnowledge}
-              onSkip={goDetail}
-              onStartImport={() => startKnowledgeBaseImport(datapackName)}
+              hasUploadedKnowledge={hasUploadedKnowledge}
+              onFinish={handleWizardFinish}
             />
           ) : null}
 
@@ -259,9 +293,15 @@ export default function DatapackConfigureWizardPage({ datapackName }: Props) {
             currentIndex={currentIndex}
             onBack={goBack}
             onNext={goNext}
-            onOpenDatapack={goDetail}
+            onSkipStep={
+              stepId === WIZARD_STEP_ID.install || stepId === WIZARD_STEP_ID.sync
+                ? goNext
+                : hasUploadedKnowledge
+                  ? completeSetupWithoutImport
+                  : undefined
+            }
             canGoNext={canGoNextFromSync}
-            nextDisabledTooltip="Upload knowledge file successfully before continuing to import."
+            nextDisabledTooltip="Upload knowledge files successfully before continuing, or use Skip step."
           />
         </div>
       </main>

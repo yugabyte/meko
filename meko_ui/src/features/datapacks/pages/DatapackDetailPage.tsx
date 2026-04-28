@@ -45,6 +45,7 @@ import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
+import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
 import { DatapackDetailMembersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailMembersTile";
 // Connect + upload modals (credentials UI and FileUpload wrapper).
 import {
@@ -142,6 +143,27 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     };
   }, [datapackName]);
 
+  useEffect(() => {
+    if (!datapack?.datapack_id) return;
+    const cache = readProvisionStatusCache();
+    const cached = cache[datapackName];
+    if (cached) {
+      setProvisionStatus((prev) => prev ?? cached);
+      return;
+    }
+    let cancelled = false;
+    void getProvisionStatus()
+      .then((details) => {
+        if (cancelled) return;
+        setProvisionStatus(details);
+        const next = { ...readProvisionStatusCache(), [datapackName]: details };
+        writeProvisionStatusCache(next);
+      })
+      .catch(() => { });
+    return () => {
+      cancelled = true;
+    };
+  }, [datapackName, datapack?.datapack_id]);
 
   // useEffect(() => {
   //   const ac = new AbortController();
@@ -284,11 +306,21 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
         {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = knowledge upload, connect, configure, share */}
         <DatapackDetailHero
           datapackName={datapackName}
+          description={datapack?.description}
           displayId={displayId}
           createdLabel={createdLabel}
           statusLoading={statusLoading}
           actions={
             <>
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-border bg-background/80"
+                onClick={() => navigate(datapackSharePath(datapackName))}
+              >
+                <Share2 className="h-4 w-4 shrink-0" aria-hidden />
+                Share
+              </Button>
               <DatapackKnowledgeUploadDialog
                 datapackName={datapackName}
                 open={isUploadOpen}
@@ -356,13 +388,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                       Configure
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuItem
-                    className="gap-2 cursor-pointer focus:bg-muted/20"
-                    onSelect={() => navigate(datapackSharePath(datapackName))}
-                  >
-                    <Share2 className="h-4 w-4 shrink-0" aria-hidden />
-                    Share
-                  </DropdownMenuItem>
                   <DropdownMenuSeparator className="bg-border" />
                   <DropdownMenuItem
                     className="gap-2 cursor-pointer focus:bg-muted/20"
@@ -431,7 +456,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               )}
             </div>
           </div>
-          <div className="flex min-h-0 min-w-0 flex-col lg:self-start lg:w-full">
+          <div className="mt-15 flex min-h-0 min-w-0 flex-col gap-4 lg:self-start lg:w-full">
+            <DatapackDetailConnectTile
+              mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
+              mcpApiKey={provisionStatus?.mcp_api_key ?? null}
+              onOpenConnect={() => setIsConnectOpen(true)}
+            />
             <DatapackDetailMembersTile datapackName={datapackName} currentUser={currentUser} />
           </div>
         </div>

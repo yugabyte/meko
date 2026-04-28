@@ -10,6 +10,7 @@ import {
   KNOWLEDGE_UPLOAD_MAX_BATCH,
   KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
 } from "@/lib/knowledgeFileUploadRules";
+import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
 
 type Props = {
   knowledgeItems: ListedSource[];
@@ -48,7 +49,9 @@ export function ConfigureWizardSyncStep({
     (it) =>
       it.kind === "file" &&
       it.file &&
-      (it.uploadStatus === "pending" || it.uploadStatus === "error" || !it.uploadStatus),
+      (it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+        it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR ||
+        !it.uploadStatus),
   );
 
   return (

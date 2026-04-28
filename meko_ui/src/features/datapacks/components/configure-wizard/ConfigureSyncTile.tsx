@@ -6,8 +6,16 @@ import { AlertCircle, type LucideIcon } from "lucide-react";
 import type { RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
 import { cn } from "@/lib/utils";
 import type { ListedSource, SyncSectionId } from "./types";
+import {
+  wizardTileRootClass,
+  wizardTileToneBadge,
+  wizardTileToneIcon,
+  wizardTileToneLink,
+  type WizardSyncTone,
+} from "./configureWizardTileStyles";
 
 /**
  * Flip here when shipping each feature (no prop drilling from parents).
@@ -23,15 +31,13 @@ function isComingSoonSection(section: SyncSectionId): boolean {
   return section === "conversations" || section === "skills";
 }
 
-type Tone = "emerald" | "blue" | "purple";
-
 type Props = {
   section: SyncSectionId;
   title: string;
   description: string;
   badge: string;
   icon: LucideIcon;
-  tone: Tone;
+  tone: WizardSyncTone;
   items: ListedSource[];
   fileInputRef: RefObject<HTMLInputElement | null>;
   accept: string | undefined;
@@ -46,37 +52,14 @@ type Props = {
   onRetryKnowledgeUpload?: (id: string) => void;
 };
 
-const toneBorder: Record<Tone, string> = {
-  emerald: "border-emerald-500/35 bg-emerald-950/20",
-  blue: "border-blue-500/35 bg-blue-950/20",
-  purple: "border-purple-500/35 bg-purple-950/20",
-};
-
-const toneBadge: Record<Tone, string> = {
-  emerald: "border-emerald-500/40 bg-emerald-500/15 text-emerald-100",
-  blue: "border-blue-500/40 bg-blue-500/15 text-blue-100",
-  purple: "border-purple-500/40 bg-purple-500/15 text-purple-100",
-};
-
-const toneIcon: Record<Tone, string> = {
-  emerald: "text-emerald-400",
-  blue: "text-blue-400",
-  purple: "text-purple-400",
-};
-
-const toneLink: Record<Tone, string> = {
-  emerald: "text-emerald-400 hover:text-emerald-300",
-  blue: "text-blue-400 hover:text-blue-300",
-  purple: "text-purple-400 hover:text-purple-300",
-};
-
 function uploadStatusShort(it: ListedSource): string | null {
   if (it.kind !== "file" || !it.file) return null;
   const s = it.uploadStatus;
-  if (!s || s === "pending") return "Not uploaded";
-  if (s === "uploading") return `Uploading${it.uploadProgress != null ? ` ${it.uploadProgress}%` : "…"}`;
-  if (s === "done") return "Uploaded";
-  if (s === "error") return "Upload failed";
+  if (!s || s === KNOWLEDGE_UPLOAD_STATUS.PENDING) return "Not uploaded";
+  if (s === KNOWLEDGE_UPLOAD_STATUS.UPLOADING)
+    return `Uploading${it.uploadProgress != null ? ` ${it.uploadProgress}%` : "…"}`;
+  if (s === KNOWLEDGE_UPLOAD_STATUS.DONE) return "Uploaded";
+  if (s === KNOWLEDGE_UPLOAD_STATUS.ERROR) return "Upload failed";
   return null;
 }
 
@@ -102,18 +85,13 @@ export function ConfigureSyncTile({
   const addUrlDisabled = section === "knowledge" && KNOWLEDGE_ADD_URL_COMING_SOON;
 
   const hasKnowledgeUploadErrors =
-    !comingSoon && items.some((it) => it.kind === "file" && it.uploadStatus === "error");
+    !comingSoon && items.some((it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR);
 
   return (
-    <div
-      className={cn(
-        "flex min-h-[280px] min-w-0 flex-1 flex-col rounded-xl border-2 p-4 sm:p-5",
-        toneBorder[tone],
-      )}
-    >
+    <div className={wizardTileRootClass(tone)}>
       <div className="flex items-start justify-between gap-2 border-b border-border/60 pb-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon className={cn("h-5 w-5 shrink-0", toneIcon[tone])} aria-hidden />
+          <Icon className={cn("h-5 w-5 shrink-0", wizardTileToneIcon[tone])} aria-hidden />
           <h3 className="truncate text-sm font-semibold text-foreground">{title}</h3>
         </div>
         {comingSoon ? (
@@ -124,7 +102,7 @@ export function ConfigureSyncTile({
           <span
             className={cn(
               "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-              toneBadge[tone],
+              wizardTileToneBadge[tone],
             )}
           >
             {badge}
@@ -145,8 +123,8 @@ export function ConfigureSyncTile({
               <li className="rounded-md bg-background/40 px-2 py-2 font-mono">notes-from-session.md</li>
             </ul>
             <div className="mt-4 flex gap-3 border-t border-border/40 pt-3">
-              <span className={cn("font-medium", toneLink[tone])}>+ Add files</span>
-              <span className={cn("font-medium", toneLink[tone])}>+ Add URL</span>
+              <span className={cn("font-medium", wizardTileToneLink[tone])}>+ Add files</span>
+              <span className={cn("font-medium", wizardTileToneLink[tone])}>+ Add URL</span>
             </div>
           </div>
           <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-[2px]">
@@ -176,7 +154,7 @@ export function ConfigureSyncTile({
             ) : (
               items.map((it) => {
                 const short = uploadStatusShort(it);
-                const failed = it.kind === "file" && it.uploadStatus === "error";
+                const failed = it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR;
                 const detail = failed && it.uploadError ? it.uploadError : short ?? undefined;
                 return (
                   <li
@@ -285,8 +263,7 @@ export function ConfigureSyncTile({
             {showKnowledgeUpload && onUploadKnowledgeFiles ? (
               <Button
                 type="button"
-                variant="secondary"
-                className="w-full font-medium sm:w-auto"
+                className="w-full bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-60 sm:w-auto"
                 disabled={knowledgeUploading}
                 onClick={onUploadKnowledgeFiles}
               >

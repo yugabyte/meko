@@ -70,9 +70,9 @@ export function startKnowledgeBaseImport(datapackName: string): void {
   void (async () => {
     try {
       await createKnowledgeBase(name);
+      markDatapackWizardConfigureDone(name);
       emit({ phase: "polling", datapackName: name });
       await pollUntilKbSettled(name);
-      markDatapackWizardConfigureDone(name);
       emit({ phase: "success", datapackName: name });
       toast({
         title: "Import complete",

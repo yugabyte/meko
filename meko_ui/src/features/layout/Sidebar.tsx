@@ -77,6 +77,8 @@ export default function Sidebar() {
     }
   }, [onPlaygroundRoute]);
 
+  const expandSidebar = () => setIsCollapsed(false);
+
   const handleLogout = async () => {
     setLogoutError(null);
     setLoggingOut(true);
@@ -123,6 +125,7 @@ export default function Sidebar() {
         {/* Install (MCP / client setup — same route as Home) */}
         <NavLink
           to={ROUTES.home}
+          onClick={expandSidebar}
           className={cn(
             "flex items-center rounded-md text-sm font-medium transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
@@ -156,6 +159,7 @@ export default function Sidebar() {
         {isCollapsed ? (
           <NavLink
             to={ROUTES.datapacks}
+            onClick={expandSidebar}
             className={cn(
               "flex items-center rounded-md text-sm font-medium transition-colors justify-center w-10 h-10 mx-auto",
               isDatapacksSectionActive
@@ -171,6 +175,7 @@ export default function Sidebar() {
             <div className="flex items-stretch gap-0 rounded-md">
               <NavLink
                 to={ROUTES.datapacks}
+                onClick={expandSidebar}
                 className={cn(
                   "flex flex-1 items-center gap-3 rounded-l-md px-3 py-2 text-sm font-medium transition-colors min-w-0",
                   isDatapacksSectionActive
@@ -230,6 +235,7 @@ export default function Sidebar() {
         {/* Observe */}
         <NavLink
           to={ROUTES.observeHub}
+          onClick={expandSidebar}
           className={cn(
             "flex items-center rounded-md text-sm font-medium transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",

@@ -8,7 +8,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { copyToClipboard } from "@/lib/clipboard";
+import { buildMekoInstallerCommand } from "@/lib/mekoInstallerCommand";
 import type { ProvisionStatus } from "@/lib/mekoApi";
 
 export type DatapackConnectDialogProps = {
@@ -127,6 +129,94 @@ export function DatapackConnectDialog({
                   )}
                 </Button>
               </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <label className="text-sm font-medium text-muted-foreground">One-line installer</label>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Run from the directory that contains the <code className="text-muted-foreground/90">installer</code>{" "}
+                folder (see product docs). Values below use this datapack&apos;s MCP URL and API key.
+              </p>
+              <Tabs defaultValue="claude" className="w-full">
+                <TabsList className="h-9 w-full justify-start bg-[#0E1525] p-1 border border-border">
+                  <TabsTrigger
+                    value="claude"
+                    className="flex-1 data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=inactive]:text-muted-foreground"
+                  >
+                    Claude
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="cursor"
+                    className="flex-1 data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=inactive]:text-muted-foreground"
+                  >
+                    Cursor
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="claude" className="mt-3 space-y-2 outline-none">
+                  <div className="flex items-start gap-2 rounded-md border border-border bg-[#0E1525] p-3">
+                    <code className="min-w-0 flex-1 break-all text-xs leading-relaxed text-blue-100">
+                      {buildMekoInstallerCommand(
+                        "claude-desktop",
+                        provisionStatus.mcp_server_url,
+                        provisionStatus.mcp_api_key,
+                      )}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-white"
+                      onClick={() =>
+                        handleCopy(
+                          buildMekoInstallerCommand(
+                            "claude-desktop",
+                            provisionStatus.mcp_server_url,
+                            provisionStatus.mcp_api_key,
+                          ),
+                          "mcpInstallClaude",
+                        )
+                      }
+                    >
+                      {copiedField === "mcpInstallClaude" ? (
+                        <Check className="h-4 w-4 text-green-500" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </TabsContent>
+                <TabsContent value="cursor" className="mt-3 space-y-2 outline-none">
+                  <div className="flex items-start gap-2 rounded-md border border-border bg-[#0E1525] p-3">
+                    <code className="min-w-0 flex-1 break-all text-xs leading-relaxed text-blue-100">
+                      {buildMekoInstallerCommand(
+                        "cursor",
+                        provisionStatus.mcp_server_url,
+                        provisionStatus.mcp_api_key,
+                      )}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-white"
+                      onClick={() =>
+                        handleCopy(
+                          buildMekoInstallerCommand(
+                            "cursor",
+                            provisionStatus.mcp_server_url,
+                            provisionStatus.mcp_api_key,
+                          ),
+                          "mcpInstallCursor",
+                        )
+                      }
+                    >
+                      {copiedField === "mcpInstallCursor" ? (
+                        <Check className="h-4 w-4 text-green-500" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </TabsContent>
+              </Tabs>
             </div>
 
             <h3 className="pt-2 text-lg font-semibold text-white">Database Access</h3>

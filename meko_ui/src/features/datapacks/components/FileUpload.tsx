@@ -17,10 +17,11 @@ import {
   KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
   filterFilesForKnowledgeUploadBatch,
 } from "@/lib/knowledgeFileUploadRules";
+import { KNOWLEDGE_UPLOAD_STATUS, type KnowledgeUploadStatus } from "@/lib/knowledgeUploadStatus";
 
 type FileEntry = {
   file: File;
-  status: "pending" | "uploading" | "done" | "error";
+  status: KnowledgeUploadStatus;
   progress: number;
   error?: string;
 };
@@ -52,20 +53,27 @@ export default function FileUpload({ datapackName }: Props) {
     warningTimer.current = setTimeout(() => setWarning(null), 4000);
   }, []);
 
-  const pendingCount = files.filter((f) => f.status === "pending").length;
-  const isUploading = files.some((f) => f.status === "uploading");
-  const batchUsed = files.filter((f) => f.status === "pending" || f.status === "uploading").length;
+  const pendingCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING).length;
+  const isUploading = files.some((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING);
+  const batchUsed = files.filter(
+    (f) => f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING || f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
+  ).length;
   const batchRemaining = KNOWLEDGE_UPLOAD_MAX_BATCH - batchUsed;
   const batchFull = batchRemaining <= 0;
 
   const addFiles = useCallback((incoming: FileList | File[]) => {
     const all = Array.from(incoming);
     setFiles((prev) => {
-      const currentBatch = prev.filter((f) => f.status === "pending" || f.status === "uploading").length;
+      const currentBatch = prev.filter(
+        (f) => f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING || f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
+      ).length;
       const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(all, currentBatch);
       if (warningParts.length > 0) showWarning(warningParts.join(". "));
       if (accepted.length === 0) return prev;
-      return [...prev, ...accepted.map((f) => ({ file: f, status: "pending" as const, progress: 0 }))];
+      return [
+        ...prev,
+        ...accepted.map((f) => ({ file: f, status: KNOWLEDGE_UPLOAD_STATUS.PENDING, progress: 0 })),
+      ];
     });
   }, [showWarning]);
 
@@ -118,10 +126,10 @@ export default function FileUpload({ datapackName }: Props) {
 
     for (let i = 0; i < files.length; i++) {
       const entry = files[i];
-      if (entry.status !== "pending") continue;
+      if (entry.status !== KNOWLEDGE_UPLOAD_STATUS.PENDING) continue;
 
       setFiles((prev) =>
-        prev.map((f, idx) => (idx === i ? { ...f, status: "uploading", progress: 0 } : f)),
+        prev.map((f, idx) => (idx === i ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.UPLOADING, progress: 0 } : f)),
       );
 
       try {
@@ -137,7 +145,7 @@ export default function FileUpload({ datapackName }: Props) {
 
         uploaded++;
         setFiles((prev) =>
-          prev.map((f, idx) => (idx === i ? { ...f, status: "done", progress: 100 } : f)),
+          prev.map((f, idx) => (idx === i ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.DONE, progress: 100 } : f)),
         );
       } catch (err) {
         setFiles((prev) =>
@@ -145,7 +153,7 @@ export default function FileUpload({ datapackName }: Props) {
             idx === i
               ? {
                 ...f,
-                status: "error",
+                status: KNOWLEDGE_UPLOAD_STATUS.ERROR,
                 progress: 0,
                 error: getApiErrorMessage(err, "Upload failed."),
               }
@@ -159,7 +167,7 @@ export default function FileUpload({ datapackName }: Props) {
       setTotalUploaded((prev) => prev + uploaded);
       if (kbCreated) setNewUploadsAfterKB((prev) => prev + uploaded);
       setTimeout(() => {
-        setFiles((prev) => prev.filter((f) => f.status !== "done"));
+        setFiles((prev) => prev.filter((f) => f.status !== KNOWLEDGE_UPLOAD_STATUS.DONE));
       }, 2000);
     }
   };
@@ -219,8 +227,8 @@ export default function FileUpload({ datapackName }: Props) {
     return () => clearInterval(pollRef.current);
   }, [pollingActive, fetchStatus]);
 
-  const doneCount = files.filter((f) => f.status === "done").length;
-  const errorCount = files.filter((f) => f.status === "error").length;
+  const doneCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.DONE).length;
+  const errorCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.ERROR).length;
 
   // Phase computation
   const sourcesDiscovering = sourceStatuses.length > 0 && sourceStatuses.some((s) => s.status !== "COMPLETED");
@@ -354,17 +362,20 @@ export default function FileUpload({ datapackName }: Props) {
                     </span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {entry.status === "uploading" && (
+                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
                       <span className="text-xs text-blue-400 tabular-nums">{entry.progress}%</span>
                     )}
-                    {entry.status === "done" && <CheckCircle2 className="w-4 h-4 text-green-400" />}
-                    {entry.status === "error" && (
+                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE && (
+                      <CheckCircle2 className="w-4 h-4 text-green-400" />
+                    )}
+                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && (
                       <span className="flex items-center gap-1 text-xs text-red-400">
                         <AlertCircle className="w-4 h-4" />
                         {entry.error}
                       </span>
                     )}
-                    {(entry.status === "pending" || entry.status === "error") && (
+                    {(entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+                      entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR) && (
                       <button
                         type="button"
                         className="text-muted-foreground hover:text-white transition-colors"
@@ -375,7 +386,7 @@ export default function FileUpload({ datapackName }: Props) {
                     )}
                   </div>
                 </div>
-                {entry.status === "uploading" && (
+                {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
                   <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
                     <div
                       className="h-full rounded-full bg-blue-500 transition-all duration-200"
