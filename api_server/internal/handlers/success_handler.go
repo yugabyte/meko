@@ -297,27 +297,29 @@ func renderSuccessWithToken(c echo.Context, accessToken string) error {
 	return c.HTML(http.StatusOK, buf.String())
 }
 
-// ProvisionStatusHandler returns the full default-datapack credentials
-// for the authenticated account. Returns 404 when the datapack has not
-// been provisioned yet (JS on the success page polls until ready).
-func ProvisionStatusHandler(dpRepo *repository.DatapackRepo) echo.HandlerFunc {
+// DatapackProvisionStatusHandler returns credentials for the datapack
+// in path scope (/datapacks/:name). Backs the per-datapack Connect
+// dialog. Ownership is enforced upstream by RequireDatapackOwnership.
+func DatapackProvisionStatusHandler(dpRepo *repository.DatapackRepo) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		account, err := auth.GetAccount(c)
+		dp, err := auth.GetDatapack(c)
 		if err != nil {
-			return apiError(c, http.StatusUnauthorized,
-				"UNAUTHORIZED", "missing account context")
+			return apiError(c, http.StatusInternalServerError,
+				"INTERNAL_ERROR", "datapack context missing")
 		}
 
-		details, err := dpRepo.GetDefaultDatapackDetails(account.ID)
+		details, err := dpRepo.GetDatapackProvisionDetails(dp.ID)
 		if err != nil {
-			slog.Error("provision-status query failed",
-				"account_id", account.ID, "error", err)
+			slog.Error("datapack provision-status query failed",
+				"datapack_id", dp.ID, "error", err)
 			return apiError(c, http.StatusInternalServerError,
-				"INTERNAL_ERROR", "failed to check provisioning status")
+				"INTERNAL_ERROR", "failed to fetch datapack provisioning details")
 		}
 		if details == nil {
+			// Rare race: ownership middleware saw the row, but it
+			// vanished before this query ran.
 			return apiError(c, http.StatusNotFound,
-				"NOT_READY", "datapack is still being provisioned")
+				"NOT_FOUND", "datapack no longer exists")
 		}
 
 		return ok(c, http.StatusOK, details)

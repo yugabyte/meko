@@ -13,10 +13,12 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -52,6 +54,16 @@ func run() error {
 	// Langfuse configuration
 	langfuseHost := flag.String("langfuse-host", os.Getenv("LANGFUSE_HOST"), "Langfuse base URL (e.g. http://localhost:3000)")
 	langfuseAdminAPIKey := flag.String("langfuse-admin-api-key", os.Getenv("LANGFUSE_ADMIN_API_KEY"), "Langfuse admin API key used for per-account org/project provisioning")
+
+	// Langfuse Postgres connection — optional, only needed for read-only
+	// observability features (e.g. listing conversations) that read Langfuse
+	// trace/observation data directly. When unset, those endpoints return 503.
+	langfuseDBHost := flag.String("langfuse-db-host", os.Getenv("LANGFUSE_DB_HOST"), "Langfuse Postgres host (optional)")
+	langfuseDBPort := flag.Int("langfuse-db-port", envIntOrDefault("LANGFUSE_DB_PORT", 5433), "Langfuse Postgres port")
+	langfuseDBName := flag.String("langfuse-db-name", envOrDefault("LANGFUSE_DB_NAME", "langfuse"), "Langfuse Postgres database name")
+	langfuseDBUser := flag.String("langfuse-db-user", envOrDefault("LANGFUSE_DB_USER", "yugabyte"), "Langfuse Postgres user")
+	langfuseDBPassword := flag.String("langfuse-db-password", os.Getenv("LANGFUSE_DB_PASSWORD"), "Langfuse Postgres password")
+
 	openAIAPIKey := flag.String("openai-api-key", os.Getenv("OPENAI_API_KEY"), "OpenAI API key")
 	openAILLMModel := flag.String("openai-llm-model", os.Getenv("OPEN_AI_LLM_MODEL"), "OpenAI LLM model (default: gpt-4o)")
 	openAIEmbeddingModel := flag.String("openai-embedding-model", os.Getenv("OPEN_AI_EMBEDDING_MODEL"), "OpenAI embedding model (default: text-embedding-3-small)")
@@ -86,6 +98,30 @@ func run() error {
 		}
 	}()
 
+	// Optional Langfuse Postgres connection — only attempted when --langfuse-db-host
+	// (or LANGFUSE_DB_HOST) is set. Disabled cleanly otherwise; observability
+	// endpoints that need it will return 503.
+	var langfuseDBConn *sql.DB
+	if *langfuseDBHost != "" {
+		langfuseConnStr := fmt.Sprintf(
+			"postgresql://%s:%d/%s?user=%s&password=%s&sslmode=disable",
+			*langfuseDBHost, *langfuseDBPort, *langfuseDBName, *langfuseDBUser, *langfuseDBPassword,
+		)
+		langfuseDBConn, err = db.ConnectWithRetry(langfuseConnStr, 3, 2*time.Second)
+		if err != nil {
+			slog.Warn("failed to connect to langfuse database; observability features disabled",
+				"host", *langfuseDBHost, "error", err)
+			langfuseDBConn = nil
+		} else {
+			slog.Info("langfuse database connected", "host", *langfuseDBHost, "db", *langfuseDBName)
+			defer func() {
+				if closeErr := langfuseDBConn.Close(); closeErr != nil {
+					slog.Error("failed to close langfuse database", "error", closeErr)
+				}
+			}()
+		}
+	}
+
 	if *migrateOnly {
 		details, err := db.RunMigrations(conn)
 		if err != nil {
@@ -111,6 +147,7 @@ func run() error {
 		CRDNamespace:         *crdNamespace,
 		LangfuseHost:         *langfuseHost,
 		LangfuseAdminAPIKey:  *langfuseAdminAPIKey,
+		LangfuseDB:           langfuseDBConn,
 		OpenAIAPIKey:         *openAIAPIKey,
 		OpenAILLMModel:       *openAILLMModel,
 		OpenAIEmbeddingModel: *openAIEmbeddingModel,
@@ -133,6 +170,15 @@ func main() {
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return fallback
 }

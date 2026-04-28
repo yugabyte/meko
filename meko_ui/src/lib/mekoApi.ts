@@ -14,7 +14,7 @@ type ApiEnvelope<T> = {
 export const AUTH_EXPIRED_EVENT = "meko:auth-expired";
 export const AUTH_LOGIN_SUCCESS_EVENT = "meko:auth-login-success";
 export const AUTH_LOGOUT_EVENT = "meko:auth-logout";
-export const PROVISION_STATUS_CACHE_KEY = "meko:provision-status:v1";
+export const PROVISION_STATUS_CACHE_KEY = "meko:provision-status:v2";
 export const ONBOARDING_STATUS_CACHE_KEY = "meko:onboarding-status:v1";
 export const ONBOARDING_STATUS_UPDATED_EVENT = "meko:onboarding-status-updated";
 /** Fired after a datapack is deleted or renamed so the sidebar can refresh its list. */
@@ -51,8 +51,6 @@ export type Datapack = {
   memory_count?: number;
   knowledge_count?: number;
   learnings_count?: number;
-  /** Optional; included when the API aggregates pipeline-style counts. */
-  conversations_count?: number;
 };
 
 export type Agent = {
@@ -165,8 +163,6 @@ const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(
   /\/$/,
   "",
 );
-const PROVISION_STATUS_PATH = "/internal/provision-status";
-
 const apiClient = axios.create({
   baseURL: API_BASE,
   withCredentials: true,
@@ -369,6 +365,70 @@ export async function bootstrapObserveSession() {
   return request<{ message: string; org_id?: string }>("/observe/session/bootstrap", "POST");
 }
 
+export type DatapackConversation = {
+  id: string;
+  agent_id?: string;
+  started_at: string;
+  /** Verbatim user prompt of the first message in the session. Empty when
+   *  the session has no messages yet — the UI renders a styled
+   *  placeholder for that case rather than relying on a server-side
+   *  string. */
+  first_message: string;
+  messages: number;
+};
+
+export type ListDatapackConversationsResponse = {
+  datapack_id: string;
+  datapack_name: string;
+  limit: number;
+  offset: number;
+  conversations: DatapackConversation[];
+};
+
+/**
+ * List Langfuse sessions (= conversations) for a datapack, newest first.
+ * Returns 503 if the api server isn't wired to a Langfuse Postgres.
+ */
+export async function listDatapackConversations(
+  datapackName: string,
+  params: { limit?: number; offset?: number } = {},
+  options: { signal?: AbortSignal } = {},
+) {
+  const qs = new URLSearchParams();
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<ListDatapackConversationsResponse>(
+    `/datapacks/${encodeURIComponent(datapackName)}/conversations${suffix}`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+export type DatapackConversationCount = {
+  datapack_id: string;
+  datapack_name: string;
+  count: number;
+};
+
+/**
+ * Total number of distinct Langfuse sessions (= conversations) for a
+ * datapack. Returns 503 if the api server isn't wired to a Langfuse
+ * Postgres.
+ */
+export async function getDatapackConversationCount(
+  datapackName: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<DatapackConversationCount>(
+    `/datapacks/${encodeURIComponent(datapackName)}/conversations/count`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
 export async function ensureLangfuseProjectKeys(datapackName: string) {
   return request<LangfuseProjectKeys>(
     `/datapacks/${encodeURIComponent(datapackName)}/langfuse/project-keys`,
@@ -376,8 +436,22 @@ export async function ensureLangfuseProjectKeys(datapackName: string) {
   );
 }
 
-export async function getProvisionStatus() {
-  return request<ProvisionStatus>(PROVISION_STATUS_PATH, "GET");
+/**
+ * Per-datapack provisioning details (ysql conn string + username +
+ * password, plus the account-level MCP URL/key for convenience).
+ * Backed by GET /datapacks/:name/provision-status; the API refuses
+ * if the caller doesn't own this datapack (RequireDatapackOwnership).
+ */
+export async function getDatapackProvisionStatus(
+  datapackName: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<ProvisionStatus>(
+    `/datapacks/${encodeURIComponent(datapackName)}/provision-status`,
+    "GET",
+    undefined,
+    options,
+  );
 }
 
 // --- Knowledge Base file upload & RAG APIs ---

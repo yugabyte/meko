@@ -74,6 +74,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	langfuseSvc := service.NewLangfuseService(service.LangfuseConfig{
 		DB:          cfg.DB,
+		LangfuseDB:  cfg.LangfuseDB,
 		Host:        cfg.LangfuseHost,
 		AdminAPIKey: cfg.LangfuseAdminAPIKey,
 	})
@@ -233,8 +234,6 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	observeH := handlers.NewObserveHandler(reg.langfuseSvc)
 	agentH := handlers.NewAgentHandler(reg.agentSvc)
 
-	g.GET("/internal/provision-status", handlers.ProvisionStatusHandler(reg.dpRepo))
-
 	g.POST("/datapacks", dpH.Create)
 	g.GET("/datapacks", dpH.List)
 	g.POST("/observe/session/bootstrap", observeH.BootstrapSession)
@@ -253,6 +252,17 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named.GET("/status", dpH.Status)
 	named.POST("/langfuse/project-keys", dpH.GenerateLangfuseProjectKeys)
 
+	// Per-datapack ysql credentials + the (account-level) MCP server
+	// URL / API key. Shown in the datapack's Connect dialog.
+	// Ownership is enforced by RequireDatapackOwnership on the named group.
+	named.GET("/provision-status", handlers.DatapackProvisionStatusHandler(reg.dpRepo))
+
+	// Read-only listing of Langfuse sessions (= chat conversations) for
+	// the datapack. Paginated with limit/offset; requires the api server
+	// to be started with --langfuse-db-host.
+	named.GET("/conversations", observeH.ConversationList)
+	named.GET("/conversations/count", observeH.ConversationCount)
+
 	named.POST("/agents", agentH.Link)
 	named.GET("/agents", agentH.ListForDatapack)
 	named.DELETE("/agents/:agent_id", agentH.Unlink)
@@ -268,6 +278,9 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named.POST("/knowledge-bases/upload-complete", kbH.ConfirmUpload)
 	named.POST("/knowledge-bases/create", kbH.CreateKB)
 	named.GET("/knowledge-bases/status", kbH.KBStatus)
+
+	named.GET("/knowledge-bases/counts", kbH.Counts)
+	named.GET("/knowledge-bases/documents", kbH.Documents)
 
 	slog.Info("datapack routes registered")
 }

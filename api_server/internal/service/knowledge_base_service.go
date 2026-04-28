@@ -166,3 +166,27 @@ func (s *KnowledgeBaseService) DeleteByDatapack(dp *models.Datapack) error {
 	}
 	return s.repo.DeleteByDatapack(dp.ID)
 }
+
+// Counts returns the per-datapack chunk / doc / promoted-memory
+// breakdown that backs the "Knowledge Base" tile.
+func (s *KnowledgeBaseService) Counts(
+	dp *models.Datapack,
+) (repository.KnowledgeBaseCounts, error) {
+	if dp == nil {
+		return repository.KnowledgeBaseCounts{},
+			fmt.Errorf("datapack is required")
+	}
+	return s.repo.Counts(dp.ID)
+}
+
+// ListDistRagDocuments returns the (document_name, status) pairs for
+// every dist_rag document tied to the datapack via dist_rag.sources.
+// Used by the "uploaded documents" tab.
+func (s *KnowledgeBaseService) ListDistRagDocuments(
+	dp *models.Datapack,
+) ([]repository.KnowledgeBaseDocument, error) {
+	if dp == nil {
+		return nil, fmt.Errorf("datapack is required")
+	}
+	return s.repo.ListDistRagDocuments(dp.ID)
+}

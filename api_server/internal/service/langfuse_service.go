@@ -17,28 +17,40 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"meko/api_server/internal/repository"
 )
 
 type LangfuseConfig struct {
-	DB          *sql.DB
+	DB *sql.DB
+	// Optional Langfuse Postgres pool. Nil when unconfigured.
+	LangfuseDB  *sql.DB
 	Host        string
 	AdminAPIKey string
 }
 
 type LangfuseService struct {
-	db               *sql.DB
+	repo             *repository.LangfuseRepo
 	host             string
 	adminAPIKey      string
 	httpClient       *http.Client
 	noRedirectClient *http.Client
 }
 
-type orgMapping struct {
-	OrgID     string
-	OrgName   string
-	PublicKey string
-	SecretKey string
+// ErrLangfuseDBNotConfigured is re-exported from the repository so
+// existing handler error checks (errors.Is(..., service.Err...)) keep
+// working unchanged.
+var ErrLangfuseDBNotConfigured = repository.ErrLangfuseDBNotConfigured
+
+// LangfuseDBConfigured reports whether the api server was started with a
+// Langfuse Postgres connection. Used by handlers to fail fast.
+func (s *LangfuseService) LangfuseDBConfigured() bool {
+	return s != nil && s.repo.LangfuseDBConfigured()
 }
+
+// orgMapping is an alias for the repo type so internal call sites
+// (ensureOrgMapping etc.) keep their existing signatures.
+type orgMapping = repository.LangfuseOrgMapping
 
 func (s *LangfuseService) Host() string {
 	if s == nil {
@@ -47,18 +59,20 @@ func (s *LangfuseService) Host() string {
 	return s.host
 }
 
-type ProjectKeys struct {
-	ProjectID   string `json:"project_id"`
-	ProjectName string `json:"project_name"`
-	PublicKey   string `json:"public_key"`
-	SecretKey   string `json:"secret_key"`
-}
+// ProjectKeys is an alias for the repo type so the LangfuseProvisioner
+// interface and its mocks (provisioning_service*.go) keep working
+// without churn.
+type ProjectKeys = repository.LangfuseProjectKeys
+
+// Conversation is an alias so handlers/UI clients that already
+// destructure on json field names keep working.
+type Conversation = repository.Conversation
 
 var errObserveInvalidCredentials error = errors.New("observe credentials invalid")
 
 func NewLangfuseService(cfg LangfuseConfig) *LangfuseService {
 	return &LangfuseService{
-		db:          cfg.DB,
+		repo:        repository.NewLangfuseRepo(cfg.DB, cfg.LangfuseDB),
 		host:        strings.TrimSpace(strings.TrimSuffix(cfg.Host, "/")),
 		adminAPIKey: strings.TrimSpace(cfg.AdminAPIKey),
 		httpClient: &http.Client{
@@ -75,7 +89,7 @@ func NewLangfuseService(cfg LangfuseConfig) *LangfuseService {
 
 func (s *LangfuseService) Enabled() bool {
 	return s != nil &&
-		s.db != nil &&
+		s.repo != nil &&
 		s.host != "" &&
 		s.adminAPIKey != ""
 }
@@ -96,7 +110,7 @@ func (s *LangfuseService) GenerateProjectKeysForDatapack(
 		return nil, fmt.Errorf("account_id is required")
 	}
 
-	existing, err := s.getProjectMapping(datapackID)
+	existing, err := s.repo.GetProjectMapping(datapackID)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +223,7 @@ func (s *LangfuseService) BootstrapObserveSession(
 }
 
 func (s *LangfuseService) ensureOrgMapping(accountID, accountEmail string) (*orgMapping, error) {
-	existing, err := s.getOrgMapping(accountID)
+	existing, err := s.repo.GetOrgMapping(accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -246,10 +260,10 @@ func (s *LangfuseService) ensureOrgMapping(accountID, accountEmail string) (*org
 		"org_secret_key", keyResp.SecretKey,
 	)
 
-	if err := s.upsertOrgMapping(accountID, orgResp.ID, orgResp.Name, keyResp.PublicKey, keyResp.SecretKey); err != nil {
+	if err := s.repo.UpsertOrgMapping(accountID, orgResp.ID, orgResp.Name, keyResp.PublicKey, keyResp.SecretKey); err != nil {
 		return nil, err
 	}
-	return s.getOrgMapping(accountID)
+	return s.repo.GetOrgMapping(accountID)
 }
 
 func (s *LangfuseService) ensureProjectMapping(
@@ -300,27 +314,10 @@ func (s *LangfuseService) ensureProjectMapping(
 		"project_secret_key", keyResp.SecretKey,
 	)
 
-	if err := s.upsertProjectMapping(accountID, datapackID, projectResp.ID, projectResp.Name, keyResp.PublicKey, keyResp.SecretKey); err != nil {
+	if err := s.repo.UpsertProjectMapping(accountID, datapackID, projectResp.ID, projectResp.Name, keyResp.PublicKey, keyResp.SecretKey); err != nil {
 		return nil, err
 	}
-	return s.getProjectMapping(datapackID)
-}
-
-func (s *LangfuseService) getOrgMapping(accountID string) (*orgMapping, error) {
-	var m orgMapping
-	err := s.db.QueryRow(
-		`SELECT langfuse_org_id, langfuse_org_name, langfuse_org_public_key, langfuse_org_secret_key
-		 FROM meko_system.langfuse_org_mapping
-		 WHERE account_id = $1`,
-		accountID,
-	).Scan(&m.OrgID, &m.OrgName, &m.PublicKey, &m.SecretKey)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch langfuse org mapping: %w", err)
-	}
-	return &m, nil
+	return s.repo.GetProjectMapping(datapackID)
 }
 
 func (s *LangfuseService) GetOrgKeysForAccount(accountID string) (string, string, error) {
@@ -331,7 +328,7 @@ func (s *LangfuseService) GetOrgKeysForAccount(accountID string) (string, string
 	if accountID == "" {
 		return "", "", fmt.Errorf("account_id is required")
 	}
-	org, err := s.getOrgMapping(accountID)
+	org, err := s.repo.GetOrgMapping(accountID)
 	if err != nil {
 		return "", "", err
 	}
@@ -341,67 +338,87 @@ func (s *LangfuseService) GetOrgKeysForAccount(accountID string) (string, string
 	return org.PublicKey, org.SecretKey, nil
 }
 
-func (s *LangfuseService) getProjectMapping(datapackID string) (*ProjectKeys, error) {
-	if strings.TrimSpace(datapackID) == "" {
+// ListConversations returns one page of Langfuse sessions (= chat
+// conversations) for the (user, datapack)'s Langfuse project, newest
+// first. Pagination is offset-based.
+//
+// Returns an empty slice when no Langfuse mapping exists for the
+// datapack; ErrLangfuseDBNotConfigured when the api server was started
+// without --langfuse-db-host.
+//
+// Datapack ownership is enforced upstream by the
+// RequireDatapackOwnership middleware.
+func (s *LangfuseService) ListConversations(
+	datapackID string,
+	limit, offset int,
+) ([]Conversation, error) {
+	if s == nil || s.repo == nil {
+		return nil, fmt.Errorf("langfuse service is not configured")
+	}
+	if !s.LangfuseDBConfigured() {
+		return nil, ErrLangfuseDBNotConfigured
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
 		return nil, fmt.Errorf("datapack_id is required")
 	}
-	var p ProjectKeys
-	err := s.db.QueryRow(
-		`SELECT langfuse_project_id, langfuse_project_name, langfuse_public_key, langfuse_secret_key
-		 FROM meko_system.langfuse_project_mapping
-		 WHERE datapack_id = $1`,
-		datapackID,
-	).Scan(&p.ProjectID, &p.ProjectName, &p.PublicKey, &p.SecretKey)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+
+	mapping, err := s.repo.GetProjectMapping(datapackID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch langfuse project mapping: %w", err)
+		return nil, err
 	}
-	return &p, nil
+	if mapping == nil {
+		return []Conversation{}, nil
+	}
+	projectID := strings.TrimSpace(mapping.ProjectID)
+	if projectID == "" {
+		slog.Error("langfuse project mapping is incomplete",
+			"datapack_id", datapackID)
+		return nil, fmt.Errorf("langfuse project mapping is incomplete")
+	}
+
+	return s.repo.ListConversationsForProject(projectID, limit, offset)
 }
 
-func (s *LangfuseService) upsertOrgMapping(accountID, orgID, orgName, publicKey, secretKey string) error {
-	_, err := s.db.Exec(
-		`INSERT INTO meko_system.langfuse_org_mapping
-		 (account_id, langfuse_org_id, langfuse_org_name, langfuse_org_public_key, langfuse_org_secret_key)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (account_id) DO UPDATE SET
-		   langfuse_org_id = EXCLUDED.langfuse_org_id,
-		   langfuse_org_name = EXCLUDED.langfuse_org_name,
-		   langfuse_org_public_key = EXCLUDED.langfuse_org_public_key,
-		   langfuse_org_secret_key = EXCLUDED.langfuse_org_secret_key,
-		   updated_at = NOW()`,
-		accountID, orgID, orgName, publicKey, secretKey,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to persist langfuse org mapping: %w", err)
+// CountConversations returns the total number of distinct Langfuse
+// sessions (= chat conversations) for the (user, datapack)'s Langfuse
+// project. Uses the same filters as ListConversations so the count
+// agrees with whatever the listing endpoint can paginate through.
+//
+// Returns (0, nil) when no Langfuse mapping exists for the datapack;
+// ErrLangfuseDBNotConfigured when the api server was started without
+// --langfuse-db-host. Datapack ownership is enforced upstream.
+func (s *LangfuseService) CountConversations(
+	datapackID string,
+) (int, error) {
+	if s == nil || s.repo == nil {
+		return 0, fmt.Errorf("langfuse service is not configured")
 	}
-	return nil
-}
+	if !s.LangfuseDBConfigured() {
+		return 0, ErrLangfuseDBNotConfigured
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return 0, fmt.Errorf("datapack_id is required")
+	}
 
-func (s *LangfuseService) upsertProjectMapping(accountID, datapackID, projectID, projectName, publicKey, secretKey string) error {
-	if strings.TrimSpace(datapackID) == "" {
-		return fmt.Errorf("failed to persist langfuse project mapping: datapack_id is required")
-	}
-	_, err := s.db.Exec(
-		`INSERT INTO meko_system.langfuse_project_mapping
-		 (account_id, datapack_id, langfuse_project_id, langfuse_project_name, langfuse_public_key, langfuse_secret_key)
-		 VALUES ($1, $2, $3, $4, $5, $6)
-		 ON CONFLICT (datapack_id) DO UPDATE SET
-		   account_id = EXCLUDED.account_id,
-		   datapack_id = EXCLUDED.datapack_id,
-		   langfuse_project_id = EXCLUDED.langfuse_project_id,
-		   langfuse_project_name = EXCLUDED.langfuse_project_name,
-		   langfuse_public_key = EXCLUDED.langfuse_public_key,
-		   langfuse_secret_key = EXCLUDED.langfuse_secret_key,
-		   updated_at = NOW()`,
-		accountID, datapackID, projectID, projectName, publicKey, secretKey,
-	)
+	mapping, err := s.repo.GetProjectMapping(datapackID)
 	if err != nil {
-		return fmt.Errorf("failed to persist langfuse project mapping: %w", err)
+		return 0, err
 	}
-	return nil
+	if mapping == nil {
+		return 0, nil
+	}
+	projectID := strings.TrimSpace(mapping.ProjectID)
+	if projectID == "" {
+		return 0, fmt.Errorf("langfuse project mapping is incomplete")
+	}
+
+	n, err := s.repo.CountDistinctSessionsForProject(projectID)
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 type createOrgReq struct {

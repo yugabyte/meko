@@ -21,6 +21,9 @@ type ServerConfig struct {
 	CognitoDomain        string
 	LangfuseHost         string
 	LangfuseAdminAPIKey  string
+	// Optional Langfuse Postgres pool. Nil when unconfigured; dependent
+	// endpoints return 503.
+	LangfuseDB           *sql.DB
 	OpenAIAPIKey         string
 	OpenAILLMModel       string
 	OpenAIEmbeddingModel string

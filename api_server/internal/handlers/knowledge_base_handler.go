@@ -566,6 +566,68 @@ func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 	return ok(c, http.StatusOK, status)
 }
 
+// Counts handles GET /api/v1/datapacks/:name/knowledge-bases/counts.
+//
+// Returns the per-datapack breakdown of total uploaded documents,
+// total stored chunks, and total promoted memories.
+//
+//	@Summary	Knowledge base counts breakdown for a datapack
+//	@Tags		knowledge-bases
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	500		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{name}/knowledge-bases/counts [get]
+func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+
+	counts, err := h.knowledgeBaseSvc.Counts(dp)
+	if err != nil {
+		slog.Error("failed to load knowledge base counts",
+			"datapack_id", dp.ID, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to load knowledge base counts")
+	}
+	return ok(c, http.StatusOK, counts)
+}
+
+// Documents handles GET /api/v1/datapacks/:name/knowledge-bases/documents.
+//
+// Returns (document_name, status) for every dist_rag.documents row
+// whose source belongs to the datapack.
+//
+//	@Summary	List uploaded documents for a datapack
+//	@Tags		knowledge-bases
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	500		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{name}/knowledge-bases/documents [get]
+func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+
+	docs, err := h.knowledgeBaseSvc.ListDistRagDocuments(dp)
+	if err != nil {
+		slog.Error("failed to list knowledge base documents",
+			"datapack_id", dp.ID, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to list knowledge base documents")
+	}
+	return ok(c, http.StatusOK, docs)
+}
+
 // mapKBError converts a KB-related error into the matching HTTP
 // envelope: 400 for validation, 404 for ErrKnowledgeBaseNotFound,
 // 409 for ErrKnowledgeBaseExists, and 500 otherwise.

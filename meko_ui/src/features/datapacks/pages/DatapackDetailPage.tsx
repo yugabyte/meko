@@ -31,7 +31,8 @@ import {
   deleteDatapack,
   getApiErrorMessage,
   getDatapack,
-  getProvisionStatus,
+  getDatapackConversationCount,
+  getDatapackProvisionStatus,
   PROVISION_STATUS_CACHE_KEY,
   updateDatapack,
   type CurrentUser,
@@ -46,6 +47,7 @@ import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfu
 import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
 import { MemoryReadOnlySummaryPanel } from "@/features/datapacks/components/memory-promotion/MemoryReadOnlySummaryPanel";
 import { KnowledgeDocumentsPanel } from "@/features/datapacks/components/knowledge-documents/KnowledgeDocumentsPanel";
+import ConversationsPanel from "@/features/datapacks/components/datapack-detail/ConversationsPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
 import { DatapackDetailMembersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailMembersTile";
@@ -68,6 +70,8 @@ type Props = {
   currentUser: CurrentUser | null;
 };
 
+// Cache is keyed by datapack_id (stable UUID), not datapack_name, so renames
+// don't orphan entries and cross-datapack lookups can never collide.
 type ProvisionStatusCache = Record<string, ProvisionStatus>;
 
 function readProvisionStatusCache(): ProvisionStatusCache {
@@ -128,7 +132,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           setKnowledgeBaseCount(dp.knowledge_count ?? 0);
           setMemoriesCount(dp.memory_count ?? 0);
           setLearningsCount(dp.learnings_count ?? 0);
-          setConversationsCount(dp.conversations_count ?? 0);
         }
       } catch (e) {
         if (!cancelled) {
@@ -146,32 +149,50 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   }, [datapackName]);
 
   useEffect(() => {
-    if (!datapack?.datapack_id) return;
+    const ac = new AbortController();
+    setConversationsCount(0);
+    void getDatapackConversationCount(datapackName, { signal: ac.signal })
+      .then((res) => {
+        if (ac.signal.aborted) return;
+        setConversationsCount(res.count ?? 0);
+      })
+      .catch(() => { });
+    return () => {
+      ac.abort();
+    };
+  }, [datapackName]);
+
+  useEffect(() => {
+    const datapackId = datapack?.datapack_id;
+    if (!datapackId) return;
     const cache = readProvisionStatusCache();
-    const cached = cache[datapackName];
+    const cached = cache[datapackId];
     if (cached) {
-      setProvisionStatus((prev) => prev ?? cached);
+      setProvisionStatus(cached);
       return;
     }
-    let cancelled = false;
-    void getProvisionStatus()
+    setProvisionStatus(null);
+    const ac = new AbortController();
+    void getDatapackProvisionStatus(datapackName, { signal: ac.signal })
       .then((details) => {
-        if (cancelled) return;
+        if (ac.signal.aborted) return;
         setProvisionStatus(details);
-        const next = { ...readProvisionStatusCache(), [datapackName]: details };
+        const next = { ...readProvisionStatusCache(), [datapackId]: details };
         writeProvisionStatusCache(next);
       })
       .catch(() => { });
     return () => {
-      cancelled = true;
+      ac.abort();
     };
   }, [datapackName, datapack?.datapack_id]);
 
   useEffect(() => {
     if (!isConnectOpen) return;
+    const datapackId = datapack?.datapack_id;
+    if (!datapackId) return;
     let mounted = true;
     const cache = readProvisionStatusCache();
-    const cached = cache[datapackName];
+    const cached = cache[datapackId];
     if (cached && mounted) {
       setProvisionStatus(cached);
       setConnectLoading(false);
@@ -185,17 +206,17 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       try {
         setConnectLoading(true);
         setConnectError(null);
-        const details = await getProvisionStatus();
+        const details = await getDatapackProvisionStatus(datapackName);
         if (!mounted) return;
         setProvisionStatus(details);
         const nextCache = readProvisionStatusCache();
-        nextCache[datapackName] = details;
+        nextCache[datapackId] = details;
         writeProvisionStatusCache(nextCache);
       } catch (err) {
         if (!mounted) return;
         setProvisionStatus(null);
         const nextCache = readProvisionStatusCache();
-        delete nextCache[datapackName];
+        delete nextCache[datapackId];
         if (Object.keys(nextCache).length === 0) {
           sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
         } else {
@@ -210,7 +231,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       mounted = false;
     };
-  }, [isConnectOpen, datapackName]);
+  }, [isConnectOpen, datapackName, datapack?.datapack_id]);
 
   const displayId = datapack?.datapack_id ?? "—";
   const createdLabel = formatDatapackCreatedAtUtc(datapack?.created_at);
@@ -265,7 +286,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     setKnowledgeBaseCount(next.knowledge_count ?? 0);
     setMemoriesCount(next.memory_count ?? 0);
     setLearningsCount(next.learnings_count ?? 0);
-    setConversationsCount(next.conversations_count ?? 0);
     dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
     toast({
       title: "Datapack updated",
@@ -416,14 +436,29 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           datapackId={datapack?.datapack_id ?? null}
           knowledgeCount={knowledgeBaseCount}
           onSelectSection={setActiveTab}
+          statusLoading={statusLoading}
         />
 
         <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,1fr)] lg:items-stretch lg:gap-6">
           <div className="flex min-h-0 min-w-0 flex-col">
             <DatapackDetailTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
             <div className="mt-6 min-h-0 w-full flex-1">
-              {activeTab === DATAPACK_DETAIL_TAB.learnings ? (
-                datapack?.datapack_id ? (
+              {/*
+                Conversations + Learnings panels stay MOUNTED across tab
+                switches so their internal cache (current page, fetched
+                rows) is preserved. Inactive ones are just hidden via
+                CSS — no remount, no duplicate API calls. Memory and
+                Knowledge tabs are still placeholder copy until those
+                panels are built.
+              */}
+              <div hidden={activeTab !== DATAPACK_DETAIL_TAB.conversations}>
+                <ConversationsPanel
+                  datapackName={datapackName}
+                  total={conversationsCount}
+                />
+              </div>
+              <div hidden={activeTab !== DATAPACK_DETAIL_TAB.learnings}>
+                {datapack?.datapack_id ? (
                   <MemoryPromotionPanel
                     datapackName={datapackName}
                     datapackId={datapack.datapack_id}
@@ -433,8 +468,9 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                   <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
                     {statusLoading ? "Loading datapack…" : "Datapack not available."}
                   </div>
-                )
-              ) : activeTab === DATAPACK_DETAIL_TAB.knowledge ? (
+                )}
+              </div>
+              {activeTab === DATAPACK_DETAIL_TAB.knowledge ? (
                 <KnowledgeDocumentsPanel
                   datapackName={datapackName}
                   knowledgeBaseCount={knowledgeBaseCount}
@@ -452,11 +488,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                     {statusLoading ? "Loading datapack…" : "Datapack not available."}
                   </div>
                 )
-              ) : (
+              ) : activeTab !== DATAPACK_DETAIL_TAB.conversations &&
+                activeTab !== DATAPACK_DETAIL_TAB.learnings ? (
                 <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
                   {DATAPACK_DETAIL_TAB_ITEMS.find((t) => t.id === activeTab)?.label} — content coming soon.
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
           <div className="mt-15 flex min-h-0 min-w-0 flex-col gap-4 lg:self-start lg:w-full">

@@ -351,8 +351,9 @@ func (r *DatapackRepo) Delete(userID, name string) error {
 	return nil
 }
 
-// DefaultDatapackDetails holds the full credentials returned only
-// during provisioning (the internal provision-status endpoint).
+// DefaultDatapackDetails is the connection-details payload returned
+// by GetDatapackProvisionDetails (and surfaced through the per-
+// datapack /provision-status endpoint).
 type DefaultDatapackDetails struct {
 	DatapackID   string `json:"datapack_id"`
 	DatapackName string `json:"datapack_name"`
@@ -363,25 +364,23 @@ type DefaultDatapackDetails struct {
 	DBConnStr    string `json:"db_conn_str"`
 }
 
-// GetDefaultDatapackDetails returns the full credentials for the
-// default datapack belonging to the given user. Returns (nil, nil)
-// when the datapack does not exist yet (provisioning still in
-// progress). The MCP API key is read from the user's user_details
-// JSONB payload so we never store the password twice.
-func (r *DatapackRepo) GetDefaultDatapackDetails(userID string) (*DefaultDatapackDetails, error) {
+// GetDatapackProvisionDetails returns the connection details for the
+// datapack with the given ID, or (nil, nil) if it doesn't exist.
+func (r *DatapackRepo) GetDatapackProvisionDetails(datapackID string) (*DefaultDatapackDetails, error) {
 	var d DefaultDatapackDetails
 	var mcpKey sql.NullString
+	var userID string
 	err := r.db.QueryRow(
-		`SELECT d.datapack_id, d.datapack_name,
+		`SELECT d.datapack_id, d.datapack_name, d.user_id,
 		        d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username, d.datapack_ysql_password,
 		        u.user_details->'mcp_credentials'->>'mcp_user_password'
 		 FROM meko_system.datapacks d
 		 JOIN meko_system.users u ON u.user_id = d.user_id
-		 WHERE d.user_id = $1 AND d.datapack_name = $2`,
-		userID, "meko_default_datapack",
+		 WHERE d.datapack_id = $1`,
+		datapackID,
 	).Scan(
-		&d.DatapackID, &d.DatapackName,
+		&d.DatapackID, &d.DatapackName, &userID,
 		&d.DBConnStr,
 		&d.DBUserName, &d.DBPassword,
 		&mcpKey,
@@ -390,9 +389,9 @@ func (r *DatapackRepo) GetDefaultDatapackDetails(userID string) (*DefaultDatapac
 		return nil, nil
 	}
 	if err != nil {
-		slog.Error("failed to get default datapack details",
-			"user_id", userID, "error", err)
-		return nil, fmt.Errorf("failed to get default datapack details: %w", err)
+		slog.Error("failed to get datapack provision details",
+			"datapack_id", datapackID, "error", err)
+		return nil, fmt.Errorf("failed to get datapack provision details: %w", err)
 	}
 
 	if mcpKey.Valid {

@@ -330,3 +330,91 @@ func (r *KnowledgeBaseRepo) GetSourceURIs(
 	}
 	return uris, rows.Err()
 }
+
+// KnowledgeBaseCounts is the per-datapack chunk / doc / promoted-memory
+// breakdown.
+type KnowledgeBaseCounts struct {
+	TotalDocs        int64 `json:"total_docs"`
+	TotalChunks      int64 `json:"total_chunks"`
+	PromotedMemories int64 `json:"promoted_memories"`
+}
+
+// KnowledgeBaseDocument is one row of the uploaded-files listing.
+type KnowledgeBaseDocument struct {
+	DocumentName string `json:"document_name"`
+	Status       string `json:"status"`
+}
+
+// Counts returns the chunk / doc / promoted-memory breakdown for a
+// datapack.
+func (r *KnowledgeBaseRepo) Counts(
+	datapackID string,
+) (KnowledgeBaseCounts, error) {
+	var c KnowledgeBaseCounts
+
+	if err := r.db.QueryRow(
+		`select count(distinct(document_id)) as doc_count
+		 from datapacks.knowledge_bases
+		 where tenant_id = $1::uuid
+		   and metadata_filters->>'source' = 'doc'`,
+		datapackID,
+	).Scan(&c.TotalDocs); err != nil {
+		return c, fmt.Errorf("count total_docs: %w", err)
+	}
+
+	if err := r.db.QueryRow(
+		`select count(*) as chunk_count
+		 from datapacks.knowledge_bases
+		 where tenant_id = $1::uuid`,
+		datapackID,
+	).Scan(&c.TotalChunks); err != nil {
+		return c, fmt.Errorf("count total_chunks: %w", err)
+	}
+
+	if err := r.db.QueryRow(
+		`select count(*)
+		 from datapacks.promoted_collection
+		 where meko_datapack_id = $1::uuid`,
+		datapackID,
+	).Scan(&c.PromotedMemories); err != nil {
+		return c, fmt.Errorf("count promoted_memories: %w", err)
+	}
+
+	return c, nil
+}
+
+// ListDistRagDocuments returns (document_name, status) for every
+// dist_rag.documents row whose source belongs to the given datapack,
+// joined through dist_rag.sources.tenant_id.
+func (r *KnowledgeBaseRepo) ListDistRagDocuments(
+	datapackID string,
+) ([]KnowledgeBaseDocument, error) {
+	rows, err := r.db.Query(
+		`SELECT d.document_name, d.status::text
+		 FROM dist_rag.documents d
+		 JOIN dist_rag.sources  s ON s.id = d.source_id
+		 WHERE s.tenant_id = $1::uuid`,
+		datapackID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list dist_rag documents: %w", err)
+	}
+	defer rows.Close()
+
+	docs := []KnowledgeBaseDocument{}
+	for rows.Next() {
+		var d KnowledgeBaseDocument
+		var name sql.NullString
+		if err := rows.Scan(&name, &d.Status); err != nil {
+			return nil, fmt.Errorf("scan document row: %w", err)
+		}
+		if name.Valid {
+			d.DocumentName = name.String
+		}
+		docs = append(docs, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate document rows: %w", err)
+	}
+	return docs, nil
+}

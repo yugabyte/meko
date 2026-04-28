@@ -42,8 +42,12 @@ type StageShellProps = {
   titleIcon?: ReactNode;
   /** Optional title color (default white). */
   titleClassName?: string;
-  /** When set, replaces the default numeric value (e.g. loading ellipsis). */
-  valueContent?: ReactNode;
+  /** When true, the value/subtitle/children area is replaced by a centered
+   *  spinner so the tile communicates "still loading" without leaving a
+   *  stale or zero number in the value slot. */
+  loading?: boolean;
+  /** Accessible label for the loading spinner. */
+  loadingLabel?: string;
   children?: React.ReactNode;
   /** Opens the matching detail tab when the stage is activated. */
   onSelect?: () => void;
@@ -59,7 +63,8 @@ function StageShell({
   cornerBadge,
   titleIcon,
   titleClassName,
-  valueContent,
+  loading = false,
+  loadingLabel,
   children,
   onSelect,
 }: StageShellProps) {
@@ -109,14 +114,38 @@ function StageShell({
           </div>
         </div>
       </div>
-      <div className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-white">
-        {valueContent ?? value.toLocaleString()}
-      </div>
-      {subtitle ? (
-        <p className="mt-1.5 text-xs leading-snug text-muted-foreground">{subtitle}</p>
-      ) : null}
-      {children ? <div className="mt-3 min-h-0">{children}</div> : null}
+      {loading ? (
+        <div
+          className="mt-2 flex flex-1 items-center justify-center"
+          aria-live="polite"
+        >
+          <TileSpinner label={loadingLabel ?? `Loading ${title}`} />
+        </div>
+      ) : (
+        <>
+          <div className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-white">
+            {value.toLocaleString()}
+          </div>
+          {subtitle ? (
+            <p className="mt-1.5 text-xs leading-snug text-muted-foreground">{subtitle}</p>
+          ) : null}
+          {children ? <div className="mt-3 min-h-0">{children}</div> : null}
+        </>
+      )}
     </div>
+  );
+}
+
+/** Small inline spinner sized to drop into a tile's body. */
+function TileSpinner({ label = "Loading" }: { label?: string }) {
+  return (
+    <span
+      role="status"
+      aria-label={label}
+      className="inline-flex items-center text-muted-foreground/80"
+    >
+      <Loader2 className="h-6 w-6 animate-spin" aria-hidden />
+    </span>
   );
 }
 
@@ -151,6 +180,10 @@ type Props = {
   datapackId?: string | null;
   /** Switch the datapack detail tab when a stage is clicked. */
   onSelectSection?: (tab: DatapackDetailTab) => void;
+  /** True while the datapack bundle (memory_count / knowledge_count / etc.)
+   *  is still being fetched. Each tile shows a centered spinner instead
+   *  of a stale or zero number while this is true. */
+  statusLoading?: boolean;
 };
 
 export function CollectiveLearningPipeline({
@@ -162,6 +195,7 @@ export function CollectiveLearningPipeline({
   knowledgeChunks = 0,
   datapackId = null,
   onSelectSection,
+  statusLoading = false,
 }: Props) {
   /** `undefined` = not loaded yet or reset; includes `0` when the API reports no memories. */
   const [totalPromotionProposals, setTotalPromotionProposals] = useState<number | undefined>(undefined);
@@ -241,6 +275,8 @@ export function CollectiveLearningPipeline({
               <MessageSquare className="h-4 w-4 text-white" strokeWidth={2} aria-hidden />
             }
             titleClassName="text-slate-400"
+            loading={statusLoading}
+            loadingLabel="Loading conversations count"
             onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations) : undefined}
           />
 
@@ -254,6 +290,8 @@ export function CollectiveLearningPipeline({
             delta=""
             subtitle=""
             titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
+            loading={statusLoading}
+            loadingLabel="Loading memories count"
             onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.memory) : undefined}
           />
 
@@ -263,9 +301,11 @@ export function CollectiveLearningPipeline({
             tone={DATAPACK_DETAIL_TAB.learnings}
             eyebrow=""
             title="ME->KO (Learnings)"
-            value={learningsCount}
+            value={learningsDisplay ?? learningsCount}
             subtitle=""
             titleIcon={<ArrowLeftRight className="h-4 w-4 text-violet-400" aria-hidden />}
+            loading={statusLoading || learningsCountLoading}
+            loadingLabel="Loading learnings count"
             onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined}
           >
             <Button
@@ -300,6 +340,8 @@ export function CollectiveLearningPipeline({
             delta=""
             subtitle=""
             titleIcon={<BookOpen className="h-4 w-4 text-emerald-400" aria-hidden />}
+            loading={statusLoading}
+            loadingLabel="Loading knowledge count"
             onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.knowledge) : undefined}
           >
             <p className="text-[11px] leading-snug text-muted-foreground/95">
