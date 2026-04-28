@@ -35,7 +35,7 @@ definitions:
       size:
         type: integer
     type: object
-  models.TenantKBSyncRequest:
+  models.PromoteMemoriesRequest:
     properties:
       agent_id:
         type: string
@@ -923,23 +923,20 @@ paths:
   /memories:
     get:
       parameters:
-      - description: User ID (optional)
-        in: query
-        name: user_id
-        type: string
-      - description: Agent ID
-        in: query
-        name: agent_id
-        type: string
       - description: Datapack ID
         in: query
         name: datapack_id
         required: true
         type: string
-      - description: Skip vector similarity ranking (free tier users)
+      - description: User ID (optional)
         in: query
-        name: free_user
-        type: boolean
+        name: user_id
+        type: string
+      - description: Account type (free|pro|enterprise). pro/enterprise enables vector
+          ranking.
+        in: query
+        name: user_type
+        type: string
       - description: Page number (1-based, default 1)
         in: query
         name: page
@@ -966,18 +963,14 @@ paths:
       summary: List memories (query)
       tags:
       - memories
-  /tenant-kb/sync:
-    post:
-      consumes:
-      - application/json
+  /memories/count:
+    get:
       parameters:
-      - description: optional user_id + optional agent_id + datapack_id + list of
-          mem0 memory IDs to sync
-        in: body
-        name: body
+      - description: Datapack ID
+        in: query
+        name: datapack_id
         required: true
-        schema:
-          $ref: '#/definitions/models.TenantKBSyncRequest'
+        type: string
       produces:
       - application/json
       responses:
@@ -993,9 +986,39 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.APIResponse'
-      summary: Sync mem0 memories into knowledge_base
+      summary: Count memories for a datapack
       tags:
-      - tenant-kb
+      - memories
+  /promote-memories:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: datapack_id + list of mem0 memory IDs to promote (optional user_id
+          / agent_id)
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/models.PromoteMemoriesRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Promote mem0 memories into the tenant knowledge base
+      tags:
+      - memories
 securityDefinitions:
   BearerAuth:
     description: 'JWT access token from /auth/login. Format: Bearer {token}'

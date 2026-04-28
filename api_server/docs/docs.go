@@ -1285,27 +1285,21 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "User ID (optional)",
-                        "name": "user_id",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Agent ID",
-                        "name": "agent_id",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
                         "description": "Datapack ID",
                         "name": "datapack_id",
                         "in": "query",
                         "required": true
                     },
                     {
-                        "type": "boolean",
-                        "description": "Skip vector similarity ranking (free tier users)",
-                        "name": "free_user",
+                        "type": "string",
+                        "description": "User ID (optional)",
+                        "name": "user_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Account type (free|pro|enterprise). pro/enterprise enables vector ranking.",
+                        "name": "user_type",
                         "in": "query"
                     },
                     {
@@ -1343,7 +1337,47 @@ const docTemplate = `{
                 }
             }
         },
-        "/tenant-kb/sync": {
+        "/memories/count": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "memories"
+                ],
+                "summary": "Count memories for a datapack",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack ID",
+                        "name": "datapack_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/promote-memories": {
             "post": {
                 "consumes": [
                     "application/json"
@@ -1352,17 +1386,17 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "tenant-kb"
+                    "memories"
                 ],
-                "summary": "Sync mem0 memories into knowledge_base",
+                "summary": "Promote mem0 memories into the tenant knowledge base",
                 "parameters": [
                     {
-                        "description": "optional user_id + optional agent_id + datapack_id + list of mem0 memory IDs to sync",
+                        "description": "datapack_id + list of mem0 memory IDs to promote (optional user_id / agent_id)",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.TenantKBSyncRequest"
+                            "$ref": "#/definitions/models.PromoteMemoriesRequest"
                         }
                     }
                 ],
@@ -1444,7 +1478,7 @@ const docTemplate = `{
                 }
             }
         },
-        "models.TenantKBSyncRequest": {
+        "models.PromoteMemoriesRequest": {
             "type": "object",
             "properties": {
                 "agent_id": {

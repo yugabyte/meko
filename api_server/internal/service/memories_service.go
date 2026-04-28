@@ -43,10 +43,9 @@ func (svc *MemoriesService) List(
 
 	slog.Info("listing memories",
 		"layer", "service",
-		"user_id", filter.UserID,
-		"agent_id", filter.AgentID,
 		"datapack_id", filter.DatapackID,
-		"free_user", filter.FreeUser,
+		"user_id", filter.UserID,
+		"user_type", filter.UserType,
 		"page", filter.Page,
 		"page_size", filter.PageSize,
 	)
@@ -57,7 +56,7 @@ func (svc *MemoriesService) List(
 	}
 
 	topK := 5
-	if filter.FreeUser {
+	if !filter.IsPaidUserType() {
 		topK = 0
 	}
 
@@ -74,5 +73,33 @@ func (svc *MemoriesService) List(
 		Page:       filter.Page,
 		PageSize:   filter.PageSize,
 		TotalPages: totalPages,
+	}, nil
+}
+
+// Count returns the total number of memory rows for a datapack. This is a
+// straight COUNT(*) on datapacks.meko_mem0_collection scoped by
+// meko_datapack_id with no additional filtering.
+func (svc *MemoriesService) Count(
+	ctx context.Context,
+	datapackID string,
+) (models.MemoryCountResponse, error) {
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return models.MemoryCountResponse{}, fmt.Errorf("datapack_id is required")
+	}
+
+	slog.Info("counting memories",
+		"layer", "service",
+		"datapack_id", datapackID,
+	)
+
+	count, err := svc.memoriesRepo.CountByDatapack(ctx, datapackID)
+	if err != nil {
+		return models.MemoryCountResponse{}, err
+	}
+
+	return models.MemoryCountResponse{
+		DatapackID: datapackID,
+		Count:      count,
 	}, nil
 }

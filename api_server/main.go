@@ -55,7 +55,6 @@ func run() error {
 	openAIAPIKey := flag.String("openai-api-key", os.Getenv("OPENAI_API_KEY"), "OpenAI API key")
 	openAILLMModel := flag.String("openai-llm-model", os.Getenv("OPEN_AI_LLM_MODEL"), "OpenAI LLM model (default: gpt-4o)")
 	openAIEmbeddingModel := flag.String("openai-embedding-model", os.Getenv("OPEN_AI_EMBEDDING_MODEL"), "OpenAI embedding model (default: text-embedding-3-small)")
-	tenantKBTable := flag.String("tenant-kb-table", "knowledge_base", "tenant KB table name in public schema")
 
 	// S3 configuration
 	s3AuthMode := flag.String("s3-auth-mode", envOrDefault("S3_AUTH_MODE", "minio"), "S3 auth mode: minio, iam-user, iam-role")
@@ -115,13 +114,12 @@ func run() error {
 		OpenAIAPIKey:         *openAIAPIKey,
 		OpenAILLMModel:       *openAILLMModel,
 		OpenAIEmbeddingModel: *openAIEmbeddingModel,
-		TenantKBTable:        *tenantKBTable,
-		S3AuthMode:          *s3AuthMode,
-		S3Endpoint:          *s3Endpoint,
-		S3AccessKey:         *s3AccessKey,
-		S3SecretKey:         *s3SecretKey,
-		S3Bucket:            *s3Bucket,
-		S3Region:            *s3Region,
+		S3AuthMode:           *s3AuthMode,
+		S3Endpoint:           *s3Endpoint,
+		S3AccessKey:          *s3AccessKey,
+		S3SecretKey:          *s3SecretKey,
+		S3Bucket:             *s3Bucket,
+		S3Region:             *s3Region,
 	})
 }
 

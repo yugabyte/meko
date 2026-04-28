@@ -3,82 +3,53 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strings"
 	"time"
 
-	"meko/api_server/internal/db"
 	"meko/api_server/internal/llm"
 	"meko/api_server/internal/models"
 )
 
-const DefaultMemoriesCollection = "meko_tenants_collection"
-
-func quoteMemoriesCollection(memoriesCollection string) (string, error) {
-	name := strings.TrimSpace(memoriesCollection)
-	if name == "" {
-		name = DefaultMemoriesCollection
-	}
-	return fmt.Sprintf(`"public"."%s"`, name), nil
-}
+const (
+	memoriesTableSQL    = `datapacks.meko_mem0_collection`
+	knowledgeBasesTable = `datapacks.knowledge_bases`
+)
 
 type MemoriesRepo struct {
-	db                     *sql.DB
-	tenantKBCollectionName string
-	openAIAPIKey           string
-	openAILLMModel         string
-	openAIEmbeddingModel   string
+	db                   *sql.DB
+	openAIAPIKey         string
+	openAILLMModel       string
+	openAIEmbeddingModel string
 }
 
-func NewMemoriesRepo(db *sql.DB, tenantKBTable, openAIAPIKey, openAILLMModel, openAIEmbeddingModel string) *MemoriesRepo {
-	tenantKBCollectionName, _ := quoteMemoriesCollection(tenantKBTable)
-	if tenantKBCollectionName == "" {
-		tenantKBCollectionName = fmt.Sprintf(`"public"."%s"`, DefaultTenantKBTable)
-	}
+func NewMemoriesRepo(db *sql.DB, openAIAPIKey, openAILLMModel, openAIEmbeddingModel string) *MemoriesRepo {
 	return &MemoriesRepo{
-		db:                     db,
-		tenantKBCollectionName: tenantKBCollectionName,
-		openAIAPIKey:           openAIAPIKey,
-		openAILLMModel:         openAILLMModel,
-		openAIEmbeddingModel:   openAIEmbeddingModel,
+		db:                   db,
+		openAIAPIKey:         openAIAPIKey,
+		openAILLMModel:       openAILLMModel,
+		openAIEmbeddingModel: openAIEmbeddingModel,
 	}
 }
 
-// GetAllChunkTexts fetches every chunk_text from knowledge_base and concatenates them
-// into a single string.
-// If agentID is non-empty, an additional filter on metadata_filters->>'agent_id' is applied.
-// @note: user_id & datapack_id are needed when the multi-tenant is enabled.
-func (repo *MemoriesRepo) GetAllChunkTexts(ctx context.Context, dbConn *sql.DB, agentID string) (string, error) {
-	if dbConn == nil {
+func (repo *MemoriesRepo) GetAllChunkTexts(ctx context.Context, datapackID string) (string, error) {
+	if repo.db == nil {
 		return "", fmt.Errorf("database connection is required")
 	}
-
-	var conds []string
-	var args []any
-	n := 1
-
-	if s := strings.TrimSpace(agentID); s != "" {
-		conds = append(conds, fmt.Sprintf("metadata_filters->>'agent_id' = $%d", n))
-		args = append(args, s)
-		n++
-	}
-
-	var whereClause string
-	if len(conds) > 0 {
-		whereClause = "WHERE " + strings.Join(conds, " AND ")
+	if strings.TrimSpace(datapackID) == "" {
+		return "", fmt.Errorf("datapack_id is required")
 	}
 
 	q := fmt.Sprintf(`
 		SELECT chunk_text
 		FROM %s
-		%s
-		ORDER BY id`, repo.tenantKBCollectionName, whereClause)
+		WHERE tenant_id = $1::uuid
+		  AND metadata_filters->>'source' = '%s'
+		ORDER BY id`, knowledgeBasesTable, KBSourceConversation)
 
-	slog.Debug("executing SQL", "func", "GetAllChunkTexts", "query", q, "args", args)
-	rows, err := dbConn.QueryContext(ctx, q, args...)
+	slog.Debug("executing SQL", "func", "GetAllChunkTexts", "query", q, "args", []any{datapackID})
+	rows, err := repo.db.QueryContext(ctx, q, datapackID)
 	if err != nil {
 		return "", fmt.Errorf("query chunk texts: %w", err)
 	}
@@ -107,82 +78,13 @@ func Float64SliceToVector(v []float64) string {
 	return "[" + strings.Join(parts, ",") + "]"
 }
 
-// to get the mem0 collections use the mcp_user credentials from the system registry.
-// note: this is a temporary fix and will be replaced later when multiple tenants are supported.
-func getMem0DBConn(ctx context.Context, systemDB *sql.DB, datapackID string) (*sql.DB, error) {
-	const getMem0ConnQuery = `
-		SELECT
-			regexp_replace(
-				d.datapack_ysql_connection_string,
-				'^postgresql://[^@]+@',
-				'postgresql://' || a.mcp_user_name || ':' || a.mcp_user_password || '@'
-			) AS updated_connection_string
-		FROM
-			meko_system.account_registry a
-		JOIN
-			meko_system.datapack_registry d
-			ON d.account_id = a.id
-		WHERE
-			d.id = $1`
-
-	slog.Debug("executing SQL", "func", "getMem0DBConn", "query", getMem0ConnQuery, "args", []any{datapackID})
-	var connStr string
-	if err := systemDB.QueryRowContext(ctx, getMem0ConnQuery, datapackID).Scan(&connStr); err != nil {
-		return nil, fmt.Errorf("fetch mem0 conn string: %w", err)
-	}
-	u, err := url.Parse(connStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse mem0 conn str: %w", err)
-	}
-	q := u.Query()
-	if q.Get("sslmode") == "" {
-		q.Set("sslmode", "disable")
-		u.RawQuery = q.Encode()
-	}
-
-	conn, err := db.ConnectWithRetry(u.String(), 3, time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("connect to mem0 db: %w", err)
-	}
-	return conn, nil
-}
-
-// getMemoriesCollections returns the quoted table names to query.
-// If agentID is non-empty, returns a single table "{agentID}_mem0_collection".
-// Otherwise, discovers all tables in the public schema ending with "_mem0_collection".
-func getMemoriesCollections(ctx context.Context, yugaDB *sql.DB, agentID string) ([]string, error) {
-	if s := strings.TrimSpace(agentID); s != "" {
-		return []string{fmt.Sprintf(`"public"."%s_mem0_collection"`, s)}, nil
-	}
-	const listCollectionsQuery = `SELECT tablename FROM pg_tables
-		 WHERE schemaname = 'public' AND tablename LIKE '%\_mem0\_collection' ESCAPE '\'`
-
-	slog.Debug("executing SQL", "func", "getMemoriesCollections", "query", listCollectionsQuery)
-	rows, err := yugaDB.QueryContext(ctx, listCollectionsQuery)
-	if err != nil {
-		return nil, fmt.Errorf("list mem0 collections: %w", err)
-	}
-	defer rows.Close()
-	var tables []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("scan collection name: %w", err)
-		}
-		tables = append(tables, fmt.Sprintf(`"public"."%s"`, name))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate mem0 collections: %w", err)
-	}
-	return tables, nil
-}
-
-// resolveQueryVector fetches all chunk texts for the filter, summarizes them via LLM,
-// and returns the embedding vector. Used only for paid users.
-func (repo *MemoriesRepo) resolveQueryVector(ctx context.Context, yugaDB *sql.DB, filter models.MemoryListFilter) ([]float64, error) {
-	chunkTexts, err := repo.GetAllChunkTexts(ctx, yugaDB, filter.AgentID)
+func (repo *MemoriesRepo) resolveQueryVector(ctx context.Context, filter models.MemoryListFilter) ([]float64, error) {
+	chunkTexts, err := repo.GetAllChunkTexts(ctx, filter.DatapackID)
 	if err != nil {
 		return nil, fmt.Errorf("get chunk texts: %w", err)
+	}
+	if strings.TrimSpace(chunkTexts) == "" {
+		return nil, nil
 	}
 	llmClient, err := llm.NewClient(repo.openAIAPIKey, repo.openAILLMModel)
 	if err != nil {
@@ -199,133 +101,111 @@ func (repo *MemoriesRepo) resolveQueryVector(ctx context.Context, yugaDB *sql.DB
 	return vector, nil
 }
 
-// buildPaidUserQuery builds a SELECT ordered by vector similarity (cosine distance).
-func buildPaidUserQuery(collections []string, whereSQL, vecParam string) string {
-	if len(collections) == 1 {
-		return fmt.Sprintf(`
-			SELECT id::text, payload
-			FROM %s
-			WHERE %s
-			ORDER BY vector <=> %s::vector`, collections[0], whereSQL, vecParam)
+// CountByDatapack returns the total number of rows in the mem0 collection
+// for a given datapack_id. No additional filtering is applied; this is a
+// straight COUNT(*) over datapacks.meko_mem0_collection scoped by
+// meko_datapack_id.
+func (repo *MemoriesRepo) CountByDatapack(ctx context.Context, datapackID string) (int, error) {
+	if repo.db == nil {
+		return 0, fmt.Errorf("database connection is required")
 	}
-	subSelects := make([]string, len(collections))
-	for i, tbl := range collections {
-		subSelects[i] = fmt.Sprintf(`SELECT id::text AS id, payload, vector FROM %s WHERE %s`, tbl, whereSQL)
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return 0, fmt.Errorf("datapack_id is required")
 	}
-	return fmt.Sprintf(`
-		SELECT id, payload
-		FROM (%s) combined
-		ORDER BY vector <=> %s::vector`,
-		strings.Join(subSelects, "\nUNION ALL\n"), vecParam)
-}
 
-// buildFreeUserQuery builds a plain SELECT with no vector operations, ordered by id.
-func buildFreeUserQuery(collections []string, whereSQL string) string {
-	if len(collections) == 1 {
-		return fmt.Sprintf(`
-			SELECT id::text, payload
-			FROM %s
-			WHERE %s
-			ORDER BY id`, collections[0], whereSQL)
-	}
-	subSelects := make([]string, len(collections))
-	for i, tbl := range collections {
-		subSelects[i] = fmt.Sprintf(`SELECT id::text AS id, payload FROM %s WHERE %s`, tbl, whereSQL)
-	}
-	return fmt.Sprintf(`
-		SELECT id, payload
-		FROM (%s) combined
-		ORDER BY id`,
-		strings.Join(subSelects, "\nUNION ALL\n"))
-}
+	query := fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s WHERE meko_datapack_id = $1::uuid`,
+		memoriesTableSQL,
+	)
 
-// buildCountQuery counts total rows matching the WHERE conditions across all collections.
-func buildCountQuery(collections []string, whereSQL string) string {
-	if len(collections) == 1 {
-		return fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, collections[0], whereSQL)
+	countCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	slog.Debug("executing SQL", "func", "CountByDatapack", "query", query, "args", []any{datapackID})
+	var count int
+	if err := repo.db.QueryRowContext(countCtx, query, datapackID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("memories count by datapack query: %w", err)
 	}
-	subSelects := make([]string, len(collections))
-	for i, tbl := range collections {
-		subSelects[i] = fmt.Sprintf(`SELECT id FROM %s WHERE %s`, tbl, whereSQL)
-	}
-	return fmt.Sprintf(`SELECT COUNT(*) FROM (%s) combined`,
-		strings.Join(subSelects, "\nUNION ALL\n"))
+
+	slog.Info("counting memories",
+		"layer", "repository",
+		"datapack_id", datapackID,
+		"count", count,
+	)
+	return count, nil
 }
 
 func (repo *MemoriesRepo) ListByFilter(
 	ctx context.Context,
 	filter models.MemoryListFilter,
 ) ([]models.Memory, int, error) {
-
 	if repo.db == nil {
 		return nil, 0, fmt.Errorf("database connection is required")
 	}
-	var conds []string
-	var args []any
-	n := 1
-	if s := strings.TrimSpace(filter.AgentID); s != "" {
-		conds = append(conds, fmt.Sprintf(`payload->>'agent_id' = $%d`, n))
-		args = append(args, s)
-		n++
-	}
-	if strings.TrimSpace(filter.DatapackID) == "" {
+	datapackID := strings.TrimSpace(filter.DatapackID)
+	if datapackID == "" {
 		return nil, 0, fmt.Errorf("datapack_id is required")
 	}
 
-	whereSQL := "TRUE"
-	if len(conds) > 0 {
-		whereSQL = strings.Join(conds, " AND ")
-	}
+	whereSQL := "meko_datapack_id = $1::uuid" +
+		" AND meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action"
+	args := []any{datapackID}
+	n := 2
 
-	mem0DB, err := getMem0DBConn(ctx, repo.db, filter.DatapackID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("open mem0 connection: %w", err)
-	}
-	defer mem0DB.Close()
-
-	collections, err := getMemoriesCollections(ctx, mem0DB, filter.AgentID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("resolve mem0 collections: %w", err)
-	}
-	if len(collections) == 0 {
-		slog.Info("no mem0 collections found", "user_id", filter.UserID, "agent_id", filter.AgentID)
-		return []models.Memory{}, 0, nil
-	}
-
-	// Run count query before adding vector/pagination args.
-	countQuery := buildCountQuery(collections, whereSQL)
-	queryCtx, cancelCount := context.WithTimeout(ctx, 30*time.Second)
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, memoriesTableSQL, whereSQL)
+	countCtx, cancelCount := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelCount()
 	slog.Debug("executing SQL", "func", "ListByFilter", "query", countQuery, "args", args)
 	var total int
-	if err := mem0DB.QueryRowContext(queryCtx, countQuery, args...).Scan(&total); err != nil {
+	if err := repo.db.QueryRowContext(countCtx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("memories count query: %w", err)
 	}
 
-	var query string
-	if filter.FreeUser {
-		query = buildFreeUserQuery(collections, whereSQL)
-	} else {
-		vector, err := repo.resolveQueryVector(ctx, mem0DB, filter)
+	const selectCols = `
+			id::text,
+			COALESCE(payload->>'data', '') AS data,
+			meko_agent_id`
+
+	var vector []float64
+	if filter.IsPaidUserType() {
+		v, err := repo.resolveQueryVector(ctx, filter)
 		if err != nil {
 			return nil, 0, err
 		}
+		vector = v
+		if len(vector) == 0 {
+			slog.Info("memories list: no KB chunks available, falling back to plain ordering",
+				"datapack_id", filter.DatapackID, "user_type", filter.UserType)
+		}
+	}
+
+	var query string
+	if len(vector) > 0 {
 		vecParam := fmt.Sprintf("$%d", n)
 		args = append(args, Float64SliceToVector(vector))
 		n++
-		query = buildPaidUserQuery(collections, whereSQL, vecParam)
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
+			WHERE %s
+			ORDER BY embeddings <=> %s::vector`, selectCols, memoriesTableSQL, whereSQL, vecParam)
+	} else {
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
+			WHERE %s
+			ORDER BY meko_created_at DESC, id DESC`, selectCols, memoriesTableSQL, whereSQL)
 	}
 
-	// Append LIMIT / OFFSET for pagination.
 	offset := (filter.Page - 1) * filter.PageSize
 	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", n, n+1)
 	args = append(args, filter.PageSize, offset)
 
 	queryCtx, cancelQuery := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelQuery()
-
 	slog.Debug("executing SQL", "func", "ListByFilter", "query", query, "args", args)
-	sqlRows, err := mem0DB.QueryContext(queryCtx, query, args...)
+	sqlRows, err := repo.db.QueryContext(queryCtx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("memories query: %w", err)
 	}
@@ -338,14 +218,8 @@ func (repo *MemoriesRepo) ListByFilter(
 	var matched []models.Memory
 	for sqlRows.Next() {
 		var row models.Memory
-		var payload []byte
-		if err := sqlRows.Scan(&row.ID, &payload); err != nil {
+		if err := sqlRows.Scan(&row.ID, &row.Data, &row.AgentID); err != nil {
 			return nil, 0, fmt.Errorf("memories scan: %w", err)
-		}
-		if len(payload) == 0 {
-			row.Payload = json.RawMessage("null")
-		} else {
-			row.Payload = append(json.RawMessage(nil), payload...)
 		}
 		matched = append(matched, row)
 	}
@@ -355,9 +229,9 @@ func (repo *MemoriesRepo) ListByFilter(
 
 	slog.Info("listing memories",
 		"layer", "repository",
-		"user_id", filter.UserID,
-		"agent_id", filter.AgentID,
 		"datapack_id", filter.DatapackID,
+		"user_id", filter.UserID,
+		"user_type", filter.UserType,
 		"page", filter.Page,
 		"page_size", filter.PageSize,
 		"total", total,

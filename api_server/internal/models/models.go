@@ -3,6 +3,7 @@ package models
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -71,21 +72,37 @@ type KnowledgeBase struct {
 	Details     json.RawMessage `json:"knowledge_base_details,omitempty"`
 }
 
-// Memory represents one row from the Mem0 vector collection table.
+// Memory represents one row from datapacks.meko_mem0_collection as exposed
+// to the UI. Only the memory text (payload->>'data') and the owning agent
+// are surfaced; all other payload fields are intentionally dropped.
 type Memory struct {
-	ID      string          `json:"id"`
-	Payload json.RawMessage `json:"payload"`
+	ID      string `json:"id"`
+	Data    string `json:"data"`
+	AgentID string `json:"agent_id"`
 }
 
-// MemoryListFilter is the filter to filter memories based on user_id, agent_id, and datapack_id in the Mem0 vector collection table.
-// FreeUser skips the vector-similarity ranking path (no LLM summary, no embedding, no ORDER BY vector).
+// MemoryListFilter is the filter for the Mem0 collection (datapacks.meko_mem0_collection).
+// DatapackID is required; UserID is optional. UserType ("free" | "pro" | "enterprise")
+// selects the query path: only "pro" / "enterprise" run the vector-similarity ranking
+// (LLM summary + embedding + ORDER BY embeddings); everything else runs the plain SELECT.
 type MemoryListFilter struct {
-	UserID     string `json:"user_id"`
-	AgentID    string `json:"agent_id"`
 	DatapackID string `json:"datapack_id"`
-	FreeUser   bool   `json:"free_user"`
+	UserID     string `json:"user_id,omitempty"`
+	UserType   string `json:"user_type,omitempty"`
 	Page       int    `json:"page"`
 	PageSize   int    `json:"page_size"`
+}
+
+// IsPaidUserType reports whether the account tier should run the
+// vector-similarity ranking path. Only "pro" / "enterprise" qualify;
+// "free" (or empty/unknown) falls back to the plain SELECT path.
+func (f MemoryListFilter) IsPaidUserType() bool {
+	switch strings.ToLower(strings.TrimSpace(f.UserType)) {
+	case "pro", "enterprise":
+		return true
+	default:
+		return false
+	}
 }
 
 // MemoryListResponse is the response to the memories list API.
@@ -99,16 +116,25 @@ type MemoryListResponse struct {
 	TotalPages int              `json:"total_pages"`
 }
 
-// TenantKBSyncRequest is the body for POST /api/v1/tenant-kb/sync.
-type TenantKBSyncRequest struct {
+// MemoryCountResponse is the response to the memories count API. It returns
+// the total number of rows in datapacks.meko_mem0_collection for a given
+// datapack_id, with no additional filtering applied.
+type MemoryCountResponse struct {
+	DatapackID string `json:"datapack_id"`
+	Count      int    `json:"count"`
+}
+
+// PromoteMemoriesRequest is the body for POST /api/v1/promote-memories.
+type PromoteMemoriesRequest struct {
 	UserID     string   `json:"user_id"`
 	AgentID    string   `json:"agent_id,omitempty"`
 	DatapackID string   `json:"datapack_id"`
 	MemoryIDs  []string `json:"memory_ids"`
 }
 
-// TenantKBSyncResult summarizes what happened during mem0 → knowledge_base sync.
-type TenantKBSyncResult struct {
+// PromoteMemoriesResult summarizes what happened when promoting mem0 memories
+// into knowledge_bases + promoted_collection (and evicting them from mem0).
+type PromoteMemoriesResult struct {
 	InsertedIDs []string `json:"inserted_ids"`
 	UpdatedIDs  []string `json:"updated_ids"`
 	NotFoundIDs []string `json:"not_found_ids"`

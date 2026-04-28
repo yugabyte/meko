@@ -9,32 +9,32 @@ import (
 	"meko/api_server/internal/service"
 )
 
-type TenantKBHandler struct {
-	svc *service.TenantKBService
+type PromoteMemoriesHandler struct {
+	svc *service.PromoteMemoriesService
 }
 
-func NewTenantKBHandler(svc *service.TenantKBService) *TenantKBHandler {
-	return &TenantKBHandler{svc: svc}
+func NewPromoteMemoriesHandler(svc *service.PromoteMemoriesService) *PromoteMemoriesHandler {
+	return &PromoteMemoriesHandler{svc: svc}
 }
 
-// Sync handles POST /api/v1/tenant-kb/sync.
+// Promote handles POST /api/v1/promote-memories.
 //
-//	@Summary	Sync mem0 memories into knowledge_base
-//	@Tags		tenant-kb
+//	@Summary	Promote mem0 memories into the tenant knowledge base
+//	@Tags		memories
 //	@Accept		json
 //	@Produce	json
-//	@Param		body	body		models.TenantKBSyncRequest	true	"optional user_id + optional agent_id + datapack_id + list of mem0 memory IDs to sync"
+//	@Param		body	body		models.PromoteMemoriesRequest	true	"datapack_id + list of mem0 memory IDs to promote (optional user_id / agent_id)"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	500		{object}	APIResponse
-//	@Router		/tenant-kb/sync [post]
-func (h *TenantKBHandler) Sync(c echo.Context) error {
-	var req models.TenantKBSyncRequest
+//	@Router		/promote-memories [post]
+func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
+	var req models.PromoteMemoriesRequest
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
 
-	result, err := h.svc.Sync(c.Request().Context(), req)
+	result, err := h.svc.Promote(c.Request().Context(), req)
 	if err != nil {
 		if isValidationErr(err) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())

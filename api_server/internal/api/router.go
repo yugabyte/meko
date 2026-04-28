@@ -27,9 +27,9 @@ type serviceRegistry struct {
 	agentSvc    *service.AgentService
 	kbSvc       *service.KnowledgeBaseService
 	ragSvc      *service.RagService
-	memoriesSvc *service.MemoriesService
-	tenantKBSvc *service.TenantKBService
-	s3Svc       *service.S3Service
+	memoriesSvc        *service.MemoriesService
+	promoteMemoriesSvc *service.PromoteMemoriesService
+	s3Svc              *service.S3Service
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -51,11 +51,11 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
 	ragSvc := service.NewRagService(cfg.DB)
 
-	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.TenantKBTable, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel)
+	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel)
 	memoriesSvc := service.NewMemoriesService(memoriesRepo)
 
-	tenantKBRepo := repository.NewTenantKBRepo(cfg.DB, cfg.TenantKBTable)
-	tenantKBSvc := service.NewTenantKBService(tenantKBRepo)
+	promoteMemoriesRepo := repository.NewPromoteMemoriesRepo(cfg.DB)
+	promoteMemoriesSvc := service.NewPromoteMemoriesService(promoteMemoriesRepo)
 	var s3Svc *service.S3Service
 	if cfg.S3Bucket != "" {
 		var err error
@@ -92,9 +92,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		agentSvc:    agentSvc,
 		kbSvc:       kbSvc,
 		ragSvc:      ragSvc,
-		memoriesSvc: memoriesSvc,
-		tenantKBSvc: tenantKBSvc,
-		s3Svc:       s3Svc,
+		memoriesSvc:        memoriesSvc,
+		promoteMemoriesSvc: promoteMemoriesSvc,
+		s3Svc:              s3Svc,
 	}
 }
 
@@ -120,9 +120,10 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 
 	memoriesHTTPHandler := handlers.NewMemoriesHandler(reg.memoriesSvc)
 	v1.GET("/memories", memoriesHTTPHandler.ListGET)
+	v1.GET("/memories/count", memoriesHTTPHandler.CountGET)
 
-	tenantKBHandler := handlers.NewTenantKBHandler(reg.tenantKBSvc)
-	v1.POST("/tenant-kb/sync", tenantKBHandler.Sync)
+	promoteMemoriesHandler := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc)
+	v1.POST("/promote-memories", promoteMemoriesHandler.Promote)
 
 	authEnabled := cfg.CognitoRegion != "" &&
 		cfg.CognitoPoolID != "" &&

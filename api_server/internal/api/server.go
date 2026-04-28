@@ -26,7 +26,6 @@ type ServerConfig struct {
 	OpenAIEmbeddingModel string
 	Port                 int
 	CRDNamespace         string
-	TenantKBTable        string
 	S3AccessKey         string
 	S3AuthMode          string
 	S3Bucket            string
