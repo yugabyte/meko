@@ -480,9 +480,9 @@ export async function getKnowledgeBaseDocuments(
   datapackName: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<KnowledgeBaseDocument[]> {
-  if (useMockKnowledgeBaseDocuments()) {
-    return Promise.resolve([...MOCK_KB_DOCUMENTS_SAMPLE]);
-  }
+  // if (useMockKnowledgeBaseDocuments()) {
+  //   return Promise.resolve([...MOCK_KB_DOCUMENTS_SAMPLE]);
+  // }
   return request<KnowledgeBaseDocument[]>(
     `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/documents`,
     "GET",
@@ -600,9 +600,9 @@ export async function listMemories(
   params: MemoryListFilter,
   options: { signal?: AbortSignal } = {},
 ): Promise<MemoryListResponse> {
-  if (useMockMemoriesList()) {
-    return Promise.resolve(buildMockMemoryListResponse(params));
-  }
+  // if (useMockMemoriesList()) {
+  //   return Promise.resolve(buildMockMemoryListResponse(params));
+  // }
   const qs = new URLSearchParams();
   qs.set("datapack_id", params.datapack_id);
   qs.set("user_id", params.user_id);

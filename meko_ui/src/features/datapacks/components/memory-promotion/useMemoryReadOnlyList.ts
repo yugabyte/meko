@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import {
+  getApiErrorMessage,
   getCurrentUser,
   listMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
@@ -49,7 +50,7 @@ export function useMemoryReadOnlyList({
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
-        setAccountError(err instanceof Error ? err.message : "Failed to load current user");
+        setAccountError(getApiErrorMessage(err, "Failed to load current user."));
       })
       .finally(() => {
         if (controller.signal.aborted) return;
@@ -80,7 +81,7 @@ export function useMemoryReadOnlyList({
         setPage(resp.page);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load memories");
+      setError(getApiErrorMessage(err, "Failed to load memories."));
       setMemories([]);
       setTotal(0);
       setTotalPages(1);

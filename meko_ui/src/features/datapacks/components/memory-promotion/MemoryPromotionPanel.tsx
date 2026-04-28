@@ -128,6 +128,10 @@ export default function MemoryPromotionPanel({
                   that might be worth promoting to shared knowledge (Ko). Review each one — approved ones
                   become visible to every agent in this datapack.
                 </p>
+              ) : accountError ? (
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Account could not be loaded for promotions. Details appear below.
+                </p>
               ) : (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Loading session summary…</p>
               )}

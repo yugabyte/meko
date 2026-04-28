@@ -58,7 +58,11 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }
                 <span className="font-normal text-muted-foreground"> · …</span>
               )}
             </h3>
-            {sessionSummaryReady ? (
+            {accountError ? (
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Account could not be loaded for this list. Details appear below.
+              </p>
+            ) : sessionSummaryReady ? (
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                 Recent session memories for{" "}
                 <span className="font-medium text-white">{datapackName}</span>

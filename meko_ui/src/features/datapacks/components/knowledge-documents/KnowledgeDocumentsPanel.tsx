@@ -90,7 +90,7 @@ export function KnowledgeDocumentsPanel({
 
       {error ? (
         <div
-          className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200"
+          className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300"
           role="alert"
         >
           <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
@@ -103,12 +103,12 @@ export function KnowledgeDocumentsPanel({
           <Loader2 className="h-8 w-8 animate-spin text-emerald-400/80" aria-hidden />
           <p className="text-sm">Loading documents…</p>
         </div>
-      ) : documents.length === 0 ? (
+      ) : documents.length === 0 && !error ? (
         <div className="rounded-lg border border-dashed border-border/60 bg-muted/5 px-4 py-12 text-center text-sm text-muted-foreground">
           No knowledge documents yet. Upload files from this datapack&apos;s actions menu to see them
           here.
         </div>
-      ) : (
+      ) : documents.length > 0 ? (
         <ul className="max-h-[min(28rem,55vh)] space-y-2 overflow-y-auto pr-1">
           {documents.map((doc, idx) => {
             const tone = kbDocumentStatusTone(doc.status);
@@ -132,7 +132,7 @@ export function KnowledgeDocumentsPanel({
             );
           })}
         </ul>
-      )}
+      ) : null}
     </div>
   );
 }

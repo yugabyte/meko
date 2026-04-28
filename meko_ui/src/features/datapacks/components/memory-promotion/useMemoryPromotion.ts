@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  getApiErrorMessage,
   getCurrentUser,
   listMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
@@ -78,7 +79,7 @@ export function useMemoryPromotion({
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
-        setAccountError(err instanceof Error ? err.message : "Failed to load current user");
+        setAccountError(getApiErrorMessage(err, "Failed to load current user."));
       })
       .finally(() => {
         if (controller.signal.aborted) return;
@@ -112,7 +113,7 @@ export function useMemoryPromotion({
         setPage(resp.page);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load memories");
+      setError(getApiErrorMessage(err, "Failed to load memories."));
       setMemories([]);
       setTotal(0);
       setTotalPages(1);
@@ -235,7 +236,7 @@ export function useMemoryPromotion({
           return next;
         });
       } catch (err) {
-        setPromoteError(err instanceof Error ? err.message : "Promotion failed");
+        setPromoteError(getApiErrorMessage(err, "Promotion failed."));
       } finally {
         setPromoting(false);
         setPromotingId(null);
