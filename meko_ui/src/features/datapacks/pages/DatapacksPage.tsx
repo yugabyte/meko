@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 import { ROUTES } from "@/app/routes/paths";
 import DatapackConfigureWizardPage from "@/features/datapacks/pages/DatapackConfigureWizardPage";
 import DatapackDetailPage from "@/features/datapacks/pages/DatapackDetailPage";
+import DatapackEditPage from "@/features/datapacks/pages/DatapackEditPage";
 import DatapackLearningsPage from "@/features/datapacks/pages/DatapackLearningsPage";
 import DatapackNewPage from "@/features/datapacks/pages/DatapackNewPage";
 import DatapackSharePage from "@/features/datapacks/pages/DatapackSharePage";
@@ -10,8 +11,8 @@ import DatapacksOverviewPage from "@/features/datapacks/pages/DatapacksOverviewP
 import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
 
 /**
- * Datapacks area: overview at `/datapacks`, new at `/datapacks/new`, configure at `/datapacks/:name/configure`,
- * detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
+ * Datapacks area: overview at `/datapacks`, new at `/datapacks/new`, edit at `/datapacks/:name/edit`,
+ * configure at `/datapacks/:name/configure`, detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
  */
 export default function DatapacksPage() {
   const location = useLocation();
@@ -48,6 +49,9 @@ export default function DatapacksPage() {
       }
       if (segments[1] === "configure") {
         return <DatapackConfigureWizardPage datapackName={datapackName} />;
+      }
+      if (segments[1] === "edit" && segments.length === 2) {
+        return <DatapackEditPage datapackName={datapackName} currentUser={currentUser} />;
       }
       if (segments[1] === "learnings" && segments.length === 2) {
         return <DatapackLearningsPage datapackName={datapackName} />;

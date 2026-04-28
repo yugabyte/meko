@@ -10,7 +10,7 @@ import {
   updateOnboardingStatus,
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
-import { DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES, datapackConfigurePath } from "@/app/routes/paths";
+import { DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES, datapackEditPath } from "@/app/routes/paths";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { ArrowRight, Check, Play, Sparkles, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,7 +19,7 @@ export default function OnboardingPage() {
   const navigate = useNavigate();
   const [action, setAction] = useState<"playground" | "datapacks" | "skip" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** From server: returning users choose “Choose your tool” → /datapacks; first-time → default datapack configure. */
+  /** From server: returning users “Choose your tool” → /datapacks; first-time → default datapack edit → configure. */
   const [serverOnboardingDone, setServerOnboardingDone] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -50,7 +50,7 @@ export default function OnboardingPage() {
         : target === "datapacks"
           ? serverOnboardingDone
             ? ROUTES.datapacks
-            : datapackConfigurePath(DEFAULT_ACCOUNT_DATAPACK_NAME)
+            : datapackEditPath(DEFAULT_ACCOUNT_DATAPACK_NAME)
           : ROUTES.datapacks;
     try {
       await updateOnboardingStatus(true);

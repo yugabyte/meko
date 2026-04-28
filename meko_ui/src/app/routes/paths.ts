@@ -10,11 +10,15 @@ export const ROUTES = {
   observeHub: "/observe-hub",
 } as const;
 
-/** Default datapack provisioned for new accounts; used from onboarding (“Choose your tool” → configure). */
+/** Default datapack provisioned for new accounts; used from onboarding (“Choose your tool” → edit). */
 export const DEFAULT_ACCOUNT_DATAPACK_NAME = "meko_default_datapack" as const;
 
 export function datapackDetailPath(datapackName: string): string {
   return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}`;
+}
+
+export function datapackEditPath(datapackName: string): string {
+  return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/edit`;
 }
 
 export function datapackSharePath(datapackName: string): string {
