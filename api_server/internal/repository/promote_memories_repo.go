@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -16,9 +17,11 @@ import (
 // plumbing is gone now that the root connection has cross-tenant access and
 // the schema is fixed.
 const (
-	memoriesSourceTable     = `datapacks.meko_mem0_collection`
-	knowledgeBaseTable      = `datapacks.knowledge_bases`
-	promotedCollectionTable = `datapacks.promoted_collection`
+	memoriesSourceTable                = `datapacks.meko_mem0_collection`
+	knowledgeBaseTable                 = `datapacks.knowledge_bases`
+	promotedCollectionTable            = `datapacks.promoted_collection`
+	mem0GraphVertexEmbeddingsTable     = `datapacks.meko_mem0_graph_vertex_embeddings`
+	promotedGraphVertexEmbeddingsTable = `datapacks.meko_promoted_graph_vertex_embeddings`
 )
 
 // Values for datapacks.knowledge_bases.metadata_filters->>'source' — used to
@@ -26,7 +29,7 @@ const (
 // writes/reads originates from a conversation; additional sources can be
 // added here as new ingest paths land. All KB queries default-filter by this
 // value so cross-source bleed is impossible.
-const KBSourceConversation = "conversation"
+const KBSourceConversation = "memory"
 
 type PromoteMemoriesRepo struct {
 	db *sql.DB
@@ -34,6 +37,17 @@ type PromoteMemoriesRepo struct {
 
 func NewPromoteMemoriesRepo(db *sql.DB) *PromoteMemoriesRepo {
 	return &PromoteMemoriesRepo{db: db}
+}
+
+type mem0Row struct {
+	id             string
+	chunkText      string
+	vectorText     string
+	agentID        string
+	userID         string
+	conversationID string
+	payload        []byte
+	createdAt      time.Time
 }
 
 // Promote moves a set of mem0 memories into the tenant's knowledge_bases +
@@ -46,12 +60,21 @@ func NewPromoteMemoriesRepo(db *sql.DB) *PromoteMemoriesRepo {
 //	tenant_id        = datapackID                              (partition key)
 //	chunk_text       = payload->>'data'
 //	embeddings       = embeddings (vector, copied as-is)
-//	document_id      = mem0.id                                 (= memory_id)
-//	metadata_filters = {"source": "conversation", "agent_id": <meko_agent_id>}
+//	document_id      = mem0.meko_conversation_id               (KB document_id is NOT NULL)
+//	metadata_filters = {"source": "memory", "agent_id": <meko_agent_id>, "memory_id": <mem0.id>}
+//
+// The KB row representing a promoted memory is identified by
+// (tenant_id, metadata_filters->>'memory_id'); document_id carries the
+// originating conversation id so chunks from the same conversation can
+// be grouped on the KB side.
 //
 // All KB reads/writes here default-filter by
-// metadata_filters->>'source' = 'conversation' so rows from any other
+// metadata_filters->>'source' = 'memory' so rows from any other
 // ingest paths added later are invisible to this flow.
+//
+// Memories without a meko_conversation_id cannot be promoted (KB
+// document_id is NOT NULL) and are reported back in notFoundIDs alongside
+// any IDs the caller asked about that did not exist in mem0.
 //
 // Memories explicitly opted out of promotion (meko_promotion_user_action =
 // 'keep_as_memory') are skipped and reported back as not found.
@@ -82,11 +105,14 @@ func (r *PromoteMemoriesRepo) Promote(
 	defer func() { _ = tx.Rollback() }()
 
 	// 1. Fetch eligible mem0 rows for this datapack. Pulls everything both
-	// the KB upsert (chunk_text, embeddings) and the promoted_collection
-	// upsert (full payload, conversation_id, user_id, created_at) need.
-	// Scoping is by datapack_id + the caller's explicit memory_ids list;
-	// meko_user_id is intentionally not filtered, and per-agent scoping
-	// happens on the KB side via metadata_filters->>'agent_id'.
+	// the KB upsert (chunk_text, embeddings, conversation_id) and the
+	// promoted_collection upsert (full payload, conversation_id, user_id,
+	// created_at) need. Scoping is by datapack_id + the caller's explicit
+	// memory_ids list; meko_user_id is intentionally not filtered, and
+	// per-agent scoping happens on the KB side via
+	// metadata_filters->>'agent_id'. meko_conversation_id is required
+	// because KB.document_id is NOT NULL — memories without one are
+	// dropped here and surfaced as notFoundIDs.
 	fetchQ := fmt.Sprintf(`
 		SELECT m.id::text,
 		       COALESCE(m.payload->>'data', '') AS chunk_text,
@@ -100,6 +126,7 @@ func (r *PromoteMemoriesRepo) Promote(
 		WHERE m.meko_datapack_id = $1::uuid
 		  AND m.id = ANY($2::uuid[])
 		  AND m.embeddings IS NOT NULL
+		  AND m.meko_conversation_id IS NOT NULL
 		  AND m.meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action`,
 		memoriesSourceTable)
 	fetchArgs := []any{datapackID, pq.Array(memoryIDs)}
@@ -108,17 +135,6 @@ func (r *PromoteMemoriesRepo) Promote(
 	rows, err := tx.QueryContext(txCtx, fetchQ, fetchArgs...)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("fetch mem0 rows: %w", err)
-	}
-
-	type mem0Row struct {
-		id             string
-		chunkText      string
-		vectorText     string
-		agentID        string
-		userID         string
-		conversationID sql.NullString
-		payload        []byte
-		createdAt      time.Time
 	}
 
 	var fetched []mem0Row
@@ -155,10 +171,11 @@ func (r *PromoteMemoriesRepo) Promote(
 	}
 
 	// 2. Find which of these mem0 IDs already exist in the KB for this tenant.
-	// document_id holds the source memory_id (we no longer keep it in
-	// metadata_filters). When the caller supplies an agent_id, scope the
-	// lookup to that agent via metadata_filters->>'agent_id' so existence is
-	// per-agent. Always default-filter by source = 'conversation'.
+	// memory_id lives in metadata_filters->>'memory_id' (document_id now
+	// holds the originating conversation id). When the caller supplies an
+	// agent_id, scope the lookup to that agent via
+	// metadata_filters->>'agent_id' so existence is per-agent. Always
+	// default-filter by source = KBSourceConversation.
 	fetchedIDs := make([]string, len(fetched))
 	for i, row := range fetched {
 		fetchedIDs[i] = row.id
@@ -169,7 +186,7 @@ func (r *PromoteMemoriesRepo) Promote(
 
 	existConds := []string{
 		"tenant_id = $1::uuid",
-		"document_id = ANY($2::uuid[])",
+		"metadata_filters->>'memory_id' = ANY($2::text[])",
 		"metadata_filters->>'source' = '" + KBSourceConversation + "'",
 	}
 	existArgs := []any{datapackID, pq.Array(fetchedIDs)}
@@ -178,7 +195,7 @@ func (r *PromoteMemoriesRepo) Promote(
 		existArgs = append(existArgs, scopedAgentID)
 	}
 	existQ := fmt.Sprintf(`
-		SELECT document_id::text
+		SELECT metadata_filters->>'memory_id'
 		FROM %s
 		WHERE %s`, knowledgeBaseTable, strings.Join(existConds, " AND "))
 
@@ -238,25 +255,26 @@ func (r *PromoteMemoriesRepo) Promote(
 	}
 
 	// 4. KB upsert: INSERT new rows, UPDATE existing ones (matched by
-	//    document_id, additionally scoped by metadata_filters->>'agent_id'
-	//    when provided). All writes/reads default-scope by source = 'conversation'.
+	//    metadata_filters->>'memory_id', additionally scoped by
+	//    metadata_filters->>'agent_id' when provided).
 	insertQ := fmt.Sprintf(`
 		INSERT INTO %s (tenant_id, chunk_text, embeddings, document_id, metadata_filters)
 		VALUES ($1::uuid, $2, $3::vector, $4::uuid, $5::jsonb)`, knowledgeBaseTable)
 
 	updateConds := []string{
 		"tenant_id = $4::uuid",
-		"document_id = $5::uuid",
+		"metadata_filters->>'memory_id' = $5",
 		"metadata_filters->>'source' = '" + KBSourceConversation + "'",
 	}
 	if hasAgentScope {
-		updateConds = append(updateConds, "metadata_filters->>'agent_id' = $6")
+		updateConds = append(updateConds, "metadata_filters->>'agent_id' = $7")
 	}
 	updateQ := fmt.Sprintf(`
 		UPDATE %s
 		SET chunk_text       = $1,
 		    embeddings       = $2::vector,
-		    metadata_filters = $3::jsonb
+		    metadata_filters = $3::jsonb,
+		    document_id      = $6::uuid
 		WHERE %s`, knowledgeBaseTable, strings.Join(updateConds, " AND "))
 
 	// 5. promoted_collection upsert: mirrors the KB upsert flow. New rows
@@ -287,19 +305,20 @@ func (r *PromoteMemoriesRepo) Promote(
 		WHERE %s`, promotedCollectionTable, strings.Join(promotedUpdateConds, " AND "))
 
 	for _, row := range fetched {
-		metadataJSON := fmt.Sprintf(`{"source":%q,"agent_id":%q}`, KBSourceConversation, row.agentID)
+		metadataJSON := fmt.Sprintf(
+			`{"source":%q,"agent_id":%q,"memory_id":%q}`,
+			KBSourceConversation, row.agentID, row.id,
+		)
 		payloadJSON := row.payload
 		if len(payloadJSON) == 0 {
 			payloadJSON = []byte("null")
 		}
-		// nullable conversation_id — nil interface{} sends as SQL NULL.
-		var convID any
-		if row.conversationID.Valid {
-			convID = row.conversationID.String
-		}
 
 		if existingSet[row.id] {
-			updateArgs := []any{row.chunkText, row.vectorText, metadataJSON, datapackID, row.id}
+			updateArgs := []any{
+				row.chunkText, row.vectorText, metadataJSON,
+				datapackID, row.id, row.conversationID,
+			}
 			if hasAgentScope {
 				updateArgs = append(updateArgs, scopedAgentID)
 			}
@@ -309,11 +328,9 @@ func (r *PromoteMemoriesRepo) Promote(
 			}
 			updatedIDs = append(updatedIDs, row.id)
 		} else {
-			slog.Debug("executing SQL", "func", "Promote", "query", insertQ,
-				"args", []any{datapackID, row.chunkText, row.vectorText, row.id, metadataJSON})
-			if _, err := tx.ExecContext(txCtx, insertQ,
-				datapackID, row.chunkText, row.vectorText, row.id, metadataJSON,
-			); err != nil {
+			insertArgs := []any{datapackID, row.chunkText, row.vectorText, row.conversationID, metadataJSON}
+			slog.Debug("executing SQL", "func", "Promote", "query", insertQ, "args", insertArgs)
+			if _, err := tx.ExecContext(txCtx, insertQ, insertArgs...); err != nil {
 				return nil, nil, nil, fmt.Errorf("insert kb row (memory_id=%s): %w", row.id, err)
 			}
 			insertedIDs = append(insertedIDs, row.id)
@@ -322,7 +339,7 @@ func (r *PromoteMemoriesRepo) Promote(
 		// Mirror the row into promoted_collection.
 		if promotedSet[row.id] {
 			promotedArgs := []any{
-				row.userID, row.agentID, convID, payloadJSON, row.createdAt,
+				row.userID, row.agentID, row.conversationID, payloadJSON, row.createdAt,
 				datapackID, row.id,
 			}
 			if hasAgentScope {
@@ -335,7 +352,7 @@ func (r *PromoteMemoriesRepo) Promote(
 		} else {
 			promotedArgs := []any{
 				datapackID, row.userID, row.agentID, row.id,
-				convID, payloadJSON, row.createdAt,
+				row.conversationID, payloadJSON, row.createdAt,
 			}
 			slog.Debug("executing SQL", "func", "Promote", "query", promotedInsertQ, "args", promotedArgs)
 			if _, err := tx.ExecContext(txCtx, promotedInsertQ, promotedArgs...); err != nil {
@@ -344,7 +361,13 @@ func (r *PromoteMemoriesRepo) Promote(
 		}
 	}
 
-	// 6. Delete the just-promoted rows from mem0. Ownership of the memory
+	// 6. Promote graph vertex embeddings referenced by the promoted memories.
+	promotedGraphRows, err := r.promoteGraphVertices(txCtx, tx, datapackID, fetched)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// 7. Delete the just-promoted rows from mem0. Ownership of the memory
 	deleteQ := fmt.Sprintf(`DELETE FROM %s WHERE id = ANY($1::uuid[]) AND meko_datapack_id = $2::uuid`, memoriesSourceTable)
 	slog.Debug("executing SQL", "func", "Promote", "query", deleteQ, "args", []any{fetchedIDs, datapackID})
 	deleteRes, err := tx.ExecContext(txCtx, deleteQ, pq.Array(fetchedIDs), datapackID)
@@ -366,7 +389,183 @@ func (r *PromoteMemoriesRepo) Promote(
 		"updated", len(updatedIDs),
 		"not_found", len(notFoundIDs),
 		"deleted_from_mem0", deletedFromMem0,
+		"promoted_graph_vertices", promotedGraphRows,
 	)
 
 	return insertedIDs, updatedIDs, notFoundIDs, nil
+}
+
+// graphNodeRef is a lookup key into meko_mem0_graph_vertex_embeddings,
+// pulled from a mem0 collection row + one entry of its payload.graph_nodes[].
+type graphNodeRef struct {
+	UserID      string
+	AgentID     string
+	GraphName   string
+	NodeGraphID int64
+}
+
+// graphVertexRow is a single row read from meko_mem0_graph_vertex_embeddings
+// and ready to be written into meko_promoted_graph_vertex_embeddings.
+type graphVertexRow struct {
+	DatapackID     string
+	NodeGraphID    int64
+	UserID         string
+	AgentID        string
+	GraphName      string
+	NodeName       sql.NullString
+	EmbeddingsText string
+	ConversationID sql.NullString
+	CreatedAt      time.Time
+}
+
+// promoteGraphVertices runs the three-step graph promotion:
+//  1. extract graph_node refs from mem0 payloads,
+//  2. fetch the matching row from meko_mem0_graph_vertex_embeddings,
+//  3. insert it into meko_promoted_graph_vertex_embeddings.
+func (r *PromoteMemoriesRepo) promoteGraphVertices(
+	ctx context.Context,
+	tx *sql.Tx,
+	datapackID string,
+	fetched []mem0Row,
+) (int64, error) {
+	refs := collectGraphNodeRefs(fetched)
+	if len(refs) == 0 {
+		return 0, nil
+	}
+
+	var inserted int64
+	for _, ref := range refs {
+		vertex, err := fetchGraphVertex(ctx, tx, datapackID, ref)
+		if err != nil {
+			return inserted, err
+		}
+		if vertex == nil {
+			continue
+		}
+		if err := insertPromotedGraphVertex(ctx, tx, *vertex); err != nil {
+			return inserted, err
+		}
+		inserted++
+	}
+	return inserted, nil
+}
+
+// Step 1: pull (user_id, agent_id, graph_name, node_graphid) tuples out of
+// each mem0 row's payload.graph_nodes[].
+func collectGraphNodeRefs(fetched []mem0Row) []graphNodeRef {
+	var refs []graphNodeRef
+	seen := make(map[string]bool)
+	for _, row := range fetched {
+		if len(row.payload) == 0 {
+			continue
+		}
+		var p struct {
+			GraphNodes []struct {
+				GraphName   string `json:"graph_name"`
+				NodeGraphID int64  `json:"node_graphid"`
+			} `json:"graph_nodes"`
+		}
+		if err := json.Unmarshal(row.payload, &p); err != nil {
+			slog.Warn("parse graph_nodes", "memory_id", row.id, "err", err)
+			continue
+		}
+		for _, n := range p.GraphNodes {
+			if n.GraphName == "" || n.NodeGraphID == 0 {
+				continue
+			}
+			key := fmt.Sprintf("%s|%s|%s|%d", row.userID, row.agentID, n.GraphName, n.NodeGraphID)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			refs = append(refs, graphNodeRef{
+				UserID:      row.userID,
+				AgentID:     row.agentID,
+				GraphName:   n.GraphName,
+				NodeGraphID: n.NodeGraphID,
+			})
+		}
+	}
+	return refs
+}
+
+// Step 2: fetch the matching graph vertex row.
+func fetchGraphVertex(
+	ctx context.Context,
+	tx *sql.Tx,
+	datapackID string,
+	ref graphNodeRef,
+) (*graphVertexRow, error) {
+	q := fmt.Sprintf(`
+		SELECT meko_datapack_id::text,
+		       node_graphid,
+		       meko_user_id::text,
+		       meko_agent_id,
+		       graph_name,
+		       node_name,
+		       embeddings::text,
+		       meko_conversation_id::text,
+		       created_at
+		FROM %s
+		WHERE meko_datapack_id = $1::uuid
+		  AND meko_user_id     = $2::uuid
+		  AND meko_agent_id    = $3
+		  AND graph_name       = $4
+		  AND node_graphid     = $5`, mem0GraphVertexEmbeddingsTable)
+
+	var v graphVertexRow
+	err := tx.QueryRowContext(ctx, q,
+		datapackID, ref.UserID, ref.AgentID, ref.GraphName, ref.NodeGraphID,
+	).Scan(
+		&v.DatapackID, &v.NodeGraphID, &v.UserID, &v.AgentID,
+		&v.GraphName, &v.NodeName, &v.EmbeddingsText, &v.ConversationID, &v.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fetch graph vertex (%s/%d): %w", ref.GraphName, ref.NodeGraphID, err)
+	}
+	return &v, nil
+}
+
+// Step 3: insert into meko_promoted_graph_vertex_embeddings.
+func insertPromotedGraphVertex(
+	ctx context.Context,
+	tx *sql.Tx,
+	v graphVertexRow,
+) error {
+	q := fmt.Sprintf(`
+		INSERT INTO %s (
+			meko_datapack_id, node_graphid, meko_user_id, meko_agent_id,
+			graph_name, node_name, embeddings, meko_conversation_id,
+			created_at, meko_prompted_at
+		) VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6, $7::vector, $8::uuid, $9, NOW())
+		ON CONFLICT (meko_datapack_id, node_graphid) DO UPDATE SET
+			meko_user_id         = EXCLUDED.meko_user_id,
+			meko_agent_id        = EXCLUDED.meko_agent_id,
+			graph_name           = EXCLUDED.graph_name,
+			node_name            = EXCLUDED.node_name,
+			embeddings           = EXCLUDED.embeddings,
+			meko_conversation_id = EXCLUDED.meko_conversation_id,
+			created_at           = EXCLUDED.created_at,
+			meko_prompted_at     = NOW()`, promotedGraphVertexEmbeddingsTable)
+
+	var nodeName any
+	if v.NodeName.Valid {
+		nodeName = v.NodeName.String
+	}
+	var conversationID any
+	if v.ConversationID.Valid {
+		conversationID = v.ConversationID.String
+	}
+
+	_, err := tx.ExecContext(ctx, q,
+		v.DatapackID, v.NodeGraphID, v.UserID, v.AgentID,
+		v.GraphName, nodeName, v.EmbeddingsText, conversationID, v.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert promoted graph vertex (node_graphid=%d): %w", v.NodeGraphID, err)
+	}
+	return nil
 }

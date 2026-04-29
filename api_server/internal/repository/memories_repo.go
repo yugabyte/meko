@@ -37,7 +37,8 @@ func (repo *MemoriesRepo) GetAllChunkTexts(ctx context.Context, datapackID strin
 	if repo.db == nil {
 		return "", fmt.Errorf("database connection is required")
 	}
-	if strings.TrimSpace(datapackID) == "" {
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
 		return "", fmt.Errorf("datapack_id is required")
 	}
 
@@ -45,8 +46,7 @@ func (repo *MemoriesRepo) GetAllChunkTexts(ctx context.Context, datapackID strin
 		SELECT chunk_text
 		FROM %s
 		WHERE tenant_id = $1::uuid
-		  AND metadata_filters->>'source' = '%s'
-		ORDER BY id`, knowledgeBasesTable, KBSourceConversation)
+		ORDER BY id`, knowledgeBasesTable)
 
 	slog.Debug("executing SQL", "func", "GetAllChunkTexts", "query", q, "args", []any{datapackID})
 	rows, err := repo.db.QueryContext(ctx, q, datapackID)

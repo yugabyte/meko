@@ -54,16 +54,16 @@ func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFil
 //	@Failure	500	{object}	APIResponse
 //	@Router		/memories [get]
 func (handler *MemoriesHandler) ListGET(c echo.Context) error {
-	datapackID := c.QueryParam("datapack_id")
-	if strings.TrimSpace(datapackID) == "" {
+	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
+	if datapackID == "" {
 		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
 	}
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	pageSize, _ := strconv.Atoi(c.QueryParam("page_size"))
 	filter := models.MemoryListFilter{
 		DatapackID: datapackID,
-		UserID:     c.QueryParam("user_id"),
-		UserType:   c.QueryParam("user_type"),
+		UserID:     strings.TrimSpace(c.QueryParam("user_id")),
+		UserType:   strings.TrimSpace(c.QueryParam("user_type")),
 		Page:       page,
 		PageSize:   pageSize,
 	}
@@ -81,8 +81,8 @@ func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 //	@Failure	500			{object}	APIResponse
 //	@Router		/memories/count [get]
 func (handler *MemoriesHandler) CountGET(c echo.Context) error {
-	datapackID := c.QueryParam("datapack_id")
-	if strings.TrimSpace(datapackID) == "" {
+	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
+	if datapackID == "" {
 		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
 	}
 
