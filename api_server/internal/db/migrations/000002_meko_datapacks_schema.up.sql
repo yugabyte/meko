@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS datapacks.promoted_collection (
 CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_graph_vertex_embeddings (
                         meko_datapack_id UUID NOT NULL,
                         meko_user_id UUID NOT NULL,
-                        meko_agent_id UUID NOT NULL,
+                        meko_agent_id TEXT NOT NULL,
                         graph_name TEXT NOT NULL,
                         node_graphid BIGINT NOT NULL,
                         node_name TEXT,
@@ -175,7 +175,7 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_promoted_graph_vertex_embeddings (
                         meko_datapack_id UUID NOT NULL,
                         node_graphid BIGINT NOT NULL,
                         meko_user_id UUID,
-                        meko_agent_id UUID,
+                        meko_agent_id TEXT,
                         graph_name TEXT NOT NULL,
                         node_name TEXT,
                         embeddings vector(1536) NOT NULL,
