@@ -7,11 +7,13 @@ type: docs
 ---
 
 Integrate with AI agents for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
+
 ## Cursor Desktop
 
 ### Automated setup
 
-See the [Quick Start](/quick-start/#connect-your-ai-client). 
+See the [Quick Start](/quick-start/#connect-your-ai-client).
+
 ### Manual setup
 
 1. In Cursor Desktop, choose **Cursor>Settings>Cursor Settings>Tools & MCPs>New MCP Server**.
@@ -50,8 +52,11 @@ See the [Quick Start](/quick-start/#connect-your-ai-client).
 ## Claude Desktop
 
 ### Automated setup
+
 See the [Quick Start](/quick-start/#connect-your-ai-client).  
+
 ### Manual setup
+
 In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 1. On a Mac, choose **Claude>Settings>Developer>Edit Config**.
@@ -93,8 +98,11 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
     ```
 
 ## Claude Code
+
 ### Automated setup
-See the [Quick Start](/quick-start/#connect-your-ai-client).  
+
+See the [Quick Start](/quick-start/#connect-your-ai-client).
+
 ### Manual setup
 
 1. Run the setup command in your shell to add the Meko MCP server to Claude Code:
@@ -114,9 +122,7 @@ See the [Quick Start](/quick-start/#connect-your-ai-client).
     ![Claude Code](/images/integrations-claudecode-response.png)
 
 ## Open AI Codex Desktop
-
-### Automated setup
-See the [Quick Start](/quick-start/#connect-your-ai-client).  
+ 
 ### Manual setup
 
 1. In Codex Desktop, choose **Codex>Settings>MCP servers>Add server>Streamable HTTP**.
@@ -149,9 +155,34 @@ See the [Quick Start](/quick-start/#connect-your-ai-client).
     ```
 
 ## VS Code
-### Automated setup
-See the [Quick Start](/quick-start/#connect-your-ai-client).  
-## Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, and others
+
+1. Run the following command:
+
+    ```sh
+    echo "### Installing the latest Node.js ###"
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
+    source ~/.$(basename $SHELL)rc
+    nvm install --lts
+    echo "### Registering the Meko MCP server ###"
+    npx mcp-add@latest \
+      --name meko \
+      --type stdio \
+      --command 'npx -y mcp-remote <mcp-server-url> --allow-http' \
+      --env 'MEKO_API_KEY=<mcp-server-api-key>' \
+      --headers 'MEKO_API_KEY=<mcp-server-api-key>' \
+      --scope global \
+      --clients 'vscode'
+    ```
+
+    Replace `<mcp-server-url>` and `<mcp-server-api-key>` with the URL and API key you saved.
+
+1. Verify the connection by entering the following in chat:
+
+    ```text
+    Is VS Code configured with an MCP Server for Meko?
+    ```
+
+<!-- ## Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, and others
 
 For Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, Continue, Goose, OpenCode, and Windsurf, use the "Automated Setup" described in the [Quick Start](/quick-start/#connect-your-ai-client).  
 
@@ -159,4 +190,4 @@ Additional support for the below is coming soon
 * Opencode
 * OpenAI chatgpt Desktop
 * Lovable
-* Replit
+* Replit -->

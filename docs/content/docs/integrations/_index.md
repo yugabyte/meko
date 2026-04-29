@@ -56,15 +56,5 @@ To register the hosted MCP server (using the URL and API key from the portal or 
 
 ## Connect programmatically
 
-{{< card-group variant="third" >}}
-  {{< card
-    href="integrations/connect-programatically/#langchain-and-langgraph"
-    title="LangChain and LangGraph"
-    logo="logos/integrations/langchain.svg"
-  >}}
-  {{< card
-    href="integrations/connect-programatically/#python"
-    title="Python"
-    icon="fa-brands fa-python"
-  >}}
-{{< /card-group >}}
+> [!NOTE] Coming soon
+>

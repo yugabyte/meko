@@ -25,52 +25,41 @@ Get from zero to a working Meko integration in 60 seconds.
 
 ## Connect your AI client
 
-Next, connect Claude Code, Cursor, VS Code, Codex, any other coding agent or any MCP-compatible client application (such as Claude Desktop) to your Meko datapack.  
+A single setup command registers the Meko MCP server with your agent and installs the Meko skills package, so your agent knows when and how to use Meko's MCP tools for memory, knowledge, and conversation management.
 
-Run the following command:
+<!-- Add this after confirming what skills will finally get installed. A single setup command registers the Meko MCP server with your agent and installs the Meko skills package (including **meko-mcp-tools** and **ysql**), so your agent knows when and how to use Meko's MCP tools for memory, knowledge, conversation management, and SQL database access. -->
+
+> [!NOTE]
+>
+> Currently, this command is supported for **Cursor**, **Claude Desktop**, and **Claude Code** only. For other supported clients such as VS Code and Codex, see [Integrations](../integrations/).
+
+### Prerequisites
+
+- [Node.js 18+](https://nodejs.org/)
+- [npm](https://www.npmjs.com/) and [npx](https://docs.npmjs.com/cli/v8/commands/npx) (usually included with a standard Node.js install)
+- Meko MCP Server URL and API key
+
+### Install
+
+Run the following command to register the Meko MCP server and install the Meko skills package.
+
+Replace the placeholders as follows:
+
+- `<mcp-client>` — `cursor`, `claude-code`, or `claude-desktop`
+- `<mcp-server-url>` — the MCP server URL you saved from the portal
+- `<mcp-server-api-key>` — the MCP server API key you saved from the portal
 
 ```sh
-echo "### Installing the latest Node.js ###"
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
-source ~/.$(basename $SHELL)rc
-nvm install --lts
-echo "### Registering the Meko MCP server ###"
-npx mcp-add@latest \
-  --name meko \
-  --type stdio \
-  --command 'npx -y mcp-remote <mcp-server-url> --allow-http' \
-  --env 'MEKO_API_KEY=<mcp-server-api-key>' \
-  --headers 'MEKO_API_KEY=<mcp-server-api-key>' \
-  --scope global \
-  --clients 'claude desktop,claude code,cursor,codex,vscode'
+npx @yugabytedb/meko-mcp --client <mcp-client> --url <mcp-server-url> --api-key <mcp-server-api-key>
 ```
 
-Replace `<mcp-server-url>` and `<mcp-server-api-key>` with the URL and API key you saved.
-
-If you're using continue, copilot cli, gemini, goose, opencode, or windsurf, change the `--clients` option to include one or more of those keywords.
-
-For manual instructions, and guidance on registering the Meko MCP Server with your own AI framework (such as LangChain, Llama Index, and more) in an application development scenario, see [Integrations](../integrations/).
-
-## Add skills to your agent
-
-> [!NOTE] Temporary instructions
+> [!TIP] Install all supported clients at once
 >
-> These instructions are temporary, and apply during Tech Preview only.
-
-The Meko Skills package tells agents when and how to use Meko's MCP tools for memory, knowledge, conversation management, and SQL database access. To install it:
-
-1. Download the skills package and start the skills installer
-
-    ```sh
-    git clone https://github.com/yugabyte/meko-mcp-server.git
-    cd meko-mcp-server
-    git checkout add-skills
-    npx skills add ./skills -g
-    ```
-
-1. When prompted to select the skills to install, select both **meko-mcp-tools** and **ysql**.
-
-1. When prompted to select the agent to install the skills to, select your agent.
+> Use `--client all` to configure Cursor, Claude Desktop, and Claude Code in a single run (with the same URL and API key as above):
+>
+> ```sh
+> npx @yugabytedb/meko-mcp --client all --url <mcp-server-url> --api-key <mcp-server-api-key>
+> ```
 
 ## Explore knowledge
 
@@ -90,7 +79,7 @@ To see how Meko stores knowledge, add documents to your datapack and query them 
 >
 > Document upload is coming soon to the web portal. Skip this section unless you want to use the CLI.
 
-In your coding agent, issue a prompt to add to the knowledge base a document and attach a file in CSV, JSON, markdown, or PDF format. 
+In your coding agent, issue a prompt to add to the knowledge base a document and attach a file in CSV, JSON, markdown, or PDF format.
 
 As an example, for Claude Code, the standard for providing project knowledge and coding practices is a `CLAUDE.md` file. Use the following markdown content in Claude Code to try this out by copying and modifying the contents to a local `CLAUDE.md` file.
 
