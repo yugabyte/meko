@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -13,16 +14,25 @@ import (
 
 // DatapackHandler holds Echo handlers for datapack endpoints.
 type DatapackHandler struct {
-	svc      *service.DatapackService
-	langfuse *service.LangfuseService
+	svc         *service.DatapackService
+	langfuse    *service.LangfuseService
+	memoriesSvc *service.MemoriesService
+	kbSvc       *service.KnowledgeBaseService
 }
 
 // NewDatapackHandler creates a new DatapackHandler.
 func NewDatapackHandler(
 	svc *service.DatapackService,
 	langfuse *service.LangfuseService,
+	memoriesSvc *service.MemoriesService,
+	kbSvc *service.KnowledgeBaseService,
 ) *DatapackHandler {
-	return &DatapackHandler{svc: svc, langfuse: langfuse}
+	return &DatapackHandler{
+		svc:         svc,
+		langfuse:    langfuse,
+		memoriesSvc: memoriesSvc,
+		kbSvc:       kbSvc,
+	}
 }
 
 // Create handles POST /api/v1/datapacks.
@@ -115,6 +125,23 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 	if !found || dp == nil {
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", "datapack not resolved by middleware")
+	}
+
+	if h.memoriesSvc != nil {
+		if resp, err := h.memoriesSvc.Count(c.Request().Context(), dp.ID); err != nil {
+			slog.Warn("failed to count memories", "datapack_id", dp.ID, "error", err)
+		} else {
+			dp.MemoryCount = resp.Count
+		}
+	}
+
+	if h.kbSvc != nil {
+		if kbCounts, err := h.kbSvc.Counts(dp); err != nil {
+			slog.Warn("failed to count knowledge base items", "datapack_id", dp.ID, "error", err)
+		} else {
+			dp.KnowledgeCount = int(kbCounts.TotalChunks)
+			dp.LearningsCount = int(kbCounts.PromotedMemories)
+		}
 	}
 
 	return ok(c, http.StatusOK, dp)

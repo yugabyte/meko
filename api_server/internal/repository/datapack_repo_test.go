@@ -247,14 +247,14 @@ func TestDatapackRepo_GetByName_NotFound(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`FROM meko_system\.datapacks d\s+WHERE d\.user_id`).
+	mock.ExpectQuery(`FROM meko_system\.datapacks d\s+JOIN meko_system\.users u`).
 		WithArgs("user-1", "missing").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"datapack_id", "user_id", "datapack_name",
 			"created_by_agent_id",
 			"universe_id", "datapack_ysql_connection_string",
 			"datapack_ysql_username", "created_at", "updated_at",
-			"description",
+			"description", "owner_name",
 		}))
 
 	repo := NewDatapackRepo(db)
@@ -278,20 +278,20 @@ func TestDatapackRepo_GetByName_Found(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now()
-	mock.ExpectQuery(`FROM meko_system\.datapacks d\s+WHERE d\.user_id`).
+	mock.ExpectQuery(`FROM meko_system\.datapacks d\s+JOIN meko_system\.users u`).
 		WithArgs("user-1", "dp-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"datapack_id", "user_id", "datapack_name",
 			"created_by_agent_id",
 			"universe_id", "datapack_ysql_connection_string",
 			"datapack_ysql_username", "created_at", "updated_at",
-			"description",
+			"description", "owner_name",
 		}).AddRow(
 			"dp-uuid-1", "user-1", "dp-1",
 			"meko_agent",
 			"u-1", "postgresql://...",
 			"mcp_user_1", now, now,
-			"test description",
+			"test description", "Test User",
 		))
 
 	repo := NewDatapackRepo(db)

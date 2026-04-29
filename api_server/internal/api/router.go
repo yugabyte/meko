@@ -244,7 +244,7 @@ func buildProvisioner(_ ServerConfig, reg *serviceRegistry) service.Provisioner 
 // registerDatapackRoutes wires all datapack, observe, agent, and
 // knowledge-base routes onto the given group.
 func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
-	dpH := handlers.NewDatapackHandler(reg.dpSvc, reg.langfuseSvc)
+	dpH := handlers.NewDatapackHandler(reg.dpSvc, reg.langfuseSvc, reg.memoriesSvc, reg.kbSvc)
 	observeH := handlers.NewObserveHandler(reg.langfuseSvc)
 	agentH := handlers.NewAgentHandler(reg.agentSvc)
 

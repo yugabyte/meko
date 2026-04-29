@@ -206,8 +206,10 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
 		        COALESCE(d.datapack_details->>'description', ''),
+		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
 		        'owner'
 		 FROM meko_system.datapacks d
+		 JOIN meko_system.users u ON u.user_id = d.user_id
 		 WHERE d.user_id = $1
 
 		 UNION ALL
@@ -218,8 +220,10 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
 		        COALESCE(d.datapack_details->>'description', ''),
+		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
 		        i.grant_role
 		 FROM meko_system.datapacks d
+		 JOIN meko_system.users u ON u.user_id = d.user_id
 		 JOIN meko_system.agent_access aa
 		      ON aa.datapack_id = d.datapack_id AND aa.user_id = $1
 		 JOIN meko_system.datapack_invites i
@@ -246,6 +250,7 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 			&d.MCPUserName,
 			&d.CreatedAt, &d.UpdatedAt,
 			&d.Description,
+			&d.OwnerName,
 			&d.Grant,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan datapack: %w", err)
@@ -270,8 +275,10 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 		        d.universe_id, d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
-		        COALESCE(d.datapack_details->>'description', '')
+		        COALESCE(d.datapack_details->>'description', ''),
+		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), '')
 		 FROM meko_system.datapacks d
+		 JOIN meko_system.users u ON u.user_id = d.user_id
 		 WHERE d.user_id = $1 AND d.datapack_name = $2`,
 		userID, name,
 	).Scan(
@@ -281,6 +288,7 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 		&d.MCPUserName,
 		&d.CreatedAt, &d.UpdatedAt,
 		&d.Description,
+		&d.OwnerName,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -305,8 +313,10 @@ func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Da
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
 		        COALESCE(d.datapack_details->>'description', ''),
+		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
 		        COALESCE(i.grant_role, 'viewer')
 		 FROM meko_system.datapacks d
+		 JOIN meko_system.users u ON u.user_id = d.user_id
 		 JOIN meko_system.agent_access aa
 		      ON aa.datapack_id = d.datapack_id AND aa.user_id = $1
 		 LEFT JOIN meko_system.datapack_invites i
@@ -323,6 +333,7 @@ func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Da
 		&d.MCPUserName,
 		&d.CreatedAt, &d.UpdatedAt,
 		&d.Description,
+		&d.OwnerName,
 		&d.Grant,
 	)
 	if err == sql.ErrNoRows {
