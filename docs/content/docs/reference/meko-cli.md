@@ -115,7 +115,7 @@ Error: not logged in - run `meko login` first
 
 When you sign in, a default datapack named `meko_default_datapack` is automatically assigned to your account.
 
-To create more, use `datapack create` to provision a new datapack with a dedicated database, MCP server endpoint, and database access credentials as follows:
+To create a new datapack, use `datapack create` to provision a new datapack with a dedicated database, MCP server endpoint, and database access credentials as follows:
 
 ```bash
 meko datapack create --name my-datapack
@@ -123,28 +123,27 @@ meko datapack create --name my-datapack
 
 The request typically takes a few seconds.
 
-You should see an output similar to the following:
+You should see an output similar to the following, and you should save them somewhere safe for future reference:
 
 ```output
  ✅ Datapack Created
 
-  Name             my-datapack
-  Datapack ID      e02a7107-c79e-451d-b360-9cd1e13f175d
-  Agent ID         18311fce-36c5-40fe-bd45-67f5913b0b52
+  Name             <my-datapack-name>
+  Datapack ID      <my-datapack-id>
+  Agent ID         <my-agent-id>
 
   ────────────────────────────────────────────────────────
   MCP Server
   ────────────────────────────────────────────────────────
-  URL              https://d81bff68-2659-4d9e-a3a3-26ce6e0fb4de.mcp.mekodev.com/mcp
-  API Key          318ce1c589d08edb11e24b0a781fe675
+  URL              <my-mcp-server-url>
+  API Key          <my-mcp-server-api-key>
 
   ────────────────────────────────────────────────────────
   Database Access
   ────────────────────────────────────────────────────────
-  User             db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack
-  Password         40ab21c8637c088862f70fa4503ce7ff
-
-  postgresql://db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack1:40ab21c8637c088862f70fa4503ce7ff@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack
+  User             <my-db-user-name>
+  Password         <my-db-password>
+  Connection String  <postgres-sql-connection-string>
 ```
 
 For machine-readable output, use the `--json` flag:
@@ -157,18 +156,18 @@ Example JSON output:
 
 ```json
 {
-  "datapack_id": "e02a7107-c79e-451d-b360-9cd1e13f175d",
-  "agent_id": "18311fce-36c5-40fe-bd45-67f5913b0b52",
+  "datapack_id": "<my-datapack-id>",
+  "agent_id": "<my-agent-id>",
   "name": "my-datapack",
-  "mcp_user_name": "mcp_h66hkj87-4567-6y7u-b7b7-12gg5y7h8jj",
+  "mcp_user_name": "<my-mcp-user-name>",
   "mcp_server": {
-    "url": "https://d81bff68-2659-4d9e-a3a3-26ce6e0fb4de.mcp.mekodev.com/mcp",
-    "api_key": "318ce1c589d08edb11e24b0a781fe675"
+    "url": "<my-mcp-server-url>",
+    "api_key": "<my-mcp-server-api-key>"
   },
   "db_access": {
-    "user_name": "db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack",
-    "password": "40ab21c8637c088862f70fa4503ce7ff",
-    "conn_str": "postgresql://db_d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack1:40ab21c8637c088862f70fa4503ce7ff@k8s-ybdevmek-ybmekosa-c74a0a6102-e4aec974c3e8e420.elb.us-east-2.amazonaws.com:5433/d81bff68-2659-4d9e-a3a3-26ce6e0fb4de_my-datapack"
+    "user_name": "<my-db-user-name>",
+    "password": "<my-db-password>",
+    "conn_str": "<postgres-sql-connection-string>"
   }
 }
 ```
@@ -207,7 +206,7 @@ Delete a specific datapack.
 
 > [!WARNING]
 >
-> This action permanently destroys the datapack and its underlying database.
+> This action permanently destroys the datapack and its underlying database. This is a hard delete, and all memories, knowledge base, and observability traces will be permanently deleted without any recourse of recovering the data.  Use this command with extreme caution.
 >
 
 ```bash
@@ -261,25 +260,3 @@ The CLI writes structured logs to `~/var/meko/logs/`. Use `--verbose` to enable 
 ```sh
 meko [command] --verbose
 ```
-
-## Build from source
-
-If you decide to download the CLI source code from the GitHub repository, you need to build the CLI locally.
-
-Requires Go 1.25+.
-
-```bash
-cd cli_app
-go mod download
-go build -o meko .
-```
-
-To authenticate against a different API server that you may build from the GitHub repository, you can login using the following command:
-
-```bash
-meko login --api-server https://my-server.example.com
-```
-
-The default API server is `https://mekodev.com`.
-
-Credentials are stored locally in `~/var/meko/credentials.json`.
