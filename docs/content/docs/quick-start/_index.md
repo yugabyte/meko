@@ -67,7 +67,7 @@ Meko provides a persistent datastore for the full spectrum of information that A
 
 - **Conversations** are one example of episodic information: raw, verbatim records of events, unfiltered and comprehensive. Episodic information captures everything that happened, relevant or not.
 - **Memory** is derived from episodic information: extracted, condensed, and stored for associative retrieval. Memory trades completeness for efficiency and recallability.
-- **Knowledge** is confirmed information — curated documents and facts that agents can rely on with confidence. Knowledge may be loaded directly or promoted from memory and conversations over time.
+- **Knowledge** is confirmed information — curated documents and facts that agents can rely on with confidence. Knowledge may be loaded directly or promoted from memory and conversations.
 
 We'll start by exploring knowledge, then move on to memory — and in a later guide, see how conversation history can drive updates to both.
 
