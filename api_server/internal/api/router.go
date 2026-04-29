@@ -260,11 +260,15 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	g.GET("/datapacks/incoming-shares", shareH.IncomingShares)
 	g.POST("/datapacks/invite-action", shareH.InviteAction)
 
+	// Describe allows both owners and shared users.
+	g.GET("/datapacks/:name", dpH.Describe,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+
 	named := g.Group("/datapacks/:name",
 		auth.RequireDatapackOwnership(reg.dpRepo),
 	)
 
-	named.GET("", dpH.Describe)
 	named.PATCH("", dpH.Update)
 	named.DELETE("", dpH.Delete)
 	named.GET("/status", dpH.Status)

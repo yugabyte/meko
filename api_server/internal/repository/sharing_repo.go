@@ -190,8 +190,8 @@ func upsertPermissions(tx *sql.Tx, userID, datapackID string, perms []ObjectPerm
 			(user_id, agent_id, datapack_id, object_type, permission,
 			 datapack_shared_status)
 		 SELECT $1, $2, $3,
-		        unnest($4::text[]),
-		        unnest($5::text[]),
+		        unnest($4::text[])::meko_system.access_object_type,
+		        unnest($5::text[])::meko_system.access_permission,
 		        'active'
 		 ON CONFLICT (user_id, agent_id, datapack_id, object_type)
 		 DO UPDATE SET permission = EXCLUDED.permission,

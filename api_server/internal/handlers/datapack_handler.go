@@ -97,6 +97,9 @@ func (h *DatapackHandler) List(c echo.Context) error {
 }
 
 // Describe handles GET /api/v1/datapacks/:name.
+// The datapack is resolved by RequireDatapackAccess middleware which
+// supports both owners and shared users. The Grant field is already
+// populated by the repository layer.
 //
 //	@Summary	Describe a datapack
 //	@Tags		datapacks
@@ -108,26 +111,10 @@ func (h *DatapackHandler) List(c echo.Context) error {
 //	@Security	BearerAuth
 //	@Router		/datapacks/{name} [get]
 func (h *DatapackHandler) Describe(c echo.Context) error {
-	account, err := auth.GetAccount(c)
-	if err != nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "missing account context")
-	}
-
-	name := c.Param("name")
-	if name == "" {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "datapack name is required")
-	}
-
-	dp, err := h.svc.Describe(account.ID, name)
-	if err != nil {
-		if isNotFoundErr(err) {
-			return apiError(c, http.StatusNotFound,
-				"NOT_FOUND", err.Error())
-		}
+	dp, found := c.Get(auth.ContextKeyDatapack).(*models.Datapack)
+	if !found || dp == nil {
 		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+			"INTERNAL_ERROR", "datapack not resolved by middleware")
 	}
 
 	return ok(c, http.StatusOK, dp)

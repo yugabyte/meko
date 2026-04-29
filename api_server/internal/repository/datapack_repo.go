@@ -194,8 +194,10 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 	}, nil
 }
 
-// List returns datapacks belonging to the given user, with the user's
-// MCP role name resolved from the user_details JSONB.
+// List returns datapacks owned by the user plus any shared datapacks
+// where the user has accepted an invite. Each entry carries a Grant
+// field: "owner" for owned datapacks, or the invite grant_role
+// (viewer/contributor/maintainer) for shared ones.
 func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 	rows, err := r.db.Query(
 		`SELECT d.datapack_id, d.user_id, d.datapack_name,
@@ -203,10 +205,30 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 		        d.universe_id, d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
-		        COALESCE(d.datapack_details->>'description', '')
+		        COALESCE(d.datapack_details->>'description', ''),
+		        'owner'
 		 FROM meko_system.datapacks d
 		 WHERE d.user_id = $1
-		 ORDER BY d.created_at DESC`,
+
+		 UNION ALL
+
+		 SELECT d.datapack_id, d.user_id, d.datapack_name,
+		        COALESCE(d.created_by_agent_id, ''),
+		        d.universe_id, d.datapack_ysql_connection_string,
+		        d.datapack_ysql_username,
+		        d.created_at, d.updated_at,
+		        COALESCE(d.datapack_details->>'description', ''),
+		        i.grant_role
+		 FROM meko_system.datapacks d
+		 JOIN meko_system.agent_access aa
+		      ON aa.datapack_id = d.datapack_id AND aa.user_id = $1
+		 JOIN meko_system.datapack_invites i
+		      ON i.datapack_id = d.datapack_id
+		         AND i.recipient_user_id = $1
+		         AND i.status = 'accepted'
+		 WHERE d.user_id != $1
+
+		 ORDER BY created_at DESC`,
 		userID,
 	)
 	if err != nil {
@@ -224,6 +246,7 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 			&d.MCPUserName,
 			&d.CreatedAt, &d.UpdatedAt,
 			&d.Description,
+			&d.Grant,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan datapack: %w", err)
 		}
@@ -238,6 +261,7 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 
 // GetByName returns a single datapack by user and name. Relies on the
 // UNIQUE (user_id, datapack_name) constraint on meko_system.datapacks.
+// Grant is set to "owner" since this path only matches owned datapacks.
 func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) {
 	var d models.Datapack
 	err := r.db.QueryRow(
@@ -264,13 +288,14 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get datapack: %w", err)
 	}
+	d.Grant = "owner"
 	return &d, nil
 }
 
 // GetByNameForSharedAccess looks up a datapack by name where the given
-// user has shared access via agent_access. Used by RequireDatapackAccess
-// as a fallback when ownership lookup fails. Returns (nil, nil) if no
-// matching shared datapack is found.
+// user has shared access via agent_access. The grant role is resolved
+// from the accepted invite. Returns (nil, nil) if no matching shared
+// datapack is found.
 func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Datapack, error) {
 	var d models.Datapack
 	err := r.db.QueryRow(
@@ -279,10 +304,15 @@ func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Da
 		        d.universe_id, d.datapack_ysql_connection_string,
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
-		        COALESCE(d.datapack_details->>'description', '')
+		        COALESCE(d.datapack_details->>'description', ''),
+		        COALESCE(i.grant_role, 'viewer')
 		 FROM meko_system.datapacks d
 		 JOIN meko_system.agent_access aa
 		      ON aa.datapack_id = d.datapack_id AND aa.user_id = $1
+		 LEFT JOIN meko_system.datapack_invites i
+		      ON i.datapack_id = d.datapack_id
+		         AND i.recipient_user_id = $1
+		         AND i.status = 'accepted'
 		 WHERE d.datapack_name = $2
 		 LIMIT 1`,
 		userID, name,
@@ -293,6 +323,7 @@ func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Da
 		&d.MCPUserName,
 		&d.CreatedAt, &d.UpdatedAt,
 		&d.Description,
+		&d.Grant,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

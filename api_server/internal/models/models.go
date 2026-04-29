@@ -25,6 +25,7 @@ type Datapack struct {
 	YBUniverseConn   string    `json:"datapack_ysql_connection_string"`
 	MCPUserName      string    `json:"datapack_ysql_username"`
 	Description      string    `json:"description,omitempty"`
+	Grant            string    `json:"grant,omitempty"`
 	MemoryCount      int         `json:"memory_count"`
 	KnowledgeCount   int         `json:"knowledge_count"`
 	LearningsCount   int         `json:"learnings_count"`
