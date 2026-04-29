@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { ArrowLeftRight, BookOpen, Database, Sparkles } from "lucide-react";
+import { Database } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { CurrentUser, Datapack } from "@/lib/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import { shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
+import { DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
 
 function formatDatapackOwnerLabel(dp: Datapack, currentUser: CurrentUser | null): string {
   if (
@@ -24,7 +25,7 @@ function formatDatapackOwnerLabel(dp: Datapack, currentUser: CurrentUser | null)
 
 /** Owned datapacks: no share grant on the list row (`grant` absent or null). */
 function datapackIsOwned(dp: Datapack): boolean {
-  return !dp.grant;
+  return dp.grant === DATAPACK_SHARE_GRANT_OWNER;
 }
 
 function filterByName(datapacks: Datapack[], q: string): Datapack[] {
@@ -33,15 +34,26 @@ function filterByName(datapacks: Datapack[], q: string): Datapack[] {
   return datapacks.filter((dp) => dp.datapack_name.toLowerCase().includes(trimmed));
 }
 
+const DESCRIPTION_PREVIEW_LEN = 120;
+
+function datapackDescriptionPreview(dp: Datapack): { preview: string; title?: string } {
+  const raw = (dp.description ?? "").trim();
+  if (!raw) {
+    return { preview: "No description yet." };
+  }
+  if (raw.length <= DESCRIPTION_PREVIEW_LEN) {
+    return { preview: raw };
+  }
+  return {
+    preview: `${raw.slice(0, DESCRIPTION_PREVIEW_LEN)}...`,
+    title: raw,
+  };
+}
+
 type Props = {
   datapacks: Datapack[];
   isLoading: boolean;
   currentUser: CurrentUser | null;
-  /** `listKnowledgeBases(datapack_name).length` per route name (filled by parent). */
-  knowledgeBaseCountByName: Record<string, number>;
-  memoryCountByName: Record<string, number>;
-  learningsCountByName: Record<string, number>;
-  knowledgeBaseCountsLoading?: boolean;
   onOpenDatapack: (datapack: Datapack) => void;
 };
 
@@ -55,22 +67,15 @@ function DatapackTile({
   dp,
   variant,
   currentUser,
-  knowledgeBaseCountByName,
-  knowledgeBaseCountsLoading,
-  memoryCountByName,
-  learningsCountByName,
   onOpenDatapack,
 }: {
   dp: Datapack;
   variant: TileVariant;
   currentUser: CurrentUser | null;
-  knowledgeBaseCountByName: Record<string, number>;
-  memoryCountByName: Record<string, number>;
-  learningsCountByName: Record<string, number>;
-  knowledgeBaseCountsLoading: boolean;
   onOpenDatapack: (datapack: Datapack) => void;
 }) {
   const grantLabel = variant === SHARED && dp.grant ? shareGrantLabel(dp.grant) : null;
+  const { preview, title } = datapackDescriptionPreview(dp);
 
   return (
     <Card
@@ -114,47 +119,18 @@ function DatapackTile({
             </p>
             <p className="text-xs text-muted-foreground mt-1 leading-snug">
               Owner:&nbsp;&nbsp;&nbsp;
-              <span className="text-muted-foreground/90 break-words">{formatDatapackOwnerLabel(dp, currentUser)}</span>
+              <span className="text-muted-foreground/90 break-words">{dp.datapack_owner_name ?? formatDatapackOwnerLabel(dp, currentUser)}</span>
             </p>
           </div>
         </div>
 
         <div className="border-t border-white/10 pt-3">
-          <div className="grid grid-cols-3 gap-1.5 min-w-0 sm:gap-2">
-            <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
-              <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
-                <Sparkles className="h-3 w-3 shrink-0 text-sky-400" aria-hidden />
-                <span title="Memory (me)">me</span>
-              </div>
-              <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
-                {memoryCountByName[dp.datapack_name] ?? 0}
-              </p>
-            </div>
-            <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
-              <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
-                <BookOpen className="h-3 w-3 shrink-0 text-emerald-400" aria-hidden />
-                <span title="Knowledge (ko)">ko</span>
-              </div>
-              <p className="mt-1 min-h-[1.75rem] flex items-center text-lg font-semibold tabular-nums tracking-tight text-white sm:min-h-[2rem] sm:text-xl">
-                {knowledgeBaseCountsLoading ? (
-                  <span className="text-base text-muted-foreground tabular-nums animate-pulse sm:text-lg">…</span>
-                ) : (
-                  knowledgeBaseCountByName[dp.datapack_name] ?? 0
-                )}
-              </p>
-            </div>
-            <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
-              <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
-                <ArrowLeftRight className="h-3 w-3 shrink-0 text-violet-400" aria-hidden />
-                <span title="Learnings (ME → KO)" className="truncate">
-                  me → ko
-                </span>
-              </div>
-              <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
-                {learningsCountByName[dp.datapack_name] ?? 0}
-              </p>
-            </div>
-          </div>
+          <p
+            className="text-sm leading-relaxed text-muted-foreground"
+            title={title}
+          >
+            {`Description: ${preview}`}
+          </p>
         </div>
       </CardContent>
     </Card>
@@ -165,10 +141,6 @@ export default function DatapacksTilesSection({
   datapacks,
   isLoading,
   currentUser,
-  knowledgeBaseCountByName,
-  memoryCountByName,
-  learningsCountByName,
-  knowledgeBaseCountsLoading = false,
   onOpenDatapack,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -232,10 +204,6 @@ export default function DatapacksTilesSection({
                     dp={dp}
                     variant={OWNED}
                     currentUser={currentUser}
-                    knowledgeBaseCountByName={knowledgeBaseCountByName}
-                    memoryCountByName={memoryCountByName}
-                    learningsCountByName={learningsCountByName}
-                    knowledgeBaseCountsLoading={knowledgeBaseCountsLoading}
                     onOpenDatapack={onOpenDatapack}
                   />
                 ))}
@@ -253,10 +221,6 @@ export default function DatapacksTilesSection({
                     dp={dp}
                     variant={SHARED}
                     currentUser={currentUser}
-                    knowledgeBaseCountByName={knowledgeBaseCountByName}
-                    memoryCountByName={memoryCountByName}
-                    learningsCountByName={learningsCountByName}
-                    knowledgeBaseCountsLoading={knowledgeBaseCountsLoading}
                     onOpenDatapack={onOpenDatapack}
                   />
                 ))}

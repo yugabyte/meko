@@ -5,11 +5,13 @@
 export const DATAPACK_SHARE_GRANT_VIEWER = "viewer" as const;
 export const DATAPACK_SHARE_GRANT_CONTRIBUTOR = "contributor" as const;
 export const DATAPACK_SHARE_GRANT_MAINTAINER = "maintainer" as const;
+export const DATAPACK_SHARE_GRANT_OWNER = "owner" as const;
 
 export const DATAPACK_SHARE_GRANTS = [
   DATAPACK_SHARE_GRANT_VIEWER,
   DATAPACK_SHARE_GRANT_CONTRIBUTOR,
   DATAPACK_SHARE_GRANT_MAINTAINER,
+  DATAPACK_SHARE_GRANT_OWNER,
 ] as const;
 
 export type DatapackShareGrant = (typeof DATAPACK_SHARE_GRANTS)[number];
@@ -18,7 +20,8 @@ export function isDatapackShareGrant(value: unknown): value is DatapackShareGran
   return (
     value === DATAPACK_SHARE_GRANT_VIEWER ||
     value === DATAPACK_SHARE_GRANT_CONTRIBUTOR ||
-    value === DATAPACK_SHARE_GRANT_MAINTAINER
+    value === DATAPACK_SHARE_GRANT_MAINTAINER ||
+    value === DATAPACK_SHARE_GRANT_OWNER
   );
 }
 

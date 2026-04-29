@@ -52,6 +52,7 @@ export type Datapack = {
   memory_count?: number;
   knowledge_count?: number;
   learnings_count?: number;
+  datapack_owner_name?: string;
   /** Set when this row is a share (recipient); `null`/omitted for datapacks you own. */
   grant?: DatapackShareGrant | null;
 };

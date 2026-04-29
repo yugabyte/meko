@@ -1,6 +1,6 @@
 /**
- * “Collective learning · live” ribbon: horizontal Conversations → Memory → Learnings → Knowledge
- * (placeholders until APIs back each stage). Shown above the datapack detail tabs.
+ * “Collective learning · live” ribbon: Conversations → Memory → Learnings → Knowledge
+ * (learnings and knowledge stacked in one column on wide layouts; full column on small screens).
  */
 import { useEffect, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
@@ -18,14 +18,14 @@ import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapack
 const toneStyles: Record<DatapackDetailTab, string> = {
   conversations:
     "border-slate-500/35 bg-gradient-to-br from-slate-900/80 via-[#121a28] to-[#0b1220]",
-  memory: "border-blue-500/40 bg-gradient-to-br from-blue-950/70 via-[#0f1729] to-[#0b1220]",
+  memories: "border-blue-500/40 bg-gradient-to-br from-blue-950/70 via-[#0f1729] to-[#0b1220]",
   learnings: "border-purple-500/40 bg-gradient-to-br from-purple-950/65 via-[#141228] to-[#0b1220]",
   knowledge: "border-emerald-900/50 bg-gradient-to-br from-emerald-950/55 via-[#0c1814] to-[#0b1220]",
 };
 
 const titleTone: Record<DatapackDetailTab, string> = {
   conversations: "text-slate-200/95",
-  memory: "text-blue-200/95",
+  memories: "text-blue-200/95",
   learnings: "text-purple-200/95",
   knowledge: "text-emerald-200/95",
 };
@@ -34,7 +34,7 @@ type StageShellProps = {
   tone: DatapackDetailTab;
   eyebrow: string;
   title: string;
-  value: number;
+  value?: number;
   delta?: string;
   subtitle: string;
   cornerBadge?: string;
@@ -51,6 +51,11 @@ type StageShellProps = {
   children?: React.ReactNode;
   /** Opens the matching detail tab when the stage is activated. */
   onSelect?: () => void;
+  /**
+   * When false, the shell does not use `flex-1` (avoids stretching in a column stack).
+   * Default true so stages in the horizontal row still share width.
+   */
+  flexGrow?: boolean;
 };
 
 function StageShell({
@@ -67,10 +72,12 @@ function StageShell({
   loadingLabel,
   children,
   onSelect,
+  flexGrow = true,
 }: StageShellProps) {
   const interactive = Boolean(onSelect);
   const shellClass = cn(
-    "relative flex min-w-0 flex-1 flex-col rounded-2xl border-2 px-4 py-4 text-left sm:min-w-[160px]",
+    "relative flex min-w-0 flex-col rounded-2xl border-2 px-4 py-4 text-left sm:min-w-[160px]",
+    flexGrow ? "flex-1" : "w-full flex-none",
     toneStyles[tone],
     interactive &&
     "cursor-pointer transition hover:brightness-[1.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50",
@@ -99,19 +106,19 @@ function StageShell({
         </span>
       ) : null}
       {eyebrow ? (
-        <div className={cn("text-[10px] font-semibold uppercase tracking-[0.18em]", titleTone[tone])}>{eyebrow}</div>
+        <div className={cn("text-center text-[10px] font-semibold uppercase tracking-[0.18em]", titleTone[tone])}>
+          {eyebrow}
+        </div>
       ) : null}
-      <div className={cn("flex min-w-0 items-start gap-2.5", eyebrow ? "mt-1" : "")}>
-        {titleIcon ? (
-          <span className="mt-0.5 inline-flex shrink-0 self-start">{titleIcon}</span>
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <span className={cn("text-base font-semibold tracking-tight text-white", titleClassName)}>{title}</span>
-            {delta ? (
-              <span className="text-xs font-medium text-blue-300/90">{delta}</span>
-            ) : null}
-          </div>
+      <div className={cn("flex w-full min-w-0 flex-col items-center gap-2", eyebrow ? "mt-1" : "")}>
+        {titleIcon ? <span className="inline-flex shrink-0">{titleIcon}</span> : null}
+        <div className="flex w-full min-w-0 flex-wrap items-baseline justify-center gap-2">
+          <span className={cn("text-center text-base font-semibold tracking-tight text-white", titleClassName)}>
+            {title}
+          </span>
+          {delta ? (
+            <span className="text-xs font-medium text-blue-300/90">{delta}</span>
+          ) : null}
         </div>
       </div>
       {loading ? (
@@ -123,9 +130,11 @@ function StageShell({
         </div>
       ) : (
         <>
-          <div className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-white">
-            {value.toLocaleString()}
-          </div>
+          {value != null ? (
+            <div className="mt-2 w-full text-center text-3xl font-bold tabular-nums tracking-tight text-white sm:text-[2rem] sm:leading-none">
+              {value.toLocaleString()}
+            </div>
+          ) : null}
           {subtitle ? (
             <p className="mt-1.5 text-xs leading-snug text-muted-foreground">{subtitle}</p>
           ) : null}
@@ -149,14 +158,25 @@ function TileSpinner({ label = "Loading" }: { label?: string }) {
   );
 }
 
-function FlowArrow({ label }: { label: string }) {
+function FlowArrow({ label, direction = "horizontal" }: { label: string; direction?: "horizontal" | "vertical" }) {
+  const vertical = direction === "vertical";
   return (
     <div
-      className="flex shrink-0 flex-col items-center justify-center gap-1 self-center px-1 py-4 lg:flex-row lg:px-2 lg:py-0"
+      className={cn(
+        "flex shrink-0 flex-col items-center justify-center gap-1 self-center px-1",
+        vertical ? "py-2" : "py-4 lg:flex-row lg:px-2 lg:py-0",
+      )}
       aria-hidden
     >
-      <ChevronRight className="hidden h-5 w-5 text-muted-foreground/70 lg:block" />
-      <div className="flex h-8 w-px flex-col bg-gradient-to-b from-border via-muted-foreground/35 to-border lg:hidden" />
+      <ChevronRight
+        className={cn("h-5 w-5 text-muted-foreground/70", vertical ? "hidden" : "hidden lg:block")}
+      />
+      <div
+        className={cn(
+          "flex h-8 w-px flex-col bg-gradient-to-b from-border via-muted-foreground/35 to-border",
+          vertical ? "" : "lg:hidden",
+        )}
+      />
       <span className="whitespace-nowrap rounded-full border border-border/80 bg-muted/25 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
@@ -263,11 +283,11 @@ export function CollectiveLearningPipeline({
       </div>
 
       <div className="px-4 py-6 sm:px-6 sm:py-8">
-        <div className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-stretch lg:gap-1">
+        <div className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center lg:gap-1">
           <StageShell
             tone={DATAPACK_DETAIL_TAB.conversations}
             eyebrow=""
-            title="conversations"
+            title="Conversations"
             value={conversationsCount}
             delta=""
             subtitle=""
@@ -280,19 +300,19 @@ export function CollectiveLearningPipeline({
             onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations) : undefined}
           />
 
-          <FlowArrow label="converts" />
+          <FlowArrow label="extract" />
 
           <StageShell
-            tone={DATAPACK_DETAIL_TAB.memory}
+            tone={DATAPACK_DETAIL_TAB.memories}
             eyebrow=""
-            title="me (memories)"
+            title="Memories"
             value={memoryCount}
             delta=""
             subtitle=""
             titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
             loading={statusLoading}
             loadingLabel="Loading memories count"
-            onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.memory) : undefined}
+            onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.memories) : undefined}
           />
 
           <FlowArrow label="extract" />
@@ -300,8 +320,8 @@ export function CollectiveLearningPipeline({
           <StageShell
             tone={DATAPACK_DETAIL_TAB.learnings}
             eyebrow=""
-            title="me->ko (learnings)"
-            value={learningsDisplay ?? learningsCount}
+            title="Learnings"
+            delta=""
             subtitle=""
             titleIcon={<ArrowLeftRight className="h-4 w-4 text-violet-400" aria-hidden />}
             loading={statusLoading || learningsCountLoading}
@@ -332,24 +352,51 @@ export function CollectiveLearningPipeline({
 
           <FlowArrow label="promote" />
 
-          <StageShell
-            tone={DATAPACK_DETAIL_TAB.knowledge}
-            eyebrow=""
-            title="ko (knowledge)"
-            value={knowledgeCount}
-            delta=""
-            subtitle=""
-            titleIcon={<BookOpen className="h-4 w-4 text-emerald-400" aria-hidden />}
-            loading={statusLoading}
-            loadingLabel="Loading knowledge count"
-            onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.knowledge) : undefined}
+          <div
+            className="relative flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border-2 border-white/25 bg-[#0c1018]/35 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6 lg:min-w-[220px]"
+            aria-labelledby="collective-learning-me-ko-label"
           >
-            <p className="text-[11px] leading-snug text-muted-foreground/95">
-              <span className="tabular-nums text-foreground/85">
-                {knowledgeChunks.toLocaleString()} chunk{knowledgeChunks === 1 ? "" : "s"}
-              </span>
-            </p>
-          </StageShell>
+            <span
+              id="collective-learning-me-ko-label"
+              className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-md bg-[#161d2e] px-3 py-0.5 text-xs font-bold tracking-normal text-violet-200/95 ring-2 ring-[#161d2e] sm:text-[17px]"
+            >
+              {`me->ko`}
+            </span>
+            <StageShell
+              flexGrow={false}
+              tone={DATAPACK_DETAIL_TAB.memories}
+              eyebrow=""
+              title="Collective Memory"
+              value={memoryCount}
+              subtitle=""
+              titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
+              loading={statusLoading}
+              loadingLabel="Loading memories count"
+              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined}
+            >
+
+            </StageShell>
+
+            <StageShell
+              flexGrow={false}
+              tone={DATAPACK_DETAIL_TAB.knowledge}
+              eyebrow=""
+              title="Shared Knowledge"
+              value={knowledgeCount}
+              delta=""
+              subtitle=""
+              titleIcon={<BookOpen className="h-4 w-4 text-emerald-400" aria-hidden />}
+              loading={statusLoading}
+              loadingLabel="Loading knowledge count"
+              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.knowledge) : undefined}
+            >
+              {/* <p className="text-[11px] leading-snug text-muted-foreground/95">
+                <span className="tabular-nums text-foreground/85">
+                  {knowledgeChunks.toLocaleString()} chunk{knowledgeChunks === 1 ? "" : "s"}
+                </span>
+              </p> */}
+            </StageShell>
+          </div>
         </div>
       </div>
 

@@ -26,7 +26,7 @@ import {
   datapackSharePath,
 } from "@/app/routes/paths";
 import { useDatapackWizardConfigureDone } from "@/lib/useDatapackWizardConfigureDone";
-import { DATAPACK_SHARE_GRANT_MAINTAINER } from "@/lib/datapackShareGrants";
+import { DATAPACK_SHARE_GRANT_MAINTAINER, DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
 import {
   DATAPACKS_LIST_UPDATED_EVENT,
   DatapackShareGrant,
@@ -113,7 +113,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [memoriesCount, setMemoriesCount] = useState(0);
   const [learningsCount, setLearningsCount] = useState(0);
   const [conversationsCount, setConversationsCount] = useState(0);
-  const [datapackGrant, setDatapackGrant] = useState<DatapackShareGrant | null | undefined>(null);
+  const [datapackGrant, setDatapackGrant] = useState<DatapackShareGrant | null>(null);
 
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName);
 
@@ -129,12 +129,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           setKnowledgeBaseCount(dp.knowledge_count ?? 0);
           setMemoriesCount(dp.memory_count ?? 0);
           setLearningsCount(dp.learnings_count ?? 0);
-          setDatapackGrant(dp.grant ?? undefined);
+          setDatapackGrant(dp.grant ?? null);
         }
       } catch (e) {
         if (!cancelled) {
           setDatapack(null);
-          setDatapackGrant(undefined);
+          setDatapackGrant(null);
           setStatusError(getApiErrorMessage(e, "Failed to load datapack."));
         }
       } finally {
@@ -240,7 +240,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const canDatapackAdminActions =
     !statusLoading &&
     datapack != null &&
-    (datapackGrant == null || datapackGrant === DATAPACK_SHARE_GRANT_MAINTAINER);
+    (datapackGrant === DATAPACK_SHARE_GRANT_MAINTAINER || datapackGrant === DATAPACK_SHARE_GRANT_OWNER);
 
   const handleDatapackEditSave = async ({ name, description }: { name: string; description: string }) => {
     const trimmedName = name.trim();
@@ -291,7 +291,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     setKnowledgeBaseCount(next.knowledge_count ?? 0);
     setMemoriesCount(next.memory_count ?? 0);
     setLearningsCount(next.learnings_count ?? 0);
-    setDatapackGrant(next.grant ?? undefined);
+    setDatapackGrant(next.grant ?? null);
     dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
     toast({
       title: "Datapack updated",

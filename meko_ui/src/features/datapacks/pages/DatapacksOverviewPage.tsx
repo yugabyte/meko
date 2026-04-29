@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Plus, Database, Sparkles, Book, ChevronDown, ChevronUp, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,12 +13,11 @@ import {
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
   listDatapacks,
-  listKnowledgeBases,
   type CurrentUser,
   type Datapack,
 } from "@/lib/mekoApi";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
-import { datapackDetailPath, datapackNewConfigurePath, datapackSharePath, ROUTES } from "@/app/routes/paths";
+import { datapackDetailPath, datapackNewConfigurePath, datapackSharePath } from "@/app/routes/paths";
 import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTilesSection";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 
@@ -28,16 +27,11 @@ type OverviewProps = {
 
 export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
   const navigate = useNavigate();
-  const location = useLocation();
   const [datapacks, setDatapacks] = useState<Datapack[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isProvisioningDefaultDatapack, setIsProvisioningDefaultDatapack] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isExplanationExpanded, setIsExplanationExpanded] = useState(true);
-  const [mekoCountsByName, setMekoCountsByName] = useState<Record<string, { knowledge_count: number, memory_count: number, learnings_count: number }>>(
-    {},
-  );
-  const [mekoCountsLoading, setMekoCountsLoading] = useState(false);
   const [sharePickerOpen, setSharePickerOpen] = useState(false);
 
   useEffect(() => {
@@ -71,55 +65,6 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refreshDatapacks);
     return () => removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refreshDatapacks);
   }, []);
-
-  useEffect(() => {
-    // Overview stays mounted while visiting Home/Observe (hidden). Re-fetch KB counts
-    // whenever we land on `/datapacks` again, even if `datapacks` state is unchanged.
-    const onOverview =
-      location.pathname === ROUTES.datapacks || location.pathname === `${ROUTES.datapacks}/`;
-    if (!onOverview) {
-      return;
-    }
-
-    if (datapacks.length === 0) {
-      setMekoCountsByName({});
-      setMekoCountsLoading(false);
-      return;
-    }
-   
-    let cancelled = false;
-    setMekoCountsLoading(true);
-
-    void Promise.all(
-      datapacks.map((dp) =>
-        listKnowledgeBases(dp.datapack_name)
-          .then((kbs) => ({
-            name: dp.datapack_name,
-            count: kbs.length,
-            memory_count: dp.memory_count ?? 0,
-            learnings_count: dp.learnings_count ?? 0,
-          }))
-          .catch(() => ({ name: dp.datapack_name, count: 0, memory_count: 0, learnings_count: 0 })),
-      ),
-    ).then((rows) => {
-      if (cancelled) return;
-      const next: Record<string, { knowledge_count: number, memory_count: number, learnings_count: number }> = {};
-      for (const row of rows) {
-        next[row.name] = {
-          knowledge_count: row.count,
-          memory_count: row.memory_count ?? 0,
-          learnings_count: row.learnings_count ?? 0,
-        };
-      }
-      setMekoCountsByName(next);
-      setMekoCountsLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-      setMekoCountsLoading(false);
-    };
-  }, [datapacks, location.pathname]);
 
   useEffect(() => {
     if (isLoading || datapacks.length > 0) {
@@ -172,30 +117,6 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
 
   const showProvisioningScreen =
     !isLoading && datapacks.length === 0 && isProvisioningDefaultDatapack;
-
-  const knowledgeBaseCountByName = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const [name, v] of Object.entries(mekoCountsByName)) {
-      out[name] = v.knowledge_count;
-    }
-    return out;
-  }, [mekoCountsByName]);
-
-  const memoryCountByName = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const [name, v] of Object.entries(mekoCountsByName)) {
-      out[name] = v.memory_count;
-    }
-    return out;
-  }, [mekoCountsByName]);
-
-  const learningsCountByName = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const [name, v] of Object.entries(mekoCountsByName)) {
-      out[name] = v.learnings_count;
-    }
-    return out;
-  }, [mekoCountsByName]);
 
   if (showProvisioningScreen) {
     return (
@@ -348,10 +269,6 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           datapacks={datapacks}
           isLoading={isLoading}
           currentUser={currentUser}
-          knowledgeBaseCountByName={knowledgeBaseCountByName}
-          memoryCountByName={memoryCountByName}
-          learningsCountByName={learningsCountByName}
-          knowledgeBaseCountsLoading={mekoCountsLoading}
           onOpenDatapack={(dp) => navigate(datapackDetailPath(dp.datapack_name))}
         />
       </main>

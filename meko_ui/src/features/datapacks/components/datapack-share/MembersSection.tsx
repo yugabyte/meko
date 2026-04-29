@@ -110,18 +110,23 @@ function MemberRow({
       {shareGrantLabel(member.grant)}
     </div>
   ) : (
-    <Select value={member.grant} onValueChange={(v) => void handleGrantChange(v as DatapackShareGrant)} disabled={grantBusy}>
-      <SelectTrigger className="h-9 w-[min(100%,11rem)] min-w-[148px] text-xs bg-background/80 sm:w-44">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {SHARE_INVITE_ROLES.map((r) => (
-          <SelectItem key={r.id} value={r.id}>
-            {r.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div
+      className="flex h-9 min-w-[80px] items-center rounded-md border border-border bg-muted/30 px-3 text-xs text-muted-foreground">
+      {shareGrantLabel(member.grant as DatapackShareGrant)}
+    </div>
+    /* TODO: We will addd back dropdown for enabling owner to change permissions */
+    // <Select value={member.grant} onValueChange={(v) => void handleGrantChange(v as DatapackShareGrant)} disabled={grantBusy}>
+    //   <SelectTrigger className="h-9 w-[min(100%,11rem)] min-w-[148px] text-xs bg-background/80 sm:w-44">
+    //     <SelectValue />
+    //   </SelectTrigger>
+    //   <SelectContent>
+    //     {SHARE_INVITE_ROLES.map((r) => (
+    //       <SelectItem key={r.id} value={r.id}>
+    //         {r.label}
+    //       </SelectItem>
+    //     ))}
+    //   </SelectContent>
+    // </Select>
   );
 
   return (
@@ -160,9 +165,10 @@ function MemberRow({
             aria-label={`Remove ${member.user_name || "member"}`}
             onClick={() => void handleRemove()}
           >
-            <span className="text-lg leading-none" aria-hidden>
+            {/* TODO: We will add back the remove icon for enabling owner to remove members */}
+            {/* <span className="text-lg leading-none" aria-hidden>
               {removeBusy ? "…" : "×"}
-            </span>
+            </span> */}
           </Button>
         )}
       </div>
