@@ -9,19 +9,20 @@ CREATE TYPE meko_system.account_type AS ENUM ('free', 'pro', 'enterprise');
  * This table will store the organization name and id.
  */
 CREATE TABLE IF NOT EXISTS meko_system.organizations (
-    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_name          VARCHAR NOT NULL UNIQUE,
-    email_domain      VARCHAR NOT NULL UNIQUE,
-    created_by_uid    UUID,                      -- user id in the users table that created this entry
-    created_at        TIMESTAMPTZ DEFAULT NOW(),
-    updated_at        TIMESTAMPTZ DEFAULT NOW()
+    id                    UUID DEFAULT gen_random_uuid(),
+    org_name              VARCHAR NOT NULL UNIQUE,
+    email_domain          VARCHAR NOT NULL UNIQUE,
+    created_by_user_id    UUID,
+    created_at            TIMESTAMPTZ DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (id HASH)
 );
 
 /*
  * The users table for each new user signing up.
  */
 CREATE TABLE IF NOT EXISTS meko_system.users (
-    user_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             UUID DEFAULT gen_random_uuid(),
     user_email          VARCHAR NOT NULL,
     user_first_name     VARCHAR NOT NULL,
     user_last_name      VARCHAR NOT NULL,
@@ -32,12 +33,14 @@ CREATE TABLE IF NOT EXISTS meko_system.users (
     email_verified_at   TIMESTAMPTZ,
     has_completed_onboarding BOOLEAN NOT NULL DEFAULT FALSE,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ DEFAULT NOW()
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (user_id HASH)
 ) SPLIT INTO 12 TABLETS;
 
--- Create a unique index on email make them unique and to allow lookups by email
+-- Unique index on user_email to enforce uniqueness and enable lookups by email.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON meko_system.users(user_email);
 
+-- Unique index on cognito_sub to enforce one user per Cognito identity and enable lookups by sub during auth.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cognito_sub ON meko_system.users(cognito_sub);
 
 -- **karthik's feedback:**
@@ -54,7 +57,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cognito_sub ON meko_system.users(cog
 -- cannot drop ysql_hostname and ysql_port as it being used in datapack_service.create() method.
 
 CREATE TABLE IF NOT EXISTS meko_system.yb_universes (
-    universe_id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    universe_id                     UUID DEFAULT gen_random_uuid(),
     yb_universe_uuid                UUID,
     yb_universe_name                VARCHAR NOT NULL,
     ysql_hostname                   VARCHAR NOT NULL,
@@ -64,7 +67,8 @@ CREATE TABLE IF NOT EXISTS meko_system.yb_universes (
     num_datapacks_created           INT NOT NULL DEFAULT 0,          -- number of datapacks created so far in this universe
     max_datapacks                   INT NOT NULL DEFAULT 1000,       -- maximum number of datapacks in this universe
     created_at                      TIMESTAMPTZ DEFAULT NOW(),
-    updated_at                      TIMESTAMPTZ DEFAULT NOW()
+    updated_at                      TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (universe_id HASH)
 );
 
 
@@ -125,10 +129,10 @@ CREATE TABLE IF NOT EXISTS meko_system.agents (
 
 /*
  * List of datapacks that each account has created. Only shows the datapacks owned by this account. In most cases,
- * at the time of creation, the ownership is assigned to the account creating it. In future, we could allow a flow
- * where ownership can be transferred.
+ * at the time of creation, the ownership is assigned to the account creating it. In future, we could allow a flow where ownership can be transferred.
+ TODO: add agent info column to the table
  */
-CREATE TABLE IF NOT EXISTS meko_system.datapacks (                -- todo: add agent info column to the table
+CREATE TABLE IF NOT EXISTS meko_system.datapacks (
     datapack_id                         UUID DEFAULT gen_random_uuid(),
     user_id                             UUID NOT NULL,            -- owning user id for this datapack
     created_by_agent_id                 VARCHAR,                  -- agent id who created this datapack, maps to agents.agent_id
@@ -144,6 +148,10 @@ CREATE TABLE IF NOT EXISTS meko_system.datapacks (                -- todo: add a
     CONSTRAINT uq_datapacks_user_name UNIQUE (user_id, datapack_name)
 ) SPLIT INTO 12 TABLETS;
 
+
+-- Covering index for per-user datapack lookups: INCLUDE (datapack_name) lets
+-- list-by-user queries return the name straight from the index without a
+-- main-table fetch. UNIQUE since (user_id, datapack_id) is one-to-one.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_datapacks_user_id ON meko_system.datapacks(user_id HASH, datapack_id ASC) INCLUDE (datapack_name);
 
 
@@ -170,7 +178,7 @@ CREATE TABLE IF NOT EXISTS meko_system.knowledge_bases (
     created_at              TIMESTAMPTZ DEFAULT NOW(),
     updated_at              TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (datapack_id HASH, rag_source_id ASC)
-);
+) SPLIT INTO 12 TABLETS;
 
 
 -- **Datapack sharing flow**:
@@ -198,13 +206,13 @@ CREATE TABLE IF NOT EXISTS meko_system.knowledge_bases (
  * Defines the list of datapacks that a user's agent(s) has access to.
  */
 CREATE TABLE IF NOT EXISTS meko_system.agent_access (
-    user_id          UUID NOT NULL,
+    user_id             UUID NOT NULL,
     agent_id            VARCHAR NOT NULL,
     datapack_id         UUID NOT NULL,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY ((user_id, agent_id) HASH, datapack_id ASC)
-);
+) SPLIT INTO 12 TABLETS;
 
 CREATE INDEX IF NOT EXISTS idx_agent_access_datapack_id 
     ON meko_system.agent_access (datapack_id HASH, user_id ASC, agent_id ASC);
@@ -229,7 +237,7 @@ CREATE TYPE meko_system.datapack_shared_status AS ENUM ('active', 'inactive');
 -- datapack_id removed; the datapack relationship is captured in the object tables themselves
 
 CREATE TABLE IF NOT EXISTS meko_system.agent_access_permissions (
-    user_id          UUID NOT NULL,
+    user_id             UUID NOT NULL,
     agent_id            VARCHAR NOT NULL,
     datapack_id         UUID NOT NULL,
     object_type         meko_system.access_object_type NOT NULL,
@@ -241,14 +249,14 @@ CREATE TABLE IF NOT EXISTS meko_system.agent_access_permissions (
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY  ((user_id , agent_id) HASH, datapack_id ASC, object_type ASC) -- TODO: Removed object_id from the primary key. It will be re-added when we have granular access control.
-);
+) SPLIT INTO 12 TABLETS;
 
 
 -- Datapack sharing invites
 CREATE TYPE meko_system.invite_status AS ENUM ('pending', 'accepted', 'declined', 'revoked');
 
 CREATE TABLE IF NOT EXISTS meko_system.datapack_invites (
-    invite_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invite_id            UUID DEFAULT gen_random_uuid(),
     datapack_id          UUID NOT NULL,
     owner_user_id        UUID NOT NULL,
     recipient_email      VARCHAR NOT NULL,
@@ -256,9 +264,11 @@ CREATE TABLE IF NOT EXISTS meko_system.datapack_invites (
     grant_role           VARCHAR NOT NULL,
     status               meko_system.invite_status NOT NULL DEFAULT 'pending',
     created_at           TIMESTAMPTZ DEFAULT NOW(),
-    updated_at           TIMESTAMPTZ DEFAULT NOW()
+    updated_at           TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (invite_id HASH)
 );
 
+-- TODO: Remove this. We should be search via owner_user_id, not email.
 CREATE INDEX IF NOT EXISTS idx_invites_recipient_email_status
     ON meko_system.datapack_invites (recipient_email, status)
     WHERE status = 'pending';
@@ -273,23 +283,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_datapack_email_pending
 
 -- Langfuse mappings
 CREATE TABLE IF NOT EXISTS meko_system.langfuse_org_mapping (
-    user_id              UUID PRIMARY KEY,
+    user_id                 UUID NOT NULL,
     langfuse_org_id         TEXT NOT NULL UNIQUE,
     langfuse_org_name       TEXT NOT NULL,
     langfuse_org_public_key TEXT NOT NULL,
     langfuse_org_secret_key TEXT NOT NULL,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id HASH)
 );
 
 CREATE TABLE IF NOT EXISTS meko_system.langfuse_project_mapping (
-    datapack_id             UUID PRIMARY KEY,
+    datapack_id             UUID NOT NULL,
     langfuse_project_id     TEXT NOT NULL UNIQUE,
     langfuse_project_name   TEXT NOT NULL,
     langfuse_public_key     TEXT NOT NULL,
     langfuse_secret_key     TEXT NOT NULL,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (datapack_id HASH)
 );
 
 
@@ -298,14 +310,15 @@ TODO: check if needed
 **************/
 -- Tier configuration
 CREATE TABLE IF NOT EXISTS meko_system.tier_config (
-    tier             meko_system.account_type PRIMARY KEY,
+    tier             meko_system.account_type NOT NULL,
     mcp_image        TEXT NOT NULL,
     rag_image        TEXT NOT NULL,
     langfuse_image   TEXT NOT NULL,
     mcp_replicas     INT NOT NULL DEFAULT 1,
     rag_replicas     INT NOT NULL DEFAULT 1,
     created_at       TIMESTAMPTZ DEFAULT NOW(),
-    updated_at       TIMESTAMPTZ DEFAULT NOW()
+    updated_at       TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (tier HASH)
 );
 
 INSERT INTO meko_system.tier_config (tier, mcp_image, rag_image, langfuse_image, mcp_replicas, rag_replicas)
