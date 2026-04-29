@@ -301,20 +301,27 @@ export default function MemoryPromotionPanel({
                       <MemoryRowBody memory={m} />
                     </div>
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-white"
-                        onClick={() => promoteOne(m.id)}
-                        disabled={promoting}
-                      >
-                        {promoting && promotingId === m.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
-                        ) : (
-                          <ArrowUpToLine className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                        )}
-                        Promote to Knowledge
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex">
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-white"
+                              onClick={() => promoteOne(m.id)}
+                              disabled={promoting || !isPromoteAllowed}
+                            >
+                              {promoting && promotingId === m.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
+                              ) : (
+                                <ArrowUpToLine className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                              )}
+                              Promote to Knowledge
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        {!isPromoteAllowed && <TooltipContent side="top">You don't have permission to promote to knowledge</TooltipContent>}
+                      </Tooltip>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <span className="inline-flex">

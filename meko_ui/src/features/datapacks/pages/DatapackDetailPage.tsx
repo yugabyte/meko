@@ -320,6 +320,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           description={datapack?.description}
           displayId={displayId}
           createdLabel={createdLabel}
+          datapackGrant={datapackGrant}
           statusLoading={statusLoading}
           actions={
             <>

@@ -2,9 +2,10 @@ import { useMemo, useState } from "react";
 import { Database } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { CurrentUser, Datapack } from "@/lib/mekoApi";
-import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
+import { formatDatapackCreatedAtUtc, sortDatapacksByCreatedAtDesc } from "@/lib/datapackDateFormat";
 import { shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
 
@@ -62,6 +63,19 @@ const SHARED = "shared";
 const OWNED = "owned";
 
 type TileVariant = "owned" | "shared";
+
+type ScopeTab = "all" | "owned" | "shared";
+
+function emptyCopy(scope: ScopeTab, searchActive: boolean): string {
+  if (searchActive) {
+    if (scope === "owned") return "No owned datapacks match your search.";
+    if (scope === "shared") return "No shared datapacks match your search.";
+    return "No datapacks match your search.";
+  }
+  if (scope === "owned") return "You don't have any datapacks you own yet.";
+  if (scope === "shared") return "You don't have any shared datapacks yet.";
+  return "No datapacks to show.";
+}
 
 function DatapackTile({
   dp,
@@ -144,6 +158,7 @@ export default function DatapacksTilesSection({
   onOpenDatapack,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [scopeTab, setScopeTab] = useState<ScopeTab>("all");
 
   const { ownedDatapacks, sharedDatapacks } = useMemo(() => {
     const owned: Datapack[] = [];
@@ -157,26 +172,44 @@ export default function DatapacksTilesSection({
 
   const filteredOwned = useMemo(() => filterByName(ownedDatapacks, searchQuery), [ownedDatapacks, searchQuery]);
   const filteredShared = useMemo(() => filterByName(sharedDatapacks, searchQuery), [sharedDatapacks, searchQuery]);
+  const filteredAll = useMemo(() => {
+    const filtered = filterByName(datapacks, searchQuery);
+    return sortDatapacksByCreatedAtDesc(filtered);
+  }, [datapacks, searchQuery]);
 
-  const noSearchResults =
-    !isLoading &&
-    datapacks.length > 0 &&
-    filteredOwned.length === 0 &&
-    filteredShared.length === 0 &&
-    searchQuery.trim() !== "";
+  const visibleDatapacks = useMemo(() => {
+    if (scopeTab === "owned") return filteredOwned;
+    if (scopeTab === "shared") return filteredShared;
+    return filteredAll;
+  }, [scopeTab, filteredOwned, filteredShared, filteredAll]);
 
-  const showSharedSection = filteredShared.length > 0;
+  const searchActive = searchQuery.trim() !== "";
+  const listEmpty = !isLoading && datapacks.length > 0 && visibleDatapacks.length === 0;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h2 className="text-lg font-semibold text-foreground">Your datapacks</h2>
+      <h2 className="text-lg font-semibold text-foreground">Your datapacks</h2>
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <Tabs value={scopeTab} onValueChange={(v) => setScopeTab(v as ScopeTab)} className="w-full sm:w-auto">
+          <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-lg bg-muted p-1 sm:inline-flex sm:w-auto">
+            <TabsTrigger value="all" className="px-3 py-1.5 text-sm">
+              All
+            </TabsTrigger>
+            <TabsTrigger value="owned" className="px-3 py-1.5 text-sm">
+              Owned
+            </TabsTrigger>
+            <TabsTrigger value="shared" className="px-3 py-1.5 text-sm">
+              Shared
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
         <Input
           type="search"
           placeholder="Search by name…"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="max-w-md bg-[#0E1525] border-border text-foreground placeholder:text-muted-foreground"
+          className="h-9 w-full max-w-[200px] shrink-0 bg-[#0E1525] border-border text-foreground placeholder:text-muted-foreground sm:max-w-[220px]"
           aria-label="Search datapacks by name"
         />
       </div>
@@ -185,48 +218,19 @@ export default function DatapacksTilesSection({
         <p className="text-sm text-muted-foreground">Loading datapacks…</p>
       ) : datapacks.length === 0 ? (
         <p className="text-sm text-muted-foreground">No datapacks yet. Add a datapack to get started.</p>
-      ) : noSearchResults ? (
-        <p className="text-sm text-muted-foreground">No datapacks match your search.</p>
+      ) : listEmpty ? (
+        <p className="text-sm text-muted-foreground">{emptyCopy(scopeTab, searchActive)}</p>
       ) : (
-        <div className="space-y-8">
-          <div className="space-y-4">
-            {filteredOwned.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {searchQuery.trim()
-                  ? "No owned datapacks match your search."
-                  : "You don't have any datapacks you own yet."}
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredOwned.map((dp) => (
-                  <DatapackTile
-                    key={dp.datapack_id}
-                    dp={dp}
-                    variant={OWNED}
-                    currentUser={currentUser}
-                    onOpenDatapack={onOpenDatapack}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-
-          {showSharedSection ? (
-            <div className="space-y-4 border-t border-border pt-6">
-              <h2 className="text-lg font-semibold text-foreground">Shared datapacks</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredShared.map((dp) => (
-                  <DatapackTile
-                    key={dp.datapack_id}
-                    dp={dp}
-                    variant={SHARED}
-                    currentUser={currentUser}
-                    onOpenDatapack={onOpenDatapack}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : null}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {visibleDatapacks.map((dp) => (
+            <DatapackTile
+              key={dp.datapack_id}
+              dp={dp}
+              variant={datapackIsOwned(dp) ? OWNED : SHARED}
+              currentUser={currentUser}
+              onOpenDatapack={onOpenDatapack}
+            />
+          ))}
         </div>
       )}
     </div>

@@ -7,9 +7,12 @@ import { Database } from "lucide-react";
 import { ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
+import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
+import { DatapackShareGrant } from "@/lib/mekoApi";
 
 type Props = {
   datapackName: string;
+  datapackGrant: DatapackShareGrant | null;
   /** Shown below the title; empty or missing hides the block. */
   description?: string | null;
   displayId: string;
@@ -21,6 +24,7 @@ type Props = {
 
 export function DatapackDetailHero({
   datapackName,
+  datapackGrant,
   description,
   displayId,
   createdLabel,
@@ -106,7 +110,14 @@ export function DatapackDetailHero({
               <span className="font-medium text-foreground/80">Created </span>
               <span>{statusLoading ? "…" : createdLabel}</span>
             </div>
+            <div>
+              <span className="font-medium text-foreground/80">Access </span>
+              <span>
+                {datapackGrant != null ? formatDatapackShareGrantCamelCase(datapackGrant) : "-"}
+              </span>
+            </div>
           </div>
+
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>

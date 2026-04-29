@@ -1,15 +1,15 @@
 /**
- * MCP client install guide: tabs for Claude Code, Claude Desktop, and Cursor with copyable shell steps.
+ * MCP client install guide: Claude Code, Claude Desktop, Cursor, and manual MCP install with copyable shell steps.
  * Shared by the Home “Install” page and the datapack configure wizard’s Install step.
  */
 import { useState } from "react";
-import { Check, Copy, Code2, Monitor, MousePointer2 } from "lucide-react";
+import { Check, Copy, Code2, Monitor, MousePointer2, Terminal } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
 
-type IdeTab = "claude_code" | "claude_desktop" | "cursor";
+type IdeTab = "claude_code" | "claude_desktop" | "cursor" | "manual_mcp";
 
 type InstallStep = {
   title: string;
@@ -18,40 +18,121 @@ type InstallStep = {
   langLabel?: string;
 };
 
-const CLAUDE_CODE_INSTALL_STEP: InstallStep = {
-  title: "Claude Code",
+/** Shared first step for Claude Code, Claude Desktop, and Cursor tabs (npx requires Node 18+). */
+const SHARED_NVM_NODE_PREREQ_STEP: InstallStep = {
+  title: "Install NVM and Node.js",
   description:
-    "Run the installer from the directory that contains it. This configures the MCP server connection for Claude Code, sets environment variables, and installs the skills plugin into the agent.",
-  code: 'node installer/bin/create-meko-setup.mjs --client claude-code --url <meko-mcp-url> --api-key "<meko-server-api-key>"',
+    "Install Node Version Manager (nvm) so you can run npx in the next step. Use **Node.js 18.0 or newer** (the current LTS is recommended). If `nvm` is not found after install, close the terminal and open a new one, or adjust the source line to match your shell profile.",
+  code: [
+    "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash",
+    "source ~/.$(basename $SHELL)rc",
+    "nvm install --lts",
+    "nvm use --lts",
+    "node -v   # should print v18.x or newer",
+  ].join("\n"),
   langLabel: "bash",
 };
 
-const CLAUDE_DESKTOP_INSTALL_STEP: InstallStep = {
-  title: "Claude Desktop",
-  description:
-    "If you use the Claude desktop app instead of Claude Code, use this command with your MCP URL and API key from the Datapacks page (same installer path as above).",
-  code: 'node installer/bin/create-meko-setup.mjs --client claude-desktop --url <mcp-server-url> --api-key "<mcp-server-api-key>"',
-  langLabel: "bash",
-};
+const CLAUDE_CODE_INSTALL_STEPS: InstallStep[] = [
+  SHARED_NVM_NODE_PREREQ_STEP,
+  {
+    title: "Install Meko MCP for Claude Code",
+    description:
+      "Run once with your MCP URL and API key from the Datapacks page (replace the placeholders before running).",
+    code: "npx @yugabytedb/meko-mcp --client claude --url <mcp-server-url> --api-key <mcp-server-api-key>",
+    langLabel: "bash",
+  },
+];
 
-const CURSOR_INSTALL_STEP: InstallStep = {
-  title: "Run the Cursor installer",
-  description:
-    "One command registers the MCP server with Cursor using your MCP URL and API key from the Datapacks page. Replace the placeholders, then run from the directory that contains the installer (same layout as the Claude tabs).",
-  code: 'node installer/bin/create-meko-setup.mjs --client cursor --url <mcp-server-url> --api-key "<mcp-server-api-key>"',
-  langLabel: "bash",
-};
+const CLAUDE_DESKTOP_INSTALL_STEPS: InstallStep[] = [
+  SHARED_NVM_NODE_PREREQ_STEP,
+  {
+    title: "Install Meko MCP for Claude Desktop",
+    description:
+      "Run once with your MCP URL and API key from the Datapacks page (replace the placeholders before running).",
+    code: "npx @yugabytedb/meko-mcp --client claude-desktop --url <mcp-server-url> --api-key <mcp-server-api-key>",
+    langLabel: "bash",
+  },
+];
+
+const CURSOR_INSTALL_STEPS: InstallStep[] = [
+  SHARED_NVM_NODE_PREREQ_STEP,
+  {
+    title: "Install Meko MCP for Cursor",
+    description:
+      "Run once with your MCP URL and API key from the Datapacks page (replace the placeholders before running).",
+    code: "npx @yugabytedb/meko-mcp --client cursor --url <mcp-server-url> --api-key <mcp-server-api-key>",
+    langLabel: "bash",
+  },
+];
+
+const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
+  {
+    title: "Install NVM",
+    description:
+      "Install Node Version Manager so you can run the tooling used to register the MCP server with your assistant.",
+    code: "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash",
+    langLabel: "bash",
+  },
+  {
+    title: "Load NVM in your shell",
+    description:
+      "Source your shell configuration so nvm is available in the current session (adjust the file if you use a custom profile).",
+    code: "source ~/.$(basename $SHELL)rc",
+    langLabel: "bash",
+  },
+  {
+    title: "Integrate MCP server",
+    description:
+      "Run mcp-add with your Meko MCP URL and API keys from the Datapacks page. Replace placeholders before executing.",
+    code: [
+      'echo "### Installing the latest Node.js ###"',
+      "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash",
+      "source ~/.$(basename $SHELL)rc",
+      "nvm install --lts",
+      'echo "### Registering the Meko MCP server ###"',
+      "npx mcp-add@latest \\",
+      "  --name meko \\",
+      "  --type stdio \\",
+      "  --command 'npx -y mcp-remote <mcp-server-url> --allow-http' \\",
+      "  --env 'MEKO_API_KEY=<mcp-server-api-key>' \\",
+      "  --headers 'MEKO_API_KEY=<mcp-server-api-key>' \\",
+      "  --scope global \\",
+      "  --clients 'claude desktop,claude code,cursor,codex,vscode'",
+    ].join("\n"),
+    langLabel: "bash",
+  },
+  {
+    title: "Integrate skills package with the AI agent",
+    description:
+      "Integrate the skills package with your AI agent to learn how to use Meko's MCP tools for memory, knowledge, and more.",
+    code: [
+      "git clone https://github.com/yugabyte/meko-mcp-server.git",
+      "cd meko-mcp-server",
+      "git checkout add-skills",
+      "npx skills add ./skills -g",
+    ].join("\n"),
+    langLabel: "bash",
+  },
+  {
+    title: "Select skills at the prompt",
+    description:
+      "When prompted to select the skills to install, select both meko-mcp-tools and ysql.",
+  },
+];
 
 const INSTALL_GUIDE: Record<IdeTab, InstallStep[]> = {
-  claude_code: [CLAUDE_CODE_INSTALL_STEP],
-  claude_desktop: [CLAUDE_DESKTOP_INSTALL_STEP],
-  cursor: [CURSOR_INSTALL_STEP],
+  claude_code: CLAUDE_CODE_INSTALL_STEPS,
+  claude_desktop: CLAUDE_DESKTOP_INSTALL_STEPS,
+  cursor: CURSOR_INSTALL_STEPS,
+  manual_mcp: MANUAL_MCP_INSTALL_STEPS,
 };
 
 const TAB_META: { id: IdeTab; label: string; icon: typeof Code2 }[] = [
   { id: "claude_code", label: "Claude Code", icon: Code2 },
   { id: "claude_desktop", label: "Claude Desktop", icon: Monitor },
   { id: "cursor", label: "Cursor", icon: MousePointer2 },
+  { id: "manual_mcp", label: "Manual MCP Install", icon: Terminal },
 ];
 
 function CodeBlock({
@@ -159,7 +240,7 @@ type McpInstallGuideProps = {
 };
 
 /**
- * MCP install steps (Claude Code / Claude Desktop / Cursor).
+ * MCP install steps (Claude Code / Claude Desktop / Cursor / Manual MCP Install).
  */
 export function McpInstallGuide({ className }: McpInstallGuideProps) {
   return (

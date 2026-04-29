@@ -239,6 +239,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                     <Button
                       variant="secondary"
                       className="gap-2 text-sm bg-white/10 hover:bg-white/20 text-white border-0"
+                      onClick={() => window.open("https://mekodata.netlify.app/", "_blank")}
                     >
                       <Book className="w-4 h-4" />
                       Documentation
@@ -246,6 +247,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                     <Button
                       variant="ghost"
                       className="gap-2 text-sm text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
+                      onClick={() => window.open("https://mekodata.netlify.app/examples/", "_blank")}
                     >
                       View Examples
                     </Button>

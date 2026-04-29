@@ -16,6 +16,19 @@ export const DATAPACK_SHARE_GRANTS = [
 
 export type DatapackShareGrant = (typeof DATAPACK_SHARE_GRANTS)[number];
 
+/**
+ * Display a grant in lowerCamelCase: the first segment is lowercased; further segments
+ * (split on `_`, `-`, or spaces) are appended with an initial capital (e.g. `SOME_ROLE` → `someRole`).
+ * Single-token API values like `maintainer` stay `maintainer`.
+ */
+export function formatDatapackShareGrantCamelCase(grant: string): string {
+  if (grant === DATAPACK_SHARE_GRANT_OWNER) return "Owner";
+  if (grant === DATAPACK_SHARE_GRANT_MAINTAINER) return "Maintainer";
+  if (grant === DATAPACK_SHARE_GRANT_CONTRIBUTOR) return "Contributor";
+  if (grant === DATAPACK_SHARE_GRANT_VIEWER) return "Viewer";
+  return grant;
+}
+
 export function isDatapackShareGrant(value: unknown): value is DatapackShareGrant {
   return (
     value === DATAPACK_SHARE_GRANT_VIEWER ||

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
 
 function buildMekoSetupCommand(mcpServerUrl: string, mcpApiKey: string): string {
-  return `node installer/bin/create-meko-setup.mjs --client <client-name> --url ${(mcpServerUrl)} --api-key <mcp-api-key>`;
+  return `npx @yugabytedb/meko-mcp --client <client-name> --url ${(mcpServerUrl)} --api-key <mcp-api-key>`;
 }
 
 type Props = {
