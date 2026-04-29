@@ -554,6 +554,11 @@ export type DatapackConversation = {
 export type ListDatapackConversationsResponse = {
   datapack_id: string;
   datapack_name: string;
+  /** Langfuse project_id resolved from meko_system.langfuse_project_mapping
+   *  for this datapack. Empty when no Langfuse mapping exists yet. The UI
+   *  uses it to build per-conversation deep links into the embedded
+   *  Observe iframe (/observe/project/<pid>/sessions/<sid>). */
+  langfuse_project_id?: string;
   limit: number;
   offset: number;
   conversations: DatapackConversation[];

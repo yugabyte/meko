@@ -56,14 +56,21 @@ func (r *RagRepo) SourceExists(sourceID string) (bool, error) {
 	return exists, nil
 }
 
-func (r *RagRepo) CreateSource(sourceURI string) (string, error) {
+// CreateSource registers a new dist_rag source bound to a tenant.
+// tenantID is required: dist_rag.create_source defaults it to the
+// all-zeros UUID, which would break /knowledge-bases/{counts,documents}
+// (those endpoints filter by tenant_id = datapack_id).
+func (r *RagRepo) CreateSource(sourceURI, tenantID string) (string, error) {
 	var sourceID string
 	err := r.db.QueryRow(
-		`SELECT dist_rag.create_source(r_source_uri := $1)`,
-		sourceURI,
+		`SELECT dist_rag.create_source(
+			r_source_uri := $1,
+			r_tenant_id  := $2::UUID
+		)`,
+		sourceURI, tenantID,
 	).Scan(&sourceID)
 	if err != nil {
-		return "", fmt.Errorf("create_source(%s): %w", sourceURI, err)
+		return "", fmt.Errorf("create_source(uri=%s, tenant=%s): %w", sourceURI, tenantID, err)
 	}
 	return sourceID, nil
 }

@@ -13,12 +13,14 @@
 // a second roundtrip just to render "Showing X–Y of Z".
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, MessageSquare } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { ExternalLink, Loader2, MessageSquare } from "lucide-react";
 import {
   getApiErrorMessage,
   listDatapackConversations,
   type DatapackConversation,
 } from "@/lib/mekoApi";
+import { ROUTES } from "@/app/routes/paths";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import DatapackPanelShell from "@/features/datapacks/components/datapack-detail/DatapackPanelShell";
 import DatapackPanelPagination from "@/features/datapacks/components/datapack-detail/DatapackPanelPagination";
@@ -36,7 +38,14 @@ type Props = {
 };
 
 export default function ConversationsPanel({ datapackName, total, className }: Props) {
+  const navigate = useNavigate();
   const [conversations, setConversations] = useState<DatapackConversation[]>([]);
+  /** Langfuse project_id for this datapack. Comes from the conversations
+   *  list response (server-side join through langfuse_project_mapping).
+   *  Empty until the first successful fetch resolves with a mapping —
+   *  in that case the per-row "Open in Observe" button is hidden because
+   *  there is nowhere to deep-link to. */
+  const [langfuseProjectId, setLangfuseProjectId] = useState<string>("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(false);
@@ -63,6 +72,7 @@ export default function ConversationsPanel({ datapackName, total, className }: P
         );
         if (signal?.aborted) return;
         setConversations(resp.conversations ?? []);
+        setLangfuseProjectId(resp.langfuse_project_id ?? "");
         setHasFetched(true);
       } catch (err) {
         if (signal?.aborted) return;
@@ -78,12 +88,34 @@ export default function ConversationsPanel({ datapackName, total, className }: P
   useEffect(() => {
     const ac = new AbortController();
     setConversations([]);
+    setLangfuseProjectId("");
     setHasFetched(false);
     setPage(1);
     setPageSize(DEFAULT_PAGE_SIZE);
     void load(1, DEFAULT_PAGE_SIZE, ac.signal);
     return () => ac.abort();
   }, [datapackName, load]);
+
+  /**
+   * Navigate to the embedded Observe page with `project` + `session`
+   * query params. ObservePage reads those and points its iframe at
+   * the Langfuse trace detail page for this conversation (Meko's MCP
+   * server sets trace.id == session_id == conversation_id, so the
+   * sessionId we pass IS the Langfuse trace id).
+   *
+   * The button is rendered only when langfuseProjectId is known.
+   */
+  const openConversationInObserve = useCallback(
+    (sessionId: string) => {
+      if (!langfuseProjectId || !sessionId) return;
+      const qs = new URLSearchParams({
+        project: langfuseProjectId,
+        session: sessionId,
+      });
+      navigate(`${ROUTES.observeHub}?${qs.toString()}`);
+    },
+    [langfuseProjectId, navigate],
+  );
 
   const goToPage = useCallback(
     (next: number) => {
@@ -172,39 +204,55 @@ export default function ConversationsPanel({ datapackName, total, className }: P
               key={c.id}
               className="rounded-lg border border-border bg-[#0E1525] px-4 py-3 space-y-1"
             >
-              {c.first_message ? (
-                <p className="text-sm text-white break-words">{c.first_message}</p>
-              ) : (
-                <p className="text-sm italic text-foreground/60">No messages yet</p>
-              )}
-              {/*
-                Fixed 3-column grid keeps agent / messages / started_at
-                vertically aligned across rows. Each cell truncates so a
-                long agent_id doesn't push the other columns sideways.
-                Memory panel uses the same template for consistency.
-              */}
-              <div className="grid grid-cols-[minmax(0,12rem)_minmax(0,8rem)_minmax(0,1fr)] gap-x-4 text-[11px] text-muted-foreground">
-                <span className="truncate" title={c.agent_id || undefined}>
-                  {c.agent_id ? (
-                    <>
-                      agent: <code className="text-blue-300">{c.agent_id}</code>
-                    </>
+              <div className="flex items-start gap-3">
+                <div className="flex-1 min-w-0 space-y-1">
+                  {c.first_message ? (
+                    <p className="text-sm text-white break-words">{c.first_message}</p>
                   ) : (
-                    <span className="text-muted-foreground/40">—</span>
+                    <p className="text-sm italic text-foreground/60">No messages yet</p>
                   )}
-                </span>
-                <span className="truncate">
-                  messages:{" "}
-                  <span className="tabular-nums text-foreground/85">
-                    {c.messages.toLocaleString()}
-                  </span>
-                </span>
-                <span className="truncate" title={c.started_at}>
-                  started at:{" "}
-                  <span className="tabular-nums text-foreground/85">
-                    {formatDatapackCreatedAtUtc(c.started_at)}
-                  </span>
-                </span>
+                  {/*
+                    Fixed 3-column grid keeps agent / messages / started_at
+                    vertically aligned across rows. Each cell truncates so a
+                    long agent_id doesn't push the other columns sideways.
+                    Memory panel uses the same template for consistency.
+                  */}
+                  <div className="grid grid-cols-[minmax(0,12rem)_minmax(0,8rem)_minmax(0,1fr)] gap-x-4 text-[11px] text-muted-foreground">
+                    <span className="truncate" title={c.agent_id || undefined}>
+                      {c.agent_id ? (
+                        <>
+                          agent: <code className="text-blue-300">{c.agent_id}</code>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
+                    </span>
+                    <span className="truncate">
+                      messages:{" "}
+                      <span className="tabular-nums text-foreground/85">
+                        {c.messages.toLocaleString()}
+                      </span>
+                    </span>
+                    <span className="truncate" title={c.started_at}>
+                      started at:{" "}
+                      <span className="tabular-nums text-foreground/85">
+                        {formatDatapackCreatedAtUtc(c.started_at)}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+                {langfuseProjectId ? (
+                  <button
+                    type="button"
+                    onClick={() => openConversationInObserve(c.id)}
+                    className="shrink-0 inline-flex items-center gap-1 rounded-md border border-border bg-muted/10 px-2 py-1 text-[11px] font-medium text-foreground/80 hover:bg-muted/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 transition-colors"
+                    title="Open this conversation in the Observe (Langfuse) trace view"
+                    aria-label={`Open conversation ${c.id} in Observe`}
+                  >
+                    <ExternalLink className="h-3 w-3" aria-hidden />
+                    <span>Open in Observe</span>
+                  </button>
+                ) : null}
               </div>
             </li>
           ))}

@@ -406,7 +406,7 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 		}
 		if sourceID == "" {
 			isNewSource = true
-			sourceID, err = h.ragSvc.CreateSource(sourceURI)
+			sourceID, err = h.ragSvc.CreateSource(sourceURI, dp.ID)
 			if err != nil {
 				slog.Error("failed to create dist_rag source", "error", err)
 				return apiError(c, http.StatusInternalServerError,

@@ -65,13 +65,15 @@ func (r *LangfuseRepo) LangfuseDBConfigured() bool {
 	return r != nil && r.langfuseDB != nil
 }
 
-// GetOrgMapping returns the org mapping for the account, or nil if absent.
+// GetOrgMapping returns the org mapping for the user, or nil if absent.
+// The accountID parameter is the user_id (post multi-tenant migration the
+// column was renamed; the Go param name is kept for backward compat).
 func (r *LangfuseRepo) GetOrgMapping(accountID string) (*LangfuseOrgMapping, error) {
 	var m LangfuseOrgMapping
 	err := r.metaDB.QueryRow(
 		`SELECT langfuse_org_id, langfuse_org_name, langfuse_org_public_key, langfuse_org_secret_key
 		 FROM meko_system.langfuse_org_mapping
-		 WHERE account_id = $1`,
+		 WHERE user_id = $1`,
 		accountID,
 	).Scan(&m.OrgID, &m.OrgName, &m.PublicKey, &m.SecretKey)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -83,13 +85,14 @@ func (r *LangfuseRepo) GetOrgMapping(accountID string) (*LangfuseOrgMapping, err
 	return &m, nil
 }
 
-// UpsertOrgMapping inserts or updates the org mapping for the account.
+// UpsertOrgMapping inserts or updates the org mapping for the user.
+// The accountID parameter is the user_id (see GetOrgMapping for context).
 func (r *LangfuseRepo) UpsertOrgMapping(accountID, orgID, orgName, publicKey, secretKey string) error {
 	_, err := r.metaDB.Exec(
 		`INSERT INTO meko_system.langfuse_org_mapping
-		 (account_id, langfuse_org_id, langfuse_org_name, langfuse_org_public_key, langfuse_org_secret_key)
+		 (user_id, langfuse_org_id, langfuse_org_name, langfuse_org_public_key, langfuse_org_secret_key)
 		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (account_id) DO UPDATE SET
+		 ON CONFLICT (user_id) DO UPDATE SET
 		   langfuse_org_id = EXCLUDED.langfuse_org_id,
 		   langfuse_org_name = EXCLUDED.langfuse_org_name,
 		   langfuse_org_public_key = EXCLUDED.langfuse_org_public_key,
@@ -126,50 +129,29 @@ func (r *LangfuseRepo) GetProjectMapping(datapackID string) (*LangfuseProjectKey
 }
 
 // UpsertProjectMapping inserts or updates the project mapping.
-func (r *LangfuseRepo) UpsertProjectMapping(accountID, datapackID, projectID, projectName, publicKey, secretKey string) error {
+// Post multi-tenant migration, langfuse_project_mapping is keyed
+// solely on datapack_id and the user is derived via the join to
+// meko_system.datapacks when needed.
+func (r *LangfuseRepo) UpsertProjectMapping(datapackID, projectID, projectName, publicKey, secretKey string) error {
 	if strings.TrimSpace(datapackID) == "" {
 		return fmt.Errorf("failed to persist langfuse project mapping: datapack_id is required")
 	}
 	_, err := r.metaDB.Exec(
 		`INSERT INTO meko_system.langfuse_project_mapping
-		 (account_id, datapack_id, langfuse_project_id, langfuse_project_name, langfuse_public_key, langfuse_secret_key)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		 (datapack_id, langfuse_project_id, langfuse_project_name, langfuse_public_key, langfuse_secret_key)
+		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (datapack_id) DO UPDATE SET
-		   account_id = EXCLUDED.account_id,
-		   datapack_id = EXCLUDED.datapack_id,
 		   langfuse_project_id = EXCLUDED.langfuse_project_id,
 		   langfuse_project_name = EXCLUDED.langfuse_project_name,
 		   langfuse_public_key = EXCLUDED.langfuse_public_key,
 		   langfuse_secret_key = EXCLUDED.langfuse_secret_key,
 		   updated_at = NOW()`,
-		accountID, datapackID, projectID, projectName, publicKey, secretKey,
+		datapackID, projectID, projectName, publicKey, secretKey,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to persist langfuse project mapping: %w", err)
 	}
 	return nil
-}
-
-// GetProjectIDAndPublicKey returns (project_id, public_key) for the
-// given (account, datapack). Used by flows that only need those two
-// columns. Returns found=false (no error) when no mapping row exists.
-func (r *LangfuseRepo) GetProjectIDAndPublicKey(accountID, datapackID string) (string, string, bool, error) {
-	var projectID string
-	var publicKey sql.NullString
-	err := r.metaDB.QueryRow(
-		`SELECT langfuse_project_id, langfuse_public_key
-		   FROM meko_system.langfuse_project_mapping
-		  WHERE account_id  = $1::uuid
-		    AND datapack_id = $2::uuid`,
-		accountID, datapackID,
-	).Scan(&projectID, &publicKey)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", false, nil
-	}
-	if err != nil {
-		return "", "", false, fmt.Errorf("meko meta db: lookup langfuse_project_mapping: %w", err)
-	}
-	return strings.TrimSpace(projectID), strings.TrimSpace(publicKey.String), true, nil
 }
 
 // FindLangfuseAPIKeyID returns public.api_keys.id for (project_id,

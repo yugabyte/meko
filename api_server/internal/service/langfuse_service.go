@@ -314,7 +314,7 @@ func (s *LangfuseService) ensureProjectMapping(
 		"project_secret_key", keyResp.SecretKey,
 	)
 
-	if err := s.repo.UpsertProjectMapping(accountID, datapackID, projectResp.ID, projectResp.Name, keyResp.PublicKey, keyResp.SecretKey); err != nil {
+	if err := s.repo.UpsertProjectMapping(datapackID, projectResp.ID, projectResp.Name, keyResp.PublicKey, keyResp.SecretKey); err != nil {
 		return nil, err
 	}
 	return s.repo.GetProjectMapping(datapackID)
@@ -338,46 +338,44 @@ func (s *LangfuseService) GetOrgKeysForAccount(accountID string) (string, string
 	return org.PublicKey, org.SecretKey, nil
 }
 
-// ListConversations returns one page of Langfuse sessions (= chat
-// conversations) for the (user, datapack)'s Langfuse project, newest
-// first. Pagination is offset-based.
-//
-// Returns an empty slice when no Langfuse mapping exists for the
-// datapack; ErrLangfuseDBNotConfigured when the api server was started
-// without --langfuse-db-host.
-//
-// Datapack ownership is enforced upstream by the
-// RequireDatapackOwnership middleware.
+// ListConversations returns one page of Langfuse sessions for the
+// datapack's project (newest first), plus the resolved langfuse
+// project_id so the UI can build per-conversation deep links without
+// a second roundtrip. Empty projectID means no mapping exists.
 func (s *LangfuseService) ListConversations(
 	datapackID string,
 	limit, offset int,
-) ([]Conversation, error) {
+) (string, []Conversation, error) {
 	if s == nil || s.repo == nil {
-		return nil, fmt.Errorf("langfuse service is not configured")
+		return "", nil, fmt.Errorf("langfuse service is not configured")
 	}
 	if !s.LangfuseDBConfigured() {
-		return nil, ErrLangfuseDBNotConfigured
+		return "", nil, ErrLangfuseDBNotConfigured
 	}
 	datapackID = strings.TrimSpace(datapackID)
 	if datapackID == "" {
-		return nil, fmt.Errorf("datapack_id is required")
+		return "", nil, fmt.Errorf("datapack_id is required")
 	}
 
 	mapping, err := s.repo.GetProjectMapping(datapackID)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if mapping == nil {
-		return []Conversation{}, nil
+		return "", []Conversation{}, nil
 	}
 	projectID := strings.TrimSpace(mapping.ProjectID)
 	if projectID == "" {
 		slog.Error("langfuse project mapping is incomplete",
 			"datapack_id", datapackID)
-		return nil, fmt.Errorf("langfuse project mapping is incomplete")
+		return "", nil, fmt.Errorf("langfuse project mapping is incomplete")
 	}
 
-	return s.repo.ListConversationsForProject(projectID, limit, offset)
+	conversations, err := s.repo.ListConversationsForProject(projectID, limit, offset)
+	if err != nil {
+		return "", nil, err
+	}
+	return projectID, conversations, nil
 }
 
 // CountConversations returns the total number of distinct Langfuse

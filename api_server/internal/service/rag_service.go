@@ -9,7 +9,7 @@ import (
 	"meko/api_server/internal/repository"
 )
 
-const DatapackIndexName = "knowledge_base"
+const DatapackIndexName = "datapacks.knowledge_bases"
 
 // RagService wraps dist_rag operations on a per-datapack database.
 type RagService struct {
@@ -59,13 +59,13 @@ func (s *RagService) SourceExists(sourceID string) (bool, error) {
 	return s.repo.SourceExists(sourceID)
 }
 
-func (s *RagService) CreateSource(sourceURI string) (string, error) {
-	sourceID, err := s.repo.CreateSource(sourceURI)
+func (s *RagService) CreateSource(sourceURI, tenantID string) (string, error) {
+	sourceID, err := s.repo.CreateSource(sourceURI, tenantID)
 	if err != nil {
 		return "", err
 	}
 	slog.Info("dist_rag source created",
-		"source_id", sourceID, "source_uri", sourceURI)
+		"source_id", sourceID, "source_uri", sourceURI, "tenant_id", tenantID)
 	return sourceID, nil
 }
 

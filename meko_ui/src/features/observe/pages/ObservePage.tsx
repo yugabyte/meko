@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   bootstrapObserveSession,
   ensureLangfuseProjectKeys,
@@ -75,6 +76,30 @@ export default function ObservePage() {
   /** Path under /observe/ without leading slash, e.g. organization/<id> or "". */
   const [langfuseRelPath, setLangfuseRelPath] = useState("");
   const observeEmbedPath = normalizeObserveEmbedPath(OBSERVE_EMBED_PATH_RAW);
+  const [searchParams] = useSearchParams();
+
+  /**
+   * Optional deep-link query params written by other panels (e.g. the
+   * datapack Conversations panel's "Open in Observe" button):
+   *   ?project=<langfuse_project_id>&session=<session_id>
+   *   ?project=<langfuse_project_id>&trace=<trace_id>
+   *
+   * Meko's MCP server writes one Langfuse trace per conversation with
+   * trace.id == trace.session_id == Meko conversation_id (see
+   * api_server/internal/repository/langfuse_repo.go:297-299), so both
+   * params resolve to the same trace detail page.
+   */
+  const deepLinkRelPath = useMemo(() => {
+    const projectId = (searchParams.get("project") || "").trim();
+    if (!projectId) return "";
+    const sessionId = (searchParams.get("session") || "").trim();
+    if (sessionId) return `project/${projectId}/traces/${sessionId}`;
+    const traceId = (searchParams.get("trace") || "").trim();
+    if (traceId) return `project/${projectId}/traces/${traceId}`;
+    return "";
+  }, [searchParams]);
+
+  const effectiveRelPath = deepLinkRelPath || langfuseRelPath;
 
   useEffect(() => {
     let mounted = true;
@@ -159,7 +184,7 @@ export default function ObservePage() {
         ) : (
           <iframe
             title="Langfuse Observe"
-            src={observeIframeSrc(observeEmbedPath, langfuseRelPath, embedRetry)}
+            src={observeIframeSrc(observeEmbedPath, effectiveRelPath, embedRetry)}
             className="w-full h-full border-0 bg-[#0E1525]"
             onError={() => {
               if (embedRetry > 0) return;

@@ -100,7 +100,7 @@ func (h *ObserveHandler) ConversationList(c echo.Context) error {
 		}
 	}
 
-	conversations, err := h.langfuse.ListConversations(dp.ID, limit, offset)
+	projectID, conversations, err := h.langfuse.ListConversations(dp.ID, limit, offset)
 	if err != nil {
 		if errors.Is(err, service.ErrLangfuseDBNotConfigured) {
 			return apiError(c, http.StatusServiceUnavailable,
@@ -116,12 +116,18 @@ func (h *ObserveHandler) ConversationList(c echo.Context) error {
 			"INTERNAL_ERROR", "failed to fetch conversations")
 	}
 
+	// langfuse_project_id is included so the UI can build
+	// per-conversation deep links to the embedded Langfuse iframe
+	// (/observe/project/<pid>/sessions/<sid>) without a second
+	// roundtrip. Empty when no Langfuse mapping exists for the
+	// datapack yet.
 	return ok(c, http.StatusOK, map[string]any{
-		"datapack_id":   dp.ID,
-		"datapack_name": dp.Name,
-		"limit":         limit,
-		"offset":        offset,
-		"conversations": conversations,
+		"datapack_id":         dp.ID,
+		"datapack_name":       dp.Name,
+		"langfuse_project_id": projectID,
+		"limit":               limit,
+		"offset":              offset,
+		"conversations":       conversations,
 	})
 }
 
