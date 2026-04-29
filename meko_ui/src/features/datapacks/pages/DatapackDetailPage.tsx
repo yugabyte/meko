@@ -26,8 +26,10 @@ import {
   datapackSharePath,
 } from "@/app/routes/paths";
 import { useDatapackWizardConfigureDone } from "@/lib/useDatapackWizardConfigureDone";
+import { DATAPACK_SHARE_GRANT_MAINTAINER } from "@/lib/datapackShareGrants";
 import {
   DATAPACKS_LIST_UPDATED_EVENT,
+  DatapackShareGrant,
   deleteDatapack,
   getApiErrorMessage,
   getDatapack,
@@ -111,6 +113,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [memoriesCount, setMemoriesCount] = useState(0);
   const [learningsCount, setLearningsCount] = useState(0);
   const [conversationsCount, setConversationsCount] = useState(0);
+  const [datapackGrant, setDatapackGrant] = useState<DatapackShareGrant | null | undefined>(null);
 
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName);
 
@@ -126,10 +129,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           setKnowledgeBaseCount(dp.knowledge_count ?? 0);
           setMemoriesCount(dp.memory_count ?? 0);
           setLearningsCount(dp.learnings_count ?? 0);
+          setDatapackGrant(dp.grant ?? undefined);
         }
       } catch (e) {
         if (!cancelled) {
           setDatapack(null);
+          setDatapackGrant(undefined);
           setStatusError(getApiErrorMessage(e, "Failed to load datapack."));
         }
       } finally {
@@ -231,6 +236,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const createdLabel = formatDatapackCreatedAtUtc(datapack?.created_at);
   const isDefaultDatapack = datapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
 
+  /** Owner (no grant) or shared maintainer: can share, add knowledge, configure, edit, delete. */
+  const canDatapackAdminActions =
+    !statusLoading &&
+    datapack != null &&
+    (datapackGrant == null || datapackGrant === DATAPACK_SHARE_GRANT_MAINTAINER);
+
   const handleDatapackEditSave = async ({ name, description }: { name: string; description: string }) => {
     const trimmedName = name.trim();
     const trimmedDesc = description.trim();
@@ -280,6 +291,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     setKnowledgeBaseCount(next.knowledge_count ?? 0);
     setMemoriesCount(next.memory_count ?? 0);
     setLearningsCount(next.learnings_count ?? 0);
+    setDatapackGrant(next.grant ?? undefined);
     dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
     toast({
       title: "Datapack updated",
@@ -311,15 +323,17 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           statusLoading={statusLoading}
           actions={
             <>
-              <Button
-                type="button"
-                variant="outline"
-                className="gap-2 border-border bg-background/80"
-                onClick={() => navigate(datapackSharePath(datapackName))}
-              >
-                <Share2 className="h-4 w-4 shrink-0" aria-hidden />
-                Share
-              </Button>
+              {canDatapackAdminActions ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2 border-border bg-background/80"
+                  onClick={() => navigate(datapackSharePath(datapackName))}
+                >
+                  <Share2 className="h-4 w-4 shrink-0" aria-hidden />
+                  Share
+                </Button>
+              ) : null}
               <DatapackKnowledgeUploadDialog
                 datapackName={datapackName}
                 open={isUploadOpen}
@@ -364,13 +378,15 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[14rem] bg-[#1C2333] border-border text-foreground">
-                  <DropdownMenuItem
-                    className="gap-2 cursor-pointer focus:bg-muted/20"
-                    onSelect={() => setIsUploadOpen(true)}
-                  >
-                    <Upload className="h-4 w-4 shrink-0" aria-hidden />
-                    Add Knowledge
-                  </DropdownMenuItem>
+                  {canDatapackAdminActions ? (
+                    <DropdownMenuItem
+                      className="gap-2 cursor-pointer focus:bg-muted/20"
+                      onSelect={() => setIsUploadOpen(true)}
+                    >
+                      <Upload className="h-4 w-4 shrink-0" aria-hidden />
+                      Add Knowledge
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuItem
                     className="gap-2 cursor-pointer focus:bg-muted/20"
                     onSelect={() => setIsConnectOpen(true)}
@@ -378,7 +394,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                     <LinkIcon className="h-4 w-4 shrink-0" aria-hidden />
                     Connect
                   </DropdownMenuItem>
-                  {!wizardConfigureDone ? (
+                  {canDatapackAdminActions && !wizardConfigureDone ? (
                     <DropdownMenuItem
                       className="gap-2 cursor-pointer focus:bg-muted/20"
                       onSelect={() => navigate(datapackConfigurePath(datapackName))}
@@ -387,29 +403,32 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                       Configure
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuSeparator className="bg-border" />
-                  <DropdownMenuItem
-                    className="gap-2 cursor-pointer focus:bg-muted/20"
-                    disabled={isDefaultDatapack}
-                    title={isDefaultDatapack ? "The default account datapack cannot be renamed." : undefined}
-                    onSelect={() => {
-                      if (!isDefaultDatapack) setIsEditNameOpen(true);
-                    }}
-                  >
-                    <Pencil className="h-4 w-4 shrink-0" aria-hidden />
-                    Edit {datapackName}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="gap-2 cursor-pointer text-red-300 focus:bg-red-950/40 focus:text-red-200"
-                    disabled={isDefaultDatapack}
-                    title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
-                    onSelect={() => {
-                      if (!isDefaultDatapack) setIsDeleteOpen(true);
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-                    Delete {datapackName}
-                  </DropdownMenuItem>
+                  {canDatapackAdminActions ? (
+                    <>
+                      <DropdownMenuSeparator className="bg-border" />
+                      <DropdownMenuItem
+                        className="gap-2 cursor-pointer focus:bg-muted/20"
+                        // title={isDefaultDatapack ? "The default account datapack cannot be renamed." : undefined}
+                        onSelect={() => {
+                          if (!isDefaultDatapack) setIsEditNameOpen(true);
+                        }}
+                      >
+                        <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+                        Edit {datapackName}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="gap-2 cursor-pointer text-red-300 focus:bg-red-950/40 focus:text-red-200"
+                        // disabled={isDefaultDatapack}
+                        // title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
+                        onSelect={() => {
+                          if (!isDefaultDatapack) setIsDeleteOpen(true);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                        Delete {datapackName}
+                      </DropdownMenuItem>
+                    </>
+                  ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
             </>

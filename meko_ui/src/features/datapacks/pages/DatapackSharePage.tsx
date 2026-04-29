@@ -1,6 +1,6 @@
 // Owner-facing page to invite collaborators, review pending invites, and manage member grants for a datapack.
 // Loads members + pending invites once via useDatapackOutgoingShares; child actions use silent refetch to stay fresh.
-import { Share2, AlertCircle } from "lucide-react";
+import { Share2 } from "lucide-react";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { InviteByEmailSection } from "@/features/datapacks/components/datapack-share/InviteByEmailSection";
@@ -11,8 +11,8 @@ import { TransferOwnershipSection } from "@/features/datapacks/components/datapa
 import { useDatapackOutgoingShares } from "@/features/datapacks/components/datapack-share/useDatapackOutgoingShares";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import type { CurrentUser } from "@/lib/mekoApi";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { InlineErrorBanner } from "@/components/ui/inline-error-banner";
 
 type Props = {
   datapackName: string;
@@ -53,32 +53,38 @@ export default function DatapackSharePage({ datapackName, currentUser }: Props) 
         </div>
 
         {error ? (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" aria-hidden />
-            <AlertTitle>Could not load sharing</AlertTitle>
-            <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <span>{error}</span>
-              <Button type="button" size="sm" variant="outline" className="shrink-0 border-destructive/40 bg-transparent" onClick={() => void refetch()}>
+          <InlineErrorBanner
+            action={
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="shrink-0 border-red-400/40 bg-red-950/20 text-red-100 hover:bg-red-950/40 hover:text-red-50"
+                onClick={() => void refetch()}
+              >
                 Retry
               </Button>
-            </AlertDescription>
-          </Alert>
+            }
+          >
+            <p className="font-medium text-red-100">Could not fetch member and invite details</p>
+            <p className="mt-1 text-xs font-normal text-red-200/85">{error}</p>
+          </InlineErrorBanner>
         ) : null}
 
         <div className="space-y-6">
           <InviteByEmailSection datapackName={datapackName} onInviteSent={refreshShares} />
-          <PendingInvitesSection
-            datapackName={datapackName}
-            invites={pendingInvites}
-            loading={loading}
-            onChanged={refreshShares}
-          />
           <MembersSection
             currentUser={currentUser}
             datapackName={datapackName}
             members={members}
             loading={loading}
             onMembersChanged={refreshShares}
+          />
+          <PendingInvitesSection
+            datapackName={datapackName}
+            invites={pendingInvites}
+            loading={loading}
+            onChanged={refreshShares}
           />
           <LinkSharingSection />
           <TransferOwnershipSection />

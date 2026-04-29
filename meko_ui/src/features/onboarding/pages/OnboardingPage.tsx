@@ -75,7 +75,6 @@ export default function OnboardingPage() {
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <AppWorkspaceHeader
-        showCliButton={false}
         padding="page"
         className="pl-4 pr-8"
         leading={
@@ -153,7 +152,7 @@ export default function OnboardingPage() {
                 knowledge, conversation history, and skills — and turns them into a live datapack.
               </p>
               <div className="mb-6 flex flex-wrap gap-2">
-                {["Claude Code", "OpenAI Codex", "Cursor"].map((label) => (
+                {["Claude Code", "Claude Desktop", "Cursor"].map((label) => (
                   <button
                     key={label}
                     type="button"

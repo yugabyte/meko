@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { DatapackShareSectionCard } from "@/features/datapacks/components/datapack-share/DatapackShareSectionCard";
 import { SHARE_INVITE_ROLES, type ShareInviteRoleId } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { parseSingleInviteEmail } from "@/features/datapacks/components/datapack-share/shareInviteEmail";
+import { DATAPACK_SHARE_GRANT_CONTRIBUTOR } from "@/lib/datapackShareGrants";
 import { getApiErrorMessage, inviteDatapackShare } from "@/lib/mekoApi";
 import { toast } from "@/hooks/use-toast";
 
@@ -26,9 +27,9 @@ type Props = {
 export function InviteByEmailSection({ datapackName, onInviteSent }: Props) {
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
-  const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>("contributor");
+  const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
   // Mirrors inviteRole so the three role tiles reflect the same selection as the dropdown.
-  const [tileRole, setTileRole] = useState<ShareInviteRoleId>("contributor");
+  const [tileRole, setTileRole] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
   const [submitting, setSubmitting] = useState(false);
 
   const syncSelectFromTiles = (id: ShareInviteRoleId) => {

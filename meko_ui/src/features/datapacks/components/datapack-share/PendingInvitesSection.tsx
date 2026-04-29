@@ -90,9 +90,6 @@ export function PendingInvitesSection({ datapackName, invites, loading = false, 
                       <div className="text-xs text-muted-foreground">
                         Invited · {shareGrantLabel(inv.grant)}
                       </div>
-                      <div className="line-clamp-2 text-[11px] leading-snug text-muted-foreground/75">
-                        {shareGrantDescription(inv.grant)}
-                      </div>
                     </div>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">

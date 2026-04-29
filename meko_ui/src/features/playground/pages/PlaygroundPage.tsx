@@ -15,7 +15,6 @@ export default function PlaygroundPage() {
             </p>
           </div>
         }
-        showCliButton={false}
       />
       <div className="flex flex-1 flex-col items-center justify-center px-2 py-6 text-center sm:px-6 sm:py-10">
         <div className="relative w-full overflow-hidden rounded-xl border border-border/70 bg-[#0E1525]/70 shadow-xl">

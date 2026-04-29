@@ -5,7 +5,7 @@ import { McpInstallGuide } from "@/features/datapacks/components/install/McpInst
 export default function HomePage() {
   return (
     <div className="flex-1 h-screen overflow-y-auto bg-background text-foreground flex flex-col">
-      <AppWorkspaceHeader showCliButton={false} />
+      <AppWorkspaceHeader />
 
       <main className="flex-1 space-y-8 p-8 pb-16 max-w-6xl mx-auto w-full">
         <div className="flex flex-col gap-2">

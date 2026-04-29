@@ -1,16 +1,15 @@
 /**
- * MCP client install guide: environment tabs (Claude → Cursor → Codex) and copyable shell steps.
- * Claude and Cursor use create-meko-setup; Codex still uses NVM + mcp-add + skills.
+ * MCP client install guide: tabs for Claude Code, Claude Desktop, and Cursor with copyable shell steps.
  * Shared by the Home “Install” page and the datapack configure wizard’s Install step.
  */
 import { useState } from "react";
-import { Check, Copy, Sparkles, SquareTerminal, MousePointer2 } from "lucide-react";
+import { Check, Copy, Code2, Monitor, MousePointer2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
 
-type IdeTab = "claude" | "cursor" | "codex";
+type IdeTab = "claude_code" | "claude_desktop" | "cursor";
 
 type InstallStep = {
   title: string;
@@ -19,46 +18,11 @@ type InstallStep = {
   langLabel?: string;
 };
 
-const NVM_INSTALL_STEP: InstallStep = {
-  title: "Install NVM",
-  description:
-    "Install Node Version Manager so you can run the tooling used to register the MCP server with your assistant.",
-  code: "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash",
-  langLabel: "bash",
-};
-
-const NVM_SOURCE_STEP: InstallStep = {
-  title: "Load NVM in your shell",
-  description:
-    "Source your shell configuration so nvm is available in the current session (adjust the file if you use a custom profile).",
-  code: "source ~/.$(basename $SHELL)rc",
-  langLabel: "bash",
-};
-
-function mcpIntegrateStep(productLabel: string, clientsArg: string): InstallStep {
-  const code = `npx mcp-add@latest \\
-  --name meko \\
-  --type stdio \\
-  --command 'npx -y mcp-remote <meko-mcp-url> --allow-http' \\
-  --env 'MEKO_API_KEY=<meko-mcp-api-key>' \\
-  --headers 'MEKO_API_KEY=<meko-api-key>' \\
-  --scope global \\
-  --clients '${clientsArg}'`;
-
-  return {
-    title: `Integrate MCP server into ${productLabel}`,
-    description:
-      "Run mcp-add with your meko MCP URL and API keys from the Datapacks page. Replace placeholders before executing.",
-    code,
-    langLabel: "bash",
-  };
-}
-
 const CLAUDE_CODE_INSTALL_STEP: InstallStep = {
   title: "Claude Code",
   description:
     "Run the installer from the directory that contains it. This configures the MCP server connection for Claude Code, sets environment variables, and installs the skills plugin into the agent.",
-  code: 'node installer/bin/create-meko-setup.mjs --url <meko-mcp-url> --api-key "<meko-api-key>" --yes',
+  code: 'node installer/bin/create-meko-setup.mjs --client claude-code --url <meko-mcp-url> --api-key "<meko-server-api-key>"',
   langLabel: "bash",
 };
 
@@ -73,45 +37,21 @@ const CLAUDE_DESKTOP_INSTALL_STEP: InstallStep = {
 const CURSOR_INSTALL_STEP: InstallStep = {
   title: "Run the Cursor installer",
   description:
-    "One command registers the MCP server with Cursor using your MCP URL and API key from the Datapacks page. Replace the placeholders, then run from the directory that contains the installer (same layout as the Claude tab).",
+    "One command registers the MCP server with Cursor using your MCP URL and API key from the Datapacks page. Replace the placeholders, then run from the directory that contains the installer (same layout as the Claude tabs).",
   code: 'node installer/bin/create-meko-setup.mjs --client cursor --url <mcp-server-url> --api-key "<mcp-server-api-key>"',
   langLabel: "bash",
 };
 
-const SKILLS_PACKAGE_STEP: InstallStep = {
-  title: "Integrate skills package with the AI agent",
-  description:
-    "Integrate skills package to AI agent to help learn how to use Meko's MCP tools for memory, knowledge.",
-  code: `git clone https://github.com/yugabyte/meko-mcp-server.git
-cd meko-mcp-server
-git checkout add-skills
-npx skills add ./skills -g`,
-  langLabel: "bash",
-};
-
-const SKILLS_PROMPT_STEP: InstallStep = {
-  title: "Select skills at the prompt",
-  description:
-    "When prompted to select the skills to install, select both meko-mcp-tools and ysql.",
-};
-
-const CODEX_EXTRA_STEPS: InstallStep[] = [SKILLS_PACKAGE_STEP, SKILLS_PROMPT_STEP];
-
 const INSTALL_GUIDE: Record<IdeTab, InstallStep[]> = {
-  claude: [CLAUDE_CODE_INSTALL_STEP, CLAUDE_DESKTOP_INSTALL_STEP],
-  codex: [
-    NVM_INSTALL_STEP,
-    NVM_SOURCE_STEP,
-    mcpIntegrateStep("Codex", "codex"),
-    ...CODEX_EXTRA_STEPS,
-  ],
+  claude_code: [CLAUDE_CODE_INSTALL_STEP],
+  claude_desktop: [CLAUDE_DESKTOP_INSTALL_STEP],
   cursor: [CURSOR_INSTALL_STEP],
 };
 
-const TAB_META: { id: IdeTab; label: string; icon: typeof Sparkles }[] = [
-  { id: "claude", label: "Claude", icon: Sparkles },
+const TAB_META: { id: IdeTab; label: string; icon: typeof Code2 }[] = [
+  { id: "claude_code", label: "Claude Code", icon: Code2 },
+  { id: "claude_desktop", label: "Claude Desktop", icon: Monitor },
   { id: "cursor", label: "Cursor", icon: MousePointer2 },
-  { id: "codex", label: "OpenAI Codex", icon: SquareTerminal },
 ];
 
 function CodeBlock({
@@ -128,7 +68,7 @@ function CodeBlock({
   onCopy: (text: string, id: string) => void;
 }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-[#0E1525]/80 shadow-sm">
+    <div className="max-w-full overflow-hidden rounded-lg border border-border bg-[#0E1525]/80 shadow-sm">
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {langLabel}
@@ -148,8 +88,8 @@ function CodeBlock({
           )}
         </Button>
       </div>
-      <pre className="overflow-x-auto p-4 text-sm leading-relaxed text-foreground/95">
-        <code>{code}</code>
+      <pre className="max-w-full p-4 text-sm leading-relaxed text-foreground/95">
+        <code className="block whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{code}</code>
       </pre>
     </div>
   );
@@ -219,11 +159,11 @@ type McpInstallGuideProps = {
 };
 
 /**
- * MCP install steps (Claude / Cursor / Codex), same content as the Home “Install” page.
+ * MCP install steps (Claude Code / Claude Desktop / Cursor).
  */
 export function McpInstallGuide({ className }: McpInstallGuideProps) {
   return (
-    <Tabs defaultValue="claude" className={cn("w-full", className)}>
+    <Tabs defaultValue="claude_code" className={cn("w-full", className)}>
       <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-xl bg-muted/60 p-1.5 sm:inline-flex sm:w-auto">
         {TAB_META.map(({ id, label, icon: Icon }) => (
           <TabsTrigger

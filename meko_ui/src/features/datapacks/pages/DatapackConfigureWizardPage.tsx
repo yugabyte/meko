@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { dispatchAppEvent } from "@/lib/browserEvents";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { DatapackConfigureWizardStepper } from "@/features/datapacks/components/configure-wizard/DatapackConfigureWizardStepper";
@@ -25,6 +26,7 @@ import { markDatapackWizardConfigureDone } from "@/lib/datapackConfigureStatus";
 import {
   confirmUpload,
   createDatapack,
+  DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
   getDatapack,
   requestUploadURL,
@@ -180,11 +182,11 @@ export default function DatapackConfigureWizardPage({
       prev.map((x) =>
         x.id === id && x.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR
           ? {
-              ...x,
-              uploadStatus: KNOWLEDGE_UPLOAD_STATUS.PENDING,
-              uploadProgress: undefined,
-              uploadError: undefined,
-            }
+            ...x,
+            uploadStatus: KNOWLEDGE_UPLOAD_STATUS.PENDING,
+            uploadProgress: undefined,
+            uploadError: undefined,
+          }
           : x,
       ),
     );
@@ -234,11 +236,11 @@ export default function DatapackConfigureWizardPage({
             prev.map((x) =>
               x.id === item.id
                 ? {
-                    ...x,
-                    uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
-                    uploadProgress: 0,
-                    uploadError: getApiErrorMessage(err, "Upload failed."),
-                  }
+                  ...x,
+                  uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
+                  uploadProgress: 0,
+                  uploadError: getApiErrorMessage(err, "Upload failed."),
+                }
                 : x,
             ),
           );
@@ -289,6 +291,9 @@ export default function DatapackConfigureWizardPage({
           user_id: currentUser.account_id,
           ...(descTrim ? { description: configureDraftDescription } : {}),
         });
+        if (created?.name) {
+          dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+        }
         if (created.mcp_server?.api_key) {
           localStorage.setItem("meko_latest_api_key", created.mcp_server.api_key);
         }
@@ -422,15 +427,15 @@ export default function DatapackConfigureWizardPage({
 
   const breadcrumbItems = isCreateFlow
     ? [
-        { label: "Datapacks", href: ROUTES.datapacks },
-        { label: "New datapack", href: ROUTES.datapacks },
-        { label: "configure" },
-      ]
+      { label: "Datapacks", href: ROUTES.datapacks },
+      { label: "New datapack", href: ROUTES.datapacks },
+      { label: "configure" },
+    ]
     : [
-        { label: "Datapacks", href: ROUTES.datapacks },
-        { label: routeDatapackName ?? "", href: datapackDetailPath(routeDatapackName ?? "") },
-        { label: "configure" },
-      ];
+      { label: "Datapacks", href: ROUTES.datapacks },
+      { label: routeDatapackName ?? "", href: datapackDetailPath(routeDatapackName ?? "") },
+      { label: "configure" },
+    ];
 
   return (
     <div className="flex h-screen flex-1 flex-col overflow-y-auto bg-background text-foreground">
@@ -482,7 +487,7 @@ export default function DatapackConfigureWizardPage({
               conversationInputRef={conversationInputRef}
               skillsInputRef={skillsInputRef}
               onPickFiles={addFiles}
-              onAddUrl={() => {}}
+              onAddUrl={() => { }}
               onRemove={removeItem}
               knowledgeUploading={knowledgeUploading}
               onUploadKnowledgeFiles={handleUploadKnowledgeFiles}
@@ -514,9 +519,9 @@ export default function DatapackConfigureWizardPage({
                 ? skipConfigureStep
                 : stepId === WIZARD_STEP_ID.install || stepId === WIZARD_STEP_ID.sync
                   ? () => {
-                      if (stepId === WIZARD_STEP_ID.install) setStepId(WIZARD_STEP_ID.sync);
-                      else if (stepId === WIZARD_STEP_ID.sync) setStepId(WIZARD_STEP_ID.import);
-                    }
+                    if (stepId === WIZARD_STEP_ID.install) setStepId(WIZARD_STEP_ID.sync);
+                    else if (stepId === WIZARD_STEP_ID.sync) setStepId(WIZARD_STEP_ID.import);
+                  }
                   : undefined
             }
             canGoNext={canWizardNext}

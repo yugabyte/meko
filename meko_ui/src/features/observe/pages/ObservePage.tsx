@@ -138,7 +138,6 @@ export default function ObservePage() {
       <AppWorkspaceHeader
         padding="compact"
         sticky={false}
-        showCliButton={false}
         showUserAvatar={false}
         leading={
           <div>

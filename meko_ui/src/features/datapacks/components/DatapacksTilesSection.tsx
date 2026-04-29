@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { CurrentUser, Datapack } from "@/lib/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
+import { shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 
 function formatDatapackOwnerLabel(dp: Datapack, currentUser: CurrentUser | null): string {
   if (
@@ -21,38 +22,181 @@ function formatDatapackOwnerLabel(dp: Datapack, currentUser: CurrentUser | null)
   return "—";
 }
 
+/** Owned datapacks: no share grant on the list row (`grant` absent or null). */
+function datapackIsOwned(dp: Datapack): boolean {
+  return !dp.grant;
+}
+
+function filterByName(datapacks: Datapack[], q: string): Datapack[] {
+  const trimmed = q.trim().toLowerCase();
+  if (!trimmed) return datapacks;
+  return datapacks.filter((dp) => dp.datapack_name.toLowerCase().includes(trimmed));
+}
+
 type Props = {
   datapacks: Datapack[];
   isLoading: boolean;
   currentUser: CurrentUser | null;
   /** `listKnowledgeBases(datapack_name).length` per route name (filled by parent). */
   knowledgeBaseCountByName: Record<string, number>;
+  memoryCountByName: Record<string, number>;
+  learningsCountByName: Record<string, number>;
   knowledgeBaseCountsLoading?: boolean;
   onOpenDatapack: (datapack: Datapack) => void;
 };
 
 /** Placeholders until per-datapack metrics are wired. */
-const MEMORY_PLACEHOLDER_COUNT = 0;
-const LEARNINGS_PLACEHOLDER_COUNT = 0;
+const SHARED = "shared";
+const OWNED = "owned";
+
+type TileVariant = "owned" | "shared";
+
+function DatapackTile({
+  dp,
+  variant,
+  currentUser,
+  knowledgeBaseCountByName,
+  knowledgeBaseCountsLoading,
+  memoryCountByName,
+  learningsCountByName,
+  onOpenDatapack,
+}: {
+  dp: Datapack;
+  variant: TileVariant;
+  currentUser: CurrentUser | null;
+  knowledgeBaseCountByName: Record<string, number>;
+  memoryCountByName: Record<string, number>;
+  learningsCountByName: Record<string, number>;
+  knowledgeBaseCountsLoading: boolean;
+  onOpenDatapack: (datapack: Datapack) => void;
+}) {
+  const grantLabel = variant === SHARED && dp.grant ? shareGrantLabel(dp.grant) : null;
+
+  return (
+    <Card
+      role="button"
+      tabIndex={0}
+      className={cn(
+        "border-border bg-[#1C2333] shadow-sm cursor-pointer transition-colors",
+        "hover:border-blue-500/40 hover:bg-[#1C2333]/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        variant === SHARED && "hover:border-violet-500/35",
+      )}
+      onClick={() => onOpenDatapack(dp)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpenDatapack(dp);
+        }
+      }}
+    >
+      <CardContent className="flex flex-col gap-3 p-4 sm:p-5">
+        <div className="flex items-start gap-3 shrink-0">
+          <div
+            className={cn(
+              "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border",
+              variant === OWNED
+                ? "bg-blue-500/15 border-blue-500/25"
+                : "bg-violet-500/15 border-violet-500/25",
+            )}
+          >
+            <Database className={cn("h-5 w-5", variant === OWNED ? "text-blue-400" : "text-violet-300")} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="font-semibold text-white truncate" title={dp.datapack_name}>
+              {dp.datapack_name}
+            </h3>
+            {grantLabel ? (
+              <p className="text-xs text-violet-200/90 mt-1 leading-snug">Your access: {grantLabel}</p>
+            ) : null}
+            <p className="text-xs text-muted-foreground mt-1 leading-snug">
+              Created:{" "}
+              <span className="text-muted-foreground/90">{formatDatapackCreatedAtUtc(dp.created_at)}</span>
+            </p>
+            <p className="text-xs text-muted-foreground mt-1 leading-snug">
+              Owner:&nbsp;&nbsp;&nbsp;
+              <span className="text-muted-foreground/90 break-words">{formatDatapackOwnerLabel(dp, currentUser)}</span>
+            </p>
+          </div>
+        </div>
+
+        <div className="border-t border-white/10 pt-3">
+          <div className="grid grid-cols-3 gap-1.5 min-w-0 sm:gap-2">
+            <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
+              <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
+                <Sparkles className="h-3 w-3 shrink-0 text-sky-400" aria-hidden />
+                <span title="Memory (me)">me</span>
+              </div>
+              <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
+                {memoryCountByName[dp.datapack_name] ?? 0}
+              </p>
+            </div>
+            <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
+              <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
+                <BookOpen className="h-3 w-3 shrink-0 text-emerald-400" aria-hidden />
+                <span title="Knowledge (ko)">ko</span>
+              </div>
+              <p className="mt-1 min-h-[1.75rem] flex items-center text-lg font-semibold tabular-nums tracking-tight text-white sm:min-h-[2rem] sm:text-xl">
+                {knowledgeBaseCountsLoading ? (
+                  <span className="text-base text-muted-foreground tabular-nums animate-pulse sm:text-lg">…</span>
+                ) : (
+                  knowledgeBaseCountByName[dp.datapack_name] ?? 0
+                )}
+              </p>
+            </div>
+            <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
+              <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
+                <ArrowLeftRight className="h-3 w-3 shrink-0 text-violet-400" aria-hidden />
+                <span title="Learnings (ME → KO)" className="truncate">
+                  me → ko
+                </span>
+              </div>
+              <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
+                {learningsCountByName[dp.datapack_name] ?? 0}
+              </p>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function DatapacksTilesSection({
   datapacks,
   isLoading,
   currentUser,
   knowledgeBaseCountByName,
+  memoryCountByName,
+  learningsCountByName,
   knowledgeBaseCountsLoading = false,
   onOpenDatapack,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
 
-  const filteredDatapacks = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return datapacks;
-    return datapacks.filter((dp) => dp.datapack_name.toLowerCase().includes(q));
-  }, [datapacks, searchQuery]);
+  const { ownedDatapacks, sharedDatapacks } = useMemo(() => {
+    const owned: Datapack[] = [];
+    const shared: Datapack[] = [];
+    for (const dp of datapacks) {
+      if (datapackIsOwned(dp)) owned.push(dp);
+      else shared.push(dp);
+    }
+    return { ownedDatapacks: owned, sharedDatapacks: shared };
+  }, [datapacks]);
+
+  const filteredOwned = useMemo(() => filterByName(ownedDatapacks, searchQuery), [ownedDatapacks, searchQuery]);
+  const filteredShared = useMemo(() => filterByName(sharedDatapacks, searchQuery), [sharedDatapacks, searchQuery]);
+
+  const noSearchResults =
+    !isLoading &&
+    datapacks.length > 0 &&
+    filteredOwned.length === 0 &&
+    filteredShared.length === 0 &&
+    searchQuery.trim() !== "";
+
+  const showSharedSection = filteredShared.length > 0;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <h2 className="text-lg font-semibold text-foreground">Your datapacks</h2>
         <Input
@@ -67,98 +211,58 @@ export default function DatapacksTilesSection({
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading datapacks…</p>
-      ) : filteredDatapacks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {datapacks.length === 0
-            ? "No datapacks yet. Add a datapack to get started."
-            : "No datapacks match your search."}
-        </p>
+      ) : datapacks.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No datapacks yet. Add a datapack to get started.</p>
+      ) : noSearchResults ? (
+        <p className="text-sm text-muted-foreground">No datapacks match your search.</p>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredDatapacks.map((dp) => (
-            <Card
-              key={dp.datapack_id}
-              role="button"
-              tabIndex={0}
-              className={cn(
-                "border-border bg-[#1C2333] shadow-sm cursor-pointer transition-colors",
-                "hover:border-blue-500/40 hover:bg-[#1C2333]/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
-              )}
-              onClick={() => onOpenDatapack(dp)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onOpenDatapack(dp);
-                }
-              }}
-            >
-              <CardContent className="flex flex-col gap-3 p-4 sm:p-5">
-                <div className="flex items-start gap-3 shrink-0">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 border border-blue-500/25">
-                    <Database className="h-5 w-5 text-blue-400" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-semibold text-white truncate" title={dp.datapack_name}>
-                      {dp.datapack_name}
-                    </h3>
-                    <p className="text-xs text-muted-foreground mt-1 leading-snug">
-                      Created:{" "}
-                      <span className="text-muted-foreground/90">
-                        {formatDatapackCreatedAtUtc(dp.created_at)}
-                      </span>
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1 leading-snug">
-                      Owner:&nbsp;&nbsp;&nbsp;
-                      <span className="text-muted-foreground/90 break-words">
-                        {formatDatapackOwnerLabel(dp, currentUser)}
-                      </span>
-                    </p>
-                  </div>
-                </div>
+        <div className="space-y-8">
+          <div className="space-y-4">
+            {filteredOwned.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {searchQuery.trim()
+                  ? "No owned datapacks match your search."
+                  : "You don't have any datapacks you own yet."}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredOwned.map((dp) => (
+                  <DatapackTile
+                    key={dp.datapack_id}
+                    dp={dp}
+                    variant={OWNED}
+                    currentUser={currentUser}
+                    knowledgeBaseCountByName={knowledgeBaseCountByName}
+                    memoryCountByName={memoryCountByName}
+                    learningsCountByName={learningsCountByName}
+                    knowledgeBaseCountsLoading={knowledgeBaseCountsLoading}
+                    onOpenDatapack={onOpenDatapack}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
 
-                <div className="border-t border-white/10 pt-3">
-                  <div className="grid grid-cols-3 gap-1.5 min-w-0 sm:gap-2">
-                    <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
-                      <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
-                        <Sparkles className="h-3 w-3 shrink-0 text-sky-400" aria-hidden />
-                        <span title="Memory (me)">me</span>
-                      </div>
-                      <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
-                        {MEMORY_PLACEHOLDER_COUNT}
-                      </p>
-                    </div>
-                    <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
-                      <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
-                        <BookOpen className="h-3 w-3 shrink-0 text-emerald-400" aria-hidden />
-                        <span title="Knowledge (ko)">ko</span>
-                      </div>
-                      <p className="mt-1 min-h-[1.75rem] flex items-center text-lg font-semibold tabular-nums tracking-tight text-white sm:min-h-[2rem] sm:text-xl">
-                        {knowledgeBaseCountsLoading ? (
-                          <span className="text-base text-muted-foreground tabular-nums animate-pulse sm:text-lg">
-                            …
-                          </span>
-                        ) : (
-                          knowledgeBaseCountByName[dp.datapack_name] ?? 0
-                        )}
-                      </p>
-                    </div>
-                    <div className="min-w-0 rounded-md bg-[#0E1525]/80 border border-border/60 px-1.5 py-2 sm:px-2 sm:py-2.5">
-                      <div className="flex flex-nowrap items-center gap-1 text-[10px] font-medium leading-tight text-muted-foreground whitespace-nowrap sm:text-[11px]">
-                        <ArrowLeftRight className="h-3 w-3 shrink-0 text-violet-400" aria-hidden />
-                        <span title="Learnings (ME → KO)" className="truncate">
-                          me → ko
-                        </span>
-                      </div>
-                      <p className="mt-1 text-lg font-semibold tabular-nums tracking-tight text-white sm:text-xl">
-                        {LEARNINGS_PLACEHOLDER_COUNT}
-                      </p>
-                    </div>
-
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+          {showSharedSection ? (
+            <div className="space-y-4 border-t border-border pt-6">
+              <h2 className="text-lg font-semibold text-foreground">Shared datapacks</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredShared.map((dp) => (
+                  <DatapackTile
+                    key={dp.datapack_id}
+                    dp={dp}
+                    variant={SHARED}
+                    currentUser={currentUser}
+                    knowledgeBaseCountByName={knowledgeBaseCountByName}
+                    memoryCountByName={memoryCountByName}
+                    learningsCountByName={learningsCountByName}
+                    knowledgeBaseCountsLoading={knowledgeBaseCountsLoading}
+                    onOpenDatapack={onOpenDatapack}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>

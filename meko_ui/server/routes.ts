@@ -1,5 +1,11 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import {
+  type DatapackShareGrant,
+  DATAPACK_SHARE_GRANT_MAINTAINER,
+  DATAPACK_SHARE_GRANT_VALIDATION_MESSAGE,
+  isDatapackShareGrant,
+} from "../src/lib/datapackShareGrants";
 
 type Datapack = {
   datapack_id: string;
@@ -63,6 +69,52 @@ const agentsByDatapack: Record<string, Agent[]> = {
 const kbByDatapack: Record<string, KnowledgeBase[]> = {
   default: [],
 };
+
+type MockOutgoingMember = {
+  user_id: string;
+  is_owner: boolean;
+  user_name: string;
+  user_email_id: string;
+  grant: DatapackShareGrant;
+};
+
+type MockPendingInvite = {
+  invite_id: string;
+  grant: DatapackShareGrant;
+  recipient_user_id: string;
+  recipient_user_name: string;
+  recipient_email_id: string;
+};
+
+type MockShareState = {
+  members: MockOutgoingMember[];
+  pending: MockPendingInvite[];
+};
+
+/** In-memory share/members state for local dev when requests hit this mock (no upstream proxy). */
+const shareStateByDatapack: Record<string, MockShareState> = {};
+
+const MOCK_OWNER_EMAIL = "dev@meko.local";
+
+function getShareState(datapackName: string): MockShareState | null {
+  const dp = datapacks.find((d) => d.datapack_name === datapackName);
+  if (!dp) return null;
+  if (!shareStateByDatapack[datapackName]) {
+    shareStateByDatapack[datapackName] = {
+      members: [
+        {
+          user_id: dp.user_id,
+          is_owner: true,
+          user_name: "Dev user",
+          user_email_id: MOCK_OWNER_EMAIL,
+          grant: DATAPACK_SHARE_GRANT_MAINTAINER,
+        },
+      ],
+      pending: [],
+    };
+  }
+  return shareStateByDatapack[datapackName];
+}
 
 function ok<T>(data: T) {
   return { data, error: null };
@@ -151,6 +203,19 @@ export async function registerRoutes(
       ]
       : [];
 
+    shareStateByDatapack[name] = {
+      members: [
+        {
+          user_id: accountId,
+          is_owner: true,
+          user_name: "Dev user",
+          user_email_id: MOCK_OWNER_EMAIL,
+          grant: DATAPACK_SHARE_GRANT_MAINTAINER,
+        },
+      ],
+      pending: [],
+    };
+
     return res.status(201).json(
       ok({
         datapack_id: id,
@@ -178,6 +243,162 @@ export async function registerRoutes(
   app.get("/api/v1/datapacks/:name/knowledge-bases", (req, res) => {
     const name = req.params.name;
     res.json(ok(kbByDatapack[name] || []));
+  });
+
+  // --- Datapack sharing (mirrors mekoApi share helpers for local mock when MEKO_API_UPSTREAM is unset) ---
+  app.get("/api/v1/datapacks/:name/outgoing-shares", (req, res) => {
+    const name = req.params.name;
+    const st = getShareState(name);
+    if (!st) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    return res.json(ok({ members: st.members, pending_invites: st.pending }));
+  });
+
+  app.post("/api/v1/datapacks/:name/share", (req, res) => {
+    const name = req.params.name;
+    const st = getShareState(name);
+    if (!st) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    const recipient_email = String(req.body?.recipient_email ?? "").trim();
+    const grant = req.body?.grant;
+    if (!recipient_email) {
+      return res.status(400).json({
+        data: null,
+        error: { code: "VALIDATION_ERROR", message: "recipient_email is required" },
+      });
+    }
+    if (!isDatapackShareGrant(grant)) {
+      return res.status(400).json({
+        data: null,
+        error: { code: "VALIDATION_ERROR", message: DATAPACK_SHARE_GRANT_VALIDATION_MESSAGE },
+      });
+    }
+    const invite_id = `inv_${Date.now()}`;
+    const local = recipient_email.split("@")[0] || "invitee";
+    st.pending.push({
+      invite_id,
+      grant,
+      recipient_user_id: "",
+      recipient_user_name: local,
+      recipient_email_id: recipient_email,
+    });
+    return res.status(201).json(
+      ok({
+        status: "sent",
+        invite_id,
+        recipient_email,
+        grant,
+      }),
+    );
+  });
+
+  app.post("/api/v1/datapacks/:name/invite/:inviteId/resend", (req, res) => {
+    const name = req.params.name;
+    const inviteId = req.params.inviteId;
+    const st = getShareState(name);
+    if (!st) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    if (!st.pending.some((p) => p.invite_id === inviteId)) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: "invite not found" },
+      });
+    }
+    return res.json(ok({}));
+  });
+
+  app.delete("/api/v1/datapacks/:name/invite/:inviteId", (req, res) => {
+    const name = req.params.name;
+    const inviteId = req.params.inviteId;
+    const st = getShareState(name);
+    if (!st) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    const idx = st.pending.findIndex((p) => p.invite_id === inviteId);
+    if (idx === -1) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: "invite not found" },
+      });
+    }
+    st.pending.splice(idx, 1);
+    return res.json(ok({}));
+  });
+
+  app.patch("/api/v1/datapacks/:name/share/:shareUserId", (req, res) => {
+    const name = req.params.name;
+    const shareUserId = req.params.shareUserId;
+    const st = getShareState(name);
+    if (!st) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    const grant = (req.body as { grant?: unknown } | undefined)?.grant;
+    if (!isDatapackShareGrant(grant)) {
+      return res.status(400).json({
+        data: null,
+        error: { code: "VALIDATION_ERROR", message: DATAPACK_SHARE_GRANT_VALIDATION_MESSAGE },
+      });
+    }
+    const member = st.members.find((m) => m.user_id === shareUserId);
+    if (!member) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: "member not found" },
+      });
+    }
+    if (member.is_owner) {
+      return res.status(400).json({
+        data: null,
+        error: { code: "VALIDATION_ERROR", message: "cannot change owner grant" },
+      });
+    }
+    member.grant = grant;
+    return res.json(ok({}));
+  });
+
+  app.delete("/api/v1/datapacks/:name/share/:shareUserId", (req, res) => {
+    const name = req.params.name;
+    const shareUserId = req.params.shareUserId;
+    const st = getShareState(name);
+    if (!st) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    const idx = st.members.findIndex((m) => m.user_id === shareUserId);
+    if (idx === -1) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: "member not found" },
+      });
+    }
+    if (st.members[idx].is_owner) {
+      return res.status(400).json({
+        data: null,
+        error: { code: "VALIDATION_ERROR", message: "cannot remove owner" },
+      });
+    }
+    st.members.splice(idx, 1);
+    return res.json(ok({}));
   });
 
   app.patch("/api/v1/datapacks/:name", (req, res) => {
@@ -222,6 +443,10 @@ export async function registerRoutes(
         kbByDatapack[newName] = kbByDatapack[name];
         delete kbByDatapack[name];
       }
+      if (shareStateByDatapack[name] !== undefined) {
+        shareStateByDatapack[newName] = shareStateByDatapack[name];
+        delete shareStateByDatapack[name];
+      }
     }
     if (newConn) {
       dp.datapack_ysql_connection_string = newConn;
@@ -246,6 +471,7 @@ export async function registerRoutes(
     datapacks.splice(idx, 1);
     delete agentsByDatapack[name];
     delete kbByDatapack[name];
+    delete shareStateByDatapack[name];
     return res.json(ok({ message: "datapack deleted" }));
   });
 

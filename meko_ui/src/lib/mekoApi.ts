@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { DatapackShareGrant } from "./datapackShareGrants";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 
 type ApiError = {
@@ -51,6 +52,8 @@ export type Datapack = {
   memory_count?: number;
   knowledge_count?: number;
   learnings_count?: number;
+  /** Set when this row is a share (recipient); `null`/omitted for datapacks you own. */
+  grant?: DatapackShareGrant | null;
 };
 
 export type Agent = {
@@ -333,8 +336,14 @@ export async function deleteDatapack(name: string) {
 
 // --- Datapack share / invites (paths are under `API_BASE`, typically `/api/v1`) ---
 
-/** Role granted on a shared datapack. */
-export type DatapackShareGrant = "viewer" | "contributor" | "maintainer";
+export type { DatapackShareGrant };
+export {
+  DATAPACK_SHARE_GRANT_CONTRIBUTOR,
+  DATAPACK_SHARE_GRANT_MAINTAINER,
+  DATAPACK_SHARE_GRANT_VIEWER,
+  DATAPACK_SHARE_GRANTS,
+  isDatapackShareGrant,
+} from "./datapackShareGrants";
 
 /** Recipient action on a pending invite. */
 export type DatapackInviteUserAction = "accept" | "decline";
@@ -386,6 +395,7 @@ export async function listDatapackIncomingShares(options: { signal?: AbortSignal
 /** Body for POST /datapacks/invite-action */
 export type DatapackInviteActionPayload = {
   invite_id: string;
+  /** Same value as {@link CurrentUser.account_id} for the signed-in recipient. */
   recipient_user_id: string;
   user_action: DatapackInviteUserAction;
 };
@@ -466,6 +476,7 @@ export type UpdateDatapackMemberGrantPayload = {
 };
 
 /**
+ * TODO: This is a stretch goal for the MVP.
  * Update an active member’s grant (owner).
  * PATCH /datapacks/:name/share/:shareUserId
  */
@@ -482,6 +493,7 @@ export async function updateDatapackMemberGrant(
 }
 
 /**
+ * TODO: This is a stretch goal for the MVP.
  * Remove a member’s access / delete active share (owner).
  * DELETE /datapacks/:name/share/:shareUserId
  */

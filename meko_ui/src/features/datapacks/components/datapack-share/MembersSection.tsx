@@ -1,7 +1,7 @@
-// Renders human members from outgoing-shares with role editing and removal when the viewer is the owner.
-// Agents tab is a coming-soon placeholder; Humans and All currently show the same member list from the API.
+// Renders human members from outgoing-shares: list layout, owner row shows crown + “Owner”, grant Select when editable.
+// Agents tab is a coming-soon placeholder; Humans and All show the same member list (no activity metadata).
 import { useState } from "react";
-import { Users } from "lucide-react";
+import { Crown, Users } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -100,56 +100,57 @@ function MemberRow({
     }
   };
 
+  const roleControl = member.is_owner ? (
+    <div className="flex h-9 items-center gap-2 pl-2 mr-4 text-sm font-medium text-foreground" title="Datapack owner">
+      <Crown className="h-4 w-4 shrink-0 text-amber-400" aria-hidden />
+      <span>Owner</span>
+    </div>
+  ) : grantReadOnly ? (
+    <div className="flex h-9 min-w-[148px] items-center rounded-md border border-border bg-muted/30 px-3 text-xs text-muted-foreground">
+      {shareGrantLabel(member.grant)}
+    </div>
+  ) : (
+    <Select value={member.grant} onValueChange={(v) => void handleGrantChange(v as DatapackShareGrant)} disabled={grantBusy}>
+      <SelectTrigger className="h-9 w-[min(100%,11rem)] min-w-[148px] text-xs bg-background/80 sm:w-44">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {SHARE_INVITE_ROLES.map((r) => (
+          <SelectItem key={r.id} value={r.id}>
+            {r.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-border bg-background/50 px-3 py-3">
-      <div
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground"
-        aria-hidden
-      >
-        {memberInitial(member)}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{member.user_name || member.user_email_id}</span>
-          {member.is_owner ? (
-            <Badge variant="secondary" className="shrink-0 text-[10px] font-semibold uppercase tracking-wide">
-              Owner
-            </Badge>
-          ) : null}
-          {isYou ? <span className="text-xs font-normal text-muted-foreground">(you)</span> : null}
+    <div className="flex w-full items-center justify-between gap-4 px-3 py-3.5">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <div
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground"
+          aria-hidden
+        >
+          {memberInitial(member)}
         </div>
-        <div className="truncate text-xs text-muted-foreground">{member.user_email_id}</div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {grantReadOnly ? (
-          <div className="flex h-8 min-w-[140px] items-center rounded-md border border-border bg-muted/30 px-2 text-xs text-muted-foreground">
-            {shareGrantLabel(member.grant)}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate text-sm font-medium text-foreground">{member.user_name || member.user_email_id}</span>
+            {isYou ? (
+              <Badge
+                variant="outline"
+                className="shrink-0 border-blue-500/35 bg-blue-500/10 px-2 py-0 text-[10px] font-semibold uppercase tracking-wide text-blue-200"
+              >
+                you
+              </Badge>
+            ) : null}
           </div>
-        ) : (
-          <Select
-            value={member.grant}
-            onValueChange={(v) => void handleGrantChange(v as DatapackShareGrant)}
-            disabled={grantBusy}
-          >
-            <SelectTrigger className="h-8 w-[140px] text-xs bg-background/80">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SHARE_INVITE_ROLES.map((r) => (
-                <SelectItem key={r.id} value={r.id}>
-                  {r.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {member.is_owner ? (
-          <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" disabled aria-label="Owner cannot be removed">
-            <span className="text-lg leading-none" aria-hidden>
-              ×
-            </span>
-          </Button>
-        ) : (
+          <div className="truncate text-xs text-muted-foreground">{member.user_email_id}</div>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center justify-end gap-2">
+        {roleControl}
+        {member.is_owner ? null : (
           <Button
             type="button"
             variant="ghost"
@@ -187,8 +188,8 @@ function MembersList({
   if (loading && members.length === 0) {
     return (
       <div className="space-y-2">
-        <div className="h-[68px] animate-pulse rounded-lg border border-border bg-muted/20" />
-        <div className="h-[68px] animate-pulse rounded-lg border border-border bg-muted/20" />
+        <div className="h-[72px] animate-pulse rounded-lg border border-border bg-muted/20" />
+        <div className="h-[72px] animate-pulse rounded-lg border border-border bg-muted/20" />
       </div>
     );
   }
@@ -202,7 +203,12 @@ function MembersList({
   }
 
   return (
-    <div className={cn("space-y-2", loading && "opacity-70")}>
+    <div
+      className={cn(
+        "divide-y divide-border overflow-hidden rounded-lg border border-border bg-background/50",
+        loading && "opacity-70",
+      )}
+    >
       {members.map((m) => (
         <MemberRow
           key={m.user_id}

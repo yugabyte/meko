@@ -1,7 +1,8 @@
+// Placeholder card for transferring datapack ownership (feature not enabled yet).
+// Uses ShareComingSoonPlaceholder with a blurred mock row so it matches LinkSharingSection on the share page.
 import { Shield } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DatapackShareSectionCard } from "@/features/datapacks/components/datapack-share/DatapackShareSectionCard";
+import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/datapack-share/ShareComingSoonPlaceholder";
 
 export function TransferOwnershipSection() {
   return (
@@ -10,28 +11,30 @@ export function TransferOwnershipSection() {
       icon={<Shield className="text-destructive/90" aria-hidden />}
       tone="danger"
       trailing={
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex shrink-0" tabIndex={0}>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled
-                className="cursor-not-allowed border-destructive/50 text-destructive opacity-70 hover:bg-transparent"
-              >
-                Transfer
-              </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="left">Coming Soon</TooltipContent>
-        </Tooltip>
+        <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          coming soon
+        </span>
       }
     >
-      <p className="text-sm text-muted-foreground max-w-2xl">
-        Transfer this datapack to another admin. You will lose owner controls unless they grant them
-        back.
-      </p>
+      <ShareComingSoonPlaceholder
+        aria-label="Transfer ownership — coming soon"
+        blurredPreview={
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="min-w-0 space-y-1">
+              <p className="text-sm font-medium text-foreground">
+                Transfer this datapack to another maintainer
+              </p>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                You will lose owner controls unless they grant them back after the transfer.
+              </p>
+            </div>
+            <div
+              className="h-9 shrink-0 self-start rounded-md border border-border bg-muted px-8 sm:self-center"
+              aria-hidden
+            />
+          </div>
+        }
+      />
     </DatapackShareSectionCard>
   );
 }
