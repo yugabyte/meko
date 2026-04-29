@@ -127,7 +127,7 @@ export default function ConversationsPanel({ datapackName, total, className }: P
               · {total} {total === 1 ? "session" : "sessions"}
             </span>
           ) : (
-            <span className="font-normal text-muted-foreground"> · …</span>
+            <span className="font-normal text-muted-foreground"> · </span>
           )}
         </>
       }

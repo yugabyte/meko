@@ -35,11 +35,13 @@ type Props = {
   datapackId: string;
   /** `preview`: shows 3 unpromoted rows (fetches a larger window so slots refill after promote). `full`: paginated list. */
   variant?: MemoryPromotionVariant;
+  isPromoteAllowed: boolean;
 };
 
 export default function MemoryPromotionPanel({
   datapackName,
   datapackId,
+  isPromoteAllowed,
   variant = "full",
 }: Props) {
   const {
@@ -182,10 +184,10 @@ export default function MemoryPromotionPanel({
                     : `Select all selectable on this page (${selectableIds.length}${total > memories.length ? ` of ${total}` : ""})`}
               </span>
             </label>
-            <Button
+            {<Button
               className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
               onClick={() => void promote()}
-              disabled={promoting || selected.size < 2}
+              disabled={promoting || selected.size < 2 || !isPromoteAllowed}
             >
               {promoting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -197,7 +199,7 @@ export default function MemoryPromotionPanel({
                 : selected.size > 1
                   ? `Promote to Knowledge (${selected.size})`
                   : "Promote to Knowledge"}
-            </Button>
+            </Button>}
           </div>
         )}
 

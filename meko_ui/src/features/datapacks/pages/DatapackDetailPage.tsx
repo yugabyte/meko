@@ -475,6 +475,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                   <MemoryPromotionPanel
                     datapackName={datapackName}
                     datapackId={datapack.datapack_id}
+                    isPromoteAllowed={datapackGrant === DATAPACK_SHARE_GRANT_OWNER || datapackGrant === DATAPACK_SHARE_GRANT_MAINTAINER}
                     variant="preview"
                   />
                 ) : (
@@ -489,7 +490,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                   knowledgeBaseCount={knowledgeBaseCount}
                   datapackSummaryReady={!statusLoading && datapack != null}
                 />
-              ) : activeTab === DATAPACK_DETAIL_TAB.memory ? (
+              ) : activeTab === DATAPACK_DETAIL_TAB.memories ? (
                 datapack?.datapack_id ? (
                   <MemoryReadOnlySummaryPanel
                     datapackName={datapackName}

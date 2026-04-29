@@ -8,6 +8,7 @@ import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-de
 import MemoryPromotionPanel from "@/features/datapacks/components/memory-promotion/MemoryPromotionPanel";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/mekoApi";
+import { DATAPACK_SHARE_GRANT_MAINTAINER, DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
 
 type Props = {
   datapackName: string;
@@ -17,6 +18,7 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [isPromoteAllowed, setIsPromoteAllowed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -25,7 +27,10 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
       setStatusError(null);
       try {
         const d = await getDatapack(datapackName);
-        if (!cancelled) setDatapack(d);
+        if (!cancelled) {
+          setDatapack(d);
+          setIsPromoteAllowed(d.grant === DATAPACK_SHARE_GRANT_OWNER || d.grant === DATAPACK_SHARE_GRANT_MAINTAINER);
+        }
       } catch (e) {
         if (!cancelled) {
           setDatapack(null);
@@ -74,7 +79,7 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
         ) : null}
 
         {datapack?.datapack_id ? (
-          <MemoryPromotionPanel datapackName={datapackName} datapackId={datapack.datapack_id} variant="full" />
+          <MemoryPromotionPanel datapackName={datapackName} datapackId={datapack.datapack_id} variant="full" isPromoteAllowed={isPromoteAllowed} />
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
             {statusLoading ? "Loading datapack…" : "Datapack not available."}
