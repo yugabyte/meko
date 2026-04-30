@@ -1,4 +1,4 @@
-// Loads paginated memories for a datapack, selection, and POST /tenant-kb/sync (promote to KB).
+// Loads paginated memories for a datapack, selection, and POST /promote-memories (promote to KB).
 // `preview` uses page 1 with a larger fetch window but only shows 3 unpromoted rows so promoting one
 // still fills the preview; `full` uses local page/pageSize and Prev/Next navigation.
 
@@ -8,9 +8,9 @@ import {
   getCurrentUser,
   listMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
-  syncMemoriesToKB,
+  promoteMemories,
   type Memory,
-  type TenantKBSyncResult,
+  type PromoteMemoriesResult,
 } from "@/lib/mekoApi";
 import { readPromotedCache, writePromotedCache, type PromotedMemory } from "./promotedStorage";
 
@@ -203,7 +203,7 @@ export function useMemoryPromotion({
       setLastOutcome(null);
 
       try {
-        const result: TenantKBSyncResult = await syncMemoriesToKB({
+        const result: PromoteMemoriesResult = await promoteMemories({
           user_id: accountId,
           datapack_id: datapackId,
           memory_ids: memoryIds,

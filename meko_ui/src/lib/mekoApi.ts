@@ -866,14 +866,14 @@ export async function listMemories(
 }
 
 /**
- * Body for POST /api/v1/tenant-kb/sync.
+ * Body for POST /api/v1/promote-memories.
  *
  * Identifier semantics:
  * - `user_id`:     Meko `account_id` of the logged-in user (same semantics
  *                  as `MemoryListFilter.user_id`). The backend both filters
  *                  the mem0 fetch on `payload->>'user_id' = user_id` and
  *                  writes this value into `knowledge_base.user_id`.
- * - `datapack_id`: Datapack UUID; routes the sync to the correct tenant DB
+ * - `datapack_id`: Datapack UUID; routes the promotion to the correct tenant DB
  *                  and is written into `knowledge_base.datapack_id`.
  * - `agent_id`:    Optional; when set, narrows the mem0 source table to
  *                  `{agent_id}_mem0_collection`.
@@ -884,20 +884,20 @@ export async function listMemories(
  *                  are INSERTed. Rows missing from mem0 or with NULL
  *                  vectors are reported in `not_found_ids`.
  */
-export type TenantKBSyncRequest = {
+export type PromoteMemoriesRequest = {
   user_id: string;
   datapack_id: string;
   agent_id?: string;
   memory_ids: string[];
 };
 
-export type TenantKBSyncResult = {
+export type PromoteMemoriesResult = {
   inserted_ids: string[];
   updated_ids: string[];
   not_found_ids: string[];
 };
 
-export async function syncMemoriesToKB(payload: TenantKBSyncRequest) {
-  return request<TenantKBSyncResult>("/tenant-kb/sync", "POST", payload);
+export async function promoteMemories(payload: PromoteMemoriesRequest) {
+  return request<PromoteMemoriesResult>("/promote-memories", "POST", payload);
 }
 
