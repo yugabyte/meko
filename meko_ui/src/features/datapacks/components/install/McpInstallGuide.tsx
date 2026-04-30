@@ -62,7 +62,7 @@ const CLAUDE_CODE_INSTALL_STEPS: InstallStep[] = [
     title: "Install Meko MCP for Claude Code",
     description:
       "Run once with your MCP URL and API key from the Datapacks page (replace the placeholders before running).",
-    code: "npx @yugabytedb/meko-mcp --client claude --url <mcp-server-url> --api-key <mcp-server-api-key>",
+    code: "npx @yugabytedb/meko-mcp --client claude-code --url <mcp-server-url> --api-key <mcp-server-api-key>",
     langLabel: "bash",
   },
 ];

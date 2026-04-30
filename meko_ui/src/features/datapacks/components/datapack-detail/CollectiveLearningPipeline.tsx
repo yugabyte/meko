@@ -367,7 +367,7 @@ export function CollectiveLearningPipeline({
               tone={DATAPACK_DETAIL_TAB.memories}
               eyebrow=""
               title="Collective Memory"
-              value={memoryCount}
+              value={learningsCount}
               subtitle=""
               titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
               loading={statusLoading}

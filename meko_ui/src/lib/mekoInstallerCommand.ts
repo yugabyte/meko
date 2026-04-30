@@ -1,5 +1,5 @@
 /** `create-meko-setup.mjs --client` values from install docs. */
-export type MekoInstallerClient = "claude-desktop" | "claude" | "cursor";
+export type MekoInstallerClient = "claude-desktop" | "claude-code" | "cursor";
 
 /**
  * One-line installer command for MCP setup (matches McpInstallGuide examples; JSON-quoted URL/key for safe copy).

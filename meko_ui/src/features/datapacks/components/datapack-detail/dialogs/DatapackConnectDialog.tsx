@@ -260,7 +260,7 @@ export function DatapackConnectDialog({
                   <InstallerCommandRow
                     dialogOpen={open}
                     command={buildMekoInstallerCommand(
-                      "claude",
+                      "claude-code",
                       provisionStatus.mcp_server_url,
                       provisionStatus.mcp_api_key,
                     )}
