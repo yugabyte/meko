@@ -10,7 +10,7 @@ Get from zero to a working Meko integration in 60 seconds.
 
 ## Sign up
 
-1. Create a Meko account at the [Meko portal](https://app.mekodev.com/).
+1. Create a Meko account at the [Meko portal](https://cloud.mekodata.ai/).
 
 1. Sign in to your account.
 
