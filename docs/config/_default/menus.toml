@@ -1,20 +1,13 @@
 [[main]]
-  name = "GitHub"
-  weight = 5
-  url = "https://github.com/yugabyte/meko"
-  pre = '<span class="social-link"><i class="fa-brands fa-github"></i>'
-  post = "</span>"
-
-[[main]]
   name = "Discord"
   weight = 10
-  url = "https://discord.gg/smxHNvmf"
+  url = "https://discord.gg/GWcSST7GqZ"
   pre = '<span class="social-link"><i class="fa-brands fa-discord"></i>'
   post = "</span>"
 
 [[main]]
-  name = "Sign Up FREE"
+  name = "Request Access"
   weight = 15
-  url = "#"
+  url = "https://info.yugabyte.com/meko-request-access"
   pre = '<span class="btn">'
   post = "</span>"

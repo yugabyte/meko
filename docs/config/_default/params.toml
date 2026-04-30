@@ -2,9 +2,8 @@ author = "Team meko"
 copyright = 'meko. All Rights Reserved'
 version = false
 
-# Docsy page-meta-links: Feedback dropdown + “Edit this doc page” on GitHub
+# Docsy page-meta-links: Feedback dropdown for GitHub issues
 github_repo = "https://github.com/yugabyte/meko"
-github_subdir = "docs"
 
 [ui]
   navbar_logo = true
@@ -15,11 +14,6 @@ github_subdir = "docs"
   ul_show = 1
 
 [[links.developer]]
-  name = "GitHub"
-  url = "https://github.com/yugabyte/meko"
-  icon = "fab fa-github"
-
-[[links.developer]]
   name = "Discord"
-  url = "https://discord.gg/smxHNvmf"
+  url = "https://discord.gg/GWcSST7GqZ"
   icon = "fab fa-discord"

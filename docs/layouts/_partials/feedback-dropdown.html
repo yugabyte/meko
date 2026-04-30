@@ -1,22 +1,12 @@
-{{/* GitHub Feedback dropdown: doc issue, edit page, product issue */ -}}
+{{/* GitHub Feedback dropdown: doc issue, product issue */ -}}
 {{ $github_repo := $.Param "github_repo" }}
 {{ if not $github_repo }}
   {{ return }}
 {{ end }}
 
-{{ $github_branch := $.Param "github_branch" | default "main" }}
-{{ $github_subdir := $.Param "github_subdir" | default "docs" }}
-
 {{ $sourceURL := $.Permalink }}
 {{ $docIssueURL := printf "%s/issues/new?title=%s&body=%s" $github_repo "[DOC]" (printf "**Source:** %s" $sourceURL) }}
 {{ $productIssueURL := printf "%s/issues/new?title=%s" $github_repo "[MEKO]" }}
-
-{{ $editURL := "" }}
-{{ if .File }}
-  {{ $editPath := printf "%s/%s/content/%s" $github_branch $github_subdir .File.Path }}
-  {{ $editPath = replaceRE "//+" "/" $editPath }}
-  {{ $editURL = printf "%s/edit/%s" $github_repo $editPath }}
-{{ end }}
 
 <div class="dropdown td-page-meta__feedback d-inline-block text-start">
   <button
@@ -31,11 +21,6 @@
     <li>
       <a class="dropdown-item" href="{{ $docIssueURL }}" target="_blank" rel="noopener">Report a doc issue</a>
     </li>
-    {{ if $editURL -}}
-      <li>
-        <a class="dropdown-item" href="{{ $editURL }}" target="_blank" rel="noopener">Edit this doc page</a>
-      </li>
-    {{ end -}}
     <li>
       <a class="dropdown-item" href="{{ $productIssueURL }}" target="_blank" rel="noopener">Report a product issue</a>
     </li>
