@@ -179,23 +179,31 @@ func (r *LangfuseRepo) FindLangfuseAPIKeyID(projectID, publicKey string) (string
 	return id, true, nil
 }
 
-// CountDistinctSessionsForProject returns COUNT(DISTINCT session_id)
-// over non-deleted clickhouse.traces rows for the given project.
-// A session_id is the canonical conversation identifier in Langfuse,
-// so the result equals the number of distinct conversations.
+// CountDistinctSessionsForProject counts conversations in the
+// project that have at least one message (observation tagged
+// with metadata.message_id by add_message). Bare traces with no
+// messages are excluded so the count matches the listing endpoint.
 func (r *LangfuseRepo) CountDistinctSessionsForProject(projectID string) (int64, error) {
 	if !r.LangfuseDBConfigured() {
 		return 0, ErrLangfuseDBNotConfigured
 	}
+	const query = `
+		SELECT COUNT(DISTINCT t.session_id)
+		FROM   clickhouse.traces t
+		WHERE  t.project_id  = $1
+		  AND  t.session_id IS NOT NULL
+		  AND  t.is_deleted  = false
+		  AND  EXISTS (
+		      -- a message = observation whose metadata has message_id set
+		      SELECT 1
+		      FROM   clickhouse.observations o
+		      WHERE  o.project_id = t.project_id
+		        AND  o.trace_id   = t.id
+		        AND  (o.metadata ->> 'message_id') IS NOT NULL
+		  )
+	`
 	var total int64
-	err := r.langfuseDB.QueryRow(
-		`SELECT COUNT(DISTINCT session_id)
-		   FROM clickhouse.traces
-		  WHERE project_id  = $1
-		    AND session_id IS NOT NULL
-		    AND is_deleted  = false`,
-		projectID,
-	).Scan(&total)
+	err := r.langfuseDB.QueryRow(query, projectID).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("langfuse db: count distinct session_id: %w", err)
 	}
@@ -227,29 +235,16 @@ func (r *LangfuseRepo) ListConversationsForProject(projectID string, limit, offs
 	}
 
 	const q = `
+-- One page of conversations: session + first user prompt + message count.
 SELECT
     sessions.conversation_id,
     sessions.agent_id,
     sessions.started_at,
-
-    -- May be NULL (no messages yet) or empty (observation had blank
-    -- input). Both are handled by the UI as a styled placeholder, so
-    -- we intentionally do NOT coalesce on the server.
-    first_messages.first_message                  AS first_message,
-
-    -- Sessions absent from the message-count subquery have no
-    -- messages; treat them as zero rather than NULL.
-    COALESCE(message_counts.messages, 0)          AS messages
+    first_messages.first_message              AS first_message,
+    COALESCE(message_counts.messages, 0)      AS messages
 
 FROM (
-    -- (1) One row per session_id. clickhouse.traces can have multiple
-    -- rows for the same trace_id (Langfuse upserts traces as events
-    -- arrive); DISTINCT ON keeps the earliest-timestamped row per
-    -- session, giving a clean canonical list.
-    --   agent_id   : trace metadata of the earliest trace (Meko MCP
-    --                writes it on conversation_create).
-    --   started_at : timestamp of the earliest trace = when the
-    --                conversation opened.
+    -- (1) one row per session: earliest trace wins (agent_id, started_at).
     SELECT DISTINCT ON (traces.session_id)
         traces.session_id              AS conversation_id,
         traces.metadata->>'agent_id'   AS agent_id,
@@ -261,35 +256,27 @@ FROM (
     ORDER  BY traces.session_id, traces."timestamp" ASC
 ) AS sessions
 
-LEFT JOIN (
-    -- (2) Message count per session. A "message" = one observation
-    -- written by langfuse_store.add_message(); that function is the
-    -- only place a 'message_id' key is set on observation metadata,
-    -- so the (metadata ? 'message_id') predicate is implementation-
-    -- stable and survives renames of the observation name column.
-    --
-    -- trace_id == session_id in the Meko MCP server (see
-    -- langfuse_store.create_conversation), which is why we can join
-    -- directly on sessions.conversation_id below.
+JOIN (
+    -- (2) message count per session; INNER JOIN drops conversations
+    -- with 0 chat messages. "message" = observation
+    -- with metadata.message_id set (only add_message stamps it).
     SELECT
         observations.trace_id  AS conversation_id,
         COUNT(*)               AS messages
     FROM   clickhouse.observations AS observations
     WHERE  observations.project_id = $1
-      AND  observations.metadata ? 'message_id'
+      AND  (observations.metadata ->> 'message_id') IS NOT NULL
     GROUP  BY observations.trace_id
 ) AS message_counts ON message_counts.conversation_id = sessions.conversation_id
 
 LEFT JOIN (
-    -- (3) First message per session. Pick the earliest message
-    -- observation and use its input (the user's prompt) as the
-    -- preview text.
+    -- (3) first user prompt per session, used as preview text.
     SELECT DISTINCT ON (observations.trace_id)
         observations.trace_id  AS conversation_id,
         observations.input     AS first_message
     FROM   clickhouse.observations AS observations
     WHERE  observations.project_id = $1
-      AND  observations.metadata ? 'message_id'
+      AND  (observations.metadata ->> 'message_id') IS NOT NULL
     ORDER  BY observations.trace_id, observations.start_time ASC
 ) AS first_messages ON first_messages.conversation_id = sessions.conversation_id
 
