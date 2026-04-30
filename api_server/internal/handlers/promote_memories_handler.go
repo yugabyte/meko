@@ -26,7 +26,9 @@ func NewPromoteMemoriesHandler(svc *service.PromoteMemoriesService) *PromoteMemo
 //	@Param		body	body		models.PromoteMemoriesRequest	true	"datapack_id + list of mem0 memory IDs to promote (optional user_id / agent_id)"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
 //	@Failure	500		{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/promote-memories [post]
 func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
 	var req models.PromoteMemoriesRequest

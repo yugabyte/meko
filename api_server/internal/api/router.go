@@ -126,13 +126,6 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 
 	v1.GET("/health", handlers.HealthHandler(cfg.DB))
 
-	memoriesHTTPHandler := handlers.NewMemoriesHandler(reg.memoriesSvc)
-	v1.GET("/memories", memoriesHTTPHandler.ListGET)
-	v1.GET("/memories/count", memoriesHTTPHandler.CountGET)
-
-	promoteMemoriesHandler := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc)
-	v1.POST("/promote-memories", promoteMemoriesHandler.Promote)
-
 	authEnabled := cfg.CognitoRegion != "" &&
 		cfg.CognitoPoolID != "" &&
 		cfg.CognitoClientID != ""
@@ -255,6 +248,13 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	g.POST("/agents", agentH.CreateUser)
 	g.GET("/agents", agentH.ListUser)
 	g.DELETE("/agents/:agent_id", agentH.DeleteUser)
+
+	memoriesH := handlers.NewMemoriesHandler(reg.memoriesSvc)
+	g.GET("/memories", memoriesH.ListGET)
+	g.GET("/memories/count", memoriesH.CountGET)
+
+	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc)
+	g.POST("/promote-memories", promoteMemoriesH.Promote)
 
 	shareH := handlers.NewSharingHandler(reg.sharingSvc)
 	g.GET("/datapacks/incoming-shares", shareH.IncomingShares)

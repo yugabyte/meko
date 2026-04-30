@@ -51,7 +51,9 @@ func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFil
 //	@Param		page_size	query	integer	false	"Items per page (default 20, max 100)"
 //	@Success	200	{object}	APIResponse
 //	@Failure	400	{object}	APIResponse
+//	@Failure	401	{object}	APIResponse
 //	@Failure	500	{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/memories [get]
 func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
@@ -78,7 +80,9 @@ func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 //	@Param		datapack_id	query		string	true	"Datapack ID"
 //	@Success	200			{object}	APIResponse
 //	@Failure	400			{object}	APIResponse
+//	@Failure	401			{object}	APIResponse
 //	@Failure	500			{object}	APIResponse
+//	@Security	BearerAuth
 //	@Router		/memories/count [get]
 func (handler *MemoriesHandler) CountGET(c echo.Context) error {
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
