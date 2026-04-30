@@ -7,6 +7,7 @@ weight: 4400
 
 Knowledge bases let you load documents into your datapack and query them using semantic search (RAG). Meko handles chunking, embedding, and indexing automatically.
 
+<!--
 ## Add a knowledge base
 
 ### Via CLI
@@ -34,6 +35,7 @@ POST /api/v1/datapacks/{name}/knowledge-bases
   "url": "s3://bucket/docs/"
 }
 ```
+-->
 
 ## Supported sources
 
@@ -57,35 +59,6 @@ Search the knowledge base for information about deployment procedures
 
 The MCP server embeds your query, performs similarity search against the indexed chunks, and returns the most relevant results.
 
-## List knowledge bases
-
-### Via CLI
-
-```bash
-meko datapack status --name my-datapack
-```
-
-Shows knowledge base count as part of the datapack summary.
-
-### Via API
-
-```text
-GET /api/v1/datapacks/{name}/knowledge-bases
-```
-
-## Delete a knowledge base
-
-### Via API
-
-```text
-DELETE /api/v1/datapacks/{name}/knowledge-bases
-```
-
-```json
-{
-  "url": "s3://bucket/docs/"
-}
-```
 
 <!-- TODO: Add documentation for trigger_knowledge_base_build and check_index_status MCP tools -->
 <!-- TODO: Add documentation for add_source_to_index to add new sources to an existing knowledge base -->
