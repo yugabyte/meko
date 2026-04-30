@@ -444,24 +444,21 @@ type DefaultDatapackDetails struct {
 
 // GetDatapackProvisionDetails returns the connection details for the
 // datapack with the given ID, or (nil, nil) if it doesn't exist.
+// MCPServerURL is set to the static MCP endpoint; MCPAPIKey is left
+// empty — the handler layer populates it from the caller's auth token.
 func (r *DatapackRepo) GetDatapackProvisionDetails(datapackID string) (*DefaultDatapackDetails, error) {
 	var d DefaultDatapackDetails
-	var mcpKey sql.NullString
-	var userID string
 	err := r.db.QueryRow(
-		`SELECT d.datapack_id, d.datapack_name, d.user_id,
-		        d.datapack_ysql_connection_string,
-		        d.datapack_ysql_username, d.datapack_ysql_password,
-		        u.user_details->'mcp_credentials'->>'mcp_user_password'
-		 FROM meko_system.datapacks d
-		 JOIN meko_system.users u ON u.user_id = d.user_id
-		 WHERE d.datapack_id = $1`,
+		`SELECT datapack_id, datapack_name,
+		        datapack_ysql_connection_string,
+		        datapack_ysql_username, datapack_ysql_password
+		 FROM meko_system.datapacks
+		 WHERE datapack_id = $1`,
 		datapackID,
 	).Scan(
-		&d.DatapackID, &d.DatapackName, &userID,
+		&d.DatapackID, &d.DatapackName,
 		&d.DBConnStr,
 		&d.DBUserName, &d.DBPassword,
-		&mcpKey,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -472,10 +469,7 @@ func (r *DatapackRepo) GetDatapackProvisionDetails(datapackID string) (*DefaultD
 		return nil, fmt.Errorf("failed to get datapack provision details: %w", err)
 	}
 
-	if mcpKey.Valid {
-		d.MCPAPIKey = mcpKey.String
-	}
-	d.MCPServerURL = fmt.Sprintf("https://%s.mcp.mekodev.com/mcp", userID)
+	d.MCPServerURL = "https://mcp.mekodata.ai/mcp"
 	return &d, nil
 }
 

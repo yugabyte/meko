@@ -61,7 +61,7 @@ func RequireAuth(
 ) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			tokenStr, err := extractBearerToken(c.Request())
+			tokenStr, err := ExtractBearerToken(c.Request())
 			if err != nil {
 				slog.Debug("auth missing or malformed header",
 					"path", c.Path(),
@@ -278,9 +278,9 @@ func DevAuth(accounts AccountLookup) echo.MiddlewareFunc {
 	}
 }
 
-// extractBearerToken pulls the token from the "Authorization: Bearer <token>"
+// ExtractBearerToken pulls the token from the "Authorization: Bearer <token>"
 // header. Returns an error if the header is missing or malformed.
-func extractBearerToken(r *http.Request) (string, error) {
+func ExtractBearerToken(r *http.Request) (string, error) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
 		// Cookie fallback for browser-based auth flows.

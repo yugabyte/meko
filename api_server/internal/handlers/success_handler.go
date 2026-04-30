@@ -316,11 +316,18 @@ func DatapackProvisionStatusHandler(dpRepo *repository.DatapackRepo) echo.Handle
 				"INTERNAL_ERROR", "failed to fetch datapack provisioning details")
 		}
 		if details == nil {
-			// Rare race: ownership middleware saw the row, but it
-			// vanished before this query ran.
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", "datapack no longer exists")
 		}
+
+		// TODO: Replace with a long-lived API key minted by the backend
+		// that maps back to the user and does not expire.
+		token, err := auth.ExtractBearerToken(c.Request())
+		if err != nil {
+			return apiError(c, http.StatusUnauthorized,
+				"UNAUTHORIZED", "unable to extract access token")
+		}
+		details.MCPAPIKey = token
 
 		return ok(c, http.StatusOK, details)
 	}
