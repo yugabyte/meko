@@ -181,17 +181,9 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     const datapackId = datapack?.datapack_id;
     if (!datapackId) return;
     let mounted = true;
-    const cache = readProvisionStatusCache();
-    const cached = cache[datapackId];
-    if (cached && mounted) {
-      setProvisionStatus(cached);
-      setConnectLoading(false);
-      setConnectError(null);
-      return () => {
-        mounted = false;
-      };
-    }
 
+    // Always fetch fresh data — mcp_api_key is the caller's short-lived
+    // access token, so a cached value would be stale.
     const loadProvisionStatus = async () => {
       try {
         setConnectLoading(true);
