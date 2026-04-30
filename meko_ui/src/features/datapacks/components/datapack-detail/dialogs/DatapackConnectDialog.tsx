@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy, Link as LinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,9 +9,66 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useTruncatableCodeDisplay } from "@/hooks/useTruncatableCodeDisplay";
 import { copyToClipboard } from "@/lib/clipboard";
 import { buildMekoInstallerCommand } from "@/lib/mekoInstallerCommand";
 import type { ProvisionStatus } from "@/lib/mekoApi";
+
+/** Collapsed API key preview length; copy always uses the full key. */
+const MCP_API_KEY_PREVIEW_MAX_CHARS = 220;
+
+/** Collapsed one-line installer preview; copy always uses the full command. */
+const INSTALLER_COMMAND_PREVIEW_MAX_CHARS = 320;
+
+function InstallerCommandRow({
+  command,
+  copyField,
+  copiedField,
+  onCopy,
+  dialogOpen,
+}: {
+  command: string;
+  copyField: string;
+  copiedField: string | null;
+  onCopy: (text: string, field: string) => void;
+  dialogOpen: boolean;
+}) {
+  const { displayText, needsToggle, expanded, toggleExpanded } = useTruncatableCodeDisplay(
+    command,
+    INSTALLER_COMMAND_PREVIEW_MAX_CHARS,
+    `${dialogOpen ? "1" : "0"}:${command}`,
+  );
+
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-border bg-[#0E1525] p-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <code className="min-w-0 break-all text-xs leading-relaxed text-blue-100">{displayText}</code>
+        {needsToggle ? (
+          <button
+            type="button"
+            className="self-start text-sm font-medium text-blue-400 hover:text-blue-300"
+            onClick={toggleExpanded}
+          >
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        ) : null}
+      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-white"
+        onClick={() => void onCopy(command, copyField)}
+      >
+        {copiedField === copyField ? (
+          <Check className="h-4 w-4 text-green-500" />
+        ) : (
+          <Copy className="h-4 w-4" />
+        )}
+      </Button>
+    </div>
+  );
+}
 
 export type DatapackConnectDialogProps = {
   open: boolean;
@@ -29,6 +86,22 @@ export function DatapackConnectDialog({
   provisionStatus,
 }: DatapackConnectDialogProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [apiKeyExpanded, setApiKeyExpanded] = useState(false);
+
+  const mcpApiKey = provisionStatus?.mcp_api_key ?? "";
+  const apiKeyNeedsToggle = mcpApiKey.length > MCP_API_KEY_PREVIEW_MAX_CHARS;
+  const apiKeyDisplay =
+    apiKeyNeedsToggle && !apiKeyExpanded
+      ? `${mcpApiKey.slice(0, MCP_API_KEY_PREVIEW_MAX_CHARS)}\u2026`
+      : mcpApiKey;
+
+  useEffect(() => {
+    if (!open) setApiKeyExpanded(false);
+  }, [open]);
+
+  useEffect(() => {
+    setApiKeyExpanded(false);
+  }, [mcpApiKey]);
 
   const handleCopy = async (text: string, field: string) => {
     const copied = await copyToClipboard(text);
@@ -114,20 +187,32 @@ export function DatapackConnectDialog({
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-muted-foreground">API Key</label>
-              <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
-                <code className="text-sm text-white break-all flex-1 pr-4">{provisionStatus.mcp_api_key}</code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-white"
-                  onClick={() => handleCopy(provisionStatus.mcp_api_key, "mcpkey")}
-                >
-                  {copiedField === "mcpkey" ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
+              <div className="rounded-md bg-[#0E1525] border border-border p-3">
+                <div className="flex items-start gap-2 min-w-0">
+                  <code className="block min-w-0 flex-1 text-sm text-white break-all pr-2">{apiKeyDisplay}</code>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-white"
+                    onClick={() => handleCopy(provisionStatus.mcp_api_key, "mcpkey")}
+                  >
+                    {copiedField === "mcpkey" ? (
+                      <Check className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+                {apiKeyNeedsToggle ? (
+                  <button
+                    type="button"
+                    className="mt-2 text-sm font-medium text-blue-400 hover:text-blue-300"
+                    onClick={() => setApiKeyExpanded((v) => !v)}
+                  >
+                    {apiKeyExpanded ? "Show less" : "Show more"}
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -159,158 +244,45 @@ export function DatapackConnectDialog({
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="claude-desktop" className="mt-3 space-y-2 outline-none">
-                  <div className="flex items-start gap-2 rounded-md border border-border bg-[#0E1525] p-3">
-                    <code className="min-w-0 flex-1 break-all text-xs leading-relaxed text-blue-100">
-                      {buildMekoInstallerCommand(
-                        "claude-desktop",
-                        provisionStatus.mcp_server_url,
-                        provisionStatus.mcp_api_key,
-                      )}
-                    </code>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-white"
-                      onClick={() =>
-                        handleCopy(
-                          buildMekoInstallerCommand(
-                            "claude-desktop",
-                            provisionStatus.mcp_server_url,
-                            provisionStatus.mcp_api_key,
-                          ),
-                          "mcpInstallClaude",
-                        )
-                      }
-                    >
-                      {copiedField === "mcpInstallClaude" ? (
-                        <Check className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
+                  <InstallerCommandRow
+                    dialogOpen={open}
+                    command={buildMekoInstallerCommand(
+                      "claude-desktop",
+                      provisionStatus.mcp_server_url,
+                      provisionStatus.mcp_api_key,
+                    )}
+                    copyField="mcpInstallClaudeDesktop"
+                    copiedField={copiedField}
+                    onCopy={handleCopy}
+                  />
                 </TabsContent>
                 <TabsContent value="claude-code" className="mt-3 space-y-2 outline-none">
-                  <div className="flex items-start gap-2 rounded-md border border-border bg-[#0E1525] p-3">
-                    <code className="min-w-0 flex-1 break-all text-xs leading-relaxed text-blue-100">
-                      {buildMekoInstallerCommand(
-                        "claude",
-                        provisionStatus.mcp_server_url,
-                        provisionStatus.mcp_api_key,
-                      )}
-                    </code>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-white"
-                      onClick={() =>
-                        handleCopy(
-                          buildMekoInstallerCommand(
-                            "claude",
-                            provisionStatus.mcp_server_url,
-                            provisionStatus.mcp_api_key,
-                          ),
-                          "mcpInstallClaude",
-                        )
-                      }
-                    >
-                      {copiedField === "mcpInstallClaude" ? (
-                        <Check className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
+                  <InstallerCommandRow
+                    dialogOpen={open}
+                    command={buildMekoInstallerCommand(
+                      "claude",
+                      provisionStatus.mcp_server_url,
+                      provisionStatus.mcp_api_key,
+                    )}
+                    copyField="mcpInstallClaudeCode"
+                    copiedField={copiedField}
+                    onCopy={handleCopy}
+                  />
                 </TabsContent>
                 <TabsContent value="cursor" className="mt-3 space-y-2 outline-none">
-                  <div className="flex items-start gap-2 rounded-md border border-border bg-[#0E1525] p-3">
-                    <code className="min-w-0 flex-1 break-all text-xs leading-relaxed text-blue-100">
-                      {buildMekoInstallerCommand(
-                        "cursor",
-                        provisionStatus.mcp_server_url,
-                        provisionStatus.mcp_api_key,
-                      )}
-                    </code>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-white"
-                      onClick={() =>
-                        handleCopy(
-                          buildMekoInstallerCommand(
-                            "cursor",
-                            provisionStatus.mcp_server_url,
-                            provisionStatus.mcp_api_key,
-                          ),
-                          "mcpInstallCursor",
-                        )
-                      }
-                    >
-                      {copiedField === "mcpInstallCursor" ? (
-                        <Check className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
+                  <InstallerCommandRow
+                    dialogOpen={open}
+                    command={buildMekoInstallerCommand(
+                      "cursor",
+                      provisionStatus.mcp_server_url,
+                      provisionStatus.mcp_api_key,
+                    )}
+                    copyField="mcpInstallCursor"
+                    copiedField={copiedField}
+                    onCopy={handleCopy}
+                  />
                 </TabsContent>
               </Tabs>
-            </div>
-
-            <h3 className="pt-2 text-lg font-semibold text-white">Database Access</h3>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground">Username</label>
-              <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
-                <code className="text-sm text-white break-all flex-1 pr-4">{provisionStatus.db_user_name}</code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-white"
-                  onClick={() => handleCopy(provisionStatus.db_user_name, "dbuser")}
-                >
-                  {copiedField === "dbuser" ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground">Password</label>
-              <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
-                <code className="text-sm text-white break-all flex-1 pr-4">{provisionStatus.db_password}</code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-white"
-                  onClick={() => handleCopy(provisionStatus.db_password, "dbpass")}
-                >
-                  {copiedField === "dbpass" ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground">Conn String</label>
-              <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
-                <code className="text-xs text-blue-300 break-all flex-1 pr-4">{provisionStatus.db_conn_str}</code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-white"
-                  onClick={() => handleCopy(provisionStatus.db_conn_str, "dbconn")}
-                >
-                  {copiedField === "dbconn" ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
             </div>
           </div>
         ) : null}

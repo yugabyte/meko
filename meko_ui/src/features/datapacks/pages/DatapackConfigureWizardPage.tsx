@@ -22,7 +22,6 @@ import {
   wizardStepIndex,
 } from "@/features/datapacks/components/configure-wizard/wizardSteps";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
-import { markDatapackWizardConfigureDone } from "@/lib/datapackConfigureStatus";
 import {
   confirmUpload,
   createDatapack,
@@ -341,10 +340,13 @@ export default function DatapackConfigureWizardPage({
         trimmed !== configureInitialName ||
         configureDraftDescription.trim() !== configureInitialDescription.trim();
       if (dirty) {
-        await updateDatapack(routeName, {
+        const updated = await updateDatapack(routeName, {
           name: trimmed,
           description: configureDraftDescription,
         });
+        if (updated?.message) {
+          dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+        }
         setApiDatapackName(trimmed);
         setConfigureInitialName(trimmed);
         setConfigureInitialDescription(configureDraftDescription);
@@ -425,7 +427,6 @@ export default function DatapackConfigureWizardPage({
   const finishPackName = apiDatapackName ?? "";
   const handleWizardFinish = useCallback(() => {
     if (!finishPackName) return;
-    markDatapackWizardConfigureDone(finishPackName);
     if (!hasUploadedKnowledge) {
       toast({
         title: "Finished setup",
@@ -512,7 +513,6 @@ export default function DatapackConfigureWizardPage({
               mcpServerUrl={installProvision?.mcp_server_url ?? null}
               mcpApiKey={installProvision?.mcp_api_key ?? null}
               provisionLoading={installProvisionLoading}
-              provisionError={installProvisionError}
             />
           ) : null}
           {stepId === WIZARD_STEP_ID.sync ? (

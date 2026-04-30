@@ -5,7 +5,6 @@ import {
   Link as LinkIcon,
   Pencil,
   Share2,
-  SlidersHorizontal,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -22,10 +21,8 @@ import {
   DEFAULT_ACCOUNT_DATAPACK_NAME,
   ROUTES,
   datapackConfigurePath,
-  datapackDetailPath,
   datapackSharePath,
 } from "@/app/routes/paths";
-import { useDatapackWizardConfigureDone } from "@/lib/useDatapackWizardConfigureDone";
 import { DATAPACK_SHARE_GRANT_MAINTAINER, DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
 import {
   DATAPACKS_LIST_UPDATED_EVENT,
@@ -36,11 +33,9 @@ import {
   getDatapackConversationCount,
   getDatapackProvisionStatus,
   PROVISION_STATUS_CACHE_KEY,
-  updateDatapack,
   type CurrentUser,
   type Datapack,
   type ProvisionStatus,
-  type UpdateDatapackPayload,
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { toast } from "@/hooks/use-toast";
@@ -57,7 +52,6 @@ import { DatapackDetailMembersTile } from "@/features/datapacks/components/datap
 import {
   DatapackConnectDialog,
   DatapackDeleteConfirmDialog,
-  DatapackEditNameDialog,
   DatapackKnowledgeUploadDialog,
 } from "@/features/datapacks/components/datapack-detail/dialogs";
 // Breadcrumbs, title, badges, description, metadata row, and hero action slot.
@@ -104,10 +98,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [provisionStatus, setProvisionStatus] = useState<ProvisionStatus | null>(null);
 
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [isEditNameOpen, setIsEditNameOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-
-  const wizardConfigureDone = useDatapackWizardConfigureDone(datapackName);
 
   const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
   const [memoriesCount, setMemoriesCount] = useState(0);
@@ -242,63 +233,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     datapack != null &&
     (datapackGrant === DATAPACK_SHARE_GRANT_MAINTAINER || datapackGrant === DATAPACK_SHARE_GRANT_OWNER);
 
-  const handleDatapackEditSave = async ({ name, description }: { name: string; description: string }) => {
-    const trimmedName = name.trim();
-    const trimmedDesc = description.trim();
-    const prevDesc = (datapack?.description ?? "").trim();
-
-    if (!trimmedName) {
-      throw new Error("Name is required.");
-    }
-
-    const payload: UpdateDatapackPayload = {};
-    if (trimmedName !== datapackName) {
-      payload.name = trimmedName;
-    }
-    if (trimmedDesc !== prevDesc) {
-      payload.description = trimmedDesc;
-    }
-
-    if (Object.keys(payload).length === 0) {
-      return;
-    }
-
-    await updateDatapack(datapackName, payload);
-
-    const renamed = trimmedName !== datapackName;
-    if (renamed) {
-      try {
-        const st = await getDatapack(trimmedName);
-        if (st.datapack_name !== trimmedName) {
-          throw new Error("rename mismatch");
-        }
-      } catch {
-        throw new Error(
-          "The server did not apply this rename. The API may not support changing the datapack name yet.",
-        );
-      }
-      dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
-      toast({
-        title: "Datapack updated",
-        description: `Renamed to "${trimmedName}".`,
-      });
-      navigate(datapackDetailPath(trimmedName), { replace: true });
-      return;
-    }
-
-    const next = await getDatapack(datapackName);
-    setDatapack(next);
-    setKnowledgeBaseCount(next.knowledge_count ?? 0);
-    setMemoriesCount(next.memory_count ?? 0);
-    setLearningsCount(next.learnings_count ?? 0);
-    setDatapackGrant(next.grant ?? null);
-    dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
-    toast({
-      title: "Datapack updated",
-      description: "Your changes were saved.",
-    });
-  };
-
   const handleDeleteConfirm = async () => {
     const { message } = await deleteDatapack(datapackName);
     dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
@@ -353,13 +287,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                 error={connectError}
                 provisionStatus={provisionStatus}
               />
-              <DatapackEditNameDialog
-                open={isEditNameOpen}
-                onOpenChange={setIsEditNameOpen}
-                currentName={datapackName}
-                currentDescription={datapack?.description ?? ""}
-                onSave={handleDatapackEditSave}
-              />
               <DatapackDeleteConfirmDialog
                 open={isDeleteOpen}
                 onOpenChange={setIsDeleteOpen}
@@ -395,24 +322,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                     <LinkIcon className="h-4 w-4 shrink-0" aria-hidden />
                     Connect
                   </DropdownMenuItem>
-                  {canDatapackAdminActions && !wizardConfigureDone ? (
-                    <DropdownMenuItem
-                      className="gap-2 cursor-pointer focus:bg-muted/20"
-                      onSelect={() => navigate(datapackConfigurePath(datapackName))}
-                    >
-                      <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden />
-                      Configure
-                    </DropdownMenuItem>
-                  ) : null}
                   {canDatapackAdminActions ? (
                     <>
                       <DropdownMenuSeparator className="bg-border" />
                       <DropdownMenuItem
                         className="gap-2 cursor-pointer focus:bg-muted/20"
-                        // title={isDefaultDatapack ? "The default account datapack cannot be renamed." : undefined}
-                        onSelect={() => {
-                          if (!isDefaultDatapack) setIsEditNameOpen(true);
-                        }}
+                        onSelect={() => navigate(datapackConfigurePath(datapackName))}
                       >
                         <Pencil className="h-4 w-4 shrink-0" aria-hidden />
                         Edit {datapackName}

@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
+import { useTruncatableCodeDisplay } from "@/hooks/useTruncatableCodeDisplay";
 
 /** Bash-safe single-quoted literal for use in generated install commands. */
 function shellSingleQuoted(value: string): string {
@@ -27,6 +28,9 @@ function injectMcpProvisionIntoCode(code: string, mcpServerUrl?: string | null, 
     .replaceAll("<meko-mcp-url>", qUrl)
     .replaceAll("<meko-server-api-key>", qKey);
 }
+
+/** Collapsed install-step code preview; copy always uses the full injected command. */
+const INSTALL_GUIDE_CODE_BLOCK_PREVIEW_MAX_CHARS = 320;
 
 type IdeTab = "claude_code" | "claude_desktop" | "cursor" | "manual_mcp";
 
@@ -178,6 +182,12 @@ function CodeBlock({
   copiedId: string | null;
   onCopy: (text: string, id: string) => void;
 }) {
+  const { displayText, needsToggle, expanded, toggleExpanded } = useTruncatableCodeDisplay(
+    code,
+    INSTALL_GUIDE_CODE_BLOCK_PREVIEW_MAX_CHARS,
+    code,
+  );
+
   return (
     <div className="max-w-full overflow-hidden rounded-lg border border-border bg-[#0E1525]/80 shadow-sm">
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
@@ -199,9 +209,22 @@ function CodeBlock({
           )}
         </Button>
       </div>
-      <pre className="max-w-full p-4 text-sm leading-relaxed text-foreground/95">
-        <code className="block whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{code}</code>
-      </pre>
+      <div className="p-4 pt-3">
+        <pre className="m-0 max-w-full overflow-x-auto text-sm leading-relaxed text-foreground/95">
+          <code className="block whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">
+            {displayText}
+          </code>
+        </pre>
+        {needsToggle ? (
+          <button
+            type="button"
+            className="mt-2 text-sm font-medium text-primary hover:underline"
+            onClick={toggleExpanded}
+          >
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
