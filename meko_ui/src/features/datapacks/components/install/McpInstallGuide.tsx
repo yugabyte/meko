@@ -2,12 +2,31 @@
  * MCP client install guide: Claude Code, Claude Desktop, Cursor, and manual MCP install with copyable shell steps.
  * Shared by the Home “Install” page and the datapack configure wizard’s Install step.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Copy, Code2, Monitor, MousePointer2, Terminal } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
+
+/** Bash-safe single-quoted literal for use in generated install commands. */
+function shellSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** When both URL and API key are set, swap placeholders for quoted values; otherwise leave placeholders. */
+function injectMcpProvisionIntoCode(code: string, mcpServerUrl?: string | null, mcpApiKey?: string | null): string {
+  const url = mcpServerUrl?.trim();
+  const key = mcpApiKey?.trim();
+  if (!url || !key) return code;
+  const qUrl = shellSingleQuoted(url);
+  const qKey = shellSingleQuoted(key);
+  return code
+    .replaceAll("<mcp-server-url>", qUrl)
+    .replaceAll("<mcp-server-api-key>", qKey)
+    .replaceAll("<meko-mcp-url>", qUrl)
+    .replaceAll("<meko-server-api-key>", qKey);
+}
 
 type IdeTab = "claude_code" | "claude_desktop" | "cursor" | "manual_mcp";
 
@@ -121,12 +140,23 @@ const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
   },
 ];
 
-const INSTALL_GUIDE: Record<IdeTab, InstallStep[]> = {
-  claude_code: CLAUDE_CODE_INSTALL_STEPS,
-  claude_desktop: CLAUDE_DESKTOP_INSTALL_STEPS,
-  cursor: CURSOR_INSTALL_STEPS,
-  manual_mcp: MANUAL_MCP_INSTALL_STEPS,
-};
+function buildInstallGuide(
+  mcpServerUrl?: string | null,
+  mcpApiKey?: string | null,
+): Record<IdeTab, InstallStep[]> {
+  const inject = (steps: InstallStep[]) =>
+    steps.map((step) => ({
+      ...step,
+      code: step.code != null ? injectMcpProvisionIntoCode(step.code, mcpServerUrl, mcpApiKey) : undefined,
+    }));
+
+  return {
+    claude_code: inject(CLAUDE_CODE_INSTALL_STEPS),
+    claude_desktop: inject(CLAUDE_DESKTOP_INSTALL_STEPS),
+    cursor: inject(CURSOR_INSTALL_STEPS),
+    manual_mcp: inject(MANUAL_MCP_INSTALL_STEPS),
+  };
+}
 
 const TAB_META: { id: IdeTab; label: string; icon: typeof Code2 }[] = [
   { id: "claude_code", label: "Claude Code", icon: Code2 },
@@ -176,8 +206,7 @@ function CodeBlock({
   );
 }
 
-function InstallSteps({ tab }: { tab: IdeTab }) {
-  const steps = INSTALL_GUIDE[tab];
+function InstallSteps({ tab, steps }: { tab: IdeTab; steps: InstallStep[] }) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const handleCopy = async (text: string, id: string) => {
@@ -237,12 +266,23 @@ function InstallSteps({ tab }: { tab: IdeTab }) {
 
 type McpInstallGuideProps = {
   className?: string;
+  /**
+   * When both are non-empty (e.g. from `getDatapackProvisionStatus`), placeholders in commands are replaced
+   * with bash-quoted values. Omit on pages like Home where the user has no datapack context yet.
+   */
+  mcpServerUrl?: string | null;
+  mcpApiKey?: string | null;
 };
 
 /**
  * MCP install steps (Claude Code / Claude Desktop / Cursor / Manual MCP Install).
  */
-export function McpInstallGuide({ className }: McpInstallGuideProps) {
+export function McpInstallGuide({ className, mcpServerUrl = null, mcpApiKey = null }: McpInstallGuideProps) {
+  const installGuide = useMemo(
+    () => buildInstallGuide(mcpServerUrl, mcpApiKey),
+    [mcpServerUrl, mcpApiKey],
+  );
+
   return (
     <Tabs defaultValue="claude_code" className={cn("w-full", className)}>
       <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-xl bg-muted/60 p-1.5 sm:inline-flex sm:w-auto">
@@ -262,7 +302,7 @@ export function McpInstallGuide({ className }: McpInstallGuideProps) {
 
       {TAB_META.map(({ id }) => (
         <TabsContent key={id} value={id} className="mt-6 rounded-xl border border-border bg-card/30 p-6 sm:p-8">
-          <InstallSteps tab={id} />
+          <InstallSteps tab={id} steps={installGuide[id]} />
         </TabsContent>
       ))}
     </Tabs>

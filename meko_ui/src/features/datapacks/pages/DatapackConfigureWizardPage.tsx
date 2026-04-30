@@ -29,9 +29,11 @@ import {
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
   getDatapack,
+  getDatapackProvisionStatus,
   requestUploadURL,
   updateDatapack,
   type CurrentUser,
+  type ProvisionStatus,
 } from "@/lib/mekoApi";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
@@ -109,6 +111,10 @@ export default function DatapackConfigureWizardPage({
   const [syncFileWarning, setSyncFileWarning] = useState<string | null>(null);
   const syncWarningTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const [installProvision, setInstallProvision] = useState<ProvisionStatus | null>(null);
+  const [installProvisionLoading, setInstallProvisionLoading] = useState(false);
+  const [installProvisionError, setInstallProvisionError] = useState<string | null>(null);
+
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
   const conversationInputRef = useRef<HTMLInputElement>(null);
   const skillsInputRef = useRef<HTMLInputElement>(null);
@@ -144,6 +150,30 @@ export default function DatapackConfigureWizardPage({
       cancelled = true;
     };
   }, [isCreateFlow, routeDatapackName]);
+
+  useEffect(() => {
+    if (stepId !== WIZARD_STEP_ID.install || !apiDatapackName) {
+      return;
+    }
+    const ac = new AbortController();
+    setInstallProvisionLoading(true);
+    setInstallProvisionError(null);
+    setInstallProvision(null);
+    void getDatapackProvisionStatus(apiDatapackName, { signal: ac.signal })
+      .then((p) => {
+        if (!ac.signal.aborted) setInstallProvision(p);
+      })
+      .catch((err) => {
+        if (ac.signal.aborted) return;
+        setInstallProvisionError(
+          getApiErrorMessage(err, "Could not load MCP connection details for install commands."),
+        );
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setInstallProvisionLoading(false);
+      });
+    return () => ac.abort();
+  }, [stepId, apiDatapackName]);
 
   const showSyncWarning = useCallback((msg: string) => {
     setSyncFileWarning(msg);
@@ -477,7 +507,14 @@ export default function DatapackConfigureWizardPage({
               error={configureError}
             />
           ) : null}
-          {stepId === WIZARD_STEP_ID.install ? <ConfigureWizardInstallStep /> : null}
+          {stepId === WIZARD_STEP_ID.install ? (
+            <ConfigureWizardInstallStep
+              mcpServerUrl={installProvision?.mcp_server_url ?? null}
+              mcpApiKey={installProvision?.mcp_api_key ?? null}
+              provisionLoading={installProvisionLoading}
+              provisionError={installProvisionError}
+            />
+          ) : null}
           {stepId === WIZARD_STEP_ID.sync ? (
             <ConfigureWizardSyncStep
               knowledgeItems={knowledgeItems}
