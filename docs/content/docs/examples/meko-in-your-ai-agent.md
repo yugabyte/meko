@@ -86,5 +86,5 @@ Use a dedicated datapack per project to store project-specific context:
 
 ## Next
 
-- [Quick start — Connect any AI client](../quick-start/#connect-your-ai-client) — Register Meko with your editors and agents
+- [Quick start — Connect any AI client](../../quick-start/#connect-your-ai-client) — Register Meko with your editors and agents
 - [Meko in your agentic application](../build-software-with-meko/) - Use conversation history and resumability
