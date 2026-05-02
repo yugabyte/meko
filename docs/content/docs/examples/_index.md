@@ -14,7 +14,7 @@ type: docs
     desc="Agent B gets Agent A's reasoning, not just its final output. No lost context across systems."
   >}}
   {{< card
-    href="examples/meko-in-your-ai-agent/#collective-learning-across-runs"
+    href="meko-enhances-teaming/#collective-learning-across-runs"
     title="Collective learning across runs"
     desc="What worked, what didn't, and why — persisted across workflow runs automatically."
   >}}
