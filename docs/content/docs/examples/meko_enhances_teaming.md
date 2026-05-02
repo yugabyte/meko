@@ -53,7 +53,7 @@ At the start of the next run, retrieve prior learnings:
 
 ```text
 Before starting, retrieve any learnings from previous runs of this workflow.
-
+```
 ## Group/team policies and standards
 
 *Share a datapack across your team so every agent works from the same playbook.*
@@ -62,7 +62,7 @@ Every team has tribal knowledge: the error format your APIs must follow, the tes
 
 Meko fixes this with a **shared team datapack** — a persistent, team-scoped knowledge base that every member's agent can read from and write to. Standards go in once, and every agent on the team applies them automatically.
 
-### How it works in practice
+##### How it works in practice
 
 **1. A team lead creates the shared datapack**
 
@@ -145,7 +145,7 @@ No one had to re-explain any of this. The agent just knows, because the team's c
 
 And when that developer discovers a new edge case — say, a retry policy that the team should adopt — they tell their agent, and it flows back into the shared datapack for everyone.
 
-### What this looks like day-to-day
+##### What this looks like day-to-day
 
 In practice, using a shared team datapack feels invisible. You open your IDE, start a session, and your agent already has the full team context. You don't say "check the team standards" — the agent does it automatically when it's relevant.
 
@@ -159,8 +159,3 @@ delivery — retries should use exponential backoff starting at 2 seconds.
 ```
 
 That knowledge is now available to every agent on the team, in every session, from that moment forward.
-
-## Next
-
-- [Traceability, resumability and more](../and_more_examples/) — Auditable learning trails, resumability, and conversation history
-- [Integrations](../../integrations/)

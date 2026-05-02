@@ -71,18 +71,3 @@ Tell the agent to checkpoint its state:
 ```text
 Checkpoint your progress to Meko after completing each file.
 ```
-
-## Team and project memory
-
-*Coding standards, norms, project context — portable across LLMs and tooling.*
-
-Agent memory shouldn't be locked to a single tool or session. Meko stores team standards, project context, and shared knowledge in a persistent, portable knowledge base that any agent — on any LLM, any tooling — can access.
-
-The metric for success isn't how many agents an organization has. It's how coordinated they are. A team of people, each with one agent, all working from shared context outperforms a team where each person runs ten agents in isolation.
-
-See [Group/team policies and standards](../meko_enhances_teaming/#groupteam-policies-and-standards) for a full walkthrough of setting up a shared datapack for your team.
-
-## Next
-
-- [Group/team policies and standards](../meko_enhances_teaming/) — Set up a shared team datapack
-- [Integrations](../../integrations/)
