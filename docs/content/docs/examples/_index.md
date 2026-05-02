@@ -5,42 +5,42 @@ description: Real-world scenarios and sample solutions built with Meko
 weight: 2000
 type: docs
 ---
-## Meko in your development process
+## Enhanced team efficiency & productivity
 
 {{< card-group >}}
   {{< card
-    href="examples/meko-in-your-ai-agent/#personal-preferences"
-    title="Tool-independent dev preferences & standards"
-    desc="Use best-of-breed tools with consistent templates & standards."
+    href="examples/meko-in-your-ai-agent/#knowledge-handoff-with-context-preserved"
+    title="Knowledge handoff with context preserved"
+    desc="Agent B gets Agent A's reasoning, not just its final output. No lost context across systems."
   >}}
   {{< card
-    href="examples/meko-in-your-ai-agent/#portable-developer-coding-preferences"
-    title="Portable coding preferences"
-    desc="Take coding preferences with you across sessions, projects, and even teams."
+    href="examples/meko-in-your-ai-agent/#collective-learning-across-runs"
+    title="Collective learning across runs"
+    desc="What worked, what didn't, and why — persisted across workflow runs automatically."
   >}}
   {{< card
     href="examples/meko-in-your-ai-agent/#groupteam-policies-and-standards"
-    title="Team policies and standards"
-    desc="Share a datapack across your team to enforce consistent coding standards and testing policies."
-  >}}
-  {{< card
-    href="examples/meko-in-your-ai-agent/#project-storage"
-    title="Project storage"
-    desc="Store project-specific context like architecture decisions, API contracts, and known workarounds."
+    title="Group/team policies and standards"
+    desc="Share a datapack across your team so every agent works from the same playbook."
   >}}
 {{< /card-group >}}
 
-## Meko in your agentic application
+## Traceability, efficient conversation history, resumability and more
 
 {{< card-group >}}
   {{< card
-    href="examples/build-software-with-meko/#conversation-history-and-reasoning"
-    title="Conversation and reasoning history"
-    desc="Retain agent reasoning traces across sessions so you have a detailed log of how your agent achieved its outcomes."
+    href="examples/build-software-with-meko/#auditable-learning-trail"
+    title="Auditable learning trail"
+    desc="Full chain-of-thought traceability for what agents learned and how it flowed — ready for EU AI Act compliance."
   >}}
   {{< card
-    href="examples/build-software-with-meko/#resumability"
-    title="Resumability"
-    desc="Resume long-running agent tasks after failures by storing and retrieving agent state in Meko."
+    href="examples/build-software-with-meko/#conversation-history-with-tiering"
+    title="Conversation history with tiering"
+    desc="Recent history in-database for fast recall; older history auto-tiered to S3 to control costs."
+  >}}
+  {{< card
+    href="examples/build-software-with-meko/#agent-resumability"
+    title="Agent resumability"
+    desc="Persist full agent and sub-agent state in Meko so any run can be paused and resumed reliably."
   >}}
 {{< /card-group >}}
