@@ -88,6 +88,15 @@
   .navbar-brand__name {
     display: none;
   }
+
+  .navbar-brand {
+    .navbar-brand__logo {
+      svg {
+        width: 140px;
+        height: auto;
+      }
+    }
+  }
 }
 
 @media (max-width: 767px) {

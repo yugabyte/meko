@@ -1,7 +1,7 @@
 <a class="navbar-brand" href="{{ .Site.Home.RelPermalink }}">
   <span class="navbar-brand__logo navbar-logo">
     {{- if ne .Site.Params.ui.navbar_logo false -}}
-      {{ with resources.Get "icons/logo-footer.svg" -}}
+      {{ with resources.Get "icons/logo.svg" -}}
         {{ ( . | minify).Content | safeHTML -}}
       {{ end -}}
     {{ end -}}

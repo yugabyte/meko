@@ -16,4 +16,13 @@
   .row.mx-md-2 {
     align-items: center;
   }
+
+  .navbar-brand {
+    .navbar-brand__logo {
+      svg {
+        width: 140px;
+        height: auto;
+      }
+    }
+  }
 }
