@@ -38,5 +38,39 @@ export function isDatapackShareGrant(value: unknown): value is DatapackShareGran
   );
 }
 
+/**
+ * True when the signed-in user is the datapack owner on a list row.
+ * `GET /datapacks` sets `grant` to `"owner"` for packs you created and the invite grant for shared packs.
+ */
+export function isDatapackListGrantOwner(dp: { grant?: DatapackShareGrant | null }): boolean {
+  return dp.grant === DATAPACK_SHARE_GRANT_OWNER;
+}
+
+/** Owner and maintainer may open sharing / manage members; viewer and contributor may not. */
+export function isDatapackGrantEligibleToShare(dp: { grant?: DatapackShareGrant | null }): boolean {
+  const userGrant = dp.grant;
+  return userGrant === DATAPACK_SHARE_GRANT_OWNER || userGrant === DATAPACK_SHARE_GRANT_MAINTAINER;
+}
+
+export function isDatapackGrantEligibleToEdit(dp: { grant?: DatapackShareGrant | null }): boolean {
+  const userGrant = dp.grant;
+  return userGrant === DATAPACK_SHARE_GRANT_OWNER;
+}
+
+export function isDatapackGrantEligibleToDelete(dp: { grant?: DatapackShareGrant | null }): boolean {
+  const userGrant = dp.grant;
+  return userGrant === DATAPACK_SHARE_GRANT_OWNER;
+}
+
+export function isDatapackGrantEligibleToAddKnowledgeBase(dp: { grant?: DatapackShareGrant | null }): boolean {
+  const userGrant = dp.grant;
+  return userGrant === DATAPACK_SHARE_GRANT_OWNER || userGrant === DATAPACK_SHARE_GRANT_MAINTAINER;
+}
+
+export function isDatapackGrantEligibleToPromoteMemoryToKnowledge(dp: { grant?: DatapackShareGrant | null }): boolean {
+  const userGrant = dp.grant;
+  return userGrant === DATAPACK_SHARE_GRANT_OWNER || userGrant === DATAPACK_SHARE_GRANT_MAINTAINER;
+}
+
 /** Human-readable list for validation error copy (mock server, etc.). */
 export const DATAPACK_SHARE_GRANT_VALIDATION_MESSAGE = `grant must be ${DATAPACK_SHARE_GRANT_VIEWER}, ${DATAPACK_SHARE_GRANT_CONTRIBUTOR}, or ${DATAPACK_SHARE_GRANT_MAINTAINER}`;

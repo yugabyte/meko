@@ -31,7 +31,8 @@ func GetAccount(c echo.Context) (*models.Account, error) {
 }
 
 // GetDatapack extracts the resolved datapack from the Echo context.
-// Returns an error if RequireDatapackOwnership middleware did not run.
+// Returns an error if neither RequireDatapackOwnership nor
+// RequireDatapackAccess has populated ContextKeyDatapack.
 func GetDatapack(c echo.Context) (*models.Datapack, error) {
 	datapack, ok := c.Get(ContextKeyDatapack).(*models.Datapack)
 	if !ok || datapack == nil {
@@ -250,6 +251,46 @@ func RequireDatapackAccess(datapacks DatapackAccessLookup) echo.MiddlewareFunc {
 			c.Set(ContextKeyDatapack, dp)
 			c.Set(ContextKeyAccessLevel, "shared")
 			return next(c)
+		}
+	}
+}
+
+// datapackGrantOwner is the API grant string for the datapack row owner.
+const datapackGrantOwner = "owner"
+
+// RequireDatapackOwnerOrMaintainerGrant runs after RequireDatapackAccess. It
+// allows only callers whose resolved datapack grant is owner or maintainer
+// (e.g. outgoing-shares, invite/resend/revoke). Viewer and contributor receive 403.
+//
+// Ordering: this middleware only reads ContextKeyDatapack via GetDatapack; it
+// does not load the datapack from the DB. RequireDatapackAccess (or
+// RequireDatapackOwnership) must run first to populate that context. Reversing
+// the chain would leave no datapack in context and fail after access checks.
+func RequireDatapackOwnerOrMaintainerGrant() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			dp, err := GetDatapack(c)
+			if err != nil || dp == nil {
+				slog.Error("datapack missing after access middleware", "path", c.Path())
+				return c.JSON(http.StatusInternalServerError, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "INTERNAL_ERROR",
+						"message": "datapack context missing",
+					},
+				})
+			}
+			g := strings.ToLower(strings.TrimSpace(dp.Grant))
+			if g == datapackGrantOwner || g == string(models.GrantMaintainer) {
+				return next(c)
+			}
+			return c.JSON(http.StatusForbidden, map[string]any{
+				"data": nil,
+				"error": map[string]any{
+					"code":    "FORBIDDEN",
+					"message": "only datapack owners and maintainers are allowed",
+				},
+			})
 		}
 	}
 }

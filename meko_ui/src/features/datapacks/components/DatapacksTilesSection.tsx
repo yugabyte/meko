@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import type { CurrentUser, Datapack } from "@/lib/mekoApi";
 import { formatDatapackCreatedAtUtc, sortDatapacksByCreatedAtDesc } from "@/lib/datapackDateFormat";
 import { shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
-import { DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
+import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 
 function formatDatapackOwnerLabel(dp: Datapack, currentUser: CurrentUser | null): string {
   if (
@@ -22,11 +22,6 @@ function formatDatapackOwnerLabel(dp: Datapack, currentUser: CurrentUser | null)
     return "You";
   }
   return "—";
-}
-
-/** Owned datapacks: no share grant on the list row (`grant` absent or null). */
-function datapackIsOwned(dp: Datapack): boolean {
-  return dp.grant === DATAPACK_SHARE_GRANT_OWNER;
 }
 
 function filterByName(datapacks: Datapack[], q: string): Datapack[] {
@@ -164,7 +159,7 @@ export default function DatapacksTilesSection({
     const owned: Datapack[] = [];
     const shared: Datapack[] = [];
     for (const dp of datapacks) {
-      if (datapackIsOwned(dp)) owned.push(dp);
+      if (isDatapackListGrantOwner(dp)) owned.push(dp);
       else shared.push(dp);
     }
     return { ownedDatapacks: owned, sharedDatapacks: shared };
@@ -226,7 +221,7 @@ export default function DatapacksTilesSection({
             <DatapackTile
               key={dp.datapack_id}
               dp={dp}
-              variant={datapackIsOwned(dp) ? OWNED : SHARED}
+              variant={isDatapackListGrantOwner(dp) ? OWNED : SHARED}
               currentUser={currentUser}
               onOpenDatapack={onOpenDatapack}
             />

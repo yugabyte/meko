@@ -42,19 +42,15 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 			"UNAUTHORIZED", "missing datapack context")
 	}
 
-	account, err := auth.GetAccount(c)
-	if err != nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "missing account context")
-	}
-
 	var req service.InviteRequest
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest,
 			"INVALID_JSON", "malformed request body")
 	}
 
-	resp, err := h.svc.InviteToDatapack(c.Request().Context(), dp.ID, account.ID, req)
+	// Invite rows use the datapack row owner as OwnerUserID so resend/revoke
+	// checks match; maintainers act on behalf of the same datapack.
+	resp, err := h.svc.InviteToDatapack(c.Request().Context(), dp.ID, dp.UserID, req)
 	if err != nil {
 		if isValidationErr(err) {
 			return apiError(c, http.StatusBadRequest,
@@ -145,6 +141,7 @@ func (h *SharingHandler) InviteAction(c echo.Context) error {
 //	@Param		name	path		string	true	"Datapack name"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
+//	@Failure	403		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/datapacks/{name}/outgoing-shares [get]
@@ -155,13 +152,9 @@ func (h *SharingHandler) OutgoingShares(c echo.Context) error {
 			"UNAUTHORIZED", "missing datapack context")
 	}
 
-	account, err := auth.GetAccount(c)
-	if err != nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "missing account context")
-	}
-
-	resp, err := h.svc.ListOutgoingShares(dp.ID, account.ID)
+	// Always use the datapack row owner for the synthetic owner member; the
+	// caller may be a maintainer with a different account_id.
+	resp, err := h.svc.ListOutgoingShares(dp.ID, dp.UserID)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", err.Error())
@@ -188,19 +181,13 @@ func (h *SharingHandler) ResendInvite(c echo.Context) error {
 			"UNAUTHORIZED", "missing datapack context")
 	}
 
-	account, err := auth.GetAccount(c)
-	if err != nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "missing account context")
-	}
-
 	inviteID := c.Param("invite_id")
 	if inviteID == "" {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "invite_id is required")
 	}
 
-	id, err := h.svc.ResendInvite(c.Request().Context(), dp.ID, account.ID, inviteID)
+	id, err := h.svc.ResendInvite(c.Request().Context(), dp.ID, dp.UserID, inviteID)
 	if err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
@@ -234,19 +221,13 @@ func (h *SharingHandler) RevokeInvite(c echo.Context) error {
 			"UNAUTHORIZED", "missing datapack context")
 	}
 
-	account, err := auth.GetAccount(c)
-	if err != nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "missing account context")
-	}
-
 	inviteID := c.Param("invite_id")
 	if inviteID == "" {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "invite_id is required")
 	}
 
-	if err := h.svc.RevokeInvite(dp.ID, account.ID, inviteID); err != nil {
+	if err := h.svc.RevokeInvite(dp.ID, dp.UserID, inviteID); err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())

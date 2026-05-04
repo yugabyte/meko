@@ -23,8 +23,9 @@ import {
   datapackConfigurePath,
   datapackSharePath,
 } from "@/app/routes/paths";
-import { DATAPACK_SHARE_GRANT_MAINTAINER, DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
+import { isDatapackGrantEligibleToAddKnowledgeBase, isDatapackGrantEligibleToDelete, isDatapackGrantEligibleToEdit, isDatapackGrantEligibleToPromoteMemoryToKnowledge, isDatapackGrantEligibleToShare } from "@/lib/datapackShareGrants";
 import {
+  DatapackOutgoingMember,
   DATAPACKS_LIST_UPDATED_EVENT,
   DatapackShareGrant,
   deleteDatapack,
@@ -32,6 +33,7 @@ import {
   getDatapack,
   getDatapackConversationCount,
   getDatapackProvisionStatus,
+  listDatapackOutgoingShares,
   PROVISION_STATUS_CACHE_KEY,
   type CurrentUser,
   type Datapack,
@@ -47,7 +49,10 @@ import { KnowledgeDocumentsPanel } from "@/features/datapacks/components/knowled
 import ConversationsPanel from "@/features/datapacks/components/datapack-detail/ConversationsPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
-import { DatapackDetailMembersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailMembersTile";
+import {
+  DatapackDetailMembersTile,
+  type DatapackMembersListStatus,
+} from "@/features/datapacks/components/datapack-detail/DatapackDetailMembersTile";
 // Connect + upload modals (credentials UI and FileUpload wrapper).
 import {
   DatapackConnectDialog,
@@ -65,6 +70,10 @@ type Props = {
   datapackName: string;
   currentUser: CurrentUser | null;
 };
+
+const LOADING_STATUS = 'loading';
+const READY_STATUS = 'ready';
+const ERROR_STATUS = 'error';
 
 // Cache is keyed by datapack_id (stable UUID), not datapack_name, so renames
 // don't orphan entries and cross-datapack lookups can never collide.
@@ -105,6 +114,8 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [learningsCount, setLearningsCount] = useState(0);
   const [conversationsCount, setConversationsCount] = useState(0);
   const [datapackGrant, setDatapackGrant] = useState<DatapackShareGrant | null>(null);
+  const [members, setMembers] = useState<DatapackOutgoingMember[]>([]);
+  const [membersListStatus, setMembersListStatus] = useState<DatapackMembersListStatus>("loading");
 
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName);
 
@@ -177,6 +188,26 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   }, [datapackName, datapack?.datapack_id]);
 
   useEffect(() => {
+    const ac = new AbortController();
+    setMembersListStatus("loading");
+    void listDatapackOutgoingShares(datapackName, { signal: ac.signal })
+      .then((res) => {
+        if (ac.signal.aborted) return;
+        setMembers(res.members ?? []);
+        setMembersListStatus("ready");
+      })
+      .catch(() => {
+        if (ac.signal.aborted) return;
+        setMembers([]);
+        setMembersListStatus("error");
+      });
+    return () => {
+      ac.abort();
+    };
+  }, [datapackName, datapack?.datapack_id]);
+
+
+  useEffect(() => {
     if (!isConnectOpen) return;
     const datapackId = datapack?.datapack_id;
     if (!datapackId) return;
@@ -219,12 +250,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const createdLabel = formatDatapackCreatedAtUtc(datapack?.created_at);
   const isDefaultDatapack = datapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
 
-  /** Owner (no grant) or shared maintainer: can share, add knowledge, configure, edit, delete. */
-  const canDatapackAdminActions =
-    !statusLoading &&
-    datapack != null &&
-    (datapackGrant === DATAPACK_SHARE_GRANT_MAINTAINER || datapackGrant === DATAPACK_SHARE_GRANT_OWNER);
-
   const handleDeleteConfirm = async () => {
     const { message } = await deleteDatapack(datapackName);
     dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
@@ -250,7 +275,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           statusLoading={statusLoading}
           actions={
             <>
-              {canDatapackAdminActions ? (
+              {isDatapackGrantEligibleToShare({ grant: datapackGrant }) && (
                 <Button
                   type="button"
                   variant="outline"
@@ -260,7 +285,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                   <Share2 className="h-4 w-4 shrink-0" aria-hidden />
                   Share
                 </Button>
-              ) : null}
+              )}
               <DatapackKnowledgeUploadDialog
                 datapackName={datapackName}
                 open={isUploadOpen}
@@ -298,15 +323,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[14rem] bg-[#1C2333] border-border text-foreground">
-                  {canDatapackAdminActions ? (
-                    <DropdownMenuItem
-                      className="gap-2 cursor-pointer focus:bg-muted/20"
-                      onSelect={() => setIsUploadOpen(true)}
-                    >
-                      <Upload className="h-4 w-4 shrink-0" aria-hidden />
-                      Add Knowledge
-                    </DropdownMenuItem>
-                  ) : null}
                   <DropdownMenuItem
                     className="gap-2 cursor-pointer focus:bg-muted/20"
                     onSelect={() => setIsConnectOpen(true)}
@@ -314,29 +330,34 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                     <LinkIcon className="h-4 w-4 shrink-0" aria-hidden />
                     Connect
                   </DropdownMenuItem>
-                  {canDatapackAdminActions ? (
-                    <>
-                      <DropdownMenuSeparator className="bg-border" />
-                      <DropdownMenuItem
-                        className="gap-2 cursor-pointer focus:bg-muted/20"
-                        onSelect={() => navigate(datapackConfigurePath(datapackName))}
-                      >
-                        <Pencil className="h-4 w-4 shrink-0" aria-hidden />
-                        Edit {datapackName}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        className="gap-2 cursor-pointer text-red-300 focus:bg-red-950/40 focus:text-red-200"
-                        // disabled={isDefaultDatapack}
-                        // title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
-                        onSelect={() => {
-                          if (!isDefaultDatapack) setIsDeleteOpen(true);
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-                        Delete {datapackName}
-                      </DropdownMenuItem>
-                    </>
-                  ) : null}
+                  {isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) && (
+                    <DropdownMenuItem
+                      className="gap-2 cursor-pointer focus:bg-muted/20"
+                      onSelect={() => setIsUploadOpen(true)}
+                    >
+                      <Upload className="h-4 w-4 shrink-0" aria-hidden />
+                      Add Knowledge
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator className="bg-border" />
+                  {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && <DropdownMenuItem
+                    className="gap-2 cursor-pointer focus:bg-muted/20"
+                    onSelect={() => navigate(datapackConfigurePath(datapackName))}
+                  >
+                    <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+                    Edit {datapackName}
+                  </DropdownMenuItem>}
+                  {isDatapackGrantEligibleToDelete({ grant: datapackGrant }) && <DropdownMenuItem
+                    className="gap-2 cursor-pointer text-red-300 focus:bg-red-950/40 focus:text-red-200"
+                    // disabled={isDefaultDatapack}
+                    // title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
+                    onSelect={() => {
+                      if (!isDefaultDatapack) setIsDeleteOpen(true);
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                    Delete {datapackName}
+                  </DropdownMenuItem>}
                 </DropdownMenuContent>
               </DropdownMenu>
             </>
@@ -383,7 +404,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                   <MemoryPromotionPanel
                     datapackName={datapackName}
                     datapackId={datapack.datapack_id}
-                    isPromoteAllowed={datapackGrant === DATAPACK_SHARE_GRANT_OWNER || datapackGrant === DATAPACK_SHARE_GRANT_MAINTAINER}
+                    isPromotionAllowed={isDatapackGrantEligibleToPromoteMemoryToKnowledge({ grant: datapackGrant }) ?? false}
                     variant="preview"
                   />
                 ) : (
@@ -424,7 +445,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               mcpApiKey={provisionStatus?.mcp_api_key ?? null}
               onOpenConnect={() => setIsConnectOpen(true)}
             />
-            <DatapackDetailMembersTile datapackName={datapackName} currentUser={currentUser} />
+            <DatapackDetailMembersTile
+              datapackName={datapackName}
+              currentUser={currentUser}
+              members={members}
+              membersListStatus={membersListStatus}
+            />
           </div>
         </div>
       </main>

@@ -89,7 +89,10 @@ export type Datapack = {
   knowledge_count?: number;
   learnings_count?: number;
   datapack_owner_name?: string;
-  /** Set when this row is a share (recipient); `null`/omitted for datapacks you own. */
+  /**
+   * From `GET /datapacks`: `"owner"` for datapacks you created; invite grant (`viewer` | `contributor` | `maintainer`)
+   * for datapacks shared with you.
+   */
   grant?: DatapackShareGrant | null;
 };
 
@@ -488,8 +491,9 @@ export type DatapackOutgoingSharesResponse = {
 };
 
 /**
- * List members and pending invites for a datapack (owner view).
- * GET /datapacks/:name/outgoing-shares
+ * List members and pending invites for a datapack.
+ * Requires datapack access; the API allows only owner or maintainer grant
+ * (403 for viewer/contributor). GET /datapacks/:name/outgoing-shares
  */
 export async function listDatapackOutgoingShares(
   datapackName: string,
@@ -674,7 +678,8 @@ export type ListDatapackConversationsResponse = {
 
 /**
  * List Langfuse sessions (= conversations) for a datapack, newest first.
- * Returns 503 if the api server isn't wired to a Langfuse Postgres.
+ * Caller must have datapack access (owner or accepted share). Returns 503
+ * if the api server isn't wired to a Langfuse Postgres.
  */
 export async function listDatapackConversations(
   datapackName: string,
@@ -701,8 +706,8 @@ export type DatapackConversationCount = {
 
 /**
  * Total number of distinct Langfuse sessions (= conversations) for a
- * datapack. Returns 503 if the api server isn't wired to a Langfuse
- * Postgres.
+ * datapack. Caller must have datapack access (owner or accepted share).
+ * Returns 503 if the api server isn't wired to a Langfuse Postgres.
  */
 export async function getDatapackConversationCount(
   datapackName: string,
@@ -726,8 +731,8 @@ export async function ensureLangfuseProjectKeys(datapackName: string) {
 /**
  * Per-datapack provisioning details (ysql conn string + username +
  * password, plus the account-level MCP URL/key for convenience).
- * Backed by GET /datapacks/:name/provision-status; the API refuses
- * if the caller doesn't own this datapack (RequireDatapackOwnership).
+ * Backed by GET /datapacks/:name/provision-status; the API allows the
+ * datapack owner or any user with shared access (accepted invite + grant).
  */
 export async function getDatapackProvisionStatus(
   datapackName: string,

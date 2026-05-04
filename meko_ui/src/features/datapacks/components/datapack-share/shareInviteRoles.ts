@@ -48,3 +48,28 @@ export function shareGrantLabel(grant: DatapackShareGrant): string {
 export function shareGrantDescription(grant: DatapackShareGrant): string {
   return SHARE_INVITE_ROLES.find((r) => r.id === grant)?.description ?? "";
 }
+
+/** Compact member-row line: same Lucide icons as invite role tiles, with tint aligned to grant badge hues. */
+export function shareInviteRoleRowPresentation(grant: DatapackShareGrant): {
+  Icon: LucideIcon;
+  label: string;
+  iconClassName: string;
+} | null {
+  const row = SHARE_INVITE_ROLES.find((r) => r.id === grant);
+  if (!row) return null;
+  let iconClassName: string;
+  switch (row.id) {
+    case DATAPACK_SHARE_GRANT_VIEWER:
+      iconClassName = "text-muted-foreground";
+      break;
+    case DATAPACK_SHARE_GRANT_CONTRIBUTOR:
+      iconClassName = "text-amber-500/90";
+      break;
+    case DATAPACK_SHARE_GRANT_MAINTAINER:
+      iconClassName = "text-violet-400/90";
+      break;
+    default:
+      iconClassName = "text-muted-foreground";
+  }
+  return { Icon: row.icon, label: row.label, iconClassName };
+}

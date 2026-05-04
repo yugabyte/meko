@@ -154,23 +154,7 @@ function MemberRow({
         </div>
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2">
-        {roleControl}
-        {member.is_owner ? null : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-            disabled={!canManage || removeBusy}
-            aria-label={`Remove ${member.user_name || "member"}`}
-            onClick={() => void handleRemove()}
-          >
-            {/* TODO: We will add back the remove icon for enabling owner to remove members */}
-            {/* <span className="text-lg leading-none" aria-hidden>
-              {removeBusy ? "…" : "×"}
-            </span> */}
-          </Button>
-        )}
+        <span className="flex shrink-0 items-center justify-end gap-2">{roleControl}</span>
       </div>
     </div>
   );

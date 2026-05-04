@@ -35,13 +35,13 @@ type Props = {
   datapackId: string;
   /** `preview`: shows 3 unpromoted rows (fetches a larger window so slots refill after promote). `full`: paginated list. */
   variant?: MemoryPromotionVariant;
-  isPromoteAllowed: boolean;
+  isPromotionAllowed: boolean;
 };
 
 export default function MemoryPromotionPanel({
   datapackName,
   datapackId,
-  isPromoteAllowed,
+  isPromotionAllowed,
   variant = "full",
 }: Props) {
   const {
@@ -187,7 +187,7 @@ export default function MemoryPromotionPanel({
             {<Button
               className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
               onClick={() => void promote()}
-              disabled={promoting || selected.size < 2 || !isPromoteAllowed}
+              disabled={promoting || selected.size < 2 || !isPromotionAllowed}
             >
               {promoting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -309,7 +309,7 @@ export default function MemoryPromotionPanel({
                               size="sm"
                               className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-white"
                               onClick={() => promoteOne(m.id)}
-                              disabled={promoting || !isPromoteAllowed}
+                              disabled={promoting || !isPromotionAllowed}
                             >
                               {promoting && promotingId === m.id ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
@@ -320,7 +320,7 @@ export default function MemoryPromotionPanel({
                             </Button>
                           </span>
                         </TooltipTrigger>
-                        {!isPromoteAllowed && <TooltipContent side="top">You don't have permission to promote to knowledge</TooltipContent>}
+                        {!isPromotionAllowed && <TooltipContent side="top">You don't have permission to promote to knowledge</TooltipContent>}
                       </Tooltip>
                       <Tooltip>
                         <TooltipTrigger asChild>

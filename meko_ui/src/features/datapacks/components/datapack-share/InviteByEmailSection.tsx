@@ -52,7 +52,7 @@ export function InviteByEmailSection({ datapackName, onInviteSent }: Props) {
     setSubmitting(true);
     try {
       await inviteDatapackShare(datapackName, {
-        recipient_email: parsed.email,
+        recipient_email: parsed?.email?.toLowerCase(),
         grant: inviteRole,
       });
       setEmail("");

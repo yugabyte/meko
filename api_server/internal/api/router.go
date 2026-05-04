@@ -18,20 +18,20 @@ import (
 // serviceRegistry holds every repository and service the router needs,
 // built once and shared across all route-registration helpers.
 type serviceRegistry struct {
-	accountRepo *repository.AccountRepo
-	ybaRepo     *repository.YBARepo
-	ybaSvc      *service.YBAService
-	dpRepo      *repository.DatapackRepo
-	dpSvc       *service.DatapackService
-	langfuseSvc *service.LangfuseService
-	agentSvc    *service.AgentService
-	kbSvc       *service.KnowledgeBaseService
-	ragSvc      *service.RagService
+	accountRepo        *repository.AccountRepo
+	ybaRepo            *repository.YBARepo
+	ybaSvc             *service.YBAService
+	dpRepo             *repository.DatapackRepo
+	dpSvc              *service.DatapackService
+	langfuseSvc        *service.LangfuseService
+	agentSvc           *service.AgentService
+	kbSvc              *service.KnowledgeBaseService
+	ragSvc             *service.RagService
 	memoriesSvc        *service.MemoriesService
 	promoteMemoriesSvc *service.PromoteMemoriesService
 	s3Svc              *service.S3Service
-	sharingRepo *repository.SharingRepo
-	sharingSvc  *service.SharingService
+	sharingRepo        *repository.SharingRepo
+	sharingSvc         *service.SharingService
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -89,20 +89,20 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
-		accountRepo: accountRepo,
-		ybaRepo:     ybaRepo,
-		ybaSvc:      ybaSvc,
-		dpRepo:      dpRepo,
-		dpSvc:       dpSvc,
-		langfuseSvc: langfuseSvc,
-		agentSvc:    agentSvc,
-		kbSvc:       kbSvc,
-		ragSvc:      ragSvc,
+		accountRepo:        accountRepo,
+		ybaRepo:            ybaRepo,
+		ybaSvc:             ybaSvc,
+		dpRepo:             dpRepo,
+		dpSvc:              dpSvc,
+		langfuseSvc:        langfuseSvc,
+		agentSvc:           agentSvc,
+		kbSvc:              kbSvc,
+		ragSvc:             ragSvc,
 		memoriesSvc:        memoriesSvc,
 		promoteMemoriesSvc: promoteMemoriesSvc,
 		s3Svc:              s3Svc,
-		sharingRepo: sharingRepo,
-		sharingSvc:  sharingSvc,
+		sharingRepo:        sharingRepo,
+		sharingSvc:         sharingSvc,
 	}
 }
 
@@ -268,6 +268,45 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
+	// Connect / MCP details: any member with datapack access (owner or
+	// accepted share with viewer/contributor/maintainer grant).
+	g.GET("/datapacks/:name/provision-status", handlers.DatapackProvisionStatusHandler(reg.dpRepo),
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+
+	// Langfuse-backed conversations: read-only; same access as Describe /
+	// provision-status (owner or shared member with agent_access).
+	g.GET("/datapacks/:name/conversations", observeH.ConversationList,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	g.GET("/datapacks/:name/conversations/count", observeH.ConversationCount,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+
+	// Outgoing shares: RequireDatapackAccess resolves the datapack for owner or any shared member (404 if none).
+	// RequireDatapackOwnerOrMaintainerGrant restricts the list to owner or maintainer grant (403 otherwise).
+	g.GET("/datapacks/:name/outgoing-shares", shareH.OutgoingShares,
+		auth.RequireDatapackAccess(reg.dpRepo),
+		// Right now we need to display memebers list on datapack details, so cannot check access rights
+		// auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+
+	// Invite / resend / revoke: owner or maintainer (not under RequireDatapackOwnership).
+	// Middleware order is required: RequireDatapackAccess loads dp into context;
+	// RequireDatapackOwnerOrMaintainerGrant only reads that context (see its doc comment).
+	g.POST("/datapacks/:name/share", shareH.Invite,
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+	g.POST("/datapacks/:name/invite/:invite_id/resend", shareH.ResendInvite,
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+	g.DELETE("/datapacks/:name/invite/:invite_id", shareH.RevokeInvite,
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+
 	named := g.Group("/datapacks/:name",
 		auth.RequireDatapackOwnership(reg.dpRepo),
 	)
@@ -276,17 +315,6 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named.DELETE("", dpH.Delete)
 	named.GET("/status", dpH.Status)
 	named.POST("/langfuse/project-keys", dpH.GenerateLangfuseProjectKeys)
-
-	// Per-datapack ysql credentials + the (account-level) MCP server
-	// URL / API key. Shown in the datapack's Connect dialog.
-	// Ownership is enforced by RequireDatapackOwnership on the named group.
-	named.GET("/provision-status", handlers.DatapackProvisionStatusHandler(reg.dpRepo))
-
-	// Read-only listing of Langfuse sessions (= chat conversations) for
-	// the datapack. Paginated with limit/offset; requires the api server
-	// to be started with --langfuse-db-host.
-	named.GET("/conversations", observeH.ConversationList)
-	named.GET("/conversations/count", observeH.ConversationCount)
 
 	named.POST("/agents", agentH.Link)
 	named.GET("/agents", agentH.ListForDatapack)
@@ -307,10 +335,6 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named.GET("/knowledge-bases/counts", kbH.Counts)
 	named.GET("/knowledge-bases/documents", kbH.Documents)
 
-	named.POST("/share", shareH.Invite)
-	named.GET("/outgoing-shares", shareH.OutgoingShares)
-	named.POST("/invite/:invite_id/resend", shareH.ResendInvite)
-	named.DELETE("/invite/:invite_id", shareH.RevokeInvite)
 	named.PATCH("/share/:share_user_id", shareH.UpdateGrant)
 
 	slog.Info("datapack routes registered")
