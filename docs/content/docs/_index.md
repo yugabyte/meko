@@ -3,7 +3,7 @@ title: Meko Documentation
 headerTitle: Meko Documentation
 linkTitle: About Meko
 headcontent: Simplify the Agent-Native Data Layer
-description: Meko is an agent-native unified data layer for multi-agent systems where agents work together to build and learn from shared knowlege and collective memory with full auditability
+description: Meko is an agent-native unified data layer for multi-agent systems where agents work and learn together from shared knowlege and collective memory with full auditability
 body_class: full-width
 notoc: true
 type: docs
@@ -16,9 +16,9 @@ Meko offers
 
 - **Collective memory:** learning that compounds across the agents working together, as opposed to just per-agent memory.
 
-- **Auditability of the learning process:** connect execution traces to how agents process data and knowledge, learn from it and share that learning.
+- **Auditability of the learning process:** connect execution traces to how agents working together process data and knowledge, learn from it, and share that learning.
 
-Meko integrates easily with any agentic framework through MCP servers. It is serverless, multi-tenant (multi-agentic), and optimized for tiering to object stores. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
+Meko integrates easily with any agentic framework through MCP servers. It is serverless, multi-tenant (multi-agentic), and optimized for tiering to object stores. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, vector search, and graph search.
 
 &nbsp;
 &nbsp;

@@ -11,17 +11,17 @@ Meko organizes agent data around a few key concepts. Understanding these will he
   {{< card
     href="architecture/core-concepts/datapacks/"
     title="Datapacks"
-    desc="The isolation unit for agent data. Each datapack bundles a database, MCP server, and credentials."
+    desc="The fundamental storage primitive for multi-agent systems. One datapack per application, or one project. It is the isolation unit for agents working together. Each datapack bundles a database, the knoweledge base, agent memories, collective memories, shared knowledge, MCP server, and credentials."
   >}}
   {{< card
     href="architecture/core-concepts/memory/"
     title="Memory"
-    desc="Long-term entity and relationship extraction from conversations, powered by mem0 and graph storage."
+    desc="Extracted memories from conversations are specific pieces of information or preferences that are explicitly stored persistently for the long term. Long-term.  Memories are stored as entity and relationship, powered by Meko's graph storage."
   >}}
   {{< card
     href="architecture/core-concepts/knowledgebase/"
     title="Knowledge bases"
-    desc="RAG pipelines that chunk, embed, and index your documents for semantic search.."
+    desc="Information repository that acts as a single source of truth for agent's grounding decisions, reducing hallucinations, and ensuring consistent responses. Uses semantic search and RAG to understand query intent, not just keywords. Documents are chunked, embedded, and indexed for retrieval."
   >}}
   {{< card
     href="architecture/core-concepts/graph-rag/"
