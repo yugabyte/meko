@@ -166,9 +166,6 @@ export default function FileUpload({ datapackName }: Props) {
     if (uploaded > 0) {
       setTotalUploaded((prev) => prev + uploaded);
       if (kbCreated) setNewUploadsAfterKB((prev) => prev + uploaded);
-      setTimeout(() => {
-        setFiles((prev) => prev.filter((f) => f.status !== KNOWLEDGE_UPLOAD_STATUS.DONE));
-      }, 2000);
     }
   };
 
@@ -180,6 +177,10 @@ export default function FileUpload({ datapackName }: Props) {
       setPollingActive(true);
       setNewUploadsAfterKB(0);
       pollGraceRef.current = 3;
+      // Files have been handed off to the KB pipeline; their per-document
+      // status is tracked below. Clear successfully uploaded files so the
+      // user has a fresh slate for the next batch.
+      setFiles((prev) => prev.filter((f) => f.status !== KNOWLEDGE_UPLOAD_STATUS.DONE));
     } catch (err) {
       showWarning(getApiErrorMessage(err, "Failed to create knowledge base."));
     } finally {
@@ -345,9 +346,14 @@ export default function FileUpload({ datapackName }: Props) {
           </div>
         )}
 
-        {/* File list */}
+        {/* File list — auto-fill grid so multiple files render side-by-side
+            on wider viewports; capped height with vertical scroll once it
+            overflows so the dialog itself doesn't stretch. */}
         {files.length > 0 && (
-          <ul className="space-y-2">
+          <ul
+            className="grid max-h-72 gap-2 overflow-y-auto pr-1"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))" }}
+          >
             {files.map((entry, i) => (
               <li
                 key={`${entry.file.name}-${i}`}
@@ -477,9 +483,10 @@ export default function FileUpload({ datapackName }: Props) {
             </p>
           )}
 
-          {/* Per-document details */}
+          {/* Per-document details — capped + scrollable so a large batch
+              doesn't push the dialog (or page) into a long stack. */}
           {pipelineDetails.length > 0 && (
-            <div className="space-y-1.5">
+            <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
               {pipelineDetails.map((d, i) => {
                 const filename = d.document_name.split("/").pop() ?? d.document_name;
                 const displayName = filename.replace(/^\d+_/, "");
