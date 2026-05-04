@@ -24,25 +24,11 @@ Meko organizes agent data around a few key concepts. Understanding these will he
     desc="Information repository that acts as a single source of truth for agents, grounding decisions, reducing hallucinations, and ensuring consistent responses. Uses semantic search and RAG to understand query intent, not just keywords. Documents are chunked, embedded, and indexed for retrieval."
   >}}
   {{< card
-    href="architecture/core-concepts/graph-rag/"
-    title="Graph RAG"
-    desc="Graph-based memory using Apache AGE for entity-relationship queries."
-  >}}
-  {{< card
-    href="architecture/core-concepts/oltp-data/"
-    title="OLTP data"
-    desc="Direct PostgreSQL access via YugabyteDB YSQL for structured data."
-  >}}
-  {{< card
     href="architecture/core-concepts/traces/"
     title="Traces"
-    desc="Audit trails and chain-of-thought traceability for agent operations."
+    desc="Meko provides end-to-end visibility into every conversation, from initial prompt through LLM chain-of-thought, including memory and knowledge, the associated API and SQL calls, the queries executed, and the results retrieved."
   >}}
-  {{< card
-    href="architecture/core-concepts/connectors/"
-    title="Connectors"
-    desc="Data source connectors for pg_dist_rag."
-  >}}
+
 {{< /card-group >}}
 
 <!--
