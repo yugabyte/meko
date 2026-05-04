@@ -11,7 +11,7 @@ import {
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES, datapackConfigurePath } from "@/app/routes/paths";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
-import { ArrowRight, Box, Check, Play, Sparkles, Terminal } from "lucide-react";
+import { ArrowRight, Check, Play, Sparkles, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function OnboardingPage() {
@@ -58,12 +58,7 @@ export default function OnboardingPage() {
         showCliButton={false}
         padding="page"
         leading={
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <Box className="h-5 w-5" aria-hidden />
-            </div>
-            <span className="text-lg font-semibold tracking-tight text-foreground">meko</span>
-          </div>
+          <img src="/meko-logo.svg" alt="meko" className="h-8 w-auto" />
         }
       />
 
