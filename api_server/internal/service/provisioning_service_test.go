@@ -63,29 +63,31 @@ func (m *mockLangfuseProvisioner) Enabled() bool {
 	return m.enabled
 }
 
-func (m *mockLangfuseProvisioner) GenerateProjectKeysForDatapack(
-	accountID string,
-	_ string,
-	_ string,
-	_ string,
+func (m *mockLangfuseProvisioner) ProvisionForDatapack(
+	account *models.Account,
 	datapackID string,
 	datapackName string,
-) (*ProjectKeys, error) {
+) *ProjectKeys {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.called = true
-	m.lastAccountID = accountID
+	if account != nil {
+		m.lastAccountID = account.ID
+	}
 	m.lastDatapackID = datapackID
 	m.lastDatapackName = datapackName
 	if m.err != nil {
-		return nil, m.err
+		// Mirror the production contract of ProvisionForDatapack:
+		// upstream errors are logged-and-swallowed by the service
+		// itself, so the caller observes nil instead of an error.
+		return nil
 	}
 	return &ProjectKeys{
 		ProjectID:   "proj-1",
 		ProjectName: "proj",
 		PublicKey:   "pk",
 		SecretKey:   "sk",
-	}, nil
+	}
 }
 
 func (m *mockLangfuseProvisioner) GetOrgKeysForAccount(_ string) (string, string, error) {

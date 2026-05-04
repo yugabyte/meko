@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
 )
 
@@ -133,6 +134,37 @@ func (s *LangfuseService) GenerateProjectKeysForDatapack(
 	}
 
 	return s.ensureProjectMapping(accountID, datapackID, datapackName, org)
+}
+
+// ProvisionForDatapack ensures a langfuse_project_mapping row exists
+// for (account, datapack). Best-effort: returns nil when Langfuse is
+// disabled or upstream provisioning fails (errors are logged).
+// Idempotent: a no-op when a mapping is already present.
+func (s *LangfuseService) ProvisionForDatapack(
+	account *models.Account,
+	datapackID, datapackName string,
+) *ProjectKeys {
+	if !s.Enabled() || account == nil {
+		return nil
+	}
+	keys, err := s.GenerateProjectKeysForDatapack(
+		account.ID,
+		account.Email,
+		account.FirstName,
+		account.LastName,
+		datapackID,
+		datapackName,
+	)
+	if err != nil {
+		slog.Error("langfuse mapping provisioning failed",
+			"user_id", account.ID,
+			"datapack_id", datapackID,
+			"datapack_name", datapackName,
+			"error", err,
+		)
+		return nil
+	}
+	return keys
 }
 
 type ObserveBootstrapResult struct {

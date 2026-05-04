@@ -54,9 +54,16 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 			"INVALID_JSON", "malformed request body")
 	}
 
-	if account, err := auth.GetAccount(c); err == nil {
-		req.UserID = account.ID
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
 	}
+	if account == nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+	req.UserID = account.ID
 
 	resp, err := h.svc.Create(req)
 	if err != nil {
@@ -74,6 +81,12 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 		}
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", err.Error())
+	}
+
+	// Eagerly provision the Langfuse mapping (best-effort) so observe
+	// / conversations work without waiting for the UI's lazy bootstrap.
+	if h.langfuse != nil {
+		h.langfuse.ProvisionForDatapack(account, resp.DatapackID, resp.Name)
 	}
 
 	return ok(c, http.StatusCreated, resp)

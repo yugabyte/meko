@@ -26,16 +26,15 @@ type AccountLookup interface {
 }
 
 // LangfuseProvisioner abstracts Langfuse project/org provisioning.
+// ProvisionForDatapack ensures a langfuse_project_mapping row for the
+// (account, datapack) pair. Best-effort: returns nil when Langfuse is
+// disabled or upstream provisioning fails.
 type LangfuseProvisioner interface {
 	Enabled() bool
-	GenerateProjectKeysForDatapack(
-		accountID string,
-		accountEmail string,
-		firstName string,
-		lastName string,
-		datapackID string,
-		datapackName string,
-	) (*ProjectKeys, error)
+	ProvisionForDatapack(
+		account *models.Account,
+		datapackID, datapackName string,
+	) *ProjectKeys
 	GetOrgKeysForAccount(accountID string) (publicKey, secretKey string, err error)
 	Host() string
 }
@@ -142,20 +141,10 @@ func (s *ProvisioningService) ensureLangfuseProvisioning(
 		)
 		return nil
 	}
-	projectKeys, err := s.langfuse.GenerateProjectKeysForDatapack(
-		acct.ID,
-		acct.Email,
-		acct.FirstName,
-		acct.LastName,
-		datapackID,
-		datapackName,
-	)
-	if err != nil {
-		slog.Error("Failed to provision langfuse mapping for default datapack",
-			"user_id", userID,
-			"datapack_id", datapackID,
-			"error", err,
-		)
+	projectKeys := s.langfuse.ProvisionForDatapack(acct, datapackID, datapackName)
+	if projectKeys == nil {
+		// ProvisionForDatapack already logs upstream errors; nothing
+		// further to do for the signup flow.
 		return nil
 	}
 	s.logLangfuseProvisioningDetails(userID, datapackID, projectKeys)
