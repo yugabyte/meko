@@ -3,16 +3,16 @@ title: Meko Documentation
 headerTitle: Meko Documentation
 linkTitle: About Meko
 headcontent: Simplify the Agent-Native Data Layer
-description: Meko is an agent-native unified data layer for multi-agent systems where agents work and learn together from shared knowlege and collective memory with full auditability
+description: Meko is an agent-native unified data layer for multi-agent systems, where agents work and learn together from shared knowlege and collective memory with full auditability.
 body_class: full-width
 notoc: true
 type: docs
 layout: list
 ---
 
-Meko offers
+Meko offers:
 
-- **Shared knowledge:** building shared knowledge over time from conversations, real-time data sources and slower-changing knowledge bases.
+- **Shared knowledge:** build shared knowledge over time from conversations, real-time data sources, and slower-changing knowledge bases.
 
 - **Collective memory:** learning that compounds across the agents working together, as opposed to just per-agent memory.
 
@@ -27,7 +27,7 @@ Meko integrates easily with any agentic framework through MCP servers. It is ser
   {{< card
     href="quick-start/"
     title="Quick Start"
-    desc="Sign up for free, connect and start using Meko with your agents in less than 60 seconds"
+    desc="Sign up for free, connect, and start using Meko with your agents in less than 60 seconds"
     cta="Get started &rarr;"
     image="images/database.svg"
   >}}

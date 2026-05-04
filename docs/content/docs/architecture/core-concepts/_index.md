@@ -16,12 +16,12 @@ Meko organizes agent data around a few key concepts. Understanding these will he
   {{< card
     href="architecture/core-concepts/memory/"
     title="Memory"
-    desc="Extracted memories from conversations are specific pieces of information or preferences that are explicitly stored persistently for the long term. Long-term.  Memories are stored as entity and relationship, powered by Meko's graph storage."
+    desc="Extracted memories from conversations are specific pieces of information or preferences that are explicitly stored persistently for the long term. Memories are stored as entity and relationship, powered by Meko's graph storage."
   >}}
   {{< card
     href="architecture/core-concepts/knowledgebase/"
     title="Knowledge bases"
-    desc="Information repository that acts as a single source of truth for agent's grounding decisions, reducing hallucinations, and ensuring consistent responses. Uses semantic search and RAG to understand query intent, not just keywords. Documents are chunked, embedded, and indexed for retrieval."
+    desc="Information repository that acts as a single source of truth for agents, grounding decisions, reducing hallucinations, and ensuring consistent responses. Uses semantic search and RAG to understand query intent, not just keywords. Documents are chunked, embedded, and indexed for retrieval."
   >}}
   {{< card
     href="architecture/core-concepts/graph-rag/"

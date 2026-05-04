@@ -259,13 +259,13 @@ With your first datapack live, you can transition from a basic demo to a robust,
     desc="Add more sources and combine document RAG with memory-driven assistants."
   >}}
   {{< card
-    href="examples/meko-in-your-ai-agent/"
-    title="Share context"
+    href="examples/meko-enhances-teaming/"
+    title="Collaborate"
     desc="Share datapacks with your team so that every agent follows the same project standards, or carry personal preferences across AI agents."
   >}}
   {{< card
-    href="examples/build-software-with-meko/"
-    title="Build resilient multi-agent systems"
+    href="examples/trace-and-resume/"
+    title="Trace and resume"
     desc="Store conversation history and agent reasoning traces, enabling features like cross-session recall and resumability after failures."
   >}}
 {{< /card-group >}}

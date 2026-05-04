@@ -30,9 +30,12 @@ Use the following guides to learn key concepts and workflows for Meko.
     title="Observability"
     desc="Traces, conversation history, and chain-of-thought visibility."
   >}}
+{{< /card-group >}}
+
+<!--
   {{< card
     href="guides/multi-agent-patterns/"
     title="Multi-agent patterns"
     desc="Shared vs. private datapacks for multi-agent systems."
   >}}
-{{< /card-group >}}
+-->

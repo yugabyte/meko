@@ -66,5 +66,5 @@ The MCP server embeds your query, performs similarity search against the indexed
 
 ## Next Steps
 
-- [Learn about knowledge bases](../../about/core-concepts/knowledgebase/)
+- [Learn about knowledge bases](../../architecture/core-concepts/knowledgebase/)
 - [Access your database](../database-access/)

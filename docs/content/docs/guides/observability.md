@@ -55,5 +55,5 @@ Meko integrates with [LangFuse](https://github.com/langfuse/langfuse) for trace 
 
 ## Next steps
 
-- [Learn about traces](../../about/core-concepts/traces/)
+- [Learn about traces](../../architecture/core-concepts/traces/)
 - [Work with memory](../working-with-memory/)

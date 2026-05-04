@@ -10,11 +10,11 @@ type: docs
 
 {{< card-group variant="third">}}
   {{< card
-    href="reference/meko-cli"
+    href="reference/meko-cli/"
     title="meko CLI"
   >}}
   {{< card
-    href="reference/mcp-server"
+    href="reference/mcp-server/"
     title="Meko MCP server"
   >}}
 {{< /card-group >}}

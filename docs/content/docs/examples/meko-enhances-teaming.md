@@ -1,7 +1,7 @@
 ---
 title: Enhanced teaming
 linkTitle: Enhanced teaming
-description: Use Meko to enhance team efficiency & productivity
+description: Use Meko to enhance team efficiency and productivity
 weight: 2010
 ---
 
@@ -104,8 +104,8 @@ Think of a shared datapack like a shared document. You create it, share it with 
 
 Each team member already has their own personal datapack (created when they signed up). Now they add the team datapack to their MCP server configuration, so their agent has access to both:
 
-- **Personal datapack** — individual preferences, coding style, role context
-- **Team datapack** — shared standards, policies, and project knowledge
+- **Personal datapack** — individual preferences, coding style, role context.
+- **Team datapack** — shared standards, policies, and project knowledge.
 
 When their agent needs context, it draws from both — personal preferences for style, team standards for correctness.
 
@@ -123,10 +123,10 @@ Contributors can add memories immediately, but only maintainers and owners can p
 
 As the team works on a project, each member's agent writes new knowledge back to the shared datapack:
 
-- **The tech lead** adds the design spec to the knowledge base, so every agent understands the architecture
-- **A developer** captures a Slack thread about an API contract change that affects the team
-- **An analyst** loads structured data — a product catalog, pricing tiers, or feature flags — into a database table within the datapack
-- **A QA engineer** documents a tricky workaround for a flaky test environment
+- **The tech lead** adds the design spec to the knowledge base, so every agent understands the architecture.
+- **A developer** captures a Slack thread about an API contract change that affects the team.
+- **An analyst** loads structured data — a product catalog, pricing tiers, or feature flags — into a database table within the datapack.
+- **A QA engineer** documents a tricky workaround for a flaky test environment.
 
 Each of these goes into the right place automatically. Structured data lands in tables. Unstructured knowledge becomes searchable memories and graph relationships. The agent figures out the right storage — you don't have to think about it.
 
@@ -136,10 +136,10 @@ Not every memory gets promoted to shared knowledge. A contributor's private memo
 
 Here's the payoff: a developer is implementing a new payment endpoint. Their agent already knows:
 
-- The team's API envelope format (from the lead's policy)
-- The event-driven architecture requirement (from the team standard)
-- The updated API contract from last week's Slack thread (from a teammate's contribution)
-- The product catalog and pricing tiers (from the analyst's structured data)
+- The team's API envelope format (from the lead's policy).
+- The event-driven architecture requirement (from the team standard).
+- The updated API contract from last week's Slack thread (from a teammate's contribution).
+- The product catalog and pricing tiers (from the analyst's structured data).
 
 No one had to re-explain any of this. The agent just knows, because the team's collective context is right there in the shared datapack.
 

@@ -1,5 +1,5 @@
 ---
-title: Traceability, efficient conversation history, resumability and more
+title: Traceability, efficient conversation history, and resumability
 linkTitle: Traceability, resumability and more
 description: Meko captures chain-of-thought history, stores & archives conversations, and enables agent resumability.
 weight: 2020
