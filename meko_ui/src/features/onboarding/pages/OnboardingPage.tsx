@@ -57,8 +57,9 @@ export default function OnboardingPage() {
       <AppWorkspaceHeader
         showCliButton={false}
         padding="page"
+        className="pl-4 pr-8"
         leading={
-          <img src="/meko-logo.svg" alt="meko" className="h-8 w-auto" />
+          <img src="/meko-logo.svg" alt="meko" className="h-12 w-auto" />
         }
       />
 

@@ -102,7 +102,7 @@ export default function Sidebar() {
         {isCollapsed ? (
           <img src="/favicons/favicon-32x32-dark.png" alt="meko" className="w-8 h-8 animate-in fade-in" />
         ) : (
-          <img src="/meko-logo.svg" alt="meko" className="h-8 w-auto animate-in fade-in" />
+          <img src="/meko-logo.svg" alt="meko" className="h-12 w-auto animate-in fade-in" />
         )}
       </div>
 
