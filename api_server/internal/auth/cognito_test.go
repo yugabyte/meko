@@ -39,6 +39,21 @@ type mockCognitoAPI struct {
 		ctx context.Context, params *cip.AdminCreateUserInput,
 		optFns ...cipOpt,
 	) (*cip.AdminCreateUserOutput, error)
+
+	resendConfirmationFn func(
+		ctx context.Context, params *cip.ResendConfirmationCodeInput,
+		optFns ...cipOpt,
+	) (*cip.ResendConfirmationCodeOutput, error)
+
+	forgotPasswordFn func(
+		ctx context.Context, params *cip.ForgotPasswordInput,
+		optFns ...cipOpt,
+	) (*cip.ForgotPasswordOutput, error)
+
+	confirmForgotPasswordFn func(
+		ctx context.Context, params *cip.ConfirmForgotPasswordInput,
+		optFns ...cipOpt,
+	) (*cip.ConfirmForgotPasswordOutput, error)
 }
 
 func (m *mockCognitoAPI) SignUp(
@@ -82,6 +97,39 @@ func (m *mockCognitoAPI) AdminCreateUser(
 		return m.adminCreateUserFn(ctx, params, optFns...)
 	}
 	return &cip.AdminCreateUserOutput{}, nil
+}
+
+func (m *mockCognitoAPI) ResendConfirmationCode(
+	ctx context.Context,
+	params *cip.ResendConfirmationCodeInput,
+	optFns ...func(*cip.Options),
+) (*cip.ResendConfirmationCodeOutput, error) {
+	if m.resendConfirmationFn != nil {
+		return m.resendConfirmationFn(ctx, params, optFns...)
+	}
+	return &cip.ResendConfirmationCodeOutput{}, nil
+}
+
+func (m *mockCognitoAPI) ForgotPassword(
+	ctx context.Context,
+	params *cip.ForgotPasswordInput,
+	optFns ...func(*cip.Options),
+) (*cip.ForgotPasswordOutput, error) {
+	if m.forgotPasswordFn != nil {
+		return m.forgotPasswordFn(ctx, params, optFns...)
+	}
+	return &cip.ForgotPasswordOutput{}, nil
+}
+
+func (m *mockCognitoAPI) ConfirmForgotPassword(
+	ctx context.Context,
+	params *cip.ConfirmForgotPasswordInput,
+	optFns ...func(*cip.Options),
+) (*cip.ConfirmForgotPasswordOutput, error) {
+	if m.confirmForgotPasswordFn != nil {
+		return m.confirmForgotPasswordFn(ctx, params, optFns...)
+	}
+	return &cip.ConfirmForgotPasswordOutput{}, nil
 }
 
 func strPtr(s string) *string { return &s }

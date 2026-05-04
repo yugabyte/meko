@@ -3,6 +3,7 @@ export const ROUTES = {
   login: "/login",
   signin: "/signin",
   signup: "/signup",
+  forgotPassword: "/forgot-password",
   onboarding: "/onboarding",
   home: "/home",
   playground: "/playground",
@@ -52,6 +53,7 @@ export const AUTH_ROUTES = [
   ROUTES.login,
   ROUTES.signin,
   ROUTES.signup,
+  ROUTES.forgotPassword,
 ] as const;
 
 export const PROTECTED_ROUTE_PREFIXES = [

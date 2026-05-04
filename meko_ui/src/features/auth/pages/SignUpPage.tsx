@@ -1,5 +1,5 @@
-import { FormEvent, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { FormEvent, useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getApiErrorMessage, signup, confirmSignup } from "@/lib/mekoApi";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ function getPasswordPolicyError(password: string): string | null {
 
 export default function SignUpPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -28,6 +29,18 @@ export default function SignUpPage() {
   const [awaitingCode, setAwaitingCode] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Deep-link from sign-in when the user must finish Cognito email verification:
+  // `/signup?resume=1&email=...` opens the confirmation-code step with email prefilled.
+  useEffect(() => {
+    const resume = searchParams.get("resume");
+    const qEmail = searchParams.get("email");
+    if (resume === "1" && qEmail?.trim()) {
+      setEmail(qEmail.trim());
+      setAwaitingCode(true);
+      setError(null);
+    }
+  }, [searchParams]);
 
   const handleSignup = async (e: FormEvent) => {
     e.preventDefault();

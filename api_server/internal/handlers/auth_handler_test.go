@@ -50,10 +50,13 @@ func noopAccountStore() *handlerMockAccountStore {
 // --- mock CognitoProvider for handler tests ---
 
 type handlerMockCognito struct {
-	signUpFn  func(ctx context.Context, email, password, firstName, lastName string) (string, error)
-	confirmFn func(ctx context.Context, email, code string) error
-	loginFn   func(ctx context.Context, email, password string) (*auth.Result, error)
-	logoutFn  func(ctx context.Context, accessToken string) error
+	signUpFn                func(ctx context.Context, email, password, firstName, lastName string) (string, error)
+	confirmFn               func(ctx context.Context, email, code string) error
+	resendFn                func(ctx context.Context, email string) error
+	forgotPasswordFn        func(ctx context.Context, email string) error
+	confirmForgotPasswordFn func(ctx context.Context, email, code, newPassword string) error
+	loginFn                 func(ctx context.Context, email, password string) (*auth.Result, error)
+	logoutFn                func(ctx context.Context, accessToken string) error
 }
 
 func (m *handlerMockCognito) SignUp(
@@ -67,6 +70,31 @@ func (m *handlerMockCognito) ConfirmSignUp(
 	ctx context.Context, email, code string,
 ) error {
 	return m.confirmFn(ctx, email, code)
+}
+
+func (m *handlerMockCognito) ResendConfirmationCode(
+	ctx context.Context, email string,
+) error {
+	if m.resendFn != nil {
+		return m.resendFn(ctx, email)
+	}
+	return nil
+}
+
+func (m *handlerMockCognito) ForgotPassword(ctx context.Context, email string) error {
+	if m.forgotPasswordFn != nil {
+		return m.forgotPasswordFn(ctx, email)
+	}
+	return nil
+}
+
+func (m *handlerMockCognito) ConfirmForgotPassword(
+	ctx context.Context, email, code, newPassword string,
+) error {
+	if m.confirmForgotPasswordFn != nil {
+		return m.confirmForgotPasswordFn(ctx, email, code, newPassword)
+	}
+	return nil
 }
 
 func (m *handlerMockCognito) Login(
@@ -136,6 +164,9 @@ func setupAuthTestServer(
 	g := e.Group("/api/v1/auth")
 	g.POST("/signup", authH.Signup)
 	g.POST("/confirm-signup", authH.ConfirmSignup)
+	g.POST("/resend-confirmation", authH.ResendConfirmation)
+	g.POST("/forgot-password", authH.ForgotPassword)
+	g.POST("/forgot-password/confirm", authH.ForgotPasswordConfirm)
 	g.POST("/login", authH.Login)
 	g.POST("/logout", authH.Logout)
 
@@ -397,6 +428,102 @@ func TestAuth_Login_WrongPassword(t *testing.T) {
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuth_Login_UserNotConfirmed(t *testing.T) {
+	cog := &handlerMockCognito{
+		loginFn: func(
+			_ context.Context, _, _ string,
+		) (*auth.Result, error) {
+			return nil, auth.ErrUserNotConfirmed
+		},
+	}
+
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/login", map[string]string{
+		"email":    "unconfirmed@example.com",
+		"password": "P@ssw0rd!",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+	apiResp := decodeResponse(t, resp)
+	if apiResp.Error == nil || apiResp.Error.Code != "USER_NOT_CONFIRMED" {
+		t.Fatalf("expected USER_NOT_CONFIRMED, got %+v", apiResp.Error)
+	}
+}
+
+func TestAuth_ResendConfirmation_Success(t *testing.T) {
+	var resendEmail string
+	cog := &handlerMockCognito{
+		resendFn: func(_ context.Context, email string) error {
+			resendEmail = email
+			return nil
+		},
+	}
+
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/resend-confirmation", map[string]string{
+		"email": "resume@example.com",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if resendEmail != "resume@example.com" {
+		t.Errorf("expected resend for resume@example.com, got %q", resendEmail)
+	}
+}
+
+func TestAuth_ForgotPassword_NoAccount(t *testing.T) {
+	cog := &handlerMockCognito{
+		forgotPasswordFn: func(_ context.Context, _ string) error {
+			return auth.ErrUserNotFound
+		},
+	}
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/forgot-password", map[string]string{
+		"email": "missing@example.com",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuth_ForgotPasswordConfirm_Success(t *testing.T) {
+	var gotEmail, gotCode, gotPw string
+	cog := &handlerMockCognito{
+		confirmForgotPasswordFn: func(_ context.Context, email, code, newPw string) error {
+			gotEmail, gotCode, gotPw = email, code, newPw
+			return nil
+		},
+	}
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/forgot-password/confirm", map[string]string{
+		"email":            "u@example.com",
+		"code":             "123456",
+		"new_password":     "abcdefg",
+		"confirm_password": "abcdefg",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if gotEmail != "u@example.com" || gotCode != "123456" || gotPw != "abcdefg" {
+		t.Fatalf("unexpected args: %q %q %q", gotEmail, gotCode, gotPw)
 	}
 }
 

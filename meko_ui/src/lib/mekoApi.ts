@@ -7,6 +7,37 @@ type ApiError = {
   message?: string;
 };
 
+/**
+ * Thrown by {@link request} when the API returns a structured `error` object
+ * (HTTP 4xx/5xx with `{ error: { code, message } }`). Lets auth UI branch on
+ * codes such as {@link API_ERROR_CODE_USER_NOT_CONFIRMED} without parsing strings.
+ */
+export class MekoApiRequestError extends Error {
+  readonly code?: string;
+  readonly httpStatus?: number;
+
+  constructor(message: string, opts?: { code?: string; httpStatus?: number }) {
+    super(message);
+    this.name = "MekoApiRequestError";
+    this.code = opts?.code;
+    this.httpStatus = opts?.httpStatus;
+  }
+}
+
+export function isMekoApiRequestError(err: unknown): err is MekoApiRequestError {
+  return err instanceof MekoApiRequestError;
+}
+
+/** Cognito sign-in blocked until email verified; client may offer resend + confirm flow. */
+export const API_ERROR_CODE_USER_NOT_CONFIRMED = "USER_NOT_CONFIRMED" as const;
+
+/**
+ * Returned from POST /auth/resend-confirmation when the email is already
+ * verified. UI should treat this as success-with-nudge (close the resend
+ * recovery panel and prompt the user to sign in) rather than a red error.
+ */
+export const API_ERROR_CODE_USER_ALREADY_CONFIRMED = "USER_ALREADY_CONFIRMED" as const;
+
 type ApiEnvelope<T> = {
   data: T;
   error?: ApiError | null;
@@ -26,6 +57,11 @@ const AUTH_PUBLIC_ENDPOINTS = new Set([
   "/auth/login",
   "/auth/signup",
   "/auth/confirm-signup",
+  /** Same-session pre-login; triggers Cognito ResendConfirmationCode. */
+  "/auth/resend-confirmation",
+  /** Cognito ForgotPassword / ConfirmForgotPassword (no session). */
+  "/auth/forgot-password",
+  "/auth/forgot-password/confirm",
 ]);
 
 function notifyAuthExpiredOnce() {
@@ -191,7 +227,10 @@ async function request<T>(
 
     const payload = res.data;
     if (payload?.error) {
-      throw new Error(payload.error.message || "API request failed");
+      throw new MekoApiRequestError(payload.error.message || "API request failed", {
+        code: payload.error.code,
+        httpStatus: res.status,
+      });
     }
     if (path === "/auth/login" || path === "/auth/me") {
       resetAuthExpiredState();
@@ -209,18 +248,30 @@ async function request<T>(
         throw new Error("Network error. Unable to reach the server.");
       }
       const status = err.response.status;
-      const apiMessage = err.response.data?.error?.message;
+      const apiErr = err.response.data?.error;
+      const apiMessage = apiErr?.message;
       if (status === 401) {
         if (AUTH_PUBLIC_ENDPOINTS.has(path)) {
-          throw new Error(apiMessage || "Unauthorized");
+          throw new MekoApiRequestError(apiMessage || "Unauthorized", {
+            code: apiErr?.code,
+            httpStatus: status,
+          });
         }
         notifyAuthExpiredOnce();
-        throw new Error(apiMessage || "Session expired. Please sign in again.");
+        throw new MekoApiRequestError(apiMessage || "Session expired. Please sign in again.", {
+          code: apiErr?.code,
+          httpStatus: status,
+        });
       }
       if (apiMessage) {
-        throw new Error(apiMessage);
+        throw new MekoApiRequestError(apiMessage, {
+          code: apiErr?.code,
+          httpStatus: status,
+        });
       }
-      throw new Error(`${status} ${err.response.statusText || "Request failed"}`);
+      throw new MekoApiRequestError(`${status} ${err.response.statusText || "Request failed"}`, {
+        httpStatus: status,
+      });
     }
     throw err;
   }
@@ -231,6 +282,9 @@ async function request<T>(
  * Prefer this over `err instanceof Error ? err.message : "…"` so network and HTTP cases read clearly.
  */
 export function getApiErrorMessage(err: unknown, fallback = "Something went wrong. Please try again."): string {
+  if (isMekoApiRequestError(err)) {
+    return err.message.trim() || fallback;
+  }
   if (axios.isCancel(err)) {
     return "Request was cancelled.";
   }
@@ -513,6 +567,60 @@ export async function confirmSignup(payload: ConfirmSignupPayload) {
   return request<{ message: string }>("/auth/confirm-signup", "POST", payload);
 }
 
+export type ResendConfirmationPayload = {
+  email: string;
+};
+
+/**
+ * POST /auth/resend-confirmation — asks AWS Cognito to email a new verification
+ * code for an account in UNCONFIRMED state (user signed up but never entered the code).
+ * Rate-limited by Cognito; does not sign the user in.
+ */
+export async function resendSignupConfirmation(payload: ResendConfirmationPayload) {
+  return request<{ message: string }>("/auth/resend-confirmation", "POST", {
+    email: payload.email.trim(),
+  });
+}
+
+export type ForgotPasswordStartPayload = {
+  email: string;
+};
+
+/**
+ * POST /auth/forgot-password — Cognito sends a password-reset code to the user’s email.
+ * 404 with NOT_FOUND when no pool user exists for that email (typical Cognito behavior).
+ */
+export async function forgotPasswordSendCode(payload: ForgotPasswordStartPayload) {
+  return request<{ message: string }>("/auth/forgot-password", "POST", {
+    email: payload.email.trim(),
+  });
+}
+
+export type ForgotPasswordConfirmPayload = {
+  email: string;
+  code: string;
+  new_password: string;
+  confirm_password: string;
+};
+
+/** POST /auth/forgot-password/confirm — Cognito ConfirmForgotPassword (sets new password). */
+export async function forgotPasswordConfirm(payload: ForgotPasswordConfirmPayload) {
+  return request<{ message: string }>("/auth/forgot-password/confirm", "POST", {
+    email: payload.email.trim(),
+    code: payload.code.trim(),
+    new_password: payload.new_password,
+    confirm_password: payload.confirm_password,
+  });
+}
+
+/**
+ * Signs in via POST /auth/login (Cognito USER_PASSWORD_AUTH). On success, sets
+ * auth cookies server-side and dispatches {@link AUTH_LOGIN_SUCCESS_EVENT}.
+ *
+ * If the user never confirmed their email, Cognito rejects login; the API maps
+ * that to HTTP 403 with `error.code` {@link API_ERROR_CODE_USER_NOT_CONFIRMED}
+ * so the sign-in page can offer resend + navigation to the confirm-code step.
+ */
 export async function login(payload: LoginPayload) {
   const data = await request<LoginResponse>("/auth/login", "POST", payload);
   dispatchAppEvent(AUTH_LOGIN_SUCCESS_EVENT);

@@ -54,6 +54,28 @@ type CognitoAPI interface {
 		params *cip.AdminCreateUserInput,
 		optFns ...func(*cip.Options),
 	) (*cip.AdminCreateUserOutput, error)
+
+	// ResendConfirmationCode emails a new verification code to an existing
+	// unconfirmed user (Cognito user pool sign-up flow).
+	ResendConfirmationCode(
+		ctx context.Context,
+		params *cip.ResendConfirmationCodeInput,
+		optFns ...func(*cip.Options),
+	) (*cip.ResendConfirmationCodeOutput, error)
+
+	// ForgotPassword emails a confirmation code for password reset (self-service).
+	ForgotPassword(
+		ctx context.Context,
+		params *cip.ForgotPasswordInput,
+		optFns ...func(*cip.Options),
+	) (*cip.ForgotPasswordOutput, error)
+
+	// ConfirmForgotPassword sets a new password using the emailed code.
+	ConfirmForgotPassword(
+		ctx context.Context,
+		params *cip.ConfirmForgotPasswordInput,
+		optFns ...func(*cip.Options),
+	) (*cip.ConfirmForgotPasswordOutput, error)
 }
 
 // Result holds the tokens returned by a successful login.
@@ -176,6 +198,82 @@ func (c *CognitoClient) ConfirmSignUp(
 	}
 
 	slog.Info("cognito email confirmed", "email", email)
+	return nil
+}
+
+// ResendConfirmationCode asks Cognito to send another email verification
+// code to the user. Only applies to users in UNCONFIRMED state (same app
+// client + SECRET_HASH rules as SignUp / ConfirmSignUp).
+func (c *CognitoClient) ResendConfirmationCode(ctx context.Context, email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	input := &cip.ResendConfirmationCodeInput{
+		ClientId:   &c.clientID,
+		Username:   &email,
+		SecretHash: c.secretHash(email),
+	}
+	_, err := c.api.ResendConfirmationCode(ctx, input)
+	if err != nil {
+		slog.Warn("cognito resend confirmation failed",
+			"email", email, "error", err,
+		)
+		return classifyCognitoErr(err)
+	}
+	slog.Info("cognito confirmation code resent", "email", email)
+	return nil
+}
+
+// ForgotPassword triggers Cognito to send a password-reset verification code
+// to the user (email/SMS per pool configuration).
+func (c *CognitoClient) ForgotPassword(ctx context.Context, email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	input := &cip.ForgotPasswordInput{
+		ClientId:   &c.clientID,
+		Username:   &email,
+		SecretHash: c.secretHash(email),
+	}
+	_, err := c.api.ForgotPassword(ctx, input)
+	if err != nil {
+		slog.Warn("cognito forgot password failed", "email", email, "error", err)
+		return classifyCognitoErr(err)
+	}
+	slog.Info("cognito forgot password code sent", "email", email)
+	return nil
+}
+
+// ConfirmForgotPassword sets a new password using the code from ForgotPassword.
+func (c *CognitoClient) ConfirmForgotPassword(
+	ctx context.Context, email, code, newPassword string,
+) error {
+	email = strings.TrimSpace(email)
+	code = strings.TrimSpace(code)
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	if code == "" {
+		return fmt.Errorf("confirmation code is required")
+	}
+	if newPassword == "" {
+		return fmt.Errorf("password is required")
+	}
+	input := &cip.ConfirmForgotPasswordInput{
+		ClientId:         &c.clientID,
+		Username:         &email,
+		ConfirmationCode: &code,
+		Password:         &newPassword,
+		SecretHash:       c.secretHash(email),
+	}
+	_, err := c.api.ConfirmForgotPassword(ctx, input)
+	if err != nil {
+		slog.Warn("cognito confirm forgot password failed", "email", email, "error", err)
+		return classifyCognitoErr(err)
+	}
+	slog.Info("cognito password reset complete", "email", email)
 	return nil
 }
 
@@ -339,8 +437,8 @@ func (c *CognitoClient) InviteUser(
 	resend bool,
 ) error {
 	input := &cip.AdminCreateUserInput{
-		UserPoolId:            &c.poolID,
-		Username:              &email,
+		UserPoolId:             &c.poolID,
+		Username:               &email,
 		DesiredDeliveryMediums: []types.DeliveryMediumType{types.DeliveryMediumTypeEmail},
 		UserAttributes: []types.AttributeType{
 			{Name: strPtr("email"), Value: &email},
@@ -387,17 +485,19 @@ func (c *CognitoClient) secretHash(username string) *string {
 
 // Sentinel errors returned by CognitoClient methods.
 var (
-	ErrUserExists       = errors.New("user already exists")
-	ErrInvalidPassword  = errors.New("password does not meet requirements")
-	ErrCodeMismatch     = errors.New("invalid confirmation code")
-	ErrCodeExpired      = errors.New("confirmation code has expired")
-	ErrNotAuthorized    = errors.New("invalid credentials")
-	ErrUserNotFound     = errors.New("user not found")
-	ErrUserNotConfirmed = errors.New("user email not confirmed")
-	ErrAuthResultNil    = errors.New("authentication result is nil")
-	ErrTooManyRequests  = errors.New("too many requests")
-	ErrLimitExceeded    = errors.New("request limit exceeded")
-	ErrCognitoInternal  = errors.New("cognito internal error")
+	ErrUserExists              = errors.New("user already exists")
+	ErrInvalidPassword         = errors.New("password does not meet requirements")
+	ErrCodeMismatch            = errors.New("invalid confirmation code")
+	ErrCodeExpired             = errors.New("confirmation code has expired")
+	ErrNotAuthorized           = errors.New("invalid credentials")
+	ErrUserNotFound            = errors.New("user not found")
+	ErrUserNotConfirmed        = errors.New("user email not confirmed")
+	ErrUserAlreadyConfirmed    = errors.New("user email is already confirmed")
+	ErrAuthResultNil           = errors.New("authentication result is nil")
+	ErrTooManyRequests         = errors.New("too many requests")
+	ErrLimitExceeded           = errors.New("request limit exceeded")
+	ErrCognitoInternal         = errors.New("cognito internal error")
+	ErrInvalidCognitoParameter = errors.New("invalid cognito request")
 )
 
 // classifyCognitoErr maps AWS Cognito SDK exceptions to sentinel errors.
@@ -422,8 +522,14 @@ func classifyCognitoErr(err error) error {
 		return ErrCodeExpired
 	}
 
+	// Login can surface UserNotConfirmedException, but some pools return
+	// NotAuthorizedException with a message like "User is not confirmed" instead.
 	var notAuthErr *types.NotAuthorizedException
 	if errors.As(err, &notAuthErr) {
+		if notAuthErr.Message != nil &&
+			strings.Contains(strings.ToLower(*notAuthErr.Message), "not confirmed") {
+			return ErrUserNotConfirmed
+		}
 		return ErrNotAuthorized
 	}
 
@@ -450,6 +556,33 @@ func classifyCognitoErr(err error) error {
 	var internalErr *types.InternalErrorException
 	if errors.As(err, &internalErr) {
 		return ErrCognitoInternal
+	}
+
+	// InvalidParameterException is ambiguous: it can mean the client sent a
+	// bad value (e.g. resend on an already-confirmed user) OR that the
+	// server is misconfigured (wrong SECRET_HASH, ClientId, missing auth
+	// flow, etc.). Log the original message explicitly so operators can
+	// triage even when the API response body stays generic, and wrap the
+	// sentinel so the original detail survives in the error chain.
+	var invalidParamErr *types.InvalidParameterException
+	if errors.As(err, &invalidParamErr) {
+		msg := ""
+		if invalidParamErr.Message != nil {
+			msg = *invalidParamErr.Message
+		}
+		// Special-case the resend-on-already-confirmed flow: Cognito uses
+		// InvalidParameterException with this exact phrasing instead of a
+		// dedicated exception type, so callers benefit from a clearer code.
+		slog.Warn("cognito invalid parameter (verify client input or pool/app-client config)",
+			"message", msg,
+		)
+		if strings.Contains(strings.ToLower(msg), "already confirmed") {
+			return ErrUserAlreadyConfirmed
+		}
+		if msg == "" {
+			return ErrInvalidCognitoParameter
+		}
+		return fmt.Errorf("%w: %s", ErrInvalidCognitoParameter, msg)
 	}
 
 	return fmt.Errorf("cognito error: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -21,11 +22,27 @@ type CognitoProvider interface {
 		email, password, firstName, lastName string,
 	) (string, error)
 	ConfirmSignUp(ctx context.Context, email, code string) error
+	ResendConfirmationCode(ctx context.Context, email string) error
+	ForgotPassword(ctx context.Context, email string) error
+	ConfirmForgotPassword(ctx context.Context, email, code, newPassword string) error
 	Login(
 		ctx context.Context, email, password string,
 	) (*auth.Result, error)
 	Logout(ctx context.Context, accessToken string) error
 }
+
+// ErrForgotPasswordNoAccount is returned when Cognito has no user for this email
+// on the forgot-password flow (mapped to HTTP 404 in the auth handler).
+var ErrForgotPasswordNoAccount = errors.New("no account exists for this email address")
+
+// Password validation errors for the forgot-password / set-password flows.
+// They are returned as typed sentinels so the handler can map them to
+// HTTP 400 VALIDATION_ERROR explicitly instead of falling through to a
+// generic 500.
+var (
+	ErrPasswordTooShort = errors.New("password must be more than 6 characters")
+	ErrPasswordMismatch = errors.New("password and confirmation do not match")
+)
 
 // AccountStore abstracts the account repository operations used by
 // AuthService, enabling test doubles.
@@ -195,6 +212,85 @@ func (s *AuthService) ConfirmSignup(
 	}
 
 	slog.Info("user email confirmed", "email", req.Email)
+	return nil
+}
+
+// ResendConfirmationRequest is the body for POST /auth/resend-confirmation.
+type ResendConfirmationRequest struct {
+	Email string `json:"email"`
+}
+
+// ResendConfirmationEmail asks Cognito to send another verification code
+// for an unconfirmed user. Used when sign-in fails with USER_NOT_CONFIRMED.
+func (s *AuthService) ResendConfirmationEmail(
+	ctx context.Context, req ResendConfirmationRequest,
+) error {
+	email := strings.TrimSpace(req.Email)
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	if err := s.cognito.ResendConfirmationCode(ctx, email); err != nil {
+		return fmt.Errorf("cognito resend confirmation: %w", err)
+	}
+	return nil
+}
+
+// ForgotPasswordStartRequest is the body for POST /auth/forgot-password.
+type ForgotPasswordStartRequest struct {
+	Email string `json:"email"`
+}
+
+// ForgotPasswordSendCode triggers Cognito ForgotPassword (sends reset code to email).
+func (s *AuthService) ForgotPasswordSendCode(
+	ctx context.Context, req ForgotPasswordStartRequest,
+) error {
+	email := strings.TrimSpace(req.Email)
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	if err := s.cognito.ForgotPassword(ctx, email); err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			return ErrForgotPasswordNoAccount
+		}
+		return fmt.Errorf("cognito forgot password: %w", err)
+	}
+	return nil
+}
+
+// ForgotPasswordConfirmRequest is the body for POST /auth/forgot-password/confirm.
+type ForgotPasswordConfirmRequest struct {
+	Email           string `json:"email"`
+	Code            string `json:"code"`
+	NewPassword     string `json:"new_password"`
+	ConfirmPassword string `json:"confirm_password"`
+}
+
+// minForgotPasswordLen is client+server minimum; Cognito pool policy may require more.
+const minForgotPasswordLen = 7 // strictly more than 6 characters
+
+// ConfirmForgotPasswordReset validates input and calls Cognito ConfirmForgotPassword.
+func (s *AuthService) ConfirmForgotPasswordReset(
+	ctx context.Context, req ForgotPasswordConfirmRequest,
+) error {
+	email := strings.TrimSpace(req.Email)
+	code := strings.TrimSpace(req.Code)
+	newPw := req.NewPassword
+	confirm := req.ConfirmPassword
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	if code == "" {
+		return fmt.Errorf("verification code is required")
+	}
+	if len(newPw) < minForgotPasswordLen {
+		return ErrPasswordTooShort
+	}
+	if newPw != confirm {
+		return ErrPasswordMismatch
+	}
+	if err := s.cognito.ConfirmForgotPassword(ctx, email, code, newPw); err != nil {
+		return fmt.Errorf("cognito confirm forgot password: %w", err)
+	}
 	return nil
 }
 

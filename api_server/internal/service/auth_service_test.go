@@ -36,10 +36,13 @@ func fakeIDToken(sub, email, given, family string) string {
 // --- mock CognitoProvider ---
 
 type mockCognito struct {
-	signUpFn  func(ctx context.Context, email, password, firstName, lastName string) (string, error)
-	confirmFn func(ctx context.Context, email, code string) error
-	loginFn   func(ctx context.Context, email, password string) (*auth.Result, error)
-	logoutFn  func(ctx context.Context, accessToken string) error
+	signUpFn              func(ctx context.Context, email, password, firstName, lastName string) (string, error)
+	confirmFn             func(ctx context.Context, email, code string) error
+	resendFn              func(ctx context.Context, email string) error
+	forgotPasswordFn      func(ctx context.Context, email string) error
+	confirmForgotPasswordFn func(ctx context.Context, email, code, newPassword string) error
+	loginFn               func(ctx context.Context, email, password string) (*auth.Result, error)
+	logoutFn              func(ctx context.Context, accessToken string) error
 }
 
 func (m *mockCognito) SignUp(
@@ -53,6 +56,31 @@ func (m *mockCognito) ConfirmSignUp(
 	ctx context.Context, email, code string,
 ) error {
 	return m.confirmFn(ctx, email, code)
+}
+
+func (m *mockCognito) ResendConfirmationCode(
+	ctx context.Context, email string,
+) error {
+	if m.resendFn != nil {
+		return m.resendFn(ctx, email)
+	}
+	return nil
+}
+
+func (m *mockCognito) ForgotPassword(ctx context.Context, email string) error {
+	if m.forgotPasswordFn != nil {
+		return m.forgotPasswordFn(ctx, email)
+	}
+	return nil
+}
+
+func (m *mockCognito) ConfirmForgotPassword(
+	ctx context.Context, email, code, newPassword string,
+) error {
+	if m.confirmForgotPasswordFn != nil {
+		return m.confirmForgotPasswordFn(ctx, email, code, newPassword)
+	}
+	return nil
 }
 
 func (m *mockCognito) Login(

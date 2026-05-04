@@ -2,9 +2,9 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
-	"log/slog"
 
 	"github.com/labstack/echo/v4"
 
@@ -74,6 +74,87 @@ func (h *AuthHandler) ConfirmSignup(c echo.Context) error {
 	})
 }
 
+// ResendConfirmation handles POST /api/v1/auth/resend-confirmation.
+// Triggers Cognito ResendConfirmationCode for users who signed up but
+// never completed email verification (same app client as SignUp).
+//
+//	@Summary	Resend email verification code
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.ResendConfirmationRequest	true	"Email to resend code to"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Failure	429		{object}	APIResponse
+//	@Router		/auth/resend-confirmation [post]
+func (h *AuthHandler) ResendConfirmation(c echo.Context) error {
+	var req service.ResendConfirmationRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+
+	if err := h.svc.ResendConfirmationEmail(c.Request().Context(), req); err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+
+	return ok(c, http.StatusOK, map[string]string{
+		"message": "verification code sent",
+	})
+}
+
+// ForgotPassword handles POST /api/v1/auth/forgot-password (Cognito ForgotPassword).
+//
+//	@Summary	Start password reset — email verification code
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.ForgotPasswordStartRequest	true	"Account email"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Failure	429		{object}	APIResponse
+//	@Router		/auth/forgot-password [post]
+func (h *AuthHandler) ForgotPassword(c echo.Context) error {
+	var req service.ForgotPasswordStartRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+	if err := h.svc.ForgotPasswordSendCode(c.Request().Context(), req); err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+	return ok(c, http.StatusOK, map[string]string{
+		"message": "If an account exists, a verification code has been sent.",
+	})
+}
+
+// ForgotPasswordConfirm handles POST /api/v1/auth/forgot-password/confirm (Cognito ConfirmForgotPassword).
+//
+//	@Summary	Complete password reset with code and new password
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.ForgotPasswordConfirmRequest	true	"Reset payload"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	429		{object}	APIResponse
+//	@Router		/auth/forgot-password/confirm [post]
+func (h *AuthHandler) ForgotPasswordConfirm(c echo.Context) error {
+	var req service.ForgotPasswordConfirmRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+	if err := h.svc.ConfirmForgotPasswordReset(c.Request().Context(), req); err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+	return ok(c, http.StatusOK, map[string]string{
+		"message": "password updated",
+	})
+}
+
 // Login handles POST /api/v1/auth/login.
 //
 //	@Summary	Authenticate and receive tokens
@@ -84,6 +165,7 @@ func (h *AuthHandler) ConfirmSignup(c echo.Context) error {
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
+//	@Failure	403		{object}	APIResponse	"Cognito USER_NOT_CONFIRMED (code USER_NOT_CONFIRMED); client should offer resend / confirm flow"
 //	@Router		/auth/login [post]
 func (h *AuthHandler) Login(c echo.Context) error {
 	var req service.LoginRequest
@@ -225,9 +307,24 @@ func (h *AuthHandler) classifyAuthErr(
 	case errors.Is(err, auth.ErrUserNotFound):
 		return apiError(c, http.StatusNotFound,
 			"NOT_FOUND", "user not found")
+	case errors.Is(err, service.ErrForgotPasswordNoAccount):
+		return apiError(c, http.StatusNotFound,
+			"NOT_FOUND", err.Error())
 	case errors.Is(err, auth.ErrUserNotConfirmed):
+		// Client: show resend + link to confirmation (sign-up) flow only for this code.
 		return apiError(c, http.StatusForbidden,
-			"USER_NOT_CONFIRMED", "email not confirmed")
+			"USER_NOT_CONFIRMED",
+			"Verify your email before signing in. You can resend the code or enter it on the confirmation screen.")
+	case errors.Is(err, auth.ErrUserAlreadyConfirmed):
+		// Resend was attempted on a verified account. 409 (state conflict)
+		// lets the client switch the resend UI back to a sign-in nudge
+		// instead of showing a generic validation error.
+		return apiError(c, http.StatusConflict,
+			"USER_ALREADY_CONFIRMED",
+			"This email is already verified. Please sign in.")
+	case errors.Is(err, auth.ErrInvalidCognitoParameter):
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "invalid request parameters")
 	case errors.Is(err, auth.ErrCodeMismatch):
 		return apiError(c, http.StatusBadRequest,
 			"INVALID_CODE", "invalid confirmation code")
@@ -238,6 +335,10 @@ func (h *AuthHandler) classifyAuthErr(
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR",
 			"password does not meet requirements")
+	case errors.Is(err, service.ErrPasswordTooShort),
+		errors.Is(err, service.ErrPasswordMismatch):
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", err.Error())
 	case errors.Is(err, auth.ErrTooManyRequests),
 		errors.Is(err, auth.ErrLimitExceeded):
 		return apiError(c, http.StatusTooManyRequests,
