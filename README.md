@@ -1,4 +1,7 @@
-# meko
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="meko_ui/public/meko-logo.svg">
+  <img src="meko_ui/public/Meko_Logo_Blk.svg" alt="meko" width="240">
+</picture>
 
 An open-source data platform for AI agents, backed by YugabyteDB. One command gives you PostgreSQL, vectors, graph memory, RAG, and inference — all in one system.
 
