@@ -15,8 +15,6 @@ func NewYBARepo(db *sql.DB) *YBARepo {
 	return &YBARepo{db: db}
 }
 
-const maxDatapacksPerUniverse = 100
-
 // UniverseAssignment holds the universe selected for a new datapack.
 type UniverseAssignment struct {
 	UniverseID string
@@ -36,16 +34,15 @@ func (r *YBARepo) AssignUniverse() (*UniverseAssignment, error) {
 		     updated_at = NOW()
 		 WHERE universe_id = (
 		     SELECT universe_id FROM meko_system.yb_universes
-		     WHERE num_datapacks_created < $1
+		     WHERE num_datapacks_created < max_datapacks
 		     ORDER BY num_datapacks_created ASC
 		     LIMIT 1
 		     FOR UPDATE SKIP LOCKED
 		 )
 		 RETURNING universe_id, ysql_hostname, ysql_port, ysql_admin_connection_string`,
-		maxDatapacksPerUniverse,
 	).Scan(&a.UniverseID, &a.Hostname, &a.Port, &a.AdminConnStr)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("no available universe with capacity (all have >= %d datapacks)", maxDatapacksPerUniverse)
+		return nil, fmt.Errorf("no available universe with capacity (all have reached their configured max_datapacks)")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to assign universe: %w", err)
