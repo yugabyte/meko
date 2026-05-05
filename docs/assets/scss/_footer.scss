@@ -1,28 +1,144 @@
 .td-footer {
   min-height: 120px;
   padding-top: 0;
+  display: flex;
   align-items: center;
-
-  .td-footer__center {
-    @media (max-width: 600px) {
-      margin-top: 15px;
-    }
-  }
-
-  .td-footer__links-item {
-    margin-right: 20px;
-  }
 
   .row.mx-md-2 {
     align-items: center;
   }
 
+  .mx-md-2 {
+    margin-right: 0 !important;
+    margin-left: 0 !important;
+  }
+
+  .row > * {
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .td-footer__left {
+    width: 20%;
+  }
+
+  .td-footer__center {
+    width: 65%;
+  }
+
+  .td-footer__right {
+    width: 15%;
+  }
+
+  .td-footer__links-item:not(:last-child) {
+    margin-right: 10px;
+  }
+
   .navbar-brand {
-    .navbar-brand__logo {
+    &__logo {
       svg {
         width: 140px;
         height: auto;
       }
+    }
+  }
+
+  .order-sm-3 {
+    order: 3 !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .td-footer {
+    > .container-fluid {
+      padding: 0 15px;
+      flex-flow: row;
+      position: relative;
+      z-index: 9999;
+    }
+
+    .navbar-brand {
+      padding: 0;
+
+      &__logo {
+        display: block;
+        width: 100%;
+        overflow: hidden;
+
+        svg {
+          width: 140px;
+          max-width: 140px;
+          margin: 0;
+        }
+      }
+    }
+
+    .td-footer__left {
+      width: 25%;
+    }
+
+    .td-footer__center {
+      width: 60%;
+    }
+
+    .td-footer__right {
+      width: 15%;
+    }
+  }
+}
+
+@media (max-width: 600px) {
+  .td-footer {
+    .td-footer__left {
+      width: 30%;
+    }
+
+    .td-footer__center {
+      width: 55%;
+    }
+
+    .td-footer__right {
+      width: 15%;
+    }
+  }
+}
+
+@media (max-width: 510px) {
+  .td-footer {
+    .td-footer__left {
+      width: 35%;
+    }
+
+    .td-footer__center {
+      width: 40%;
+      padding-left: 10px;
+    }
+
+    .td-footer__right {
+      width: 25%;
+    }
+  }
+}
+
+@media (max-width: 430px) {
+  .td-footer {
+    .navbar-brand__logo svg {
+      width: 100px;
+    }
+
+    .td-footer__links-item i {
+      font-size: 20px;
+    }
+  }
+}
+
+@media (max-width: 360px) {
+  .td-footer {
+    .td-footer__left,
+    .td-footer__center,
+    .td-footer__right {
+      width: 100%;
+      text-align: center;
     }
   }
 }

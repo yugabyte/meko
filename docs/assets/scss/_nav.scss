@@ -1,96 +1,94 @@
 .td-navbar {
   background-color: $dark;
 
-  .navbar-nav .nav-item {
-    align-items: center;
-    display: flex;
-    padding: 0;
-
-    .nav-link {
-      display: inline-flex;
+  .navbar-nav {
+    .nav-item {
+      display: flex;
       align-items: center;
-      gap: 0.5rem;
-      color: $white;
-      padding: 0 !important;
-      transition: all 0.3s ease;
+      padding: 0;
 
-      .social-link {
-        padding: 6px;
-        text-align: center;
-        width: 50px;
-      }
-
-      i {
-        transition: all 0.3s ease;
+      .nav-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
         color: $white;
         padding: 0 !important;
-        font-size: 24px;
-        position: relative;
+        transition: all 0.3s ease;
 
-        @media (max-width: 500px) {
-          padding-right: 0 !important;
+        .social-link {
+          width: 50px;
+          padding: 6px;
+          text-align: center;
         }
 
-        + span {
-          display: none;
-        }
-      }
+        i {
+          font-size: 24px;
+          color: $white;
+          position: relative;
+          transition: all 0.3s ease;
 
-      &:hover {
-        span {
+          @media (max-width: 500px) {
+            padding-right: 0;
+          }
+
+          + span {
+            display: none;
+          }
+        }
+
+        &:hover span {
           color: $white;
         }
       }
-    }
 
-    .btn {
-      position: relative;
-      display: inline-block;
-      color: $white;
-      font-size: 16px;
-      border-radius: 40px;
-      background: $black;
-      z-index: 1;
-      overflow: hidden;
-
-      &::before {
-        content: '';
-        position: absolute;
-        inset: 0;
-        padding: 3px;
+      .btn {
+        position: relative;
+        display: inline-block;
+        font-size: 16px;
+        color: $white;
         border-radius: 40px;
-        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        -webkit-mask:
-          linear-gradient(#fff 0 0) content-box,
-          linear-gradient(#fff 0 0);
-        -webkit-mask-composite: destination-out;
-        mask-composite: exclude;
-        z-index: -1;
-      }
+        background: $black;
+        overflow: hidden;
+        z-index: 1;
 
-      span {
-        display: inline-flex;
-        padding: 10px 25px;
-        justify-content: center;
-        align-items: center;
-        gap: 12px;
-      }
+        &::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          padding: 3px;
+          border-radius: 40px;
+          background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+          -webkit-mask:
+            linear-gradient(#fff 0 0) content-box,
+            linear-gradient(#fff 0 0);
+          -webkit-mask-composite: destination-out;
+          mask-composite: exclude;
+          z-index: -1;
+        }
 
-      &:hover {
-        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        background-size: 200% 200%;
-        border-image: none;
-        border-color: #000 !important;
+        span {
+          display: inline-flex;
+          justify-content: center;
+          align-items: center;
+          gap: 12px;
+          padding: 10px 25px;
+        }
+
+        &:hover {
+          background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+          background-size: 200% 200%;
+          border: none;
+        }
       }
     }
-  }
-
-  .navbar-brand__name {
-    display: none;
   }
 
   .navbar-brand {
-    .navbar-brand__logo {
+    &__name {
+      display: none;
+    }
+
+    &__logo {
       svg {
         width: 140px;
         height: auto;
@@ -110,11 +108,9 @@
       z-index: 9999;
     }
 
-    .navbar-nav .nav-item .btn {
-      > span {
-        padding: 5px;
-        font-size: 14px;
-      }
+    .navbar-nav .nav-item .btn span {
+      padding: 5px;
+      font-size: 14px;
     }
 
     .scroll-indicator {
@@ -128,18 +124,43 @@
     .navbar-brand {
       padding: 0;
 
-      .navbar-brand__logo {
-        width: 39px;
-        overflow: hidden;
+      &__logo {
         display: block;
+        width: 100%;
+        overflow: hidden;
 
         svg {
-          max-width: 140px;
           width: 140px;
-          margin-left: -13px;
-          margin-top: -11px;
+          max-width: 140px;
+          margin: 0;
         }
       }
+    }
+  }
+}
+
+@media (max-width: 430px) {
+  .td-navbar {
+    .navbar-brand__logo svg {
+      width: 100px;
+    }
+
+    .navbar-nav {
+      .nav-item {
+        .nav-link {
+          .social-link {
+            width: 40px;
+          }
+
+          i {
+            font-size: 20px;
+          }
+        }
+      }
+    }
+
+    .td-navbar__main {
+      padding-right: 30px;
     }
   }
 }
