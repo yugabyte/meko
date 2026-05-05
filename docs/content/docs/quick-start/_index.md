@@ -6,29 +6,45 @@ weight: 1000
 type: docs
 ---
 
-Get from zero to a working Meko integration in 60 seconds.
-
-## Sign up
+Get from zero to a working Meko integration in minutes:
 
 1. Create a Meko account at the [Meko portal](https://cloud.mekodata.ai/).
 
 1. Sign in to your account.
 
-    Your default [datapack](../../architecture/core-concepts/datapacks/) (`meko_default_datapack`), is displayed. A datapack is a container for memory and knowledge.
+    Meko creates a [datapack](../architecture/core-concepts/datapacks/) (`meko_default_datapack`) for you, ready to configure.
 
-1. Click **Connect**.
+1. Click **Choose Your Tool**.
 
+    The first time you sign in, Meko displays the **Configure** wizard. Follow the instructions in the wizard to:
+
+    - Name your datapack
+    - Install the Meko MCP server on your AI tool of choice.
+    - Optionally, add [knowledge](../architecture/core-concepts/knowledgebase/) to your datapack.
+
+That's it - when you finish, Meko displays your datapack, and you're ready to start adding knowledge and creating memories using your favorite agent.
+
+> [!TIP]
+>
+> You may need to restart your client to start the MCP server connection.
+>
+> To add additional clients, you can return to the configure wizard by selecting your datapack and choosing **Actions>Edit**.
+>
+> The connection instructions use node.js and nvm. If you need to connect your client manually, refer to [Integrations](../../integrations/) for instructions.
+
+<!--
 1. Copy the following MCP Server details and store them in a safe place:
 
     - Your MCP server **URL**.
     - Your MCP server **API key**.
 
-## Connect your AI client
+## Connect your AI client manually
 
-A single setup command registers the Meko MCP server with your agent and installs the Meko skills package, so your agent knows when and how to use Meko's MCP tools for memory, knowledge, and conversation management.
+A single setup command registers the Meko MCP server with your agent and installs the Meko skills package, so your agent knows when and how to use Meko's MCP tools for memory, knowledge, and conversation management. -->
 
 <!-- Add this after confirming what skills will finally get installed. A single setup command registers the Meko MCP server with your agent and installs the Meko skills package (including **meko-mcp-tools** and **ysql**), so your agent knows when and how to use Meko's MCP tools for memory, knowledge, conversation management, and SQL database access. -->
 
+<!--
 > [!NOTE]
 >
 > Currently, this command is supported for **Cursor**, **Claude Desktop**, and **Claude Code** only. For other supported clients such as VS Code and Codex, see [Integrations](../integrations/).
@@ -60,6 +76,7 @@ npx @yugabytedb/meko-mcp --client <mcp-client> --url <mcp-server-url> --api-key 
 > ```sh
 > npx @yugabytedb/meko-mcp --client all --url <mcp-server-url> --api-key <mcp-server-api-key>
 > ```
+-->
 
 ## Explore knowledge
 
@@ -69,19 +86,17 @@ Meko provides a persistent datastore for the full spectrum of information that A
 - **Memory** is derived from episodic information: extracted, condensed, and stored for associative retrieval. Memory trades completeness for efficiency and recallability.
 - **Knowledge** is confirmed information — curated documents and facts that agents can rely on with confidence. Knowledge may be loaded directly or promoted from memory and conversations.
 
-We'll start by exploring knowledge, then move on to memory — and in a later guide, see how conversation history can drive updates to both.
+We'll start by exploring knowledge, then move on to memory.
 
 ### Upload knowledge
 
-To see how Meko stores knowledge, add documents to your datapack and query them using RAG.
+To see how Meko stores knowledge, add documents to your datapack and query them from your AI client.
 
-> [!NOTE] Coming soon
->
-> Document upload is coming soon to the web portal. Skip this section unless you want to use the CLI.
+As an example, for Claude Code, the standard for providing project knowledge and coding practices is a [CLAUDE.md file](https://claude.com/blog/using-claude-md-files). You can add your CLAUDE.md file to your datapack.
 
-In your coding agent, issue a prompt to add to the knowledge base a document and attach a file in CSV, JSON, markdown, or PDF format.
+In your coding agent, issue a prompt to add a document to your datapack, and attach a file in CSV, JSON, markdown, or PDF format.
 
-As an example, for Claude Code, the standard for providing project knowledge and coding practices is a `CLAUDE.md` file. Use the following markdown content in Claude Code to try this out by copying and modifying the contents to a local `CLAUDE.md` file.
+Use the following markdown content in Claude Code to try this out by copying and modifying the contents to a local `CLAUDE.md` file.
 
 ```text
 # Project Guidelines: Building agents to triage issues being logged by customers
@@ -119,6 +134,16 @@ IMPORTANT: After every significant code change, you MUST follow this sequence:
 - **API**: All external service calls must include a 3-second timeout and explicit error handling.
 ```
 
+##### Use the portal
+
+On the Meko portal:
+
+1. Navigate to **Datapacks** and select your datapack.
+1. Click **Actions>Add Knowledge**.
+1. Upload your file.
+
+Meko will process the file; this may take a few minutes.
+
 ##### Use the CLI
 
 You can also upload knowledge using the Meko CLI. See [Meko CLI](../../reference/meko-cli/) for installation instructions.
@@ -129,18 +154,23 @@ Upload documents to your datapack's knowledge base as follows:
 meko datapack add_knowledge_base --name meko_default_datapack --url s3://bucket/docs/
 ```
 
-<!-- TODO: Add details on portal-based document upload once the web portal is available -->
-
 ### Query your knowledge
 
-> [!NOTE] Coming soon
->
-> Document upload is coming soon to the web portal. Skip this section unless you added your knowledge using the CLI.
-
-Once your documents are parsed, chunked, and indexed by Meko, query them through your coding agent:
+Once your documents are parsed, chunked, and indexed by Meko, query them through your coding agent. For example:
 
 ```text
-Search the knowledge base for information about <your topic>
+What are the critical commands for the project?
+```
+
+```output
+The critical commands defined in your project guidelines are:
+
+- Build: npm run build
+- Lint: npm run lint
+- Test: npm test (or npm run test:watch for watch mode)
+- Format: npm run format
+
+And per the Quality Check Workflow, after every significant code change you should run them in this order: npm run format → npm run lint → npm test, fixing any regressions before reporting completion.
 ```
 
 The MCP server performs semantic search across your indexed documents and returns relevant chunks. In short, Meko has automated the retrieval augmented generation (RAG) pre-processing pipeline by reading, parsing, chunking, vectorizing/indexing the documents, and by providing a semantic search capability.
@@ -176,14 +206,14 @@ In your coding agent, do the following:
     Please remember that I like to take vacations at tropical beach locations, on a budget
     ```
 
-    Using the Meko MCP server, the agent will create a conversation in your datapack and assign an agent ID, for example, `cursor_assistant`. The agent should let you know what the agent ID is; you can also ask it.
+    Using the Meko MCP server, the agent will create a conversation in your datapack and assign an agent ID, for example, `personal-preferences`. The agent should let you know what the agent ID is; you can also ask it.
 
 1. Start a new chat session, then type the following (use the agent ID the other agent provided):
 
     ```text
-    Access my preferences using agent ID cursor_assistant.
+    Access my preferences using agent <cursor_name>.
     Propose a 5 day vacation for me.
-    ```
+    Access my preferences using agent personal-preferences.
 
 Your AI can now leverage the memory to provide a more relevant response.
 
@@ -224,21 +254,22 @@ The agent retrieves your stored preferences and immediately proposes a vacation 
 You can verify what Meko stored by checking your datapack's memories in the Meko portal. You'll see:
 
 - The stored memories with their extracted entities
-- Key metrics: number of memories, knowledge base sources, and MCP requests
+- Key metrics: number of conversations, memories, learnings, and knowledge
 
-Type:
+You can also ask your agent. Type:
 
 ```text
 What does Meko remember about me?
 ```
 
-### Observe your datapack
+## Observe your datapack
 
 Check what's happening inside your datapack:
 
+- **Conversations**: View stored conversation history. Provides access to reasoning traces and execution logs for all your conversations.
 - **Memories**: View stored memories and their extracted entities.
-- **Knowledge bases**: See indexed document sources and their status.
-- **Traces**: Review LLM reasoning traces and execution logs.
+- **Learnings**: Meko highlights memories that might be worth promoting to shared knowledge (Ko).
+- **Knowledge**: See indexed document sources and their status.
 
 <!-- TODO: Add LangFuse observability walkthrough once integration details are finalized -->
 <!-- TODO: Add screenshots showing costs, calls, and timings -->

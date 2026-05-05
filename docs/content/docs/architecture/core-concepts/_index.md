@@ -11,7 +11,7 @@ Meko organizes agent data around a few key concepts. Understanding these will he
   {{< card
     href="architecture/core-concepts/datapacks/"
     title="Datapacks"
-    desc="The fundamental storage primitive for multi-agent systems. One datapack per application, or one project. It is the isolation unit for agents working together. Each datapack bundles a database, the knoweledge base, agent memories, collective memories, shared knowledge, MCP server, and credentials."
+    desc="The fundamental storage primitive for multi-agent systems. One datapack per application, or one project. It is the isolation unit for agents working together. Each datapack bundles a database, the knowledge base, agent memories, collective memories, shared knowledge, MCP server, and credentials."
   >}}
   {{< card
     href="architecture/core-concepts/memory/"
