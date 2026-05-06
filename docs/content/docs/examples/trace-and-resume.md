@@ -5,7 +5,7 @@ description: Meko captures chain-of-thought history, stores & archives conversat
 weight: 2020
 ---
 
-Today, agents work as individuals but pretend to be a team. They can share outputs — a spec, a summary, a result — but not the reasoning behind them. State misalignment from this lost context accounts for roughly 37% of failures in multi-agent systems. The less context you share, the more every agent re-derives from first principles, burning tokens and producing results that diverge — because LLMs are not deterministic.
+Today, agents work as individuals but pretend to be a team. They can share outputs — a spec, a summary, a result — but not the reasoning behind them. The less context you share, the more every agent re-derives from first principles, burning tokens and producing results that diverge — because LLMs are not deterministic.
 
 Meko is agent-native data infrastructure: a single data layer for memory, knowledge, and decision traces, built for the primitives agents actually need.
 
@@ -19,17 +19,28 @@ This matters for two reasons. First, compliance: regulated industries need to re
 
 **How to use it**
 
-Tell the agent to log its decisions:
+1. Tell the agent to log its decisions as it works.
 
-```text
-Log each decision you make to Meko, including what context you retrieved and why you chose this approach.
-```
+    ```text
+    Log each decision you make to Meko, including what context you retrieved and why you chose this approach.
+    ```
 
-Auditors or downstream systems query the trail later:
+    For example, an invoice-processing agent might log:
 
-```text
-Retrieve the full decision log for the invoice-processing workflow run on 2026-04-30.
-```
+    ```text
+    Flagged invoice #4872 as a duplicate. Retrieved prior payment record from 2026-04-15
+    for the same vendor and amount. Chose to hold rather than reject — rejection requires
+    manual review under current policy; a hold auto-resolves if no matching payment clears
+    within 48 hours.
+    ```
+
+1. Auditors or downstream systems query the trail later.
+
+    ```text
+    Retrieve the full decision log for the invoice-processing workflow run on 2026-04-30.
+    ```
+
+    The full chain — what was retrieved, what was decided, and why — is available for review or replay.
 
 ## Conversation history with tiering
 
@@ -41,11 +52,21 @@ Meko handles this automatically: recent history stays hot in the database for fa
 
 **How to use it**
 
-```text
-Store all conversation history and agent reasoning in Meko.
-```
+1. Store conversation history.
 
-That's it. Tiering is handled automatically.
+    ```text
+    Store all conversation history and agent reasoning in Meko.
+    ```
+
+That's it. Tiering is handled automatically — you don't configure a threshold or manage the move to object storage. 
+
+1. When you need to trace a decision back to an old conversation, query it the same way regardless of age:
+
+    ```text
+    What did we decide about the invoice deduplication policy, and when?
+    ```
+
+Meko retrieves it whether the conversation is from yesterday or six months ago.
 
 ## Agent resumability
 
@@ -66,8 +87,14 @@ Meko keeps an audit trail of sub-agent operations, so the supervisor knows exact
 
 **How to use it**
 
-Tell the agent to checkpoint its state:
+1. Tell the agent to checkpoint its state:
 
-```text
-Checkpoint your progress to Meko after completing each file.
-```
+    ```text
+    Checkpoint your progress to Meko after completing each file.
+    ```
+
+1. When resuming after a failure:
+
+    ```text
+    My last run failed midway. Retrieve your last checkpoint from Meko and resume from there.
+    ```

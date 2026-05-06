@@ -9,37 +9,50 @@ Meko gives your AI agent persistent memory that follows you across sessions, pro
 
 ## Knowledge handoff with context preserved
 
-*Agent B gets Agent A's reasoning, not just its final output. No lost context across systems.*
+*Agent B gets Agent A's reasoning, not just its final output. No lost context across agents.*
 
-Consider the classic handoff: one agent designs a spec, another implements it. The implementer gets the document — but not why it was written that way. When they hit a problem, they can't fix it at the source because they don't know the reasoning behind the decision. They have to escalate back, re-explain the issue, and wait — or just patch the output without understanding what caused it.
+Consider the classic handoff: one agent designs a spec, another implements it. The implementer gets the document, but not the reasoning behind it. When they hit a problem, they can't fix it at the source — they don't know the reasoning behind the decision. They patch the output without understanding the constraint, or escalate back and wait.
 
-This degrades at every step in a multi-agent pipeline. By the time the third agent acts, the original reasoning is gone.
+This compounds at every step. By the time the third agent acts, the original reasoning is gone.
 
-With Meko, each agent stores its full reasoning trace — not just its output — so any downstream agent can retrieve not only *what* was decided but *why*.
+With Meko, you save what was decided and why, not only the final output. The downstream agent retrieves that context before it acts — including tradeoffs and rejected alternatives, not just conclusions.
 
 **How to use it**
 
-Before a handoff, the first agent stores its reasoning:
+1. Agent A stores its reasoning before handing off.
 
-```text
-Store your reasoning and findings in Meko before handing off to the code generation agent.
-```
+    At the end of a task, ask the first agent to capture what it learned:
 
-The receiving agent retrieves the full context before proceeding:
+    Store your reasoning and findings in Meko so the next agent can pick them up.
 
-```text
-Retrieve the research agent's reasoning from Meko before starting.
-```
+    For example, a spec-writing agent might store:
+  
+    ```text
+    Chose optimistic locking for the inventory table. Pessimistic locking caused
+    deadlocks under concurrent writes in load testing (PR #142). Tradeoff: optimistic
+    locking requires explicit retry logic on conflict — the implementation agent needs
+    to handle that.
+    ```
+
+1. Agent B retrieves that context before starting.
+
+   The implementing agent opens by searching for relevant prior reasoning:
+
+   Retrieve the spec agent's reasoning from Meko before starting.
+
+   It gets back the stored decision, including the retry requirement, rather than discovering that constraint by hitting it in production.
+
+Takeaway: Capture conclusions before you switch agents or tasks. The downstream agent can ask Meko for the reasoning instead of re-deriving it or patching around constraints it doesn't understand.
 
 ## Collective learning across runs
 
-*What worked, what didn't, and why — persisted across workflow runs automatically.*
+*What worked, what didn't, and why — available on the next run when you save it.*
 
 Most agentic systems have no memory of previous runs. Each run starts from scratch, repeating the same mistakes and rediscovering the same solutions. And if two agents independently analyze the same problem — or the same agent runs the same analysis twice — they may arrive at different conclusions, because LLMs are not deterministic.
 
-A better approach: run the reasoning once, store the result, and have every agent work from that single stable truth. A shared, consistent result — even an imperfect one — is a better foundation for iteration than independent re-derivations that diverge. It also costs less: every redundant re-derivation burns tokens that a shared memory would have avoided.
+A better approach: run the reasoning once, save what mattered, and have the next run start from that stable picture. A shared, consistent snapshot — even an imperfect one — is a better foundation for iteration than independent re-derivations that diverge. It also costs less: every redundant re-derivation burns tokens that stored context can avoid.
 
-Meko persists learnings across runs and reconciles new findings with what's already known, so shared knowledge compounds rather than diverges.
+Meko keeps those learnings in the datapack so you can retrieve them later. **You still choose what to save**; not every line of chat becomes team truth automatically.
 
 **How to use it**
 
@@ -49,115 +62,109 @@ After a run, store what the agent learned:
 Store what worked and what failed in this run to Meko, including the root cause of any failures.
 ```
 
+For example, after a data pipeline run, an agent might store:
+
+```text
+Batch size of 500 caused memory errors on the transform step. Dropping to 100
+resolved it. Root cause: the enrichment query does a full join — it doesn't
+scale linearly. Don't exceed batch size 200 for this workflow.
+```
+
 At the start of the next run, retrieve prior learnings:
 
 ```text
 Before starting, retrieve any learnings from previous runs of this workflow.
 ```
+
+The next run starts with that constraint already known — no re-discovery, no repeated failure.
+
 ## Group/team policies and standards
 
 *Share a datapack across your team so every agent works from the same playbook.*
 
 Every team has tribal knowledge: the error format your APIs must follow, the testing bar for a PR to ship, the architectural patterns that are blessed vs. banned. Today that knowledge lives in wiki pages nobody reads, or worse, in one person's head. When a team member's AI agent generates code, it has no idea those standards exist.
 
-Meko fixes this with a **shared team datapack** — a persistent, team-scoped knowledge base that every member's agent can read from and write to. Standards go in once, and every agent on the team applies them automatically.
+Meko helps with a **shared team datapack** — one workspace where standards and decisions can live so agents **retrieve** them when asked. Sharing the datapack lets teammates plug into that same stored context.
 
-##### How it works in practice
+For example, if you use Meko in Cursor and invite someone else to the same datapack, they see what has been saved in that workspace from memories you asked to store, knowledge you added, and similar — not every message from your session. For today's findings to help them, ask your agent to remember or save what matters (for example "remember this for the team"). Don't assume sharing alone copies ephemeral thread history to them.
 
-**1. A team lead creates the shared datapack**
+**How to use it**
 
-<!--
-Using the Meko CLI, the lead creates a dedicated datapack for the team:
+1. A team lead creates the shared [datapack](../../architecture/core-concepts/datapacks/#create-a-datapack) with a clear name and description.
 
-```bash
-meko datapack create --name "payments-team"
-```
--->
+1. The lead seeds the datapack with team standards by storing the real policies as memories or documents.
 
-Give the datapack a clear description of what kind of knowledge it will hold. Meko uses this description to guide how memories get extracted from your team's conversations — a vague description produces generic memories; a specific one keeps the datapack focused.
+    In any session connected to that datapack, the lead asks the agent to remember the rules:
 
-**2. The lead seeds it with team standards**
+    ```text
+    Remember our team coding standard: all API endpoints must return JSON
+    using our standard envelope: { "data": ..., "error": { "code": ..., "message": ... } }
+    ```
 
-In any IDE session connected to the shared datapack, the lead tells their agent to store the team's policies:
+    ```text
+    Remember our testing policy: PRs require minimum 80% code coverage,
+    integration tests for all API endpoints, and no mocked database calls
+    in integration tests — we got burned when mocked tests passed but a
+    prod migration failed.
+    ```
 
-```text
-Remember our team coding standard: all API endpoints must return JSON
-using our standard envelope: { "data": ..., "error": { "code": ..., "message": ... } }
-```
+    ```text
+    Remember our architectural policy: new services must use the event-driven
+    pattern with our internal message bus. No direct synchronous service-to-service
+    calls for new features.
+    ```
 
-```text
-Remember our testing policy: PRs require minimum 80% code coverage,
-integration tests for all API endpoints, and no mocked database calls
-in integration tests — we got burned when mocked tests passed but a
-prod migration failed.
-```
+    The agent stores these as memories in the shared datapack. The lead, as owner, can promote memories to shared knowledge so the team can retrieve them through the usual flows. For details on memories, see [Work with memory](../../guides/working-with-memory/).
 
-```text
-Remember our architectural policy: new services must use the event-driven
-pattern with our internal message bus. No direct synchronous service-to-service
-calls for new features.
-```
+1. Team members connect to the shared datapack.
 
-The agent stores these as memories in the shared datapack — both as vector entries (for semantic search) and as graph relationships (for structured retrieval). The lead, as owner, can promote any memory to shared knowledge — elevating it from a personal observation to a team-wide truth that every agent applies automatically.
+    Think of a shared datapack like shared notes where you invite the team, give each person access that matches how much they should edit versus read, and have them register that datapack's connection in their AI client (Cursor, Claude Desktop, and so on).
 
-**3. Team members connect to the shared datapack**
+    Each team member already has their own personal datapack (created when they signed up). Now they add the team datapack to their MCP server configuration, so their agent has access to both:
 
-Think of a shared datapack like a shared document. You create it, share it with the team, and everyone with access can contribute. Except instead of paragraphs and bullet points, the primitives are memories and knowledge graphs that your agents query directly.
+    - **Personal datapack** — individual preferences, coding style, role context.
+    - **Team datapack** — shared standards, policies, and project knowledge.
 
-Each team member already has their own personal datapack (created when they signed up). Now they add the team datapack to their MCP server configuration, so their agent has access to both:
+    When their agent needs context, it draws from both — personal preferences for style, team standards for correctness.
 
-- **Personal datapack** — individual preferences, coding style, role context.
-- **Team datapack** — shared standards, policies, and project knowledge.
+    When you add a member, you assign them a role:
 
-When their agent needs context, it draws from both — personal preferences for style, team standards for correctness.
+    | Role | View | Add | Promote |
+    | ---- | ---- | --- | ------- |
+    | Viewer | Yes | No | No |
+    | Contributor | Yes | Yes | No |
+    | Maintainer | Yes | Yes | Yes |
 
-When you add a member, you assign them a role:
+    - *View*: read knowledge-base material, memories, and conversations your deployment exposes for that datapack.
+    - *Add*: create new memories.
+    - *Promote*: elevate content into shared knowledge (often after review), per your product's flows.
 
-| Role | Can add memories | Can promote to shared knowledge |
-|------|-----------------|-------------------------------|
-| Owner | Yes | Yes |
-| Maintainer | Yes | Yes |
-| Contributor | Yes | No |
+1. Team members contribute knowledge as they work.
 
-Contributors can add memories immediately, but only maintainers and owners can promote memories to shared knowledge. This separation matters: it lets new team members start contributing without risking the integrity of the shared knowledge base.
+    As the team works, capture decisions in the shared datapack when others should benefit:
 
-**4. Team members contribute knowledge as they work**
+    - **Tech lead** — design direction as memory or uploaded docs.
+    - **Developer** — summarize an API change from chat or Slack into Meko so it isn't lost (paste or paraphrase; there's no magic Slack sync).
+    - **Analyst** — structured data through the paths your team uses (database tools, uploads, pipelines).
+    - **QA** — flaky-environment gotchas as durable notes.
 
-As the team works on a project, each member's agent writes new knowledge back to the shared datapack:
+    Not every memory gets promoted to shared knowledge. A contributor's private memories stay private until a maintainer reviews and promotes them. This culling is what keeps the shared knowledge signal-dense. If everything flowed in indiscriminately, the useful policies would get buried in noise — and the compounding effect that makes shared context valuable would weaken.
 
-- **The tech lead** adds the design spec to the knowledge base, so every agent understands the architecture.
-- **A developer** captures a Slack thread about an API contract change that affects the team.
-- **An analyst** loads structured data — a product catalog, pricing tiers, or feature flags — into a database table within the datapack.
-- **A QA engineer** documents a tricky workaround for a flaky test environment.
+1. The knowledge compounds.
 
-Each of these goes into the right place automatically. Structured data lands in tables. Unstructured knowledge becomes searchable memories and graph relationships. The agent figures out the right storage — you don't have to think about it.
+    Here's the payoff: a developer implements a new payment endpoint; their agent can recall envelope format, architecture expectations, and recent decisions because those were stored in the team datapack — not because every IDE streams chat to everyone else.
 
-Not every memory gets promoted to shared knowledge. A contributor's private memories stay private until a maintainer reviews and promotes them. This culling is what keeps the shared knowledge signal-dense. If everything flowed in indiscriminately, the useful policies would get buried in noise — and the compounding effect that makes shared context valuable would weaken.
+    When you learn something the team should share, say it plainly and save it to the team datapack, for example:
 
-**5. The knowledge compounds**
+    ```text
+    Remember that the payments-v2 API has a 30-second timeout on webhook
+    delivery — retries should use exponential backoff starting at 2 seconds.
+    ```
 
-Here's the payoff: a developer is implementing a new payment endpoint. Their agent already knows:
-
-- The team's API envelope format (from the lead's policy).
-- The event-driven architecture requirement (from the team standard).
-- The updated API contract from last week's Slack thread (from a teammate's contribution).
-- The product catalog and pricing tiers (from the analyst's structured data).
-
-No one had to re-explain any of this. The agent just knows, because the team's collective context is right there in the shared datapack.
-
-And when that developer discovers a new edge case — say, a retry policy that the team should adopt — they tell their agent, and it flows back into the shared datapack for everyone.
+    Teammates who use that datapack will see it when they search or ask their agent to recall team context — on their next session or question, not as an instant push to every screen.
 
 ##### What this looks like day-to-day
 
-In practice, using a shared team datapack feels invisible. You open your IDE, start a session, and your agent already has the full team context. You don't say "check the team standards" — the agent does it automatically when it's relevant.
+You open your IDE, connect to the team datapack when you need project rules, and ask naturally: "What does our team do about errors?" or "Remember this for payments."
 
-The context follows you regardless of which tool you're in. A developer using Cursor and a teammate using Claude Desktop connect to the same datapack — different agents, different IDEs, but the same shared knowledge. When a correction flows into the datapack, every connected agent gets it immediately.
-
-When you learn something new that the team should know, you just say it naturally:
-
-```text
-Remember that the payments-v2 API has a 30-second timeout on webhook
-delivery — retries should use exponential backoff starting at 2 seconds.
-```
-
-That knowledge is now available to every agent on the team, in every session, from that moment forward.
+**Takeaway:** Sharing opens a **shared vault** of what you chose to store. Ask Meko to remember what matters so collaborators' agents can use it when they connect to the same datapack.

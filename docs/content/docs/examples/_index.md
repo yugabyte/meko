@@ -11,12 +11,12 @@ type: docs
   {{< card
     href="examples/meko-enhances-teaming/#knowledge-handoff-with-context-preserved"
     title="Knowledge handoff with context preserved"
-    desc="Agent B gets Agent A's reasoning, not just its final output. No lost context across systems."
+    desc="Agent B gets Agent A's reasoning, not just its final output. No lost context across agents."
   >}}
   {{< card
     href="examples/meko-enhances-teaming/#collective-learning-across-runs"
     title="Collective learning across runs"
-    desc="What worked, what didn't, and why — persisted across workflow runs automatically."
+    desc="What worked, what didn't, and why — available on the next run when you save it."
   >}}
   {{< card
     href="examples/meko-enhances-teaming/#groupteam-policies-and-standards"
