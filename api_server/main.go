@@ -65,6 +65,7 @@ func run() error {
 	langfuseDBName := flag.String("langfuse-db-name", envOrDefault("LANGFUSE_DB_NAME", "langfuse"), "Langfuse Postgres database name")
 	langfuseDBUser := flag.String("langfuse-db-user", envOrDefault("LANGFUSE_DB_USER", "yugabyte"), "Langfuse Postgres user")
 	langfuseDBPassword := flag.String("langfuse-db-password", os.Getenv("LANGFUSE_DB_PASSWORD"), "Langfuse Postgres password")
+	langfuseDBSSLMode := flag.String("langfuse-db-sslmode", envOrDefault("LANGFUSE_DB_SSLMODE", "disable"), "Langfuse Postgres sslmode (disable, require, verify-ca, verify-full)")
 
 	openAIAPIKey := flag.String("openai-api-key", os.Getenv("OPENAI_API_KEY"), "OpenAI API key")
 	openAILLMModel := flag.String("openai-llm-model", os.Getenv("OPEN_AI_LLM_MODEL"), "OpenAI LLM model (default: gpt-4o)")
@@ -106,8 +107,8 @@ func run() error {
 	var langfuseDBConn *sql.DB
 	if *langfuseDBHost != "" {
 		langfuseConnStr := fmt.Sprintf(
-			"postgresql://%s:%d/%s?user=%s&password=%s&sslmode=disable",
-			*langfuseDBHost, *langfuseDBPort, *langfuseDBName, *langfuseDBUser, *langfuseDBPassword,
+			"postgresql://%s:%d/%s?user=%s&password=%s&sslmode=%s",
+			*langfuseDBHost, *langfuseDBPort, *langfuseDBName, *langfuseDBUser, *langfuseDBPassword, *langfuseDBSSLMode,
 		)
 		langfuseDBConn, err = db.ConnectWithRetry(langfuseConnStr, 3, 2*time.Second)
 		if err != nil {
