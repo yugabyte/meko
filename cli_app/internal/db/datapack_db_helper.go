@@ -133,7 +133,6 @@ func startVectorIndexCreationForKnowledgeBase(dpDB *sql.DB, indexName, knowledge
 	return nil
 }
 
-
 // createTablesForAgentMemory creates a dedicated database for the datapack and
 // provisions the AGE graph extension and embedding tables inside it.
 func createTablesForAgentMemory(mainDB *sql.DB, host string, port int, datapackID, agentName, embedModel, kbase string) (string, error) {
@@ -161,7 +160,7 @@ func createTablesForAgentMemory(mainDB *sql.DB, host string, port int, datapackI
 		return "", fmt.Errorf("failed to connect to datapack database %q: %w", dbName, err)
 	}
 
-	for _, ext := range []string{"vector", "age", "pg_dist_rag"} {
+	for _, ext := range []string{"vector", "mage", "pg_dist_rag"} {
 		if _, err := dpDB.Exec(fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %s", ext)); err != nil {
 			slog.Error("failed to create extension", "extension", ext, "database", dbName, "error", err)
 			return "", fmt.Errorf("failed to create extension %q in datapack database: %w", ext, err)
@@ -169,16 +168,16 @@ func createTablesForAgentMemory(mainDB *sql.DB, host string, port int, datapackI
 	}
 	slog.Debug("extensions created", "database", dbName)
 
-	if _, err := dpDB.Exec(`SET search_path = ag_catalog, public`); err != nil {
-		return "", fmt.Errorf("failed to set search_path for AGE: %w", err)
+	if _, err := dpDB.Exec(`SET search_path = mag_catalog, public`); err != nil {
+		return "", fmt.Errorf("failed to set search_path for MAGE: %w", err)
 	}
 
 	graphName := agentName + "_meko_graph"
-	if _, err := dpDB.Exec(fmt.Sprintf(`SELECT * FROM ag_catalog.create_graph('%s')`, graphName)); err != nil {
-		slog.Error("failed to create AGE graph", "database", dbName, "graph", graphName, "error", err)
-		return "", fmt.Errorf("failed to create AGE graph %q: %w", graphName, err)
+	if _, err := dpDB.Exec("SELECT * FROM mag_catalog.create_graph($1)", graphName); err != nil {
+		slog.Error("failed to create MAGE graph", "database", dbName, "graph", graphName, "error", err)
+		return "", fmt.Errorf("failed to create MAGE graph %q: %w", graphName, err)
 	}
-	slog.Debug("AGE graph created", "database", dbName, "graph", graphName)
+	slog.Debug("MAGE graph created", "database", dbName, "graph", graphName)
 
 	embDims := EmbeddingDims(embedModel)
 

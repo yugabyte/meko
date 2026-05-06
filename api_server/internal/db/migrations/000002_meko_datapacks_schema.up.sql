@@ -200,21 +200,21 @@ CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
     -- _ag_label_vertex
     -- _ag_label_label
 
-SET search_path = ag_catalog, datapacks, public;
+SET search_path = mag_catalog, datapacks, public;
 
 -- Meko multi-teant Agent Private Graph:
-SELECT * FROM ag_catalog.create_graph('meko_multi_tenant_graph');
+SELECT * FROM mag_catalog.create_graph('meko_multi_tenant_graph');
 
-SELECT * FROM ag_catalog.create_vlabel('meko_multi_tenant_graph','Entity');
+SELECT * FROM mag_catalog.create_vlabel('meko_multi_tenant_graph','Entity');
 
-SELECT * FROM ag_catalog.create_elabel('meko_multi_tenant_graph','CONNECTED_TO');
+SELECT * FROM mag_catalog.create_elabel('meko_multi_tenant_graph','CONNECTED_TO');
 
 -- Meko multi-tenant global promoted to KB graph:
-SELECT * FROM ag_catalog.create_graph('meko_promoted_graph');
+SELECT * FROM mag_catalog.create_graph('meko_promoted_graph');
 
-SELECT * FROM ag_catalog.create_vlabel('meko_promoted_graph','Entity');
+SELECT * FROM mag_catalog.create_vlabel('meko_promoted_graph','Entity');
 
-SELECT * FROM ag_catalog.create_elabel('meko_promoted_graph','CONNECTED_TO');
+SELECT * FROM mag_catalog.create_elabel('meko_promoted_graph','CONNECTED_TO');
 
 
 -- TODO: Remove the need for meko_mem0_graph_vertex_embeddings table and use a vector coloum in the Entity tables.
