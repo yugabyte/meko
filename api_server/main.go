@@ -37,6 +37,7 @@ func run() error {
 	dbUserName := flag.String("db-user-name", "yugabyte", "database user name")
 	dbPassword := flag.String("db-password", "", "database password")
 	dbPort := flag.Int("db-port", 5433, "database port")
+	dbName := flag.String("db-name", "yugabyte", "database name")
 
 	// migrate only flag
 	migrateOnly := flag.Bool("migrate-only", false, "run migrations and exit without starting the server")
@@ -84,8 +85,8 @@ func run() error {
 	))
 
 	connStr := fmt.Sprintf(
-		"postgresql://%s:%d/yugabyte?user=%s&password=%s&sslmode=disable",
-		*dbHost, *dbPort, *dbUserName, *dbPassword,
+		"postgresql://%s:%d/%s?user=%s&password=%s&sslmode=disable",
+		*dbHost, *dbPort, *dbName, *dbUserName, *dbPassword,
 	)
 
 	conn, err := db.ConnectWithRetry(connStr, 5, 3*time.Second)
