@@ -5,7 +5,7 @@ description: The isolation unit for agent data in Meko
 weight: 10
 ---
 
-A **datapack** is Meko's fundamental unit of isolation. Each datapack provides a self-contained environment for an agent, bundling together a dedicated database, access with a single MCP server endpoint, and access credentials.
+A **datapack** is Meko's fundamental unit of isolation. Each datapack provides a self-contained persistent store for conversations, memory, and knowledge, accessible via a single MCP server endpoint.
 
 ## What's in a datapack
 
@@ -13,7 +13,7 @@ When you create a datapack, Meko provisions:
 
 - **An MCP server endpoint**. A unique URL that your agent uses to discover and interact with the datapack.
 - **An MCP server API key**. For authenticating MCP requests.
-- **A dedicated database**. An isolated YugabyteDB (YSQL) database with pgvector enabled, scoped to your agent.
+- **Isolated storage**. Data storage scoped to your agent(s), managed internally by Meko.
 
 ## Create a datapack
 
@@ -31,7 +31,7 @@ To create additional datapacks:
 meko datapack create --name my-datapack
 ```
 
-This returns the datapack's MCP server URL, API key, and database connection details:
+This returns the datapack's MCP server URL and API key:
 
 ```json
 {

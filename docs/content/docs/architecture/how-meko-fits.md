@@ -11,13 +11,13 @@ Meko is an agent-native data layer for multi-agent systems that work and learn t
 - **Shared knowledge**. Meko builds knowledge over time from conversations, real-time data sources, and slower-changing knowledge bases.
 - **Auditability of the learning process**. Connect execution traces to how agents process data and knowledge, learn from it, and share that learning.
 
-Meko is serverless, and multi-tenant (multi-agentic). In addition to providing memory, conversation history, shareable knowledge, and full chain-of-thought traceability, Meko also exposes PostgreSQL-compatible database models (vector, SQL, graph, and more).
+Meko is serverless, and multi-tenant (multi-agentic). It provides memory, conversation history, shareable knowledge, and full chain-of-thought traceability.
 
 ## Architecture
 
-Meko integrates easily with any agentic framework through MCP servers. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.  
+Meko integrates with any agentic framework through a standard MCP interface. It is built on top of a unified distributed PostgreSQL data layer that supports vector, SQL, NoSQL, graph, and search.
 
-Meko sits between your agent SDK and the underlying database, providing a unified data layer that replaces multiple standalone systems.
+Meko sits between your agent SDK and the underlying storage, providing a unified data layer that replaces multiple standalone systems.
 
 ![Meko Architecture Diagram](/images/architecture.svg)
 
@@ -25,21 +25,19 @@ Meko sits between your agent SDK and the underlying database, providing a unifie
 
 A [datapack](../core-concepts/datapacks/) is the isolation unit for agent data in Meko. Datapacks can be shared by many users and connected to many agents. A datapack incorporates the following:
 
-| Capability | Description |
-| :--------- | :---------- |
-| PostgreSQL (YugabyteDB YSQL) | Structured data and conversation history. |
-| Vector search (pgvector, hnswlib) | Embeddings and similarity search. |
-| Graph memory (MAGE, a graphRAG database) | Long-term entity and relationship extraction from conversations. |
-| RAG pipeline<br>(pg_dist_rag, a YugabyteDB extension) | Document chunking, embedding, indexing with built-in data preprocessing. |
-| MCP server | Agents discover and query their own datapack. |
-| Audit trails | LLM reasoning traces and execution logs. |
-| Observability, security, RBAC | Spans the full stack, not bolted on per-component. |
+| Capability | Powered by (internal) | API |
+| :--------- | :-------------------- | :--- |
+| Conversation history | PostgreSQL (YugabyteDB YSQL) | `conversation_*` tools |
+| Memory | Graph memory (MAGE) + vector search (pgvector, hnswlib) | `memory_*` tools |
+| Knowledge base | RAG pipeline (pg_dist_rag) + vector search | `knowledgebase_*` tools |
+| Audit trails | LLM reasoning traces and execution logs | Observability dashboard |
+| Observability, security, RBAC | Spans the full stack, not bolted on per-component | — |
 
 ![Meko Datapack Internals Diagram](/images/meko-datapack-internals.svg)
 
-The memory, knowledge, and database layers share state, and they operate as one system, not as isolated tiers.
+The underlying storage technologies are managed internally and not directly accessible.
 
-### What meko replaces
+### What Meko replaces
 
 Without Meko, building an agentic application typically requires wiring together:
 
@@ -51,7 +49,7 @@ Without Meko, building an agentic application typically requires wiring together
 
 ![What Meko Replaces Diagram](/images/meko-what-replaces.svg)
 
-Meko replaces all of this with a single system. The memory, knowledge, and database layers share state and operate as one.
+Meko replaces all of this with a single system. The memory, knowledge, and conversation layers share state and operate as one.
 
 ### How agents connect
 
@@ -65,7 +63,7 @@ Developers can also interact via:
 
 ### Framework compatibility
 
-Meko works with any agent framework that supports MCP:
+Meko works with any agentic framework, including:
 
 - CrewAI
 - LangChain / LangGraph
@@ -74,4 +72,4 @@ Meko works with any agent framework that supports MCP:
 
 ## Deployment
 
-- **Cloud**: Currently, Meko is a cloud service, managed by YugabyteDB.  
+- **Cloud**: Currently, Meko is a cloud service, managed by YugabyteDB.
