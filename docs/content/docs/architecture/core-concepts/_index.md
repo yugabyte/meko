@@ -16,7 +16,7 @@ Meko organizes agent data around a few key concepts. Understanding these will he
   {{< card
     href="architecture/core-concepts/memory/"
     title="Memory"
-    desc="Extracted memories from conversations are specific pieces of information or preferences that are explicitly stored persistently for the long term. Memories are stored as entity and relationship, powered by Meko's graph storage."
+    desc="Extracted memories from conversations are specific pieces of information or preferences that are explicitly stored persistently for the long term. Memories are stored as entity and relationship, powered by Meko's graph storage, also called MAGE.  Agent memories can be promoted to a shared knowledge base, so all agents can learn from each other's learnings."
   >}}
   {{< card
     href="architecture/core-concepts/knowledgebase/"
@@ -26,7 +26,7 @@ Meko organizes agent data around a few key concepts. Understanding these will he
   {{< card
     href="architecture/core-concepts/traces/"
     title="Traces"
-    desc="Meko provides end-to-end visibility into every conversation, from initial prompt through LLM chain-of-thought, including memory and knowledge, the associated API and SQL calls, the queries executed, and the results retrieved."
+    desc="Meko provides end-to-end visibility into every conversation, from initial prompt through LLM chain-of-thought, including memory and knowledge additions and search, the associated API and SQL calls, the queries executed, and the results retrieved."
   >}}
 
 {{< /card-group >}}
@@ -36,17 +36,13 @@ Meko organizes agent data around a few key concepts. Understanding these will he
 
 ### Accelerate agent development
 
-Stop stitching together data across multiple silos. Meko exposes agent-native primitives, such as "add knowledge," that abstract away storage complexity. A PDF can live in object storage, in real-time updates to SQL tables, or in both, without you having to model the implementation. Your code works with agent concepts, not database schemas, dramatically reducing development time.
+Stop stitching together data across multiple silos. Meko exposes agent-native primitives, such as "add memory," that abstract away storage complexity of agent preferences in a graph, or a vector store. A PDF can be uploaded easily in the Meko UI, in real-time by parsing, chunking, and creating the vector embeddings without you having to model the implementation or writing a complex data pre-processing pipeline. Your code works with agent concepts, not database schemas, dramatically reducing development time.
 
-Meko is a fundamentally multi-agentic, open-source data layer that enables agents to share knowledge and memories, integrates with the AI ecosystem through open APIs, and is available as both a serverless managed service and for private cloud deployment.
+Meko is a fundamentally multi-agentic, and severless.  It enables agents to share knowledge and memories, integrates with the AI ecosystem through a single MCP server endpoint.
 
 ### Higher performance, more efficient agents
 
 Meko's AI-tailored serverless architecture and multi-tenant design handle the variable resource utilization inherent to agentic applications. Agents consume minimal resources when idle and burst instantly when active. Meko optimizes common AI operations like parsing, chunking, and entity extraction with cost-effective models, giving you accuracy versus cost tradeoffs that generic databases cannot provide.
-
-### Automatic data tiering lowers storage costs
-
-Conversations are fundamental to agents but expensive to store in real-time databases. Meko keeps all conversation history queryable while transparently tiering older messages to object storage. Configurable retention policies purge data beyond your needs. This applies across all data models, keeping hot data fast and cold data cheap without manual intervention.
 
 ### Full chain-of-thought traceability
 

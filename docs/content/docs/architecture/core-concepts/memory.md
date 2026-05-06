@@ -9,11 +9,11 @@ Memory in Meko gives agents persistent, long-term recall of facts, preferences, 
 
 ## How it works
 
-Meko uses [mem0](https://github.com/mem0ai/mem0) to power its memory layer. When you add a memory, mem0 does the following:
+When you add a memory, Meko does the following:
 
 1. Extracts entities and relationships from the text using an LLM.
-1. Stores vector embeddings in pgvector for semantic similarity search.
-1. Stores graph relationships in Apache AGE for entity-relationship queries.
+1. Stores vector embeddings in the vector store for semantic similarity search.
+1. Stores graph relationships in Meko AGE for entity-relationship queries.
 
 This dual storage means memories can be found both by semantic similarity ("find memories about vacation preferences") and by graph traversal ("what entities are related to this user?").
 
@@ -23,10 +23,10 @@ Meko exposes four core memory operations.
 
 ### Add memory
 
-Store a new memory from text. The LLM extracts entities and relationships automatically.
+Store a new memory from text. The LLM extracts entities and relationships automatically from agent conversations.
 
 ```text
-"Please remember that I like to take vacations at tropical beach locations, on a budget"
+"I like to take vacations at tropical beach locations, on a budget"
 ```
 
 Behind the scenes, this calls `memory.add()` which extracts entities (user, tropical beaches, budget travel) and stores both vector embeddings and graph edges.
@@ -39,7 +39,7 @@ Find relevant memories using semantic similarity search. Returns the top matches
 "What are my vacation preferences?"
 ```
 
-This searches both the vector store (pgvector) and the graph store (Apache AGE), combining results for comprehensive recall.
+This searches both the vector store (pgvector) and the graph store (Meko AGE), combining results for comprehensive recall.
 
 ### Get all memories
 
