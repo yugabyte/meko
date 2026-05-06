@@ -47,15 +47,17 @@
   # CSP
   for = "/*"
   [headers.values]
-    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
     Content-Security-Policy = '''
         default-src 'self' 'unsafe-inline'
         ;
 
         connect-src 'self'
+            https://www.google.com/
         ;
 
         script-src 'self' 'unsafe-eval' 'unsafe-inline'
+            https://www.googletagmanager.com/
             https://code.jquery.com/jquery-3.7.1.min.js
             https://netlify-cdp-loader.netlify.app/
             https://netlify-rum.netlify.app
@@ -79,13 +81,13 @@
             https://www.google.com/
         ;
 
-        frame-ancestors 'self'
-        ;
+        frame-ancestors 'none';
 
         media-src 'self' 'unsafe-inline'
         ;
 '''
     X-Content-Type-Options = "nosniff"
-    Referrer-Policy = "strict-origin"
-    Permissions-Policy = "disabled"
-    X-XSS-Protection = "1"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), camera=(), microphone=()"
+    X-XSS-Protection = "0"
