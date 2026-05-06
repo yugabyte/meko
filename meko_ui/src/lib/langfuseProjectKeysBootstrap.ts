@@ -19,13 +19,22 @@ function readLangfuseProjectKeysCache(): Record<string, number> {
   try {
     return JSON.parse(raw) as Record<string, number>;
   } catch {
-    sessionStorage.removeItem(LANGFUSE_PROJECT_KEYS_CACHE_KEY);
+    clearLangfuseProjectKeysCache();
     return {};
   }
 }
 
 function writeLangfuseProjectKeysCache(cache: Record<string, number>) {
   sessionStorage.setItem(LANGFUSE_PROJECT_KEYS_CACHE_KEY, JSON.stringify(cache));
+}
+
+/**
+ * Drop the per-name "we already provisioned Langfuse keys for this pack" markers.
+ * Call this when the datapack list changes so deleted/renamed packs do not linger
+ * in the cache and newly-created packs are re-evaluated by the bootstrap flow.
+ */
+export function clearLangfuseProjectKeysCache(): void {
+  sessionStorage.removeItem(LANGFUSE_PROJECT_KEYS_CACHE_KEY);
 }
 
 /** Same naming rule as legacy Datapacks: default / tech-preview packs get Langfuse JIT keys. */

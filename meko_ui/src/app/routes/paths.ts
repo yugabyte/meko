@@ -67,6 +67,19 @@ export function datapackMemorySummaryPath(datapackName: string): string {
   return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/memory-summary`;
 }
 
+/** Full conversation viewer route. When `conversationId` is provided
+ *  the viewer pre-selects that session in the left rail; otherwise it
+ *  lands on the first row of the newest page. */
+export function datapackConversationsPath(
+  datapackName: string,
+  conversationId?: string,
+): string {
+  const base = `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/conversations`;
+  return conversationId
+    ? `${base}/${encodeURIComponent(conversationId)}`
+    : base;
+}
+
 export const AUTH_ROUTES = [
   ROUTES.root,
   ROUTES.login,

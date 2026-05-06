@@ -21,7 +21,6 @@ import {
 import { isDatapackGrantEligibleToAddKnowledgeBase, isDatapackGrantEligibleToDelete, isDatapackGrantEligibleToEdit, isDatapackGrantEligibleToPromoteMemoryToKnowledge, isDatapackGrantEligibleToShare } from "@/lib/datapackShareGrants";
 import {
   DatapackOutgoingMember,
-  DATAPACKS_LIST_UPDATED_EVENT,
   DatapackShareGrant,
   deleteDatapack,
   getApiErrorMessage,
@@ -36,7 +35,7 @@ import {
   type KnowledgeBaseDocument,
   type ProvisionStatus,
 } from "@/lib/mekoApi";
-import { dispatchAppEvent } from "@/lib/browserEvents";
+import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
@@ -294,7 +293,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
 
   const handleDeleteConfirm = async () => {
     const { message } = await deleteDatapack(datapackName);
-    dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+    notifyDatapacksListChanged(`delete:${datapackName}`);
     toast({
       title: "Datapack deleted",
       description: message || `"${datapackName}" was removed.`,

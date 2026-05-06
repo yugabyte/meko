@@ -683,13 +683,28 @@ export async function bootstrapObserveSession() {
 export type DatapackConversation = {
   id: string;
   agent_id?: string;
+  /** Falls back to the truncated first message when MCP didn't pass a
+   *  title to conversation_create. May be empty for very old sessions
+   *  that have neither. */
+  title?: string;
   started_at: string;
+  /** MAX(observation.end_time) across the trace; equals started_at for
+   *  sessions whose only observation is the zero-duration bookmark. */
+  last_activity_at: string;
   /** Verbatim user prompt of the first message in the session. Empty when
    *  the session has no messages yet — the UI renders a styled
    *  placeholder for that case rather than relying on a server-side
    *  string. */
   first_message: string;
   messages: number;
+  /** Count of *persisted* mem0 rows attributed to this conversation in
+   *  datapacks.meko_mem0_collection — i.e. the same number the Memories
+   *  tab shows for this session, after Mem0's fact extractor and dedup
+   *  ran. NOT the count of `memory_add` tool invocations: those can
+   *  return zero or many facts per call, so the two diverge in practice
+   *  (vague text → 0 persisted, rich text → multiple). */
+  memories_added: number;
+  llm_calls: number;
 };
 
 export type ListDatapackConversationsResponse = {
@@ -702,6 +717,9 @@ export type ListDatapackConversationsResponse = {
   langfuse_project_id?: string;
   limit: number;
   offset: number;
+  /** True when the page returned `limit` rows — there is *probably* at
+   *  least one more page. Drives the viewer's infinite-scroll. */
+  has_more: boolean;
   conversations: DatapackConversation[];
 };
 
@@ -721,6 +739,115 @@ export async function listDatapackConversations(
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<ListDatapackConversationsResponse>(
     `/datapacks/${encodeURIComponent(datapackName)}/conversations${suffix}`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+/** One user/assistant exchange inside a conversation. `reasoning` is
+ *  the chain-of-thought from the matched Reasoning generation; empty
+ *  when the client didn't pass one to conversation_add_message.
+ *
+ *  `memories_extracted` counts Memory Add tool spans in this message
+ *  window (extraction attempts observed in traces), not guaranteed
+ *  persisted rows in mem0. */
+export type DatapackThreadMessage = {
+  message_id: string;
+  observation_id: string;
+  started_at: string;
+  input: string;
+  output: string;
+  reasoning?: string;
+  /** Wall-clock duration of the parent `Conversation Add Message(Meko MCP)`
+   *  TOOL span — the bookmark span itself is zero-duration and not
+   *  useful for timing. */
+  latency_ms: number;
+  memories_extracted: number;
+  llm_calls: number;
+};
+
+export type DatapackConversationDetail = DatapackConversation & {
+  thread: DatapackThreadMessage[];
+  thread_limit: number;
+  thread_offset: number;
+  thread_has_more: boolean;
+};
+
+export type GetDatapackConversationResponse = {
+  datapack_id: string;
+  datapack_name: string;
+  langfuse_project_id?: string;
+  conversation: DatapackConversationDetail;
+};
+
+/**
+ * Fetch one conversation header + a paginated thread of turns.
+ * Returns 404 if the conversation does not belong to this datapack's
+ * Langfuse project. Caller must have datapack access.
+ */
+export async function getDatapackConversation(
+  datapackName: string,
+  conversationId: string,
+  params: { messagesLimit?: number; messagesOffset?: number } = {},
+  options: { signal?: AbortSignal } = {},
+) {
+  const qs = new URLSearchParams();
+  if (params.messagesLimit !== undefined) qs.set("messages_limit", String(params.messagesLimit));
+  if (params.messagesOffset !== undefined) qs.set("messages_offset", String(params.messagesOffset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<GetDatapackConversationResponse>(
+    `/datapacks/${encodeURIComponent(datapackName)}/conversations/${encodeURIComponent(
+      conversationId,
+    )}${suffix}`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+/** One observation in the windowed span tree for a single message turn.
+ *  `parent_observation_id` is empty for the root of the windowed sub-
+ *  tree. `duration_ms` and `offset_ms` are derived from start_time /
+ *  end_time relative to the message bookmark. */
+export type DatapackTraceSpan = {
+  id: string;
+  parent_observation_id?: string;
+  name: string;
+  type: string;
+  duration_ms: number;
+  offset_ms: number;
+  model?: string;
+  /** Raw JSONB string from langfuse usage column (token counts,
+   *  prompt/completion split, etc.). UI parses on demand. */
+  usage?: string;
+  total_cost?: string;
+};
+
+export type GetDatapackMessageTraceResponse = {
+  datapack_id: string;
+  datapack_name: string;
+  langfuse_project_id?: string;
+  conversation_id: string;
+  message_id: string;
+  spans: DatapackTraceSpan[];
+};
+
+/**
+ * Fetch the per-message span tree (all observations between this
+ * message's bookmark and the next message's bookmark). Caller must
+ * have datapack access.
+ */
+export async function getDatapackMessageTrace(
+  datapackName: string,
+  conversationId: string,
+  messageId: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<GetDatapackMessageTraceResponse>(
+    `/datapacks/${encodeURIComponent(datapackName)}/conversations/${encodeURIComponent(
+      conversationId,
+    )}/messages/${encodeURIComponent(messageId)}/trace`,
     "GET",
     undefined,
     options,

@@ -5,13 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import {
-  DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
   listDatapackIncomingShares,
   postDatapackInviteAction,
   type DatapackIncomingShare,
 } from "@/lib/mekoApi";
-import { dispatchAppEvent } from "@/lib/browserEvents";
+import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -64,7 +63,7 @@ export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
       });
       setInvites((prev) => prev.filter((r) => r.invite_id !== invite.invite_id));
       if (user_action === "accept") {
-        dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+        notifyDatapacksListChanged(`share-accepted:${invite.datapack_name || invite.invite_id}`);
       }
       toast({
         title: user_action === "accept" ? INCOMING_SHARE_TOAST_ACCEPTED_TITLE : INCOMING_SHARE_TOAST_DECLINED_TITLE,

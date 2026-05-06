@@ -16,6 +16,13 @@ import (
 const (
 	conversationsDefaultLimit = 20
 	conversationsMaxLimit     = 200
+
+	// Per-conversation thread page sizing. The thread can be very
+	// long (the largest prod conversations have 30-40 messages and
+	// growing); the UI scrolls within the right pane and asks for
+	// older turns by bumping messagesOffset.
+	threadDefaultLimit = 100
+	threadMaxLimit     = 500
 )
 
 // ObserveHandler handles lightweight Observe bootstrap.
@@ -116,6 +123,13 @@ func (h *ObserveHandler) ConversationList(c echo.Context) error {
 			"INTERNAL_ERROR", "failed to fetch conversations")
 	}
 
+	// has_more is the cheap boundary signal for the UI's
+	// infinite-scroll: when len(rows) == limit there's *probably*
+	// another page (the next request returns 0 rows if not). The
+	// UI keeps the existing /conversations/count endpoint for the
+	// totals chip; we don't compute it here to keep this query hot.
+	hasMore := len(conversations) == limit
+
 	// langfuse_project_id is included so the UI can build
 	// per-conversation deep links to the embedded Langfuse iframe
 	// (/observe/project/<pid>/sessions/<sid>) without a second
@@ -127,6 +141,7 @@ func (h *ObserveHandler) ConversationList(c echo.Context) error {
 		"langfuse_project_id": projectID,
 		"limit":               limit,
 		"offset":              offset,
+		"has_more":            hasMore,
 		"conversations":       conversations,
 	})
 }
@@ -164,5 +179,141 @@ func (h *ObserveHandler) ConversationCount(c echo.Context) error {
 		"datapack_id":   dp.ID,
 		"datapack_name": dp.Name,
 		"count":         n,
+	})
+}
+
+// ConversationDetail handles
+// GET /api/v1/datapacks/:name/conversations/:conversation_id.
+// Returns the header (same shape as a list row) plus a paginated
+// thread of user/assistant turns with reasoning and per-turn counters.
+//
+// Datapack access is enforced upstream by RequireDatapackAccess.
+//
+// Query params:
+//
+//	messages_limit  — turns per page (default 100, max 500)
+//	messages_offset — turns to skip (default 0)
+func (h *ObserveHandler) ConversationDetail(c echo.Context) error {
+	if h.langfuse == nil {
+		return apiError(c, http.StatusServiceUnavailable,
+			"SERVICE_UNAVAILABLE",
+			"langfuse service is not configured")
+	}
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+	conversationID := c.Param("conversation_id")
+	if conversationID == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "conversation_id is required")
+	}
+
+	msgsLimit := threadDefaultLimit
+	if v := c.QueryParam("messages_limit"); v != "" {
+		if n, parseErr := strconv.Atoi(v); parseErr == nil && n > 0 {
+			msgsLimit = n
+		}
+	}
+	if msgsLimit > threadMaxLimit {
+		slog.Warn("thread messages_limit exceeds max; clamping",
+			"requested", msgsLimit, "max", threadMaxLimit)
+		msgsLimit = threadMaxLimit
+	}
+	msgsOffset := 0
+	if v := c.QueryParam("messages_offset"); v != "" {
+		if n, parseErr := strconv.Atoi(v); parseErr == nil && n >= 0 {
+			msgsOffset = n
+		}
+	}
+
+	projectID, detail, err := h.langfuse.GetConversation(
+		dp.ID, conversationID, msgsLimit, msgsOffset,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrLangfuseDBNotConfigured):
+			return apiError(c, http.StatusServiceUnavailable,
+				"SERVICE_UNAVAILABLE",
+				"langfuse database is not configured on the api server")
+		case errors.Is(err, service.ErrConversationNotFound):
+			return apiError(c, http.StatusNotFound,
+				"NOT_FOUND", "conversation not found")
+		}
+		slog.Error("conversation detail failed",
+			"datapack_id", dp.ID,
+			"conversation_id", conversationID,
+			"error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to fetch conversation detail")
+	}
+
+	return ok(c, http.StatusOK, map[string]any{
+		"datapack_id":         dp.ID,
+		"datapack_name":       dp.Name,
+		"langfuse_project_id": projectID,
+		"conversation":        detail,
+	})
+}
+
+// MessageTrace handles
+// GET /api/v1/datapacks/:name/conversations/:conversation_id/messages/:message_id/trace.
+// Returns the windowed observation tree for one turn — the message
+// span plus all tool / generation observations between this message's
+// start_time and the next message's start_time.
+//
+// Datapack access is enforced upstream by RequireDatapackAccess.
+func (h *ObserveHandler) MessageTrace(c echo.Context) error {
+	if h.langfuse == nil {
+		return apiError(c, http.StatusServiceUnavailable,
+			"SERVICE_UNAVAILABLE",
+			"langfuse service is not configured")
+	}
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+	conversationID := c.Param("conversation_id")
+	if conversationID == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "conversation_id is required")
+	}
+	messageID := c.Param("message_id")
+	if messageID == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "message_id is required")
+	}
+
+	projectID, spans, err := h.langfuse.GetMessageTrace(
+		dp.ID, conversationID, messageID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrLangfuseDBNotConfigured):
+			return apiError(c, http.StatusServiceUnavailable,
+				"SERVICE_UNAVAILABLE",
+				"langfuse database is not configured on the api server")
+		case errors.Is(err, service.ErrConversationNotFound):
+			return apiError(c, http.StatusNotFound,
+				"NOT_FOUND", "message trace not found")
+		}
+		slog.Error("message trace failed",
+			"datapack_id", dp.ID,
+			"conversation_id", conversationID,
+			"message_id", messageID,
+			"error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to fetch message trace")
+	}
+
+	return ok(c, http.StatusOK, map[string]any{
+		"datapack_id":         dp.ID,
+		"datapack_name":       dp.Name,
+		"langfuse_project_id": projectID,
+		"conversation_id":     conversationID,
+		"message_id":          messageID,
+		"spans":               spans,
 	})
 }

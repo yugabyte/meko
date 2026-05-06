@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { dispatchAppEvent } from "@/lib/browserEvents";
+import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { DatapackConfigureWizardStepper } from "@/features/datapacks/components/configure-wizard/DatapackConfigureWizardStepper";
@@ -26,7 +26,6 @@ import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import {
   confirmUpload,
   createDatapack,
-  DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
   getDatapack,
   getDatapackProvisionStatus,
@@ -331,7 +330,7 @@ export default function DatapackConfigureWizardPage({
           ...(descTrim ? { description: configureDraftDescription } : {}),
         });
         if (created?.name) {
-          dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+          notifyDatapacksListChanged(`create:${created.name}`);
         }
         if (created.mcp_server?.api_key) {
           localStorage.setItem("meko_latest_api_key", created.mcp_server.api_key);
@@ -355,7 +354,7 @@ export default function DatapackConfigureWizardPage({
           description: configureDraftDescription,
         });
         if (updated?.message) {
-          dispatchAppEvent(DATAPACKS_LIST_UPDATED_EVENT);
+          notifyDatapacksListChanged(`rename:${routeName}->${trimmed}`);
         }
         setApiDatapackName(trimmed);
         setConfigureInitialName(trimmed);

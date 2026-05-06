@@ -65,9 +65,21 @@ func (s *LangfuseService) Host() string {
 // without churn.
 type ProjectKeys = repository.LangfuseProjectKeys
 
-// Conversation is an alias so handlers/UI clients that already
-// destructure on json field names keep working.
-type Conversation = repository.Conversation
+// Conversation, ConversationDetail, ThreadMessage and TraceSpan are
+// aliases so handlers/UI clients that already destructure on json
+// field names keep working.
+type (
+	Conversation       = repository.Conversation
+	ConversationDetail = repository.ConversationDetail
+	ThreadMessage      = repository.ThreadMessage
+	TraceSpan          = repository.TraceSpan
+)
+
+// ErrConversationNotFound is returned by GetConversation /
+// GetMessageTrace when the (datapack, session_id) or
+// (datapack, session_id, message_id) tuple has no rows in Langfuse —
+// callers translate it into a 404.
+var ErrConversationNotFound = errors.New("conversation not found")
 
 var errObserveInvalidCredentials error = errors.New("observe credentials invalid")
 
@@ -407,6 +419,28 @@ func (s *LangfuseService) ListConversations(
 	if err != nil {
 		return "", nil, err
 	}
+
+	// Overlay authoritative persisted-memory counts from
+	// datapacks.meko_mem0_collection. The list query above sets
+	// MemoriesAdded to 0; we replace it with the mem0 row count so the
+	// number matches the Memories tab. Failure here is logged but
+	// non-fatal — the rest of the listing is still useful.
+	if len(conversations) > 0 {
+		ids := make([]string, len(conversations))
+		for i, c := range conversations {
+			ids[i] = c.ID
+		}
+		counts, mErr := s.repo.MemoriesPerConversation(datapackID, ids)
+		if mErr != nil {
+			slog.Warn("conversations: failed to fetch mem0 counts; defaulting to 0",
+				"datapack_id", datapackID, "err", mErr)
+		} else {
+			for i := range conversations {
+				conversations[i].MemoriesAdded = counts[conversations[i].ID]
+			}
+		}
+	}
+
 	return projectID, conversations, nil
 }
 
@@ -449,6 +483,125 @@ func (s *LangfuseService) CountConversations(
 		return 0, err
 	}
 	return int(n), nil
+}
+
+// GetConversation returns the header + a paginated thread for a
+// single conversation under the datapack's Langfuse project.
+//
+// Returns ErrConversationNotFound when no Langfuse mapping exists for
+// the datapack or no rows match the session_id; callers map that to
+// HTTP 404. Datapack access is enforced upstream by
+// RequireDatapackAccess.
+func (s *LangfuseService) GetConversation(
+	datapackID, conversationID string,
+	messagesLimit, messagesOffset int,
+) (string, *ConversationDetail, error) {
+	if s == nil || s.repo == nil {
+		return "", nil, fmt.Errorf("langfuse service is not configured")
+	}
+	if !s.LangfuseDBConfigured() {
+		return "", nil, ErrLangfuseDBNotConfigured
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return "", nil, fmt.Errorf("datapack_id is required")
+	}
+	conversationID = normalizeSessionID(conversationID)
+	if conversationID == "" {
+		return "", nil, fmt.Errorf("conversation_id is required")
+	}
+
+	mapping, err := s.repo.GetProjectMapping(datapackID)
+	if err != nil {
+		return "", nil, err
+	}
+	if mapping == nil {
+		return "", nil, ErrConversationNotFound
+	}
+	projectID := strings.TrimSpace(mapping.ProjectID)
+	if projectID == "" {
+		return "", nil, fmt.Errorf("langfuse project mapping is incomplete")
+	}
+
+	detail, err := s.repo.GetConversationThread(
+		projectID, conversationID, datapackID, messagesLimit, messagesOffset,
+	)
+	if err != nil {
+		return "", nil, err
+	}
+	if detail == nil {
+		return projectID, nil, ErrConversationNotFound
+	}
+	
+	counts, mErr := s.repo.MemoriesPerConversation(datapackID, []string{conversationID})
+	if mErr != nil {
+		slog.Warn("conversation detail: failed to fetch mem0 count; defaulting to 0",
+			"datapack_id", datapackID, "conversation_id", conversationID, "err", mErr)
+	} else {
+		detail.MemoriesAdded = counts[conversationID]
+	}
+
+	return projectID, detail, nil
+}
+
+// GetMessageTrace returns the windowed observation tree for one
+// message turn — used by the conversation viewer's trace drawer.
+//
+// Returns ErrConversationNotFound when there's no Langfuse mapping or
+// no message with the given id under the conversation. Datapack access
+// is enforced upstream by RequireDatapackAccess.
+func (s *LangfuseService) GetMessageTrace(
+	datapackID, conversationID, messageID string,
+) (string, []TraceSpan, error) {
+	if s == nil || s.repo == nil {
+		return "", nil, fmt.Errorf("langfuse service is not configured")
+	}
+	if !s.LangfuseDBConfigured() {
+		return "", nil, ErrLangfuseDBNotConfigured
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return "", nil, fmt.Errorf("datapack_id is required")
+	}
+
+	conversationID = normalizeSessionID(conversationID)
+	if conversationID == "" {
+		return "", nil, fmt.Errorf("conversation_id is required")
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return "", nil, fmt.Errorf("message_id is required")
+	}
+
+	mapping, err := s.repo.GetProjectMapping(datapackID)
+	if err != nil {
+		return "", nil, err
+	}
+	if mapping == nil {
+		return "", nil, ErrConversationNotFound
+	}
+	projectID := strings.TrimSpace(mapping.ProjectID)
+	if projectID == "" {
+		return "", nil, fmt.Errorf("langfuse project mapping is incomplete")
+	}
+
+	spans, err := s.repo.GetMessageTrace(projectID, conversationID, messageID)
+	if err != nil {
+		return "", nil, err
+	}
+	if spans == nil {
+		return projectID, nil, ErrConversationNotFound
+	}
+	return projectID, spans, nil
+}
+
+// normalizeSessionID strips hyphens from the input; MCP's
+// langfuse_store derives Langfuse trace_ids from session_ids by
+// removing hyphens, so the on-disk session_id is always the unhyphenated
+// form. Callers may receive either form from the URL — normalize here
+// so handlers don't have to.
+func normalizeSessionID(s string) string {
+	return strings.ReplaceAll(strings.TrimSpace(s), "-", "")
 }
 
 type createOrgReq struct {

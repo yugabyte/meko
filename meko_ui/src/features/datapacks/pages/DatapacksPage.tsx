@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { datapackNewConfigurePath, ROUTES } from "@/app/routes/paths";
 import DatapackConfigureWizardPage from "@/features/datapacks/pages/DatapackConfigureWizardPage";
+import DatapackConversationsViewerPage from "@/features/datapacks/pages/DatapackConversationsViewerPage";
 import DatapackDetailPage from "@/features/datapacks/pages/DatapackDetailPage";
 import DatapackEditPage from "@/features/datapacks/pages/DatapackEditPage";
 import DatapackLearningsPage from "@/features/datapacks/pages/DatapackLearningsPage";
@@ -13,7 +14,9 @@ import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
 /**
  * Datapacks area: overview at `/datapacks`, new datapack wizard at `/datapacks/new/configure`, edit at `/datapacks/:name/edit`,
  * configure at `/datapacks/:name/configure`, learnings at `/datapacks/:name/learnings`,
- * memory-summary at `/datapacks/:name/memory-summary`, detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
+ * memory-summary at `/datapacks/:name/memory-summary`,
+ * conversations viewer at `/datapacks/:name/conversations[/:conversationId]`,
+ * detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
  */
 export default function DatapacksPage() {
   const location = useLocation();
@@ -63,6 +66,17 @@ export default function DatapacksPage() {
       }
       if (segments[1] === "learnings" && segments.length === 2) {
         return <DatapackLearningsPage datapackName={datapackName} />;
+      }
+      if (segments[1] === "conversations" && segments.length <= 3) {
+        const conversationId = segments[2]
+          ? decodeURIComponent(segments[2])
+          : undefined;
+        return (
+          <DatapackConversationsViewerPage
+            datapackName={datapackName}
+            conversationId={conversationId}
+          />
+        );
       }
       return <DatapackDetailPage datapackName={datapackName} currentUser={currentUser} />;
     }

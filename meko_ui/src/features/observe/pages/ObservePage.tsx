@@ -2,39 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   bootstrapObserveSession,
+  DATAPACKS_LIST_UPDATED_EVENT,
   ensureLangfuseProjectKeys,
   getApiErrorMessage,
   listDatapacks,
 } from "@/lib/mekoApi";
+import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
+import {
+  clearObserveBootstrapCache,
+  getObserveIframeVersion,
+  isObserveBootstrapFresh,
+  OBSERVE_IFRAME_VERSION_STORAGE_KEY,
+  readObserveBootstrapCache,
+  writeObserveBootstrapCache,
+} from "@/features/observe/observeRefresh";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 
 const OBSERVE_EMBED_PATH_RAW = (import.meta.env.VITE_OBSERVE_EMBED_PATH || "").trim();
-const OBSERVE_BOOTSTRAP_CACHE_KEY = "meko:observe-bootstrap-cache:v1";
-const OBSERVE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60_000;
-
-type ObserveBootstrapCache = {
-  langfuseRelPath: string;
-  updatedAt: number;
-};
-
-function readObserveBootstrapCache(): ObserveBootstrapCache | null {
-  const raw = sessionStorage.getItem(OBSERVE_BOOTSTRAP_CACHE_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as ObserveBootstrapCache;
-  } catch {
-    sessionStorage.removeItem(OBSERVE_BOOTSTRAP_CACHE_KEY);
-    return null;
-  }
-}
-
-function writeObserveBootstrapCache(cache: ObserveBootstrapCache) {
-  sessionStorage.setItem(OBSERVE_BOOTSTRAP_CACHE_KEY, JSON.stringify(cache));
-}
-
-function isObserveBootstrapFresh(updatedAt: number) {
-  return Date.now() - updatedAt <= OBSERVE_BOOTSTRAP_CACHE_TTL_MS;
-}
 
 function normalizeObserveEmbedPath(rawPath: string): string {
   const value = rawPath.trim();
@@ -72,7 +56,17 @@ function observeIframeSrc(embedBase: string, langfusePath: string, retry: number
 export default function ObservePage() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [embedRetry, setEmbedRetry] = useState(0);
+  /**
+   * Iframe-version counter, embedded in the iframe `src` as `?r=<n>` so a
+   * change forces both the browser HTTP-cache miss and a fresh Langfuse
+   * SPA load (so the project list inside the iframe is re-fetched).
+   *
+   * Initialized from the persisted localStorage counter (bumped by
+   * {@link notifyDatapacksListChanged}) so a datapack mutation that
+   * happened on a different page before the user navigated here still
+   * busts the iframe on this mount.
+   */
+  const [embedRetry, setEmbedRetry] = useState<number>(() => getObserveIframeVersion());
   /** Path under /observe/ without leading slash, e.g. organization/<id> or "". */
   const [langfuseRelPath, setLangfuseRelPath] = useState("");
   const observeEmbedPath = normalizeObserveEmbedPath(OBSERVE_EMBED_PATH_RAW);
@@ -126,7 +120,18 @@ export default function ObservePage() {
       if (!datapacks.length) {
         throw new Error("No datapacks found for this account");
       }
-      await ensureLangfuseProjectKeys(datapacks[0].datapack_name);
+      // listDatapacks() returns owned + shared datapacks. ensureLangfuseProjectKeys
+      // hits an owner-only handler (POST /datapacks/<name>/langfuse/project-keys
+      // → DatapackService.Describe → owner-only repo lookup), so we MUST pick an
+      // owned datapack here. Without this filter, a user whose first datapack is
+      // a share (sorted by created_at DESC) gets a 404 "datapack <name> not found"
+      // and the iframe never loads. If the user has only shared datapacks, the
+      // owner already provisioned the Langfuse project — we just bootstrap our
+      // own org session and skip the keys call.
+      const ownedDatapack = datapacks.find((dp) => (dp.grant ?? "owner") === "owner");
+      if (ownedDatapack) {
+        await ensureLangfuseProjectKeys(ownedDatapack.datapack_name);
+      }
       const bootstrap = await bootstrapObserveSession();
       if (mounted && bootstrap.org_id) {
         const rel = `organization/${bootstrap.org_id}`;
@@ -158,6 +163,41 @@ export default function ObservePage() {
     };
   }, [observeEmbedPath]);
 
+  /**
+   * Keep the iframe src in sync with the persisted iframe-version counter.
+   *
+   *  - DATAPACKS_LIST_UPDATED_EVENT fires for same-tab mutations once
+   *    {@link notifyDatapacksListChanged} has bumped the counter and cleared
+   *    the in-flight session caches; we just re-read the counter and let the
+   *    iframe `src` (and the `key` prop) change → Langfuse SPA reloads.
+   *  - The native `storage` event fires for the SAME localStorage write in
+   *    OTHER tabs, so an Observe tab open in tab B picks up a mutation made
+   *    in tab A automatically.
+   *  - Both listeners also clear the bootstrap cache defensively in case
+   *    the helper version-skews and a stale tab is the one mutating.
+   */
+  useEffect(() => {
+    const syncToPersistedVersion = (origin: string) => {
+      const persisted = getObserveIframeVersion();
+      void origin;
+      clearObserveBootstrapCache();
+      setEmbedRetry(persisted);
+    };
+
+    const onDatapacksChanged = () => syncToPersistedVersion("event");
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== OBSERVE_IFRAME_VERSION_STORAGE_KEY) return;
+      syncToPersistedVersion("storage");
+    };
+
+    addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, onDatapacksChanged);
+    globalThis.addEventListener("storage", onStorage);
+    return () => {
+      removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, onDatapacksChanged);
+      globalThis.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
   return (
     <div className="flex-1 h-screen bg-background text-foreground flex flex-col">
       <AppWorkspaceHeader
@@ -183,6 +223,7 @@ export default function ObservePage() {
           </div>
         ) : (
           <iframe
+            key={`${effectiveRelPath}#${embedRetry}`}
             title="Langfuse Observe"
             src={observeIframeSrc(observeEmbedPath, effectiveRelPath, embedRetry)}
             className="w-full h-full border-0 bg-[#0E1525]"
