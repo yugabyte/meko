@@ -18,6 +18,25 @@ export function datapackDetailPath(datapackName: string): string {
   return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}`;
 }
 
+/**
+ * Search param names for deep links into datapack pages (e.g. open a modal from the overview).
+ * Use with {@link DATAPACK_QUERY_FLAG_ON} for boolean-style flags.
+ */
+export const DATAPACK_QUERY_PARAM = {
+  connect: "connect",
+  share: "share",
+} as const;
+
+/** Value meaning “enable / open” for {@link DATAPACK_QUERY_PARAM} flags. */
+export const DATAPACK_QUERY_FLAG_ON = "1" as const;
+
+/** Datapack detail URL that opens the Connect dialog (consumes param on load). */
+export function datapackDetailUrlOpenConnect(datapackName: string): string {
+  const q = new URLSearchParams();
+  q.set(DATAPACK_QUERY_PARAM.connect, DATAPACK_QUERY_FLAG_ON);
+  return `${datapackDetailPath(datapackName)}?${q.toString()}`;
+}
+
 export function datapackEditPath(datapackName: string): string {
   return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/edit`;
 }

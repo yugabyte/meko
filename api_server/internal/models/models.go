@@ -26,6 +26,7 @@ type Datapack struct {
 	MCPUserName      string    `json:"datapack_ysql_username"`
 	Description      string    `json:"description,omitempty"`
 	OwnerName        string    `json:"datapack_owner_name,omitempty"`
+	OwnerEmail       string    `json:"datapack_owner_email_id,omitempty"`
 	Grant            string    `json:"grant,omitempty"`
 	MemoryCount      int         `json:"memory_count"`
 	KnowledgeCount   int         `json:"knowledge_count"`
@@ -202,10 +203,16 @@ type OutgoingSharePendingInvite struct {
 	RecipientEmailID   string  `json:"recipient_email_id"`
 }
 
-// OutgoingSharesResponse is returned by GET /datapacks/:name/outgoing-shares.
-type OutgoingSharesResponse struct {
-	Members        []OutgoingShareMember      `json:"members"`
+// OutgoingPendingInvitesResponse is returned by GET /datapacks/:name/outgoing-shares
+// (pending invites only; owner or maintainer).
+type OutgoingPendingInvitesResponse struct {
 	PendingInvites []OutgoingSharePendingInvite `json:"pending_invites"`
+}
+
+// DatapackMembersResponse is returned by GET /datapacks/:name/member-list
+// (accepted members and metadata; any datapack access).
+type DatapackMembersResponse struct {
+	Members []OutgoingShareMember `json:"members"`
 }
 
 // EmbeddingDims returns the vector dimension for a given embedding model name.

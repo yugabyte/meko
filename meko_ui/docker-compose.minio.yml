@@ -21,12 +21,9 @@ services:
     depends_on:
       - meko-minio
     entrypoint: >
-      /bin/sh -c "
-      sleep 3;
-      mc alias set local http://meko-minio:9000 meko mekosecret;
-      mc mb --ignore-existing local/meko-kb-uploads;
-      echo 'Bucket meko-kb-uploads ready';
-      "
+      /bin/sh -c " sleep 3; mc alias set local http://meko-minio:9000 meko
+      mekosecret; mc mb --ignore-existing local/meko-kb-uploads; echo 'Bucket
+      meko-kb-uploads ready'; "
     networks:
       - meko_net
 

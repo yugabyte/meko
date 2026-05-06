@@ -1,20 +1,23 @@
 /**
- * Knowledge tab: lists ingested documents and pipeline status from GET .../knowledge-bases/documents.
+ * Knowledge tab: lists ingested documents from GET …/knowledge-bases/documents.
+ * Data is loaded by the parent so the same payload can feed the sidebar tile without a second request.
  */
-import { useCallback, useEffect, useState } from "react";
 import { BookOpen, Loader2, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getApiErrorMessage, getKnowledgeBaseDocuments } from "@/lib/mekoApi";
 import type { KnowledgeBaseDocument } from "@/lib/mekoApi";
+import { documentNameLastSegment } from "./knowledgeDocumentName";
 import { kbDocumentStatusLabel, kbDocumentStatusTone } from "./knowledgeDocumentStatus";
 
 type Props = {
-  datapackName: string;
   /** From datapack describe (`knowledge_count`); shown in header when summary is ready. */
   knowledgeBaseCount: number;
   /** When false, header shows a placeholder (same pattern as Learnings summary). */
   datapackSummaryReady: boolean;
+  documents: KnowledgeBaseDocument[];
+  documentsLoading: boolean;
+  documentsError: string | null;
+  onReloadDocuments: () => void;
 };
 
 const toneClasses = {
@@ -25,31 +28,14 @@ const toneClasses = {
 } as const;
 
 export function KnowledgeDocumentsPanel({
-  datapackName,
   knowledgeBaseCount,
   datapackSummaryReady,
+  documents,
+  documentsLoading,
+  documentsError,
+  onReloadDocuments,
 }: Props) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [documents, setDocuments] = useState<KnowledgeBaseDocument[]>([]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const rows = await getKnowledgeBaseDocuments(datapackName);
-      setDocuments(rows);
-    } catch (err) {
-      setError(getApiErrorMessage(err, "Could not load knowledge documents."));
-      setDocuments([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [datapackName]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const loading = documentsLoading;
 
   return (
     <div className="rounded-xl border border-border bg-[#1C2333] p-6 space-y-4">
@@ -76,7 +62,7 @@ export function KnowledgeDocumentsPanel({
         <Button
           variant="outline"
           className="gap-2 border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={() => void load()}
+          onClick={() => void onReloadDocuments()}
           disabled={loading}
         >
           {loading ? (
@@ -88,22 +74,22 @@ export function KnowledgeDocumentsPanel({
         </Button>
       </div>
 
-      {error ? (
+      {documentsError ? (
         <div
           className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300"
           role="alert"
         >
           <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
-          {error}
+          {documentsError}
         </div>
       ) : null}
 
-      {loading && documents.length === 0 && !error ? (
+      {loading && documents.length === 0 && !documentsError ? (
         <div className="flex flex-col items-center justify-center gap-3 py-14 text-muted-foreground">
           <Loader2 className="h-8 w-8 animate-spin text-emerald-400/80" aria-hidden />
           <p className="text-sm">Loading documents…</p>
         </div>
-      ) : documents.length === 0 && !error ? (
+      ) : documents.length === 0 && !documentsError ? (
         <div className="rounded-lg border border-dashed border-border/60 bg-muted/5 px-4 py-12 text-center text-sm text-muted-foreground">
           No knowledge documents yet. Upload files from this datapack&apos;s actions menu to see them
           here.
@@ -112,13 +98,18 @@ export function KnowledgeDocumentsPanel({
         <ul className="max-h-[min(28rem,55vh)] space-y-2 overflow-y-auto pr-1">
           {documents.map((doc, idx) => {
             const tone = kbDocumentStatusTone(doc.status);
+            const fullName = doc.document_name?.trim() || "—";
+            const displayName = documentNameLastSegment(fullName);
             return (
               <li
                 key={`${idx}-${doc.document_name}`}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-[#0E1525]/80 px-3 py-2.5"
               >
-                <span className="min-w-0 flex-1 font-mono text-xs text-foreground/90" title={doc.document_name}>
-                  {doc.document_name}
+                <span
+                  className="min-w-0 flex-1 truncate font-mono text-xs text-foreground/90"
+                  title={fullName}
+                >
+                  {displayName}
                 </span>
                 <span
                   className={cn(

@@ -12,8 +12,9 @@ import { DatapackConfigureWizardStepper } from "@/features/datapacks/components/
 import { ConfigureWizardConfigureStep } from "@/features/datapacks/components/configure-wizard/ConfigureWizardConfigureStep";
 import { ConfigureWizardStatusStep } from "@/features/datapacks/components/configure-wizard/ConfigureWizardStatusStep";
 import { ConfigureWizardInstallStep } from "@/features/datapacks/components/configure-wizard/ConfigureWizardInstallStep";
-import { ConfigureWizardNavBar } from "@/features/datapacks/components/configure-wizard/ConfigureWizardNavBar";
+import { ConfigureWizardUnifiedFooter } from "@/features/datapacks/components/configure-wizard/ConfigureWizardUnifiedFooter";
 import { ConfigureWizardSyncStep } from "@/features/datapacks/components/configure-wizard/ConfigureWizardSyncStep";
+import { ConfigureWizardPageHeader } from "@/features/datapacks/components/configure-wizard/ConfigureWizardPageHeader";
 import type { ListedSource, SyncSectionId } from "@/features/datapacks/components/configure-wizard/types";
 import {
   WIZARD_STEP_ID,
@@ -36,6 +37,7 @@ import {
 } from "@/lib/mekoApi";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
+  filterDuplicateKnowledgeFileNames,
   filterFilesForKnowledgeUploadBatch,
 } from "@/lib/knowledgeFileUploadRules";
 import { startKnowledgeBaseImport } from "@/lib/knowledgeBaseImportJob";
@@ -193,12 +195,19 @@ export default function DatapackConfigureWizardPage({
       const staging = prev.filter((it) => it.kind === "file" && it.uploadStatus !== KNOWLEDGE_UPLOAD_STATUS.DONE)
         .length;
       const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(Array.from(files), staging);
-      if (warningParts.length > 0) {
-        const text = warningParts.join(". ");
-        setTimeout(() => showSyncWarning(text), 0);
+      const existingNames = prev.filter((it) => it.kind === "file").map((it) => it.label);
+      const { unique, duplicateCount } = filterDuplicateKnowledgeFileNames(accepted, existingNames);
+      const warnings = [...warningParts];
+      if (duplicateCount > 0) {
+        warnings.push(
+          `${duplicateCount} skipped (same filename already in the list or duplicated in this selection)`,
+        );
       }
-      if (accepted.length === 0) return prev;
-      return [...prev, ...accepted.map((f) => fileEntry(f, true))];
+      if (warnings.length > 0) {
+        setTimeout(() => showSyncWarning(warnings.join(". ")), 0);
+      }
+      if (unique.length === 0) return prev;
+      return [...prev, ...unique.map((f) => fileEntry(f, true))];
     });
   };
 
@@ -221,7 +230,7 @@ export default function DatapackConfigureWizardPage({
     );
   }, []);
 
-  const handleUploadKnowledgeFiles = useCallback(async () => {
+  const handleUploadKnowledgeFiles = useCallback(async (includedIds: Set<string>) => {
     const pack = apiDatapackName;
     if (!pack) return;
     setKnowledgeUploading(true);
@@ -230,6 +239,7 @@ export default function DatapackConfigureWizardPage({
         (it) =>
           it.kind === "file" &&
           it.file &&
+          includedIds.has(it.id) &&
           (it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
             it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR),
       );
@@ -368,11 +378,6 @@ export default function DatapackConfigureWizardPage({
     routeDatapackName,
   ]);
 
-  const skipConfigureStep = useCallback(() => {
-    setConfigureError(null);
-    setStepId(WIZARD_STEP_ID.install);
-  }, []);
-
   const handleWizardNext = useCallback(async () => {
     if (stepId === WIZARD_STEP_ID.configure) {
       await handleConfigureStepNext();
@@ -387,16 +392,7 @@ export default function DatapackConfigureWizardPage({
     }
   }, [handleConfigureStepNext, stepId, syncAllKnowledgeUploaded]);
 
-  /** After create, do not return to Configure (datapack already exists); exit to overview instead. */
-  const createFlowCommitted = isCreateFlow && Boolean(apiDatapackName);
-  const backExitsCreateWizardToDatapacks =
-    createFlowCommitted && stepId !== WIZARD_STEP_ID.configure;
-
   const goBack = () => {
-    if (backExitsCreateWizardToDatapacks) {
-      navigate(ROUTES.datapacks);
-      return;
-    }
     if (currentIndex === 0) {
       if (isCreateFlow) {
         navigate(ROUTES.datapacks);
@@ -411,13 +407,8 @@ export default function DatapackConfigureWizardPage({
     if (prev) setStepId(prev.id);
   };
 
-  const backButtonLabel = backExitsCreateWizardToDatapacks
-    ? "Back to datapacks"
-    : currentIndex === 0
-      ? isCreateFlow
-        ? "Back to datapacks"
-        : "Back"
-      : "Back";
+  const backButtonLabel =
+    currentIndex === 0 ? (isCreateFlow ? "Back to datapacks" : "Back") : "Back";
 
   const hasUploadedKnowledge = knowledgeItems.some((it) => it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE);
   const knowledgeDoneCount = knowledgeItems.filter(
@@ -439,22 +430,17 @@ export default function DatapackConfigureWizardPage({
     navigate(datapackDetailPath(finishPackName));
   }, [finishPackName, hasUploadedKnowledge, navigate]);
 
-  const canGoNextFromSync = stepId !== WIZARD_STEP_ID.sync || syncAllKnowledgeUploaded;
-
   const canProceedFromConfigure =
     Boolean(configureDraftName.trim()) &&
     !configureSubmitting &&
     !configureLoading &&
     Boolean(currentUser?.account_id);
 
-  const canWizardNext =
-    stepId === WIZARD_STEP_ID.configure
-      ? canProceedFromConfigure
-      : stepId === WIZARD_STEP_ID.sync
-        ? canGoNextFromSync
-        : true;
-
-  const displayTitleName = apiDatapackName ?? (isCreateFlow ? "new datapack" : routeDatapackName ?? "");
+  const headerDatapackName =
+    configureDraftName.trim() ||
+    apiDatapackName ||
+    routeDatapackName ||
+    (isCreateFlow ? "new datapack" : "");
 
   const breadcrumbItems = isCreateFlow
     ? [
@@ -476,19 +462,15 @@ export default function DatapackConfigureWizardPage({
         <div className="mx-auto w-full max-w-5xl space-y-8">
           <DatapackBreadcrumbs items={breadcrumbItems} />
 
-          <div className="space-y-2">
-            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-              Configure <span className="text-foreground">{displayTitleName}</span>
-            </h1>
-            {descriptionFromState && isCreateFlow && !apiDatapackName ? (
-              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">{descriptionFromState}</p>
-            ) : (
-              <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                Finish setup: configure the datapack, install the client, add knowledge files, then review and
-                finish.
-              </p>
-            )}
-          </div>
+          {/* When agent/MCP detection is wired, pass loading | connected instead of idle. */}
+          <ConfigureWizardPageHeader
+            datapackDisplayName={headerDatapackName}
+            stepId={stepId}
+            connectionStatus="idle"
+            createFlowDescription={
+              descriptionFromState && isCreateFlow && !apiDatapackName ? descriptionFromState : null
+            }
+          />
 
           <div className="w-full min-w-0 rounded-xl border border-border bg-muted/20 py-4 sm:py-5">
             <div className="w-full min-w-0 px-2 sm:px-3">
@@ -534,35 +516,33 @@ export default function DatapackConfigureWizardPage({
             />
           ) : null}
           {stepId === WIZARD_STEP_ID.import && finishPackName ? (
-            <ConfigureWizardStatusStep
-              datapackName={finishPackName}
-              knowledgeItems={knowledgeItems}
-              knowledgeCount={knowledgeDoneCount}
-              conversationsCount={0}
-              skillsCount={0}
-              hasUploadedKnowledge={hasUploadedKnowledge}
-              onFinish={handleWizardFinish}
-            />
+            <ConfigureWizardStatusStep knowledgeItems={knowledgeItems} />
           ) : null}
 
-          <ConfigureWizardNavBar
+          <ConfigureWizardUnifiedFooter
             stepId={stepId}
-            currentIndex={currentIndex}
+            datapackName={headerDatapackName}
+            isCreateFlow={isCreateFlow}
             backButtonLabel={backButtonLabel}
             onBack={goBack}
-            onNext={() => void handleWizardNext()}
-            onSkipStep={
-              stepId === WIZARD_STEP_ID.configure && !isCreateFlow
-                ? skipConfigureStep
-                : stepId === WIZARD_STEP_ID.install || stepId === WIZARD_STEP_ID.sync
-                  ? () => {
-                    if (stepId === WIZARD_STEP_ID.install) setStepId(WIZARD_STEP_ID.sync);
-                    else if (stepId === WIZARD_STEP_ID.sync) setStepId(WIZARD_STEP_ID.import);
-                  }
-                  : undefined
-            }
-            canGoNext={canWizardNext}
-            nextDisabledTooltip="Upload knowledge files successfully before continuing, or use Skip step."
+            showBack={stepId !== WIZARD_STEP_ID.install}
+            configureSubmitting={configureSubmitting}
+            canProceedFromConfigure={canProceedFromConfigure}
+            onConfigureSubmit={() => void handleConfigureStepNext()}
+            syncKnowledgeCount={knowledgeItems.length}
+            syncConversationsCount={0}
+            syncSkillsCount={0}
+            canImport={syncAllKnowledgeUploaded}
+            onImport={() => void handleWizardNext()}
+            onSkipForward={() => {
+              if (stepId === WIZARD_STEP_ID.install) setStepId(WIZARD_STEP_ID.sync);
+              else if (stepId === WIZARD_STEP_ID.sync) setStepId(WIZARD_STEP_ID.import);
+            }}
+            importKnowledgeCount={knowledgeDoneCount}
+            importConversationsCount={0}
+            importSkillsCount={0}
+            hasUploadedKnowledge={hasUploadedKnowledge}
+            onFinish={handleWizardFinish}
           />
         </div>
       </main>

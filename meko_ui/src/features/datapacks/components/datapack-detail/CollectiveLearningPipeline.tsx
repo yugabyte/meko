@@ -1,11 +1,20 @@
 /**
- * “Collective learning · live” ribbon: Conversations → Memory → Learnings → Knowledge
- * (learnings and knowledge stacked in one column on wide layouts; full column on small screens).
+ * “Collective learning” ribbon: Conversations → Memories → Learnings → (promote) → Collective Memory + Shared Knowledge.
  */
 import { useEffect, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { ArrowLeftRight, BookOpen, ChevronRight, Loader2, MessageSquare, Sparkles } from "lucide-react";
+import {
+  ArrowLeftRight,
+  BookOpen,
+  ChevronRight,
+  Loader2,
+  MessageSquare,
+  Settings,
+  Sparkles,
+  Upload,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   CurrentUser,
@@ -19,7 +28,8 @@ const toneStyles: Record<DatapackDetailTab, string> = {
   conversations:
     "border-slate-500/35 bg-gradient-to-br from-slate-900/80 via-[#121a28] to-[#0b1220]",
   memories: "border-blue-500/40 bg-gradient-to-br from-blue-950/70 via-[#0f1729] to-[#0b1220]",
-  learnings: "border-purple-500/40 bg-gradient-to-br from-purple-950/65 via-[#141228] to-[#0b1220]",
+  learnings:
+    "border-purple-500/50 bg-gradient-to-br from-purple-950/65 via-[#141228] to-[#0b1220] shadow-[0_0_24px_rgba(168,85,247,0.12)]",
   knowledge: "border-emerald-900/50 bg-gradient-to-br from-emerald-950/55 via-[#0c1814] to-[#0b1220]",
 };
 
@@ -37,24 +47,17 @@ type StageShellProps = {
   value?: number;
   delta?: string;
   subtitle: string;
-  cornerBadge?: string;
-  /** Lucide icon aligned with datapack tiles (Memory / Learnings / Knowledge). */
+  cornerBadge?: ReactNode;
+  cornerBadgeTone?: "purple" | "green";
+  cornerBadgePulse?: boolean;
   titleIcon?: ReactNode;
-  /** Optional title color (default white). */
   titleClassName?: string;
-  /** When true, the value/subtitle/children area is replaced by a centered
-   *  spinner so the tile communicates "still loading" without leaving a
-   *  stale or zero number in the value slot. */
   loading?: boolean;
-  /** Accessible label for the loading spinner. */
   loadingLabel?: string;
+  /** Rendered below the large value (e.g. collective memory empty state). */
+  afterValue?: ReactNode;
   children?: React.ReactNode;
-  /** Opens the matching detail tab when the stage is activated. */
   onSelect?: () => void;
-  /**
-   * When false, the shell does not use `flex-1` (avoids stretching in a column stack).
-   * Default true so stages in the horizontal row still share width.
-   */
   flexGrow?: boolean;
 };
 
@@ -66,17 +69,20 @@ function StageShell({
   delta,
   subtitle,
   cornerBadge,
+  cornerBadgeTone = "purple",
+  cornerBadgePulse = false,
   titleIcon,
   titleClassName,
   loading = false,
   loadingLabel,
+  afterValue,
   children,
   onSelect,
   flexGrow = true,
 }: StageShellProps) {
   const interactive = Boolean(onSelect);
   const shellClass = cn(
-    "relative flex min-w-0 flex-col rounded-2xl border-2 px-4 py-4 text-left sm:min-w-[160px]",
+    "relative flex h-fit min-w-0 shrink-0 flex-col rounded-2xl border-2 px-4 py-3 text-left sm:min-w-[160px]",
     flexGrow ? "flex-1" : "w-full flex-none",
     toneStyles[tone],
     interactive &&
@@ -91,6 +97,11 @@ function StageShell({
     }
   };
 
+  const badgeClass =
+    cornerBadgeTone === "green"
+      ? "border-emerald-400/45 bg-emerald-500/20 text-emerald-100"
+      : "border-purple-400/40 bg-purple-500/25 text-purple-100";
+
   return (
     <div
       role={interactive ? "button" : undefined}
@@ -101,7 +112,18 @@ function StageShell({
       className={shellClass}
     >
       {cornerBadge ? (
-        <span className="absolute right-2 top-2 rounded-md border border-purple-400/30 bg-purple-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-100">
+        <span
+          className={cn(
+            "absolute right-2 top-2 z-[1] inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-semibold tabular-nums tracking-wide",
+            badgeClass,
+            cornerBadgePulse &&
+            cornerBadgeTone === "purple" &&
+            "animate-pulse shadow-[0_0_14px_rgba(168,85,247,0.55)] ring-1 ring-purple-400/30",
+            cornerBadgePulse &&
+            cornerBadgeTone === "green" &&
+            "animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.35)] ring-1 ring-emerald-400/25",
+          )}
+        >
           {cornerBadge}
         </span>
       ) : null}
@@ -116,16 +138,11 @@ function StageShell({
           <span className={cn("text-center text-base font-semibold tracking-tight text-white", titleClassName)}>
             {title}
           </span>
-          {delta ? (
-            <span className="text-xs font-medium text-blue-300/90">{delta}</span>
-          ) : null}
+          {delta ? <span className="text-xs font-medium text-blue-300/90">{delta}</span> : null}
         </div>
       </div>
       {loading ? (
-        <div
-          className="mt-2 flex flex-1 items-center justify-center"
-          aria-live="polite"
-        >
+        <div className="mt-2 flex min-h-[3rem] items-center justify-center py-1" aria-live="polite">
           <TileSpinner label={loadingLabel ?? `Loading ${title}`} />
         </div>
       ) : (
@@ -135,9 +152,8 @@ function StageShell({
               {value.toLocaleString()}
             </div>
           ) : null}
-          {subtitle ? (
-            <p className="mt-1.5 text-xs leading-snug text-muted-foreground">{subtitle}</p>
-          ) : null}
+          {afterValue ? <div className="mt-2 w-full min-w-0">{afterValue}</div> : null}
+          {subtitle ? <p className="mt-1.5 text-xs leading-snug text-muted-foreground">{subtitle}</p> : null}
           {children ? <div className="mt-3 min-h-0">{children}</div> : null}
         </>
       )}
@@ -145,14 +161,9 @@ function StageShell({
   );
 }
 
-/** Small inline spinner sized to drop into a tile's body. */
 function TileSpinner({ label = "Loading" }: { label?: string }) {
   return (
-    <span
-      role="status"
-      aria-label={label}
-      className="inline-flex items-center text-muted-foreground/80"
-    >
+    <span role="status" aria-label={label} className="inline-flex items-center text-muted-foreground/80">
       <Loader2 className="h-6 w-6 animate-spin" aria-hidden />
     </span>
   );
@@ -184,25 +195,40 @@ function FlowArrow({ label, direction = "horizontal" }: { label: string; directi
   );
 }
 
+/** Desktop-only: compact “PROMOTE / to both” connector (fixed size — not stretched with the pipeline row). */
+function PromoteFlowBracket() {
+  const line = "bg-muted-foreground/45";
+  return (
+    <div className="relative mx-1 hidden h-[92px] w-[4.25rem] shrink-0 self-center lg:block" aria-hidden>
+      {/* Learnings → spine */}
+      <div className={`absolute left-0 top-[40px] z-[1] h-px w-[18px] ${line}`} />
+      {/* Single short spine (runs behind the pill) */}
+      <div className={`absolute left-[18px] top-1 z-0 h-[62px] w-px ${line}`} />
+      {/* Upper tee toward Collective Memory */}
+      <div className={`absolute left-2 top-4 h-px w-2 ${line}`} />
+      {/* PROMOTE (covers middle of spine) */}
+      <div className="absolute left-1/2 top-[30px] z-[2] flex -translate-x-1/2 flex-col items-center rounded-md border border-border/70 bg-[#141b2c]/95 px-2 py-1 shadow-md backdrop-blur-sm">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Promote</span>
+      </div>
+      {/* Lower tee toward Shared Knowledge */}
+      <div className={`absolute left-2 top-[60px] h-px w-2 ${line}`} />
+      <p className="absolute left-1/2 top-[72px] -translate-x-1/2 whitespace-nowrap text-[9px] font-medium text-muted-foreground/75">
+        to both
+      </p>
+    </div>
+  );
+}
+
 type Props = {
   currentUser: CurrentUser | null;
   conversationsCount?: number;
   memoryCount?: number;
-  /** Fallback when `datapackId` is not set or memories request fails. */
   learningsCount?: number;
   knowledgeCount?: number;
-  /** Knowledge index size; wire from API when available. */
   knowledgeChunks?: number;
-  /**
-   * Datapack UUID (`datapack_registry.id`). When set, learnings proposal count is loaded from
-   * GET /memories (`total`) using the signed-in user as `user_id`, same as the promotion panel.
-   */
   datapackId?: string | null;
-  /** Switch the datapack detail tab when a stage is clicked. */
   onSelectSection?: (tab: DatapackDetailTab) => void;
-  /** True while the datapack bundle (memory_count / knowledge_count / etc.)
-   *  is still being fetched. Each tile shows a centered spinner instead
-   *  of a stale or zero number while this is true. */
+  onUploadKnowledgeFiles?: () => void;
   statusLoading?: boolean;
 };
 
@@ -212,12 +238,12 @@ export function CollectiveLearningPipeline({
   memoryCount = 0,
   learningsCount = 0,
   knowledgeCount = 0,
-  knowledgeChunks = 0,
+  knowledgeChunks: _knowledgeChunks = 0,
   datapackId = null,
   onSelectSection,
+  onUploadKnowledgeFiles,
   statusLoading = false,
 }: Props) {
-  /** `undefined` = not loaded yet or reset; includes `0` when the API reports no memories. */
   const [totalPromotionProposals, setTotalPromotionProposals] = useState<number | undefined>(undefined);
   const [learningsCountLoading, setLearningsCountLoading] = useState(false);
 
@@ -232,7 +258,7 @@ export function CollectiveLearningPipeline({
     setTotalPromotionProposals(undefined);
     const run = async () => {
       try {
-        const user = currentUser ?? await getCurrentUser({ signal: ac.signal });
+        const user = currentUser ?? (await getCurrentUser({ signal: ac.signal }));
         const resp = await listMemories(
           {
             datapack_id: datapackId,
@@ -254,7 +280,7 @@ export function CollectiveLearningPipeline({
     };
     void run();
     return () => ac.abort();
-  }, [datapackId]);
+  }, [datapackId, currentUser]);
 
   const hasDatapack = Boolean(datapackId?.trim());
   const learningsDisplay = !hasDatapack
@@ -265,141 +291,198 @@ export function CollectiveLearningPipeline({
         ? totalPromotionProposals
         : learningsCount;
 
+  const learningsReadyBadge =
+    !statusLoading &&
+    !learningsCountLoading &&
+    learningsDisplay >= 1 &&
+    `${learningsDisplay} ready`;
+
+  const knowledgeFileBadge =
+    !statusLoading && knowledgeCount >= 1 ? (
+      <span className="inline-flex items-center gap-0.5">
+        <Upload className="size-3 shrink-0 opacity-90" aria-hidden />
+        +{knowledgeCount} file{knowledgeCount === 1 ? "" : "s"}
+      </span>
+    ) : undefined;
+
+  const reviewLabel = learningsCountLoading
+    ? "Loading…"
+    : learningsDisplay === 1
+      ? "Review 1 promotion →"
+      : `Review ${learningsDisplay.toLocaleString()} promotions →`;
+
   return (
-    <section className="overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-[#1c2438] via-[#171f2e] to-[#141a28]">
-      <div className="border-b border-border/60 bg-[#1C2333]/40 px-5 py-4 sm:px-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <TooltipProvider delayDuration={200}>
+      <section className="overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-[#1c2438] via-[#171f2e] to-[#141a28]">
+        <div className="border-b border-border/60 bg-[#1C2333]/40 px-5 py-4 sm:px-6">
           <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-semibold tracking-tight text-white sm:text-xl">
-                Collective learning
-              </h2>
-            </div>
-            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-              How memory from individual agents flows into shared knowledge everyone can read.
+            <h2 className="text-lg font-semibold tracking-tight text-white sm:text-xl">Collective learning</h2>
+            <p className="text-sm leading-normal text-muted-foreground whitespace-nowrap overflow-x-auto pb-0.5 [scrollbar-width:thin]">
+              How memory from individual agents flows into shared knowledge everyone can read. Each promotion
+              populates <span className="font-semibold text-sky-400/95">both</span> destinations; Shared Knowledge can
+              also receive files directly.
             </p>
           </div>
         </div>
-      </div>
 
-      <div className="px-4 py-6 sm:px-6 sm:py-8">
-        <div className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center lg:gap-1">
-          <StageShell
-            tone={DATAPACK_DETAIL_TAB.conversations}
-            eyebrow=""
-            title="Conversations"
-            value={conversationsCount}
-            delta=""
-            subtitle=""
-            titleIcon={
-              <MessageSquare className="h-4 w-4 text-white" strokeWidth={2} aria-hidden />
-            }
-            titleClassName="text-slate-400"
-            loading={statusLoading}
-            loadingLabel="Loading conversations count"
-            onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations) : undefined}
-          />
-
-          <FlowArrow label="extract" />
-
-          <StageShell
-            tone={DATAPACK_DETAIL_TAB.memories}
-            eyebrow=""
-            title="Memories"
-            value={memoryCount}
-            delta=""
-            subtitle=""
-            titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
-            loading={statusLoading}
-            loadingLabel="Loading memories count"
-            onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.memories) : undefined}
-          />
-
-          <FlowArrow label="extract" />
-
-          <StageShell
-            tone={DATAPACK_DETAIL_TAB.learnings}
-            eyebrow=""
-            title="Learnings"
-            delta=""
-            subtitle=""
-            titleIcon={<ArrowLeftRight className="h-4 w-4 text-violet-400" aria-hidden />}
-            loading={statusLoading || learningsCountLoading}
-            loadingLabel="Loading learnings count"
-            onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined}
-          >
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full border-purple-500/40 bg-purple-500/10 text-xs font-medium text-purple-100 hover:bg-purple-500/20"
-              disabled={learningsCountLoading || !onSelectSection}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelectSection?.(DATAPACK_DETAIL_TAB.learnings);
-              }}
-            >
-              {learningsCountLoading ? (
-                <span className="inline-flex items-center justify-center gap-2">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
-                  Loading…
-                </span>
-              ) : (
-                <>Review {learningsDisplay?.toLocaleString()} promotions →</>
-              )}
-            </Button>
-          </StageShell>
-
-          <FlowArrow label="promote" />
-
-          <div
-            className="relative flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border-2 border-white/25 bg-[#0c1018]/35 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6 lg:min-w-[220px]"
-            aria-labelledby="collective-learning-me-ko-label"
-          >
-            <span
-              id="collective-learning-me-ko-label"
-              className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-md bg-[#161d2e] px-3 py-0.5 text-xs font-bold tracking-normal text-violet-200/95 ring-2 ring-[#161d2e] sm:text-[17px]"
-            >
-              {`me->ko`}
-            </span>
+        <div className="px-4 py-6 sm:px-6 sm:py-8">
+          <div className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center lg:gap-0">
             <StageShell
-              flexGrow={false}
+              tone={DATAPACK_DETAIL_TAB.conversations}
+              eyebrow=""
+              title="Conversations"
+              value={conversationsCount}
+              delta=""
+              subtitle=""
+              titleIcon={<MessageSquare className="h-4 w-4 text-white" strokeWidth={2} aria-hidden />}
+              titleClassName="text-slate-400"
+              loading={statusLoading}
+              loadingLabel="Loading conversations count"
+              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations) : undefined}
+            />
+
+            <FlowArrow label="extract" />
+
+            <StageShell
               tone={DATAPACK_DETAIL_TAB.memories}
               eyebrow=""
-              title="Collective Memory"
-              value={learningsCount}
+              title="Memories"
+              value={memoryCount}
+              delta=""
               subtitle=""
               titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
               loading={statusLoading}
               loadingLabel="Loading memories count"
-              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined}
-            >
+              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.memories) : undefined}
+            />
 
-            </StageShell>
+            <FlowArrow label="extract" />
 
             <StageShell
-              flexGrow={false}
-              tone={DATAPACK_DETAIL_TAB.knowledge}
+              tone={DATAPACK_DETAIL_TAB.learnings}
               eyebrow=""
-              title="Shared Knowledge"
-              value={knowledgeCount}
+              title="Learnings"
               delta=""
               subtitle=""
-              titleIcon={<BookOpen className="h-4 w-4 text-emerald-400" aria-hidden />}
-              loading={statusLoading}
-              loadingLabel="Loading knowledge count"
-              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.knowledge) : undefined}
+              cornerBadge={learningsReadyBadge || undefined}
+              cornerBadgePulse={Boolean(learningsReadyBadge)}
+              titleIcon={<ArrowLeftRight className="h-4 w-4 text-violet-400" aria-hidden />}
+              loading={statusLoading || learningsCountLoading}
+              loadingLabel="Loading learnings count"
+              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined}
             >
-              {/* <p className="text-[11px] leading-snug text-muted-foreground/95">
-                <span className="tabular-nums text-foreground/85">
-                  {knowledgeChunks.toLocaleString()} chunk{knowledgeChunks === 1 ? "" : "s"}
-                </span>
-              </p> */}
+              <Button
+                type="button"
+                size="sm"
+                className="w-full border-0 bg-purple-600 text-xs font-semibold text-white shadow-md hover:bg-purple-500 disabled:opacity-60"
+                disabled={learningsCountLoading || !onSelectSection}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectSection?.(DATAPACK_DETAIL_TAB.learnings);
+                }}
+              >
+                {learningsCountLoading ? (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
+                    Loading…
+                  </span>
+                ) : (
+                  reviewLabel
+                )}
+              </Button>
             </StageShell>
+
+            <div className="hidden lg:contents">
+              <PromoteFlowBracket />
+            </div>
+            <div className="lg:hidden">
+              <FlowArrow label="promote" />
+            </div>
+
+            <div
+              className="relative flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border-2 border-white/20 bg-[#0c1018]/40 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6 lg:min-w-[220px]"
+              aria-labelledby="collective-learning-me-ko-label"
+            >
+              <span
+                id="collective-learning-me-ko-label"
+                className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-border/60 bg-[#0d121c] px-3 py-1 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground shadow-md ring-2 ring-[#141a28]"
+              >
+                me → ko
+              </span>
+              <StageShell
+                flexGrow={false}
+                tone={DATAPACK_DETAIL_TAB.memories}
+                eyebrow=""
+                title="Collective Memory"
+                value={learningsCount}
+                subtitle=""
+                titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
+                loading={statusLoading}
+                loadingLabel="Loading collective memory count"
+                afterValue={
+                  !statusLoading && learningsCount === 0 ? (
+                    <p className="text-center text-[10px] font-semibold uppercase  text-muted-foreground">
+                      Awaiting first promotion
+                    </p>
+                  ) : null
+                }
+                onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined}
+              />
+
+              <StageShell
+                flexGrow={false}
+                tone={DATAPACK_DETAIL_TAB.knowledge}
+                eyebrow=""
+                title="Shared Knowledge"
+                value={knowledgeCount}
+                delta=""
+                subtitle=""
+                cornerBadge={knowledgeFileBadge}
+                cornerBadgeTone="green"
+                titleIcon={<BookOpen className="h-4 w-4 text-emerald-400" aria-hidden />}
+                loading={statusLoading}
+                loadingLabel="Loading knowledge count"
+                onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.knowledge) : undefined}
+              />
+            </div>
           </div>
         </div>
-      </div>
 
-    </section>
+        <div className="border-t border-border/55 bg-[#161d2e]/25 px-4 py-3 sm:px-6">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2 border-border/80 bg-background/40 text-foreground hover:bg-muted/30"
+              onClick={() => onUploadKnowledgeFiles?.()}
+            >
+              <Upload className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+              Upload knowledge files
+            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled
+                    className="gap-2 border-border/80 bg-background/30 opacity-70"
+                    aria-label="Tune thresholds (coming soon)"
+                  >
+                    <Settings className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+                    Tune thresholds
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[14rem]">
+                Coming soon
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+      </section>
+    </TooltipProvider>
   );
 }

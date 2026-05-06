@@ -1,25 +1,43 @@
 // Owner-facing page to invite collaborators, review pending invites, and manage member grants for a datapack.
-// Loads members + pending invites once via useDatapackOutgoingShares; child actions use silent refetch to stay fresh.
-import { Share2 } from "lucide-react";
+// Loads member-list + outgoing-shares via useDatapackOutgoingShares; child actions use silent refetch to stay fresh.
+import { useState } from "react";
+import { Bot, Mail, Share2 } from "lucide-react";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
+import { InviteAgentByTokenSection } from "@/features/datapacks/components/datapack-share/InviteAgentByTokenSection";
 import { InviteByEmailSection } from "@/features/datapacks/components/datapack-share/InviteByEmailSection";
 import { LinkSharingSection } from "@/features/datapacks/components/datapack-share/LinkSharingSection";
 import { MembersSection } from "@/features/datapacks/components/datapack-share/MembersSection";
 import { PendingInvitesSection } from "@/features/datapacks/components/datapack-share/PendingInvitesSection";
+import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/datapack-share/ShareComingSoonPlaceholder";
 import { TransferOwnershipSection } from "@/features/datapacks/components/datapack-share/TransferOwnershipSection";
 import { useDatapackOutgoingShares } from "@/features/datapacks/components/datapack-share/useDatapackOutgoingShares";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import type { CurrentUser } from "@/lib/mekoApi";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { InlineErrorBanner } from "@/components/ui/inline-error-banner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 
 type Props = {
   datapackName: string;
   currentUser: CurrentUser | null;
 };
 
+type InviteMode = "person" | "agent";
+
+/** Full-width segmented tabs: equal columns, centered label, bottom rule spans the whole cell (not content width). */
+const inviteTabTriggerClass = cn(
+  "relative flex w-full min-w-0 min-h-[3rem] items-center justify-center gap-0 whitespace-normal rounded-none border-0 border-b-2 border-border bg-transparent px-3 py-3 text-sm font-normal leading-normal shadow-none ring-0 ring-offset-0 transition-colors",
+  "hover:bg-muted/25 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+  "data-[state=active]:text-inherit data-[state=active]:shadow-none data-[state=active]:ring-0 data-[state=active]:ring-offset-0",
+  "data-[state=inactive]:text-muted-foreground data-[state=inactive]:opacity-90 data-[state=inactive]:hover:bg-muted/20 data-[state=inactive]:hover:opacity-100",
+);
+
 export default function DatapackSharePage({ datapackName, currentUser }: Props) {
+  const [inviteMode, setInviteMode] = useState<InviteMode>("person");
   const { data, loading, error, refetch } = useDatapackOutgoingShares(datapackName);
   const members = data?.members ?? [];
   const pendingInvites = data?.pending_invites ?? [];
@@ -72,7 +90,74 @@ export default function DatapackSharePage({ datapackName, currentUser }: Props) 
         ) : null}
 
         <div className="space-y-6">
-          <InviteByEmailSection datapackName={datapackName} onInviteSent={refreshShares} />
+          <Card className="border-border bg-card/50 shadow-sm">
+            <Tabs value={inviteMode} onValueChange={(v) => setInviteMode(v as InviteMode)}>
+              <CardHeader className="space-y-0 px-6 pb-0 pt-6">
+                <TabsList className="grid h-auto w-full min-w-0 grid-cols-2 gap-0 rounded-none border-0 bg-transparent p-0">
+                  <TabsTrigger
+                    value="person"
+                    className={cn(
+                      inviteTabTriggerClass,
+                      "group border-r border-border/70",
+                      "data-[state=active]:border-b-blue-500 data-[state=active]:bg-blue-950/25 data-[state=active]:text-foreground",
+                    )}
+                  >
+                    <span className="inline-flex max-w-full items-center justify-center gap-2.5">
+                      <Mail
+                        className="block size-4 shrink-0 text-muted-foreground group-data-[state=active]:text-blue-400"
+                        aria-hidden
+                      />
+                      <span className="inline-flex min-h-[1.25rem] max-w-full flex-wrap items-baseline justify-center gap-x-0 text-center whitespace-normal">
+                        <span className="mt-0.5 font-semibold leading-none group-data-[state=active]:text-foreground">
+                          Invite a human&nbsp;
+                        </span>
+                        <span className="font-normal leading-none text-muted-foreground group-data-[state=active]:text-muted-foreground">
+                          {" "}
+                          · by email
+                        </span>
+                      </span>
+                    </span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="agent"
+                    className={cn(
+                      inviteTabTriggerClass,
+                      "group",
+                      "data-[state=active]:border-b-violet-500 data-[state=active]:bg-violet-950/20 data-[state=active]:text-foreground",
+                    )}
+                  >
+                    <span className="inline-flex max-w-full items-center justify-center gap-2 sm:gap-2.5">
+                      <Bot
+                        className="block size-4 shrink-0 text-muted-foreground group-data-[state=active]:text-violet-300"
+                        aria-hidden
+                      />
+                      <span className="inline-flex min-h-[1.25rem] max-w-full flex-wrap items-baseline justify-center gap-x-0 text-center whitespace-normal">
+                        <span className="mt-1 font-semibold leading-none group-data-[state=active]:text-foreground">
+                          Invite an agent&nbsp;
+                        </span>
+                        <span className="font-normal leading-none text-muted-foreground group-data-[state=active]:text-muted-foreground">
+                          {" "}
+                          · by token
+                        </span>
+                      </span>
+                    </span>
+                  </TabsTrigger>
+                </TabsList>
+              </CardHeader>
+              <CardContent className="p-6 pt-6">
+                <TabsContent value="person" className="mt-0 outline-none focus-visible:outline-none">
+                  <InviteByEmailSection datapackName={datapackName} onInviteSent={refreshShares} />
+                </TabsContent>
+                <TabsContent value="agent" className="mt-0 outline-none focus-visible:outline-none">
+                  <ShareComingSoonPlaceholder
+                    aria-label="Invite an agent by token — coming soon"
+                    blurredPreview={<InviteAgentByTokenSection />}
+                  />
+                </TabsContent>
+              </CardContent>
+            </Tabs>
+          </Card>
+
           <MembersSection
             currentUser={currentUser}
             datapackName={datapackName}

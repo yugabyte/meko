@@ -133,9 +133,9 @@ func (h *SharingHandler) InviteAction(c echo.Context) error {
 	return ok(c, http.StatusOK, resp)
 }
 
-// OutgoingShares handles GET /api/v1/datapacks/:name/outgoing-shares.
+// OutgoingShares handles GET /api/v1/datapacks/:name/outgoing-shares (pending invites only).
 //
-//	@Summary	List outgoing shares for a datapack
+//	@Summary	List pending outgoing invites for a datapack
 //	@Tags		sharing
 //	@Produce	json
 //	@Param		name	path		string	true	"Datapack name"
@@ -152,9 +152,34 @@ func (h *SharingHandler) OutgoingShares(c echo.Context) error {
 			"UNAUTHORIZED", "missing datapack context")
 	}
 
-	// Always use the datapack row owner for the synthetic owner member; the
-	// caller may be a maintainer with a different account_id.
-	resp, err := h.svc.ListOutgoingShares(dp.ID, dp.UserID)
+	resp, err := h.svc.ListOutgoingPendingInvites(dp.ID)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", err.Error())
+	}
+
+	return ok(c, http.StatusOK, resp)
+}
+
+// MemberList handles GET /api/v1/datapacks/:name/member-list (accepted members).
+//
+//	@Summary	List datapack members
+//	@Tags		sharing
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{name}/member-list [get]
+func (h *SharingHandler) MemberList(c echo.Context) error {
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing datapack context")
+	}
+
+	resp, err := h.svc.ListDatapackMembers(dp.ID, dp.UserID)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", err.Error())

@@ -342,9 +342,9 @@ func TestSharing_IncomingShares_Empty(t *testing.T) {
 	}
 }
 
-// TestSharing_OutgoingShares_OwnerOnly verifies that a fresh datapack's
-// outgoing-shares contains only the owner in the members array.
-func TestSharing_OutgoingShares_OwnerOnly(t *testing.T) {
+// TestSharing_MemberList_OwnerOnly verifies that a fresh datapack's member-list
+// contains only the owner in the members array.
+func TestSharing_MemberList_OwnerOnly(t *testing.T) {
 	srv, db := setupTestServer(t)
 	defer srv.Close()
 	defer db.Close()
@@ -352,7 +352,7 @@ func TestSharing_OutgoingShares_OwnerOnly(t *testing.T) {
 	createDatapack(t, srv.URL, "share-owner-only")
 
 	resp, err := http.Get(
-		srv.URL + "/api/v1/datapacks/share-owner-only/outgoing-shares",
+		srv.URL + "/api/v1/datapacks/share-owner-only/member-list",
 	)
 	if err != nil {
 		t.Fatal(err)

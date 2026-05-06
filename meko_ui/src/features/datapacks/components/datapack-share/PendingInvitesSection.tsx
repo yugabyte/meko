@@ -1,5 +1,5 @@
 // Lists pending datapack share invites and wires Resend / Revoke to the invite API endpoints.
-// Parent supplies rows from outgoing-shares; on success we toast and call onChanged to refresh lists.
+// Parent supplies pending invite rows (GET outgoing-shares); on success we toast and call onChanged to refresh lists.
 import { useState } from "react";
 import { Clock, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";

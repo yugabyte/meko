@@ -1,7 +1,8 @@
-// Renders human members from outgoing-shares: list layout, owner row shows crown + “Owner”, grant Select when editable.
+// Renders human members from GET member-list: list layout, owner row shows crown + “Owner”, grant Select when editable.
 // Agents tab is a coming-soon placeholder; Humans and All show the same member list (no activity metadata).
 import { useState } from "react";
 import { Crown, Users } from "lucide-react";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -18,7 +19,6 @@ import {
   removeDatapackMemberShare,
   updateDatapackMemberGrant,
 } from "@/lib/mekoApi";
-import { DatapackShareSectionCard } from "@/features/datapacks/components/datapack-share/DatapackShareSectionCard";
 import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/datapack-share/ShareComingSoonPlaceholder";
 import { SHARE_INVITE_ROLES, shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { toast } from "@/hooks/use-toast";
@@ -213,63 +213,71 @@ function MembersList({
   );
 }
 
+const membersTabTriggerClass = cn(
+  "rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground shadow-none transition-colors",
+  "data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:font-semibold",
+  "data-[state=inactive]:hover:text-foreground/90",
+);
+
 export function MembersSection({ currentUser, datapackName, members, loading, onMembersChanged }: Props) {
   const humanCount = members.length;
   // Only the member row marked is_owner whose email matches the session may edit others’ roles or remove them.
   const canManage = members.some((m) => m.is_owner && emailsMatch(m.user_email_id, currentUser?.email));
 
   return (
-    <DatapackShareSectionCard
-      title="Members"
-      icon={<Users className="text-emerald-400" aria-hidden />}
-      trailing={
-        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-          {humanCount}
-        </span>
-      }
-    >
-      <Tabs defaultValue="humans" className="w-full">
-        <TabsList className="mb-4 h-9 w-full justify-start bg-muted/50 p-1 sm:w-auto">
-          <TabsTrigger value="humans" className="text-xs sm:text-sm">
-            Humans
-            <span className="ml-1.5 rounded-md bg-background/80 px-1.5 py-0 text-[10px] text-muted-foreground tabular-nums">
+    <Tabs defaultValue="humans" className="w-full">
+      <Card className="border-border bg-card/50 shadow-sm">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-4">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Users className="h-5 w-5 shrink-0 text-emerald-400" aria-hidden />
+            <h2 className="text-base font-semibold tracking-tight text-foreground">Members</h2>
+            <Badge
+              variant="outline"
+              className="shrink-0 border-emerald-500/45 bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold tabular-nums text-emerald-200"
+            >
               {humanCount}
-            </span>
-          </TabsTrigger>
-          <TabsTrigger value="agents" className="text-xs sm:text-sm">
-            Agents
-          </TabsTrigger>
-          <TabsTrigger value="all" className="text-xs sm:text-sm">
-            All
-            <span className="ml-1.5 rounded-md bg-background/80 px-1.5 py-0 text-[10px] text-muted-foreground tabular-nums">
-              {humanCount}
-            </span>
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="humans" className="mt-0 space-y-2">
-          <MembersList
-            members={members}
-            datapackName={datapackName}
-            currentUser={currentUser}
-            canManage={canManage}
-            loading={loading}
-            onMembersChanged={onMembersChanged}
-          />
-        </TabsContent>
-        <TabsContent value="agents" className="mt-0">
-          <ShareComingSoonPlaceholder aria-label="Agent members — coming soon" />
-        </TabsContent>
-        <TabsContent value="all" className="mt-0 space-y-2">
-          <MembersList
-            members={members}
-            datapackName={datapackName}
-            currentUser={currentUser}
-            canManage={canManage}
-            loading={loading}
-            onMembersChanged={onMembersChanged}
-          />
-        </TabsContent>
-      </Tabs>
-    </DatapackShareSectionCard>
+            </Badge>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+            <TabsList className="flex h-auto flex-wrap justify-end gap-1 bg-transparent p-0">
+              <TabsTrigger value="humans" className={membersTabTriggerClass}>
+                Humans
+              </TabsTrigger>
+              <TabsTrigger value="agents" className={membersTabTriggerClass}>
+                Agents
+              </TabsTrigger>
+              <TabsTrigger value="all" className={membersTabTriggerClass}>
+                All
+              </TabsTrigger>
+            </TabsList>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <TabsContent value="humans" className="mt-0 space-y-2 outline-none">
+            <MembersList
+              members={members}
+              datapackName={datapackName}
+              currentUser={currentUser}
+              canManage={canManage}
+              loading={loading}
+              onMembersChanged={onMembersChanged}
+            />
+          </TabsContent>
+          <TabsContent value="agents" className="mt-0 outline-none">
+            <ShareComingSoonPlaceholder aria-label="Agent members — coming soon" />
+          </TabsContent>
+          <TabsContent value="all" className="mt-0 space-y-2 outline-none">
+            <MembersList
+              members={members}
+              datapackName={datapackName}
+              currentUser={currentUser}
+              canManage={canManage}
+              loading={loading}
+              onMembersChanged={onMembersChanged}
+            />
+          </TabsContent>
+        </CardContent>
+      </Card>
+    </Tabs>
   );
 }

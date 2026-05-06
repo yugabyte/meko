@@ -260,7 +260,7 @@ const datapackGrantOwner = "owner"
 
 // RequireDatapackOwnerOrMaintainerGrant runs after RequireDatapackAccess. It
 // allows only callers whose resolved datapack grant is owner or maintainer
-// (e.g. outgoing-shares, invite/resend/revoke). Viewer and contributor receive 403.
+// (e.g. outgoing-shares pending invites, invite/resend/revoke). Viewer and contributor receive 403.
 //
 // Ordering: this middleware only reads ContextKeyDatapack via GetDatapack; it
 // does not load the datapack from the DB. RequireDatapackAccess (or

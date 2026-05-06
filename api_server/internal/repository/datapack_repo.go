@@ -207,6 +207,7 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 		        d.created_at, d.updated_at,
 		        COALESCE(d.datapack_details->>'description', ''),
 		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
+		        COALESCE(u.user_email, ''),
 		        'owner'
 		 FROM meko_system.datapacks d
 		 JOIN meko_system.users u ON u.user_id = d.user_id
@@ -221,6 +222,7 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 		        d.created_at, d.updated_at,
 		        COALESCE(d.datapack_details->>'description', ''),
 		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
+		        COALESCE(u.user_email, ''),
 		        i.grant_role
 		 FROM meko_system.datapacks d
 		 JOIN meko_system.users u ON u.user_id = d.user_id
@@ -251,6 +253,7 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 			&d.CreatedAt, &d.UpdatedAt,
 			&d.Description,
 			&d.OwnerName,
+			&d.OwnerEmail,
 			&d.Grant,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan datapack: %w", err)
@@ -276,7 +279,8 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 		        d.datapack_ysql_username,
 		        d.created_at, d.updated_at,
 		        COALESCE(d.datapack_details->>'description', ''),
-		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), '')
+		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
+		        COALESCE(u.user_email, '')
 		 FROM meko_system.datapacks d
 		 JOIN meko_system.users u ON u.user_id = d.user_id
 		 WHERE d.user_id = $1 AND d.datapack_name = $2`,
@@ -289,6 +293,7 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 		&d.CreatedAt, &d.UpdatedAt,
 		&d.Description,
 		&d.OwnerName,
+		&d.OwnerEmail,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -314,6 +319,7 @@ func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Da
 		        d.created_at, d.updated_at,
 		        COALESCE(d.datapack_details->>'description', ''),
 		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
+		        COALESCE(u.user_email, ''),
 		        COALESCE(i.grant_role, 'viewer')
 		 FROM meko_system.datapacks d
 		 JOIN meko_system.users u ON u.user_id = d.user_id
@@ -334,6 +340,7 @@ func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Da
 		&d.CreatedAt, &d.UpdatedAt,
 		&d.Description,
 		&d.OwnerName,
+		&d.OwnerEmail,
 		&d.Grant,
 	)
 	if err == sql.ErrNoRows {

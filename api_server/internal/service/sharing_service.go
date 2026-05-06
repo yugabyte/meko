@@ -179,18 +179,8 @@ func (s *SharingService) HandleInviteAction(req InviteActionRequest) (*InviteAct
 	return &InviteActionResponse{Status: "declined", InviteID: req.InviteID}, nil
 }
 
-// ListOutgoingShares returns members + pending invites for a datapack.
-func (s *SharingService) ListOutgoingShares(
-	datapackID, ownerUserID string,
-) (*models.OutgoingSharesResponse, error) {
-	members, err := s.repo.GetOutgoingMembers(datapackID, ownerUserID)
-	if err != nil {
-		return nil, err
-	}
-	if members == nil {
-		members = []models.OutgoingShareMember{}
-	}
-
+// ListOutgoingPendingInvites returns pending (not yet accepted) invites for a datapack.
+func (s *SharingService) ListOutgoingPendingInvites(datapackID string) (*models.OutgoingPendingInvitesResponse, error) {
 	pending, err := s.repo.GetOutgoingPendingInvites(datapackID)
 	if err != nil {
 		return nil, err
@@ -198,11 +188,21 @@ func (s *SharingService) ListOutgoingShares(
 	if pending == nil {
 		pending = []models.OutgoingSharePendingInvite{}
 	}
+	return &models.OutgoingPendingInvitesResponse{PendingInvites: pending}, nil
+}
 
-	return &models.OutgoingSharesResponse{
-		Members:        members,
-		PendingInvites: pending,
-	}, nil
+// ListDatapackMembers returns accepted members (including synthetic owner row).
+func (s *SharingService) ListDatapackMembers(
+	datapackID, ownerUserID string,
+) (*models.DatapackMembersResponse, error) {
+	members, err := s.repo.GetOutgoingMembers(datapackID, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	if members == nil {
+		members = []models.OutgoingShareMember{}
+	}
+	return &models.DatapackMembersResponse{Members: members}, nil
 }
 
 // ResendInvite re-sends a pending invite. For non-existing users the

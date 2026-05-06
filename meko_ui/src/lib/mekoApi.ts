@@ -89,6 +89,8 @@ export type Datapack = {
   knowledge_count?: number;
   learnings_count?: number;
   datapack_owner_name?: string;
+  /** Owner account email from `users.user_email` (list + describe). */
+  datapack_owner_email_id?: string;
   /**
    * From `GET /datapacks`: `"owner"` for datapacks you created; invite grant (`viewer` | `contributor` | `maintainer`)
    * for datapacks shared with you.
@@ -96,18 +98,19 @@ export type Datapack = {
   grant?: DatapackShareGrant | null;
 };
 
+/** Linked agents from `GET /datapacks/:name/agents` (matches `models.Agent` JSON). */
 export type Agent = {
-  id: string;
-  datapack_id: string;
-  agent_name: string;
-  agent_metadata?: string;
+  agent_id: string;
+  user_id?: string;
+  agent_details?: unknown;
   created_at?: string;
   updated_at?: string;
 };
 
+/** Knowledge sources from `GET /datapacks/:name/knowledge-bases` (matches `models.KnowledgeBase` JSON). */
 export type KnowledgeBase = {
-  id: string;
-  datapack_id: string;
+  rag_source_id?: string;
+  datapack_id?: string;
   knowledge_base_url: string;
   created_at?: string;
   updated_at?: string;
@@ -334,8 +337,8 @@ export async function getDatapack(name: string, options: { signal?: AbortSignal 
   return request<Datapack>(`/datapacks/${encodeURIComponent(name)}`, "GET", undefined, options);
 }
 
-export async function listAgents(name: string) {
-  return request<Agent[]>(`/datapacks/${encodeURIComponent(name)}/agents`);
+export async function listAgents(name: string, options: { signal?: AbortSignal } = {}) {
+  return request<Agent[]>(`/datapacks/${encodeURIComponent(name)}/agents`, "GET", undefined, options);
 }
 
 export async function listKnowledgeBases(
@@ -479,21 +482,25 @@ export type DatapackOutgoingMember = {
 export type DatapackOutgoingPendingInvite = {
   invite_id: string;
   grant: DatapackShareGrant;
-  recipient_user_id: string;
-  recipient_user_name: string;
+  recipient_user_id?: string | null;
+  recipient_user_name?: string | null;
   recipient_email_id: string;
 };
 
-/** `data` from GET /datapacks/:name/outgoing-shares */
+/** `data` from GET /datapacks/:name/outgoing-shares (pending invites only; owner or maintainer). */
 export type DatapackOutgoingSharesResponse = {
-  members: DatapackOutgoingMember[];
   pending_invites: DatapackOutgoingPendingInvite[];
 };
 
+/** `data` from GET /datapacks/:name/member-list (accepted members; any datapack access). */
+export type DatapackMembersResponse = {
+  members: DatapackOutgoingMember[];
+};
+
 /**
- * List members and pending invites for a datapack.
- * Requires datapack access; the API allows only owner or maintainer grant
- * (403 for viewer/contributor). GET /datapacks/:name/outgoing-shares
+ * List pending outgoing invites for a datapack.
+ * Owner or maintainer only (403 for viewer/contributor).
+ * GET /datapacks/:name/outgoing-shares
  */
 export async function listDatapackOutgoingShares(
   datapackName: string,
@@ -506,6 +513,28 @@ export async function listDatapackOutgoingShares(
     options,
   );
 }
+
+/**
+ * List accepted members for a datapack (including owner row).
+ * Any grant with datapack access. GET /datapacks/:name/member-list
+ */
+export async function listDatapackMembers(
+  datapackName: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<DatapackMembersResponse>(
+    `/datapacks/${encodeURIComponent(datapackName)}/member-list`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+/** Combined members + pending invites for share UI (from member-list + outgoing-shares). */
+export type DatapackShareListsResponse = {
+  members: DatapackOutgoingMember[];
+  pending_invites: DatapackOutgoingPendingInvite[];
+};
 
 /**
  * Resend a pending invite (owner).

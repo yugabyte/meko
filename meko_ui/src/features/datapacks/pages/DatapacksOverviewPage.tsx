@@ -1,15 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Database, Sparkles, Book, ChevronDown, ChevronUp, Share2 } from "lucide-react";
+import { Plus, Database, Sparkles, Book, ChevronDown, ChevronUp, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
@@ -18,15 +10,15 @@ import {
   type Datapack,
 } from "@/lib/mekoApi";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
-import { datapackDetailPath, datapackNewConfigurePath, datapackSharePath } from "@/app/routes/paths";
+import {
+  datapackDetailPath,
+  datapackDetailUrlOpenConnect,
+  datapackNewConfigurePath,
+  datapackSharePath,
+} from "@/app/routes/paths";
 import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTilesSection";
-import { DatapackGrantBadge } from "@/features/datapacks/components/datapack-share/DatapackGrantBadge";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
-import { sortDatapacksByCreatedAtDesc } from "@/lib/datapackDateFormat";
-import { isDatapackGrantEligibleToShare, isDatapackShareGrant } from "@/lib/datapackShareGrants";
-
-const SHARE_ACCESS_TOOLTIP =
-  "You need Owner or Maintainer access to open sharing settings for this datapack.";
+import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 
 type OverviewProps = {
   currentUser: CurrentUser | null;
@@ -38,8 +30,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isProvisioningDefaultDatapack, setIsProvisioningDefaultDatapack] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isExplanationExpanded, setIsExplanationExpanded] = useState(true);
-  const [sharePickerOpen, setSharePickerOpen] = useState(false);
+  const [isExplanationExpanded, setIsExplanationExpanded] = useState(false);
 
   useEffect(() => {
     const loadDatapacks = async () => {
@@ -113,15 +104,15 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     };
   }, [isLoading, datapacks.length]);
 
-  const sortedDatapacksForShareDialog = useMemo(
-    () => sortDatapacksByCreatedAtDesc(datapacks),
+  /** Shared rows: not owner (`grant` ≠ owner) and invite grant viewer | contributor | maintainer. */
+  const sharedWithYouCount = useMemo(
+    () =>
+      datapacks.filter((dp) => {
+        if (isDatapackListGrantOwner(dp)) return false;
+        return true;
+      }).length,
     [datapacks],
   );
-
-  const handleShareDatapack = () => {
-    if (datapacks.length === 0) return;
-    setSharePickerOpen(true);
-  };
 
   const showProvisioningScreen =
     !isLoading && datapacks.length === 0 && isProvisioningDefaultDatapack;
@@ -145,139 +136,46 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
       <AppWorkspaceHeader />
 
       <main className="flex-1 p-8 max-w-6xl mx-auto w-full space-y-8 pb-16">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-3">
-              <Database className="w-6 h-6 text-blue-400 shrink-0" />
-              <h1 className="text-2xl font-semibold tracking-tight">Datapacks</h1>
-            </div>
-            <p className="text-muted-foreground text-sm max-w-xl">
-              All datapacks in your workspace. Open one to manage agents, knowledge, and connection details.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              className="gap-2 font-medium border-border bg-background/80"
-              disabled={isLoading || datapacks.length === 0}
-              onClick={handleShareDatapack}
-            >
-              <Share2 className="w-5 h-5 shrink-0" aria-hidden />
-              Share datapack
-            </Button>
-            <Button
-              size="lg"
-              className="gap-2 font-medium bg-white text-black hover:bg-gray-200 disabled:opacity-70"
-              onClick={() => navigate(datapackNewConfigurePath())}
-            >
-              <Plus className="w-5 h-5 shrink-0" aria-hidden />
-              Add Datapack
-            </Button>
-          </div>
-        </div>
-
-        <Dialog open={sharePickerOpen} onOpenChange={setSharePickerOpen}>
-          <DialogContent
-            className="w-[calc(100vw-1.5rem)] max-w-lg gap-0 overflow-hidden rounded-2xl border-border bg-card p-0 shadow-xl"
-            onOpenAutoFocus={(e) => {
-              const root = e.currentTarget as HTMLElement | null;
-              if (!root) return;
-              const firstShareable = root.querySelector<HTMLButtonElement>('ul button[type="button"]');
-              if (firstShareable) {
-                e.preventDefault();
-                firstShareable.focus();
-                return;
-              }
-              const heading = root.querySelector<HTMLElement>("[data-share-dialog-heading]");
-              if (heading) {
-                e.preventDefault();
-                heading.focus();
-              }
-            }}
-          >
-            <div className="border-b border-border/80 bg-muted/40 px-6 pb-4 pt-6">
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
-                  <Share2 className="h-5 w-5" aria-hidden />
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3">
+                <div
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 ring-1 ring-blue-500/20"
+                  aria-hidden
+                >
+                  <Database className="h-5 w-5 text-blue-400" />
                 </div>
-                <DialogHeader className="flex-1 space-y-1.5 text-left">
-                  <DialogTitle
-                    tabIndex={-1}
-                    data-share-dialog-heading
-                    className="text-lg font-semibold tracking-tight outline-none"
-                  >
-                    Share a datapack
-                  </DialogTitle>
-                  <DialogDescription className="text-sm leading-relaxed text-muted-foreground">
-                    Your access level is shown for each datapack. Only Owner or Maintainer can open sharing
-                    settings.
-                  </DialogDescription>
-                </DialogHeader>
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground">Datapacks</h1>
               </div>
+              <p className="text-muted-foreground text-sm max-w-xl leading-relaxed">
+                All datapacks in your workspace. Open one to manage agents, knowledge, memories, and
+                connection details.
+              </p>
             </div>
-            <div
-              className="max-h-[min(28rem,70vh)] overflow-y-auto overscroll-contain px-3 py-3 sm:px-4"
-              role="listbox"
-              aria-label="Datapacks and your access"
-            >
-              <ul className="space-y-1.5">
-                {sortedDatapacksForShareDialog.map((dp) => {
-                  const grant =
-                    dp.grant != null && isDatapackShareGrant(dp.grant) ? dp.grant : null;
-                  const canShare = isDatapackGrantEligibleToShare(dp);
-
-                  const rowInner = (
-                    <>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                        {dp.datapack_name}
-                      </span>
-                      {grant ? <DatapackGrantBadge grant={grant} /> : null}
-                    </>
-                  );
-
-                  return (
-                    <li key={dp.datapack_id}>
-                      {canShare ? (
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-3 rounded-xl border border-transparent bg-muted/20 px-4 py-3 text-left transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                          onClick={() => {
-                            navigate(datapackSharePath(dp.datapack_name));
-                            setSharePickerOpen(false);
-                          }}
-                        >
-                          {rowInner}
-                        </button>
-                      ) : (
-                        <Tooltip delayDuration={400}>
-                          <TooltipTrigger asChild>
-                            <div
-                              role="option"
-                              aria-disabled
-                              tabIndex={0}
-                              className="flex w-full cursor-not-allowed items-center gap-3 rounded-xl border border-transparent bg-muted/10 px-4 py-3 text-left opacity-60 outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                            >
-                              {rowInner}
-                            </div>
-                          </TooltipTrigger>
-                          <TooltipContent
-                            side="top"
-                            align="center"
-                            className="max-w-[240px] text-center leading-snug"
-                          >
-                            {SHARE_ACCESS_TOOLTIP}
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <Button
+                size="lg"
+                className="gap-2 font-medium bg-white text-black hover:bg-gray-200 disabled:opacity-70"
+                onClick={() => navigate(datapackNewConfigurePath())}
+              >
+                <Plus className="w-5 h-5 shrink-0" aria-hidden />
+                Add Datapack
+              </Button>
             </div>
-          </DialogContent>
-        </Dialog>
+          </div>
+
+          {/* <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card/50 px-4 py-3 text-sm">
+            <div className="flex min-w-0 items-center gap-2 border-border sm:border-r sm:pr-4">
+              <Layers className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="font-medium text-foreground">Workspace total</span>
+            </div>
+            <div className="text-muted-foreground">
+              <span className="tabular-nums text-foreground/90">{sharedWithYouCount}</span>
+              {" shared with me"}
+            </div>
+          </div> */}
+        </div>
 
         {error ? (
           <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -320,7 +218,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                     <Button
                       variant="secondary"
                       className="gap-2 text-sm bg-white/10 hover:bg-white/20 text-white border-0"
-                      onClick={() => window.open("https://mekodata.netlify.app/", "_blank")}
+                      onClick={() => window.open("https://docs.mekodata.ai/", "_blank")}
                     >
                       <Book className="w-4 h-4" />
                       Documentation
@@ -328,19 +226,24 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                     <Button
                       variant="ghost"
                       className="gap-2 text-sm text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
-                      onClick={() => window.open("https://mekodata.netlify.app/examples/", "_blank")}
+                      onClick={() => window.open("https://docs.mekodata.ai/examples/", "_blank")}
                     >
                       View Examples
                     </Button>
                   </div>
                 </div>
 
-                <div className="hidden md:flex w-48 h-32 border border-border bg-[#0E1525] rounded-xl flex-col items-center justify-center gap-4 relative overflow-hidden group">
+                <div className="hidden md:flex w-48 h-38 border border-border bg-[#0E1525] rounded-xl flex-col items-center justify-center gap-4 relative overflow-hidden group">
                   <div className="absolute inset-0 bg-gradient-to-tr from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                   <Database className="w-10 h-10 text-blue-400" />
                   <div className="text-center">
                     <div className="text-sm font-medium text-white">PostgreSQL</div>
                     <div className="text-xs text-muted-foreground mt-1">Logical DB Mapping</div>
+                    <div className="mt-2 flex justify-center">
+                      <span className="rounded-md border border-border/70 bg-[#1C2333]/90 px-2 py-0.5 font-mono text-[10px] leading-tight text-muted-foreground/90">
+                        Via YugabyteDB mapping
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -353,6 +256,9 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           isLoading={isLoading}
           currentUser={currentUser}
           onOpenDatapack={(dp) => navigate(datapackDetailPath(dp.datapack_name))}
+          onConnectDatapack={(dp) => navigate(datapackDetailUrlOpenConnect(dp.datapack_name))}
+          onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_name))}
+          onNewDatapack={() => navigate(datapackNewConfigurePath())}
         />
       </main>
     </div>

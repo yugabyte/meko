@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
 
 function buildMekoSetupCommand(mcpServerUrl: string, mcpApiKey: string): string {
-  return `npx @yugabytedb/meko-mcp --client <client-name> --url ${(mcpServerUrl)} --api-key <mcp-api-key>`;
+  return `npx @yugabytedb/meko-mcp --client <client-name> --url ${mcpServerUrl} --api-key <mcp-api-key>`;
 }
 
 type Props = {
@@ -16,7 +16,7 @@ type Props = {
 };
 
 /**
- * Sidebar tile: one-line installer command using MCP URL + API key from provision status (same source as Connect dialog).
+ * Sidebar tile: one-line installer command (truncated + copy) using MCP URL + API key from provision status.
  */
 export function DatapackDetailConnectTile({
   mcpServerUrl,
@@ -50,15 +50,18 @@ export function DatapackDetailConnectTile({
       <div className="flex flex-col gap-3 px-3 py-3">
         {ready ? (
           <>
-            <div className="relative rounded-md border border-border bg-[#0E1525] p-3 pr-11">
-              <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-foreground/95">
+            <div className="relative flex min-h-[2.5rem] items-center rounded-md border border-border bg-[#0E1525] py-1.5 pl-3 pr-10">
+              <p
+                className="min-w-0 flex-1 truncate font-mono text-[11px] leading-snug text-foreground/95"
+                title={command}
+              >
                 {command}
-              </pre>
+              </p>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="absolute right-1 top-1 h-8 w-8 text-muted-foreground hover:text-foreground"
+                className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 shrink-0 text-muted-foreground hover:text-foreground"
                 onClick={() => void handleCopy()}
                 aria-label="Copy setup command"
               >
@@ -66,7 +69,7 @@ export function DatapackDetailConnectTile({
               </Button>
             </div>
             <p className="text-[11px] leading-snug text-muted-foreground">
-              Uses the same MCP server URL and API key as{' '}
+              Uses the same MCP server URL and API key as{" "}
               <button
                 type="button"
                 className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-300"
@@ -79,14 +82,14 @@ export function DatapackDetailConnectTile({
           </>
         ) : (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Open{' '}
+            Open{" "}
             <button
               type="button"
               className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-300"
               onClick={onOpenConnect}
             >
               Connect
-            </button>{' '}
+            </button>{" "}
             to load your MCP URL and API key; the command will appear here.
           </p>
         )}

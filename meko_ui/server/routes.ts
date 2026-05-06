@@ -20,16 +20,15 @@ type Datapack = {
 };
 
 type Agent = {
-  id: string;
-  datapack_id: string;
-  agent_name: string;
-  agent_metadata: string;
+  agent_id: string;
+  user_id: string;
+  agent_details?: string;
   created_at: string;
   updated_at: string;
 };
 
 type KnowledgeBase = {
-  id: string;
+  rag_source_id: string;
   datapack_id: string;
   knowledge_base_url: string;
   created_at: string;
@@ -56,10 +55,9 @@ const datapacks: Datapack[] = [
 const agentsByDatapack: Record<string, Agent[]> = {
   default: [
     {
-      id: "agt_default_1",
-      datapack_id: "dp_default_1",
-      agent_name: "meko_user_agent",
-      agent_metadata: "{}",
+      agent_id: "agt_default_1",
+      user_id: accountId,
+      agent_details: JSON.stringify({ name: "meko_user_agent" }),
       created_at: nowIso(),
       updated_at: nowIso(),
     },
@@ -181,12 +179,12 @@ export async function registerRoutes(
       description: desc,
     };
     datapacks.unshift(created);
+    const agentId = `agt_${Date.now()}`;
     agentsByDatapack[name] = [
       {
-        id: `agt_${Date.now()}`,
-        datapack_id: id,
-        agent_name: "meko_user_agent",
-        agent_metadata: "{}",
+        agent_id: agentId,
+        user_id: accountId,
+        agent_details: JSON.stringify({ name: "meko_user_agent" }),
         created_at: createdAt,
         updated_at: createdAt,
       },
@@ -194,7 +192,7 @@ export async function registerRoutes(
     kbByDatapack[name] = req.body?.seed_knowledge_base
       ? [
         {
-          id: `kb_${Date.now()}`,
+          rag_source_id: `kb_${Date.now()}`,
           datapack_id: id,
           knowledge_base_url: String(req.body.seed_knowledge_base),
           created_at: createdAt,
@@ -219,7 +217,7 @@ export async function registerRoutes(
     return res.status(201).json(
       ok({
         datapack_id: id,
-        agent_id: agentsByDatapack[name][0].id,
+        agent_id: agentsByDatapack[name][0].agent_id,
         name,
         mcp_user_name: "mcp_user",
         mcp_server: {
@@ -255,7 +253,19 @@ export async function registerRoutes(
         error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
       });
     }
-    return res.json(ok({ members: st.members, pending_invites: st.pending }));
+    return res.json(ok({ pending_invites: st.pending }));
+  });
+
+  app.get("/api/v1/datapacks/:name/member-list", (req, res) => {
+    const name = req.params.name;
+    const st = getShareState(name);
+    if (!st) {
+      return res.status(404).json({
+        data: null,
+        error: { code: "NOT_FOUND", message: `datapack "${name}" not found` },
+      });
+    }
+    return res.json(ok({ members: st.members }));
   });
 
   app.post("/api/v1/datapacks/:name/share", (req, res) => {

@@ -7,11 +7,10 @@ import type { RefObject } from "react";
 import { ConfigureSyncTile } from "./ConfigureSyncTile";
 import type { ListedSource, SyncSectionId } from "./types";
 import {
+  KNOWLEDGE_UPLOAD_EXTENSIONS_HINT,
   KNOWLEDGE_UPLOAD_MAX_BATCH,
   KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
 } from "@/lib/knowledgeFileUploadRules";
-import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
-
 type Props = {
   knowledgeItems: ListedSource[];
   conversationItems: ListedSource[];
@@ -23,7 +22,7 @@ type Props = {
   onAddUrl: (section: SyncSectionId) => void;
   onRemove: (section: SyncSectionId, id: string) => void;
   knowledgeUploading: boolean;
-  onUploadKnowledgeFiles: () => void;
+  onUploadKnowledgeFiles: (includedIds: Set<string>) => void;
   onRetryKnowledgeUpload: (id: string) => void;
   knowledgeFileAccept: string;
   syncFileWarning: string | null;
@@ -45,22 +44,12 @@ export function ConfigureWizardSyncStep({
   knowledgeFileAccept,
   syncFileWarning,
 }: Props) {
-  const knowledgePendingUpload = knowledgeItems.some(
-    (it) =>
-      it.kind === "file" &&
-      it.file &&
-      (it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
-        it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR ||
-        !it.uploadStatus),
-  );
-
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Add knowledge files for retrieval in this datapack (same types and size limits as the datapack file uploader:
-        PDF, TXT, MD, JSON, MP4 — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}MB each, up to {KNOWLEDGE_UPLOAD_MAX_BATCH}{" "}
-        files per batch). Conversation exports and Markdown skills
-        will be available here in a future release.
+        Stage knowledge files for this datapack (PDF, TXT, MD, JSON, MP4 — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}
+        MB each, up to {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch). Conversations and skills use the same layout below and
+        will be available in a future release.
       </p>
       {syncFileWarning ? (
         <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-2 text-xs text-yellow-200">
@@ -72,17 +61,17 @@ export function ConfigureWizardSyncStep({
         <ConfigureSyncTile
           section="knowledge"
           title="Knowledge"
-          description="Files we can index and chunk for retrieval."
-          badge={`${knowledgeItems.length} items`}
+          description=""
+          badge=""
           icon={Book}
           tone="emerald"
           items={knowledgeItems}
           fileInputRef={knowledgeInputRef}
           accept={knowledgeFileAccept}
+          knowledgeExtensionsHint={KNOWLEDGE_UPLOAD_EXTENSIONS_HINT}
           onPickFiles={(fl) => onPickFiles("knowledge", fl)}
           onAddUrl={() => onAddUrl("knowledge")}
           onRemove={(id) => onRemove("knowledge", id)}
-          showKnowledgeUpload={knowledgePendingUpload}
           knowledgeUploading={knowledgeUploading}
           onUploadKnowledgeFiles={onUploadKnowledgeFiles}
           onRetryKnowledgeUpload={onRetryKnowledgeUpload}
@@ -90,7 +79,7 @@ export function ConfigureWizardSyncStep({
         <ConfigureSyncTile
           section="conversations"
           title="Conversations"
-          description="Chat exports or logs you want available to the datapack."
+          description="Past chats with the agent. Older ones will auto-tier to S3."
           badge=""
           icon={MessageSquare}
           tone="blue"
@@ -104,7 +93,7 @@ export function ConfigureWizardSyncStep({
         <ConfigureSyncTile
           section="skills"
           title="Skills"
-          description="Markdown runbooks and conventions (.md only)."
+          description="Standards and runbooks that define how the agent works."
           badge=""
           icon={Wrench}
           tone="purple"

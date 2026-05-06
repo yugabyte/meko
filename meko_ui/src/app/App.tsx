@@ -138,7 +138,7 @@ function AppRouter() {
   if (isAuthRoute(location.pathname)) {
     return (
       <Navigate
-        to={ROUTES.onboarding}
+        to={hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding}
         replace
       />
     );

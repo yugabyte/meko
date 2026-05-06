@@ -1,13 +1,6 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import {
-  ChevronDown,
-  Link as LinkIcon,
-  Pencil,
-  Share2,
-  Trash2,
-  Upload,
-} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link as LinkIcon, Pencil, Settings, Share2, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -20,6 +13,8 @@ import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import {
   DEFAULT_ACCOUNT_DATAPACK_NAME,
   ROUTES,
+  DATAPACK_QUERY_FLAG_ON,
+  DATAPACK_QUERY_PARAM,
   datapackConfigurePath,
   datapackSharePath,
 } from "@/app/routes/paths";
@@ -33,22 +28,26 @@ import {
   getDatapack,
   getDatapackConversationCount,
   getDatapackProvisionStatus,
-  listDatapackOutgoingShares,
+  getKnowledgeBaseDocuments,
+  listDatapackMembers,
   PROVISION_STATUS_CACHE_KEY,
   type CurrentUser,
   type Datapack,
+  type KnowledgeBaseDocument,
   type ProvisionStatus,
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { toast } from "@/hooks/use-toast";
-import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
+import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
 import { MemoryReadOnlySummaryPanel } from "@/features/datapacks/components/memory-promotion/MemoryReadOnlySummaryPanel";
 import { KnowledgeDocumentsPanel } from "@/features/datapacks/components/knowledge-documents/KnowledgeDocumentsPanel";
 import ConversationsPanel from "@/features/datapacks/components/datapack-detail/ConversationsPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
+import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
+import { DatapackDetailKnowledgeTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailKnowledgeTile";
 import {
   DatapackDetailMembersTile,
   type DatapackMembersListStatus,
@@ -71,10 +70,6 @@ type Props = {
   currentUser: CurrentUser | null;
 };
 
-const LOADING_STATUS = 'loading';
-const READY_STATUS = 'ready';
-const ERROR_STATUS = 'error';
-
 // Cache is keyed by datapack_id (stable UUID), not datapack_name, so renames
 // don't orphan entries and cross-datapack lookups can never collide.
 type ProvisionStatusCache = Record<string, ProvisionStatus>;
@@ -96,6 +91,7 @@ function writeProvisionStatusCache(cache: ProvisionStatusCache) {
 
 export default function DatapackDetailPage({ datapackName, currentUser }: Props) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -109,7 +105,11 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
 
-  const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
+  // const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeBaseDocument[]>([]);
+  const [knowledgeDocumentsLoading, setKnowledgeDocumentsLoading] = useState(true);
+  const [knowledgeDocumentsError, setKnowledgeDocumentsError] = useState<string | null>(null);
+  const [knowledgeDocumentsNonce, setKnowledgeDocumentsNonce] = useState(0);
   const [memoriesCount, setMemoriesCount] = useState(0);
   const [learningsCount, setLearningsCount] = useState(0);
   const [conversationsCount, setConversationsCount] = useState(0);
@@ -120,6 +120,14 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName);
 
   useEffect(() => {
+    if (searchParams.get(DATAPACK_QUERY_PARAM.connect) !== DATAPACK_QUERY_FLAG_ON) return;
+    setIsConnectOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete(DATAPACK_QUERY_PARAM.connect);
+    setSearchParams(next, { replace: true });
+  }, [datapackName, searchParams, setSearchParams]);
+
+  useEffect(() => {
     let cancelled = false;
     const run = async () => {
       setStatusLoading(true);
@@ -128,7 +136,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
         const dp = await getDatapack(datapackName);
         if (!cancelled) {
           setDatapack(dp);
-          setKnowledgeBaseCount(dp.knowledge_count ?? 0);
+          // setKnowledgeBaseCount(dp.knowledge_count ?? 0);
           setMemoriesCount(dp.memory_count ?? 0);
           setLearningsCount(dp.learnings_count ?? 0);
           setDatapackGrant(dp.grant ?? null);
@@ -190,7 +198,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   useEffect(() => {
     const ac = new AbortController();
     setMembersListStatus("loading");
-    void listDatapackOutgoingShares(datapackName, { signal: ac.signal })
+    void listDatapackMembers(datapackName, { signal: ac.signal })
       .then((res) => {
         if (ac.signal.aborted) return;
         setMembers(res.members ?? []);
@@ -206,6 +214,31 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     };
   }, [datapackName, datapack?.datapack_id]);
 
+  const reloadKnowledgeDocuments = useCallback(() => {
+    setKnowledgeDocumentsNonce((n) => n + 1);
+  }, []);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    setKnowledgeDocumentsLoading(true);
+    setKnowledgeDocumentsError(null);
+    void getKnowledgeBaseDocuments(datapackName, { signal: ac.signal })
+      .then((list) => {
+        if (ac.signal.aborted) return;
+        setKnowledgeDocuments(list ?? []);
+      })
+      .catch((e) => {
+        if (ac.signal.aborted) return;
+        setKnowledgeDocuments([]);
+        setKnowledgeDocumentsError(
+          getApiErrorMessage(e, "Could not load knowledge documents."),
+        );
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setKnowledgeDocumentsLoading(false);
+      });
+    return () => ac.abort();
+  }, [datapackName, knowledgeDocumentsNonce]);
 
   useEffect(() => {
     if (!isConnectOpen) return;
@@ -248,7 +281,16 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
 
   const displayId = datapack?.datapack_id ?? "—";
   const createdLabel = formatDatapackCreatedAtUtc(datapack?.created_at);
+  const isNewDatapack = isDatapackCreatedWithinLast24Hours(datapack?.created_at);
   const isDefaultDatapack = datapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
+
+  const showDatapackActionsDropdown =
+    isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) ||
+    isDatapackGrantEligibleToEdit({ grant: datapackGrant }) ||
+    isDatapackGrantEligibleToDelete({ grant: datapackGrant });
+  const showActionsDropdownDangerSeparator =
+    isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) &&
+    (isDatapackGrantEligibleToEdit({ grant: datapackGrant }) || isDatapackGrantEligibleToDelete({ grant: datapackGrant }));
 
   const handleDeleteConfirm = async () => {
     const { message } = await deleteDatapack(datapackName);
@@ -265,16 +307,26 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       <AppWorkspaceHeader />
 
       <main className="flex-1 pr-1 pt-6 pl-1 pb-3 max-w-7xl mx-auto w-full space-y-8">
-        {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = knowledge upload, connect, configure, share */}
+        {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = Connect, Share (if eligible), upload dialog, settings menu (maintainer/owner only) */}
         <DatapackDetailHero
           datapackName={datapackName}
           description={datapack?.description}
           displayId={displayId}
           createdLabel={createdLabel}
           datapackGrant={datapackGrant}
+          isNewDatapack={isNewDatapack}
           statusLoading={statusLoading}
           actions={
             <>
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-border bg-background/80"
+                onClick={() => setIsConnectOpen(true)}
+              >
+                <LinkIcon className="h-4 w-4 shrink-0" aria-hidden />
+                Connect
+              </Button>
               {isDatapackGrantEligibleToShare({ grant: datapackGrant }) && (
                 <Button
                   type="button"
@@ -310,56 +362,51 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                 datapackName={datapackName}
                 onConfirm={handleDeleteConfirm}
               />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="gap-2 border-border bg-background/80"
-                    aria-label="Datapack actions"
-                  >
-                    Actions
-                    <ChevronDown className="h-4 w-4 shrink-0 opacity-70" aria-hidden />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-[14rem] bg-[#1C2333] border-border text-foreground">
-                  <DropdownMenuItem
-                    className="gap-2 cursor-pointer focus:bg-muted/20"
-                    onSelect={() => setIsConnectOpen(true)}
-                  >
-                    <LinkIcon className="h-4 w-4 shrink-0" aria-hidden />
-                    Connect
-                  </DropdownMenuItem>
-                  {isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) && (
-                    <DropdownMenuItem
-                      className="gap-2 cursor-pointer focus:bg-muted/20"
-                      onSelect={() => setIsUploadOpen(true)}
+              {showDatapackActionsDropdown ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="shrink-0 border-border bg-background/80"
+                      aria-label="Datapack actions"
                     >
-                      <Upload className="h-4 w-4 shrink-0" aria-hidden />
-                      Add Knowledge
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuSeparator className="bg-border" />
-                  {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && <DropdownMenuItem
-                    className="gap-2 cursor-pointer focus:bg-muted/20"
-                    onSelect={() => navigate(datapackConfigurePath(datapackName))}
-                  >
-                    <Pencil className="h-4 w-4 shrink-0" aria-hidden />
-                    Edit {datapackName}
-                  </DropdownMenuItem>}
-                  {isDatapackGrantEligibleToDelete({ grant: datapackGrant }) && <DropdownMenuItem
-                    className="gap-2 cursor-pointer text-red-300 focus:bg-red-950/40 focus:text-red-200"
-                    // disabled={isDefaultDatapack}
-                    // title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
-                    onSelect={() => {
-                      if (!isDefaultDatapack) setIsDeleteOpen(true);
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-                    Delete {datapackName}
-                  </DropdownMenuItem>}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                      <Settings className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-[14rem] bg-[#1C2333] border-border text-foreground">
+                    {isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) && (
+                      <DropdownMenuItem
+                        className="gap-2 cursor-pointer focus:bg-muted/20"
+                        onSelect={() => setIsUploadOpen(true)}
+                      >
+                        <Upload className="h-4 w-4 shrink-0" aria-hidden />
+                        Add Knowledge
+                      </DropdownMenuItem>
+                    )}
+                    {showActionsDropdownDangerSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
+                    {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && <DropdownMenuItem
+                      className="gap-2 cursor-pointer focus:bg-muted/20"
+                      onSelect={() => navigate(datapackConfigurePath(datapackName))}
+                    >
+                      <Pencil className="h-4 w-4 shrink-0" aria-hidden />
+                      Edit {datapackName}
+                    </DropdownMenuItem>}
+                    {isDatapackGrantEligibleToDelete({ grant: datapackGrant }) && <DropdownMenuItem
+                      className="gap-2 cursor-pointer text-red-300 focus:bg-red-950/40 focus:text-red-200"
+                      // disabled={isDefaultDatapack}
+                      // title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
+                      onSelect={() => {
+                        if (!isDefaultDatapack) setIsDeleteOpen(true);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                      Delete {datapackName}
+                    </DropdownMenuItem>}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
             </>
           }
         />
@@ -376,8 +423,9 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           memoryCount={memoriesCount}
           learningsCount={learningsCount}
           datapackId={datapack?.datapack_id ?? null}
-          knowledgeCount={knowledgeBaseCount}
+          knowledgeCount={knowledgeDocuments?.length}
           onSelectSection={setActiveTab}
+          onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
           statusLoading={statusLoading}
         />
 
@@ -415,9 +463,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               </div>
               {activeTab === DATAPACK_DETAIL_TAB.knowledge ? (
                 <KnowledgeDocumentsPanel
-                  datapackName={datapackName}
-                  knowledgeBaseCount={knowledgeBaseCount}
+                  knowledgeBaseCount={knowledgeDocuments?.length}
                   datapackSummaryReady={!statusLoading && datapack != null}
+                  documents={knowledgeDocuments}
+                  documentsLoading={knowledgeDocumentsLoading}
+                  documentsError={knowledgeDocumentsError}
+                  onReloadDocuments={reloadKnowledgeDocuments}
                 />
               ) : activeTab === DATAPACK_DETAIL_TAB.memories ? (
                 datapack?.datapack_id ? (
@@ -439,17 +490,25 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               ) : null}
             </div>
           </div>
-          <div className="mt-15 flex min-h-0 min-w-0 flex-col gap-4 lg:self-start lg:w-full">
-            <DatapackDetailConnectTile
-              mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
-              mcpApiKey={provisionStatus?.mcp_api_key ?? null}
-              onOpenConnect={() => setIsConnectOpen(true)}
+          <div className="flex min-h-0 min-w-0 flex-col gap-4 lg:self-start lg:w-full">
+            <DatapackDetailAgentsTile datapackName={datapackName} />
+            <DatapackDetailKnowledgeTile
+              documents={knowledgeDocuments}
+              documentsLoading={knowledgeDocumentsLoading}
+              documentsError={knowledgeDocumentsError}
+              canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
+              onAddSource={() => setIsUploadOpen(true)}
             />
             <DatapackDetailMembersTile
               datapackName={datapackName}
               currentUser={currentUser}
               members={members}
               membersListStatus={membersListStatus}
+            />
+            <DatapackDetailConnectTile
+              mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
+              mcpApiKey={provisionStatus?.mcp_api_key ?? null}
+              onOpenConnect={() => setIsConnectOpen(true)}
             />
           </div>
         </div>

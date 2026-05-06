@@ -19,7 +19,7 @@ export default function OnboardingPage() {
   const navigate = useNavigate();
   const [action, setAction] = useState<"playground" | "datapacks" | "skip" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** From server: returning users “Choose your tool” → /datapacks; first-time → default datapack edit → configure. */
+  /** From server: drives first-time vs returning copy; “Choose your tool” path uses configure for first-time only. */
   const [serverOnboardingDone, setServerOnboardingDone] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -35,11 +35,6 @@ export default function OnboardingPage() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (serverOnboardingDone !== true) return;
-    navigate(ROUTES.datapacks, { replace: true });
-  }, [serverOnboardingDone, navigate]);
 
   const finishAndGo = async (target: "playground" | "datapacks" | "skip") => {
     setError(null);
@@ -88,7 +83,9 @@ export default function OnboardingPage() {
       />
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center px-8 pb-16 pt-8">
-        {serverOnboardingDone === false ? (
+        {serverOnboardingDone === null ? (
+          <p className="py-24 text-center text-sm text-muted-foreground">Loading…</p>
+        ) : (
           <>
             <div
               className={cn(
@@ -96,7 +93,9 @@ export default function OnboardingPage() {
               )}
             >
               <Sparkles className="h-3.5 w-3.5 shrink-0 text-blue-400" aria-hidden />
-              Your workspace is ready · 1 default datapack created
+              {serverOnboardingDone
+                ? "Welcome back — pick where to go next"
+                : "Your workspace is ready · 1 default datapack created"}
             </div>
 
             <h1 className="mb-3 text-center text-3xl font-bold tracking-tight text-foreground md:text-4xl">
@@ -182,24 +181,22 @@ export default function OnboardingPage() {
               </Card>
             </div>
 
-            <button
-              type="button"
-              className="mt-10 text-sm text-muted-foreground underline-offset-4 transition hover:text-foreground hover:underline disabled:opacity-50"
-              disabled={busy}
-              onClick={() => void finishAndGo("skip")}
-            >
-              {action === "skip" ? "Saving…" : "Skip for now · I'll set this up later"}
-              <span className="ml-1" aria-hidden>
-                {'>'}
-              </span>
-            </button>
+            {serverOnboardingDone ? null : (
+              <button
+                type="button"
+                className="mt-10 text-sm text-muted-foreground underline-offset-4 transition hover:text-foreground hover:underline disabled:opacity-50"
+                disabled={busy}
+                onClick={() => void finishAndGo("skip")}
+              >
+                {action === "skip" ? "Saving…" : "Skip for now · I'll set this up later"}
+                <span className="ml-1" aria-hidden>
+                  {'>'}
+                </span>
+              </button>
+            )}
 
             {error ? <p className="mt-4 text-center text-sm text-destructive">{error}</p> : null}
           </>
-        ) : (
-          <p className="py-24 text-center text-sm text-muted-foreground">
-            {serverOnboardingDone === null ? "Loading…" : "Taking you to datapacks…"}
-          </p>
         )}
       </main>
     </div>

@@ -285,13 +285,13 @@ func TestDatapackRepo_GetByName_Found(t *testing.T) {
 			"created_by_agent_id",
 			"universe_id", "datapack_ysql_connection_string",
 			"datapack_ysql_username", "created_at", "updated_at",
-			"description", "owner_name",
+			"description", "owner_name", "owner_email",
 		}).AddRow(
 			"dp-uuid-1", "user-1", "dp-1",
 			"meko_agent",
 			"u-1", "postgresql://...",
 			"mcp_user_1", now, now,
-			"test description", "Test User",
+			"test description", "Test User", "owner@example.com",
 		))
 
 	repo := NewDatapackRepo(db)

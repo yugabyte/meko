@@ -1,7 +1,6 @@
 // Card UI for inviting one person by email with a grant role; posts to inviteDatapackShare on Send invite.
 // Role tiles and the dropdown stay in sync; parent receives onInviteSent to refetch members/pending lists.
 import { useState } from "react";
-import { Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -12,7 +11,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { DatapackShareSectionCard } from "@/features/datapacks/components/datapack-share/DatapackShareSectionCard";
 import { SHARE_INVITE_ROLES, type ShareInviteRoleId } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { parseSingleInviteEmail } from "@/features/datapacks/components/datapack-share/shareInviteEmail";
 import { DATAPACK_SHARE_GRANT_CONTRIBUTOR } from "@/lib/datapackShareGrants";
@@ -70,7 +68,7 @@ export function InviteByEmailSection({ datapackName, onInviteSent }: Props) {
   };
 
   return (
-    <DatapackShareSectionCard title="Invite by email" icon={<Mail className="text-blue-400" aria-hidden />}>
+    <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
         <div className="min-w-0 flex-1 space-y-2">
           <label htmlFor="share-invite-emails" className="sr-only">
@@ -149,6 +147,6 @@ export function InviteByEmailSection({ datapackName, onInviteSent }: Props) {
           );
         })}
       </div>
-    </DatapackShareSectionCard>
+    </div>
   );
 }

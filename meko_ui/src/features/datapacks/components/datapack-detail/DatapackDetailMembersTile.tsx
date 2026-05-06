@@ -56,7 +56,7 @@ type Props = {
 };
 
 /**
- * Members roster from outgoing-shares (owner first). Owners and maintainers see the full list;
+ * Members roster from GET member-list (owner first). Owners and maintainers see the full list;
  * viewers/contributors get an error state when the list API is forbidden.
  */
 export function DatapackDetailMembersTile({

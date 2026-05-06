@@ -6,10 +6,14 @@ import {
   API_ERROR_CODE_USER_ALREADY_CONFIRMED,
   API_ERROR_CODE_USER_NOT_CONFIRMED,
   getApiErrorMessage,
+  getCurrentUser,
   isMekoApiRequestError,
   login,
+  ONBOARDING_STATUS_CACHE_KEY,
+  ONBOARDING_STATUS_UPDATED_EVENT,
   resendSignupConfirmation,
 } from "@/lib/mekoApi";
+import { dispatchAppEvent } from "@/lib/browserEvents";
 import { ROUTES } from "@/app/routes/paths";
 
 /** Query flag used with {@link ROUTES.signup} so the sign-up page opens on the “enter code” step. */
@@ -59,7 +63,20 @@ export default function SignInPage() {
     resetRecoveryUi();
     try {
       await login({ email: email.trim(), password });
-      navigate(ROUTES.onboarding, { replace: true });
+      let nextPath: (typeof ROUTES)["datapacks" | "onboarding"] = ROUTES.onboarding;
+      try {
+        const user = await getCurrentUser();
+        localStorage.setItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
+        dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
+          has_completed_onboarding: user.has_completed_onboarding,
+        });
+        if (user.has_completed_onboarding) {
+          nextPath = ROUTES.datapacks;
+        }
+      } catch {
+        // Unusual after a successful login; still land on onboarding so the user isn’t stuck.
+      }
+      navigate(nextPath, { replace: true });
     } catch (err) {
       const isUnconfirmed =
         isMekoApiRequestError(err) && err.code === API_ERROR_CODE_USER_NOT_CONFIRMED;

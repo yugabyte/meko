@@ -2,7 +2,7 @@
  * MCP client install guide: Claude Code, Claude Desktop, Cursor, and manual MCP install with copyable shell steps.
  * Shared by the Home “Install” page and the datapack configure wizard’s Install step.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, Code2, Monitor, MousePointer2, Terminal } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,27 @@ function injectMcpProvisionIntoCode(code: string, mcpServerUrl?: string | null, 
 /** Collapsed install-step code preview; copy always uses the full injected command. */
 const INSTALL_GUIDE_CODE_BLOCK_PREVIEW_MAX_CHARS = 320;
 
+const API_KEY_DISPLAY_HEAD_CHARS = 6;
+const API_KEY_DISPLAY_TAIL_CHARS = 4;
+
+/** Middle-ellipsis only inside `--api-key '…'` for long keys; copy still uses full `code`. */
+function getApiKeyTruncatedShellDisplay(code: string, expanded: boolean): {
+  display: string;
+  needsToggle: boolean;
+} {
+  const re = /--api-key\s+'([^']*)'/;
+  const m = code.match(re);
+  if (!m) return { display: code, needsToggle: false };
+  const key = m[1];
+  const minLen = API_KEY_DISPLAY_HEAD_CHARS + API_KEY_DISPLAY_TAIL_CHARS + 2;
+  if (key.length <= minLen) return { display: code, needsToggle: false };
+  if (expanded) return { display: code, needsToggle: true };
+  const start = m.index ?? 0;
+  const end = start + m[0].length;
+  const shortened = `--api-key '${key.slice(0, API_KEY_DISPLAY_HEAD_CHARS)}…${key.slice(-API_KEY_DISPLAY_TAIL_CHARS)}'`;
+  return { display: code.slice(0, start) + shortened + code.slice(end), needsToggle: true };
+}
+
 type IdeTab = "claude_code" | "claude_desktop" | "cursor" | "manual_mcp";
 
 type InstallStep = {
@@ -39,21 +60,24 @@ type InstallStep = {
   description: string;
   code?: string;
   langLabel?: string;
+  /** NVM-style one-liner: single row + horizontal scroll (default wraps long lines). */
+  codeSingleRowScroll?: boolean;
 };
 
 /** Shared first step for Claude Code, Claude Desktop, and Cursor tabs (npx requires Node 18+). */
 const SHARED_NVM_NODE_PREREQ_STEP: InstallStep = {
   title: "Install NVM and Node.js",
   description:
-    "Install Node Version Manager (nvm) so you can run npx in the next step. Use **Node.js 18.0 or newer** (the current LTS is recommended). If `nvm` is not found after install, close the terminal and open a new one, or adjust the source line to match your shell profile.",
+    "Install Node Version Manager (nvm) so you can run npx in the next step. Use **Node.js 18.0 or newer** (the current LTS is recommended).",
   code: [
     "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash",
     "source ~/.$(basename $SHELL)rc",
     "nvm install --lts",
     "nvm use --lts",
-    "node -v   # should print v18.x or newer",
-  ].join("\n"),
+    "node -v  # should print v18.x or newer",
+  ].join(" && "),
   langLabel: "bash",
+  codeSingleRowScroll: true,
 };
 
 const CLAUDE_CODE_INSTALL_STEPS: InstallStep[] = [
@@ -175,18 +199,40 @@ function CodeBlock({
   copyId,
   copiedId,
   onCopy,
+  codeSingleRowScroll = false,
 }: {
   code: string;
   langLabel: string;
   copyId: string;
   copiedId: string | null;
   onCopy: (text: string, id: string) => void;
+  codeSingleRowScroll?: boolean;
 }) {
-  const { displayText, needsToggle, expanded, toggleExpanded } = useTruncatableCodeDisplay(
+  const apiKeyPreview = useMemo(() => getApiKeyTruncatedShellDisplay(code, false), [code]);
+  const [apiKeyExpanded, setApiKeyExpanded] = useState(false);
+
+  useEffect(() => {
+    setApiKeyExpanded(false);
+  }, [code]);
+
+  const apiKeyDisplay = useMemo(
+    () => getApiKeyTruncatedShellDisplay(code, apiKeyExpanded),
+    [code, apiKeyExpanded],
+  );
+
+  const charTruncate = useTruncatableCodeDisplay(
     code,
     INSTALL_GUIDE_CODE_BLOCK_PREVIEW_MAX_CHARS,
     code,
   );
+
+  const useApiKeyTruncation = apiKeyPreview.needsToggle;
+  const displayText = useApiKeyTruncation ? apiKeyDisplay.display : charTruncate.displayText;
+  const needsToggle = useApiKeyTruncation ? apiKeyDisplay.needsToggle : charTruncate.needsToggle;
+  const expanded = useApiKeyTruncation ? apiKeyExpanded : charTruncate.expanded;
+  const toggleExpanded = useApiKeyTruncation
+    ? () => setApiKeyExpanded((v) => !v)
+    : charTruncate.toggleExpanded;
 
   return (
     <div className="max-w-full overflow-hidden rounded-lg border border-border bg-[#0E1525]/80 shadow-sm">
@@ -211,7 +257,14 @@ function CodeBlock({
       </div>
       <div className="p-4 pt-3">
         <pre className="m-0 max-w-full overflow-x-auto text-sm leading-relaxed text-foreground/95">
-          <code className="block whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">
+          <code
+            className={cn(
+              "block font-mono",
+              codeSingleRowScroll
+                ? "whitespace-pre w-max min-w-full"
+                : "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
+            )}
+          >
             {displayText}
           </code>
         </pre>
@@ -221,7 +274,7 @@ function CodeBlock({
             className="mt-2 text-sm font-medium text-primary hover:underline"
             onClick={toggleExpanded}
           >
-            {expanded ? "Show less" : "Show more"}
+            {expanded ? "Show less" : "Show all"}
           </button>
         ) : null}
       </div>
@@ -277,6 +330,7 @@ function InstallSteps({ tab, steps }: { tab: IdeTab; steps: InstallStep[] }) {
                   copyId={copyId}
                   copiedId={copiedId}
                   onCopy={handleCopy}
+                  codeSingleRowScroll={step.codeSingleRowScroll === true}
                 />
               </div>
             ) : null}

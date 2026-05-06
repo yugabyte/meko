@@ -283,12 +283,14 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
-	// Outgoing shares: RequireDatapackAccess resolves the datapack for owner or any shared member (404 if none).
-	// RequireDatapackOwnerOrMaintainerGrant restricts the list to owner or maintainer grant (403 otherwise).
+	// Pending outgoing invites: owner or maintainer only.
 	g.GET("/datapacks/:name/outgoing-shares", shareH.OutgoingShares,
 		auth.RequireDatapackAccess(reg.dpRepo),
-		// Right now we need to display memebers list on datapack details, so cannot check access rights
-		// auth.RequireDatapackOwnerOrMaintainerGrant(),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+	// Accepted members (roster): any role with datapack access.
+	g.GET("/datapacks/:name/member-list", shareH.MemberList,
+		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
 	// Invite / resend / revoke: owner or maintainer (not under RequireDatapackOwnership).
@@ -317,23 +319,39 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named.POST("/langfuse/project-keys", dpH.GenerateLangfuseProjectKeys)
 
 	named.POST("/agents", agentH.Link)
-	named.GET("/agents", agentH.ListForDatapack)
 	named.DELETE("/agents/:agent_id", agentH.Unlink)
 
 	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.ragSvc, reg.s3Svc)
+
+	// Read-only datapack routes: any member with datapack access (owner or accepted share),
+	// not the ownership-only group below.
+	g.GET("/datapacks/:name/agents", agentH.ListForDatapack,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	g.GET("/datapacks/:name/knowledge-bases/counts", kbH.Counts,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	g.GET("/datapacks/:name/knowledge-bases/documents", kbH.Documents,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+
+	// Knowledge base CRUD / upload: datapack owner or maintainer only (not viewer/contributor).
 	// TODO(external-kb): POST /knowledge-bases is reserved for a future
 	// "register an external KB URL" flow. The canonical per-datapack KB
 	// row is created/refreshed via POST /knowledge-bases/create.
-	named.POST("/knowledge-bases", kbH.Add)
-	named.GET("/knowledge-bases", kbH.List)
-	named.DELETE("/knowledge-bases/:rag_source_id", kbH.Delete)
-	named.POST("/knowledge-bases/upload-url", kbH.RequestUploadURL)
-	named.POST("/knowledge-bases/upload-complete", kbH.ConfirmUpload)
-	named.POST("/knowledge-bases/create", kbH.CreateKB)
-	named.GET("/knowledge-bases/status", kbH.KBStatus)
-
-	named.GET("/knowledge-bases/counts", kbH.Counts)
-	named.GET("/knowledge-bases/documents", kbH.Documents)
+	kbOwnerOrMaintainer := []echo.MiddlewareFunc{
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	}
+	g.POST("/datapacks/:name/knowledge-bases", kbH.Add, kbOwnerOrMaintainer...)
+	g.GET("/datapacks/:name/knowledge-bases", kbH.List,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	g.DELETE("/datapacks/:name/knowledge-bases/:rag_source_id", kbH.Delete, kbOwnerOrMaintainer...)
+	g.POST("/datapacks/:name/knowledge-bases/upload-url", kbH.RequestUploadURL, kbOwnerOrMaintainer...)
+	g.POST("/datapacks/:name/knowledge-bases/upload-complete", kbH.ConfirmUpload, kbOwnerOrMaintainer...)
+	g.POST("/datapacks/:name/knowledge-bases/create", kbH.CreateKB, kbOwnerOrMaintainer...)
+	g.GET("/datapacks/:name/knowledge-bases/status", kbH.KBStatus, kbOwnerOrMaintainer...)
 
 	named.PATCH("/share/:share_user_id", shareH.UpdateGrant)
 

@@ -6,6 +6,11 @@ export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS = ".pdf,.txt,.md,.json,.mp4";
 export const KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB = 5;
 export const KNOWLEDGE_UPLOAD_MAX_BATCH = 10;
 
+/** Human-readable list for UI (matches `KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS`). */
+export const KNOWLEDGE_UPLOAD_EXTENSIONS_HINT = KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS.split(",")
+  .map((s) => s.replace(/^\./, "").trim())
+  .join(", ");
+
 export function knowledgeFileExtension(filename: string): string {
   return `.${filename.split(".").pop()?.toLowerCase() ?? ""}`;
 }
@@ -54,4 +59,29 @@ export function filterFilesForKnowledgeUploadBatch(
   }
 
   return { accepted, warningParts };
+}
+
+/**
+ * Drops files whose name already exists in the list or appears twice in `incoming`
+ * (case-insensitive basename match).
+ */
+export function filterDuplicateKnowledgeFileNames(
+  incoming: File[],
+  existingFileLabels: string[],
+): { unique: File[]; duplicateCount: number } {
+  const taken = new Set(existingFileLabels.map((n) => n.trim().toLowerCase()));
+  const unique: File[] = [];
+  let duplicateCount = 0;
+  const seenIncoming = new Set<string>();
+  for (const f of incoming) {
+    const key = f.name.trim().toLowerCase();
+    if (taken.has(key) || seenIncoming.has(key)) {
+      duplicateCount++;
+      continue;
+    }
+    seenIncoming.add(key);
+    taken.add(key);
+    unique.push(f);
+  }
+  return { unique, duplicateCount };
 }

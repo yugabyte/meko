@@ -32,7 +32,7 @@ function FinishKnowledgeSummaryTile({ uploadedDoneCount }: { uploadedDoneCount: 
         </span>
       </div>
       <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        Files we can index and chunk for retrieval.
+        Files we&apos;ll index and chunk for retrieval.
       </p>
       <div className="mt-4 flex min-h-[160px] flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border/60 bg-muted/5 px-3 py-6">
         {uploadedDoneCount > 0 ? (
@@ -69,7 +69,7 @@ export function ConfigureWizardFinishTiles({ knowledgeItems }: Props) {
       <ConfigureSyncTile
         section="conversations"
         title="Conversations"
-        description="Chat exports or logs you want available to the datapack."
+        description="Past chats with the agent. Older ones will auto-tier to S3."
         badge=""
         icon={MessageSquare}
         tone="blue"
@@ -83,7 +83,7 @@ export function ConfigureWizardFinishTiles({ knowledgeItems }: Props) {
       <ConfigureSyncTile
         section="skills"
         title="Skills"
-        description="Markdown runbooks and conventions (.md only)."
+        description="Standards and runbooks that define how the agent works."
         badge=""
         icon={Wrench}
         tone="purple"
