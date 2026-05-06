@@ -260,6 +260,7 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 
 	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc)
 	g.POST("/promote-memories", promoteMemoriesH.Promote)
+	g.GET("/promoted-memories", promoteMemoriesH.ListGET)
 
 	shareH := handlers.NewSharingHandler(reg.sharingSvc)
 	g.GET("/datapacks/incoming-shares", shareH.IncomingShares)

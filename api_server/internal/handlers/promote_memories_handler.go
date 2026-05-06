@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -45,4 +48,47 @@ func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
 	}
 
 	return ok(c, http.StatusOK, result)
+}
+
+// ListGET handles GET /api/v1/promoted-memories.
+//
+//	@Summary	List promoted memories (paginated)
+//	@Tags		memories
+//	@Produce	json
+//	@Param		datapack_id	query	string	true	"Datapack ID"
+//	@Param		page		query	integer	false	"Page number (1-based, default 1)"
+//	@Param		page_size	query	integer	false	"Items per page (default 20, max 100)"
+//	@Success	200			{object}	APIResponse
+//	@Failure	400			{object}	APIResponse
+//	@Failure	401			{object}	APIResponse
+//	@Failure	500			{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/promoted-memories [get]
+func (h *PromoteMemoriesHandler) ListGET(c echo.Context) error {
+	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
+	if datapackID == "" {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
+	}
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	pageSize, _ := strconv.Atoi(c.QueryParam("page_size"))
+	filter := models.PromotedMemoryListFilter{
+		DatapackID: datapackID,
+		Page:       page,
+		PageSize:   pageSize,
+	}
+
+	slog.Info("listing promoted memories",
+		"layer", "handler",
+		"datapack_id", filter.DatapackID,
+	)
+
+	response, err := h.svc.List(c.Request().Context(), filter)
+	if err != nil {
+		if isValidationErr(err) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+
+	return ok(c, http.StatusOK, response)
 }

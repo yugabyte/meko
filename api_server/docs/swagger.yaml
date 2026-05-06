@@ -84,6 +84,22 @@ definitions:
       agent_id:
         type: string
     type: object
+  service.ForgotPasswordConfirmRequest:
+    properties:
+      code:
+        type: string
+      confirm_password:
+        type: string
+      email:
+        type: string
+      new_password:
+        type: string
+    type: object
+  service.ForgotPasswordStartRequest:
+    properties:
+      email:
+        type: string
+    type: object
   service.InviteActionRequest:
     properties:
       invite_id:
@@ -110,6 +126,11 @@ definitions:
       email:
         type: string
       password:
+        type: string
+    type: object
+  service.ResendConfirmationRequest:
+    properties:
+      email:
         type: string
     type: object
   service.SignupRequest:
@@ -255,6 +276,68 @@ paths:
       summary: Confirm email with verification code
       tags:
       - auth
+  /auth/forgot-password:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Account email
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.ForgotPasswordStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Start password reset — email verification code
+      tags:
+      - auth
+  /auth/forgot-password/confirm:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Reset payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.ForgotPasswordConfirmRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Complete password reset with code and new password
+      tags:
+      - auth
   /auth/login:
     post:
       consumes:
@@ -279,6 +362,11 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Cognito USER_NOT_CONFIRMED (code USER_NOT_CONFIRMED); client
+            should offer resend / confirm flow
           schema:
             $ref: '#/definitions/handlers.APIResponse'
       summary: Authenticate and receive tokens
@@ -348,6 +436,39 @@ paths:
       security:
       - BearerAuth: []
       summary: Update onboarding completion status
+      tags:
+      - auth
+  /auth/resend-confirmation:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Email to resend code to
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.ResendConfirmationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Resend email verification code
       tags:
       - auth
   /auth/signup:
@@ -1034,6 +1155,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "404":
           description: Not Found
           schema:
@@ -1253,10 +1378,16 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: List memories (query)
       tags:
       - memories
@@ -1279,10 +1410,16 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Count memories for a datapack
       tags:
       - memories
@@ -1309,11 +1446,57 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
       summary: Promote mem0 memories into the tenant knowledge base
+      tags:
+      - memories
+  /promoted-memories:
+    get:
+      parameters:
+      - description: Datapack ID
+        in: query
+        name: datapack_id
+        required: true
+        type: string
+      - description: Page number (1-based, default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 100)
+        in: query
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List promoted memories (paginated)
       tags:
       - memories
 securityDefinitions:

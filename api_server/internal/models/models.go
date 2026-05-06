@@ -28,9 +28,9 @@ type Datapack struct {
 	OwnerName        string    `json:"datapack_owner_name,omitempty"`
 	OwnerEmail       string    `json:"datapack_owner_email_id,omitempty"`
 	Grant            string    `json:"grant,omitempty"`
-	MemoryCount      int         `json:"memory_count"`
-	KnowledgeCount   int         `json:"knowledge_count"`
-	LearningsCount   int         `json:"learnings_count"`
+	MemoryCount      int       `json:"memory_count"`
+	KnowledgeCount   int       `json:"knowledge_count"`
+	LearningsCount   int       `json:"learnings_count"`
 }
 
 // Agent represents a user-scoped agent. Backed by meko_system.agents.
@@ -143,6 +143,32 @@ type PromoteMemoriesResult struct {
 	NotFoundIDs []string `json:"not_found_ids"`
 }
 
+// PromotedMemory is one row from datapacks.promoted_collection for list APIs.
+type PromotedMemory struct {
+	ID             string     `json:"id"`
+	ConversationID *string    `json:"conversation_id,omitempty"`
+	AgentID        string     `json:"agent_id,omitempty"`
+	Data           string     `json:"data"`
+	PromotedToKBAt *time.Time `json:"promoted_to_kb_at,omitempty"`
+}
+
+// PromotedMemoryListFilter is the query input for GET /promoted-memories.
+type PromotedMemoryListFilter struct {
+	DatapackID string `json:"datapack_id"`
+	Page       int    `json:"page"`
+	PageSize   int    `json:"page_size"`
+}
+
+// PromotedMemoryListResponse is the response body for GET /promoted-memories.
+type PromotedMemoryListResponse struct {
+	Criteria         PromotedMemoryListFilter `json:"criteria"`
+	PromotedMemories []PromotedMemory         `json:"promoted_memories"`
+	Total            int                      `json:"total"`
+	Page             int                      `json:"page"`
+	PageSize         int                      `json:"page_size"`
+	TotalPages       int                      `json:"total_pages"`
+}
+
 // GrantRole represents the API-level share role. The backend translates
 // each role into two agent_access_permissions rows (one per object_type).
 type GrantRole string
@@ -196,11 +222,11 @@ type OutgoingShareMember struct {
 
 // OutgoingSharePendingInvite is an invite that has not been accepted yet.
 type OutgoingSharePendingInvite struct {
-	InviteID           string  `json:"invite_id"`
-	GrantRole          string  `json:"grant"`
-	RecipientUserID    *string `json:"recipient_user_id"`
-	RecipientUserName  *string `json:"recipient_user_name"`
-	RecipientEmailID   string  `json:"recipient_email_id"`
+	InviteID          string  `json:"invite_id"`
+	GrantRole         string  `json:"grant"`
+	RecipientUserID   *string `json:"recipient_user_id"`
+	RecipientUserName *string `json:"recipient_user_name"`
+	RecipientEmailID  string  `json:"recipient_email_id"`
 }
 
 // OutgoingPendingInvitesResponse is returned by GET /datapacks/:name/outgoing-shares

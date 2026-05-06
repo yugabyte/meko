@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+
+	"meko/api_server/internal/models"
 )
 
 // Fixed datapack-side tables this repo bridges. All live in the shared
@@ -568,4 +570,86 @@ func insertPromotedGraphVertex(
 		return fmt.Errorf("insert promoted graph vertex (node_graphid=%d): %w", v.NodeGraphID, err)
 	}
 	return nil
+}
+
+// ListPromoted returns a page of rows from datapacks.promoted_collection for a datapack.
+func (r *PromoteMemoriesRepo) ListPromoted(
+	ctx context.Context,
+	datapackID string,
+	page, pageSize int,
+) ([]models.PromotedMemory, int, error) {
+	if r.db == nil {
+		return nil, 0, fmt.Errorf("database connection is required")
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return nil, 0, fmt.Errorf("datapack_id is required")
+	}
+
+	args := []any{datapackID}
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE meko_datapack_id = $1::uuid`, promotedCollectionTable)
+	countCtx, cancelCount := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelCount()
+	slog.Debug("executing SQL", "func", "ListPromoted", "query", countQuery, "args", args)
+	var total int
+	if err := r.db.QueryRowContext(countCtx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("promoted memories count query: %w", err)
+	}
+
+	listQuery := fmt.Sprintf(`
+		SELECT id::text,
+		       meko_conversation_id::text,
+		       meko_agent_id,
+		       COALESCE(payload->>'data', '') AS data,
+		       meko_promoted_to_kb_at
+		  FROM %s
+		 WHERE meko_datapack_id = $1::uuid
+		 ORDER BY meko_promoted_to_kb_at DESC
+		 LIMIT $2 OFFSET $3`, promotedCollectionTable)
+
+	offset := (page - 1) * pageSize
+	listArgs := []any{datapackID, pageSize, offset}
+
+	queryCtx, cancelQuery := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelQuery()
+	slog.Debug("executing SQL", "func", "ListPromoted", "query", listQuery, "args", listArgs)
+	rows, err := r.db.QueryContext(queryCtx, listQuery, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("promoted memories query: %w", err)
+	}
+	defer func() {
+		if errClose := rows.Close(); errClose != nil {
+			slog.Warn("promoted memories list close sql rows", "error", errClose)
+		}
+	}()
+
+	var out []models.PromotedMemory
+	for rows.Next() {
+		var (
+			row        models.PromotedMemory
+			convoID    sql.NullString
+			agentID    sql.NullString
+			promotedAt sql.NullTime
+		)
+		if err := rows.Scan(&row.ID, &convoID, &agentID, &row.Data, &promotedAt); err != nil {
+			return nil, 0, fmt.Errorf("promoted memories scan: %w", err)
+		}
+		if convoID.Valid && strings.TrimSpace(convoID.String) != "" {
+			s := strings.TrimSpace(convoID.String)
+			row.ConversationID = &s
+		}
+		if agentID.Valid {
+			row.AgentID = agentID.String
+		}
+		if promotedAt.Valid {
+			t := promotedAt.Time
+			row.PromotedToKBAt = &t
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("promoted memories rows: %w", err)
+	}
+
+	return out, total, nil
 }
