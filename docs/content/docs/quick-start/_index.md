@@ -25,7 +25,7 @@ Get from zero to a working Meko integration in minutes:
     Follow the instructions in the wizard to:
 
     - Name your datapack
-    - [Configure](../integrations/connect-to-ai-agent.md) the Meko MCP server on your AI tool of choice.
+    - [Configure](../integrations/connect-to-ai-agent) the Meko MCP server on your AI tool of choice.
     - Optionally, add [knowledge](../architecture/core-concepts/knowledgebase/) to your datapack.
 
 That's it - when you finish, Meko displays your datapack, and you're ready to start adding knowledge and creating memories using your favorite agent.
