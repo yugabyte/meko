@@ -44,15 +44,6 @@ For each datapack, you can view:
 - Token costs per interaction
 - Latency at each pipeline stage
 
-## LangFuse integration
-
-Meko integrates with [LangFuse](https://github.com/langfuse/langfuse) for trace collection and visualization.
-
-<!-- TODO: Add LangFuse setup and configuration instructions -->
-<!-- TODO: Add screenshots of the LangFuse dashboard with Meko traces -->
-<!-- TODO: Add documentation for trace-related MCP tools and API endpoints -->
-<!-- TODO: Add guide for common debugging patterns using traces -->
-
 ## Next steps
 
 - [Learn about traces](../../architecture/core-concepts/traces/)
