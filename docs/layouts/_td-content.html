@@ -10,7 +10,7 @@
 	</header>
 	{{ .Render "_td-content-after-header" -}}
 	{{ .Content }}
-	{{ partial "feedback.html" . -}}
+	{{ if (.Site.Params.ui.feedback.enable) }}{{ partial "feedback.html" . -}}{{ end }}
 	{{ if (.Site.Config.Services.Disqus.Shortname) -}}
 		<br />
 		{{- partial "disqus-comment.html" . -}}

@@ -32,9 +32,11 @@
                 </div>
               {{ end -}}
               {{- $isFullWidth := strings.Contains (default "" (.Param "body_class")) "full-width" -}}
+              {{- if (.Site.Params.ui.feedback.enable) -}}
               <div class="td-docs-topbar__feedback flex-shrink-0 ms-auto text-end d-print-none{{ if not $isFullWidth }} d-xl-none{{ end }}">
                 {{ partial "feedback-dropdown.html" . -}}
               </div>
+              {{- end -}}
             </div>
             {{ block "main" . }}{{ end }}
           </main>

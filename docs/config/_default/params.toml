@@ -13,6 +13,10 @@ github_repo = "https://github.com/yugabyte/meko"
   sidebar_root_enabled = true
   ul_show = 1
 
+# Feedback widget (docs top bar + right TOC + footer block). Temporarily off.
+[ui.feedback]
+  enable = false
+
 [[links.developer]]
   name = "Discord"
   url = "https://discord.gg/GWcSST7GqZ"
