@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 880" width="1200" height="880" font-family="DM Sans, system-ui, sans-serif">
+
+  <rect width="1200" height="880" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="600" y="56" text-anchor="middle" fill="#e6edf3" font-size="28" font-weight="700">What lives inside a Datapack</text>
+  <text x="600" y="86" text-anchor="middle" fill="#8b949e" font-size="14">Your agent's isolated workspace. One MCP endpoint. Shared knowledge, private memory.</text>
+
+  <!-- ═══ DATAPACK CONTAINER ═══ -->
+  <g transform="translate(80,124)">
+    <rect width="1040" height="660" rx="14" fill="#0d1117" stroke="#f97316" stroke-width="1.5"/>
+
+    <!-- DATAPACK badge -->
+    <g transform="translate(460,-16)">
+      <rect width="120" height="32" rx="16" fill="#f97316"/>
+      <text x="60" y="21" text-anchor="middle" fill="#0d1117" font-size="13" font-weight="700" letter-spacing="1.5">DATAPACK</text>
+    </g>
+
+    <!-- ═══ PER-AGENT ZONE ═══ -->
+    <g transform="translate(32,44)">
+      <rect width="976" height="310" rx="12" fill="none" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="6 5"/>
+      <g transform="translate(20,-10)">
+        <rect width="300" height="22" rx="6" fill="#0d1117"/>
+        <text x="6" y="16" fill="#ef4444" font-size="12" font-weight="600">PER-AGENT — ISOLATED BY AGENT IDENTITY</text>
+      </g>
+
+      <!-- Memory -->
+      <g transform="translate(28,28)">
+        <rect width="450" height="260" rx="10" fill="#8b5cf6" fill-opacity="0.10" stroke="#8b5cf6" stroke-opacity="0.4" stroke-width="1"/>
+        <rect width="5" height="260" rx="2.5" fill="#8b5cf6"/>
+        <text x="24" y="36" fill="#8b5cf6" font-size="18" font-weight="700">Memory</text>
+        <text x="24" y="62" fill="#e6edf3" font-size="13">Learns over time from conversations</text>
+        <text x="24" y="82" fill="#8b949e" font-size="12">Vector + graph search · entity extraction</text>
+
+        <g transform="translate(24,104)">
+          <g><rect width="190" height="30" rx="6" fill="none" stroke="#8b5cf6" stroke-opacity="0.4"/><text x="95" y="20" text-anchor="middle" fill="#e6edf3" font-size="12">Learned preferences</text></g>
+          <g transform="translate(206,0)"><rect width="190" height="30" rx="6" fill="none" stroke="#8b5cf6" stroke-opacity="0.4"/><text x="95" y="20" text-anchor="middle" fill="#e6edf3" font-size="12">Extracted entities</text></g>
+          <g transform="translate(0,42)"><rect width="190" height="30" rx="6" fill="none" stroke="#8b5cf6" stroke-opacity="0.4"/><text x="95" y="20" text-anchor="middle" fill="#e6edf3" font-size="12">Relationship graph</text></g>
+          <g transform="translate(206,42)"><rect width="190" height="30" rx="6" fill="#a78bfa" fill-opacity="0.08" stroke="#a78bfa" stroke-opacity="0.5"/><text x="95" y="20" text-anchor="middle" fill="#a78bfa" font-size="12">Promote to KB ↗</text></g>
+        </g>
+      </g>
+
+      <!-- Conversations -->
+      <g transform="translate(498,28)">
+        <rect width="450" height="260" rx="10" fill="#ec4899" fill-opacity="0.08" stroke="#ec4899" stroke-opacity="0.4" stroke-width="1"/>
+        <rect width="5" height="260" rx="2.5" fill="#ec4899"/>
+        <text x="24" y="36" fill="#ec4899" font-size="18" font-weight="700">Conversations</text>
+        <text x="24" y="62" fill="#e6edf3" font-size="13">Full session history and reasoning trail</text>
+        <text x="24" y="82" fill="#8b949e" font-size="12">Persist across sessions · hand off context</text>
+
+        <g transform="translate(24,104)">
+          <g><rect width="190" height="30" rx="6" fill="none" stroke="#ec4899" stroke-opacity="0.4"/><text x="95" y="20" text-anchor="middle" fill="#e6edf3" font-size="12">Message turns</text></g>
+          <g transform="translate(206,0)"><rect width="190" height="30" rx="6" fill="none" stroke="#ec4899" stroke-opacity="0.4"/><text x="95" y="20" text-anchor="middle" fill="#e6edf3" font-size="12">Chain-of-thought</text></g>
+          <g transform="translate(0,42)"><rect width="190" height="30" rx="6" fill="none" stroke="#ec4899" stroke-opacity="0.4"/><text x="95" y="20" text-anchor="middle" fill="#e6edf3" font-size="12">Resumability</text></g>
+          <g transform="translate(206,42)"><rect width="190" height="30" rx="6" fill="none" stroke="#ec4899" stroke-opacity="0.4"/><text x="95" y="20" text-anchor="middle" fill="#e6edf3" font-size="12">Audit trail</text></g>
+        </g>
+      </g>
+    </g>
+
+    <!-- ═══ SHARED ZONE ═══ -->
+    <g transform="translate(32,378)">
+      <rect width="976" height="248" rx="12" fill="none" stroke="#06b6d4" stroke-width="1.2" stroke-dasharray="6 5"/>
+      <g transform="translate(20,-10)">
+        <rect width="380" height="22" rx="6" fill="#0d1117"/>
+        <text x="6" y="16" fill="#06b6d4" font-size="12" font-weight="600">SHARED — ACCESSIBLE BY ALL AGENTS IN THE DATAPACK</text>
+      </g>
+
+      <!-- Knowledge -->
+      <g transform="translate(28,24)">
+        <rect width="920" height="120" rx="10" fill="#06b6d4" fill-opacity="0.10" stroke="#06b6d4" stroke-opacity="0.4" stroke-width="1"/>
+        <rect width="5" height="120" rx="2.5" fill="#06b6d4"/>
+        <text x="24" y="34" fill="#06b6d4" font-size="18" font-weight="700">Knowledge</text>
+        <text x="24" y="58" fill="#e6edf3" font-size="13">Document ingestion, auto-embedding, semantic search — any agent can query</text>
+
+        <g transform="translate(24,74)">
+          <g><rect width="160" height="28" rx="6" fill="none" stroke="#06b6d4" stroke-opacity="0.4"/><text x="80" y="18" text-anchor="middle" fill="#e6edf3" font-size="12">Documents + PDFs</text></g>
+          <g transform="translate(176,0)"><rect width="150" height="28" rx="6" fill="none" stroke="#06b6d4" stroke-opacity="0.4"/><text x="75" y="18" text-anchor="middle" fill="#e6edf3" font-size="12">Vector indexes</text></g>
+          <g transform="translate(342,0)"><rect width="180" height="28" rx="6" fill="#a78bfa" fill-opacity="0.08" stroke="#a78bfa" stroke-opacity="0.5"/><text x="90" y="18" text-anchor="middle" fill="#a78bfa" font-size="12">Promoted memories</text></g>
+          <g transform="translate(538,0)"><rect width="140" height="28" rx="6" fill="none" stroke="#06b6d4" stroke-opacity="0.4"/><text x="70" y="18" text-anchor="middle" fill="#e6edf3" font-size="12">Data lineage</text></g>
+        </g>
+      </g>
+
+      <!-- Observability -->
+      <g transform="translate(28,158)">
+        <rect width="920" height="66" rx="10" fill="#eab308" fill-opacity="0.08" stroke="#eab308" stroke-opacity="0.4" stroke-width="1"/>
+        <rect width="5" height="66" rx="2.5" fill="#eab308"/>
+        <text x="24" y="28" fill="#eab308" font-size="16" font-weight="700">Observability</text>
+        <text x="24" y="50" fill="#e6edf3" font-size="13">Trace agent reasoning, audit decisions, debug the learning process</text>
+        <text x="896" y="28" text-anchor="end" fill="#6e7681" font-size="11" font-family="monospace, monospace">execution traces · chain-of-thought logging</text>
+      </g>
+    </g>
+
+  </g>
+  <!-- end DATAPACK container -->
+
+  <!-- Bottom bar: sharing + access -->
+  <g transform="translate(80,806)">
+    <rect width="1040" height="48" rx="10" fill="#38bdf8" fill-opacity="0.06" stroke="#38bdf8" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="6 4"/>
+    <rect width="5" height="48" rx="2.5" fill="#38bdf8"/>
+    <text x="24" y="30" fill="#38bdf8" font-size="14" font-weight="600">Shareable</text>
+    <text x="116" y="30" fill="#8b949e" font-size="13">·  invite collaborators to your datapack  ·  every agent follows the same project context</text>
+  </g>
+
+  <!-- Footer -->
+  <g transform="translate(160,876)">
+    <text x="880" y="0" text-anchor="end" fill="#484f58" font-size="12" font-family="monospace, monospace">© 2026 All Rights Reserved</text>
+  </g>
+</svg>

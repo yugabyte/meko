@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 740" width="1200" height="740" font-family="DM Sans, system-ui, sans-serif">
+
+  <!-- Background -->
+  <rect width="1200" height="740" fill="#0d1117"/>
+
+  <!-- ═══ TOP ROW: 3 CATEGORIES ═══ -->
+  <g transform="translate(80,32)">
+    <g transform="translate(0,0)">
+      <rect width="330" height="100" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="165" y="30" text-anchor="middle" fill="#e6edf3" font-size="13" font-weight="700" letter-spacing="0.5">CODING HARNESSES</text>
+      <text x="165" y="56" text-anchor="middle" fill="#8b949e" font-size="12" font-family="monospace, monospace">Claude Code · Cursor</text>
+      <text x="165" y="78" text-anchor="middle" fill="#484f58" font-size="11" font-family="monospace, monospace">Codex * · VS Code *</text>
+    </g>
+    <g transform="translate(354,0)">
+      <rect width="330" height="100" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="165" y="30" text-anchor="middle" fill="#e6edf3" font-size="13" font-weight="700" letter-spacing="0.5">AI ASSISTANTS</text>
+      <text x="165" y="56" text-anchor="middle" fill="#8b949e" font-size="12" font-family="monospace, monospace">Claude Desktop</text>
+      <text x="165" y="78" text-anchor="middle" fill="#484f58" font-size="11" font-family="monospace, monospace">ChatGPT * · Gemini *</text>
+    </g>
+    <g transform="translate(708,0)">
+      <rect width="332" height="100" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="166" y="30" text-anchor="middle" fill="#e6edf3" font-size="13" font-weight="700" letter-spacing="0.5">AI FRAMEWORKS</text>
+      <text x="166" y="56" text-anchor="middle" fill="#8b949e" font-size="12" font-family="monospace, monospace">CrewAI · LangChain · OpenAI</text>
+      <text x="166" y="78" text-anchor="middle" fill="#8b949e" font-size="12" font-family="monospace, monospace">Bedrock AgentCore</text>
+    </g>
+  </g>
+
+  <!-- Arrow: Top → MCP Server -->
+  <g transform="translate(600,132)">
+    <line x1="0" y1="0" x2="0" y2="26" stroke="#f97316" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <path d="M -6 22 L 0 30 L 6 22" fill="none" stroke="#f97316" stroke-width="1.5"/>
+  </g>
+
+  <!-- ═══ MCP SERVER BOX ═══ -->
+  <g transform="translate(380,162)">
+    <rect width="440" height="48" rx="10" fill="#f97316" fill-opacity="0.12" stroke="#f97316" stroke-width="1.5"/>
+    <text x="220" y="20" text-anchor="middle" fill="#f97316" font-size="10" font-family="monospace, monospace" font-weight="500" letter-spacing="1.2">MODEL CONTEXT PROTOCOL</text>
+    <text x="220" y="38" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="600">MCP Server</text>
+  </g>
+
+  <!-- Arrow: MCP Server → MEKO -->
+  <g transform="translate(600,210)">
+    <line x1="0" y1="0" x2="0" y2="26" stroke="#f97316" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <path d="M -6 22 L 0 30 L 6 22" fill="none" stroke="#f97316" stroke-width="1.5"/>
+  </g>
+
+  <!-- ═══════════════ MEKO CONTAINER ═══════════════ -->
+  <g transform="translate(80,240)">
+    <rect width="1040" height="440" rx="14" fill="#0d1117" stroke="#f97316" stroke-width="1.5"/>
+
+    <!-- MEKO badge -->
+    <g transform="translate(455,-20)">
+      <rect width="130" height="40" rx="20" fill="#f97316"/>
+      <text x="65" y="27" text-anchor="middle" fill="#0d1117" font-size="22" font-weight="800" letter-spacing="2">MEKO</text>
+    </g>
+
+    <!-- ── KNOWLEDGE ── -->
+    <g transform="translate(32,36)">
+      <rect width="976" height="68" rx="10" fill="#06b6d4" fill-opacity="0.10" stroke="#06b6d4" stroke-opacity="0.30" stroke-width="1"/>
+      <rect width="5" height="68" rx="2.5" fill="#06b6d4"/>
+      <text x="24" y="26" fill="#06b6d4" font-size="15" font-weight="600">KNOWLEDGE</text>
+      <text x="24" y="50" fill="#e6edf3" font-size="12">Upload documents, build vector indexes, query with semantic search</text>
+      <text x="952" y="50" text-anchor="end" fill="#6e7681" font-size="11" font-family="monospace, monospace">pg_dist_rag · chunking · embedding</text>
+    </g>
+
+    <!-- ── MEMORY ── -->
+    <g transform="translate(32,114)">
+      <rect width="976" height="68" rx="10" fill="#8b5cf6" fill-opacity="0.10" stroke="#8b5cf6" stroke-opacity="0.30" stroke-width="1"/>
+      <rect width="5" height="68" rx="2.5" fill="#8b5cf6"/>
+      <text x="24" y="26" fill="#8b5cf6" font-size="15" font-weight="600">MEMORY</text>
+      <text x="24" y="50" fill="#e6edf3" font-size="12">Store agent learnings, promote to knowledge base, vector + graph search</text>
+      <text x="952" y="50" text-anchor="end" fill="#6e7681" font-size="11" font-family="monospace, monospace">entity extraction · graph relationships</text>
+    </g>
+
+    <!-- ── CONVERSATIONS ── -->
+    <g transform="translate(32,192)">
+      <rect width="976" height="68" rx="10" fill="#ec4899" fill-opacity="0.10" stroke="#ec4899" stroke-opacity="0.30" stroke-width="1"/>
+      <rect width="5" height="68" rx="2.5" fill="#ec4899"/>
+      <text x="24" y="26" fill="#ec4899" font-size="15" font-weight="600">CONVERSATIONS</text>
+      <text x="24" y="50" fill="#e6edf3" font-size="12">Persist session history, resume across sessions, hand off context between agents</text>
+      <text x="952" y="50" text-anchor="end" fill="#6e7681" font-size="11" font-family="monospace, monospace">cross-session recall · resumability</text>
+    </g>
+
+    <!-- ── OBSERVABILITY ── -->
+    <g transform="translate(32,270)">
+      <rect width="976" height="68" rx="10" fill="#eab308" fill-opacity="0.10" stroke="#eab308" stroke-opacity="0.30" stroke-width="1"/>
+      <rect width="5" height="68" rx="2.5" fill="#eab308"/>
+      <text x="24" y="26" fill="#eab308" font-size="15" font-weight="600">OBSERVABILITY</text>
+      <text x="24" y="50" fill="#e6edf3" font-size="12">Trace agent reasoning chains, audit decisions, debug the learning process</text>
+      <text x="952" y="50" text-anchor="end" fill="#6e7681" font-size="11" font-family="monospace, monospace">chain-of-thought · execution traces</text>
+    </g>
+
+    <!-- ── SHARING ── -->
+    <g transform="translate(32,350)">
+      <rect width="976" height="62" rx="10" fill="#38bdf8" fill-opacity="0.06" stroke="#38bdf8" stroke-opacity="0.25" stroke-width="1" stroke-dasharray="6 4"/>
+      <rect width="5" height="62" rx="2.5" fill="#38bdf8"/>
+      <text x="24" y="24" fill="#38bdf8" font-size="14" font-weight="600">DATAPACK SHARING</text>
+      <text x="24" y="44" fill="#e6edf3" font-size="12">Share datapacks with collaborators so every agent follows the same project context</text>
+      <text x="952" y="44" text-anchor="end" fill="#6e7681" font-size="11" font-family="monospace, monospace">team knowledge · RBAC</text>
+    </g>
+
+  </g>
+
+  <!-- Footer -->
+  <g transform="translate(160,716)">
+    <text x="0" y="0" fill="#484f58" font-size="12" font-family="monospace, monospace">* roadmap</text>
+    <text x="880" y="0" text-anchor="end" fill="#484f58" font-size="12" font-family="monospace, monospace">© 2026 All Rights Reserved</text>
+  </g>
+</svg>

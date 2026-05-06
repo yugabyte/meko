@@ -1,7 +1,7 @@
 ---
 title: Knowledge bases
 linkTitle: Knowledge base
-description: RAG pipelines that parses, chunks, embeds, and indexes your documents
+description: RAG pipeline that parses, chunks, embeds, and indexes your documents
 weight: 30
 ---
 

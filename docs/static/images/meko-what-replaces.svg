@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 840" width="1200" height="840" font-family="DM Sans, system-ui, sans-serif">
+  <defs>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22c55e" fill-opacity="0.7"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="840" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="600" y="52" text-anchor="middle" fill="#e6edf3" font-size="28" font-weight="700">What Meko replaces</text>
+
+  <!-- BEFORE / AFTER labels -->
+  <g transform="translate(60,90)">
+    <rect width="320" height="38" rx="8" fill="#ef4444" fill-opacity="0.12" stroke="#ef4444" stroke-opacity="0.5"/>
+    <text x="160" y="25" text-anchor="middle" fill="#ef4444" font-size="14" font-weight="600">BEFORE</text>
+  </g>
+  <g transform="translate(820,90)">
+    <rect width="320" height="38" rx="8" fill="#22c55e" fill-opacity="0.12" stroke="#22c55e" stroke-opacity="0.5"/>
+    <text x="160" y="25" text-anchor="middle" fill="#22c55e" font-size="14" font-weight="600">AFTER</text>
+  </g>
+
+  <!-- ═══ BEFORE COLUMN — 8 items ═══ -->
+  <g transform="translate(60,148)" font-size="14">
+    <g>
+      <rect width="320" height="52" rx="8" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-opacity="0.3"/>
+      <text x="20" y="32" fill="#e6edf3" font-weight="600">Vector database</text>
+      <text x="300" y="32" text-anchor="end" fill="#6e7681" font-size="11">for embeddings</text>
+    </g>
+    <g transform="translate(0,64)">
+      <rect width="320" height="52" rx="8" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-opacity="0.3"/>
+      <text x="20" y="32" fill="#e6edf3" font-weight="600">Graph database</text>
+      <text x="300" y="32" text-anchor="end" fill="#6e7681" font-size="11">for relationships</text>
+    </g>
+    <g transform="translate(0,128)">
+      <rect width="320" height="52" rx="8" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-opacity="0.3"/>
+      <text x="20" y="32" fill="#e6edf3" font-weight="600">Relational database</text>
+      <text x="300" y="32" text-anchor="end" fill="#6e7681" font-size="11">for structured data</text>
+    </g>
+    <g transform="translate(0,192)">
+      <rect width="320" height="52" rx="8" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-opacity="0.3"/>
+      <text x="20" y="32" fill="#e6edf3" font-weight="600">RAG pipeline</text>
+      <text x="300" y="32" text-anchor="end" fill="#6e7681" font-size="11">chunk, embed, index</text>
+    </g>
+    <g transform="translate(0,256)">
+      <rect width="320" height="52" rx="8" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-opacity="0.3"/>
+      <text x="20" y="32" fill="#e6edf3" font-weight="600">Memory framework</text>
+      <text x="300" y="32" text-anchor="end" fill="#6e7681" font-size="11">for agent context</text>
+    </g>
+    <g transform="translate(0,320)">
+      <rect width="320" height="52" rx="8" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-opacity="0.3"/>
+      <text x="20" y="32" fill="#e6edf3" font-weight="600">Session management</text>
+      <text x="300" y="32" text-anchor="end" fill="#6e7681" font-size="11">conversations</text>
+    </g>
+    <g transform="translate(0,384)">
+      <rect width="320" height="52" rx="8" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-opacity="0.3"/>
+      <text x="20" y="32" fill="#e6edf3" font-weight="600">Observability tooling</text>
+      <text x="300" y="32" text-anchor="end" fill="#6e7681" font-size="11">traces &amp; logging</text>
+    </g>
+    <g transform="translate(0,448)">
+      <rect width="320" height="52" rx="8" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-opacity="0.3"/>
+      <text x="20" y="32" fill="#e6edf3" font-weight="600">Per-component auth</text>
+      <text x="300" y="32" text-anchor="end" fill="#6e7681" font-size="11">RBAC per system</text>
+    </g>
+  </g>
+
+  <!-- ═══ AFTER COLUMN — Meko ═══ -->
+  <g transform="translate(820,148)">
+    <rect width="320" height="500" rx="14" fill="#0d1117" stroke="#f97316" stroke-width="1.5"/>
+    <g transform="translate(100,-16)">
+      <rect width="120" height="34" rx="17" fill="#f97316"/>
+      <text x="60" y="23" text-anchor="middle" fill="#0d1117" font-size="18" font-weight="800" letter-spacing="1.5">MEKO</text>
+    </g>
+
+    <!-- Knowledge -->
+    <g transform="translate(16,30)">
+      <rect width="288" height="100" rx="10" fill="#06b6d4" fill-opacity="0.10" stroke="#06b6d4" stroke-opacity="0.4"/>
+      <rect width="5" height="100" rx="2.5" fill="#06b6d4"/>
+      <text x="20" y="28" fill="#06b6d4" font-size="15" font-weight="700">Knowledge</text>
+      <text x="20" y="50" fill="#e6edf3" font-size="12">Auto-embedding, semantic search,</text>
+      <text x="20" y="68" fill="#e6edf3" font-size="12">distributed RAG pipeline built in</text>
+      <text x="20" y="90" fill="#6e7681" font-size="11" font-family="monospace, monospace">replaces: vector DB, RAG, relational DB</text>
+    </g>
+
+    <!-- Memory -->
+    <g transform="translate(16,146)">
+      <rect width="288" height="100" rx="10" fill="#8b5cf6" fill-opacity="0.10" stroke="#8b5cf6" stroke-opacity="0.4"/>
+      <rect width="5" height="100" rx="2.5" fill="#8b5cf6"/>
+      <text x="20" y="28" fill="#8b5cf6" font-size="15" font-weight="700">Memory</text>
+      <text x="20" y="50" fill="#e6edf3" font-size="12">Entity extraction, relationship graphs,</text>
+      <text x="20" y="68" fill="#e6edf3" font-size="12">promote learnings to knowledge base</text>
+      <text x="20" y="90" fill="#6e7681" font-size="11" font-family="monospace, monospace">replaces: graph DB, memory framework</text>
+    </g>
+
+    <!-- Conversations -->
+    <g transform="translate(16,262)">
+      <rect width="288" height="100" rx="10" fill="#ec4899" fill-opacity="0.10" stroke="#ec4899" stroke-opacity="0.4"/>
+      <rect width="5" height="100" rx="2.5" fill="#ec4899"/>
+      <text x="20" y="28" fill="#ec4899" font-size="15" font-weight="700">Conversations</text>
+      <text x="20" y="50" fill="#e6edf3" font-size="12">Full session history, resumability,</text>
+      <text x="20" y="68" fill="#e6edf3" font-size="12">cross-agent context handoff</text>
+      <text x="20" y="90" fill="#6e7681" font-size="11" font-family="monospace, monospace">replaces: session mgmt, glue code</text>
+    </g>
+
+    <!-- Observability -->
+    <g transform="translate(16,378)">
+      <rect width="288" height="100" rx="10" fill="#eab308" fill-opacity="0.10" stroke="#eab308" stroke-opacity="0.4"/>
+      <rect width="5" height="100" rx="2.5" fill="#eab308"/>
+      <text x="20" y="28" fill="#eab308" font-size="15" font-weight="700">Observability</text>
+      <text x="20" y="50" fill="#e6edf3" font-size="12">Chain-of-thought logging, audit trails,</text>
+      <text x="20" y="68" fill="#e6edf3" font-size="12">execution traces across the full stack</text>
+      <text x="20" y="90" fill="#6e7681" font-size="11" font-family="monospace, monospace">replaces: observability, per-system auth</text>
+    </g>
+  </g>
+
+  <!-- ═══ ARROWS (before → after) ═══ -->
+  <g stroke="#22c55e" stroke-opacity="0.45" stroke-width="1.1" fill="none">
+    <!-- Vector DB → Knowledge -->
+    <path d="M 380 174 C 560 174 640 228 820 228" marker-end="url(#arrowGreen)"/>
+    <!-- Graph DB → Memory -->
+    <path d="M 380 238 C 560 238 640 344 820 344" marker-end="url(#arrowGreen)"/>
+    <!-- Relational DB → Knowledge -->
+    <path d="M 380 302 C 560 302 640 240 820 240" marker-end="url(#arrowGreen)"/>
+    <!-- RAG pipeline → Knowledge -->
+    <path d="M 380 366 C 560 366 640 252 820 252" marker-end="url(#arrowGreen)"/>
+    <!-- Memory framework → Memory -->
+    <path d="M 380 430 C 560 430 640 356 820 356" marker-end="url(#arrowGreen)"/>
+    <!-- Session management → Conversations -->
+    <path d="M 380 494 C 560 494 640 460 820 460" marker-end="url(#arrowGreen)"/>
+    <!-- Observability tooling → Observability -->
+    <path d="M 380 558 C 560 558 640 576 820 576" marker-end="url(#arrowGreen)"/>
+    <!-- Per-component auth → Observability -->
+    <path d="M 380 622 C 560 622 640 588 820 588" marker-end="url(#arrowGreen)"/>
+  </g>
+
+  <!-- ═══ BOTTOM PILLS ═══ -->
+  <g transform="translate(60,720)">
+    <g>
+      <rect width="260" height="42" rx="21" fill="#22c55e" fill-opacity="0.10" stroke="#22c55e" stroke-opacity="0.4"/>
+      <text x="130" y="27" text-anchor="middle" fill="#22c55e" font-size="13" font-weight="600">One MCP endpoint</text>
+    </g>
+    <g transform="translate(280,0)">
+      <rect width="260" height="42" rx="21" fill="#22c55e" fill-opacity="0.10" stroke="#22c55e" stroke-opacity="0.4"/>
+      <text x="130" y="27" text-anchor="middle" fill="#22c55e" font-size="13" font-weight="600">One security model</text>
+    </g>
+    <g transform="translate(560,0)">
+      <rect width="260" height="42" rx="21" fill="#22c55e" fill-opacity="0.10" stroke="#22c55e" stroke-opacity="0.4"/>
+      <text x="130" y="27" text-anchor="middle" fill="#22c55e" font-size="13" font-weight="600">Full observability</text>
+    </g>
+    <g transform="translate(840,0)">
+      <rect width="260" height="42" rx="21" fill="#22c55e" fill-opacity="0.10" stroke="#22c55e" stroke-opacity="0.4"/>
+      <text x="130" y="27" text-anchor="middle" fill="#22c55e" font-size="13" font-weight="600">Share with your team</text>
+    </g>
+  </g>
+
+  <!-- Tagline -->
+  <text x="600" y="808" text-anchor="middle" fill="#8b949e" font-size="15" font-family="monospace, monospace">Connect via MCP — and you have everything</text>
+</svg>

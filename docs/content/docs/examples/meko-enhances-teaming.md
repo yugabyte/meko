@@ -15,6 +15,8 @@ Consider the classic handoff: one agent designs a spec, another implements it. T
 
 This compounds at every step. By the time the third agent acts, the original reasoning is gone.
 
+![Multi-agent handoff Diagram](/images/meko-usecase-handoff.svg)
+
 With Meko, you save what was decided and why, not only the final output. The downstream agent retrieves that context before it acts — including tradeoffs and rejected alternatives, not just conclusions.
 
 **How to use it**

@@ -7,6 +7,8 @@ weight: 50
 
 Meko organizes agent data around a few key concepts. Understanding these will help you get the most out of the platform.
 
+![Meko Concepts Diagram](/images/meko-concepts.svg)
+
 {{< card-group >}}
   {{< card
     href="architecture/core-concepts/datapacks/"

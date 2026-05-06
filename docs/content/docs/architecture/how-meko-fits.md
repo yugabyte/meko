@@ -21,11 +21,9 @@ Meko sits between your agent SDK and the underlying database, providing a unifie
 
 ![Meko Architecture Diagram](/images/architecture.svg)
 
-Agents interact via MCP.
-
 ### What you get
 
-A [datapack](../core-concepts/datapacks/) incorporates the following:
+A [datapack](../core-concepts/datapacks/) is the isolation unit for agent data in Meko. Datapacks can be shared by many users and connected to many agents. A datapack incorporates the following:
 
 | Capability | Description |
 | :--------- | :---------- |
@@ -37,7 +35,9 @@ A [datapack](../core-concepts/datapacks/) incorporates the following:
 | Audit trails | LLM reasoning traces and execution logs. |
 | Observability, security, RBAC | Spans the full stack, not bolted on per-component. |
 
-The memory, knowledge, and database layers share state, and they operate as one system, not three isolated tiers.
+![Meko Datapack Internals Diagram](/images/meko-datapack-internals.svg)
+
+The memory, knowledge, and database layers share state, and they operate as one system, not as isolated tiers.
 
 ### What meko replaces
 
@@ -48,6 +48,8 @@ Without Meko, building an agentic application typically requires wiring together
 - A graph database for entity relationships
 - Custom integration code for each system
 - Per-component observability, security, and RBAC
+
+![What Meko Replaces Diagram](/images/meko-what-replaces.svg)
 
 Meko replaces all of this with a single system. The memory, knowledge, and database layers share state and operate as one.
 
