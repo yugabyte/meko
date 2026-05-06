@@ -1,32 +1,36 @@
 .markdown-actions {
   position: relative;
   display: inline-flex !important;
-  padding: 3px 10px;
+  padding: 4px;
+  margin: 10px 0;
   left: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 40px;
-  box-sizing: border-box;
+  top: -6px;
+  border: 1px solid #d7dee4d9;
+  border-radius: 8px;
 
-  @media (min-width: 1024px) {
-    top: -8px;
-    margin: 10px 0;
+  @media (max-width: 768px) {
+    top: -4px;
   }
 
   button {
-    width: 30px;
-    height: 30px;
+    width: 20px;
+    height: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.55);
-    background: transparent !important;
+    color: #d7dee4d9;
+    background: 0 0 !important;
     border: none;
     transition: color 0.15s ease;
+
+    i.fa {
+      margin: 8px !important;
+    }
 
     &:hover {
       background-color: transparent;
       border: none;
-      color: rgba(255, 255, 255, 0.88);
+      color: rgba(255, 255, 255, 88%);
     }
 
     &.copy-link {
@@ -67,47 +71,18 @@
         }
       }
 
-      &:hover {
-        span {
-          padding: 4px 10px;
-          overflow: visible;
-          width: auto;
-          height: auto;
+      &:hover span {
+        padding: 4px 10px;
+        overflow: visible;
+        width: auto;
+        height: auto;
+        opacity: 1;
+        transition: opacity 250ms ease;
+
+        &::before {
           opacity: 1;
           transition: opacity 250ms ease;
-
-          &::before {
-            opacity: 1;
-            transition: opacity 250ms ease;
-          }
         }
-      }
-    }
-  }
-
-  .dropdown-menu {
-    background-color: #1a1a2e;
-    border-color: #ffffff1f;
-    margin-top: 6px !important;
-
-    li {
-      margin: 0;
-    }
-
-    .copy-item {
-      color: #ffffffd9;
-      border-radius: 4px;
-      padding: 4px 10px;
-      text-decoration: none;
-
-      &:hover {
-        color: #fff;
-        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        background-size: 200% 200%;
-      }
-
-      &::after {
-        display: none;
       }
     }
   }
