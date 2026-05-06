@@ -43,6 +43,7 @@ export default function Sidebar() {
   const onPlaygroundRoute =
     location.pathname === ROUTES.playground ||
     location.pathname.startsWith(`${ROUTES.playground}/`);
+  const activeDatapackId = (new URLSearchParams(location.search).get("datapack_id") ?? "").trim();
   // Fetch once when entering the datapacks area, not on every `/datapacks/...` subpath change
   // (otherwise opening a datapack from overview triggers an extra listDatapacks call).
   useEffect(() => {
@@ -266,16 +267,20 @@ export default function Sidebar() {
                 {datapackList.map((dp) => (
                   <NavLink
                     key={dp.datapack_id}
-                    to={datapackDetailPath(dp.datapack_name)}
+                    to={`${datapackDetailPath(dp.datapack_name)}?datapack_id=${encodeURIComponent(dp.datapack_id)}`}
                     title={dp.datapack_name}
-                    className={({ isActive }) =>
-                      cn(
+                    className={() => {
+                      const basePath = datapackDetailPath(dp.datapack_name);
+                      const onDatapackSubroute =
+                        location.pathname === basePath || location.pathname.startsWith(`${basePath}/`);
+                      const isActive = onDatapackSubroute && activeDatapackId === dp.datapack_id;
+                      return cn(
                         "flex items-center rounded-md py-1.5 pl-2 pr-2 text-xs font-medium transition-colors min-w-0",
                         isActive
                           ? "bg-white/10 text-white"
                           : "text-gray-400 hover:bg-white/5 hover:text-white",
-                      )
-                    }
+                      );
+                    }}
                   >
                     <span className="truncate">{dp.datapack_name}</span>
                   </NavLink>

@@ -27,6 +27,7 @@ type DatapackService struct {
 	repo        *repository.DatapackRepo
 	ybaSvc      *YBAService
 	accountRepo *repository.AccountRepo
+	langfuseSvc *LangfuseService
 }
 
 // NewDatapackService creates a new DatapackService.
@@ -34,8 +35,14 @@ func NewDatapackService(
 	repo *repository.DatapackRepo,
 	ybaSvc *YBAService,
 	accountRepo *repository.AccountRepo,
+	langfuseSvc *LangfuseService,
 ) *DatapackService {
-	return &DatapackService{repo: repo, ybaSvc: ybaSvc, accountRepo: accountRepo}
+	return &DatapackService{
+		repo:        repo,
+		ybaSvc:      ybaSvc,
+		accountRepo: accountRepo,
+		langfuseSvc: langfuseSvc,
+	}
 }
 
 // CreateRequest holds the fields for creating a datapack.
@@ -219,9 +226,9 @@ func (s *DatapackService) Update(
 	})
 }
 
-// Delete removes the datapack registry entry and releases the universe
-// slot. There is no per-datapack database to drop in the multi-tenant
-// model.
+// Delete removes the Langfuse project (when configured), deletes the
+// datapack registry entry, and releases the universe slot. There is no
+// per-datapack database to drop in the multi-tenant model.
 func (s *DatapackService) Delete(userID, name string) error {
 	if name == "" {
 		return fmt.Errorf("name is required")
@@ -238,8 +245,22 @@ func (s *DatapackService) Delete(userID, name string) error {
 		return fmt.Errorf("datapack %q not found", name)
 	}
 
+	if s.langfuseSvc != nil {
+		if err := s.langfuseSvc.CleanupForDeletedDatapack(userID, dp.ID); err != nil {
+			return fmt.Errorf("failed to cleanup langfuse project before deleting datapack: %w", err)
+		}
+	}
+
 	if err := s.repo.Delete(userID, name); err != nil {
 		return fmt.Errorf("failed to delete registry entry: %w", err)
+	}
+
+	if s.langfuseSvc != nil {
+		slog.Info("langfuse cleanup completed for datapack deletion",
+			"user_id", userID,
+			"datapack_id", dp.ID,
+			"datapack_name", name,
+		)
 	}
 
 	if err := s.ybaSvc.ReleaseUniverse(dp.UniverseID); err != nil {

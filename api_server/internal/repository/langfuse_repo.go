@@ -30,6 +30,15 @@ type LangfuseOrgMapping struct {
 	SecretKey string
 }
 
+// AcceptedShareMembership is the normalized share row needed to backfill
+// Langfuse org/project memberships for already-accepted datapack shares.
+type AcceptedShareMembership struct {
+	OwnerUserID    string
+	DatapackID     string
+	GrantRole      string
+	RecipientEmail string
+}
+
 // Conversation is one row from ListConversationsForProject. Each row is
 // one Langfuse session = one chat conversation. AgentID is empty when
 // the session metadata didn't include it. FirstMessage is empty when
@@ -176,6 +185,22 @@ func (r *LangfuseRepo) GetOrgMapping(accountID string) (*LangfuseOrgMapping, err
 	return &m, nil
 }
 
+// GetUserEmailByID returns users.user_email for the given user_id.
+func (r *LangfuseRepo) GetUserEmailByID(userID string) (string, error) {
+	var email string
+	err := r.metaDB.QueryRow(
+		`SELECT user_email FROM meko_system.users WHERE user_id = $1`,
+		userID,
+	).Scan(&email)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch user email: %w", err)
+	}
+	return strings.TrimSpace(email), nil
+}
+
 // UpsertOrgMapping inserts or updates the org mapping for the user.
 // The accountID parameter is the user_id (see GetOrgMapping for context).
 func (r *LangfuseRepo) UpsertOrgMapping(accountID, orgID, orgName, publicKey, secretKey string) error {
@@ -219,6 +244,63 @@ func (r *LangfuseRepo) GetProjectMapping(datapackID string) (*LangfuseProjectKey
 	return &p, nil
 }
 
+// GetDatapackNameByID returns datapacks.datapack_name for the given datapack_id.
+func (r *LangfuseRepo) GetDatapackNameByID(datapackID string) (string, error) {
+	var name string
+	err := r.metaDB.QueryRow(
+		`SELECT datapack_name FROM meko_system.datapacks WHERE datapack_id = $1`,
+		datapackID,
+	).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch datapack name: %w", err)
+	}
+	return strings.TrimSpace(name), nil
+}
+
+// ListAcceptedShareMembershipsForRecipient returns accepted datapack shares
+// for a recipient user, deduplicated to the latest invite per datapack.
+func (r *LangfuseRepo) ListAcceptedShareMembershipsForRecipient(recipientUserID string) ([]AcceptedShareMembership, error) {
+	recipientUserID = strings.TrimSpace(recipientUserID)
+	if recipientUserID == "" {
+		return nil, fmt.Errorf("recipient_user_id is required")
+	}
+
+	const q = `
+		SELECT DISTINCT ON (di.datapack_id)
+		       di.owner_user_id,
+		       di.datapack_id,
+		       di.grant_role,
+		       COALESCE(u.user_email, '')
+		  FROM meko_system.datapack_invites di
+		  LEFT JOIN meko_system.users u
+		         ON u.user_id = di.recipient_user_id
+		 WHERE di.recipient_user_id = $1
+		   AND di.status::text = 'accepted'
+		 ORDER BY di.datapack_id, di.updated_at DESC, di.created_at DESC`
+
+	rows, err := r.metaDB.Query(q, recipientUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list accepted share memberships: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]AcceptedShareMembership, 0, 8)
+	for rows.Next() {
+		var row AcceptedShareMembership
+		if err := rows.Scan(&row.OwnerUserID, &row.DatapackID, &row.GrantRole, &row.RecipientEmail); err != nil {
+			return nil, fmt.Errorf("failed to scan accepted share membership: %w", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate accepted share memberships: %w", err)
+	}
+	return out, nil
+}
+
 // UpsertProjectMapping inserts or updates the project mapping.
 // Post multi-tenant migration, langfuse_project_mapping is keyed
 // solely on datapack_id and the user is derived via the join to
@@ -241,6 +323,22 @@ func (r *LangfuseRepo) UpsertProjectMapping(datapackID, projectID, projectName, 
 	)
 	if err != nil {
 		return fmt.Errorf("failed to persist langfuse project mapping: %w", err)
+	}
+	return nil
+}
+
+// DeleteProjectMapping removes the langfuse_project_mapping row for a datapack.
+// It is idempotent: deleting a non-existing mapping is treated as success.
+func (r *LangfuseRepo) DeleteProjectMapping(datapackID string) error {
+	if strings.TrimSpace(datapackID) == "" {
+		return fmt.Errorf("failed to delete langfuse project mapping: datapack_id is required")
+	}
+	if _, err := r.metaDB.Exec(
+		`DELETE FROM meko_system.langfuse_project_mapping
+		 WHERE datapack_id = $1`,
+		datapackID,
+	); err != nil {
+		return fmt.Errorf("failed to delete langfuse project mapping: %w", err)
 	}
 	return nil
 }

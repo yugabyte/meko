@@ -300,7 +300,7 @@ func (h *SharingHandler) UpdateGrant(c echo.Context) error {
 			"INVALID_JSON", "malformed request body")
 	}
 
-	resp, err := h.svc.UpdateMemberGrant(dp.ID, shareUserID, req)
+	resp, err := h.svc.UpdateMemberGrant(dp.ID, dp.UserID, shareUserID, req)
 	if err != nil {
 		if isValidationErr(err) {
 			return apiError(c, http.StatusBadRequest,

@@ -179,6 +179,193 @@ func (s *LangfuseService) ProvisionForDatapack(
 	return keys
 }
 
+// CleanupForDeletedDatapack deletes the Langfuse project (best-effort)
+// and removes its local mapping row after a datapack deletion.
+//
+// Behavior:
+//   - no-op when Langfuse is disabled or mapping is absent
+//   - treats remote 404 as already deleted
+//   - always removes local mapping to avoid stale references
+func (s *LangfuseService) CleanupForDeletedDatapack(ownerUserID, datapackID string) error {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if datapackID == "" || ownerUserID == "" {
+		return fmt.Errorf("owner_user_id and datapack_id are required")
+	}
+
+	mapping, err := s.repo.GetProjectMapping(datapackID)
+	if err != nil {
+		return err
+	}
+	if mapping == nil {
+		return nil
+	}
+
+	if s.Enabled() {
+		org, err := s.repo.GetOrgMapping(ownerUserID)
+		if err != nil {
+			return err
+		}
+		if org != nil {
+			path := "/api/public/projects/" + url.PathEscape(mapping.ProjectID)
+			delErr := s.doJSON(http.MethodDelete, path, basicAuth(org.PublicKey, org.SecretKey), nil, nil)
+			if delErr != nil && !strings.Contains(delErr.Error(), "status 404") {
+				return fmt.Errorf("delete langfuse project %s: %w", mapping.ProjectID, delErr)
+			}
+		}
+	}
+
+	if err := s.repo.DeleteProjectMapping(datapackID); err != nil {
+		return err
+	}
+	return nil
+}
+
+type projectMembershipUpsertReq struct {
+	UserID string `json:"userId"`
+	Role   string `json:"role"`
+}
+
+type orgMembershipUpsertReq struct {
+	UserID string `json:"userId"`
+	Role   string `json:"role"`
+}
+
+var grantToProjectRoleMap = map[string]string{
+	string(models.GrantViewer):      "VIEWER",
+	string(models.GrantContributor): "MEMBER",
+	string(models.GrantMaintainer):  "ADMIN",
+}
+
+func grantToLangfuseProjectRole(grant string) string {
+	role, ok := grantToProjectRoleMap[strings.ToLower(strings.TrimSpace(grant))]
+	if !ok {
+		return "VIEWER"
+	}
+	return role
+}
+
+// SyncSharedDatapackMembership ensures the shared recipient has Langfuse
+// org membership and the correct project membership role for the datapack.
+func (s *LangfuseService) SyncSharedDatapackMembership(
+	ownerUserID string,
+	recipientUserID string,
+	recipientEmail string,
+	recipientFirstName string,
+	recipientLastName string,
+	datapackID string,
+	grantRole string,
+) error {
+	if !s.Enabled() {
+		return nil
+	}
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	recipientUserID = strings.TrimSpace(recipientUserID)
+	recipientEmail = strings.TrimSpace(recipientEmail)
+	datapackID = strings.TrimSpace(datapackID)
+	if ownerUserID == "" || recipientUserID == "" || recipientEmail == "" || datapackID == "" {
+		return fmt.Errorf("owner_user_id, recipient_user_id, recipient_email, and datapack_id are required")
+	}
+
+	org, err := s.repo.GetOrgMapping(ownerUserID)
+	if err != nil {
+		return err
+	}
+	if org == nil {
+		ownerEmail, emailErr := s.repo.GetUserEmailByID(ownerUserID)
+		if emailErr != nil {
+			return emailErr
+		}
+		if ownerEmail == "" {
+			return fmt.Errorf("langfuse org mapping not found for owner %s", ownerUserID)
+		}
+		org, err = s.ensureOrgMapping(ownerUserID, ownerEmail)
+		if err != nil {
+			return err
+		}
+	}
+
+	projectMapping, err := s.repo.GetProjectMapping(datapackID)
+	if err != nil {
+		return err
+	}
+	if projectMapping == nil || strings.TrimSpace(projectMapping.ProjectID) == "" {
+		datapackName, nameErr := s.repo.GetDatapackNameByID(datapackID)
+		if nameErr != nil {
+			return nameErr
+		}
+		if strings.TrimSpace(datapackName) == "" {
+			return fmt.Errorf("langfuse project mapping not found for datapack %s", datapackID)
+		}
+		projectMapping, err = s.ensureProjectMapping(ownerUserID, datapackID, datapackName, org)
+		if err != nil {
+			return err
+		}
+	}
+
+	loginEmail := langfuseLoginEmail(recipientUserID, recipientEmail)
+
+	// Not assigning any role to the recipient user in the org.
+	orgRole := "NONE"
+
+	// Shared recipients are org members; per-datapack rights are enforced
+	// via project membership role derived from Meko grant.
+	body := buildScimUserReqWithRole(
+		loginEmail,
+		recipientFirstName,
+		recipientLastName,
+		recipientEmail,
+		s.adminAPIKey,
+		orgRole,
+	)
+	if err := s.createOrgUser(org, body, true); err != nil {
+		return err
+	}
+
+	userIDs, err := s.listOrgUserIDsByEmail(org, loginEmail)
+	if err != nil {
+		return err
+	}
+	if len(userIDs) == 0 {
+		return fmt.Errorf("langfuse user not found for recipient %s", loginEmail)
+	}
+
+	userID := userIDs[0]
+	orgMembershipPath := "/api/public/organizations/memberships"
+	if err := s.doJSON(
+		http.MethodPut,
+		orgMembershipPath,
+		basicAuth(org.PublicKey, org.SecretKey),
+		orgMembershipUpsertReq{
+			UserID: userID,
+			Role:   orgRole,
+		},
+		nil,
+	); err != nil {
+		return fmt.Errorf("upsert langfuse organization membership: %w", err)
+	}
+
+	path := "/api/public/projects/" + url.PathEscape(projectMapping.ProjectID) + "/memberships"
+	role := grantToLangfuseProjectRole(grantRole)
+	if err := s.doJSON(
+		http.MethodPut,
+		path,
+		basicAuth(org.PublicKey, org.SecretKey),
+		projectMembershipUpsertReq{
+			UserID: userID,
+			Role:   role,
+		},
+		nil,
+	); err != nil {
+		return fmt.Errorf("upsert langfuse project membership: %w", err)
+	}
+
+	return nil
+}
+
 type ObserveBootstrapResult struct {
 	SetCookies []string
 	OrgID      string
@@ -214,6 +401,13 @@ func (s *LangfuseService) BootstrapObserveSession(
 		lastName,
 	); err != nil {
 		return nil, err
+	}
+	// Legacy-share backfill: if this user accepted datapacks before
+	// share-time Langfuse sync was fully reliable, re-run idempotent
+	// membership upserts so Observe works without manual repair.
+	if err := s.reconcileSharedMembershipsForRecipient(accountID, accountEmail, firstName, lastName); err != nil {
+		slog.Warn("langfuse share backfill failed during bootstrap",
+			"recipient_user_id", accountID, "error", err)
 	}
 	loginEmail := langfuseLoginEmail(accountID, accountEmail)
 
@@ -264,6 +458,55 @@ func (s *LangfuseService) BootstrapObserveSession(
 		SetCookies: merged,
 		OrgID:      org.OrgID,
 	}, nil
+}
+
+func (s *LangfuseService) reconcileSharedMembershipsForRecipient(
+	recipientUserID string,
+	recipientEmail string,
+	recipientFirstName string,
+	recipientLastName string,
+) error {
+	shares, err := s.repo.ListAcceptedShareMembershipsForRecipient(recipientUserID)
+	if err != nil {
+		return err
+	}
+	if len(shares) == 0 {
+		return nil
+	}
+
+	var firstErr error
+	for _, share := range shares {
+		email := strings.TrimSpace(share.RecipientEmail)
+		if email == "" {
+			email = strings.TrimSpace(recipientEmail)
+		}
+		if email == "" {
+			slog.Warn("langfuse share backfill skipped: missing recipient email",
+				"recipient_user_id", recipientUserID, "datapack_id", share.DatapackID)
+			continue
+		}
+
+		if syncErr := s.SyncSharedDatapackMembership(
+			share.OwnerUserID,
+			recipientUserID,
+			email,
+			recipientFirstName,
+			recipientLastName,
+			share.DatapackID,
+			share.GrantRole,
+		); syncErr != nil {
+			slog.Warn("langfuse share backfill failed",
+				"recipient_user_id", recipientUserID,
+				"owner_user_id", share.OwnerUserID,
+				"datapack_id", share.DatapackID,
+				"grant_role", share.GrantRole,
+				"error", syncErr)
+			if firstErr == nil {
+				firstErr = syncErr
+			}
+		}
+	}
+	return firstErr
 }
 
 func (s *LangfuseService) ensureOrgMapping(accountID, accountEmail string) (*orgMapping, error) {
@@ -747,6 +990,19 @@ type scimUserPutReq struct {
 }
 
 func buildScimUserReq(loginEmail, firstName, lastName, fallbackEmail, adminAPIKey string) scimUserReq {
+	return buildScimUserReqWithRole(
+		loginEmail,
+		firstName,
+		lastName,
+		fallbackEmail,
+		adminAPIKey,
+		"OWNER",
+	)
+}
+
+func buildScimUserReqWithRole(
+	loginEmail, firstName, lastName, fallbackEmail, adminAPIKey, role string,
+) scimUserReq {
 	first := strings.TrimSpace(firstName)
 	last := strings.TrimSpace(lastName)
 	fullName := strings.TrimSpace(first + " " + last)
@@ -759,7 +1015,7 @@ func buildScimUserReq(loginEmail, firstName, lastName, fallbackEmail, adminAPIKe
 		Emails:   []scimUserEmail{{Primary: true, Value: loginEmail, Type: "work"}},
 		Active:   true,
 		Password: deriveLangfusePassword(loginEmail, adminAPIKey),
-		Roles:    []string{"OWNER"},
+		Roles:    []string{strings.ToUpper(strings.TrimSpace(role))},
 	}
 }
 
@@ -778,11 +1034,19 @@ func (s *LangfuseService) ensureOrgUser(
 		return fmt.Errorf("email is required for langfuse user provisioning")
 	}
 	loginEmail := langfuseLoginEmail(accountID, email)
-	body := buildScimUserReq(loginEmail, firstName, lastName, email, s.adminAPIKey)
-	if err := s.createOrgUser(org, body, true); err != nil {
+
+	userIDs, err := s.listOrgUserIDsByEmail(org, loginEmail)
+	if err != nil {
 		return err
 	}
-	return s.ensureOrgUserRole(org, loginEmail, "OWNER")
+	if len(userIDs) > 0 {
+		// User already exists — enforce the OWNER role and done.
+		return s.ensureOrgUserRole(org, loginEmail, "OWNER")
+	}
+
+	// New user — create via SCIM; role is embedded in the request body.
+	body := buildScimUserReq(loginEmail, firstName, lastName, email, s.adminAPIKey)
+	return s.createOrgUser(org, body, true)
 }
 
 func (s *LangfuseService) createOrgUser(

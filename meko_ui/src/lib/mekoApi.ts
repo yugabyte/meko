@@ -332,13 +332,32 @@ export async function listDatapacks() {
   return request<Datapack[]>("/datapacks");
 }
 
-/** GET /datapacks/:name — full datapack row (includes `description` when set). */
-export async function getDatapack(name: string, options: { signal?: AbortSignal } = {}) {
-  return request<Datapack>(`/datapacks/${encodeURIComponent(name)}`, "GET", undefined, options);
+type DatapackRouteOptions = { signal?: AbortSignal; datapackId?: string };
+
+function withDatapackID(path: string, datapackId?: string): string {
+  const id = (datapackId ?? "").trim();
+  if (!id) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}datapack_id=${encodeURIComponent(id)}`;
 }
 
-export async function listAgents(name: string, options: { signal?: AbortSignal } = {}) {
-  return request<Agent[]>(`/datapacks/${encodeURIComponent(name)}/agents`, "GET", undefined, options);
+/** GET /datapacks/:name — full datapack row (includes `description` when set). */
+export async function getDatapack(name: string, options: DatapackRouteOptions = {}) {
+  return request<Datapack>(
+    withDatapackID(`/datapacks/${encodeURIComponent(name)}`, options.datapackId),
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+export async function listAgents(name: string, options: DatapackRouteOptions = {}) {
+  return request<Agent[]>(
+    withDatapackID(`/datapacks/${encodeURIComponent(name)}/agents`, options.datapackId),
+    "GET",
+    undefined,
+    options,
+  );
 }
 
 export async function listKnowledgeBases(
@@ -520,10 +539,10 @@ export async function listDatapackOutgoingShares(
  */
 export async function listDatapackMembers(
   datapackName: string,
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ) {
   return request<DatapackMembersResponse>(
-    `/datapacks/${encodeURIComponent(datapackName)}/member-list`,
+    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/member-list`, options.datapackId),
     "GET",
     undefined,
     options,
@@ -731,11 +750,12 @@ export type ListDatapackConversationsResponse = {
 export async function listDatapackConversations(
   datapackName: string,
   params: { limit?: number; offset?: number } = {},
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ) {
   const qs = new URLSearchParams();
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  if (options.datapackId?.trim()) qs.set("datapack_id", options.datapackId.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<ListDatapackConversationsResponse>(
     `/datapacks/${encodeURIComponent(datapackName)}/conversations${suffix}`,
@@ -867,10 +887,10 @@ export type DatapackConversationCount = {
  */
 export async function getDatapackConversationCount(
   datapackName: string,
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ) {
   return request<DatapackConversationCount>(
-    `/datapacks/${encodeURIComponent(datapackName)}/conversations/count`,
+    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/conversations/count`, options.datapackId),
     "GET",
     undefined,
     options,
@@ -892,10 +912,10 @@ export async function ensureLangfuseProjectKeys(datapackName: string) {
  */
 export async function getDatapackProvisionStatus(
   datapackName: string,
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ) {
   return request<ProvisionStatus>(
-    `/datapacks/${encodeURIComponent(datapackName)}/provision-status`,
+    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/provision-status`, options.datapackId),
     "GET",
     undefined,
     options,
@@ -1000,13 +1020,16 @@ function useMockKnowledgeBaseDocuments(): boolean {
  */
 export async function getKnowledgeBaseDocuments(
   datapackName: string,
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ): Promise<KnowledgeBaseDocument[]> {
   // if (useMockKnowledgeBaseDocuments()) {
   //   return Promise.resolve([...MOCK_KB_DOCUMENTS_SAMPLE]);
   // }
   return request<KnowledgeBaseDocument[]>(
-    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/documents`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/documents`,
+      options.datapackId,
+    ),
     "GET",
     undefined,
     options,

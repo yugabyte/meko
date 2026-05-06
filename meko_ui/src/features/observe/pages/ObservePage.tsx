@@ -105,8 +105,9 @@ export default function ObservePage() {
       };
     }
 
+    const shouldForceBootstrap = Boolean(deepLinkRelPath);
     const cached = readObserveBootstrapCache();
-    if (cached && isObserveBootstrapFresh(cached.updatedAt)) {
+    if (!shouldForceBootstrap && cached && isObserveBootstrapFresh(cached.updatedAt)) {
       setLangfuseRelPath(cached.langfuseRelPath);
       setError(null);
       setBootstrapping(false);
@@ -130,7 +131,11 @@ export default function ObservePage() {
       // own org session and skip the keys call.
       const ownedDatapack = datapacks.find((dp) => (dp.grant ?? "owner") === "owner");
       if (ownedDatapack) {
-        await ensureLangfuseProjectKeys(ownedDatapack.datapack_name);
+        try {
+          await ensureLangfuseProjectKeys(ownedDatapack.datapack_name);
+        } catch {
+          // Best-effort: bootstrap can still succeed using existing org/project mappings.
+        }
       }
       const bootstrap = await bootstrapObserveSession();
       if (mounted && bootstrap.org_id) {
@@ -161,7 +166,7 @@ export default function ObservePage() {
     return () => {
       mounted = false;
     };
-  }, [observeEmbedPath]);
+  }, [observeEmbedPath, deepLinkRelPath]);
 
   /**
    * Keep the iframe src in sync with the persisted iframe-version counter.

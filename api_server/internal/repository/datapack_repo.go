@@ -305,6 +305,42 @@ func (r *DatapackRepo) GetByName(userID, name string) (*models.Datapack, error) 
 	return &d, nil
 }
 
+// GetByID returns a single owned datapack by user and datapack UUID.
+func (r *DatapackRepo) GetByID(userID, datapackID string) (*models.Datapack, error) {
+	var d models.Datapack
+	err := r.db.QueryRow(
+		`SELECT d.datapack_id, d.user_id, d.datapack_name,
+		        COALESCE(d.created_by_agent_id, ''),
+		        d.universe_id, d.datapack_ysql_connection_string,
+		        d.datapack_ysql_username,
+		        d.created_at, d.updated_at,
+		        COALESCE(d.datapack_details->>'description', ''),
+		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
+		        COALESCE(u.user_email, '')
+		 FROM meko_system.datapacks d
+		 JOIN meko_system.users u ON u.user_id = d.user_id
+		 WHERE d.user_id = $1 AND d.datapack_id = $2`,
+		userID, datapackID,
+	).Scan(
+		&d.ID, &d.UserID, &d.Name,
+		&d.CreatedByAgentID,
+		&d.UniverseID, &d.YBUniverseConn,
+		&d.MCPUserName,
+		&d.CreatedAt, &d.UpdatedAt,
+		&d.Description,
+		&d.OwnerName,
+		&d.OwnerEmail,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get datapack by id: %w", err)
+	}
+	d.Grant = "owner"
+	return &d, nil
+}
+
 // GetByNameForSharedAccess looks up a datapack by name where the given
 // user has shared access via agent_access. The grant role is resolved
 // from the accepted invite. Returns (nil, nil) if no matching shared
@@ -348,6 +384,51 @@ func (r *DatapackRepo) GetByNameForSharedAccess(userID, name string) (*models.Da
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get shared datapack: %w", err)
+	}
+	return &d, nil
+}
+
+// GetByIDForSharedAccess resolves shared datapack access by UUID for a
+// specific user via agent_access, with grant derived from accepted invites.
+func (r *DatapackRepo) GetByIDForSharedAccess(userID, datapackID string) (*models.Datapack, error) {
+	var d models.Datapack
+	err := r.db.QueryRow(
+		`SELECT d.datapack_id, d.user_id, d.datapack_name,
+		        COALESCE(d.created_by_agent_id, ''),
+		        d.universe_id, d.datapack_ysql_connection_string,
+		        d.datapack_ysql_username,
+		        d.created_at, d.updated_at,
+		        COALESCE(d.datapack_details->>'description', ''),
+		        COALESCE(CONCAT(u.user_first_name, ' ', u.user_last_name), ''),
+		        COALESCE(u.user_email, ''),
+		        COALESCE(i.grant_role, 'viewer')
+		 FROM meko_system.datapacks d
+		 JOIN meko_system.users u ON u.user_id = d.user_id
+		 JOIN meko_system.agent_access aa
+		      ON aa.datapack_id = d.datapack_id AND aa.user_id = $1
+		 LEFT JOIN meko_system.datapack_invites i
+		      ON i.datapack_id = d.datapack_id
+		         AND i.recipient_user_id = $1
+		         AND i.status = 'accepted'
+		 WHERE d.datapack_id = $2
+		 LIMIT 1`,
+		userID, datapackID,
+	).Scan(
+		&d.ID, &d.UserID, &d.Name,
+		&d.CreatedByAgentID,
+		&d.UniverseID, &d.YBUniverseConn,
+		&d.MCPUserName,
+		&d.CreatedAt, &d.UpdatedAt,
+		&d.Description,
+		&d.OwnerName,
+		&d.OwnerEmail,
+		&d.Grant,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shared datapack by id: %w", err)
 	}
 	return &d, nil
 }

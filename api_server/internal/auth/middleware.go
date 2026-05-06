@@ -178,6 +178,11 @@ type DatapackAccessLookup interface {
 	GetByNameForSharedAccess(userID, name string) (*models.Datapack, error)
 }
 
+type datapackIDAccessLookup interface {
+	GetByID(userID, datapackID string) (*models.Datapack, error)
+	GetByIDForSharedAccess(userID, datapackID string) (*models.Datapack, error)
+}
+
 // ContextKeyAccessLevel is set by RequireDatapackAccess to "owner" or
 // "shared" so handlers can branch on access level.
 const ContextKeyAccessLevel = "access_level"
@@ -206,6 +211,49 @@ func RequireDatapackAccess(datapacks DatapackAccessLookup) echo.MiddlewareFunc {
 						"message": "datapack name is required",
 					},
 				})
+			}
+
+			// Disambiguation for duplicate datapack names across owner/shared rows:
+			// when datapack_id is provided, resolve access by ID first.
+			datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
+			if datapackID != "" {
+				if byID, ok := datapacks.(datapackIDAccessLookup); ok {
+					dp, err := byID.GetByID(account.ID, datapackID)
+					if err != nil {
+						slog.Error("access lookup by id failed",
+							"datapack_id", datapackID, "user_id", account.ID, "error", err)
+						return c.JSON(http.StatusInternalServerError, map[string]any{
+							"data": nil,
+							"error": map[string]any{
+								"code":    "INTERNAL_ERROR",
+								"message": "failed to verify datapack access",
+							},
+						})
+					}
+					if dp != nil {
+						c.Set(ContextKeyDatapack, dp)
+						c.Set(ContextKeyAccessLevel, "owner")
+						return next(c)
+					}
+
+					dp, err = byID.GetByIDForSharedAccess(account.ID, datapackID)
+					if err != nil {
+						slog.Error("shared access lookup by id failed",
+							"datapack_id", datapackID, "user_id", account.ID, "error", err)
+						return c.JSON(http.StatusInternalServerError, map[string]any{
+							"data": nil,
+							"error": map[string]any{
+								"code":    "INTERNAL_ERROR",
+								"message": "failed to verify datapack access",
+							},
+						})
+					}
+					if dp != nil {
+						c.Set(ContextKeyDatapack, dp)
+						c.Set(ContextKeyAccessLevel, "shared")
+						return next(c)
+					}
+				}
 			}
 
 			dp, err := datapacks.GetByName(account.ID, name)

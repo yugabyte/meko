@@ -67,9 +67,19 @@ export function scheduleEnsureLangfuseProjectKeysForDatapack(datapackName: strin
     });
 }
 
-/** Runs {@link scheduleEnsureLangfuseProjectKeysForDatapack} when `datapackName` changes. */
-export function useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName: string): void {
+/**
+ * Runs {@link scheduleEnsureLangfuseProjectKeysForDatapack} when `datapackName` changes,
+ * but only when the current user is the datapack owner.  Pass `isOwner=true` once the
+ * datapack response is available; `null/undefined` means "not yet known" and is treated
+ * as a no-op so shared recipients never hit the owner-only endpoint.
+ */
+export function useEnsureLangfuseProjectKeysForTechPreviewDatapack(
+  datapackName: string,
+  isOwner?: boolean | null,
+): void {
   useEffect(() => {
+    // Skip until we know the grant status, and skip for non-owners.
+    if (isOwner !== true) return;
     scheduleEnsureLangfuseProjectKeysForDatapack(datapackName);
-  }, [datapackName]);
+  }, [datapackName, isOwner]);
 }

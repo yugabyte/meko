@@ -104,7 +104,7 @@ func TestSharingService_HandleInviteAction_RequiresValidAction(t *testing.T) {
 
 func TestSharingService_UpdateMemberGrant_RequiresValidGrant(t *testing.T) {
 	svc := service.NewSharingService(nil, nil)
-	_, err := svc.UpdateMemberGrant("dp-1", "user-1", service.UpdateGrantRequest{
+	_, err := svc.UpdateMemberGrant("dp-1", "owner-1", "user-1", service.UpdateGrantRequest{
 		GrantRole: "invalid",
 	})
 	if err == nil || !strings.Contains(err.Error(), "grant is required") {

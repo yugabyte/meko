@@ -39,10 +39,11 @@ type ListStatus = "loading" | "ready" | "error";
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
   className?: string;
 };
 
-export function DatapackDetailAgentsTile({ datapackName, className }: Props) {
+export function DatapackDetailAgentsTile({ datapackName, datapackId, className }: Props) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [status, setStatus] = useState<ListStatus>("loading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -51,7 +52,7 @@ export function DatapackDetailAgentsTile({ datapackName, className }: Props) {
     const ac = new AbortController();
     setStatus("loading");
     setErrorMessage(null);
-    void listAgents(datapackName, { signal: ac.signal })
+    void listAgents(datapackName, { signal: ac.signal, datapackId })
       .then((rows) => {
         if (ac.signal.aborted) return;
         setAgents(rows ?? []);
@@ -64,7 +65,7 @@ export function DatapackDetailAgentsTile({ datapackName, className }: Props) {
         setStatus("error");
       });
     return () => ac.abort();
-  }, [datapackName]);
+  }, [datapackName, datapackId]);
 
   const total = agents.length;
   const preview = agents.slice(0, PREVIEW_LIMIT);

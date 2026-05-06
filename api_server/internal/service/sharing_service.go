@@ -19,8 +19,9 @@ type CognitoInviter interface {
 // SharingService orchestrates datapack sharing operations: invites,
 // accept/decline, outgoing share views, and grant updates.
 type SharingService struct {
-	repo    *repository.SharingRepo
-	cognito CognitoInviter
+	repo      *repository.SharingRepo
+	cognito   CognitoInviter
+	langfuseS *LangfuseService
 }
 
 // NewSharingService creates a new SharingService. The cognito parameter
@@ -34,6 +35,12 @@ func NewSharingService(repo *repository.SharingRepo, cognito CognitoInviter) *Sh
 // client is created after the SharingService).
 func (s *SharingService) SetCognito(c CognitoInviter) {
 	s.cognito = c
+}
+
+// SetLangfuse late-binds the LangfuseService used to sync
+// datapack-share membership into Langfuse org/project memberships.
+func (s *SharingService) SetLangfuse(l *LangfuseService) {
+	s.langfuseS = l
 }
 
 // InviteRequest is the body for POST /datapacks/:name/share.
@@ -170,6 +177,35 @@ func (s *SharingService) HandleInviteAction(req InviteActionRequest) (*InviteAct
 		); err != nil {
 			return nil, err
 		}
+		if s.langfuseS != nil {
+			firstName := ""
+			lastName := ""
+			if identity, iErr := s.repo.GetUserIdentityForShareSync(req.RecipientUserID); iErr != nil {
+				slog.Warn("langfuse share sync: recipient identity lookup failed (continuing with email only)",
+					"invite_id", req.InviteID,
+					"recipient_user_id", req.RecipientUserID,
+					"error", iErr)
+			} else if identity != nil {
+				firstName = identity.FirstName
+				lastName = identity.LastName
+			}
+			if syncErr := s.langfuseS.SyncSharedDatapackMembership(
+				inv.OwnerUserID,
+				req.RecipientUserID,
+				inv.RecipientEmail,
+				firstName,
+				lastName,
+				inv.DatapackID,
+				inv.GrantRole,
+			); syncErr != nil {
+				slog.Warn("langfuse share sync failed on invite accept (non-fatal)",
+					"invite_id", req.InviteID,
+					"datapack_id", inv.DatapackID,
+					"owner_user_id", inv.OwnerUserID,
+					"recipient_user_id", req.RecipientUserID,
+					"error", syncErr)
+			}
+		}
 		return &InviteActionResponse{Status: "accepted", InviteID: req.InviteID}, nil
 	}
 
@@ -259,7 +295,7 @@ type UpdateGrantResponse struct {
 
 // UpdateMemberGrant changes the access level of an active member.
 func (s *SharingService) UpdateMemberGrant(
-	datapackID, memberUserID string,
+	datapackID, ownerUserID, memberUserID string,
 	req UpdateGrantRequest,
 ) (*UpdateGrantResponse, error) {
 	req.GrantRole = strings.ToLower(strings.TrimSpace(req.GrantRole))
@@ -270,6 +306,30 @@ func (s *SharingService) UpdateMemberGrant(
 	perms := grantToPermissions(req.GrantRole)
 	if err := s.repo.UpdateMemberGrant(datapackID, memberUserID, req.GrantRole, perms); err != nil {
 		return nil, err
+	}
+	if s.langfuseS != nil {
+		identity, iErr := s.repo.GetUserIdentityForShareSync(memberUserID)
+		if iErr != nil {
+			slog.Warn("langfuse share sync skipped: failed to load member identity",
+				"datapack_id", datapackID, "member_user_id", memberUserID, "error", iErr)
+		} else if identity != nil {
+			if syncErr := s.langfuseS.SyncSharedDatapackMembership(
+				ownerUserID,
+				memberUserID,
+				identity.Email,
+				identity.FirstName,
+				identity.LastName,
+				datapackID,
+				req.GrantRole,
+			); syncErr != nil {
+				slog.Warn("langfuse share sync failed on grant update (non-fatal)",
+					"datapack_id", datapackID,
+					"owner_user_id", ownerUserID,
+					"member_user_id", memberUserID,
+					"grant", req.GrantRole,
+					"error", syncErr)
+			}
+		}
 	}
 
 	return &UpdateGrantResponse{

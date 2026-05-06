@@ -32,6 +32,7 @@ export const CONVERSATIONS_PREVIEW_SIZE = 4;
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
   /** Authoritative session count for this datapack, sourced from
    *  `dp.conversations_count` on the parent. Used purely for the
    *  "· N sessions" header chip and to decide whether to render the
@@ -40,7 +41,7 @@ type Props = {
   className?: string;
 };
 
-export default function ConversationsPanel({ datapackName, total, className }: Props) {
+export default function ConversationsPanel({ datapackName, datapackId, total, className }: Props) {
   const navigate = useNavigate();
   const [conversations, setConversations] = useState<DatapackConversation[]>([]);
   /** Langfuse project_id for this datapack. Empty until first fetch
@@ -59,7 +60,7 @@ export default function ConversationsPanel({ datapackName, total, className }: P
         const resp = await listDatapackConversations(
           datapackName,
           { limit: CONVERSATIONS_PREVIEW_SIZE, offset: 0 },
-          { signal },
+          { signal, datapackId },
         );
         if (signal?.aborted) return;
         setConversations(resp.conversations ?? []);
@@ -72,7 +73,7 @@ export default function ConversationsPanel({ datapackName, total, className }: P
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [datapackName],
+    [datapackName, datapackId],
   );
 
   useEffect(() => {
@@ -82,7 +83,7 @@ export default function ConversationsPanel({ datapackName, total, className }: P
     setHasFetched(false);
     void load(ac.signal);
     return () => ac.abort();
-  }, [datapackName, load]);
+  }, [datapackName, datapackId, load]);
 
   const openConversation = useCallback(
     (conversationId: string) => {

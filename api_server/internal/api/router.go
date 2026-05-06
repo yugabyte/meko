@@ -44,7 +44,6 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	dpRepo := repository.NewDatapackRepo(cfg.DB)
 
 	ybaSvc := service.NewYBAService(ybaRepo)
-	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo)
 
 	agentRepo := repository.NewAgentRepo(cfg.DB)
 	agentSvc := service.NewAgentService(agentRepo)
@@ -86,6 +85,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	if !langfuseSvc.Enabled() {
 		slog.Warn("langfuse integration disabled; set host + admin api key to enable")
 	}
+	sharingSvc.SetLangfuse(langfuseSvc)
+
+	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc)
 
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
@@ -359,7 +361,13 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	g.POST("/datapacks/:name/knowledge-bases/create", kbH.CreateKB, kbOwnerOrMaintainer...)
 	g.GET("/datapacks/:name/knowledge-bases/status", kbH.KBStatus, kbOwnerOrMaintainer...)
 
-	named.PATCH("/share/:share_user_id", shareH.UpdateGrant)
+	// Update a member's grant: owner or maintainer only (same gate as invite/resend/revoke).
+	// Uses RequireDatapackAccess so shared maintainers can act; dp.UserID in the handler
+	// always refers to the datapack row owner, not the caller.
+	g.PATCH("/datapacks/:name/share/:share_user_id", shareH.UpdateGrant,
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
 
 	slog.Info("datapack routes registered")
 }

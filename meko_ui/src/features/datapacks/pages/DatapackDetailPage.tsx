@@ -28,6 +28,7 @@ import {
   getDatapackConversationCount,
   getDatapackProvisionStatus,
   getKnowledgeBaseDocuments,
+  isMekoApiRequestError,
   listDatapackMembers,
   PROVISION_STATUS_CACHE_KEY,
   type CurrentUser,
@@ -91,6 +92,7 @@ function writeProvisionStatusCache(cache: ProvisionStatusCache) {
 export default function DatapackDetailPage({ datapackName, currentUser }: Props) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const routeDatapackId = (searchParams.get("datapack_id") ?? "").trim() || undefined;
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -116,7 +118,9 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [members, setMembers] = useState<DatapackOutgoingMember[]>([]);
   const [membersListStatus, setMembersListStatus] = useState<DatapackMembersListStatus>("loading");
 
-  useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName);
+  // Only the owner should provision project keys; null = not yet loaded.
+  const isOwner = datapack !== null ? (datapackGrant === null || datapackGrant === "owner") : null;
+  useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName, isOwner);
 
   useEffect(() => {
     if (searchParams.get(DATAPACK_QUERY_PARAM.connect) !== DATAPACK_QUERY_FLAG_ON) return;
@@ -132,7 +136,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const dp = await getDatapack(datapackName);
+        const dp = await getDatapack(datapackName, { datapackId: routeDatapackId });
         if (!cancelled) {
           setDatapack(dp);
           // setKnowledgeBaseCount(dp.knowledge_count ?? 0);
@@ -142,6 +146,17 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
         }
       } catch (e) {
         if (!cancelled) {
+          if (
+            isMekoApiRequestError(e) &&
+            (e.httpStatus === 404 || e.code === "NOT_FOUND")
+          ) {
+            toast({
+              title: "Datapack no longer available",
+              description: `Datapack "${datapackName}" was deleted or your access was removed.`,
+            });
+            navigate(ROUTES.datapacks, { replace: true });
+            return;
+          }
           setDatapack(null);
           setDatapackGrant(null);
           setStatusError(getApiErrorMessage(e, "Failed to load datapack."));
@@ -154,12 +169,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       cancelled = true;
     };
-  }, [datapackName]);
+  }, [datapackName, navigate, routeDatapackId]);
 
   useEffect(() => {
     const ac = new AbortController();
     setConversationsCount(0);
-    void getDatapackConversationCount(datapackName, { signal: ac.signal })
+    void getDatapackConversationCount(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
       .then((res) => {
         if (ac.signal.aborted) return;
         setConversationsCount(res.count ?? 0);
@@ -168,7 +183,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       ac.abort();
     };
-  }, [datapackName]);
+  }, [datapackName, routeDatapackId]);
 
   useEffect(() => {
     const datapackId = datapack?.datapack_id;
@@ -181,7 +196,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     }
     setProvisionStatus(null);
     const ac = new AbortController();
-    void getDatapackProvisionStatus(datapackName, { signal: ac.signal })
+    void getDatapackProvisionStatus(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
       .then((details) => {
         if (ac.signal.aborted) return;
         setProvisionStatus(details);
@@ -192,12 +207,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       ac.abort();
     };
-  }, [datapackName, datapack?.datapack_id]);
+  }, [datapackName, datapack?.datapack_id, routeDatapackId]);
 
   useEffect(() => {
     const ac = new AbortController();
     setMembersListStatus("loading");
-    void listDatapackMembers(datapackName, { signal: ac.signal })
+    void listDatapackMembers(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
       .then((res) => {
         if (ac.signal.aborted) return;
         setMembers(res.members ?? []);
@@ -211,7 +226,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       ac.abort();
     };
-  }, [datapackName, datapack?.datapack_id]);
+  }, [datapackName, datapack?.datapack_id, routeDatapackId]);
 
   const reloadKnowledgeDocuments = useCallback(() => {
     setKnowledgeDocumentsNonce((n) => n + 1);
@@ -221,7 +236,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     const ac = new AbortController();
     setKnowledgeDocumentsLoading(true);
     setKnowledgeDocumentsError(null);
-    void getKnowledgeBaseDocuments(datapackName, { signal: ac.signal })
+    void getKnowledgeBaseDocuments(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
       .then((list) => {
         if (ac.signal.aborted) return;
         setKnowledgeDocuments(list ?? []);
@@ -237,7 +252,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
         if (!ac.signal.aborted) setKnowledgeDocumentsLoading(false);
       });
     return () => ac.abort();
-  }, [datapackName, knowledgeDocumentsNonce]);
+  }, [datapackName, knowledgeDocumentsNonce, routeDatapackId]);
 
   useEffect(() => {
     if (!isConnectOpen) return;
@@ -251,7 +266,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       try {
         setConnectLoading(true);
         setConnectError(null);
-        const details = await getDatapackProvisionStatus(datapackName);
+        const details = await getDatapackProvisionStatus(datapackName, { datapackId: routeDatapackId });
         if (!mounted) return;
         setProvisionStatus(details);
         const nextCache = readProvisionStatusCache();
@@ -276,7 +291,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       mounted = false;
     };
-  }, [isConnectOpen, datapackName, datapack?.datapack_id]);
+  }, [isConnectOpen, datapackName, datapack?.datapack_id, routeDatapackId]);
 
   const displayId = datapack?.datapack_id ?? "—";
   const createdLabel = formatDatapackCreatedAtUtc(datapack?.created_at);
@@ -443,6 +458,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               <div hidden={activeTab !== DATAPACK_DETAIL_TAB.conversations}>
                 <ConversationsPanel
                   datapackName={datapackName}
+                  datapackId={routeDatapackId}
                   total={conversationsCount}
                 />
               </div>
@@ -490,7 +506,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             </div>
           </div>
           <div className="flex min-h-0 min-w-0 flex-col gap-4 lg:self-start lg:w-full">
-            <DatapackDetailAgentsTile datapackName={datapackName} />
+            <DatapackDetailAgentsTile datapackName={datapackName} datapackId={routeDatapackId} />
             <DatapackDetailKnowledgeTile
               documents={knowledgeDocuments}
               documentsLoading={knowledgeDocumentsLoading}

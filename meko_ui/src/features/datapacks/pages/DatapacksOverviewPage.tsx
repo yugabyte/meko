@@ -255,8 +255,14 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           datapacks={datapacks}
           isLoading={isLoading}
           currentUser={currentUser}
-          onOpenDatapack={(dp) => navigate(datapackDetailPath(dp.datapack_name))}
-          onConnectDatapack={(dp) => navigate(datapackDetailUrlOpenConnect(dp.datapack_name))}
+          onOpenDatapack={(dp) =>
+            navigate(
+              `${datapackDetailPath(dp.datapack_name)}?datapack_id=${encodeURIComponent(dp.datapack_id)}`,
+            )}
+          onConnectDatapack={(dp) =>
+            navigate(
+              `${datapackDetailUrlOpenConnect(dp.datapack_name)}&datapack_id=${encodeURIComponent(dp.datapack_id)}`,
+            )}
           onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_name))}
           onNewDatapack={() => navigate(datapackNewConfigurePath())}
         />

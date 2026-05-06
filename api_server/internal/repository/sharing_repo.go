@@ -421,6 +421,32 @@ func (r *SharingRepo) LookupUserByEmail(email string) (*string, error) {
 	return &id, nil
 }
 
+// UserIdentity carries the minimal profile fields needed by sharing sync flows.
+type UserIdentityForShareSync struct {
+	UserID    string
+	FirstName string
+	LastName  string
+	Email     string
+}
+
+// GetUserIdentity returns first_name/last_name/email for a given user_id.
+func (r *SharingRepo) GetUserIdentityForShareSync(userID string) (*UserIdentityForShareSync, error) {
+	var out UserIdentityForShareSync
+	err := r.db.QueryRow(
+		`SELECT user_id, user_first_name, user_last_name, user_email
+		 FROM meko_system.users
+		 WHERE user_id = $1`,
+		userID,
+	).Scan(&out.UserID, &out.FirstName, &out.LastName, &out.Email)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up user identity: %w", err)
+	}
+	return &out, nil
+}
+
 // isUniqueViolation checks if the error is a Postgres unique violation (23505).
 func isUniqueViolation(err error) bool {
 	if err == nil {
