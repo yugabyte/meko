@@ -16,11 +16,13 @@ Get from zero to a working Meko integration in minutes:
 
 1. Sign in to your account.
 
-    Meko creates a [datapack](../architecture/core-concepts/datapacks/) (`meko_default_datapack`) for you, ready to configure.
+    The first time you sign in, Meko displays the **Welcome to Meko** page.
 
 1. Click **Choose Your Tool**.
 
-    The first time you sign in, Meko displays the **Configure** wizard. Follow the instructions in the wizard to:
+    Meko displays the **Configure** wizard, where you will create your first [datapack](../architecture/core-concepts/datapacks/).
+
+    Follow the instructions in the wizard to:
 
     - Name your datapack
     - Install the Meko MCP server on your AI tool of choice.
