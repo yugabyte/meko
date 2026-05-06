@@ -5,7 +5,7 @@ description: MCP server and tools reference
 weight: 40
 ---
 
-The Meko MCP Server provides the primary tools for managing datapacks, conversations, memories, knowledge base search, and connecting to the PostgreSQL-compatible YugabyteDB database for executing database commands.
+The Meko MCP Server provides the primary tools for managing datapacks, conversations, memories, knowledge base, and related search.
 
 To connect from IDEs and MCP-compatible clients using your datapack URL and API key, see [Quick start — Connect your AI client](../../quick-start/#connect-your-ai-client).
 
@@ -18,8 +18,13 @@ The Meko MCP Server provides the following tools.
 | [Conversation](#conversation-tools)<br>`conversation_*` | Full saved chat history and thread replay.<br><br>Example: _Save or retrieve this chat_ |
 | [Memory](#memory-tools)<br>`memory_*` | Durable facts, preferences, decisions, and useful outcomes you want to recall across agents.<br><br>Example: _Remember this about me or the project_ |
 | [Knowledge base](#knowledgebase-tools)<br>`knowledgebase_*` | Reusable, persistent, indexed shared documents, and collective memories that can be searched across agents.<br><br>Example: _Search this in the knowledge base_ |
-| [Database](#database-tools)<br>`db_*` | Structured operational data you want to query or modify with SQL.<br><br>Example: _Run SQL on my data_ |
 | [Datapack](#datapack-tools)<br>`datapack_*` | Provisioning and managing Meko workspaces/environments.<br><br>Example: _Create or manage a workspace_ |
+
+<!-- 
+| [Database](#database-tools)<br>`db_*` | Structured operational data you want to query or modify with SQL.<br><br>Example: _Run SQL on my data_ |
+-->
+
+
 
 ### Conversation tools
 
@@ -50,6 +55,7 @@ The Meko MCP Server provides the following tools.
 | :--- | :---------- |
 | `knowledgebase_search` | Perform a similarity search based on the user query.<br>Use this when you want to search the knowledge base for your queries.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id` |
 
+<!--
 ### Database tools
 
 | Tool | Description |
@@ -57,6 +63,7 @@ The Meko MCP Server provides the following tools.
 | `db_run_read_only_query` | Run a read-only SQL query and return JSON results.<br>Use this for direct structured data access using YSQL.<br>Typical inputs: `scope, datapack_id, conversation_id, query` |
 | `db_run_write_query` | Run a write SQL statement in a transaction.<br>Use this to insert, update, or delete structured data.<br>Typical inputs: `scope, datapack_id, conversation_id, query` |
 | `db_summarize_database` | Summarize tables, schema, and row counts.<br>Use this to explore a datapack's database before writing queries.<br>Typical inputs: `scope, datapack_id, conversation_id, schema` |
+-->
 
 ### Datapack tools
 

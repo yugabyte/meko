@@ -55,9 +55,11 @@ Meko replaces all of this with a single system. The memory, knowledge, and datab
 
 Agents interact with Meko via **MCP** (Model Context Protocol). Each datapack exposes an MCP server that provides tools for memory, knowledge, and more.
 
+<!--
 Developers can also interact via:
 
 - **CLI**: `meko` commands for datapack management
+-->
 
 ### Framework compatibility
 
