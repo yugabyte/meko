@@ -111,13 +111,40 @@ func (r *RagRepo) GetExistingDocURIs(sourceID string) (map[string]bool, error) {
 	return uris, rows.Err()
 }
 
-func (r *RagRepo) InsertDocument(sourceID, documentName, documentURI, checksum string) error {
+func (r *RagRepo) InsertDocument(sourceID, documentName, documentURI, checksum, documentType string) error {
 	_, err := r.db.Exec(
 		`INSERT INTO dist_rag.documents
-			(source_id, document_name, document_uri, document_checksum)
-		 VALUES ($1::UUID, $2, $3, $4)
-		 ON CONFLICT DO NOTHING`,
-		sourceID, documentName, documentURI, checksum,
+			(source_id, document_name, document_uri, document_checksum, document_type)
+		 VALUES ($1::UUID, $2, $3, $4, $5)
+		 ON CONFLICT (source_id, document_uri)
+		   DO UPDATE SET document_type = EXCLUDED.document_type
+		   WHERE dist_rag.documents.document_type IS NULL`,
+		sourceID, documentName, documentURI, checksum, documentType,
+	)
+	if err == nil {
+		return nil
+	}
+
+	// Fallback path: the table has no unique constraint on (source_id, document_uri).
+	// Check existence and insert/update manually.
+	var exists bool
+	if scanErr := r.db.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM dist_rag.documents WHERE source_id = $1::UUID AND document_uri = $2)`,
+		sourceID, documentURI,
+	).Scan(&exists); scanErr != nil {
+		return fmt.Errorf("check document existence %s: %w", documentName, scanErr)
+	}
+
+	if exists {
+		return nil
+	}
+
+	// Document is genuinely new — plain insert without conflict target.
+	_, err = r.db.Exec(
+		`INSERT INTO dist_rag.documents
+			(source_id, document_name, document_uri, document_checksum, document_type)
+		 VALUES ($1::UUID, $2, $3, $4, $5)`,
+		sourceID, documentName, documentURI, checksum, documentType,
 	)
 	if err != nil {
 		return fmt.Errorf("insert document %s: %w", documentName, err)
@@ -228,13 +255,13 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 	}
 
 	rows, err := r.db.Query(
-		`SELECT DISTINCT ON (document_id)
+		`SELECT DISTINCT ON (document_uri)
 		        index_name, source_uri, document_name, document_status,
 		        chunks_processed
 		 FROM dist_rag.vector_index_pipeline_details
 		 WHERE index_name = $1
 		   AND source_uri = ANY($2::TEXT[])
-		 ORDER BY document_id, pipeline_created_at DESC NULLS LAST`,
+		 ORDER BY document_uri, pipeline_created_at DESC NULLS LAST`,
 		r.indexName, pq.Array(sourceURIs),
 	)
 	if err != nil {

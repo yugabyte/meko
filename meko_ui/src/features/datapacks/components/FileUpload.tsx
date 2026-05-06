@@ -16,6 +16,7 @@ import {
   KNOWLEDGE_UPLOAD_MAX_BATCH,
   KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
   filterFilesForKnowledgeUploadBatch,
+  filterDuplicateKnowledgeFileNames,
 } from "@/lib/knowledgeFileUploadRules";
 import { KNOWLEDGE_UPLOAD_STATUS, type KnowledgeUploadStatus } from "@/lib/knowledgeUploadStatus";
 
@@ -64,10 +65,17 @@ export default function FileUpload({ datapackName }: Props) {
   const addFiles = useCallback((incoming: FileList | File[]) => {
     const all = Array.from(incoming);
     setFiles((prev) => {
+      const { unique, duplicateCount } = filterDuplicateKnowledgeFileNames(
+        all,
+        prev.map((e) => e.file.name),
+      );
       const currentBatch = prev.filter(
         (f) => f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING || f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
       ).length;
-      const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(all, currentBatch);
+      const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(unique, currentBatch);
+      if (duplicateCount > 0) {
+        warningParts.unshift(`${duplicateCount} skipped (already in queue)`);
+      }
       if (warningParts.length > 0) showWarning(warningParts.join(". "));
       if (accepted.length === 0) return prev;
       return [

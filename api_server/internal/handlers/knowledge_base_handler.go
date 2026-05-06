@@ -452,7 +452,7 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 			continue
 		}
 		if err := h.ragSvc.InsertDocument(
-			sourceID, obj.Key, docURI, obj.ETag,
+			sourceID, obj.Key, docURI, obj.ETag, obj.ContentType,
 		); err != nil {
 			slog.Warn("failed to insert document",
 				"document", obj.Key, "error", err)

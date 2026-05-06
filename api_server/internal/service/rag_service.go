@@ -89,8 +89,8 @@ func (s *RagService) GetExistingDocURIs(sourceID string) (map[string]bool, error
 	return s.repo.GetExistingDocURIs(sourceID)
 }
 
-func (s *RagService) InsertDocument(sourceID, documentName, documentURI, checksum string) error {
-	return s.repo.InsertDocument(sourceID, documentName, documentURI, checksum)
+func (s *RagService) InsertDocument(sourceID, documentName, documentURI, checksum, documentType string) error {
+	return s.repo.InsertDocument(sourceID, documentName, documentURI, checksum, documentType)
 }
 
 func (s *RagService) BuildIndex() error {

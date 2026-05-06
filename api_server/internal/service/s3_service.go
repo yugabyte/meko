@@ -173,8 +173,34 @@ func (s *S3Service) ObjectExists(ctx context.Context, key string) (bool, error) 
 
 // S3Object holds metadata for a single object in S3.
 type S3Object struct {
-	Key  string // full S3 key e.g. "<user_id>/<datapack_id>/report.pdf"
-	ETag string // S3 ETag (MD5 for non-multipart uploads)
+	Key         string // full S3 key e.g. "<user_id>/<datapack_id>/report.pdf"
+	ETag        string // S3 ETag (MD5 for non-multipart uploads)
+	ContentType string // MIME type derived from file extension
+}
+
+// mimeTypeByExtension maps common file extensions to MIME types supported by
+// the dist_rag worker. Falls back to "application/octet-stream" for unknown
+// extensions so such files are inserted but skipped by the worker filter.
+var mimeTypeByExtension = map[string]string{
+	".txt":  "text/plain",
+	".text": "text/plain",
+	".md":   "text/markdown",
+	".csv":  "text/csv",
+	".xml":  "text/xml",
+	".html": "text/html",
+	".htm":  "text/html",
+	".json": "application/json",
+	".pdf":  "application/pdf",
+	".mp4":  "video/mp4",
+}
+
+// mimeTypeFromKey derives the MIME type for an S3 key based on its extension.
+func mimeTypeFromKey(key string) string {
+	ext := strings.ToLower(path.Ext(key))
+	if mt, ok := mimeTypeByExtension[ext]; ok {
+		return mt
+	}
+	return "application/octet-stream"
 }
 
 // ListObjects returns all objects under the given key prefix.
@@ -196,9 +222,11 @@ func (s *S3Service) ListObjects(ctx context.Context, prefix string) ([]S3Object,
 			if obj.ETag != nil {
 				etag = strings.Trim(*obj.ETag, "\"")
 			}
+			key := aws.ToString(obj.Key)
 			objects = append(objects, S3Object{
-				Key:  aws.ToString(obj.Key),
-				ETag: etag,
+				Key:         key,
+				ETag:        etag,
+				ContentType: mimeTypeFromKey(key),
 			})
 		}
 	}
