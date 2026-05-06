@@ -17,7 +17,15 @@ When you create a datapack, Meko provisions:
 
 ## Create a datapack
 
-Using the CLI:
+The first time you sign in to the Meko portal, Meko walks you through the steps to create your default datapack (`meko_default_datapack`) and connect it to your client.
+
+To create additional datapacks:
+
+1. In the Meko portal, navigate to **Datapacks**.
+1. Click **Add Datapack**.
+1. Follow the instructions in the configure wizard.
+
+<!-- Using the CLI:
 
 ```bash
 meko datapack create --name my-datapack
@@ -35,7 +43,17 @@ This returns the datapack's MCP server URL, API key, and database connection det
     "api_key": "318ce1c589d08edb11e24b0a781fe675"
   }
 }
-```
+``` -->
+
+## Share a datapack
+
+To share your datapack with colleagues:
+
+1. In the Meko portal, under **Datapacks**, select the datapack you want to share.
+1. Click **Share**.
+1. Enter the email of the person you want to share with, and select the permission level.
+1. Click **Send Invite**.
+
 
 ## Isolation model
 
@@ -60,12 +78,19 @@ Each datapack exposes an MCP server that agents use to interact with their data:
 }
 ```
 
-Add this configuration to your coding agent or agent framework to connect.
+When you create a datapack in the Meko portal, Meko provides instructions to connect your datapack to your agent automatically. The connection commands are also available under **Install** in the Meko portal.
 
-For the hosted MCP URL and API key (from the portal or `meko datapack` output), register multiple clients at once with [Connect your AI client](../../../quick-start/#connect-your-ai-client).
+You can also configure clients by manually adding this configuration to your coding agent or agent framework. See [Integrations](/integrations/).
 
 ## Manage datapacks
 
+Manage your datapacks from the **Datapacks** page in the Meko portal. **Datapacks** lists all your datapacks. From here you can add and share datapacks.
+
+Select a datapack to view the conversations, memories, learnings, knowledge the datapack holds.
+
+From here, you can review and promote learnings to [knowledge](../knowledgebase/).
+
+<!--
 | Command | Description |
 | :------ | :---------- |
 | `meko datapack list` | List all your datapacks |
@@ -73,3 +98,4 @@ For the hosted MCP URL and API key (from the portal or `meko datapack` output), 
 | `meko datapack delete --name <n>` | Permanently delete a datapack |
 
 See the [CLI reference](../../../reference/meko-cli/) for full details.
+-->

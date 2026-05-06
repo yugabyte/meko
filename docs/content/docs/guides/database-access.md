@@ -1,13 +1,9 @@
 ---
-hide:
-  - navigation
----
-
----
 title: Database access
 linkTitle: Database access
 description: Connect directly to your datapack's PostgreSQL database
 weight: 4500
+toc_hide: true
 ---
 
 Every datapack includes a dedicated YugabyteDB (YSQL) database that you can access directly using standard PostgreSQL tools.

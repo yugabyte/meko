@@ -66,11 +66,13 @@ Meko fixes this with a **shared team datapack** — a persistent, team-scoped kn
 
 **1. A team lead creates the shared datapack**
 
+<!--
 Using the Meko CLI, the lead creates a dedicated datapack for the team:
 
 ```bash
 meko datapack create --name "payments-team"
 ```
+-->
 
 Give the datapack a clear description of what kind of knowledge it will hold. Meko uses this description to guide how memories get extracted from your team's conversations — a vague description produces generic memories; a specific one keeps the datapack focused.
 

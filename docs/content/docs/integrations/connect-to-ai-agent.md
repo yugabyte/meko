@@ -4,17 +4,20 @@ linkTitle: AI agents
 description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and more
 weight: 3010
 type: docs
+rightNav:
+  hideH3: true
+  hideH4: true
 ---
 
 Integrate with AI agents for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
 
 ## Cursor Desktop
 
-### Automated setup
+##### Automated setup
 
-See the [Quick Start](/quick-start/#connect-your-ai-client).
+In the Meko portal, select **Install** and follow the steps.
 
-### Manual setup
+##### Manual setup
 
 1. In Cursor Desktop, choose **Cursor>Settings>Cursor Settings>Tools & MCPs>New MCP Server**.
 
@@ -51,11 +54,11 @@ See the [Quick Start](/quick-start/#connect-your-ai-client).
 
 ## Claude Desktop
 
-### Automated setup
+##### Automated setup
 
-See the [Quick Start](/quick-start/#connect-your-ai-client).  
+In the Meko portal, select **Install** and follow the steps.
 
-### Manual setup
+##### Manual setup
 
 In Claude Desktop (whether used for Chat, Cowork, or Code):
 
@@ -99,11 +102,11 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 
 ## Claude Code
 
-### Automated setup
+##### Automated setup
 
-See the [Quick Start](/quick-start/#connect-your-ai-client).
+In the Meko portal, select **Install** and follow the steps.
 
-### Manual setup
+##### Manual setup
 
 1. Run the setup command in your shell to add the Meko MCP server to Claude Code:
 
@@ -123,7 +126,7 @@ See the [Quick Start](/quick-start/#connect-your-ai-client).
 
 ## Open AI Codex Desktop
  
-### Manual setup
+##### Manual setup
 
 1. In Codex Desktop, choose **Codex>Settings>MCP servers>Add server>Streamable HTTP**.
 2. Enter a name for the Meko MCP server.

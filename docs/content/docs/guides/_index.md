@@ -21,11 +21,6 @@ Use the following guides to learn key concepts and workflows for Meko.
     desc="Build and query knowledge bases from your documents."
   >}}
   {{< card
-    href="guides/database-access/"
-    title="Access your database"
-    desc="Connect directly to your datapack's PostgreSQL database."
-  >}}
-  {{< card
     href="guides/observability/"
     title="Observability"
     desc="Traces, conversation history, and chain-of-thought visibility."
@@ -33,6 +28,11 @@ Use the following guides to learn key concepts and workflows for Meko.
 {{< /card-group >}}
 
 <!--
+  {{< card
+    href="guides/database-access/"
+    title="Access your database"
+    desc="Connect directly to your datapack's PostgreSQL database."
+  >}}
   {{< card
     href="guides/multi-agent-patterns/"
     title="Multi-agent patterns"

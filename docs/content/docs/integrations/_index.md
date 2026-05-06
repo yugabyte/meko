@@ -13,11 +13,17 @@ Meko integrates via the Model Context Protocol (MCP). Each Datapack exposes an M
 
 You follow the same basic pattern with all tools and frameworks:
 
-1. **Create a datapack** using either the Meko web portal or the Meko CLI.
+1. **Create a datapack** using the Meko web portal.
 2. **Register the Meko MCP server** with your AI agent or with your application's MCP Client.
 3. **Start using Meko** through natural language prompts.
 
-To register the hosted MCP server (using the URL and API key from the portal or CLI) with multiple coding agents in a single command, see [Connect your AI client](../../quick-start/#connect-your-ai-client).
+## MCP Server URL and API Key
+
+To register the hosted MCP server, you will need your datapack MCP URL and API key.
+
+1. In the Meko portal, select your datapack.
+1. In the **Connect** box, click **Connect**.
+1. Copy the MCP **URL** and **API key**.
 
 ## Connect to an AI agent
 
@@ -54,7 +60,8 @@ To register the hosted MCP server (using the URL and API key from the portal or 
   >}}
 {{< /card-group >}}
 
+<!--
 ## Connect programmatically
 
 > [!NOTE] Coming soon
->
+-->

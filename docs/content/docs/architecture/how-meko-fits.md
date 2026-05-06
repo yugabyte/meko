@@ -25,17 +25,17 @@ Agents interact via MCP.
 
 ### What you get
 
-Each agent gets an isolated [datapack](../core-concepts/datapacks/) with:
+A [datapack](../core-concepts/datapacks/) incorporates the following:
 
 | Capability | Description |
 | :--------- | :---------- |
-| PostgreSQL (YugabyteDB YSQL) | Structured data and conversation history |
-| Vector search (pgvector, hnswlib) | Embeddings and similarity search |
-| Graph memory (MAGE, a graphRAG database) | Long-term entity and relationship extraction from conversations |
-| RAG pipeline<br>(pg_dist_rag, a YugabyteDB extension) | Document chunking, embedding, indexing with built-in data preprocessing |
-| MCP server | Agents discover and query their own datapack |
-| Audit trails | LLM reasoning traces and execution logs |
-| Observability, security, RBAC | Spans the full stack, not bolted on per-component |
+| PostgreSQL (YugabyteDB YSQL) | Structured data and conversation history. |
+| Vector search (pgvector, hnswlib) | Embeddings and similarity search. |
+| Graph memory (MAGE, a graphRAG database) | Long-term entity and relationship extraction from conversations. |
+| RAG pipeline<br>(pg_dist_rag, a YugabyteDB extension) | Document chunking, embedding, indexing with built-in data preprocessing. |
+| MCP server | Agents discover and query their own datapack. |
+| Audit trails | LLM reasoning traces and execution logs. |
+| Observability, security, RBAC | Spans the full stack, not bolted on per-component. |
 
 The memory, knowledge, and database layers share state, and they operate as one system, not three isolated tiers.
 

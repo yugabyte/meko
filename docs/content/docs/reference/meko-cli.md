@@ -1,12 +1,9 @@
 ---
-hide:
-  - navigation
----
----
 title: Meko CLI
 linkTitle: Meko CLI
 description: Install and use the Meko CLI
 weight: 20
+toc_hide: true
 ---
 
 The Meko CLI (`meko`) is the primary tool for managing datapacks from the command line.

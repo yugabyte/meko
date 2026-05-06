@@ -1,14 +1,9 @@
-
----
-hide:
-  - navigation
----
-
 ---
 title: OLTP data
 linkTitle: OLTP data
 description: Direct PostgreSQL access via YugabyteDB YSQL for structured data
 weight: 50
+toc_hide: true
 ---
 
 Meko's database layer is powered by [YugabyteDB](https://www.yugabyte.com/) YSQL, a distributed PostgreSQL-compatible database. Every datapack includes a dedicated YSQL database that you can access directly using standard PostgreSQL tools and drivers.
