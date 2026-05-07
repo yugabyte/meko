@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/lib/pq"
 )
@@ -179,12 +180,20 @@ func (r *RagRepo) IndexExists() (bool, error) {
 // InitVectorIndex creates the vector index via dist_rag.init_vector_index.
 func (r *RagRepo) InitVectorIndex() (string, error) {
 	var indexID string
+	schemaPart, tablePart, ok := strings.Cut(r.indexName, ".")
+	schemaName := strings.TrimSpace(schemaPart)
+	indexTableName := strings.TrimSpace(tablePart)
+	if !ok {
+		schemaName = "public"
+		indexTableName = r.indexName
+	}
 	err := r.db.QueryRow(`SELECT dist_rag.init_vector_index(
 		r_index_name   := $1,
 		r_sources      := ARRAY[]::UUID[],
 		r_embedding_model_params := '{"model": "text-embedding-3-large", "dimensions": 1536}',
-		r_chunk_params := '{"chunk_size": 1024, "chunk_overlap": 256}'
-	)`, r.indexName).Scan(&indexID)
+		r_chunk_params := '{"chunk_size": 1024, "chunk_overlap": 256}',
+		r_schema_name  := $2
+	)`, indexTableName, schemaName).Scan(&indexID)
 	if err != nil {
 		return "", fmt.Errorf("init_vector_index(%s): %w", r.indexName, err)
 	}
