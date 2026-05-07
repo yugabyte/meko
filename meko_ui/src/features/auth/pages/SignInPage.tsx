@@ -16,6 +16,8 @@ import {
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { ROUTES } from "@/app/routes/paths";
 
+const MEKO_REQUEST_ACCESS_URL = "https://info.yugabyte.com/meko-request-access" as const;
+
 /** Query flag used with {@link ROUTES.signup} so the sign-up page opens on the “enter code” step. */
 const SIGNUP_RESUME_CONFIRM_QUERY = "resume" as const;
 const SIGNUP_RESUME_CONFIRM_VALUE = "1" as const;
@@ -198,12 +200,17 @@ export default function SignInPage() {
           <Link to={ROUTES.forgotPassword} className="font-medium text-blue-400 hover:underline">
             Forgot password?
           </Link>
-          <p>
+          {/* <p>
             New to Meko?{" "}
             <Link to={ROUTES.signup} className="font-medium text-blue-400 hover:underline">
               Sign up
             </Link>
-          </p>
+          </p> */}
+          <Button variant="outline" className="h-11 w-full border-border bg-[#0E1525] text-white hover:bg-white/10" asChild>
+            <a href={MEKO_REQUEST_ACCESS_URL} target="_blank" rel="noopener noreferrer">
+              Request Access
+            </a>
+          </Button>
         </div>
       </div>
     </div>
