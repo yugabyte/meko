@@ -3,16 +3,13 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2, Pencil } from "lucide-react";
+import { Info, Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackNameDescriptionFields } from "@/features/datapacks/components/DatapackNameDescriptionFields";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
-import {
-  datapackConfigurePath,
-  datapackDetailPath,
-  ROUTES,
-} from "@/app/routes/paths";
+import { datapackDetailPath, DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES } from "@/app/routes/paths";
+import { toast } from "@/hooks/use-toast";
 import type { CurrentUser } from "@/lib/mekoApi";
 import { getApiErrorMessage, getDatapack, updateDatapack } from "@/lib/mekoApi";
 
@@ -31,6 +28,7 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
   const [initialDescription, setInitialDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isDefaultDatapack = initialName === DEFAULT_ACCOUNT_DATAPACK_NAME;
 
   useEffect(() => {
     let cancelled = false;
@@ -77,16 +75,22 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
     setError(null);
     const descTrim = description.trim();
     const initialDescTrim = initialDescription.trim();
-    const dirty =
-      trimmedName !== initialName || descTrim !== initialDescTrim;
+      const dirty =
+      (!isDefaultDatapack && trimmedName !== initialName) || descTrim !== initialDescTrim;
     try {
       if (dirty) {
         await updateDatapack(datapackName, {
           name: trimmedName,
           description: description,
         }, { datapackId });
+        toast({
+          title: "Datapack updated",
+          description: trimmedName !== initialName
+            ? `Renamed to "${trimmedName}" successfully.`
+            : "Description updated successfully.",
+        });
       }
-      navigate(datapackConfigurePath(trimmedName), { replace: true });
+      navigate(datapackDetailPath(trimmedName), { replace: true });
     } catch (err) {
       setError(getApiErrorMessage(err, "Failed to update datapack."));
     } finally {
@@ -129,12 +133,20 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
             </p>
           </div>
 
+          {isDefaultDatapack ? (
+            <div className="flex items-start gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-300">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span>The default datapack cannot be renamed. You can still update its description.</span>
+            </div>
+          ) : null}
+
           <DatapackNameDescriptionFields
             name={name}
             description={description}
             onNameChange={setName}
             onDescriptionChange={setDescription}
             disabled={submitting || loading}
+            nameDisabled={isDefaultDatapack}
             nameInputId="datapack-edit-page-name"
             descriptionInputId="datapack-edit-page-description"
           />

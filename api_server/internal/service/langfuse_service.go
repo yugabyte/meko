@@ -224,6 +224,60 @@ func (s *LangfuseService) CleanupForDeletedDatapack(ownerUserID, datapackID stri
 	return nil
 }
 
+type updateProjectReq struct {
+	Name     string                 `json:"name"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// RenameProject propagates a datapack rename to the corresponding Langfuse
+// project. It is best-effort: if Langfuse is disabled or no project mapping
+// exists yet the call is a no-op. The caller should log but not surface errors
+// to the end user when this fails — the local DB rename has already succeeded.
+func (s *LangfuseService) RenameProject(ownerUserID, datapackID, newName string) error {
+	if s == nil || !s.Enabled() {
+		return nil
+	}
+	newName = strings.TrimSpace(newName)
+	if newName == "" || datapackID == "" || ownerUserID == "" {
+		return fmt.Errorf("owner_user_id, datapack_id and new_name are required")
+	}
+
+	mapping, err := s.repo.GetProjectMapping(datapackID)
+	if err != nil {
+		return fmt.Errorf("get project mapping: %w", err)
+	}
+	if mapping == nil {
+		return nil // project not yet provisioned; nothing to rename
+	}
+
+	org, err := s.repo.GetOrgMapping(ownerUserID)
+	if err != nil {
+		return fmt.Errorf("get org mapping: %w", err)
+	}
+	if org == nil {
+		return nil
+	}
+
+	body := updateProjectReq{
+		Name: newName,
+		Metadata: map[string]interface{}{
+			"source":        "meko",
+			"account_id":    ownerUserID,
+			"datapack_id":   datapackID,
+			"datapack_name": newName,
+		},
+	}
+	path := "/api/public/projects/" + url.PathEscape(mapping.ProjectID)
+	if err := s.doJSON(http.MethodPut, path, basicAuth(org.PublicKey, org.SecretKey), body, nil); err != nil {
+		return fmt.Errorf("rename langfuse project %s: %w", mapping.ProjectID, err)
+	}
+
+	// Sync the cached project name in the local mapping.
+	return s.repo.UpsertProjectMapping(
+		datapackID, mapping.ProjectID, newName, mapping.PublicKey, mapping.SecretKey,
+	)
+}
+
 type projectMembershipUpsertReq struct {
 	UserID string `json:"userId"`
 	Role   string `json:"role"`

@@ -9,6 +9,8 @@ export type DatapackNameDescriptionFieldsProps = {
   onNameChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
   disabled?: boolean;
+  /** Lock only the name input while leaving description editable. */
+  nameDisabled?: boolean;
   nameInputId: string;
   descriptionInputId: string;
   className?: string;
@@ -23,6 +25,7 @@ export function DatapackNameDescriptionFields({
   onNameChange,
   onDescriptionChange,
   disabled,
+  nameDisabled,
   nameInputId,
   descriptionInputId,
   className,
@@ -37,7 +40,7 @@ export function DatapackNameDescriptionFields({
           onChange={(e) => onNameChange(e.target.value)}
           placeholder="e.g. foo-project"
           autoComplete="off"
-          disabled={disabled}
+          disabled={disabled || nameDisabled}
           className="h-10 border-border bg-background shadow-sm"
         />
       </div>

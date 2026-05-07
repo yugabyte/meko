@@ -397,8 +397,8 @@ export default function DatapackConfigureWizardPage({
     if (currentIndex === 0) {
       if (isCreateFlow) {
         navigate(ROUTES.datapacks);
-      } else if (routeDatapackName) {
-        navigate(datapackDetailPath(routeDatapackName));
+      } else if (apiDatapackName ?? routeDatapackName) {
+        navigate(datapackDetailPath(apiDatapackName ?? routeDatapackName ?? ""));
       } else {
         navigate(ROUTES.datapacks);
       }

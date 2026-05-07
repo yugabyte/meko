@@ -16,6 +16,8 @@ import (
 	"meko/api_server/internal/repository"
 )
 
+const defaultDatapackName = "meko_default_datapack"
+
 // DatapackService orchestrates datapack lifecycle operations.
 //
 // Multi-tenant model: every datapack is just a row in
@@ -93,6 +95,7 @@ type CreateResponse struct {
 // agent is created at signup; additional agents are created via
 // POST /agents.
 func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
+	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
@@ -209,7 +212,10 @@ type UpdateRequest struct {
 	Description       string `json:"description,omitempty"`
 }
 
-// Update modifies a datapack's configuration.
+// Update modifies a datapack's configuration. When the name is being changed
+// and Langfuse is configured, the corresponding Langfuse project is renamed as
+// a best-effort operation: failure is logged but does not roll back the local
+// DB rename.
 func (s *DatapackService) Update(
 	userID, name string, req UpdateRequest,
 ) error {
@@ -219,11 +225,54 @@ func (s *DatapackService) Update(
 	if userID == "" {
 		return fmt.Errorf("user_id is required")
 	}
-	return s.repo.Update(userID, name, repository.UpdateDatapackParams{
+	if req.Name != "" {
+		req.Name = strings.TrimSpace(req.Name)
+		if req.Name == "" {
+			return fmt.Errorf("name cannot be blank")
+		}
+		// Normalise: if the client sends the same name back, treat it as no-op
+		// for the rename path so the default-datapack guard and Langfuse sync
+		// are not triggered unnecessarily.
+		if req.Name == name {
+			req.Name = ""
+		}
+	}
+	if req.Name != "" && name == defaultDatapackName {
+		return fmt.Errorf("%s cannot be renamed", defaultDatapackName)
+	}
+
+	// Fetch the datapack ID before the rename so we can reference it in
+	// Langfuse (the project mapping is keyed by datapack_id, not name).
+	var datapackID string
+	if req.Name != "" && s.langfuseSvc != nil {
+		dp, err := s.repo.GetByName(userID, name)
+		if err != nil {
+			return fmt.Errorf("get datapack before rename: %w", err)
+		}
+		if dp == nil {
+			return fmt.Errorf("datapack %q not found", name)
+		}
+		datapackID = dp.ID
+	}
+
+	if err := s.repo.Update(userID, name, repository.UpdateDatapackParams{
 		YBConnStr:   req.YBUniverseConnStr,
 		Name:        req.Name,
 		Description: req.Description,
-	})
+	}); err != nil {
+		return err
+	}
+
+	if datapackID != "" {
+		if err := s.langfuseSvc.RenameProject(userID, datapackID, req.Name); err != nil {
+			slog.Warn("langfuse project rename failed after datapack rename",
+				"datapack_id", datapackID,
+				"new_name", req.Name,
+				"error", err,
+			)
+		}
+	}
+	return nil
 }
 
 // Delete removes the Langfuse project (when configured), deletes the
