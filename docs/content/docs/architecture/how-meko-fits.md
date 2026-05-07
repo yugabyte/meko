@@ -51,16 +51,6 @@ Without Meko, building an agentic application typically requires wiring together
 
 Meko replaces all of this with a single system. The memory, knowledge, and conversation layers share state and operate as one.
 
-### How agents connect
-
-Agents interact with Meko via **MCP** (Model Context Protocol). Each datapack exposes an MCP server that provides tools for memory, knowledge, and more.
-
-<!--
-Developers can also interact via:
-
-- **CLI**: `meko` commands for datapack management
--->
-
 ### Framework compatibility
 
 Meko works with any agentic framework, including:

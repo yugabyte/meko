@@ -8,11 +8,11 @@ type: docs
 
 Meko provides a persistent datastore for the full spectrum of information that AI agents need, from raw to refined:
 
-- **Conversations** are one example of episodic information: raw, verbatim records of events, unfiltered and comprehensive. Episodic information captures everything that happened, relevant or not.
-- **Memory** is derived from episodic information: extracted, condensed, and stored for associative retrieval. Memory trades completeness for efficiency and recallability.
-- **Knowledge** is confirmed information — curated documents and facts that agents can rely on with confidence. Knowledge may be loaded directly or promoted from memory and conversations.
+- **Conversations** are a form of episodic information. They are raw, verbatim recordings, unfiltered and comprehensive. 
+- **Memory** is derived from conversations: extracted, condensed, and stored for associative retrieval. Memory begins as private and can be promoted to shared.  Memory trades completeness for efficiency and recallability.
+- **Knowledge** is confirmed information — curated documents and facts (e.g. from text, PDF, or other files).
 
-We'll start by exploring knowledge, then move on to memory.
+We'll start by adding knowledge, then move on to creating memories.
 
 ## Upload knowledge
 
@@ -70,7 +70,8 @@ On the Meko portal:
 
 Meko will process the file; this may take a few minutes.
 
-<!--##### Use the CLI
+<!---
+##### Use the CLI
 
 You can also upload knowledge using the Meko CLI. See [Meko CLI](../../reference/meko-cli/) for installation instructions.
 
@@ -79,7 +80,7 @@ Upload documents to your datapack's knowledge base as follows:
 ```bash
 meko datapack add_knowledge_base --name meko_default_datapack --url s3://bucket/docs/
 ```
--->
+--->
 
 ## Query your knowledge
 
@@ -118,33 +119,31 @@ With Meko, however, your AI can remember your vacation preferences, and use them
 
 ### Create a memory
 
-In your coding agent, do the following:
-
-1. Tell the agent to store your preferences:
-
-    ```text
-    You have access to the Meko platform through MCP server.
-    Have Meko remember all my personal preferences.
-    ```
-
-1. Type the following to persist your personal preferences as memory:
+1. In your coding agent, type the following:
 
     ```text
     Please remember that I like to take vacations at tropical beach locations, on a budget
     ```
 
-    Using the Meko MCP server, the agent will create a conversation in your datapack and assign an agent ID, for example, `personal-preferences`. The agent should let you know what the agent ID is; you can also ask it.
+2.  Now, verify that your memory reached Meko (in the cloud) by retrieving the memory from another independent session.
 
-1. Start a new chat session, then type the following (use the agent ID the other agent provided):
+In your original session (from the previous step), retrieve your agent-id by typing:
 
     ```text
-    Access my preferences using agent <cursor_name>.
+    What is my agent-id for Meko?
+    ``` 
+
+ Start a new separate session (e.g. in Claude, open a separate instance of Claude Code in another terminal window.   In Cursor, create a New Agent.   Etc.).   Type the following (use the agent ID just retrieved):
+
+    ```text
+    Access my preferences using <insert_your_agent_id>.
     Propose a 5 day vacation for me.
-    Access my preferences using agent personal-preferences.
 
-Your AI can now leverage the memory to provide a more relevant response.
+Your AI leverages the memory (extracted automatically by Meko from your first session’s conversation) to provide an personalized response.  
 
-For example, Cursor can respond with something similar to the following:
+Without Meko, AI will suggest a random vacation destination, or will ask clarifying questions (what vacation budget?  what type of destination?)  
+
+With Meko, you will see a personalized, more optimal response such as the following.   Memory saves on tokens consumed, gets more optimal, more accurate results, and can be shared with and augmented by other agents so that knowledge compounds across the system.
 
 ```text
 Here’s a 5-day plan tuned to what you’ve saved: tropical beach + budget.
@@ -173,8 +172,6 @@ Thailand or Nusa Penida + Sanur, Bali if you’re already closer to Asia.)
 ## If you tell me your month, home airport region, and solo vs. group, I can
 ## narrow this to one place, rough daily spend, and a rain-day backup.
 ```
-
-The agent retrieves your stored preferences and immediately proposes a vacation aligned to these preferences (a tropical beach vacation within budget). No follow-up questions are needed.
 
 ### Check your memories
 
