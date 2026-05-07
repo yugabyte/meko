@@ -56,6 +56,7 @@ type handlerMockCognito struct {
 	forgotPasswordFn        func(ctx context.Context, email string) error
 	confirmForgotPasswordFn func(ctx context.Context, email, code, newPassword string) error
 	loginFn                 func(ctx context.Context, email, password string) (*auth.Result, error)
+	completeNewPasswordFn   func(ctx context.Context, email, newPassword, session, firstName, lastName string) (*auth.Result, error)
 	logoutFn                func(ctx context.Context, accessToken string) error
 }
 
@@ -101,6 +102,18 @@ func (m *handlerMockCognito) Login(
 	ctx context.Context, email, password string,
 ) (*auth.Result, error) {
 	return m.loginFn(ctx, email, password)
+}
+
+func (m *handlerMockCognito) CompleteNewPassword(
+	ctx context.Context,
+	email, newPassword, session, firstName, lastName string,
+) (*auth.Result, error) {
+	if m.completeNewPasswordFn != nil {
+		return m.completeNewPasswordFn(
+			ctx, email, newPassword, session, firstName, lastName,
+		)
+	}
+	return nil, nil
 }
 
 func (m *handlerMockCognito) Logout(
@@ -168,6 +181,7 @@ func setupAuthTestServer(
 	g.POST("/forgot-password", authH.ForgotPassword)
 	g.POST("/forgot-password/confirm", authH.ForgotPasswordConfirm)
 	g.POST("/login", authH.Login)
+	g.POST("/complete-new-password", authH.CompleteNewPassword)
 	g.POST("/logout", authH.Logout)
 
 	return httptest.NewServer(e)
@@ -428,6 +442,163 @@ func TestAuth_Login_WrongPassword(t *testing.T) {
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuth_Login_NewPasswordRequiredChallenge(t *testing.T) {
+	cog := &handlerMockCognito{
+		loginFn: func(
+			_ context.Context, _, _ string,
+		) (*auth.Result, error) {
+			return &auth.Result{
+				ChallengeName: service.ChallengeNewPasswordRequired,
+				Session:       "session-token-xyz",
+			}, nil
+		},
+	}
+
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/login", map[string]string{
+		"email":    "fcp@example.com",
+		"password": "Temp-PW-1!",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with challenge payload, got %d", resp.StatusCode)
+	}
+	for _, cookie := range resp.Cookies() {
+		if cookie.Name == "access_token" || cookie.Name == "id_token" || cookie.Name == "refresh_token" {
+			if cookie.Value != "" {
+				t.Errorf("did not expect %s cookie on challenge response, got %q",
+					cookie.Name, cookie.Value)
+			}
+		}
+	}
+
+	apiResp := decodeResponse(t, resp)
+	data, ok := apiResp.Data.(map[string]any)
+	if !ok {
+		t.Fatal("expected data to be a map")
+	}
+	if data["challenge"] != service.ChallengeNewPasswordRequired {
+		t.Errorf("expected challenge=%s, got %v",
+			service.ChallengeNewPasswordRequired, data["challenge"])
+	}
+	if data["session"] != "session-token-xyz" {
+		t.Errorf("expected session echoed back, got %v", data["session"])
+	}
+	if _, hasAccess := data["access_token"]; hasAccess {
+		t.Error("expected no access_token field on challenge response")
+	}
+}
+
+func TestAuth_CompleteNewPassword_Success(t *testing.T) {
+	idToken := handlerFakeIDToken("sub-fcp-1", "fcp@example.com")
+	var gotFirst, gotLast string
+	cog := &handlerMockCognito{
+		completeNewPasswordFn: func(
+			_ context.Context, _, _, _, firstName, lastName string,
+		) (*auth.Result, error) {
+			gotFirst, gotLast = firstName, lastName
+			return &auth.Result{
+				AccessToken:  "access-tok",
+				IDToken:      idToken,
+				RefreshToken: "refresh-tok",
+				ExpiresIn:    3600,
+			}, nil
+		},
+	}
+
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t,
+		srv.URL+"/api/v1/auth/complete-new-password",
+		map[string]string{
+			"email":            "fcp@example.com",
+			"new_password":     "NewP@ssw0rd!",
+			"confirm_password": "NewP@ssw0rd!",
+			"session":          "session-token-xyz",
+			"first_name":       "Force",
+			"last_name":        "Change",
+		},
+	)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	apiResp := decodeResponse(t, resp)
+	data, ok := apiResp.Data.(map[string]any)
+	if !ok {
+		t.Fatal("expected data to be a map")
+	}
+	if data["access_token"] != "access-tok" {
+		t.Errorf("expected access-tok, got %v", data["access_token"])
+	}
+	if gotFirst != "Force" || gotLast != "Change" {
+		t.Errorf("expected names forwarded to cognito, got first=%q last=%q",
+			gotFirst, gotLast)
+	}
+}
+
+func TestAuth_CompleteNewPassword_PasswordMismatch(t *testing.T) {
+	srv := setupAuthTestServer(t, &handlerMockCognito{}, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t,
+		srv.URL+"/api/v1/auth/complete-new-password",
+		map[string]string{
+			"email":            "fcp@example.com",
+			"new_password":     "abcdefg",
+			"confirm_password": "different",
+			"session":          "s",
+		},
+	)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	apiResp := decodeResponse(t, resp)
+	if apiResp.Error == nil || apiResp.Error.Code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %+v", apiResp.Error)
+	}
+}
+
+func TestAuth_CompleteNewPassword_InvalidPassword(t *testing.T) {
+	cog := &handlerMockCognito{
+		completeNewPasswordFn: func(
+			_ context.Context, _, _, _, _, _ string,
+		) (*auth.Result, error) {
+			return nil, auth.ErrInvalidPassword
+		},
+	}
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t,
+		srv.URL+"/api/v1/auth/complete-new-password",
+		map[string]string{
+			"email":            "fcp@example.com",
+			"new_password":     "abcdefg",
+			"confirm_password": "abcdefg",
+			"session":          "s",
+		},
+	)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	apiResp := decodeResponse(t, resp)
+	if apiResp.Error == nil || apiResp.Error.Code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR for ErrInvalidPassword, got %+v",
+			apiResp.Error)
 	}
 }
 

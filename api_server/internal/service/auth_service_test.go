@@ -36,13 +36,14 @@ func fakeIDToken(sub, email, given, family string) string {
 // --- mock CognitoProvider ---
 
 type mockCognito struct {
-	signUpFn              func(ctx context.Context, email, password, firstName, lastName string) (string, error)
-	confirmFn             func(ctx context.Context, email, code string) error
-	resendFn              func(ctx context.Context, email string) error
-	forgotPasswordFn      func(ctx context.Context, email string) error
+	signUpFn                func(ctx context.Context, email, password, firstName, lastName string) (string, error)
+	confirmFn               func(ctx context.Context, email, code string) error
+	resendFn                func(ctx context.Context, email string) error
+	forgotPasswordFn        func(ctx context.Context, email string) error
 	confirmForgotPasswordFn func(ctx context.Context, email, code, newPassword string) error
-	loginFn               func(ctx context.Context, email, password string) (*auth.Result, error)
-	logoutFn              func(ctx context.Context, accessToken string) error
+	loginFn                 func(ctx context.Context, email, password string) (*auth.Result, error)
+	completeNewPasswordFn   func(ctx context.Context, email, newPassword, session, firstName, lastName string) (*auth.Result, error)
+	logoutFn                func(ctx context.Context, accessToken string) error
 }
 
 func (m *mockCognito) SignUp(
@@ -87,6 +88,18 @@ func (m *mockCognito) Login(
 	ctx context.Context, email, password string,
 ) (*auth.Result, error) {
 	return m.loginFn(ctx, email, password)
+}
+
+func (m *mockCognito) CompleteNewPassword(
+	ctx context.Context,
+	email, newPassword, session, firstName, lastName string,
+) (*auth.Result, error) {
+	if m.completeNewPasswordFn != nil {
+		return m.completeNewPasswordFn(
+			ctx, email, newPassword, session, firstName, lastName,
+		)
+	}
+	return nil, nil
 }
 
 func (m *mockCognito) Logout(
@@ -393,6 +406,228 @@ func TestAuthService_Login_InvalidCredentials(t *testing.T) {
 	}
 	if !errors.Is(err, auth.ErrNotAuthorized) {
 		t.Errorf("expected ErrNotAuthorized, got %v", err)
+	}
+}
+
+func TestAuthService_Login_NewPasswordRequiredChallenge(t *testing.T) {
+	cog := &mockCognito{
+		loginFn: func(
+			_ context.Context, _, _ string,
+		) (*auth.Result, error) {
+			return &auth.Result{
+				ChallengeName: service.ChallengeNewPasswordRequired,
+				Session:       "session-token-xyz",
+			}, nil
+		},
+	}
+	jitCalls := 0
+	store := &mockAccountStore{
+		getByCognitoSubFn: func(
+			_ context.Context, _ string,
+		) (*models.Account, error) {
+			jitCalls++
+			return nil, nil
+		},
+		createFn: func(
+			_ context.Context,
+			_ repository.CreateAccountParams,
+		) (*models.Account, error) {
+			t.Fatal("Create should not be called when challenge is returned")
+			return nil, nil
+		},
+	}
+	svc := service.NewAuthService(cog, store)
+
+	resp, err := svc.Login(context.Background(), service.LoginRequest{
+		Email:    "user@example.com",
+		Password: "Temp-PW-1!",
+	})
+	if err != nil {
+		t.Fatalf("expected no error on challenge, got %v", err)
+	}
+	if resp.Challenge != service.ChallengeNewPasswordRequired {
+		t.Errorf("expected challenge %s, got %q",
+			service.ChallengeNewPasswordRequired, resp.Challenge,
+		)
+	}
+	if resp.Session != "session-token-xyz" {
+		t.Errorf("expected Session=session-token-xyz, got %q", resp.Session)
+	}
+	if resp.Email != "user@example.com" {
+		t.Errorf("expected Email echoed back, got %q", resp.Email)
+	}
+	if resp.AccessToken != "" || resp.IDToken != "" {
+		t.Errorf("expected no tokens on challenge, got %+v", resp)
+	}
+	// EnsureAccountFromIDToken would call GetByCognitoSub; on the
+	// challenge branch we must skip JIT entirely.
+	if jitCalls != 0 {
+		t.Errorf("expected no JIT lookups on challenge branch, got %d", jitCalls)
+	}
+}
+
+// --- CompleteNewPassword tests ---
+
+func TestAuthService_CompleteNewPassword_Success(t *testing.T) {
+	idToken := fakeIDToken(
+		"sub-fcp-1", "fcp@example.com", "Force", "Change",
+	)
+	var gotEmail, gotNewPw, gotSession, gotFirst, gotLast string
+	cog := &mockCognito{
+		completeNewPasswordFn: func(
+			_ context.Context,
+			email, newPassword, session, firstName, lastName string,
+		) (*auth.Result, error) {
+			gotEmail, gotNewPw, gotSession = email, newPassword, session
+			gotFirst, gotLast = firstName, lastName
+			return &auth.Result{
+				AccessToken:  "access-tok",
+				IDToken:      idToken,
+				RefreshToken: "refresh-tok",
+				ExpiresIn:    3600,
+			}, nil
+		},
+	}
+	var createdParams repository.CreateAccountParams
+	store := &mockAccountStore{
+		getByCognitoSubFn: func(
+			_ context.Context, _ string,
+		) (*models.Account, error) {
+			return nil, nil
+		},
+		createFn: func(
+			_ context.Context, params repository.CreateAccountParams,
+		) (*models.Account, error) {
+			createdParams = params
+			return &models.Account{
+				ID:         "acct-fcp-1",
+				Email:      params.Email,
+				CognitoSub: params.CognitoSub,
+			}, nil
+		},
+	}
+	svc := service.NewAuthService(cog, store)
+
+	resp, err := svc.CompleteNewPassword(
+		context.Background(),
+		service.CompleteNewPasswordRequest{
+			Email:           "fcp@example.com",
+			NewPassword:     "NewP@ssw0rd!",
+			ConfirmPassword: "NewP@ssw0rd!",
+			Session:         "session-token-xyz",
+			FirstName:       "Force",
+			LastName:        "Change",
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if resp.AccessToken != "access-tok" {
+		t.Errorf("expected access-tok, got %s", resp.AccessToken)
+	}
+	if gotEmail != "fcp@example.com" {
+		t.Errorf("expected email forwarded, got %q", gotEmail)
+	}
+	if gotNewPw != "NewP@ssw0rd!" {
+		t.Errorf("expected new password forwarded, got %q", gotNewPw)
+	}
+	if gotSession != "session-token-xyz" {
+		t.Errorf("expected session forwarded, got %q", gotSession)
+	}
+	if gotFirst != "Force" {
+		t.Errorf("expected first name forwarded, got %q", gotFirst)
+	}
+	if gotLast != "Change" {
+		t.Errorf("expected last name forwarded, got %q", gotLast)
+	}
+	if createdParams.CognitoSub != "sub-fcp-1" {
+		t.Errorf("expected JIT account created with sub from id token, got %q",
+			createdParams.CognitoSub,
+		)
+	}
+}
+
+func TestAuthService_CompleteNewPassword_ValidationErrors(t *testing.T) {
+	svc := service.NewAuthService(nil, nil)
+
+	tests := []struct {
+		name    string
+		req     service.CompleteNewPasswordRequest
+		wantErr error
+	}{
+		{
+			"empty email",
+			service.CompleteNewPasswordRequest{
+				NewPassword:     "abcdefg",
+				ConfirmPassword: "abcdefg",
+				Session:         "s",
+			},
+			nil,
+		},
+		{
+			"empty session",
+			service.CompleteNewPasswordRequest{
+				Email:           "u@example.com",
+				NewPassword:     "abcdefg",
+				ConfirmPassword: "abcdefg",
+			},
+			nil,
+		},
+		{
+			"password too short",
+			service.CompleteNewPasswordRequest{
+				Email:           "u@example.com",
+				NewPassword:     "short",
+				ConfirmPassword: "short",
+				Session:         "s",
+			},
+			service.ErrPasswordTooShort,
+		},
+		{
+			"password mismatch",
+			service.CompleteNewPasswordRequest{
+				Email:           "u@example.com",
+				NewPassword:     "abcdefg",
+				ConfirmPassword: "different",
+				Session:         "s",
+			},
+			service.ErrPasswordMismatch,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CompleteNewPassword(context.Background(), tc.req)
+			if err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Errorf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestAuthService_CompleteNewPassword_CognitoError(t *testing.T) {
+	cog := &mockCognito{
+		completeNewPasswordFn: func(
+			_ context.Context, _, _, _, _, _ string,
+		) (*auth.Result, error) {
+			return nil, auth.ErrInvalidPassword
+		},
+	}
+	svc := service.NewAuthService(cog, &mockAccountStore{})
+
+	_, err := svc.CompleteNewPassword(
+		context.Background(),
+		service.CompleteNewPasswordRequest{
+			Email:           "u@example.com",
+			NewPassword:     "abcdefg",
+			ConfirmPassword: "abcdefg",
+			Session:         "s",
+		},
+	)
+	if !errors.Is(err, auth.ErrInvalidPassword) {
+		t.Errorf("expected ErrInvalidPassword, got %v", err)
 	}
 }
 

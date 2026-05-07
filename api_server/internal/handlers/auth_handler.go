@@ -157,12 +157,18 @@ func (h *AuthHandler) ForgotPasswordConfirm(c echo.Context) error {
 
 // Login handles POST /api/v1/auth/login.
 //
+// On success returns either tokens (and sets HttpOnly auth cookies)
+// or, when the user must change their password before tokens are
+// issued, a challenge payload of the form
+// `{challenge: "NEW_PASSWORD_REQUIRED", session, email}`. The client
+// then completes the flow via POST /auth/complete-new-password.
+//
 //	@Summary	Authenticate and receive tokens
 //	@Tags		auth
 //	@Accept		json
 //	@Produce	json
 //	@Param		body	body		service.LoginRequest	true	"Login request"
-//	@Success	200		{object}	APIResponse
+//	@Success	200		{object}	APIResponse	"Tokens, or {challenge:NEW_PASSWORD_REQUIRED, session, email} when the user must set a new password"
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	403		{object}	APIResponse	"Cognito USER_NOT_CONFIRMED (code USER_NOT_CONFIRMED); client should offer resend / confirm flow"
@@ -175,6 +181,47 @@ func (h *AuthHandler) Login(c echo.Context) error {
 	}
 
 	resp, err := h.svc.Login(c.Request().Context(), req)
+	if err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+
+	// When Cognito returned a challenge instead of tokens (e.g.
+	// NEW_PASSWORD_REQUIRED), there are no tokens to set; just
+	// return the challenge payload so the client can drive the
+	// follow-up step.
+	if resp.AccessToken == "" {
+		return ok(c, http.StatusOK, resp)
+	}
+
+	setAuthCookie(c, "access_token", resp.AccessToken)
+	setAuthCookie(c, "id_token", resp.IDToken)
+	setAuthCookie(c, "refresh_token", resp.RefreshToken)
+
+	return ok(c, http.StatusOK, resp)
+}
+
+// CompleteNewPassword handles POST /api/v1/auth/complete-new-password.
+// It completes the NEW_PASSWORD_REQUIRED challenge returned by
+// /auth/login for users created via AdminCreateUser (Cognito
+// FORCE_CHANGE_PASSWORD state).
+//
+//	@Summary	Complete first-login set-new-password challenge
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.CompleteNewPasswordRequest	true	"New password payload"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Router		/auth/complete-new-password [post]
+func (h *AuthHandler) CompleteNewPassword(c echo.Context) error {
+	var req service.CompleteNewPasswordRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+
+	resp, err := h.svc.CompleteNewPassword(c.Request().Context(), req)
 	if err != nil {
 		return h.classifyAuthErr(c, err)
 	}

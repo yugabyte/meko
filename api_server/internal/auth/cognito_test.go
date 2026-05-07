@@ -54,6 +54,11 @@ type mockCognitoAPI struct {
 		ctx context.Context, params *cip.ConfirmForgotPasswordInput,
 		optFns ...cipOpt,
 	) (*cip.ConfirmForgotPasswordOutput, error)
+
+	respondToAuthChallengeFn func(
+		ctx context.Context, params *cip.RespondToAuthChallengeInput,
+		optFns ...cipOpt,
+	) (*cip.RespondToAuthChallengeOutput, error)
 }
 
 func (m *mockCognitoAPI) SignUp(
@@ -130,6 +135,17 @@ func (m *mockCognitoAPI) ConfirmForgotPassword(
 		return m.confirmForgotPasswordFn(ctx, params, optFns...)
 	}
 	return &cip.ConfirmForgotPasswordOutput{}, nil
+}
+
+func (m *mockCognitoAPI) RespondToAuthChallenge(
+	ctx context.Context,
+	params *cip.RespondToAuthChallengeInput,
+	optFns ...func(*cip.Options),
+) (*cip.RespondToAuthChallengeOutput, error) {
+	if m.respondToAuthChallengeFn != nil {
+		return m.respondToAuthChallengeFn(ctx, params, optFns...)
+	}
+	return &cip.RespondToAuthChallengeOutput{}, nil
 }
 
 func strPtr(s string) *string { return &s }
@@ -293,6 +309,205 @@ func TestCognitoClient_Login_InvalidCredentials(t *testing.T) {
 	)
 	if !errors.Is(err, auth.ErrNotAuthorized) {
 		t.Errorf("expected ErrNotAuthorized, got %v", err)
+	}
+}
+
+func TestCognitoClient_Login_NewPasswordRequiredChallenge(t *testing.T) {
+	mock := &mockCognitoAPI{
+		initiateAuthFn: func(
+			_ context.Context,
+			_ *cip.InitiateAuthInput,
+			_ ...func(*cip.Options),
+		) (*cip.InitiateAuthOutput, error) {
+			return &cip.InitiateAuthOutput{
+				ChallengeName: types.ChallengeNameTypeNewPasswordRequired,
+				Session:       strPtr("session-token-xyz"),
+			}, nil
+		},
+	}
+	client := newTestClient(mock)
+
+	result, err := client.Login(
+		context.Background(), "user@example.com", "Temp-PW-1!",
+	)
+	if err != nil {
+		t.Fatalf("expected no error on challenge, got %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result on challenge")
+	}
+	if result.ChallengeName != string(types.ChallengeNameTypeNewPasswordRequired) {
+		t.Errorf("expected ChallengeName=%s, got %q",
+			types.ChallengeNameTypeNewPasswordRequired,
+			result.ChallengeName,
+		)
+	}
+	if result.Session != "session-token-xyz" {
+		t.Errorf("expected Session=session-token-xyz, got %q", result.Session)
+	}
+	if result.AccessToken != "" || result.IDToken != "" || result.RefreshToken != "" {
+		t.Errorf("expected no tokens on challenge, got %+v", result)
+	}
+}
+
+// --------------- CompleteNewPassword tests ---------------
+
+func TestCognitoClient_CompleteNewPassword_Success(t *testing.T) {
+	var capturedInput *cip.RespondToAuthChallengeInput
+	mock := &mockCognitoAPI{
+		respondToAuthChallengeFn: func(
+			_ context.Context,
+			params *cip.RespondToAuthChallengeInput,
+			_ ...func(*cip.Options),
+		) (*cip.RespondToAuthChallengeOutput, error) {
+			capturedInput = params
+			return &cip.RespondToAuthChallengeOutput{
+				AuthenticationResult: &types.AuthenticationResultType{
+					AccessToken:  strPtr("access-tok"),
+					IdToken:      strPtr("id-tok"),
+					RefreshToken: strPtr("refresh-tok"),
+					ExpiresIn:    3600,
+				},
+			}, nil
+		},
+	}
+	client := newTestClient(mock)
+
+	result, err := client.CompleteNewPassword(
+		context.Background(),
+		"user@example.com", "NewP@ssw0rd!", "session-token-xyz",
+		"Jane", "Doe",
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.AccessToken != "access-tok" {
+		t.Errorf("expected access-tok, got %s", result.AccessToken)
+	}
+	if result.IDToken != "id-tok" {
+		t.Errorf("expected id-tok, got %s", result.IDToken)
+	}
+	if capturedInput == nil {
+		t.Fatal("expected RespondToAuthChallenge to be called")
+	}
+	if capturedInput.ChallengeName != types.ChallengeNameTypeNewPasswordRequired {
+		t.Errorf("expected ChallengeName=NEW_PASSWORD_REQUIRED, got %s",
+			capturedInput.ChallengeName,
+		)
+	}
+	if capturedInput.Session == nil || *capturedInput.Session != "session-token-xyz" {
+		t.Errorf("expected Session=session-token-xyz, got %v", capturedInput.Session)
+	}
+	if capturedInput.ChallengeResponses["USERNAME"] != "user@example.com" {
+		t.Errorf("expected USERNAME=user@example.com, got %q",
+			capturedInput.ChallengeResponses["USERNAME"],
+		)
+	}
+	if capturedInput.ChallengeResponses["NEW_PASSWORD"] != "NewP@ssw0rd!" {
+		t.Errorf("expected NEW_PASSWORD set, got %q",
+			capturedInput.ChallengeResponses["NEW_PASSWORD"],
+		)
+	}
+	// Required-attribute pass-through: Cognito demands these whenever
+	// the User Pool marks given_name / family_name as required and
+	// the admin-created user does not have them yet.
+	if capturedInput.ChallengeResponses["userAttributes.given_name"] != "Jane" {
+		t.Errorf("expected userAttributes.given_name=Jane, got %q",
+			capturedInput.ChallengeResponses["userAttributes.given_name"],
+		)
+	}
+	if capturedInput.ChallengeResponses["userAttributes.family_name"] != "Doe" {
+		t.Errorf("expected userAttributes.family_name=Doe, got %q",
+			capturedInput.ChallengeResponses["userAttributes.family_name"],
+		)
+	}
+}
+
+func TestCognitoClient_CompleteNewPassword_OmitsEmptyNames(t *testing.T) {
+	var capturedInput *cip.RespondToAuthChallengeInput
+	mock := &mockCognitoAPI{
+		respondToAuthChallengeFn: func(
+			_ context.Context,
+			params *cip.RespondToAuthChallengeInput,
+			_ ...func(*cip.Options),
+		) (*cip.RespondToAuthChallengeOutput, error) {
+			capturedInput = params
+			return &cip.RespondToAuthChallengeOutput{
+				AuthenticationResult: &types.AuthenticationResultType{
+					AccessToken:  strPtr("access-tok"),
+					IdToken:      strPtr("id-tok"),
+					RefreshToken: strPtr("refresh-tok"),
+				},
+			}, nil
+		},
+	}
+	client := newTestClient(mock)
+
+	_, err := client.CompleteNewPassword(
+		context.Background(),
+		"user@example.com", "NewP@ssw0rd!", "session-token-xyz",
+		"", "  ",
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if _, ok := capturedInput.ChallengeResponses["userAttributes.given_name"]; ok {
+		t.Error("expected userAttributes.given_name to be omitted when empty")
+	}
+	if _, ok := capturedInput.ChallengeResponses["userAttributes.family_name"]; ok {
+		t.Error("expected userAttributes.family_name to be omitted when whitespace only")
+	}
+}
+
+func TestCognitoClient_CompleteNewPassword_InvalidPassword(t *testing.T) {
+	mock := &mockCognitoAPI{
+		respondToAuthChallengeFn: func(
+			_ context.Context,
+			_ *cip.RespondToAuthChallengeInput,
+			_ ...func(*cip.Options),
+		) (*cip.RespondToAuthChallengeOutput, error) {
+			return nil, &types.InvalidPasswordException{
+				Message: strPtr("password too weak"),
+			}
+		},
+	}
+	client := newTestClient(mock)
+
+	_, err := client.CompleteNewPassword(
+		context.Background(),
+		"user@example.com", "weak", "session-token-xyz",
+		"Jane", "Doe",
+	)
+	if !errors.Is(err, auth.ErrInvalidPassword) {
+		t.Errorf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+func TestCognitoClient_CompleteNewPassword_MissingArgs(t *testing.T) {
+	mock := &mockCognitoAPI{}
+	client := newTestClient(mock)
+
+	tests := []struct {
+		name     string
+		email    string
+		password string
+		session  string
+	}{
+		{"empty email", "", "P@ssw0rd!", "session"},
+		{"empty password", "u@example.com", "", "session"},
+		{"empty session", "u@example.com", "P@ssw0rd!", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := client.CompleteNewPassword(
+				context.Background(),
+				tc.email, tc.password, tc.session,
+				"Jane", "Doe",
+			)
+			if err == nil {
+				t.Error("expected validation error, got nil")
+			}
+		})
 	}
 }
 

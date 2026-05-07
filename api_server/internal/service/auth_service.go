@@ -28,6 +28,10 @@ type CognitoProvider interface {
 	Login(
 		ctx context.Context, email, password string,
 	) (*auth.Result, error)
+	CompleteNewPassword(
+		ctx context.Context,
+		email, newPassword, session, firstName, lastName string,
+	) (*auth.Result, error)
 	Logout(ctx context.Context, accessToken string) error
 }
 
@@ -300,12 +304,45 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-// LoginResponse holds the tokens returned by a successful login.
+// ChallengeNewPasswordRequired is returned in LoginResponse.Challenge
+// when the authenticated user must set a permanent password before
+// receiving tokens (i.e. accounts created via AdminCreateUser that
+// are still in FORCE_CHANGE_PASSWORD state).
+const ChallengeNewPasswordRequired = "NEW_PASSWORD_REQUIRED"
+
+// LoginResponse holds the tokens returned by a successful login. When
+// Cognito requires the user to set a new password before issuing
+// tokens, the token fields are empty and Challenge/Session/Email are
+// populated instead. The client must then call POST
+// /auth/complete-new-password with the session to finish the login.
 type LoginResponse struct {
-	AccessToken  string `json:"access_token"`
-	IDToken      string `json:"id_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int32  `json:"expires_in"`
+	AccessToken  string `json:"access_token,omitempty"`
+	IDToken      string `json:"id_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	ExpiresIn    int32  `json:"expires_in,omitempty"`
+
+	Challenge string `json:"challenge,omitempty"`
+	Session   string `json:"session,omitempty"`
+	Email     string `json:"email,omitempty"`
+}
+
+// CompleteNewPasswordRequest carries the input for completing the
+// NEW_PASSWORD_REQUIRED challenge issued by Login.
+//
+// FirstName / LastName are required whenever the Cognito User Pool
+// marks given_name / family_name as required attributes and the
+// admin-created user does not already have them set. They are
+// forwarded to Cognito as `userAttributes.given_name` /
+// `userAttributes.family_name` in the challenge response, and they
+// are what JIT account creation reads from the resulting ID token to
+// populate the local account.
+type CompleteNewPasswordRequest struct {
+	Email           string `json:"email"`
+	NewPassword     string `json:"new_password"`
+	ConfirmPassword string `json:"confirm_password"`
+	Session         string `json:"session"`
+	FirstName       string `json:"first_name"`
+	LastName        string `json:"last_name"`
 }
 
 // UpdateOnboardingRequest holds the input for updating onboarding completion.
@@ -333,9 +370,67 @@ func (s *AuthService) Login(
 		return nil, fmt.Errorf("cognito login: %w", err)
 	}
 
+	// Admin-created accounts in FORCE_CHANGE_PASSWORD state get a
+	// challenge instead of tokens; pass the session back to the
+	// client so it can complete the flow via /auth/complete-new-password.
+	// Skip JIT account creation here: there is no ID token yet, and
+	// EnsureAccountFromIDToken runs once the challenge is completed.
+	if result.ChallengeName == ChallengeNewPasswordRequired {
+		slog.Info("user login requires new password", "email", req.Email)
+		return &LoginResponse{
+			Challenge: ChallengeNewPasswordRequired,
+			Session:   result.Session,
+			Email:     req.Email,
+		}, nil
+	}
+
 	s.EnsureAccountFromIDToken(ctx, result.IDToken)
 
 	slog.Info("user login succeeded", "email", req.Email)
+
+	return &LoginResponse{
+		AccessToken:  result.AccessToken,
+		IDToken:      result.IDToken,
+		RefreshToken: result.RefreshToken,
+		ExpiresIn:    result.ExpiresIn,
+	}, nil
+}
+
+// CompleteNewPassword finishes the NEW_PASSWORD_REQUIRED challenge
+// returned by Login for users in FORCE_CHANGE_PASSWORD state. On
+// success it returns the same shape as Login (tokens) and JIT-creates
+// the local account from the freshly issued ID token claims.
+func (s *AuthService) CompleteNewPassword(
+	ctx context.Context, req CompleteNewPasswordRequest,
+) (*LoginResponse, error) {
+	email := strings.TrimSpace(req.Email)
+	if email == "" {
+		return nil, fmt.Errorf("email is required")
+	}
+	if req.Session == "" {
+		return nil, fmt.Errorf("session is required")
+	}
+	if len(req.NewPassword) < minForgotPasswordLen {
+		return nil, ErrPasswordTooShort
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		return nil, ErrPasswordMismatch
+	}
+
+	slog.Info("complete new password attempt", "email", email)
+
+	result, err := s.cognito.CompleteNewPassword(
+		ctx,
+		email, req.NewPassword, req.Session,
+		req.FirstName, req.LastName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cognito complete new password: %w", err)
+	}
+
+	s.EnsureAccountFromIDToken(ctx, result.IDToken)
+
+	slog.Info("complete new password succeeded", "email", email)
 
 	return &LoginResponse{
 		AccessToken:  result.AccessToken,

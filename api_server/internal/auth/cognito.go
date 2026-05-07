@@ -55,6 +55,14 @@ type CognitoAPI interface {
 		optFns ...func(*cip.Options),
 	) (*cip.AdminCreateUserOutput, error)
 
+	// RespondToAuthChallenge completes a Cognito challenge such as
+	// NEW_PASSWORD_REQUIRED that was returned by InitiateAuth.
+	RespondToAuthChallenge(
+		ctx context.Context,
+		params *cip.RespondToAuthChallengeInput,
+		optFns ...func(*cip.Options),
+	) (*cip.RespondToAuthChallengeOutput, error)
+
 	// ResendConfirmationCode emails a new verification code to an existing
 	// unconfirmed user (Cognito user pool sign-up flow).
 	ResendConfirmationCode(
@@ -78,12 +86,20 @@ type CognitoAPI interface {
 	) (*cip.ConfirmForgotPasswordOutput, error)
 }
 
-// Result holds the tokens returned by a successful login.
+// Result holds the tokens returned by a successful login. When
+// Cognito responds to InitiateAuth with a challenge instead of tokens
+// (e.g. NEW_PASSWORD_REQUIRED for users in FORCE_CHANGE_PASSWORD
+// state), AccessToken/IDToken/RefreshToken are empty and
+// ChallengeName + Session carry the data needed to complete the
+// challenge via a follow-up RespondToAuthChallenge call.
 type Result struct {
 	AccessToken  string `json:"access_token"`
 	IDToken      string `json:"id_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int32  `json:"expires_in"`
+
+	ChallengeName string `json:"challenge_name,omitempty"`
+	Session       string `json:"session,omitempty"`
 }
 
 // CognitoClient wraps the AWS Cognito Identity Provider SDK to provide
@@ -305,9 +321,29 @@ func (c *CognitoClient) Login(
 		return nil, classifyCognitoErr(err)
 	}
 
+	// Users created via AdminCreateUser sit in FORCE_CHANGE_PASSWORD
+	// state until they set a permanent password. Cognito surfaces
+	// that as a NEW_PASSWORD_REQUIRED challenge with no auth result;
+	// hand the session back to the caller so it can be completed via
+	// CompleteNewPassword.
+	if output.ChallengeName == types.ChallengeNameTypeNewPasswordRequired {
+		session := ""
+		if output.Session != nil {
+			session = *output.Session
+		}
+		slog.Info("cognito login requires new password",
+			"email", email,
+		)
+		return &Result{
+			ChallengeName: string(types.ChallengeNameTypeNewPasswordRequired),
+			Session:       session,
+		}, nil
+	}
+
 	if output.AuthenticationResult == nil {
 		slog.Error("cognito login returned nil auth result",
 			"email", email,
+			"challenge_name", string(output.ChallengeName),
 		)
 		return nil, ErrAuthResultNil
 	}
@@ -326,6 +362,87 @@ func (c *CognitoClient) Login(
 	}
 
 	slog.Info("cognito login succeeded", "email", email)
+	return result, nil
+}
+
+// CompleteNewPassword completes the NEW_PASSWORD_REQUIRED challenge
+// returned from Login for users in FORCE_CHANGE_PASSWORD state. The
+// session must be the one returned by the prior Login call; Cognito
+// rejects expired or reused sessions as NotAuthorizedException.
+//
+// firstName and lastName are forwarded as
+// `userAttributes.given_name` / `userAttributes.family_name` in the
+// challenge response when non-empty. Cognito requires these whenever
+// the User Pool marks given_name / family_name as required attributes
+// and the admin-created user does not already have them set; without
+// them Cognito rejects the call with InvalidParameterException
+// ("Invalid attributes given, given_name is missing").
+func (c *CognitoClient) CompleteNewPassword(
+	ctx context.Context,
+	email, newPassword, session, firstName, lastName string,
+) (*Result, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil, fmt.Errorf("email is required")
+	}
+	if newPassword == "" {
+		return nil, fmt.Errorf("password is required")
+	}
+	if session == "" {
+		return nil, fmt.Errorf("session is required")
+	}
+
+	challengeResponses := map[string]string{
+		"USERNAME":     email,
+		"NEW_PASSWORD": newPassword,
+	}
+	if firstName = strings.TrimSpace(firstName); firstName != "" {
+		challengeResponses["userAttributes.given_name"] = firstName
+	}
+	if lastName = strings.TrimSpace(lastName); lastName != "" {
+		challengeResponses["userAttributes.family_name"] = lastName
+	}
+	if hash := c.secretHash(email); hash != nil {
+		challengeResponses["SECRET_HASH"] = *hash
+	}
+
+	input := &cip.RespondToAuthChallengeInput{
+		ChallengeName:      types.ChallengeNameTypeNewPasswordRequired,
+		ClientId:           &c.clientID,
+		Session:            &session,
+		ChallengeResponses: challengeResponses,
+	}
+
+	output, err := c.api.RespondToAuthChallenge(ctx, input)
+	if err != nil {
+		slog.Warn("cognito complete new password failed",
+			"email", email, "error", err,
+		)
+		return nil, classifyCognitoErr(err)
+	}
+
+	if output.AuthenticationResult == nil {
+		slog.Error("cognito new password returned nil auth result",
+			"email", email,
+			"challenge_name", string(output.ChallengeName),
+		)
+		return nil, ErrAuthResultNil
+	}
+
+	result := &Result{
+		ExpiresIn: output.AuthenticationResult.ExpiresIn,
+	}
+	if output.AuthenticationResult.AccessToken != nil {
+		result.AccessToken = *output.AuthenticationResult.AccessToken
+	}
+	if output.AuthenticationResult.IdToken != nil {
+		result.IDToken = *output.AuthenticationResult.IdToken
+	}
+	if output.AuthenticationResult.RefreshToken != nil {
+		result.RefreshToken = *output.AuthenticationResult.RefreshToken
+	}
+
+	slog.Info("cognito new password set", "email", email)
 	return result, nil
 }
 

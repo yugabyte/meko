@@ -144,6 +144,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/complete-new-password": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Complete first-login set-new-password challenge",
+                "parameters": [
+                    {
+                        "description": "New password payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.CompleteNewPasswordRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/confirm-signup": {
             "post": {
                 "consumes": [
@@ -304,7 +349,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Tokens, or {challenge:NEW_PASSWORD_REQUIRED, session, email} when the user must set a new password",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1630,6 +1675,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/datapacks/{name}/member-list": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "List datapack members",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/datapacks/{name}/outgoing-shares": {
             "get": {
                 "security": [
@@ -1643,7 +1733,7 @@ const docTemplate = `{
                 "tags": [
                     "sharing"
                 ],
-                "summary": "List outgoing shares for a datapack",
+                "summary": "List pending outgoing invites for a datapack",
                 "parameters": [
                     {
                         "type": "string",
@@ -1846,6 +1936,116 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/feedback": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "feedback"
+                ],
+                "summary": "List feedback rows",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by submitting user UUID",
+                        "name": "user_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by status: new, triaged, in_progress, resolved, wontfix",
+                        "name": "status",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "feedback"
+                ],
+                "summary": "Submit product feedback",
+                "parameters": [
+                    {
+                        "description": "Feedback payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.CreateFeedbackRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -2173,6 +2373,41 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CreateFeedbackRequest": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "datapack_id": {
+                    "type": "string"
+                },
+                "datapack_name": {
+                    "type": "string"
+                },
+                "feedback_text": {
+                    "type": "string"
+                },
+                "meko_version": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "source_identifier": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "user_path": {
+                    "type": "string"
+                }
+            }
+        },
         "models.PromoteMemoriesRequest": {
             "type": "object",
             "properties": {
@@ -2194,15 +2429,27 @@ const docTemplate = `{
             }
         },
         "service.AddRequest": {
+            "type": "object"
+        },
+        "service.CompleteNewPasswordRequest": {
             "type": "object",
             "properties": {
-                "details": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
+                "confirm_password": {
+                    "type": "string"
                 },
-                "url": {
+                "email": {
+                    "type": "string"
+                },
+                "first_name": {
+                    "type": "string"
+                },
+                "last_name": {
+                    "type": "string"
+                },
+                "new_password": {
+                    "type": "string"
+                },
+                "session": {
                     "type": "string"
                 }
             }

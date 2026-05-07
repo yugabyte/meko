@@ -216,6 +216,7 @@ func registerAuthRoutes(
 	authGroup.POST("/forgot-password", authH.ForgotPassword)
 	authGroup.POST("/forgot-password/confirm", authH.ForgotPasswordConfirm)
 	authGroup.POST("/login", authH.Login)
+	authGroup.POST("/complete-new-password", authH.CompleteNewPassword)
 	authGroup.POST("/logout", authH.Logout)
 	authGroup.GET("/me", authH.Me, requireAuth)
 	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
