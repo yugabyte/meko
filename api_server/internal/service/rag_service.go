@@ -9,22 +9,38 @@ import (
 	"meko/api_server/internal/repository"
 )
 
-const DatapackIndexName = "datapacks.knowledge_bases"
+// dist_rag.vector_indexes splits a fully-qualified index into two columns
+// (schema_name, index_name); the SQL functions take them as separate
+// parameters too. We keep a dotted form available for log lines and for
+// the JSON response body via FullIndexName().
+const (
+	DatapackIndexSchema = "datapacks"
+	DatapackIndexName   = "knowledge_bases"
+)
 
 // RagService wraps dist_rag operations on a per-datapack database.
 type RagService struct {
-	repo      *repository.RagRepo
-	indexName string
+	repo       *repository.RagRepo
+	schemaName string
+	indexName  string
 }
 
-func NewRagService(db *sql.DB) *RagService {
+func NewRagService(db *sql.DB, schemaName, indexName string) *RagService {
 	return &RagService{
-		repo:      repository.NewRagRepo(db, DatapackIndexName),
-		indexName: DatapackIndexName,
+		repo:       repository.NewRagRepo(db, schemaName, indexName),
+		schemaName: schemaName,
+		indexName:  indexName,
 	}
 }
 
-func (s *RagService) IndexName() string { return s.indexName }
+func (s *RagService) SchemaName() string { return s.schemaName }
+func (s *RagService) IndexName() string  { return s.indexName }
+
+// FullIndexName returns the dotted "schema.index" form used in log lines
+// and in the API response body for /knowledge-bases/create.
+func (s *RagService) FullIndexName() string {
+	return s.schemaName + "." + s.indexName
+}
 
 // EnsureVectorIndex creates the vector index if it is missing. Idempotent:
 // a no-op (no error) when the index already exists.
@@ -37,13 +53,13 @@ func (s *RagService) EnsureVectorIndex() error {
 		return nil
 	}
 	slog.Info("vector index does not exist, creating lazily",
-		"index_name", s.indexName)
+		"index_name", s.FullIndexName())
 	indexID, err := s.repo.InitVectorIndex()
 	if err != nil {
 		return err
 	}
 	slog.Info("vector index created",
-		"index_name", s.indexName, "index_id", indexID)
+		"index_name", s.FullIndexName(), "index_id", indexID)
 	return nil
 }
 
@@ -81,7 +97,7 @@ func (s *RagService) AddSourceToIndex(sourceID string) error {
 		return err
 	}
 	slog.Info("source added to index",
-		"index_name", s.indexName, "index_id", indexID, "source_id", sourceID)
+		"index_name", s.FullIndexName(), "index_id", indexID, "source_id", sourceID)
 	return nil
 }
 
@@ -97,7 +113,7 @@ func (s *RagService) BuildIndex() error {
 	if err := s.repo.BuildIndex(); err != nil {
 		return err
 	}
-	slog.Info("index build triggered", "index_name", s.indexName)
+	slog.Info("index build triggered", "index_name", s.FullIndexName())
 	return nil
 }
 
@@ -145,7 +161,7 @@ func (s *RagService) WaitAndBuild(sourceID string) {
 
 // WaitAndBuildAsync opens its own connection to the datapack DB so it can
 // run as a background goroutine that outlives the HTTP request.
-func WaitAndBuildAsync(datapackConnStr, sourceID string) {
+func WaitAndBuildAsync(datapackConnStr, schemaName, indexName, sourceID string) {
 	if !strings.Contains(datapackConnStr, "sslmode=") {
 		if strings.Contains(datapackConnStr, "?") {
 			datapackConnStr += "&sslmode=disable"
@@ -161,7 +177,7 @@ func WaitAndBuildAsync(datapackConnStr, sourceID string) {
 	}
 	defer db.Close()
 
-	svc := NewRagService(db)
+	svc := NewRagService(db, schemaName, indexName)
 	svc.WaitAndBuild(sourceID)
 }
 

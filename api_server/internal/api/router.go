@@ -50,7 +50,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	kbRepo := repository.NewKnowledgeBaseRepo(cfg.DB)
 	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
-	ragSvc := service.NewRagService(cfg.DB)
+	ragSvc := service.NewRagService(cfg.DB, service.DatapackIndexSchema, service.DatapackIndexName)
 
 	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel)
 	memoriesSvc := service.NewMemoriesService(memoriesRepo)

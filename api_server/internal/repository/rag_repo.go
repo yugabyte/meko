@@ -3,29 +3,40 @@ package repository
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 
 	"github.com/lib/pq"
 )
 
 // RagRepo encapsulates dist_rag SQL queries on a per-datapack database.
+//
+// dist_rag stores fully-qualified vector indexes as two columns
+// (schema_name, index_name) and the SQL functions take them as separate
+// arguments, so the repo carries both pieces and never reasons about the
+// dotted form except when constructing display strings via FullName.
 type RagRepo struct {
-	db        *sql.DB
-	indexName string
+	db         *sql.DB
+	schemaName string
+	indexName  string
 }
 
-func NewRagRepo(db *sql.DB, indexName string) *RagRepo {
-	return &RagRepo{db: db, indexName: indexName}
+func NewRagRepo(db *sql.DB, schemaName, indexName string) *RagRepo {
+	return &RagRepo{db: db, schemaName: schemaName, indexName: indexName}
 }
+
+// FullName returns the dotted "schema.index" form used in error messages
+// and log lines. It is never sent to dist_rag SQL functions — those take
+// schema_name and index_name as separate parameters.
+func (r *RagRepo) FullName() string { return r.schemaName + "." + r.indexName }
 
 func (r *RagRepo) LookupIndexID() (string, error) {
 	var id string
 	err := r.db.QueryRow(
-		`SELECT id FROM dist_rag.vector_indexes WHERE index_name = $1`,
-		r.indexName,
+		`SELECT id FROM dist_rag.vector_indexes
+		 WHERE schema_name = $1 AND index_name = $2`,
+		r.schemaName, r.indexName,
 	).Scan(&id)
 	if err != nil {
-		return "", fmt.Errorf("lookup index %q: %w", r.indexName, err)
+		return "", fmt.Errorf("lookup index %q: %w", r.FullName(), err)
 	}
 	return id, nil
 }
@@ -153,49 +164,59 @@ func (r *RagRepo) InsertDocument(sourceID, documentName, documentURI, checksum, 
 	return nil
 }
 
+// BuildIndex enqueues a build for this repo's vector index. dist_rag.build_index
+// requires exactly one of r_index_id / r_index_name; we resolve to the id first
+// so callers don't depend on dist_rag still uniquely identifying by index_name
+// alone (today it does, but it's a per-extension-version contract).
 func (r *RagRepo) BuildIndex() error {
-	_, err := r.db.Exec(
-		`SELECT dist_rag.build_index(r_index_name := $1)`,
-		r.indexName,
-	)
+	indexID, err := r.LookupIndexID()
 	if err != nil {
-		return fmt.Errorf("build_index(%s): %w", r.indexName, err)
+		return fmt.Errorf("build_index(%s): %w", r.FullName(), err)
+	}
+	if _, err := r.db.Exec(
+		`SELECT dist_rag.build_index(r_index_id := $1::UUID)`,
+		indexID,
+	); err != nil {
+		return fmt.Errorf("build_index(%s, id=%s): %w", r.FullName(), indexID, err)
 	}
 	return nil
 }
 
 // IndexExists returns true if the vector index already exists in dist_rag.
+//
+// dist_rag.vector_indexes has a UNIQUE index on index_name alone, but we
+// filter on (schema_name, index_name) anyway so we don't accidentally match
+// an unrelated index that happens to share the same unqualified name in a
+// different schema (defensive against future relaxations of the constraint).
 func (r *RagRepo) IndexExists() (bool, error) {
 	var exists bool
 	err := r.db.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM dist_rag.vector_indexes WHERE index_name = $1)`,
-		r.indexName,
+		`SELECT EXISTS(
+		   SELECT 1 FROM dist_rag.vector_indexes
+		   WHERE schema_name = $1 AND index_name = $2)`,
+		r.schemaName, r.indexName,
 	).Scan(&exists)
 	if err != nil {
-		return false, fmt.Errorf("check index exists %q: %w", r.indexName, err)
+		return false, fmt.Errorf("check index exists %q: %w", r.FullName(), err)
 	}
 	return exists, nil
 }
 
 // InitVectorIndex creates the vector index via dist_rag.init_vector_index.
+// Passes schema_name and index_name as separate parameters per the
+// dist_rag function signature (introduced when the table grew a
+// schema_name column).
 func (r *RagRepo) InitVectorIndex() (string, error) {
 	var indexID string
-	schemaPart, tablePart, ok := strings.Cut(r.indexName, ".")
-	schemaName := strings.TrimSpace(schemaPart)
-	indexTableName := strings.TrimSpace(tablePart)
-	if !ok {
-		schemaName = "public"
-		indexTableName = r.indexName
-	}
 	err := r.db.QueryRow(`SELECT dist_rag.init_vector_index(
 		r_index_name   := $1,
 		r_sources      := ARRAY[]::UUID[],
 		r_embedding_model_params := '{"model": "text-embedding-3-large", "dimensions": 1536}',
 		r_chunk_params := '{"chunk_size": 1024, "chunk_overlap": 256}',
 		r_schema_name  := $2
-	)`, indexTableName, schemaName).Scan(&indexID)
+	)`, r.indexName, r.schemaName).Scan(&indexID)
 	if err != nil {
-		return "", fmt.Errorf("init_vector_index(%s): %w", r.indexName, err)
+		return "", fmt.Errorf("init_vector_index(%s): %w", r.FullName(), err)
 	}
 	return indexID, nil
 }
@@ -257,7 +278,7 @@ type PipelineStatus struct {
 }
 
 func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error) {
-	ps := &PipelineStatus{IndexName: r.indexName}
+	ps := &PipelineStatus{IndexName: r.FullName()}
 
 	if len(sourceURIs) == 0 {
 		return ps, nil
@@ -265,13 +286,14 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 
 	rows, err := r.db.Query(
 		`SELECT DISTINCT ON (document_uri)
-		        index_name, source_uri, document_name, document_status,
+		        schema_name, index_name, source_uri, document_name, document_status,
 		        chunks_processed
 		 FROM dist_rag.vector_index_pipeline_details
-		 WHERE index_name = $1
-		   AND source_uri = ANY($2::TEXT[])
+		 WHERE schema_name = $1
+		   AND index_name  = $2
+		   AND source_uri  = ANY($3::TEXT[])
 		 ORDER BY document_uri, pipeline_created_at DESC NULLS LAST`,
-		r.indexName, pq.Array(sourceURIs),
+		r.schemaName, r.indexName, pq.Array(sourceURIs),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query pipeline_details: %w", err)
@@ -279,13 +301,18 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 	defer rows.Close()
 
 	for rows.Next() {
-		var d PipelineDetail
+		var (
+			d        PipelineDetail
+			schema   string
+			rawIndex string
+		)
 		if err := rows.Scan(
-			&d.IndexName, &d.SourceURI, &d.DocumentName,
+			&schema, &rawIndex, &d.SourceURI, &d.DocumentName,
 			&d.DocumentStatus, &d.ChunksProcessed,
 		); err != nil {
 			return nil, fmt.Errorf("scan pipeline_details: %w", err)
 		}
+		d.IndexName = schema + "." + rawIndex
 		ps.Details = append(ps.Details, d)
 	}
 	if err := rows.Err(); err != nil {

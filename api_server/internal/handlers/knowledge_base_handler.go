@@ -485,13 +485,13 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 		"datapack_id", dp.ID,
 		"source_id", sourceID,
 		"is_new_source", isNewSource,
-		"index_name", h.ragSvc.IndexName(),
+		"index_name", h.ragSvc.FullIndexName(),
 	)
 
 	return ok(c, http.StatusCreated, map[string]string{
 		"datapack_id":   dp.ID,
 		"rag_source_id": sourceID,
-		"index_name":    h.ragSvc.IndexName(),
+		"index_name":    h.ragSvc.FullIndexName(),
 		"source_uri":    sourceURI,
 		"status":        "build_triggered",
 	})
@@ -534,7 +534,7 @@ func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 	if h.ragSvc == nil || len(sourceIDs) == 0 {
 		indexName := ""
 		if h.ragSvc != nil {
-			indexName = h.ragSvc.IndexName()
+			indexName = h.ragSvc.FullIndexName()
 		}
 		return ok(c, http.StatusOK, &repository.PipelineStatus{
 			IndexName: indexName,
