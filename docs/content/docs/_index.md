@@ -40,7 +40,7 @@ Teams still fail when agents can't share state (36% of failures trace to inter-a
 
 &nbsp;
 
-<img src="/images/meko-architecture-intro.svg" alt="Diagram: agents A B and C connect to MCP server, then datapack with memory knowledge traces, then YugabyteDB and S3 tier" width="800" height="534" decoding="async" loading="lazy" style="max-width: min(800px, 100%); height: auto; display: block; margin-inline: auto;" />
+![Meko datapack diagram](/images/meko-architecture-intro.svg)
 
 &nbsp;
 
