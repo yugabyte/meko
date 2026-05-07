@@ -1,6 +1,6 @@
 ---
-title: Explore knowledge and memory
-linkTitle: Explore memory
+title: Explore Meko
+linkTitle: Explore Meko
 description: Experience how Meko stores knowledge and saves memories
 weight: 1000
 type: docs
@@ -200,7 +200,7 @@ Check what's happening inside your datapack:
 
 ## Next steps
 
-With your first datapack live, you can transition from a basic demo to a robust, context-aware development environment. Explore the following advanced capabilities to fully leverage Meko's persistent memory and knowledge graph.
+Explore the following advanced capabilities to fully leverage Meko's persistent memory and knowledge graph.
 
 {{< card-group >}}
   {{< card

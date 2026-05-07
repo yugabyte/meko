@@ -38,6 +38,8 @@ That's it - when you finish, Meko displays your datapack, and you're ready to st
 >
 > The connection instructions use node.js and nvm. If you need to connect your client manually, refer to [Integrations](../../integrations/) for instructions.
 
+With your first datapack live, you can transition from a basic demo to a robust, context-aware development environment.
+
 <!--
 1. Copy the following MCP Server details and store them in a safe place:
 
@@ -84,35 +86,13 @@ npx @yugabytedb/meko-mcp --client <mcp-client> --url <mcp-server-url> --api-key 
 > ```
 -->
 
-## Next steps
-
-With your first datapack live, you can transition from a basic demo to a robust, context-aware development environment. Explore the following advanced capabilities to fully leverage Meko's persistent memory and knowledge graph.
+## Next
 
 {{< card-group >}}
   {{< card
     href="quick-start/explore-memory/"
-    title="Explore knowledge and memory"
+    title="Explore Meko"
     desc="Add knowledge to your datapack and create memories."
-  >}}
-  {{< card
-    href="guides/working-with-memory/"
-    title="Manage and curate memories"
-    desc="Search and list what is stored, compress overlapping facts, or clear a datapack when you need a reset."
-  >}}
-  {{< card
-    href="guides/working-with-knowledge-bases/"
-    title="Grow your knowledge base"
-    desc="Add more sources and combine document RAG with memory-driven assistants."
-  >}}
-  {{< card
-    href="examples/meko-enhances-teaming/"
-    title="Collaborate"
-    desc="Share datapacks with your team so that every agent follows the same project standards, or carry personal preferences across AI agents."
-  >}}
-  {{< card
-    href="examples/trace-and-resume/"
-    title="Trace and resume"
-    desc="Store conversation history and agent reasoning traces, enabling features like cross-session recall and resumability after failures."
   >}}
 {{< /card-group >}}
 
