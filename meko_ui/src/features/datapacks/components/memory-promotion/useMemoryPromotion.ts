@@ -21,7 +21,7 @@ import {
 export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 export const DEFAULT_PAGE_SIZE = 10;
 /** How many unpromoted rows the preview UI shows at once. */
-export const PREVIEW_PAGE_SIZE = 3;
+export const PREVIEW_PAGE_SIZE = 5;
 /** Preview fetches this many rows from page 1 so the next memories can fill in after a promotion. */
 export const PREVIEW_FETCH_PAGE_SIZE = 30;
 

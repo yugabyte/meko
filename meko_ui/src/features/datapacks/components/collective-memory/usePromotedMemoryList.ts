@@ -13,7 +13,7 @@ import {
 } from "@/lib/mekoApi";
 import { DEFAULT_PAGE_SIZE } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
 
-export const COLLECTIVE_MEMORY_PREVIEW_SIZE = 10;
+export const COLLECTIVE_MEMORY_PREVIEW_SIZE = 7;
 
 export type CollectiveMemoryVariant = "preview" | "full";
 

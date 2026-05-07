@@ -28,7 +28,7 @@ import DatapackPanelShell from "@/features/datapacks/components/datapack-detail/
 /** How many of the newest conversations to show in the in-tab preview.
  *  Matches the "top 3-4" call-out from product; we use 4 so the panel
  *  visually mirrors the memories preview. */
-export const CONVERSATIONS_PREVIEW_SIZE = 4;
+export const CONVERSATIONS_PREVIEW_SIZE = 7;
 
 type Props = {
   datapackName: string;
@@ -131,11 +131,8 @@ export default function ConversationsPanel({ datapackName, datapackId, total, cl
       }
       description={
         <>
-          Latest Langfuse sessions for{" "}
+          Recent conversations in{" "}
           <span className="font-medium text-white">{datapackName}</span>
-          {hasFetched
-            ? ` (showing up to ${CONVERSATIONS_PREVIEW_SIZE} here).`
-            : "."}
         </>
       }
       onRefresh={() => void load()}

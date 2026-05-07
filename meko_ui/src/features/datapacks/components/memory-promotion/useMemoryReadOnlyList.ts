@@ -12,7 +12,7 @@ import {
 } from "@/lib/mekoApi";
 import { DEFAULT_PAGE_SIZE } from "./useMemoryPromotion";
 
-export const MEMORY_READ_ONLY_PREVIEW_SIZE = 10;
+export const MEMORY_READ_ONLY_PREVIEW_SIZE = 7;
 
 export type MemoryReadOnlyVariant = "preview" | "full";
 

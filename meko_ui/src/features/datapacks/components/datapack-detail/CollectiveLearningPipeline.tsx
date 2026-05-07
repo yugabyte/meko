@@ -320,7 +320,7 @@ export function CollectiveLearningPipeline({
         <div className="border-b border-border/60 bg-[#1C2333]/40 px-5 py-4 sm:px-6">
           <div className="min-w-0 space-y-1">
             <h2 className="text-lg font-semibold tracking-tight text-white sm:text-xl">Collective learning</h2>
-            <p className="text-sm leading-normal text-muted-foreground whitespace-nowrap overflow-x-auto pb-0.5 [scrollbar-width:thin]">
+            <p className="text-sm leading-normal text-muted-foreground text-pretty">
               How memory from individual agents flows into shared knowledge everyone can read. Each promotion
               populates <span className="font-semibold text-sky-400/95">both</span> destinations; Shared Knowledge can
               also receive files directly.

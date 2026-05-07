@@ -525,7 +525,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             </div>
           </div>
           <div className="flex min-h-0 min-w-0 flex-col gap-4 lg:self-start lg:w-full">
-            <DatapackDetailAgentsTile datapackName={datapackName} datapackId={routeDatapackId} />
+            <DatapackDetailMembersTile
+              datapackName={datapackName}
+              currentUser={currentUser}
+              members={members}
+              membersListStatus={membersListStatus}
+            />
             <DatapackDetailKnowledgeTile
               documents={knowledgeDocuments}
               documentsLoading={knowledgeDocumentsLoading}
@@ -533,12 +538,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
               onAddSource={() => setIsUploadOpen(true)}
             />
-            <DatapackDetailMembersTile
-              datapackName={datapackName}
-              currentUser={currentUser}
-              members={members}
-              membersListStatus={membersListStatus}
-            />
+            <DatapackDetailAgentsTile datapackName={datapackName} datapackId={routeDatapackId} />
             <DatapackDetailConnectTile
               mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
               mcpApiKey={provisionStatus?.mcp_api_key ?? null}
