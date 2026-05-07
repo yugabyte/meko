@@ -1,4 +1,8 @@
 ---
+hide:
+  - navigation
+---
+---
 title: Meko CLI
 linkTitle: Meko CLI
 description: Install and use the Meko CLI

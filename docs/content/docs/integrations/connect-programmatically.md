@@ -15,7 +15,7 @@ This approach enables your application to save memory and knowledge in Meko, suc
 >* OpenAI Agents SDK
 >* LangChain
 >* LangGraph
->* Lysor
+>* Lyzr
 >* CrewAI
 
 <!-- 
