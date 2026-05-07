@@ -91,3 +91,29 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "geolocation=(), camera=(), microphone=()"
     X-XSS-Protection = "0"
+
+# Redirect hidden pages to their parent pages
+
+[[redirects]]
+  from = "/guides/database-access/"
+  to = "/guides/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/architecture/core-concepts/oltp-data/"
+  to = "/architecture/core-concepts/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/contribute/"
+  to = "/"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/reference/meko-cli"
+  to = "/reference/"
+  status = 301
+  force = true
