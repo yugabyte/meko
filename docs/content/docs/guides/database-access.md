@@ -1,9 +1,4 @@
 ---
-hide:
-  - navigation
----
-
----
 title: Database access
 linkTitle: Database access
 description: Connect directly to your datapack's PostgreSQL database

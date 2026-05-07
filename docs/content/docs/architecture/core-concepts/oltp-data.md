@@ -1,9 +1,3 @@
-
----
-hide:
-  - navigation
----
-
 ---
 title: OLTP data
 linkTitle: OLTP data
