@@ -4,6 +4,8 @@ export const ROUTES = {
   signin: "/signin",
   signup: "/signup",
   forgotPassword: "/forgot-password",
+  /** First-login Cognito challenge: set password + name (from Admin-created users). */
+  completeNewPassword: "/complete-new-password",
   onboarding: "/onboarding",
   home: "/home",
   playground: "/playground",
@@ -90,6 +92,7 @@ export const AUTH_ROUTES = [
   ROUTES.signin,
   ROUTES.signup,
   ROUTES.forgotPassword,
+  ROUTES.completeNewPassword,
 ] as const;
 
 export const PROTECTED_ROUTE_PREFIXES = [

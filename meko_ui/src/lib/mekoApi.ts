@@ -62,6 +62,8 @@ const AUTH_PUBLIC_ENDPOINTS = new Set([
   /** Cognito ForgotPassword / ConfirmForgotPassword (no session). */
   "/auth/forgot-password",
   "/auth/forgot-password/confirm",
+  /** Completes NEW_PASSWORD_REQUIRED after /auth/login challenge (cookies set on success). */
+  "/auth/complete-new-password",
 ]);
 
 function notifyAuthExpiredOnce() {
@@ -173,12 +175,23 @@ export type LoginPayload = {
   password: string;
 };
 
-export type LoginResponse = {
+export type AuthSessionTokens = {
   access_token: string;
   id_token: string;
   refresh_token: string;
   expires_in: number;
 };
+
+
+/** Cognito challenge from POST /auth/login when the user must set a new password first. */
+export const AUTH_CHALLENGE_NEW_PASSWORD_REQUIRED = "NEW_PASSWORD_REQUIRED" as const;
+export type LoginNewPasswordChallengeResponse = {
+  challenge: typeof AUTH_CHALLENGE_NEW_PASSWORD_REQUIRED;
+  session: string;
+  email: string;
+};
+
+export type LoginResponse = AuthSessionTokens | LoginNewPasswordChallengeResponse;
 
 export type CurrentUser = {
   account_id: string;
@@ -217,6 +230,28 @@ const apiClient = axios.create({
   },
 });
 
+export function isNewPasswordChallengeResponse(
+  data: LoginResponse,
+): data is LoginNewPasswordChallengeResponse {
+  return (
+    "challenge" in data &&
+    data.challenge === AUTH_CHALLENGE_NEW_PASSWORD_REQUIRED &&
+    typeof data.session === "string" &&
+    data.session.trim().length > 0 &&
+    typeof data.email === "string" &&
+    data.email.trim().length > 0
+  );
+}
+
+export type CompleteNewPasswordPayload = {
+  email: string;
+  session: string;
+  new_password: string;
+  confirm_password: string;
+  first_name: string;
+  last_name: string;
+};
+
 async function request<T>(
   path: string,
   method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
@@ -238,7 +273,11 @@ async function request<T>(
         httpStatus: res.status,
       });
     }
-    if (path === "/auth/login" || path === "/auth/me") {
+    if (
+      path === "/auth/login" ||
+      path === "/auth/me" ||
+      path === "/auth/complete-new-password"
+    ) {
       resetAuthExpiredState();
     }
     return payload.data;
@@ -713,8 +752,13 @@ export async function forgotPasswordConfirm(payload: ForgotPasswordConfirmPayloa
 }
 
 /**
- * Signs in via POST /auth/login (Cognito USER_PASSWORD_AUTH). On success, sets
- * auth cookies server-side and dispatches {@link AUTH_LOGIN_SUCCESS_EVENT}.
+ * Signs in via POST /auth/login (Cognito USER_PASSWORD_AUTH).
+ *
+ * - When tokens are issued: sets auth cookies server-side and dispatches
+ *   {@link AUTH_LOGIN_SUCCESS_EVENT}.
+ * - When Cognito returns {@link AUTH_CHALLENGE_NEW_PASSWORD_REQUIRED}, the API
+ *   returns `{ challenge, session, email }` with no cookies; the client must not
+ *   treat that as a logged-in session — drive POST /auth/complete-new-password instead.
  *
  * If the user never confirmed their email, Cognito rejects login; the API maps
  * that to HTTP 403 with `error.code` {@link API_ERROR_CODE_USER_NOT_CONFIRMED}
@@ -722,8 +766,26 @@ export async function forgotPasswordConfirm(payload: ForgotPasswordConfirmPayloa
  */
 export async function login(payload: LoginPayload) {
   const data = await request<LoginResponse>("/auth/login", "POST", payload);
-  dispatchAppEvent(AUTH_LOGIN_SUCCESS_EVENT);
+  if ("access_token" in data && Boolean(data.access_token)) {
+    dispatchAppEvent(AUTH_LOGIN_SUCCESS_EVENT);
+  }
   return data;
+}
+
+/**
+ * POST /auth/complete-new-password — finishes NEW_PASSWORD_REQUIRED; sets auth cookies like login.
+ * Does not dispatch {@link AUTH_LOGIN_SUCCESS_EVENT}: the UI typically signs the user out and
+ * sends them to `/login` so they sign in fresh with the new password.
+ */
+export async function completeNewPassword(payload: CompleteNewPasswordPayload) {
+  return request<AuthSessionTokens>("/auth/complete-new-password", "POST", {
+    email: payload.email.trim(),
+    session: payload.session,
+    new_password: payload.new_password,
+    confirm_password: payload.confirm_password,
+    first_name: payload.first_name.trim(),
+    last_name: payload.last_name.trim(),
+  });
 }
 
 export async function logout() {

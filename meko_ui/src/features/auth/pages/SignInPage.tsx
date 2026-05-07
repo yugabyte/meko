@@ -8,6 +8,7 @@ import {
   getApiErrorMessage,
   getCurrentUser,
   isMekoApiRequestError,
+  isNewPasswordChallengeResponse,
   login,
   ONBOARDING_STATUS_CACHE_KEY,
   ONBOARDING_STATUS_UPDATED_EVENT,
@@ -64,7 +65,14 @@ export default function SignInPage() {
     setError(null);
     resetRecoveryUi();
     try {
-      await login({ email: email.trim(), password });
+      const loginResult = await login({ email: email.trim(), password });
+      if (isNewPasswordChallengeResponse(loginResult)) {
+        navigate(ROUTES.completeNewPassword, {
+          replace: true,
+          state: { session: loginResult.session, email: loginResult.email },
+        });
+        return;
+      }
       let nextPath: (typeof ROUTES)["datapacks" | "onboarding"] = ROUTES.onboarding;
       try {
         const user = await getCurrentUser();
