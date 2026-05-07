@@ -35,7 +35,7 @@ ENV HUGO_CACHEDIR=/tmp/hugo_cache
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-EXPOSE 1313
+EXPOSE 13131
 
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["npm", "run", "dev"]

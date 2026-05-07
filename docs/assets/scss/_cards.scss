@@ -20,28 +20,6 @@
       width: 100%;
     }
 
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      z-index: -1;
-      margin: 2px;
-      border-radius: inherit;
-      background: linear-gradient(to right, #2d94ee 0%, #9b46d8 100%);
-      box-shadow: 0 0 6px 0 a(255, 255, 255, 50%);
-      transition: all 400ms ease;
-    }
-
-    &:hover::after {
-      margin: -3px;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      &::after {
-        transition: none;
-      }
-    }
-
     .meko-card-content {
       display: flex;
       flex-flow: column;
@@ -175,6 +153,30 @@
     }
   }
 
+  a.meko-card {
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      margin: 2px;
+      border-radius: inherit;
+      background: linear-gradient(to right, #2d94ee 0%, #9b46d8 100%);
+      box-shadow: 0 0 6px 0 a(255, 255, 255, 50%);
+      transition: all 400ms ease;
+    }
+
+    &:hover::after {
+      margin: -3px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      &::after {
+        transition: none;
+      }
+    }
+  }
+
   &:not(.full, .three-quarter, .half, .third) {
     .meko-card {
       &:nth-child(1):nth-last-child(2),
@@ -233,18 +235,6 @@
   &.third {
     .meko-card {
       width: calc((100% / 3) - 8px);
-
-      @media (min-width: 1200px) and (max-width: 1379px) {
-        width: calc(50% - 6px);
-      }
-
-      @media (max-width: 1023px) {
-        width: calc(50% - 6px);
-      }
-
-      @media (max-width: 599px) {
-        width: 100%;
-      }
     }
   }
 }
