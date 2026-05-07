@@ -42,6 +42,7 @@ import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
 import { MemoryReadOnlySummaryPanel } from "@/features/datapacks/components/memory-promotion/MemoryReadOnlySummaryPanel";
+import { CollectiveMemoryPanel } from "@/features/datapacks/components/collective-memory/CollectiveMemoryPanel";
 import { KnowledgeDocumentsPanel } from "@/features/datapacks/components/knowledge-documents/KnowledgeDocumentsPanel";
 import ConversationsPanel from "@/features/datapacks/components/datapack-detail/ConversationsPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
@@ -96,7 +97,11 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<DatapackDetailTab>(DATAPACK_DETAIL_TAB.learnings);
+  // Bump to force the datapack effect to re-fetch (e.g. after a memory
+  // promotion so `learnings_count` refreshes in the pipeline ribbon).
+  const [datapackReloadNonce, setDatapackReloadNonce] = useState(0);
+  const reloadDatapack = useCallback(() => setDatapackReloadNonce((n) => n + 1), []);
+  const [activeTab, setActiveTab] = useState<DatapackDetailTab>(DATAPACK_DETAIL_TAB.conversations);
 
   const [isConnectOpen, setIsConnectOpen] = useState(false);
   const [connectLoading, setConnectLoading] = useState(false);
@@ -169,7 +174,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       cancelled = true;
     };
-  }, [datapackName, navigate, routeDatapackId]);
+  }, [datapackName, navigate, routeDatapackId, datapackReloadNonce]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -469,6 +474,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                     datapackId={datapack.datapack_id}
                     isPromotionAllowed={isDatapackGrantEligibleToPromoteMemoryToKnowledge({ grant: datapackGrant }) ?? false}
                     variant="preview"
+                    onPromoted={reloadDatapack}
                   />
                 ) : (
                   <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
@@ -488,6 +494,18 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               ) : activeTab === DATAPACK_DETAIL_TAB.memories ? (
                 datapack?.datapack_id ? (
                   <MemoryReadOnlySummaryPanel
+                    datapackName={datapackName}
+                    datapackId={datapack.datapack_id}
+                    variant="preview"
+                  />
+                ) : (
+                  <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
+                    {statusLoading ? "Loading datapack…" : "Datapack not available."}
+                  </div>
+                )
+              ) : activeTab === DATAPACK_DETAIL_TAB.collectiveMemory ? (
+                datapack?.datapack_id ? (
+                  <CollectiveMemoryPanel
                     datapackName={datapackName}
                     datapackId={datapack.datapack_id}
                     variant="preview"

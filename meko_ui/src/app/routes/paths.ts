@@ -67,6 +67,10 @@ export function datapackMemorySummaryPath(datapackName: string): string {
   return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/memory-summary`;
 }
 
+export function datapackCollectiveMemorySummaryPath(datapackName: string): string {
+  return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/collective-memory-summary`;
+}
+
 /** Full conversation viewer route. When `conversationId` is provided
  *  the viewer pre-selects that session in the left rail; otherwise it
  *  lands on the first row of the newest page. */

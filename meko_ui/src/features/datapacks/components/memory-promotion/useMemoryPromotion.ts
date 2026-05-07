@@ -1,8 +1,13 @@
 // Loads paginated memories for a datapack, selection, and POST /promote-memories (promote to KB).
 // `preview` uses page 1 with a larger fetch window but only shows 3 unpromoted rows so promoting one
 // still fills the preview; `full` uses local page/pageSize and Prev/Next navigation.
+//
+// After a successful promote we refetch from the server (which now omits the
+// just-promoted rows) and invoke `onPromoted(count)` so the parent can refresh
+// downstream views (e.g. CollectiveLearningPipeline learnings count) and show
+// a toast.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   getApiErrorMessage,
   getCurrentUser,
@@ -12,7 +17,6 @@ import {
   type Memory,
   type PromoteMemoriesResult,
 } from "@/lib/mekoApi";
-import { readPromotedCache, writePromotedCache, type PromotedMemory } from "./promotedStorage";
 
 export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 export const DEFAULT_PAGE_SIZE = 10;
@@ -33,9 +37,14 @@ type PromotionSummary = {
 export function useMemoryPromotion({
   datapackId,
   variant,
+  onPromoted,
 }: {
   datapackId: string;
   variant: MemoryPromotionVariant;
+  /** Fired after a successful promote with the count of just-promoted memories
+   *  (inserted + updated). Parent typically refetches the datapack to refresh
+   *  learnings_count and shows a toast. */
+  onPromoted?: (count: number) => void;
 }) {
   const isPreview = variant === "preview";
 
@@ -60,13 +69,6 @@ export function useMemoryPromotion({
   const [promotingId, setPromotingId] = useState<string | null>(null);
   const [promoteError, setPromoteError] = useState<string | null>(null);
   const [lastOutcome, setLastOutcome] = useState<PromotionSummary | null>(null);
-
-  const [promoted, setPromoted] = useState<Map<string, PromotedMemory>>(() => new Map());
-
-  useEffect(() => {
-    if (!accountId || !datapackId) return;
-    setPromoted(readPromotedCache(accountId, datapackId));
-  }, [accountId, datapackId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -165,23 +167,8 @@ export function useMemoryPromotion({
     });
   }, []);
 
-  const unpromotedFromFetch = useMemo(
-    () => memories.filter((m) => !promoted.has(m.id)),
-    [memories, promoted],
-  );
-  const unpromotedMemories = useMemo(
-    () =>
-      isPreview ? unpromotedFromFetch.slice(0, PREVIEW_PAGE_SIZE) : unpromotedFromFetch,
-    [isPreview, unpromotedFromFetch],
-  );
-  const promotedMemories = useMemo(
-    () =>
-      Array.from(promoted.values())
-        .sort((a, b) => b.promotedAt - a.promotedAt)
-        .map((e) => e.memory),
-    [promoted],
-  );
-  const selectableIds = useMemo(() => unpromotedMemories.map((m) => m.id), [unpromotedMemories]);
+  const unpromotedMemories = isPreview ? memories.slice(0, PREVIEW_PAGE_SIZE) : memories;
+  const selectableIds = unpromotedMemories.map((m) => m.id);
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
   const someChecked = selected.size > 0 && !allChecked;
 
@@ -202,47 +189,83 @@ export function useMemoryPromotion({
       setPromoteError(null);
       setLastOutcome(null);
 
+      // Optimistic UI: drop the just-clicked row(s) immediately so the tile
+      // vanishes without waiting for the BE round trip. We snapshot ONLY the
+      // rows being promoted (with their original indices) plus the
+      // optimistically-decremented total — not the full arrays — so a
+      // rollback merges the rows back into whatever state exists at that
+      // moment instead of clobbering concurrent updates the user made during
+      // the in-flight call (manual refresh, checkbox toggle on another row,
+      // pagination, etc.).
+      const idsBeingPromoted = new Set(memoryIds);
+      const removedRows: { index: number; memory: Memory }[] = [];
+      memories.forEach((m, i) => {
+        if (idsBeingPromoted.has(m.id)) {
+          removedRows.push({ index: i, memory: m });
+        }
+      });
+      const removedSelectedIds = memoryIds.filter((id) => selected.has(id));
+      setMemories((prev) => prev.filter((m) => !idsBeingPromoted.has(m.id)));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const id of memoryIds) next.delete(id);
+        return next;
+      });
+      // Keep the header count in sync with the list (otherwise we'd render
+      // "10 memories" with fewer rows visible). The successful path's
+      // loadMemories() reconciles this from the server.
+      setTotal((prev) => Math.max(0, prev - removedRows.length));
+
       try {
         const result: PromoteMemoriesResult = await promoteMemories({
           user_id: accountId,
           datapack_id: datapackId,
           memory_ids: memoryIds,
         });
+        const promotedCount = result.inserted_ids.length + result.updated_ids.length;
         setLastOutcome({
           attempted: memoryIds.length,
           inserted: result.inserted_ids.length,
           updated: result.updated_ids.length,
           notFound: result.not_found_ids.length,
         });
-        const justPromoted = [...(result.inserted_ids ?? []), ...(result.updated_ids ?? [])];
-        if (justPromoted.length > 0) {
-          const justPromotedSet = new Set(justPromoted);
-          const promotedMems = memories.filter((m) => justPromotedSet.has(m.id));
-          const now = Date.now();
-          setPromoted((prev) => {
-            const next = new Map(prev);
-            for (const mem of promotedMems) {
-              next.set(mem.id, { memory: mem, promotedAt: now });
-            }
-            writePromotedCache(accountId, datapackId, next);
-            return next;
-          });
+        // Authoritative refetch: brings in rows that should now fill the gap
+        // (preview window) and reconciles any not_found / partial-success
+        // semantics + total with the server.
+        await loadMemories();
+        if (promotedCount > 0) {
+          onPromoted?.(promotedCount);
         }
-        setSelected((prev) => {
-          const next = new Set(prev);
-          for (const id of justPromoted) {
-            next.delete(id);
+      } catch (err) {
+        // Roll back by merging the removed rows + selection ids + total back
+        // into the *current* state (don't replace it), so anything the user
+        // changed during the in-flight call survives.
+        setMemories((current) => {
+          const next = [...current];
+          // Insert in ascending original-index order so positions are stable.
+          const ordered = [...removedRows].sort((a, b) => a.index - b.index);
+          for (const { index, memory } of ordered) {
+            // Skip if a concurrent refresh already brought the row back.
+            if (next.some((m) => m.id === memory.id)) continue;
+            const insertAt = Math.min(index, next.length);
+            next.splice(insertAt, 0, memory);
           }
           return next;
         });
-      } catch (err) {
+        setSelected((current) => {
+          if (removedSelectedIds.length === 0) return current;
+          const next = new Set(current);
+          for (const id of removedSelectedIds) next.add(id);
+          return next;
+        });
+        setTotal((prev) => prev + removedRows.length);
         setPromoteError(getApiErrorMessage(err, "Promotion failed."));
       } finally {
         setPromoting(false);
         setPromotingId(null);
       }
     },
-    [accountId, datapackId, memories],
+    [accountId, datapackId, loadMemories, memories, onPromoted, selected],
   );
 
   const promote = useCallback(async () => {
@@ -275,7 +298,6 @@ export function useMemoryPromotion({
     promotingId,
     promoteError,
     lastOutcome,
-    promotedMemories,
     unpromotedMemories,
     selectableIds,
     allChecked,

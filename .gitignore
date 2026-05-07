@@ -29,3 +29,4 @@ build/
 
 # User journey UI standalone
 user-journey-ui-standalone/
+.claude/

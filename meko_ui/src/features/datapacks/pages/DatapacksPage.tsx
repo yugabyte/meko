@@ -7,6 +7,7 @@ import DatapackDetailPage from "@/features/datapacks/pages/DatapackDetailPage";
 import DatapackEditPage from "@/features/datapacks/pages/DatapackEditPage";
 import DatapackLearningsPage from "@/features/datapacks/pages/DatapackLearningsPage";
 import DatapackMemorySummaryPage from "@/features/datapacks/pages/DatapackMemorySummaryPage";
+import DatapackCollectiveMemorySummaryPage from "@/features/datapacks/pages/DatapackCollectiveMemorySummaryPage";
 import DatapackSharePage from "@/features/datapacks/pages/DatapackSharePage";
 import DatapacksOverviewPage from "@/features/datapacks/pages/DatapacksOverviewPage";
 import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
@@ -15,6 +16,7 @@ import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
  * Datapacks area: overview at `/datapacks`, new datapack wizard at `/datapacks/new/configure`, edit at `/datapacks/:name/edit`,
  * configure at `/datapacks/:name/configure`, learnings at `/datapacks/:name/learnings`,
  * memory-summary at `/datapacks/:name/memory-summary`,
+ * collective-memory-summary at `/datapacks/:name/collective-memory-summary`,
  * conversations viewer at `/datapacks/:name/conversations[/:conversationId]`,
  * detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
  */
@@ -63,6 +65,9 @@ export default function DatapacksPage() {
       }
       if (segments[1] === "memory-summary" && segments.length === 2) {
         return <DatapackMemorySummaryPage datapackName={datapackName} />;
+      }
+      if (segments[1] === "collective-memory-summary" && segments.length === 2) {
+        return <DatapackCollectiveMemorySummaryPage datapackName={datapackName} />;
       }
       if (segments[1] === "learnings" && segments.length === 2) {
         return <DatapackLearningsPage datapackName={datapackName} />;

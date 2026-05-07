@@ -1,6 +1,7 @@
 // Renders agent memories with promote-to-KB actions: preview (3 rows + optional View All) or full pagination.
 // UI-only; state and API calls live in useMemoryPromotion so detail and learnings routes stay in sync.
 
+import { useCallback } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowLeftRight,
@@ -21,6 +22,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
 import { datapackLearningsPath } from "@/app/routes/paths";
 import {
   PAGE_SIZE_OPTIONS,
@@ -36,6 +38,10 @@ type Props = {
   /** `preview`: shows 3 unpromoted rows (fetches a larger window so slots refill after promote). `full`: paginated list. */
   variant?: MemoryPromotionVariant;
   isPromotionAllowed: boolean;
+  /** Fired after a successful promote with the count of just-promoted memories.
+   *  Parent typically refetches the datapack so the learnings count in the
+   *  pipeline ribbon refreshes. The toast itself is handled here. */
+  onPromoted?: (count: number) => void;
 };
 
 export default function MemoryPromotionPanel({
@@ -43,7 +49,20 @@ export default function MemoryPromotionPanel({
   datapackId,
   isPromotionAllowed,
   variant = "full",
+  onPromoted,
 }: Props) {
+  const handlePromoted = useCallback(
+    (count: number) => {
+      toast({
+        title:
+          count === 1
+            ? "1 memory promoted to knowledge"
+            : `${count} memories promoted to knowledge`,
+      });
+      onPromoted?.(count);
+    },
+    [onPromoted],
+  );
   const {
     isPreview,
     loading,
@@ -61,7 +80,6 @@ export default function MemoryPromotionPanel({
     promotingId,
     promoteError,
     lastOutcome,
-    promotedMemories,
     unpromotedMemories,
     selectableIds,
     allChecked,
@@ -76,7 +94,7 @@ export default function MemoryPromotionPanel({
     promote,
     promoteOne,
     accountId,
-  } = useMemoryPromotion({ datapackId, variant });
+  } = useMemoryPromotion({ datapackId, variant, onPromoted: handlePromoted });
 
   const showPagination = !isPreview && total > 0;
   // More than PREVIEW_PAGE_SIZE memories exist server-side — link out to the full learnings page.
@@ -101,7 +119,7 @@ export default function MemoryPromotionPanel({
                 {sessionSummaryReady ? (
                   <span>
                     {" "}
-                    · {total - (promotedMemories.length ?? 0)} new {total === 1 ? "memory" : "memories"}
+                    · {total} {total === 1 ? "memory" : "memories"}
                   </span>
                 ) : (
                   <span className="font-normal text-muted-foreground"> · …</span>
@@ -111,15 +129,6 @@ export default function MemoryPromotionPanel({
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   No session memories yet for{" "}
                   <span className="font-medium text-white">{datapackName}</span>.
-                </p>
-              ) : sessionSummaryReady && patternCount === 0 && total > 0 ? (
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  Every memory on this view is already promoted to shared knowledge (Ko).
-                  {isPreview && total > PREVIEW_PAGE_SIZE ? (
-                    <> Use View All to open the full learnings summary.</>
-                  ) : !isPreview ? (
-                    <> Use Prev/Next or refresh to review more from this datapack.</>
-                  ) : null}
                 </p>
               ) : sessionSummaryReady ? (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -180,7 +189,7 @@ export default function MemoryPromotionPanel({
                 {selected.size > 0
                   ? `${selected.size} of ${selectableIds.length} selectable on this page`
                   : selectableIds.length === 0
-                    ? `Nothing to promote on this page (${promotedMemories.length} already promoted)`
+                    ? "Nothing to promote on this page"
                     : `Select all selectable on this page (${selectableIds.length}${total > memories.length ? ` of ${total}` : ""})`}
               </span>
             </label>
@@ -279,7 +288,7 @@ export default function MemoryPromotionPanel({
           </div>
         )}
 
-        {(memories.length > 0 || promotedMemories.length > 0) && (
+        {memories.length > 0 && (
           <>
             <ul className="space-y-2">
               {unpromotedMemories.map((m) => {
@@ -343,36 +352,6 @@ export default function MemoryPromotionPanel({
                 );
               })}
 
-              {promotedMemories.length > 0 && (
-                <li
-                  className="pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground/70"
-                  aria-hidden
-                >
-                  Already promoted · {promotedMemories.length}
-                </li>
-              )}
-
-              {promotedMemories.map((m) => (
-                <li
-                  key={m.id}
-                  className="flex items-start gap-3 rounded-lg border border-dashed border-border/60 bg-[#0E1525]/40 px-4 py-3 opacity-50"
-                  aria-label="Already promoted to knowledge base"
-                >
-                  <Checkbox checked={false} disabled className="mt-0.5 cursor-not-allowed" />
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <MemoryRowBody
-                      memory={m}
-                      textClassName="line-through decoration-muted-foreground/40"
-                    />
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-                      <span className="inline-flex items-center gap-1 rounded-full border border-green-500/30 bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-300">
-                        <CheckCircle2 className="w-3 h-3" />
-                        Promoted to KB
-                      </span>
-                    </div>
-                  </div>
-                </li>
-              ))}
             </ul>
 
             {showViewAll ? (

@@ -31,6 +31,8 @@ const toneStyles: Record<DatapackDetailTab, string> = {
   learnings:
     "border-purple-500/50 bg-gradient-to-br from-purple-950/65 via-[#141228] to-[#0b1220] shadow-[0_0_24px_rgba(168,85,247,0.12)]",
   knowledge: "border-emerald-900/50 bg-gradient-to-br from-emerald-950/55 via-[#0c1814] to-[#0b1220]",
+  "collective-memory":
+    "border-sky-500/40 bg-gradient-to-br from-sky-950/65 via-[#0c1828] to-[#0b1220]",
 };
 
 const titleTone: Record<DatapackDetailTab, string> = {
@@ -38,6 +40,7 @@ const titleTone: Record<DatapackDetailTab, string> = {
   memories: "text-blue-200/95",
   learnings: "text-purple-200/95",
   knowledge: "text-emerald-200/95",
+  "collective-memory": "text-sky-200/95",
 };
 
 type StageShellProps = {
@@ -411,7 +414,7 @@ export function CollectiveLearningPipeline({
               </span>
               <StageShell
                 flexGrow={false}
-                tone={DATAPACK_DETAIL_TAB.memories}
+                tone={DATAPACK_DETAIL_TAB.collectiveMemory}
                 eyebrow=""
                 title="Collective Memory"
                 value={learningsCount}
@@ -426,7 +429,7 @@ export function CollectiveLearningPipeline({
                     </p>
                   ) : null
                 }
-                onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined}
+                onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.collectiveMemory) : undefined}
               />
 
               <StageShell
