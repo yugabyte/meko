@@ -7,24 +7,28 @@ import {
   LogOut,
   Download,
   ChevronDown,
+  MessageSquare,
   PlayCircle,
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   AUTH_LOGOUT_EVENT,
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
+  getCurrentUser,
   listDatapacks,
   logout,
   ONBOARDING_STATUS_CACHE_KEY,
   PROVISION_STATUS_CACHE_KEY,
+  type CurrentUser,
   type Datapack,
 } from "@/lib/mekoApi";
 import { addAppEventListener, dispatchAppEvent, removeAppEventListener } from "@/lib/browserEvents";
 import { ROUTES, datapackDetailPath } from "@/app/routes/paths";
+import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 
 export default function Sidebar() {
   const location = useLocation();
@@ -34,6 +38,39 @@ export default function Sidebar() {
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [datapackList, setDatapackList] = useState<Datapack[]>([]);
   const [datapacksExpanded, setDatapacksExpanded] = useState(true);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  // Loaded once for the Feedback dialog (account_id + email). Same `/auth/me`
+  // endpoint other components hit; cheap and lets the dialog open instantly.
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+
+  useEffect(() => {
+    if (!feedbackOpen || currentUser !== null) return;
+    const ac = new AbortController();
+    void getCurrentUser({ signal: ac.signal })
+      .then((u) => setCurrentUser(u))
+      .catch(() => setCurrentUser(null));
+    return () => ac.abort();
+  }, [feedbackOpen, currentUser]);
+
+  // Drop the cached user when the user signs out so the next sign-in re-fetches.
+  useEffect(() => {
+    const onLogout = () => setCurrentUser(null);
+    addAppEventListener(AUTH_LOGOUT_EVENT, onLogout);
+    return () => removeAppEventListener(AUTH_LOGOUT_EVENT, onLogout);
+  }, []);
+
+  // Derive the active datapack from the URL: the segment after /datapacks/.
+  // Falls back to null on /home, /playground, /observe-hub, etc.
+  const activeDatapack = useMemo(() => {
+    const prefix = `${ROUTES.datapacks}/`;
+    if (!location.pathname.startsWith(prefix)) return null;
+    const rest = location.pathname.slice(prefix.length);
+    const first = rest.split("/").filter(Boolean)[0];
+    if (!first || first === "new") return null;
+    const name = decodeURIComponent(first);
+    const match = datapackList.find((d) => d.datapack_name === name);
+    return { name, id: match?.datapack_id ?? null };
+  }, [location.pathname, datapackList]);
 
   const onOnboardingRoute =
     location.pathname === ROUTES.onboarding || location.pathname.startsWith(`${ROUTES.onboarding}/`);
@@ -312,6 +349,20 @@ export default function Sidebar() {
         <button
           type="button"
           className={cn(
+            "flex items-center rounded-md text-sm font-medium text-blue-300 ring-1 ring-blue-500/30 bg-blue-500/5 hover:bg-blue-500/15 hover:text-blue-100 transition-colors",
+            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+          )}
+          onClick={() => setFeedbackOpen(true)}
+          title={isCollapsed ? "Send feedback" : undefined}
+          aria-label="Send feedback"
+        >
+          <MessageSquare className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+          {!isCollapsed && <span className="animate-in fade-in truncate">Feedback</span>}
+        </button>
+
+        <button
+          type="button"
+          className={cn(
             "mt-1 flex items-center rounded-md text-sm font-medium text-gray-400 hover:bg-white/5 hover:text-white transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
           )}
@@ -330,6 +381,16 @@ export default function Sidebar() {
           <p className="px-3 pt-1 text-xs text-red-400">{logoutError}</p>
         ) : null}
       </div>
+
+      <FeedbackDialog
+        open={feedbackOpen}
+        onOpenChange={setFeedbackOpen}
+        userId={currentUser?.account_id ?? null}
+        email={currentUser?.email ?? null}
+        currentPath={location.pathname}
+        datapackId={activeDatapack?.id ?? null}
+        datapackName={activeDatapack?.name ?? null}
+      />
     </div>
   );
 }

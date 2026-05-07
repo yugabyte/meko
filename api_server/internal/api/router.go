@@ -32,6 +32,7 @@ type serviceRegistry struct {
 	s3Svc              *service.S3Service
 	sharingRepo        *repository.SharingRepo
 	sharingSvc         *service.SharingService
+	feedbackRepo       *repository.FeedbackRepo
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -60,6 +61,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	sharingRepo := repository.NewSharingRepo(cfg.DB)
 	sharingSvc := service.NewSharingService(sharingRepo, nil)
+	feedbackRepo := repository.NewFeedbackRepo(cfg.DB)
 	var s3Svc *service.S3Service
 	if cfg.S3Bucket != "" {
 		var err error
@@ -105,6 +107,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		s3Svc:              s3Svc,
 		sharingRepo:        sharingRepo,
 		sharingSvc:         sharingSvc,
+		feedbackRepo:       feedbackRepo,
 	}
 }
 
@@ -261,6 +264,10 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc)
 	g.POST("/promote-memories", promoteMemoriesH.Promote)
 	g.GET("/promoted-memories", promoteMemoriesH.ListGET)
+
+	feedbackH := handlers.NewFeedbackHandler(reg.feedbackRepo)
+	g.POST("/feedback", feedbackH.Create)
+	g.GET("/feedback", feedbackH.ListGET)
 
 	shareH := handlers.NewSharingHandler(reg.sharingSvc)
 	g.GET("/datapacks/incoming-shares", shareH.IncomingShares)

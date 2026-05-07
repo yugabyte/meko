@@ -1231,6 +1231,48 @@ export async function promoteMemories(payload: PromoteMemoriesRequest) {
   return request<PromoteMemoriesResult>("/promote-memories", "POST", payload);
 }
 
+// --- Feedback (POST /feedback) ---
+
+/** Allowed values for `category` — must match `meko_system.feedback_category`. */
+export const FEEDBACK_CATEGORIES = ["bug", "confusion", "feature_request", "other"] as const;
+export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number];
+
+/** Allowed values for `source` — must match `meko_system.feedback_source`. */
+export type FeedbackSource = "web_app" | "docs" | "discord" | "email" | "cli" | "mcp_server";
+
+/**
+ * Body for POST /api/v1/feedback. Mirrors `models.CreateFeedbackRequest`.
+ *
+ * - `user_id` (required) — must match the authenticated account.
+ * - `feedback_text` (required) — non-empty after trim.
+ * - `category` / `source` (required) — must be a recognized enum value.
+ * - `created_at` — server falls back to NOW() if omitted; we send the client time as ISO 8601.
+ * - `datapack_id` / `datapack_name` — only set when feedback is filed from inside a datapack page.
+ * - `user_path` — current pathname; only sent when the user opted in to share session context.
+ * - `source_identifier` — typically the signed-in email; the BE auto-fills it from account.email if blank.
+ */
+export type CreateFeedbackRequest = {
+  user_id: string;
+  feedback_text: string;
+  category: FeedbackCategory;
+  source: FeedbackSource;
+  created_at?: string | null;
+  datapack_id?: string | null;
+  datapack_name?: string | null;
+  user_path?: string | null;
+  source_identifier?: string | null;
+  meko_version?: string | null;
+};
+
+export type CreateFeedbackResponse = {
+  feedback_id: string;
+  status: string;
+  message: string;
+};
+
+export async function submitFeedback(payload: CreateFeedbackRequest) {
+  return request<CreateFeedbackResponse>("/feedback", "POST", payload);
+}
 // --- Promoted memories list (Collective Memory tab + summary route) ---
 
 /** One row from GET /promoted-memories. Mirrors `models.PromotedMemory`. */
@@ -1261,9 +1303,7 @@ export type PromotedMemoryListResponse = {
 
 /**
  * GET /promoted-memories — paginated list of memories already promoted into the
- * tenant knowledge base for a datapack. In dev (or when
- * `VITE_MOCK_PROMOTED_MEMORIES=true`) returns canned data so the UI can be
- * previewed without seeded rows.
+ * tenant knowledge base for a datapack.
  */
 export async function listPromotedMemories(
   params: PromotedMemoryListFilter,

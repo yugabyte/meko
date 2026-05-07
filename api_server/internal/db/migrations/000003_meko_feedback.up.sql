@@ -21,7 +21,7 @@ CREATE TYPE meko_system.feedback_category AS ENUM (
     'bug',
     'confusion',
     'feature_request',
-    'Other'
+    'other'
 );
 
 CREATE TYPE meko_system.feedback_status AS ENUM (

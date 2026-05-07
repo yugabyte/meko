@@ -127,6 +127,76 @@ type MemoryCountResponse struct {
 	Count      int    `json:"count"`
 }
 
+// CreateFeedbackRequest is the body for POST /api/v1/feedback.
+// user_id is required and must match the authenticated user (non-pointer string;
+// JSON null unmarshals to empty and fails validation). Optional pointers may be
+// omitted or JSON null for datapack scope when there is no datapack (e.g. install/home).
+type CreateFeedbackRequest struct {
+	UserID           string     `json:"user_id"`
+	CreatedAt        *time.Time `json:"created_at"`
+	DatapackID       *string    `json:"datapack_id"`
+	DatapackName     *string    `json:"datapack_name"`
+	UserPath         *string    `json:"user_path"`
+	Category         string     `json:"category"`
+	FeedbackText     string     `json:"feedback_text"`
+	Source           string     `json:"source"`
+	SourceIdentifier *string    `json:"source_identifier"`
+	MekoVersion      *string    `json:"meko_version,omitempty"`
+}
+
+// CreateFeedbackResponse is the JSON body for a successful POST /api/v1/feedback.
+// FeedbackID is the meko_system.feedback.id assigned by the database (string form of BIGINT).
+type CreateFeedbackResponse struct {
+	FeedbackID string `json:"feedback_id"`
+	Status     string `json:"status"`
+	Message    string `json:"message"`
+}
+
+// ValidFeedbackSource reports whether s is a meko_system.feedback_source value.
+func ValidFeedbackSource(s string) bool {
+	switch s {
+	case "web_app", "docs", "discord", "email", "cli", "mcp_server":
+		return true
+	}
+	return false
+}
+
+// ValidFeedbackCategory reports whether s is a meko_system.feedback_category value.
+func ValidFeedbackCategory(s string) bool {
+	switch s {
+	case "bug", "confusion", "feature_request", "other":
+		return true
+	}
+	return false
+}
+
+// ValidFeedbackStatus reports whether s is a meko_system.feedback_status value.
+func ValidFeedbackStatus(s string) bool {
+	switch s {
+	case "new", "triaged", "in_progress", "resolved", "wontfix":
+		return true
+	}
+	return false
+}
+
+// FeedbackListItem is one row returned by GET /api/v1/feedback.
+// Omits internal-only columns (internal_notes, resolved_at) per migration policy.
+type FeedbackListItem struct {
+	ID               string     `json:"id"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+	UserID           *string    `json:"user_id,omitempty"`
+	Source           string     `json:"source"`
+	SourceIdentifier *string    `json:"source_identifier,omitempty"`
+	DatapackID       *string    `json:"datapack_id,omitempty"`
+	DatapackName     *string    `json:"datapack_name,omitempty"`
+	ContextRoute     *string    `json:"context_route,omitempty"`
+	Category         string     `json:"category"`
+	Body             string     `json:"body"`
+	MekoVersion      *string    `json:"meko_version,omitempty"`
+	Status           string     `json:"status"`
+}
+
 // PromoteMemoriesRequest is the body for POST /api/v1/promote-memories.
 type PromoteMemoriesRequest struct {
 	UserID     string   `json:"user_id"`
