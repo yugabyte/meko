@@ -312,7 +312,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     (isDatapackGrantEligibleToEdit({ grant: datapackGrant }) || isDatapackGrantEligibleToDelete({ grant: datapackGrant }));
 
   const handleDeleteConfirm = async () => {
-    const { message } = await deleteDatapack(datapackName);
+    const { message } = await deleteDatapack(datapackName, { datapackId: routeDatapackId });
     notifyDatapacksListChanged(`delete:${datapackName}`);
     toast({
       title: "Datapack deleted",
@@ -359,6 +359,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               )}
               <DatapackKnowledgeUploadDialog
                 datapackName={datapackName}
+                datapackId={routeDatapackId}
                 open={isUploadOpen}
                 onOpenChange={setIsUploadOpen}
               />

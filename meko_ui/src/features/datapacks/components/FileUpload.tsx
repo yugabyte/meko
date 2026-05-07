@@ -29,9 +29,10 @@ type FileEntry = {
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
 };
 
-export default function FileUpload({ datapackName }: Props) {
+export default function FileUpload({ datapackName, datapackId }: Props) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
@@ -146,10 +147,11 @@ export default function FileUpload({ datapackName }: Props) {
           entry.file.name,
           entry.file.type || "application/octet-stream",
           entry.file.size,
+          { datapackId },
         );
 
         await uploadFileToS3(url, entry.file, i);
-        await confirmUpload(datapackName, key, entry.file.name, entry.file.size);
+        await confirmUpload(datapackName, key, entry.file.name, entry.file.size, { datapackId });
 
         uploaded++;
         setFiles((prev) =>
@@ -180,7 +182,7 @@ export default function FileUpload({ datapackName }: Props) {
   const handleCreateKB = async () => {
     setCreatingKB(true);
     try {
-      await createKnowledgeBase(datapackName);
+      await createKnowledgeBase(datapackName, { datapackId });
       setKbCreated(true);
       setPollingActive(true);
       setNewUploadsAfterKB(0);
@@ -198,7 +200,7 @@ export default function FileUpload({ datapackName }: Props) {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const status = await getKBStatus(datapackName);
+      const status = await getKBStatus(datapackName, { datapackId });
       const sources = status.source_statuses ?? [];
       const details = status.pipeline_details ?? [];
       setSourceStatuses(sources);

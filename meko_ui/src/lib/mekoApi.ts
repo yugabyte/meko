@@ -362,10 +362,10 @@ export async function listAgents(name: string, options: DatapackRouteOptions = {
 
 export async function listKnowledgeBases(
   name: string,
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ) {
   return request<KnowledgeBase[]>(
-    `/datapacks/${encodeURIComponent(name)}/knowledge-bases`,
+    withDatapackID(`/datapacks/${encodeURIComponent(name)}/knowledge-bases`, options.datapackId),
     "GET",
     undefined,
     options,
@@ -402,16 +402,26 @@ export type DeleteDatapackResponse = {
   message: string;
 };
 
-export async function updateDatapack(name: string, payload: UpdateDatapackPayload) {
+export async function updateDatapack(
+  name: string,
+  payload: UpdateDatapackPayload,
+  options: DatapackRouteOptions = {},
+) {
   return request<UpdateDatapackResponse>(
-    `/datapacks/${encodeURIComponent(name)}`,
+    withDatapackID(`/datapacks/${encodeURIComponent(name)}`, options.datapackId),
     "PATCH",
     payload,
+    options,
   );
 }
 
-export async function deleteDatapack(name: string) {
-  return request<DeleteDatapackResponse>(`/datapacks/${encodeURIComponent(name)}`, "DELETE");
+export async function deleteDatapack(name: string, options: DatapackRouteOptions = {}) {
+  return request<DeleteDatapackResponse>(
+    withDatapackID(`/datapacks/${encodeURIComponent(name)}`, options.datapackId),
+    "DELETE",
+    undefined,
+    options,
+  );
 }
 
 // --- Datapack share / invites (paths are under `API_BASE`, typically `/api/v1`) ---
@@ -446,11 +456,16 @@ export type InviteDatapackShareResponse = {
  * Invite someone to a datapack.
  * POST /datapacks/:name/share
  */
-export async function inviteDatapackShare(datapackName: string, payload: InviteDatapackSharePayload) {
+export async function inviteDatapackShare(
+  datapackName: string,
+  payload: InviteDatapackSharePayload,
+  options: DatapackRouteOptions = {},
+) {
   return request<InviteDatapackShareResponse>(
-    `/datapacks/${encodeURIComponent(datapackName)}/share`,
+    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/share`, options.datapackId),
     "POST",
     payload,
+    options,
   );
 }
 
@@ -523,10 +538,10 @@ export type DatapackMembersResponse = {
  */
 export async function listDatapackOutgoingShares(
   datapackName: string,
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ) {
   return request<DatapackOutgoingSharesResponse>(
-    `/datapacks/${encodeURIComponent(datapackName)}/outgoing-shares`,
+    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/outgoing-shares`, options.datapackId),
     "GET",
     undefined,
     options,
@@ -559,10 +574,19 @@ export type DatapackShareListsResponse = {
  * Resend a pending invite (owner).
  * POST /datapacks/:name/invite/:inviteId/resend
  */
-export async function resendDatapackInvite(datapackName: string, inviteId: string) {
+export async function resendDatapackInvite(
+  datapackName: string,
+  inviteId: string,
+  options: DatapackRouteOptions = {},
+) {
   return request<unknown>(
-    `/datapacks/${encodeURIComponent(datapackName)}/invite/${encodeURIComponent(inviteId)}/resend`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/invite/${encodeURIComponent(inviteId)}/resend`,
+      options.datapackId,
+    ),
     "POST",
+    undefined,
+    options,
   );
 }
 
@@ -570,10 +594,19 @@ export async function resendDatapackInvite(datapackName: string, inviteId: strin
  * Revoke a pending invite before acceptance (owner).
  * DELETE /datapacks/:name/invite/:inviteId
  */
-export async function revokeDatapackInvite(datapackName: string, inviteId: string) {
+export async function revokeDatapackInvite(
+  datapackName: string,
+  inviteId: string,
+  options: DatapackRouteOptions = {},
+) {
   return request<unknown>(
-    `/datapacks/${encodeURIComponent(datapackName)}/invite/${encodeURIComponent(inviteId)}`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/invite/${encodeURIComponent(inviteId)}`,
+      options.datapackId,
+    ),
     "DELETE",
+    undefined,
+    options,
   );
 }
 
@@ -591,11 +624,16 @@ export async function updateDatapackMemberGrant(
   datapackName: string,
   shareUserId: string,
   payload: UpdateDatapackMemberGrantPayload,
+  options: DatapackRouteOptions = {},
 ) {
   return request<unknown>(
-    `/datapacks/${encodeURIComponent(datapackName)}/share/${encodeURIComponent(shareUserId)}`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/share/${encodeURIComponent(shareUserId)}`,
+      options.datapackId,
+    ),
     "PATCH",
     payload,
+    options,
   );
 }
 
@@ -604,10 +642,19 @@ export async function updateDatapackMemberGrant(
  * Remove a member’s access / delete active share (owner).
  * DELETE /datapacks/:name/share/:shareUserId
  */
-export async function removeDatapackMemberShare(datapackName: string, shareUserId: string) {
+export async function removeDatapackMemberShare(
+  datapackName: string,
+  shareUserId: string,
+  options: DatapackRouteOptions = {},
+) {
   return request<unknown>(
-    `/datapacks/${encodeURIComponent(datapackName)}/share/${encodeURIComponent(shareUserId)}`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/share/${encodeURIComponent(shareUserId)}`,
+      options.datapackId,
+    ),
     "DELETE",
+    undefined,
+    options,
   );
 }
 
@@ -755,10 +802,9 @@ export async function listDatapackConversations(
   const qs = new URLSearchParams();
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
-  if (options.datapackId?.trim()) qs.set("datapack_id", options.datapackId.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<ListDatapackConversationsResponse>(
-    `/datapacks/${encodeURIComponent(datapackName)}/conversations${suffix}`,
+    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/conversations${suffix}`, options.datapackId),
     "GET",
     undefined,
     options,
@@ -810,16 +856,15 @@ export async function getDatapackConversation(
   datapackName: string,
   conversationId: string,
   params: { messagesLimit?: number; messagesOffset?: number } = {},
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ) {
   const qs = new URLSearchParams();
   if (params.messagesLimit !== undefined) qs.set("messages_limit", String(params.messagesLimit));
   if (params.messagesOffset !== undefined) qs.set("messages_offset", String(params.messagesOffset));
+  const base = `/datapacks/${encodeURIComponent(datapackName)}/conversations/${encodeURIComponent(conversationId)}`;
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<GetDatapackConversationResponse>(
-    `/datapacks/${encodeURIComponent(datapackName)}/conversations/${encodeURIComponent(
-      conversationId,
-    )}${suffix}`,
+    withDatapackID(`${base}${suffix}`, options.datapackId),
     "GET",
     undefined,
     options,
@@ -862,12 +907,15 @@ export async function getDatapackMessageTrace(
   datapackName: string,
   conversationId: string,
   messageId: string,
-  options: { signal?: AbortSignal } = {},
+  options: DatapackRouteOptions = {},
 ) {
   return request<GetDatapackMessageTraceResponse>(
-    `/datapacks/${encodeURIComponent(datapackName)}/conversations/${encodeURIComponent(
-      conversationId,
-    )}/messages/${encodeURIComponent(messageId)}/trace`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/conversations/${encodeURIComponent(
+        conversationId,
+      )}/messages/${encodeURIComponent(messageId)}/trace`,
+      options.datapackId,
+    ),
     "GET",
     undefined,
     options,
@@ -897,10 +945,18 @@ export async function getDatapackConversationCount(
   );
 }
 
-export async function ensureLangfuseProjectKeys(datapackName: string) {
+export async function ensureLangfuseProjectKeys(
+  datapackName: string,
+  options: DatapackRouteOptions = {},
+) {
   return request<LangfuseProjectKeys>(
-    `/datapacks/${encodeURIComponent(datapackName)}/langfuse/project-keys`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/langfuse/project-keys`,
+      options.datapackId,
+    ),
     "POST",
+    undefined,
+    options,
   );
 }
 
@@ -929,11 +985,16 @@ export async function requestUploadURL(
   filename: string,
   contentType: string,
   size: number,
+  options: DatapackRouteOptions = {},
 ) {
   return request<{ url: string; key: string }>(
-    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/upload-url`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/upload-url`,
+      options.datapackId,
+    ),
     "POST",
     { filename, content_type: contentType, size },
+    options,
   );
 }
 
@@ -942,23 +1003,36 @@ export async function confirmUpload(
   key: string,
   filename: string,
   size: number,
+  options: DatapackRouteOptions = {},
 ) {
   return request<{ message: string; key: string }>(
-    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/upload-complete`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/upload-complete`,
+      options.datapackId,
+    ),
     "POST",
     { key, filename, size },
+    options,
   );
 }
 
-export async function createKnowledgeBase(datapackName: string) {
+export async function createKnowledgeBase(
+  datapackName: string,
+  options: DatapackRouteOptions = {},
+) {
   return request<{
     source_id: string;
     index_name: string;
     source_uri: string;
     status: string;
   }>(
-    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/create`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/create`,
+      options.datapackId,
+    ),
     "POST",
+    undefined,
+    options,
   );
 }
 
@@ -982,9 +1056,15 @@ export type KBPipelineStatus = {
   pipeline_details: PipelineDetail[] | null;
 };
 
-export async function getKBStatus(datapackName: string) {
+export async function getKBStatus(datapackName: string, options: DatapackRouteOptions = {}) {
   return request<KBPipelineStatus>(
-    `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/status`,
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/status`,
+      options.datapackId,
+    ),
+    "GET",
+    undefined,
+    options,
   );
 }
 

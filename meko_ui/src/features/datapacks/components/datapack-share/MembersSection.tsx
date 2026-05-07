@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 type Props = {
   currentUser: CurrentUser | null;
   datapackName: string;
+  datapackId?: string;
   members: DatapackOutgoingMember[];
   loading: boolean;
   onMembersChanged: () => void | Promise<void>;
@@ -48,12 +49,14 @@ function memberInitial(member: DatapackOutgoingMember): string {
 function MemberRow({
   member,
   datapackName,
+  datapackId,
   currentUserEmail,
   canManage,
   onMembersChanged,
 }: {
   member: DatapackOutgoingMember;
   datapackName: string;
+  datapackId?: string;
   currentUserEmail: string | null | undefined;
   canManage: boolean;
   onMembersChanged: () => void | Promise<void>;
@@ -68,7 +71,7 @@ function MemberRow({
     if (next === member.grant || grantReadOnly) return;
     setGrantBusy(true);
     try {
-      await updateDatapackMemberGrant(datapackName, member.user_id, { grant: next });
+      await updateDatapackMemberGrant(datapackName, member.user_id, { grant: next }, { datapackId });
       toast({ title: "Role updated" });
       await onMembersChanged();
     } catch (err) {
@@ -86,7 +89,7 @@ function MemberRow({
     if (!canManage || member.is_owner) return;
     setRemoveBusy(true);
     try {
-      await removeDatapackMemberShare(datapackName, member.user_id);
+      await removeDatapackMemberShare(datapackName, member.user_id, { datapackId });
       toast({ title: "Access removed" });
       await onMembersChanged();
     } catch (err) {
@@ -163,6 +166,7 @@ function MemberRow({
 function MembersList({
   members,
   datapackName,
+  datapackId,
   currentUser,
   canManage,
   loading,
@@ -170,6 +174,7 @@ function MembersList({
 }: {
   members: DatapackOutgoingMember[];
   datapackName: string;
+  datapackId?: string;
   currentUser: CurrentUser | null;
   canManage: boolean;
   loading: boolean;
@@ -204,6 +209,7 @@ function MembersList({
           key={m.user_id}
           member={m}
           datapackName={datapackName}
+          datapackId={datapackId}
           currentUserEmail={currentUser?.email}
           canManage={canManage}
           onMembersChanged={onMembersChanged}
@@ -219,7 +225,7 @@ const membersTabTriggerClass = cn(
   "data-[state=inactive]:hover:text-foreground/90",
 );
 
-export function MembersSection({ currentUser, datapackName, members, loading, onMembersChanged }: Props) {
+export function MembersSection({ currentUser, datapackName, datapackId, members, loading, onMembersChanged }: Props) {
   const humanCount = members.length;
   // Only the member row marked is_owner whose email matches the session may edit others’ roles or remove them.
   const canManage = members.some((m) => m.is_owner && emailsMatch(m.user_email_id, currentUser?.email));
@@ -257,6 +263,7 @@ export function MembersSection({ currentUser, datapackName, members, loading, on
             <MembersList
               members={members}
               datapackName={datapackName}
+              datapackId={datapackId}
               currentUser={currentUser}
               canManage={canManage}
               loading={loading}
@@ -270,6 +277,7 @@ export function MembersSection({ currentUser, datapackName, members, loading, on
             <MembersList
               members={members}
               datapackName={datapackName}
+              datapackId={datapackId}
               currentUser={currentUser}
               canManage={canManage}
               loading={loading}

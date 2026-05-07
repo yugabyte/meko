@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, useLocation } from "react-router-dom";
+import { Navigate, useLocation, useSearchParams } from "react-router-dom";
 import { datapackNewConfigurePath, ROUTES } from "@/app/routes/paths";
 import DatapackConfigureWizardPage from "@/features/datapacks/pages/DatapackConfigureWizardPage";
 import DatapackConversationsViewerPage from "@/features/datapacks/pages/DatapackConversationsViewerPage";
@@ -22,6 +22,8 @@ import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
  */
 export default function DatapacksPage() {
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const routeDatapackId = (searchParams.get("datapack_id") ?? "").trim() || undefined;
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
@@ -55,13 +57,13 @@ export default function DatapacksPage() {
     if (nameEncoded) {
       const datapackName = decodeURIComponent(nameEncoded);
       if (segments[1] === "share") {
-        return <DatapackSharePage datapackName={datapackName} currentUser={currentUser} />;
+        return <DatapackSharePage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
       }
       if (segments[1] === "edit" && segments.length === 2) {
-        return <DatapackEditPage datapackName={datapackName} currentUser={currentUser} />;
+        return <DatapackEditPage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
       }
       if (segments[1] === "configure") {
-        return <DatapackConfigureWizardPage datapackName={datapackName} currentUser={currentUser} />;
+        return <DatapackConfigureWizardPage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
       }
       if (segments[1] === "memory-summary" && segments.length === 2) {
         return <DatapackMemorySummaryPage datapackName={datapackName} />;
@@ -79,6 +81,7 @@ export default function DatapacksPage() {
         return (
           <DatapackConversationsViewerPage
             datapackName={datapackName}
+            datapackId={routeDatapackId}
             conversationId={conversationId}
           />
         );

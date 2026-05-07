@@ -24,13 +24,13 @@ function emit(detail: KbImportJobDetail) {
   dispatchAppEvent(KB_IMPORT_JOB_EVENT, detail);
 }
 
-async function pollUntilKbSettled(datapackName: string): Promise<void> {
+async function pollUntilKbSettled(datapackName: string, datapackId?: string): Promise<void> {
   const deadline = Date.now() + MAX_WAIT_MS;
   pollGraceTicks = 3;
 
   while (Date.now() < deadline) {
     try {
-      const status = await getKBStatus(datapackName);
+      const status = await getKBStatus(datapackName, { datapackId });
       const sources = status.source_statuses ?? [];
       const details = status.pipeline_details ?? [];
 
@@ -59,7 +59,7 @@ export function isKnowledgeBaseImportInFlight(): boolean {
   return inFlight;
 }
 
-export function startKnowledgeBaseImport(datapackName: string): void {
+export function startKnowledgeBaseImport(datapackName: string, datapackId?: string): void {
   const name = datapackName.trim();
   if (!name || inFlight) return;
 
@@ -68,9 +68,9 @@ export function startKnowledgeBaseImport(datapackName: string): void {
 
   void (async () => {
     try {
-      await createKnowledgeBase(name);
+      await createKnowledgeBase(name, { datapackId });
       emit({ phase: "polling", datapackName: name });
-      await pollUntilKbSettled(name);
+      await pollUntilKbSettled(name, datapackId);
       emit({ phase: "success", datapackName: name });
       toast({
         title: "Import complete",

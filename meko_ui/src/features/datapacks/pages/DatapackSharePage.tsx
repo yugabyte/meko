@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
   currentUser: CurrentUser | null;
 };
 
@@ -36,9 +37,9 @@ const inviteTabTriggerClass = cn(
   "data-[state=inactive]:text-muted-foreground data-[state=inactive]:opacity-90 data-[state=inactive]:hover:bg-muted/20 data-[state=inactive]:hover:opacity-100",
 );
 
-export default function DatapackSharePage({ datapackName, currentUser }: Props) {
+export default function DatapackSharePage({ datapackName, datapackId, currentUser }: Props) {
   const [inviteMode, setInviteMode] = useState<InviteMode>("person");
-  const { data, loading, error, refetch } = useDatapackOutgoingShares(datapackName);
+  const { data, loading, error, refetch } = useDatapackOutgoingShares(datapackName, datapackId);
   const members = data?.members ?? [];
   const pendingInvites = data?.pending_invites ?? [];
 
@@ -146,7 +147,7 @@ export default function DatapackSharePage({ datapackName, currentUser }: Props) 
               </CardHeader>
               <CardContent className="p-6 pt-6">
                 <TabsContent value="person" className="mt-0 outline-none focus-visible:outline-none">
-                  <InviteByEmailSection datapackName={datapackName} onInviteSent={refreshShares} />
+                  <InviteByEmailSection datapackName={datapackName} datapackId={datapackId} onInviteSent={refreshShares} />
                 </TabsContent>
                 <TabsContent value="agent" className="mt-0 outline-none focus-visible:outline-none">
                   <ShareComingSoonPlaceholder
@@ -161,12 +162,14 @@ export default function DatapackSharePage({ datapackName, currentUser }: Props) 
           <MembersSection
             currentUser={currentUser}
             datapackName={datapackName}
+            datapackId={datapackId}
             members={members}
             loading={loading}
             onMembersChanged={refreshShares}
           />
           <PendingInvitesSection
             datapackName={datapackName}
+            datapackId={datapackId}
             invites={pendingInvites}
             loading={loading}
             onChanged={refreshShares}

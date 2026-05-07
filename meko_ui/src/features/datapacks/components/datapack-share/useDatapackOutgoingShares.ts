@@ -9,7 +9,7 @@ import {
   type DatapackShareListsResponse,
 } from "@/lib/mekoApi";
 
-export function useDatapackOutgoingShares(datapackName: string) {
+export function useDatapackOutgoingShares(datapackName: string, datapackId?: string) {
   const [data, setData] = useState<DatapackShareListsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -22,10 +22,10 @@ export function useDatapackOutgoingShares(datapackName: string) {
     }
     setError(null);
     try {
-      const membersRes = await listDatapackMembers(datapackName);
+      const membersRes = await listDatapackMembers(datapackName, { datapackId });
       let pendingInvites: DatapackShareListsResponse["pending_invites"] = [];
       try {
-        const out = await listDatapackOutgoingShares(datapackName);
+        const out = await listDatapackOutgoingShares(datapackName, { datapackId });
         pendingInvites = out.pending_invites ?? [];
       } catch (err) {
         if (isMekoApiRequestError(err) && err.httpStatus === 403) {
@@ -46,7 +46,7 @@ export function useDatapackOutgoingShares(datapackName: string) {
         setLoading(false);
       }
     }
-  }, [datapackName]);
+  }, [datapackName, datapackId]);
 
   useEffect(() => {
     void refetch();

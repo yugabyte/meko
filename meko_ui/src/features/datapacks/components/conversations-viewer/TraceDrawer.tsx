@@ -39,6 +39,7 @@ import {
 type Props = {
   open: boolean;
   datapackName: string;
+  datapackId?: string;
   conversationId: string;
   /** When this changes the drawer refetches. The drawer stays mounted
    *  even when closed so the slide animation works in both directions
@@ -50,6 +51,7 @@ type Props = {
 export function TraceDrawer({
   open,
   datapackName,
+  datapackId,
   conversationId,
   messageId,
   onClose,
@@ -68,6 +70,7 @@ export function TraceDrawer({
     setCollapsed({});
     getDatapackMessageTrace(datapackName, conversationId, messageId, {
       signal: ac.signal,
+      datapackId,
     })
       .then((resp) => {
         if (ac.signal.aborted) return;

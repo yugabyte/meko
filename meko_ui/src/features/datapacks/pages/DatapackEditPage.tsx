@@ -18,10 +18,11 @@ import { getApiErrorMessage, getDatapack, updateDatapack } from "@/lib/mekoApi";
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
   currentUser: CurrentUser | null;
 };
 
-export default function DatapackEditPage({ datapackName, currentUser }: Props) {
+export default function DatapackEditPage({ datapackName, datapackId, currentUser }: Props) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
@@ -35,7 +36,7 @@ export default function DatapackEditPage({ datapackName, currentUser }: Props) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    void getDatapack(datapackName)
+    void getDatapack(datapackName, { datapackId })
       .then((dp) => {
         if (cancelled) return;
         const n = dp.datapack_name ?? datapackName;
@@ -83,7 +84,7 @@ export default function DatapackEditPage({ datapackName, currentUser }: Props) {
         await updateDatapack(datapackName, {
           name: trimmedName,
           description: description,
-        });
+        }, { datapackId });
       }
       navigate(datapackConfigurePath(trimmedName), { replace: true });
     } catch (err) {

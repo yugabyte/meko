@@ -28,6 +28,7 @@ import type { DatapackConversation } from "@/lib/mekoApi";
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
   /** From URL; undefined when on the bare /conversations route. The
    *  rail will auto-select the newest conversation in that case. */
   conversationId?: string;
@@ -35,6 +36,7 @@ type Props = {
 
 export default function DatapackConversationsViewerPage({
   datapackName,
+  datapackId,
   conversationId,
 }: Props) {
   const navigate = useNavigate();
@@ -104,6 +106,7 @@ export default function DatapackConversationsViewerPage({
         <div className="grid flex-1 grid-cols-[340px_1fr] min-h-0 overflow-hidden">
           <ConversationListRail
             datapackName={datapackName}
+            datapackId={datapackId}
             selectedId={conversationId ?? ""}
             onSelect={handleSelect}
             onFirstPageLoaded={handleFirstPageLoaded}
@@ -113,6 +116,7 @@ export default function DatapackConversationsViewerPage({
             {conversationId ? (
               <ConversationThreadPane
                 datapackName={datapackName}
+                datapackId={datapackId}
                 conversationId={conversationId}
                 onOpenTrace={(messageId) => setTraceMessageId(messageId)}
               />
@@ -129,6 +133,7 @@ export default function DatapackConversationsViewerPage({
       <TraceDrawer
         open={!!traceMessageId}
         datapackName={datapackName}
+        datapackId={datapackId}
         conversationId={conversationId ?? ""}
         messageId={traceMessageId}
         onClose={() => setTraceMessageId(null)}

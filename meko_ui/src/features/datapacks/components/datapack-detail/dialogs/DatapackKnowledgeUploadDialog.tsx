@@ -9,12 +9,14 @@ import FileUpload from "@/features/datapacks/components/FileUpload";
 
 export type DatapackKnowledgeUploadDialogProps = {
   datapackName: string;
+  datapackId?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 };
 
 export function DatapackKnowledgeUploadDialog({
   datapackName,
+  datapackId,
   open,
   onOpenChange,
 }: DatapackKnowledgeUploadDialogProps) {
@@ -29,7 +31,7 @@ export function DatapackKnowledgeUploadDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="px-4 py-4 sm:px-6 sm:pb-6">
-          <FileUpload datapackName={datapackName} />
+          <FileUpload datapackName={datapackName} datapackId={datapackId} />
         </div>
       </DialogContent>
     </Dialog>

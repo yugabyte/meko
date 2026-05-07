@@ -187,13 +187,13 @@ export default function ConversationsPanel({ datapackName, datapackId, total, cl
                           <span className="truncate">
                             messages:{" "}
                             <span className="tabular-nums text-foreground/85">
-                              {c.messages.toLocaleString()}
+                              {(c.messages ?? 0).toLocaleString()}
                             </span>
                           </span>
                           <span className="truncate">
                             memories:{" "}
                             <span className="tabular-nums text-blue-300">
-                              {c.memories_added.toLocaleString()}
+                              {(c.memories_added ?? 0).toLocaleString()}
                             </span>
                           </span>
                           <span className="truncate" title={c.started_at}>

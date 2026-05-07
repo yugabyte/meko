@@ -46,7 +46,7 @@ export function isTechPreviewDefaultDatapackName(name: string): boolean {
  * Best-effort POST …/langfuse/project-keys for tech-preview default packs, with a
  * per-name sessionStorage TTL so we do not hammer the API. Errors are console-only.
  */
-export function scheduleEnsureLangfuseProjectKeysForDatapack(datapackName: string): void {
+export function scheduleEnsureLangfuseProjectKeysForDatapack(datapackName: string, datapackId?: string): void {
   if (!datapackName.trim() || !isTechPreviewDefaultDatapackName(datapackName)) {
     return;
   }
@@ -56,7 +56,7 @@ export function scheduleEnsureLangfuseProjectKeysForDatapack(datapackName: strin
     return;
   }
 
-  void ensureLangfuseProjectKeys(datapackName)
+  void ensureLangfuseProjectKeys(datapackName, { datapackId })
     .then(() => {
       const next = readLangfuseProjectKeysCache();
       next[datapackName] = Date.now();

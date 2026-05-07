@@ -34,6 +34,7 @@ const PAGE_SIZE = 20;
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
   /** Currently selected conversation id (URL-derived). Empty when no
    *  selection — the rail still renders, just without a highlight. */
   selectedId: string;
@@ -47,6 +48,7 @@ type Props = {
 
 export function ConversationListRail({
   datapackName,
+  datapackId,
   selectedId,
   onSelect,
   onFirstPageLoaded,
@@ -76,7 +78,7 @@ export function ConversationListRail({
         const resp = await listDatapackConversations(
           datapackName,
           { limit: PAGE_SIZE, offset: nextOffset },
-          { signal: params.signal },
+          { signal: params.signal, datapackId },
         );
         if (params.signal?.aborted) return;
         const incoming = resp.conversations ?? [];
@@ -200,8 +202,8 @@ export function ConversationListRail({
                     {headline}
                   </p>
                   <div className="flex items-center gap-2.5 text-[10px] text-muted-foreground">
-                    <span className="tabular-nums">{c.messages.toLocaleString()} msgs</span>
-                    {c.memories_added > 0 ? (
+                    <span className="tabular-nums">{(c.messages ?? 0).toLocaleString()} msgs</span>
+                    {(c.memories_added ?? 0) > 0 ? (
                       <>
                         <span>·</span>
                         <span className="inline-flex items-center gap-1 text-blue-300">

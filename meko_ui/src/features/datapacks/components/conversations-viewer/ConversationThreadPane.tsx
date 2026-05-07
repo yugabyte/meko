@@ -80,6 +80,7 @@ const transformListItemChildren = (children: ReactNode) =>
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
   conversationId: string;
   /** Called when the user clicks "View trace" on an assistant turn —
    *  parent owns the drawer state so the trace panel can persist
@@ -89,6 +90,7 @@ type Props = {
 
 export function ConversationThreadPane({
   datapackName,
+  datapackId,
   conversationId,
   onOpenTrace,
 }: Props) {
@@ -127,7 +129,7 @@ export function ConversationThreadPane({
       datapackName,
       conversationId,
       { messagesLimit: THREAD_PAGE_SIZE, messagesOffset: 0 },
-      { signal: ac.signal },
+      { signal: ac.signal, datapackId },
     )
       .then((resp) => {
         if (ac.signal.aborted) return;
@@ -152,7 +154,7 @@ export function ConversationThreadPane({
       const resp = await getDatapackConversation(datapackName, conversationId, {
         messagesLimit: THREAD_PAGE_SIZE,
         messagesOffset: olderOffset,
-      });
+      }, { datapackId });
       const incoming = resp.conversation.thread ?? [];
       setOlderMessages((prev) => [...prev, ...incoming]);
       setOlderOffset(olderOffset + incoming.length);
@@ -231,14 +233,14 @@ export function ConversationThreadPane({
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <Chip icon={<MessageSquare className="h-3 w-3" />} accent="slate">
-                {detail.messages.toLocaleString()} messages
+                {(detail.messages ?? 0).toLocaleString()} messages
               </Chip>
-              {detail.memories_added > 0 ? (
+              {(detail.memories_added ?? 0) > 0 ? (
                 <Chip icon={<MemoryIcon className="text-[14px]" />} accent="blue">
                   {detail.memories_added.toLocaleString()} memories extracted
                 </Chip>
               ) : null}
-              {detail.llm_calls > 0 ? (
+              {(detail.llm_calls ?? 0) > 0 ? (
                 <Chip icon={<Cpu className="h-3 w-3" />} accent="amber">
                   {detail.llm_calls.toLocaleString()} llm calls
                 </Chip>
@@ -397,14 +399,14 @@ function ThreadTurn({
               <Clock className="h-2.5 w-2.5" aria-hidden />
               {latencyLabel}
             </span>
-            {message.memories_extracted > 0 ? (
+            {(message.memories_extracted ?? 0) > 0 ? (
               <span className="inline-flex items-center gap-1">
                 <MemoryIcon className="text-[13px]" />
                 {message.memories_extracted.toLocaleString()}{" "}
                 {message.memories_extracted === 1 ? "memory" : "memories"} extracted
               </span>
             ) : null}
-            {message.llm_calls > 0 ? (
+            {(message.llm_calls ?? 0) > 0 ? (
               <span className="inline-flex items-center gap-1">
                 <Cpu className="h-2.5 w-2.5 text-amber-400" aria-hidden />
                 {message.llm_calls.toLocaleString()} llm

@@ -79,12 +79,14 @@ type DatapackConfigureWizardPageProps = {
   isCreateFlow?: boolean;
   /** `/datapacks/:name/configure` */
   datapackName?: string;
+  datapackId?: string;
 };
 
 export default function DatapackConfigureWizardPage({
   currentUser,
   isCreateFlow = false,
   datapackName: routeDatapackName,
+  datapackId: routeDatapackId,
 }: DatapackConfigureWizardPageProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -129,7 +131,7 @@ export default function DatapackConfigureWizardPage({
     let cancelled = false;
     setConfigureLoading(true);
     setConfigureError(null);
-    void getDatapack(routeDatapackName)
+    void getDatapack(routeDatapackName, { datapackId: routeDatapackId })
       .then((dp) => {
         if (cancelled) return;
         const n = dp.datapack_name ?? routeDatapackName;
@@ -316,7 +318,7 @@ export default function DatapackConfigureWizardPage({
             await updateDatapack(apiDatapackName, {
               name: trimmed,
               description: configureDraftDescription,
-            });
+            }, { datapackId: routeDatapackId });
             setApiDatapackName(trimmed);
             setConfigureInitialName(trimmed);
             setConfigureInitialDescription(configureDraftDescription);
@@ -352,7 +354,7 @@ export default function DatapackConfigureWizardPage({
         const updated = await updateDatapack(routeName, {
           name: trimmed,
           description: configureDraftDescription,
-        });
+        }, { datapackId: routeDatapackId });
         if (updated?.message) {
           notifyDatapacksListChanged(`rename:${routeName}->${trimmed}`);
         }
@@ -424,7 +426,7 @@ export default function DatapackConfigureWizardPage({
         duration: 4000,
       });
     } else {
-      startKnowledgeBaseImport(finishPackName);
+      startKnowledgeBaseImport(finishPackName, routeDatapackId);
     }
     navigate(datapackDetailPath(finishPackName));
   }, [finishPackName, hasUploadedKnowledge, navigate]);

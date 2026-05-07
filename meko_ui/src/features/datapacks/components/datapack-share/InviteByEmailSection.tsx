@@ -19,10 +19,11 @@ import { toast } from "@/hooks/use-toast";
 
 type Props = {
   datapackName: string;
+  datapackId?: string;
   onInviteSent: () => void | Promise<void>;
 };
 
-export function InviteByEmailSection({ datapackName, onInviteSent }: Props) {
+export function InviteByEmailSection({ datapackName, datapackId, onInviteSent }: Props) {
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
   const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
@@ -52,7 +53,7 @@ export function InviteByEmailSection({ datapackName, onInviteSent }: Props) {
       await inviteDatapackShare(datapackName, {
         recipient_email: parsed?.email?.toLowerCase(),
         grant: inviteRole,
-      });
+      }, { datapackId });
       setEmail("");
       toast({ title: "Invite sent" });
       await onInviteSent();
