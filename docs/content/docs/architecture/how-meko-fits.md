@@ -5,11 +5,13 @@ description: Where Meko sits in your architecture and how it deploys
 weight: 10
 ---
 
-Meko is an agent-native data layer for multi-agent systems that work and learn together. It supports:
+Meko is the agent-native data infrastructure that enables multi-agent systems to learn together, building collective memory and shared knowledge that compounds across the entire system.
+
+It supports:
 
 - **Collective memory**. Learning compounds across the entire system, not just per-agent memory.
 - **Shared knowledge**. Meko builds knowledge over time from conversations, real-time data sources, and slower-changing knowledge bases.
-- **Auditability of the learning process**. Connect execution traces to how agents process data and knowledge, learn from it, and share that learning.
+- **Decision Traces**. Connect raw conversations to execution traces of how LLMs think, agents process memory and knowledge, learn from it, and share that learning.
 
 Meko is serverless, and multi-tenant (multi-agentic). It provides memory, conversation history, shareable knowledge, and full chain-of-thought traceability.
 
@@ -28,9 +30,9 @@ A [datapack](../core-concepts/datapacks/) is the isolation unit for agent data i
 | Capability | Powered by (internal) | API |
 | :--------- | :-------------------- | :--- |
 | Conversation history | PostgreSQL (YugabyteDB YSQL) | `conversation_*` tools |
-| Memory | Graph memory (MAGE) + vector search (pgvector, hnswlib) | `memory_*` tools |
+| Memory | Graph memory + vector search (pgvector, hnswlib) | `memory_*` tools |
 | Knowledge base | RAG pipeline (pg_dist_rag) + vector search | `knowledgebase_*` tools |
-| Audit trails | LLM reasoning traces and execution logs | Observability dashboard |
+| Decision traces | LLM reasoning traces and execution logs | Observability dashboard |
 | Observability, security, RBAC | Spans the full stack, not bolted on per-component | — |
 
 ![Meko Datapack Internals Diagram](/images/meko-datapack-internals.svg)
@@ -44,8 +46,9 @@ Without Meko, building an agentic application typically requires wiring together
 - A relational database for structured data
 - A vector database for embeddings and similarity search
 - A graph database for entity relationships
-- Custom integration code for each system
-- Per-component observability, security, and RBAC
+- Per-database observability, security, and RBAC
+- Custom integration code for stitching together search results from each database
+
 
 ![What Meko Replaces Diagram](/images/meko-what-replaces.svg)
 
