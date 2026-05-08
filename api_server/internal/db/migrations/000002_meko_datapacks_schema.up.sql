@@ -3,6 +3,26 @@
 -- promotions tables
 CREATE SCHEMA IF NOT EXISTS datapacks;
 
+
+/*
+As we are manually creating the vector index `datapacks.knowledge_bases`, we need to insert an entry in the dist_rag.vector_indexes table.
+*/
+
+INSERT INTO dist_rag.vector_indexes
+  (index_name,
+  schema_name,
+   index_options,
+   index_creation_status,
+   ai_provider,
+   embedding_model_params)
+VALUES
+  ('knowledge_bases', 'datapacks',
+   '{"distance_metric": "cosine", "m": 32, "ef_construction": 64}'::jsonb,
+   'INIT'::dist_rag.index_build_status,
+   'OPENAI'::dist_rag.ai_provider_enum,
+   '{"model": "text-embedding-3-large", "dimensions": 1536}'::jsonb)
+RETURNING id;
+
 /*
 This table is used to store the knowledge base for each tenant.
 1. This schema needs to match that of dist_rag vector index table.
