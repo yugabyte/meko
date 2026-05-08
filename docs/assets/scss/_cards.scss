@@ -235,6 +235,10 @@
   &.third {
     .meko-card {
       width: calc((100% / 3) - 8px);
+
+      @media (max-width: 599px) {
+        width: 100%;
+      }
     }
   }
 }
