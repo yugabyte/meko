@@ -57,10 +57,16 @@ import {
   type DatapackThreadMessage,
 } from "@/lib/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
+
+import {
+  MemoryIcon,
+  formatLatencyLabel,
+} from "@/components/conversation-telemetry";
+
 import { ROUTES } from "@/app/routes/paths";
+
 import { formatRelativeTime, useNowMs } from "./useRelativeTime";
 import { parseMemoryOutput } from "./parseMemoryOutput";
-import { MemoryIcon } from "./MemoryIcon";
 
 /** Initial per-page thread size. Most production conversations sit
  *  well under 100 turns; older history is loaded on demand. */
@@ -79,9 +85,9 @@ const transformListItemChildren = (children: ReactNode) =>
   Children.map(children, (child) =>
     isTextElement(child)
       ? createElement("span", {
-          ...child.props,
-          className: cn(child.props.className, "mb-1"),
-        })
+        ...child.props,
+        className: cn(child.props.className, "mb-1"),
+      })
       : child,
   );
 
@@ -670,18 +676,6 @@ function MemoryHoverCard({
   );
 }
 
-function formatLatencyLabel(latencyMs: number): string {
-  if (latencyMs < 1000) {
-    return `${Math.max(1, Math.round(latencyMs))}ms`;
-  }
-  if (latencyMs < 60_000) {
-    return `${(latencyMs / 1000).toFixed(1)}s`;
-  }
-  const mins = Math.floor(latencyMs / 60_000);
-  const secs = Math.floor((latencyMs % 60_000) / 1000);
-  return `${mins}m ${secs}s`;
-}
-
 // ---------------------------------------------------------------------------
 // Small inline pill helper for the header chips. Inlined (rather than
 // importing a shared Badge) so the conversation viewer can pick its
@@ -714,7 +708,6 @@ function Chip({ icon, accent, children }: ChipProps) {
     </span>
   );
 }
-
 
 function normalizeMarkdownText(value?: string): string {
   if (!value) return "";

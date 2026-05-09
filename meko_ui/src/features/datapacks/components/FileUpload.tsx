@@ -30,10 +30,18 @@ type FileEntry = {
 type Props = {
   datapackName: string;
   datapackId?: string;
+  /** Optional pre-staged files (e.g. a sample seed). Captured on first mount only. */
+  initialFiles?: File[];
 };
 
-export default function FileUpload({ datapackName, datapackId }: Props) {
-  const [files, setFiles] = useState<FileEntry[]>([]);
+export default function FileUpload({ datapackName, datapackId, initialFiles }: Props) {
+  const [files, setFiles] = useState<FileEntry[]>(() =>
+    (initialFiles ?? []).map((file) => ({
+      file,
+      status: KNOWLEDGE_UPLOAD_STATUS.PENDING,
+      progress: 0,
+    })),
+  );
   const [isDragOver, setIsDragOver] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [totalUploaded, setTotalUploaded] = useState(0);
@@ -392,14 +400,14 @@ export default function FileUpload({ datapackName, datapackId }: Props) {
                     )}
                     {(entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
                       entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR) && (
-                      <button
-                        type="button"
-                        className="text-muted-foreground hover:text-white transition-colors"
-                        onClick={() => removeFile(i)}
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-white transition-colors"
+                          onClick={() => removeFile(i)}
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
                   </div>
                 </div>
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (

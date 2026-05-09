@@ -81,7 +81,7 @@ export function DatapackDetailKnowledgeTile({
           disabled={!canAddSource}
           onClick={onAddSource}
         >
-          + Add source
+          + Add Knowledge
         </button>
       </div>
     </aside>

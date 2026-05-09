@@ -12,6 +12,8 @@ export type DatapackKnowledgeUploadDialogProps = {
   datapackId?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Optional pre-staged files (e.g. a sample). Re-captured each time the dialog opens. */
+  initialFiles?: File[];
 };
 
 export function DatapackKnowledgeUploadDialog({
@@ -19,6 +21,7 @@ export function DatapackKnowledgeUploadDialog({
   datapackId,
   open,
   onOpenChange,
+  initialFiles,
 }: DatapackKnowledgeUploadDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -31,7 +34,7 @@ export function DatapackKnowledgeUploadDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="px-4 py-4 sm:px-6 sm:pb-6">
-          <FileUpload datapackName={datapackName} datapackId={datapackId} />
+          <FileUpload datapackName={datapackName} datapackId={datapackId} initialFiles={initialFiles} />
         </div>
       </DialogContent>
     </Dialog>

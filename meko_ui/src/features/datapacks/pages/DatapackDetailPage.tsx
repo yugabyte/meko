@@ -316,7 +316,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     notifyDatapacksListChanged(`delete:${datapackName}`);
     toast({
       title: "Datapack deleted",
-      description: message || `"${datapackName}" was removed.`,
+      description: `"${datapackName}" was deleted.`,
     });
     navigate(ROUTES.datapacks, { replace: true });
   };

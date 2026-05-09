@@ -87,7 +87,10 @@ export function ConfigureWizardUnifiedFooter({
   syncKnowledgeCount,
   syncConversationsCount,
   syncSkillsCount,
-  canImport,
+  // `canImport` is intentionally not destructured — the sync-step CTA now
+  // toggles between "Import" and "Next" purely on the staged knowledge
+  // count and is always enabled. The prop is kept in the type so the
+  // parent's call signature stays untouched.
   onImport,
   onSkipForward,
   importKnowledgeCount,
@@ -144,26 +147,35 @@ export function ConfigureWizardUnifiedFooter({
     </Button>
   );
 
-  const importDisabled = !canImport;
-  const importButton = (
+  // Sync step CTA — label depends on whether the user has staged any
+  // knowledge files. With files: "Import" (kicks off the KB pipeline).
+  // Without files: "Next" (just advances to the import step). Always
+  // enabled by design — the user can move forward with or without uploads.
+  const hasStagedKnowledge = syncKnowledgeCount > 0;
+  const syncCtaLabel = hasStagedKnowledge ? "Import" : "Next";
+  const syncCtaOnClick = hasStagedKnowledge ? onImport : onSkipForward;
+  const syncCtaButton = (
     <Button
       type="button"
-      disabled={importDisabled}
-      className="bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-60"
-      onClick={onImport}
+      className="bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-500"
+      onClick={syncCtaOnClick}
     >
-      Import
+      {syncCtaLabel}
       <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
     </Button>
   );
 
-  const detectButton = (
+  // Install step CTA — formerly a disabled "Detect" placeholder. Renamed
+  // to "Next" and always enabled; calls the same skip-forward handler
+  // since detection is still TBD.
+  const installNextButton = (
     <Button
       type="button"
-      disabled
-      className="bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-60"
+      className="bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-500"
+      onClick={onSkipForward}
     >
-      Detect
+      Next
+      <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
     </Button>
   );
 
@@ -192,12 +204,7 @@ export function ConfigureWizardUnifiedFooter({
         >
           Skip for now
         </button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex">{detectButton}</span>
-          </TooltipTrigger>
-          <TooltipContent side="top">Coming Soon</TooltipContent>
-        </Tooltip>
+        {installNextButton}
       </div>
     );
   } else if (stepId === WIZARD_STEP_ID.sync) {
@@ -215,19 +222,7 @@ export function ConfigureWizardUnifiedFooter({
             {backButtonLabel}
           </Button>
         ) : null}
-
-        {importDisabled ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">{importButton}</span>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              Upload knowledge files successfully before continuing, or use Skip step.
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          importButton
-        )}
+        {syncCtaButton}
       </div>
     );
   } else if (stepId === WIZARD_STEP_ID.import) {

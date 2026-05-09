@@ -149,7 +149,10 @@ export function ConfigureSyncTile({
       <div
         className={wizardTileRootClass(
           tone,
-          "w-full min-w-0 self-start overflow-hidden min-h-[320px] max-h-[min(32rem,72vh)]",
+          // No `self-start` — let this column stretch to match the row
+          // height set by the grid's `items-stretch`, so Knowledge ends up
+          // the same height as the Conversations / Skills columns.
+          "w-full min-w-0 overflow-hidden min-h-[320px] max-h-[min(32rem,72vh)]",
         )}
       >
         <ConfigureSyncKnowledgePanel
