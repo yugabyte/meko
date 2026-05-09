@@ -227,8 +227,8 @@ inference_gateway/
 docker build -t 161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/inference-gateway:0.0.1-20260509 .
 
 docker run --rm -p 8088:8088 \
-  -e AWS_ACCESS_KEY_ID="AKIASLMUBCTPLPVVFWL4" \
-  -e AWS_SECRET_ACCESS_KEY="ABl1VljGZes7GS6ZMIB6DJhXuOyYaC7RuwNJEI9S" \
+  -e AWS_ACCESS_KEY_ID="<YOUR_AWS_ACCESS_KEY_ID>" \
+  -e AWS_SECRET_ACCESS_KEY="<YOUR_AWS_SECRET_ACCESS_KEY>" \
   -e AWS_REGION=us-east-2 \
   161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/inference-gateway:0.0.1-20260509 \
   --llm-provider bedrock \
