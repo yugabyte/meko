@@ -220,3 +220,20 @@ inference_gateway/
   panel won't show the turn until the next successful write.
 - **Trust model.** The gateway treats the caller (the React app) as
   authoritative for `user_token`. Any front-door auth happens upstream.
+
+## Docker build and deployment
+
+```sh
+docker build -t 161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/inference-gateway:0.0.1-20260509 .
+
+docker run --rm -p 8088:8088 \
+  -e AWS_ACCESS_KEY_ID="AKIASLMUBCTPLPVVFWL4" \
+  -e AWS_SECRET_ACCESS_KEY="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" \
+  -e AWS_REGION=us-east-2 \
+  161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/inference-gateway:0.0.1-20260509 \
+  --llm-provider bedrock \
+  --llm-model us.amazon.nova-2-lite-v1:0 \
+  --aws-region us-east-1 \
+  --mcp-endpoint https://mcp.mekodev.com/mcp
+
+```
