@@ -14,10 +14,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
-  Bot,
   Loader2,
   MessageSquare,
-  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -26,6 +24,7 @@ import {
   type DatapackConversation,
 } from "@/lib/mekoApi";
 import { formatRelativeTime, useNowMs } from "./useRelativeTime";
+import { MemoryIcon } from "./MemoryIcon";
 
 /** Page size for the infinite-scroll. Same as the API default; small
  *  enough to keep first paint snappy, big enough that most users won't
@@ -183,7 +182,6 @@ export function ConversationListRail({
                   <div className="flex items-center justify-between gap-2 mb-1">
                     {c.agent_id ? (
                       <span className="inline-flex items-center gap-1 truncate text-[10px] text-blue-300">
-                        <Bot className="h-2.5 w-2.5 shrink-0" aria-hidden />
                         <span className="truncate">{c.agent_id}</span>
                       </span>
                     ) : (
@@ -207,7 +205,7 @@ export function ConversationListRail({
                       <>
                         <span>·</span>
                         <span className="inline-flex items-center gap-1 text-blue-300">
-                          <Sparkles className="h-2.5 w-2.5" aria-hidden />
+                          <MemoryIcon className="text-[10px]" />
                           {c.memories_added.toLocaleString()}
                         </span>
                       </>

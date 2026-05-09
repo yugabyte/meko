@@ -88,15 +88,18 @@ func (repo *MemoriesRepo) resolveQueryVector(ctx context.Context, filter models.
 	}
 	llmClient, err := llm.NewClient(repo.openAIAPIKey, repo.openAILLMModel)
 	if err != nil {
-		return nil, fmt.Errorf("create llm client: %w", err)
+		slog.Warn("memories list: could not create LLM client, falling back to plain ordering", "error", err)
+		return nil, nil
 	}
 	summary, err := llmClient.Complete(ctx, fmt.Sprintf("Generate a summary of the following text: %s", chunkTexts))
 	if err != nil {
-		return nil, fmt.Errorf("generate summary: %w", err)
+		slog.Warn("memories list: LLM summarization failed, falling back to plain ordering", "error", err)
+		return nil, nil
 	}
 	vector, err := llmClient.GenerateEmbedding(ctx, summary, repo.openAIEmbeddingModel)
 	if err != nil {
-		return nil, fmt.Errorf("generate embedding: %w", err)
+		slog.Warn("memories list: embedding generation failed, falling back to plain ordering", "error", err)
+		return nil, nil
 	}
 	return vector, nil
 }
@@ -165,7 +168,8 @@ func (repo *MemoriesRepo) ListByFilter(
 	const selectCols = `
 			id::text,
 			COALESCE(payload->>'data', '') AS data,
-			meko_agent_id`
+			meko_agent_id,
+			COALESCE(meko_conversation_id::text, '') AS conversation_id`
 
 	var vector []float64
 	if filter.IsPaidUserType() {
@@ -218,7 +222,7 @@ func (repo *MemoriesRepo) ListByFilter(
 	var matched []models.Memory
 	for sqlRows.Next() {
 		var row models.Memory
-		if err := sqlRows.Scan(&row.ID, &row.Data, &row.AgentID); err != nil {
+		if err := sqlRows.Scan(&row.ID, &row.Data, &row.AgentID, &row.ConversationID); err != nil {
 			return nil, 0, fmt.Errorf("memories scan: %w", err)
 		}
 		matched = append(matched, row)

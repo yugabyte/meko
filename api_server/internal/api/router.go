@@ -258,7 +258,7 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	g.GET("/agents", agentH.ListUser)
 	g.DELETE("/agents/:agent_id", agentH.DeleteUser)
 
-	memoriesH := handlers.NewMemoriesHandler(reg.memoriesSvc)
+	memoriesH := handlers.NewMemoriesHandler(reg.memoriesSvc, reg.langfuseSvc)
 	g.GET("/memories", memoriesH.ListGET)
 	g.GET("/memories/count", memoriesH.CountGET)
 

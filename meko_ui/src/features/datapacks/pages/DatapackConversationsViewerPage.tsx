@@ -45,9 +45,12 @@ export default function DatapackConversationsViewerPage({
    *  Owned at the page level so the drawer survives thread re-fetches
    *  and conversation switches reset it cleanly. */
   const [traceMessageId, setTraceMessageId] = useState<string | null>(null);
+  /** When true, the TraceDrawer shimmers its memories panel to draw
+   *  the user's eye after opening via the memory hover card. */
+  const [shimmerMemories, setShimmerMemories] = useState(false);
 
   // Closing the drawer when the conversation changes prevents stale
-  // trace data from flashing while the new thread loads.
+  // trace data from shimmering while the new thread loads.
   useEffect(() => {
     setTraceMessageId(null);
   }, [conversationId]);
@@ -119,6 +122,10 @@ export default function DatapackConversationsViewerPage({
                 datapackId={datapackId}
                 conversationId={conversationId}
                 onOpenTrace={(messageId) => setTraceMessageId(messageId)}
+                onOpenTraceWithMemoryShimmer={(messageId) => {
+                  setTraceMessageId(messageId);
+                  setShimmerMemories(true);
+                }}
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -137,6 +144,8 @@ export default function DatapackConversationsViewerPage({
         conversationId={conversationId ?? ""}
         messageId={traceMessageId}
         onClose={() => setTraceMessageId(null)}
+        shimmerMemories={shimmerMemories}
+        onShimmerMemoriesDone={() => setShimmerMemories(false)}
       />
     </div>
   );

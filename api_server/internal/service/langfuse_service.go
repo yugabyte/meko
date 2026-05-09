@@ -680,6 +680,20 @@ func (s *LangfuseService) GetOrgKeysForAccount(accountID string) (string, string
 }
 
 // ListConversations returns one page of Langfuse sessions for the
+// GetProjectID returns the Langfuse project ID for a datapack, or "" if no
+// mapping exists. Useful for adding project_id to responses that don't
+// otherwise query Langfuse (e.g. the memories list).
+func (s *LangfuseService) GetProjectID(datapackID string) string {
+	if s == nil || s.repo == nil {
+		return ""
+	}
+	mapping, err := s.repo.GetProjectMapping(strings.TrimSpace(datapackID))
+	if err != nil || mapping == nil {
+		return ""
+	}
+	return mapping.ProjectID
+}
+
 // datapack's project (newest first), plus the resolved langfuse
 // project_id so the UI can build per-conversation deep links without
 // a second roundtrip. Empty projectID means no mapping exists.
@@ -829,7 +843,7 @@ func (s *LangfuseService) GetConversation(
 	if detail == nil {
 		return projectID, nil, ErrConversationNotFound
 	}
-	
+
 	counts, mErr := s.repo.MemoriesPerConversation(datapackID, []string{conversationID})
 	if mErr != nil {
 		slog.Warn("conversation detail: failed to fetch mem0 count; defaulting to 0",

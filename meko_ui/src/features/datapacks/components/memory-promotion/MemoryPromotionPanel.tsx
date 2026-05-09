@@ -1,7 +1,7 @@
 // Renders agent memories with promote-to-KB actions: preview (3 rows + optional View All) or full pagination.
 // UI-only; state and API calls live in useMemoryPromotion so detail and learnings routes stay in sync.
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowLeftRight,

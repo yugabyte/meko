@@ -105,7 +105,10 @@ type ThreadMessage struct {
 	Reasoning         string    `json:"reasoning,omitempty"`
 	LatencyMs         int64     `json:"latency_ms"`
 	MemoriesExtracted int64     `json:"memories_extracted"`
-	LLMCalls          int64     `json:"llm_calls"`
+	// MemoryIDs lists the mem0 row IDs attributed to this message window.
+	// Nil/empty when the message has no associated memories.
+	MemoryIDs []string `json:"memory_ids,omitempty"`
+	LLMCalls  int64    `json:"llm_calls"`
 }
 
 type messageWindow struct {
@@ -139,6 +142,10 @@ type TraceSpan struct {
 	Model               string `json:"model,omitempty"`
 	Usage               string `json:"usage,omitempty"`
 	TotalCost           string `json:"total_cost,omitempty"`
+	// Output is the raw output blob for the observation. Only populated
+	// for memory-related spans (name ILIKE '%memor%') to keep payloads
+	// small. The UI uses it to surface extracted memory text.
+	Output string `json:"output,omitempty"`
 }
 
 // LangfuseRepo encapsulates database operations for Langfuse mappings
@@ -731,18 +738,35 @@ WITH msg AS (
     FROM   clickhouse.observations
     WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
       AND  name = 'Conversation Add Message(Meko MCP)'
-), windows AS (
-    -- root_start is the canonical start for this message window
-    -- (parent tool start when present, else bookmark start). Using
-    -- LEAD(root_start) avoids bleeding the next message's wrapper tool
-    -- into this message window.
+), conv_start AS (
+    -- Earliest observation in the trace (Conversation Create span).
+    -- Used to extend the first message's window backward so out-of-order
+    -- tool calls (e.g. memory_add before conversation_add_message) are
+    -- attributed to the first turn rather than dropped.
+    SELECT MIN(start_time) AS trace_start
+    FROM   clickhouse.observations
+    WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
+), raw_windows AS (
     SELECT m.observation_id, m.message_id, m.start_time, m.end_time,
            m.input, m.output,
-           COALESCE(p.p_start, m.start_time) AS root_start,
-           LEAD(COALESCE(p.p_start, m.start_time)) OVER (
-             ORDER BY COALESCE(p.p_start, m.start_time), m.start_time
-           ) AS next_start
+           COALESCE(p.p_start, m.start_time) AS msg_start
     FROM   msg m LEFT JOIN parents p ON p.id = m.parent_observation_id
+), windows AS (
+    -- root_start is the canonical start for this message window.
+    -- For the first message only, extend root_start back to conv_start
+    -- so spans written before conversation_add_message (out-of-order
+    -- memory_add, etc.) are included in latency and the trace drawer.
+    -- next_start always uses the unextended msg_start so the extension
+    -- does not bleed into subsequent message windows.
+    SELECT observation_id, message_id, start_time, end_time,
+           input, output,
+           CASE
+               WHEN ROW_NUMBER() OVER (ORDER BY msg_start, start_time) = 1
+               THEN LEAST(msg_start, (SELECT trace_start FROM conv_start))
+               ELSE msg_start
+           END AS root_start,
+           LEAD(msg_start) OVER (ORDER BY msg_start, start_time) AS next_start
+    FROM   raw_windows
 ), reasoning_raw AS (
     SELECT NULLIF(o.metadata ->> 'message_id', '') AS metadata_message_id,
            o.parent_observation_id,
@@ -871,35 +895,47 @@ LIMIT  $3 OFFSET $4`
 	header.ThreadOffset = messagesOffset
 	header.ThreadHasMore = len(header.Thread) == messagesLimit
 
-	// Populate per-message persisted-memory counts from mem0 so the
-	// thread chips reflect actual extracted rows (and align with the
-	// conversation-level MemoriesAdded metric), not Memory Add call count.
+	// Populate per-message persisted-memory counts and IDs from mem0 so
+	// the thread chips reflect actual extracted rows (aligning with the
+	// conversation-level MemoriesAdded metric), and the UI can deep-link
+	// to the specific message that extracted a given memory.
 	if len(header.Thread) > 0 {
-		memoriesByMessage, err := r.memoriesPerMessageWindow(datapackID, sessionID, windows)
+		memRes, err := r.memoriesPerMessageWindow(datapackID, sessionID, windows)
 		if err != nil {
 			return nil, err
 		}
 		for i := range header.Thread {
-			header.Thread[i].MemoriesExtracted = memoriesByMessage[header.Thread[i].MessageID]
+			mid := header.Thread[i].MessageID
+			header.Thread[i].MemoriesExtracted = memRes.counts[mid]
+			header.Thread[i].MemoryIDs = memRes.memoryIDs[mid]
 		}
 	}
 
 	return &header, nil
 }
 
+type memoryWindowResult struct {
+	counts    map[string]int64
+	memoryIDs map[string][]string // messageID → []memoryID
+}
+
 func (r *LangfuseRepo) memoriesPerMessageWindow(
 	datapackID, sessionID string,
 	windows []messageWindow,
-) (map[string]int64, error) {
+) (memoryWindowResult, error) {
+	empty := memoryWindowResult{
+		counts:    map[string]int64{},
+		memoryIDs: map[string][]string{},
+	}
 	if r == nil || r.metaDB == nil {
-		return nil, fmt.Errorf("meta database is not configured")
+		return empty, fmt.Errorf("meta database is not configured")
 	}
 	if len(windows) == 0 {
-		return map[string]int64{}, nil
+		return empty, nil
 	}
 
 	const q = `
-SELECT meko_created_at
+SELECT id::text, meko_created_at
 FROM   datapacks.meko_mem0_collection
 WHERE  meko_datapack_id = $1::uuid
   AND  meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action
@@ -909,21 +945,31 @@ ORDER  BY meko_created_at ASC`
 
 	rows, err := r.metaDB.Query(q, datapackID, strings.ReplaceAll(sessionID, "-", ""))
 	if err != nil {
-		return nil, fmt.Errorf("meta db: load mem0 rows for message windows: %w", err)
+		return empty, fmt.Errorf("meta db: load mem0 rows for message windows: %w", err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]int64, len(windows))
+	res := memoryWindowResult{
+		counts:    make(map[string]int64, len(windows)),
+		memoryIDs: make(map[string][]string, len(windows)),
+	}
 	for _, w := range windows {
-		out[w.MessageID] = 0
+		res.counts[w.MessageID] = 0
+		res.memoryIDs[w.MessageID] = nil
+	}
+
+	assign := func(messageID, memID string) {
+		res.counts[messageID]++
+		res.memoryIDs[messageID] = append(res.memoryIDs[messageID], memID)
 	}
 
 	// Two-pointer attribution over ascending timestamps.
 	winIdx := 0
 	for rows.Next() {
+		var memID string
 		var createdAt sql.NullTime
-		if err := rows.Scan(&createdAt); err != nil {
-			return nil, fmt.Errorf("meta db: scan mem0 row timestamp: %w", err)
+		if err := rows.Scan(&memID, &createdAt); err != nil {
+			return empty, fmt.Errorf("meta db: scan mem0 row: %w", err)
 		}
 		if !createdAt.Valid {
 			continue
@@ -934,7 +980,7 @@ ORDER  BY meko_created_at ASC`
 		// to the first message so per-message totals still reconcile with
 		// the conversation-level mem0 total.
 		if ct.Before(windows[0].Start) {
-			out[windows[0].MessageID]++
+			assign(windows[0].MessageID, memID)
 			continue
 		}
 		for winIdx < len(windows) {
@@ -946,14 +992,14 @@ ORDER  BY meko_created_at ASC`
 				winIdx++
 				continue
 			}
-			out[w.MessageID]++
+			assign(w.MessageID, memID)
 			break
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("meta db: iterate mem0 rows for message windows: %w", err)
+		return empty, fmt.Errorf("meta db: iterate mem0 rows for message windows: %w", err)
 	}
-	return out, nil
+	return res, nil
 }
 
 // MemoriesPerConversation returns persisted-mem0 row counts for the
@@ -1074,12 +1120,36 @@ WITH msg AS (
       AND  name       = 'Conversation Message Added'
       AND  (metadata ->> 'message_id') = $3
     LIMIT 1
+), conv_start AS (
+    -- Earliest observation in the trace — the Conversation Create(Meko MCP)
+    -- tool span or the Conversation Created bookmark. Used as a floor for
+    -- the first message's window so that any tool calls the agent made
+    -- between conversation_create and conversation_add_message (e.g. an
+    -- out-of-order memory_add) are still visible in the trace drawer.
+    SELECT MIN(start_time) AS trace_start
+    FROM   clickhouse.observations
+    WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
 ), root AS (
     -- Anchor the window at the parent Add Message tool span when one
     -- exists (its start time is slightly earlier than the bookmark);
     -- this way the tree includes the wrapper itself.
+    --
+    -- For the first message (no earlier Conversation Message Added exists),
+    -- fall back to conv_start so out-of-order pre-message tool calls
+    -- (memory_add, etc.) are included in the window rather than dropped.
     SELECT
-        COALESCE(p.start_time, m.start_time) AS root_start
+        CASE
+            WHEN NOT EXISTS (
+                SELECT 1 FROM clickhouse.observations
+                WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
+                  AND  name = 'Conversation Message Added'
+                  AND  (metadata ->> 'message_id') <> $3
+                  AND  start_time < COALESCE(p.start_time, m.start_time)
+            )
+            THEN LEAST(COALESCE(p.start_time, m.start_time),
+                       (SELECT trace_start FROM conv_start))
+            ELSE COALESCE(p.start_time, m.start_time)
+        END AS root_start
     FROM msg m
     LEFT JOIN clickhouse.observations p
            ON p.id = m.parent_observation_id
@@ -1108,7 +1178,12 @@ SELECT o.id,
        (EXTRACT(EPOCH FROM (o.start_time - (SELECT root_start FROM root)))*1000)::bigint AS offset_ms,
        COALESCE(o.provided_model_name, '')                                           AS model,
        CASE WHEN o.usage_details::text = '{}' THEN '' ELSE o.usage_details::text END AS usage,
-       COALESCE(o.total_cost::text, '')                                              AS total_cost
+       COALESCE(o.total_cost::text, '')                                              AS total_cost,
+       -- Include output only for memory-related spans to keep payload small.
+       CASE WHEN o.name ILIKE '%memory%' OR o.name ILIKE '%memories%'
+            THEN COALESCE(LEFT(o.output::text, 4000), '')
+            ELSE ''
+       END                                                                           AS output
 FROM   clickhouse.observations o
 WHERE  o.project_id = $1 AND o.trace_id = $2 AND o.is_deleted = false
   AND  o.start_time >= (SELECT root_start FROM root)
@@ -1138,6 +1213,7 @@ ORDER  BY o.start_time ASC`
 			&span.Model,
 			&span.Usage,
 			&span.TotalCost,
+			&span.Output,
 		); err != nil {
 			return nil, fmt.Errorf("langfuse db: scan trace span: %w", err)
 		}

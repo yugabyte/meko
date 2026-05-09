@@ -8,15 +8,20 @@
 // result set) are surfaced as additional roots so we never silently
 // drop information.
 //
+// When the trace contains memory-related spans with output, a right
+// panel is rendered alongside the tree to surface the extracted
+// memory text so users can see exactly what was committed to memory.
+//
 // Click-to-close: ESC + backdrop click + the X button all dismiss.
 // We don't trap focus aggressively — the parent thread page stays
 // visible behind a translucent backdrop so users can still see
 // where they are in the conversation.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Bot,
+  BrainCircuit,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -35,6 +40,7 @@ import {
   getDatapackMessageTrace,
   type DatapackTraceSpan,
 } from "@/lib/mekoApi";
+import { parseMemoryOutput } from "./parseMemoryOutput";
 
 type Props = {
   open: boolean;
@@ -46,6 +52,10 @@ type Props = {
    *  without a remount, but it skips the fetch until `open === true`. */
   messageId: string | null;
   onClose: () => void;
+  /** When true, runs a shimmer sweep over the extracted-memories panel to draw
+   *  the user's attention after opening via the memory badge. */
+  shimmerMemories?: boolean;
+  onShimmerMemoriesDone?: () => void;
 };
 
 export function TraceDrawer({
@@ -55,11 +65,26 @@ export function TraceDrawer({
   conversationId,
   messageId,
   onClose,
+  shimmerMemories,
+  onShimmerMemoriesDone,
 }: Props) {
   const [spans, setSpans] = useState<DatapackTraceSpan[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [hoveredSpanId, setHoveredSpanId] = useState<string | null>(null);
+  const [shimmering, setShimmering] = useState(false);
+
+  // When the parent signals a shimmer, run the sweep then report done.
+  useEffect(() => {
+    if (!shimmerMemories) return;
+    setShimmering(true);
+    const t = setTimeout(() => {
+      setShimmering(false);
+      onShimmerMemoriesDone?.();
+    }, 1600);
+    return () => clearTimeout(t);
+  }, [shimmerMemories, onShimmerMemoriesDone]);
 
   useEffect(() => {
     if (!open || !messageId) return;
@@ -109,8 +134,39 @@ export function TraceDrawer({
     return Math.max(1, max);
   }, [spans]);
 
+  /** Top-level memory spans that have output. We exclude child spans
+   *  whose parent is also a memory span to avoid showing duplicates
+   *  (e.g. "Memory Add (Meko MCP)" and its child "Create a new memory
+   *  in Mem0" carry the same output — we only show the parent). */
+  const memorySpans = useMemo(() => {
+    const memoryIds = new Set(
+      spans
+        .filter((s) => /memor/i.test(s.name) && s.output)
+        .map((s) => s.id),
+    );
+    return spans.filter(
+      (s) =>
+        /memor/i.test(s.name) &&
+        s.output &&
+        (!s.parent_observation_id || !memoryIds.has(s.parent_observation_id)),
+    );
+  }, [spans]);
+  const hasMemories = memorySpans.length > 0;
+
+  const handleHoverSpan = useCallback(
+    (id: string | null) => setHoveredSpanId(id),
+    [],
+  );
+
   return (
     <>
+      <style>{`
+        @keyframes memory-shimmer {
+          0%   { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+      `}</style>
+
       {/* Backdrop. Click-through dismissal. */}
       <div
         className={cn(
@@ -122,10 +178,12 @@ export function TraceDrawer({
       />
 
       {/* Drawer. Translates off-screen when closed; the parent keeps
-          this mounted so the close animation runs. */}
+          this mounted so the close animation runs. Widens when memory
+          spans are present to accommodate the right-side panel. */}
       <aside
         className={cn(
-          "fixed right-0 top-0 z-50 flex h-full w-full max-w-[640px] flex-col border-l border-border bg-[#0E1525] shadow-2xl transition-transform duration-200",
+          "fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l border-border bg-[#0E1525] shadow-2xl transition-[transform,max-width] duration-200",
+          hasMemories ? "max-w-[960px]" : "max-w-[640px]",
           open ? "translate-x-0" : "translate-x-full",
         )}
         aria-hidden={!open}
@@ -161,42 +219,151 @@ export function TraceDrawer({
           </Button>
         </header>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
-          {loading ? (
-            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-              Loading trace…
-            </div>
-          ) : error ? (
-            <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
-              <span>{error}</span>
-            </div>
-          ) : spans.length === 0 ? (
-            <p className="text-center text-sm text-muted-foreground">
-              No trace spans recorded for this message.
-            </p>
-          ) : (
-            <ul className="space-y-1">
-              {tree.roots.map((rootId) => (
-                <SpanTreeNode
-                  key={rootId}
-                  spanId={rootId}
-                  depth={0}
-                  byId={tree.byId}
-                  childrenOf={tree.childrenOf}
-                  totalMs={totalMs}
-                  collapsed={collapsed}
-                  onToggle={(id) =>
-                    setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))
-                  }
+        {/* Body: span tree (left) + optional extracted memories panel (right) */}
+        <div className="flex flex-1 min-h-0 divide-x divide-border">
+          {/* ── Left: span tree ── */}
+          <div className="flex-1 min-w-0 overflow-y-auto px-5 py-4">
+            {loading ? (
+              <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                Loading trace…
+              </div>
+            ) : error ? (
+              <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
+                <span>{error}</span>
+              </div>
+            ) : spans.length === 0 ? (
+              <p className="text-center text-sm text-muted-foreground">
+                No trace spans recorded for this message.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {tree.roots.map((rootId) => (
+                  <SpanTreeNode
+                    key={rootId}
+                    spanId={rootId}
+                    depth={0}
+                    byId={tree.byId}
+                    childrenOf={tree.childrenOf}
+                    totalMs={totalMs}
+                    collapsed={collapsed}
+                    onToggle={(id) =>
+                      setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))
+                    }
+                    hoveredSpanId={hoveredSpanId}
+                    onHoverSpan={handleHoverSpan}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* ── Right: extracted memories ── shown only when present */}
+          {hasMemories ? (
+            <div className="relative w-[320px] shrink-0 overflow-hidden px-4 py-4">
+              {/* Diagonal shimmer sweep: bottom-left → top-right */}
+              {shimmering ? (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 z-10"
+                  style={{
+                    animation: "memory-shimmer 1.6s ease-in-out forwards",
+                    background:
+                      "linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.08) 58%, transparent 70%)",
+                    width: "200%",
+                    height: "100%",
+                    top: "0",
+                    left: "0",
+                  }}
                 />
-              ))}
-            </ul>
-          )}
+              ) : null}
+              <div className="overflow-y-auto h-full">
+                <div className="mb-3 flex items-center gap-2">
+                  <BrainCircuit className="h-4 w-4 text-blue-300" aria-hidden />
+                  <h4 className="text-[13px] font-medium text-white">
+                    Extracted memories
+                  </h4>
+                  <span className="ml-auto rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] text-blue-300">
+                    {memorySpans.length}
+                  </span>
+                </div>
+                <ul className="space-y-2">
+                  {memorySpans.map((s) => (
+                    <MemoryCard
+                      key={s.id}
+                      span={s}
+                      highlighted={hoveredSpanId === s.id}
+                      onHoverSpan={handleHoverSpan}
+                    />
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : null}
         </div>
       </aside>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MemoryCard: renders one extracted memory from a memory-related span.
+// The `output` blob can be a JSON string (various Mem0 response shapes)
+// or plain text; we try to parse it and pull out human-readable strings.
+// ---------------------------------------------------------------------------
+
+type MemoryCardProps = {
+  span: DatapackTraceSpan;
+  highlighted: boolean;
+  onHoverSpan: (id: string | null) => void;
+};
+
+function MemoryCard({ span, highlighted, onHoverSpan }: MemoryCardProps) {
+  const memories = useMemo(
+    () => parseMemoryOutput(span.output ?? ""),
+    [span.output],
+  );
+
+  if (!memories.length) return null;
+
+  return (
+    <li
+      className={cn(
+        "rounded-lg border px-3 py-2.5 transition-colors duration-100 cursor-default",
+        highlighted
+          ? "border-blue-400/60 bg-blue-500/15 ring-1 ring-blue-400/30"
+          : "border-blue-500/20 bg-blue-500/5 hover:border-blue-400/40 hover:bg-blue-500/10",
+      )}
+      onMouseEnter={() => onHoverSpan(span.id)}
+      onMouseLeave={() => onHoverSpan(null)}
+    >
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <Sparkles className="h-3 w-3 shrink-0 text-blue-300" aria-hidden />
+        <span className="truncate text-[11px] text-blue-200/70" title={span.name}>
+          {span.name}
+        </span>
+        <span className="ml-auto shrink-0 tabular-nums text-[10px] text-muted-foreground">
+          {formatDuration(span.duration_ms)}
+        </span>
+      </div>
+      <ul className="space-y-1.5">
+        {memories.map((text, i) => (
+          <li
+            // eslint-disable-next-line react/no-array-index-key
+            key={i}
+            className="text-[12.5px] leading-relaxed text-foreground/85"
+          >
+            {memories.length > 1 ? (
+              <span className="mr-1 font-mono text-[10px] text-muted-foreground">
+                {i + 1}.
+              </span>
+            ) : null}
+            {text}
+          </li>
+        ))}
+      </ul>
+    </li>
   );
 }
 
@@ -214,6 +381,8 @@ type NodeProps = {
   totalMs: number;
   collapsed: Record<string, boolean>;
   onToggle: (id: string) => void;
+  hoveredSpanId: string | null;
+  onHoverSpan: (id: string | null) => void;
 };
 
 function SpanTreeNode({
@@ -224,12 +393,16 @@ function SpanTreeNode({
   totalMs,
   collapsed,
   onToggle,
+  hoveredSpanId,
+  onHoverSpan,
 }: NodeProps) {
   const span = byId[spanId];
   if (!span) return null;
   const kids = childrenOf[spanId] ?? [];
   const hasKids = kids.length > 0;
   const isCollapsed = !!collapsed[spanId];
+  const isHovered = hoveredSpanId === spanId;
+  const isMemorySpan = /memor/i.test(span.name);
 
   // Waterfall sizing — left offset and width are percentages of the
   // total message wall time.
@@ -241,8 +414,15 @@ function SpanTreeNode({
   return (
     <li>
       <div
-        className="group flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-[#141C2E]"
+        className={cn(
+          "group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors duration-100",
+          isHovered && isMemorySpan
+            ? "bg-blue-500/15 ring-1 ring-inset ring-blue-400/30"
+            : "hover:bg-[#141C2E]",
+        )}
         style={{ paddingLeft: `${depth * 14 + 6}px` }}
+        onMouseEnter={() => isMemorySpan && onHoverSpan(spanId)}
+        onMouseLeave={() => isMemorySpan && onHoverSpan(null)}
       >
         <button
           type="button"
@@ -306,6 +486,8 @@ function SpanTreeNode({
               totalMs={totalMs}
               collapsed={collapsed}
               onToggle={onToggle}
+              hoveredSpanId={hoveredSpanId}
+              onHoverSpan={onHoverSpan}
             />
           ))}
         </ul>

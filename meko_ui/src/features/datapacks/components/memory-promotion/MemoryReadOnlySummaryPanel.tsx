@@ -2,10 +2,14 @@
  * Read-only memories: same card chrome as Learnings summary, without promote / keep actions.
  * Preview shows top {@link MEMORY_READ_ONLY_PREVIEW_SIZE} rows + optional “View all” to the memory-summary route.
  */
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { cn } from "@/lib/utils";
 import { ArrowLeftRight, ChevronLeft, ChevronRight, Loader2, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { datapackMemorySummaryPath } from "@/app/routes/paths";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { datapackConversationsPath, datapackMemorySummaryPath } from "@/app/routes/paths";
+
+import { ObserveButton } from "@/features/datapacks/components/ObserveButton";
 import { MEMORY_READ_ONLY_PREVIEW_SIZE, useMemoryReadOnlyList, type MemoryReadOnlyVariant } from "./useMemoryReadOnlyList";
 import { PAGE_SIZE_OPTIONS } from "./useMemoryPromotion";
 import { MemoryRowBody } from "./memoryRowBody";
@@ -17,6 +21,7 @@ type Props = {
 };
 
 export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }: Props) {
+  const navigate = useNavigate();
   const {
     isFull,
     loading,
@@ -31,15 +36,32 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }
     sessionSummaryReady,
     rangeStart,
     rangeEnd,
+    langfuseProjectId,
     loadMemories,
     goToPage,
     changePageSize,
   } = useMemoryReadOnlyList({ datapackId, variant });
 
+  const isValidConvId = (conversationId: string) =>
+    !!conversationId && conversationId !== datapackId;
+
+  // Langfuse / conversation viewer both expect IDs without dashes.
+  const traceId = (conversationId: string) => conversationId.replace(/-/g, "");
+
+  /** Navigate to the conversation viewer, optionally pre-selecting a
+   *  specific message via the memoryId query param so it can be scrolled
+   *  to and shimmered. */
+  const goToConversation = (conversationId: string, memoryId: string) => {
+    if (!isValidConvId(conversationId)) return;
+    const path = datapackConversationsPath(datapackName, traceId(conversationId));
+    navigate(`${path}?memoryId=${encodeURIComponent(memoryId)}`);
+  };
+
   const showPagination = isFull && total > 0;
   const showViewAll = !isFull && total > MEMORY_READ_ONLY_PREVIEW_SIZE;
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="rounded-xl border border-border bg-[#1C2333] p-6 space-y-4">
       <div className="flex items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-4">
@@ -161,14 +183,38 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }
       {memories.length > 0 ? (
         <>
           <ul className="space-y-2">
-            {memories.map((m) => (
-              <li
-                key={m.id}
-                className="rounded-lg border border-border bg-[#0E1525] px-4 py-3"
-              >
-                <MemoryRowBody memory={m} />
-              </li>
-            ))}
+            {memories.map((m) => {
+              const canLink = m.conversation_id && isValidConvId(m.conversation_id);
+              return (
+                <li key={m.id}>
+                  <button
+                    type="button"
+                    onClick={() => canLink && goToConversation(m.conversation_id!, m.id)}
+                    className={cn(
+                      "w-full rounded-lg border border-border bg-[#0E1525] px-4 py-3 text-left",
+                      canLink
+                        ? "cursor-pointer hover:bg-[#161d2e] hover:border-border/80 transition-colors"
+                        : "cursor-default",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <MemoryRowBody memory={m} />
+                      {canLink ? (
+                        <div
+                          className="flex shrink-0 items-center gap-1.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ObserveButton
+                            projectId={langfuseProjectId}
+                            sessionId={traceId(m.conversation_id!)}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
           {showViewAll ? (
             <div className="flex justify-center pt-1">
@@ -184,5 +230,6 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }
         </>
       ) : null}
     </div>
+    </TooltipProvider>
   );
 }

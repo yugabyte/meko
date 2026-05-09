@@ -26,8 +26,10 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { useSearchParams } from "react-router-dom";
 import ReactMarkdown, { type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -39,6 +41,7 @@ import {
   ChevronUp,
   Clock,
   Cpu,
+  ExternalLink,
   Loader2,
   MessageSquare,
   Send,
@@ -49,11 +52,15 @@ import { cn } from "@/lib/utils";
 import {
   getApiErrorMessage,
   getDatapackConversation,
+  getDatapackMessageTrace,
   type DatapackConversationDetail,
   type DatapackThreadMessage,
 } from "@/lib/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
+import { ROUTES } from "@/app/routes/paths";
 import { formatRelativeTime, useNowMs } from "./useRelativeTime";
+import { parseMemoryOutput } from "./parseMemoryOutput";
+import { MemoryIcon } from "./MemoryIcon";
 
 /** Initial per-page thread size. Most production conversations sit
  *  well under 100 turns; older history is loaded on demand. */
@@ -86,6 +93,9 @@ type Props = {
    *  parent owns the drawer state so the trace panel can persist
    *  across thread re-fetches. */
   onOpenTrace: (messageId: string) => void;
+  /** Like onOpenTrace but also asks TraceDrawer to shimmer the memories
+   *  panel — called when the user clicks directly on the memory badge. */
+  onOpenTraceWithMemoryShimmer?: (messageId: string) => void;
 };
 
 export function ConversationThreadPane({
@@ -93,8 +103,10 @@ export function ConversationThreadPane({
   datapackId,
   conversationId,
   onOpenTrace,
+  onOpenTraceWithMemoryShimmer,
 }: Props) {
   const [detail, setDetail] = useState<DatapackConversationDetail | null>(null);
+  const [langfuseProjectId, setLangfuseProjectId] = useState<string>("");
   /** Older pages are prepended to this array in load order. The
    *  rendered thread = [...olderPages, ...detail.thread]. */
   const [olderMessages, setOlderMessages] = useState<DatapackThreadMessage[]>([]);
@@ -112,6 +124,7 @@ export function ConversationThreadPane({
   useEffect(() => {
     if (!conversationId) {
       setDetail(null);
+      setLangfuseProjectId("");
       setOlderMessages([]);
       setOlderOffset(0);
       setOlderHasMore(false);
@@ -134,6 +147,7 @@ export function ConversationThreadPane({
       .then((resp) => {
         if (ac.signal.aborted) return;
         setDetail(resp.conversation);
+        setLangfuseProjectId(resp.langfuse_project_id ?? "");
         setOlderOffset(resp.conversation.thread.length);
         setOlderHasMore(resp.conversation.thread_has_more);
       })
@@ -176,6 +190,31 @@ export function ConversationThreadPane({
     if (!detail) return [] as DatapackThreadMessage[];
     return [...detail.thread, ...olderMessages];
   }, [detail, olderMessages]);
+
+  // Deep-link: when arriving with ?memoryId=<id>, find the message that
+  // extracted that memory, scroll to it, and shimmer that message bubble.
+  const [searchParams] = useSearchParams();
+  const targetMemoryId = searchParams.get("memoryId") ?? "";
+  const msgElRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const didAutoSelectRef = useRef(false);
+  const [shimmeringMessageId, setShimmeringMessageId] = useState("");
+
+  useEffect(() => {
+    if (!targetMemoryId || !messages.length || didAutoSelectRef.current) return;
+    const target = messages.find((m) => m.memory_ids?.includes(targetMemoryId));
+    if (!target) return;
+    didAutoSelectRef.current = true;
+    setTimeout(() => {
+      msgElRefs.current[target.message_id]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setShimmeringMessageId(target.message_id);
+      setTimeout(() => setShimmeringMessageId(""), 1800);
+    }, 150);
+  }, [messages, targetMemoryId]);
+
+  // Reset auto-select flag when conversation changes.
+  useEffect(() => {
+    didAutoSelectRef.current = false;
+  }, [conversationId]);
 
   if (loading) {
     return (
@@ -247,16 +286,28 @@ export function ConversationThreadPane({
               ) : null}
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5 shrink-0 border-border bg-background text-muted-foreground hover:text-foreground"
-            disabled
-            title="Continuing this conversation from the viewer is not wired yet"
-          >
-            <Send className="h-3.5 w-3.5" aria-hidden />
-            Continue
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            {langfuseProjectId ? (
+              <a
+                href={`${ROUTES.observeHub}?${new URLSearchParams({ project: langfuseProjectId, session: conversationId }).toString()}`}
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/10 px-2 py-1 text-[11px] font-medium text-foreground/80 hover:bg-muted/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 transition-colors"
+                title="Open this conversation in the Langfuse trace view"
+              >
+                <ExternalLink className="h-3 w-3" aria-hidden />
+                <span>Observe</span>
+              </a>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 border-border bg-background text-muted-foreground hover:text-foreground"
+              disabled
+              title="Continuing this conversation from the viewer is not wired yet"
+            >
+              <Send className="h-3.5 w-3.5" aria-hidden />
+              Continue
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -285,14 +336,27 @@ export function ConversationThreadPane({
         ) : null}
 
         {messages.map((m) => (
-          <ThreadTurn
+          <div
             key={m.message_id}
-            message={m}
-            now={now}
-            reasoningExpanded={!!expandedReasoning[m.message_id]}
-            onToggleReasoning={() => toggleReasoning(m.message_id)}
-            onOpenTrace={() => onOpenTrace(m.message_id)}
-          />
+            ref={(el) => { msgElRefs.current[m.message_id] = el; }}
+          >
+            <ThreadTurn
+              message={m}
+              now={now}
+              reasoningExpanded={!!expandedReasoning[m.message_id]}
+              onToggleReasoning={() => toggleReasoning(m.message_id)}
+              onOpenTrace={() => onOpenTrace(m.message_id)}
+              onOpenTraceWithMemoryShimmer={
+                onOpenTraceWithMemoryShimmer
+                  ? () => onOpenTraceWithMemoryShimmer(m.message_id)
+                  : undefined
+              }
+              isShimmering={shimmeringMessageId === m.message_id}
+              datapackName={datapackName}
+              datapackId={datapackId}
+              conversationId={conversationId}
+            />
+          </div>
         ))}
       </div>
     </div>
@@ -313,6 +377,11 @@ type ThreadTurnProps = {
   reasoningExpanded: boolean;
   onToggleReasoning: () => void;
   onOpenTrace: () => void;
+  onOpenTraceWithMemoryShimmer?: () => void;
+  isShimmering?: boolean;
+  datapackName: string;
+  datapackId?: string;
+  conversationId: string;
 };
 
 function ThreadTurn({
@@ -321,6 +390,11 @@ function ThreadTurn({
   reasoningExpanded,
   onToggleReasoning,
   onOpenTrace,
+  onOpenTraceWithMemoryShimmer,
+  isShimmering = false,
+  datapackName,
+  datapackId,
+  conversationId,
 }: ThreadTurnProps) {
   const normalizedReasoning = normalizeMarkdownText(message.reasoning);
   const normalizedOutput = normalizeMarkdownText(message.output);
@@ -331,6 +405,15 @@ function ThreadTurn({
 
   return (
     <div className="space-y-4">
+      {isShimmering ? (
+        <style>{`
+          @keyframes memory-shimmer {
+            0%   { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+          }
+        `}</style>
+      ) : null}
+
       {/* User bubble — right-aligned. */}
       {message.input ? (
         <div className="flex max-w-3xl ml-auto justify-end gap-3">
@@ -384,15 +467,34 @@ function ThreadTurn({
             </div>
           ) : null}
 
-          {hasOutput ? (
-            <div className="rounded-2xl rounded-tl-sm border border-border bg-[#1C2333] px-4 py-3 text-sm leading-relaxed text-foreground/95 whitespace-pre-wrap">
-              <MarkdownMessage text={normalizedOutput} />
-            </div>
-          ) : (
-            <div className="rounded-2xl rounded-tl-sm border border-dashed border-border bg-[#1C2333]/50 px-4 py-3 text-sm italic text-muted-foreground">
-              (no assistant response captured for this turn)
-            </div>
-          )}
+          <div className="relative overflow-hidden rounded-2xl">
+            {hasOutput ? (
+              <div className={cn(
+                "rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-relaxed text-foreground/95 whitespace-pre-wrap transition-colors duration-300",
+                isShimmering ? "border-white/30 bg-[#252F45]" : "border-border bg-[#1C2333]",
+              )}>
+                <MarkdownMessage text={normalizedOutput} />
+              </div>
+            ) : (
+              <div className="rounded-2xl rounded-tl-sm border border-dashed border-border bg-[#1C2333]/50 px-4 py-3 text-sm italic text-muted-foreground">
+                (no assistant response captured for this turn)
+              </div>
+            )}
+            {isShimmering ? (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 z-10"
+                style={{
+                  animation: "memory-shimmer 1.6s ease-in-out forwards",
+                  background: "linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.08) 58%, transparent 70%)",
+                  width: "200%",
+                  height: "100%",
+                  top: "0",
+                  left: "0",
+                }}
+              />
+            ) : null}
+          </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-1 text-[11px] text-muted-foreground">
             <span className="inline-flex items-center gap-1">
@@ -400,11 +502,14 @@ function ThreadTurn({
               {latencyLabel}
             </span>
             {(message.memories_extracted ?? 0) > 0 ? (
-              <span className="inline-flex items-center gap-1">
-                <MemoryIcon className="text-[13px]" />
-                {message.memories_extracted.toLocaleString()}{" "}
-                {message.memories_extracted === 1 ? "memory" : "memories"} extracted
-              </span>
+              <MemoryHoverCard
+                count={message.memories_extracted}
+                messageId={message.message_id}
+                datapackName={datapackName}
+                datapackId={datapackId}
+                conversationId={conversationId}
+                onClickOpenTrace={onOpenTraceWithMemoryShimmer ?? onOpenTrace}
+              />
             ) : null}
             {(message.llm_calls ?? 0) > 0 ? (
               <span className="inline-flex items-center gap-1">
@@ -425,6 +530,143 @@ function ThreadTurn({
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MemoryHoverCard: fetches trace spans on hover and surfaces the extracted
+// memory texts in a floating popover above the badge. Lazy — no network
+// request until the user actually hovers.
+// ---------------------------------------------------------------------------
+
+const MEMORY_PREVIEW_CHARS = 120;
+
+type MemoryHoverCardProps = {
+  count: number;
+  messageId: string;
+  datapackName: string;
+  datapackId?: string;
+  conversationId: string;
+  onClickOpenTrace: () => void;
+};
+
+function MemoryHoverCard({
+  count,
+  messageId,
+  datapackName,
+  datapackId,
+  conversationId,
+  onClickOpenTrace,
+}: MemoryHoverCardProps) {
+  const [open, setOpen] = useState(false);
+  const [memories, setMemories] = useState<string[] | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const fetchedRef = useRef(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchMemories = useCallback(() => {
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
+    setFetching(true);
+    getDatapackMessageTrace(datapackName, conversationId, messageId, {
+      datapackId,
+    })
+      .then((resp) => {
+        const spans = resp.spans ?? [];
+        const memoryIds = new Set(
+          spans.filter((s) => /memor/i.test(s.name) && s.output).map((s) => s.id),
+        );
+        const topLevel = spans.filter(
+          (s) =>
+            /memor/i.test(s.name) &&
+            s.output &&
+            (!s.parent_observation_id || !memoryIds.has(s.parent_observation_id)),
+        );
+        setMemories(topLevel.flatMap((s) => parseMemoryOutput(s.output ?? "")));
+      })
+      .catch(() => setMemories([]))
+      .finally(() => setFetching(false));
+  }, [datapackName, conversationId, messageId, datapackId]);
+
+  const openPopover = useCallback(() => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    setOpen(true);
+    fetchMemories();
+  }, [fetchMemories]);
+
+  const closePopover = useCallback(() => {
+    closeTimerRef.current = setTimeout(() => setOpen(false), 150);
+  }, []);
+
+  const label = `${count.toLocaleString()} ${count === 1 ? "memory" : "memories"} extracted`;
+
+  return (
+    <span className="relative inline-flex items-center">
+      {/* Badge */}
+      <span
+        role="button"
+        tabIndex={0}
+        className={cn(
+          "inline-flex cursor-pointer select-none items-center gap-1 rounded px-1 py-0.5 transition-colors",
+          open ? "bg-blue-500/15 text-blue-300" : "hover:bg-blue-500/10 hover:text-blue-300",
+        )}
+        onMouseEnter={openPopover}
+        onMouseLeave={closePopover}
+        onClick={onClickOpenTrace}
+        onKeyDown={(e) => e.key === "Enter" && onClickOpenTrace()}
+      >
+        <MemoryIcon className="text-[13px]" />
+        {label}
+      </span>
+
+      {/* Popover */}
+      {open ? (
+        <div
+          className="absolute bottom-full left-0 z-50 mb-2 w-72 overflow-hidden rounded-xl border border-blue-500/25 bg-[#0E1525] shadow-2xl"
+          onMouseEnter={openPopover}
+          onMouseLeave={closePopover}
+          onClick={onClickOpenTrace}
+        >
+          {/* Caret */}
+          <div className="absolute -bottom-1.5 left-4 h-3 w-3 rotate-45 border-b border-r border-blue-500/25 bg-[#0E1525]" />
+
+          <div className="px-3.5 py-3">
+            <p className="mb-2.5 flex items-center gap-1.5 text-[11px] font-medium text-blue-300">
+              <MemoryIcon className="text-[13px]" />
+              Extracted memories
+              <span className="ml-auto text-[10px] font-normal text-blue-300/50">
+                Click to open trace
+              </span>
+            </p>
+
+            {fetching ? (
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                Loading…
+              </div>
+            ) : !memories || memories.length === 0 ? (
+              <p className="text-[11px] italic text-muted-foreground">
+                No memory text captured in trace.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {memories.map((text, i) => (
+                  // eslint-disable-next-line react/no-array-index-key
+                  <li key={i} className="flex items-start gap-2">
+                    <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400/70" />
+                    <span className="text-[12px] leading-relaxed text-foreground/85">
+                      {text.length > MEMORY_PREVIEW_CHARS
+                        ? `${text.slice(0, MEMORY_PREVIEW_CHARS)}…`
+                        : text}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </span>
   );
 }
 
@@ -473,13 +715,6 @@ function Chip({ icon, accent, children }: ChipProps) {
   );
 }
 
-function MemoryIcon({ className }: { className?: string }) {
-  return (
-    <span role="img" aria-label="memory" className={cn("inline-block leading-none", className)}>
-      🧠
-    </span>
-  );
-}
 
 function normalizeMarkdownText(value?: string): string {
   if (!value) return "";

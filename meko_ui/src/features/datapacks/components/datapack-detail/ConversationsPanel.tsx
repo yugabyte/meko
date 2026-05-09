@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ExternalLink, Loader2, MessageSquare } from "lucide-react";
+import { Loader2, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   getApiErrorMessage,
@@ -19,11 +19,11 @@ import {
   type DatapackConversation,
 } from "@/lib/mekoApi";
 import {
-  ROUTES,
   datapackConversationsPath,
 } from "@/app/routes/paths";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import DatapackPanelShell from "@/features/datapacks/components/datapack-detail/DatapackPanelShell";
+import { ObserveButton } from "@/features/datapacks/components/ObserveButton";
 
 /** How many of the newest conversations to show in the in-tab preview.
  *  Matches the "top 3-4" call-out from product; we use 4 so the panel
@@ -92,20 +92,6 @@ export default function ConversationsPanel({ datapackName, datapackId, total, cl
     [datapackName, navigate],
   );
 
-  /** Secondary "open in raw Langfuse iframe" shortcut. Stops propagation
-   *  so it doesn't also fire the row-click navigation to the native
-   *  viewer. */
-  const openConversationInObserve = useCallback(
-    (sessionId: string) => {
-      if (!langfuseProjectId || !sessionId) return;
-      const qs = new URLSearchParams({
-        project: langfuseProjectId,
-        session: sessionId,
-      });
-      navigate(`${ROUTES.observeHub}?${qs.toString()}`);
-    },
-    [langfuseProjectId, navigate],
-  );
 
   const showEmpty = !error && hasFetched && total === 0;
   const showInitialLoader = loading && conversations.length === 0 && !error;
@@ -201,21 +187,11 @@ export default function ConversationsPanel({ datapackName, datapackId, total, cl
                           </span>
                         </div>
                       </div>
-                      {langfuseProjectId ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openConversationInObserve(c.id);
-                          }}
-                          className="shrink-0 inline-flex items-center gap-1 rounded-md border border-border bg-muted/10 px-2 py-1 text-[11px] font-medium text-foreground/80 hover:bg-muted/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 transition-colors"
-                          title="Open this conversation in the raw Langfuse trace view"
-                          aria-label={`Open conversation ${c.id} in Observe`}
-                        >
-                          <ExternalLink className="h-3 w-3" aria-hidden />
-                          <span>Observe</span>
-                        </button>
-                      ) : null}
+                      <ObserveButton
+                        projectId={langfuseProjectId}
+                        sessionId={c.id}
+                        onClick={(e) => e.stopPropagation()}
+                      />
                     </div>
                   </button>
                 </li>

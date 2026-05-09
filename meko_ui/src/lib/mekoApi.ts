@@ -892,6 +892,10 @@ export type DatapackThreadMessage = {
    *  useful for timing. */
   latency_ms: number;
   memories_extracted: number;
+  /** mem0 row IDs attributed to this message's time window. Present only
+   *  when memories_extracted > 0. Used to deep-link from the Memories tab
+   *  to the specific message that extracted a given memory. */
+  memory_ids?: string[];
   llm_calls: number;
 };
 
@@ -949,6 +953,9 @@ export type DatapackTraceSpan = {
    *  prompt/completion split, etc.). UI parses on demand. */
   usage?: string;
   total_cost?: string;
+  /** Raw output blob, populated only for memory-related spans.
+   *  May be a JSON string; UI parses and surfaces the memory text. */
+  output?: string;
 };
 
 export type GetDatapackMessageTraceResponse = {
@@ -1193,6 +1200,7 @@ export type Memory = {
   id: string;
   data: string;
   agent_id?: string;
+  conversation_id?: string;
 };
 
 /**
@@ -1228,6 +1236,7 @@ export type MemoryListResponse = {
   page: number;
   page_size: number;
   total_pages: number;
+  langfuse_project_id?: string;
 };
 
 const MEMORIES_MOCK_ON =

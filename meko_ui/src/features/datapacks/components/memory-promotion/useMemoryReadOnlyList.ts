@@ -31,6 +31,7 @@ export function useMemoryReadOnlyList({
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [listReady, setListReady] = useState(false);
+  const [langfuseProjectId, setLangfuseProjectId] = useState("");
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
@@ -77,6 +78,7 @@ export function useMemoryReadOnlyList({
       setMemories(resp.memories ?? []);
       setTotal(resp.total ?? 0);
       setTotalPages(Math.max(1, resp.total_pages ?? 1));
+      setLangfuseProjectId(resp.langfuse_project_id ?? "");
       if (isFull && typeof resp.page === "number" && resp.page > 0 && resp.page !== effectivePage) {
         setPage(resp.page);
       }
@@ -141,6 +143,7 @@ export function useMemoryReadOnlyList({
     sessionSummaryReady,
     rangeStart,
     rangeEnd,
+    langfuseProjectId,
     loadMemories,
     goToPage,
     changePageSize,

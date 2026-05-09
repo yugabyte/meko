@@ -79,9 +79,10 @@ type KnowledgeBase struct {
 // to the UI. Only the memory text (payload->>'data') and the owning agent
 // are surfaced; all other payload fields are intentionally dropped.
 type Memory struct {
-	ID      string `json:"id"`
-	Data    string `json:"data"`
-	AgentID string `json:"agent_id"`
+	ID             string `json:"id"`
+	Data           string `json:"data"`
+	AgentID        string `json:"agent_id"`
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 // MemoryListFilter is the filter for the Mem0 collection (datapacks.meko_mem0_collection).
@@ -110,13 +111,14 @@ func (f MemoryListFilter) IsPaidUserType() bool {
 
 // MemoryListResponse is the response to the memories list API.
 type MemoryListResponse struct {
-	Criteria   MemoryListFilter `json:"criteria"`
-	Memories   []Memory         `json:"memories"`
-	TopK       int              `json:"top_k"`
-	Total      int              `json:"total"`
-	Page       int              `json:"page"`
-	PageSize   int              `json:"page_size"`
-	TotalPages int              `json:"total_pages"`
+	Criteria          MemoryListFilter `json:"criteria"`
+	Memories          []Memory         `json:"memories"`
+	TopK              int              `json:"top_k"`
+	Total             int              `json:"total"`
+	Page              int              `json:"page"`
+	PageSize          int              `json:"page_size"`
+	TotalPages        int              `json:"total_pages"`
+	LangfuseProjectID string           `json:"langfuse_project_id,omitempty"`
 }
 
 // MemoryCountResponse is the response to the memories count API. It returns

@@ -14,10 +14,11 @@ import (
 
 type MemoriesHandler struct {
 	memoriesSvc *service.MemoriesService
+	langfuseSvc *service.LangfuseService
 }
 
-func NewMemoriesHandler(memoriesSvc *service.MemoriesService) *MemoriesHandler {
-	return &MemoriesHandler{memoriesSvc: memoriesSvc}
+func NewMemoriesHandler(memoriesSvc *service.MemoriesService, langfuseSvc *service.LangfuseService) *MemoriesHandler {
+	return &MemoriesHandler{memoriesSvc: memoriesSvc, langfuseSvc: langfuseSvc}
 }
 
 func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFilter) error {
@@ -35,6 +36,8 @@ func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFil
 		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
+
+	response.LangfuseProjectID = handler.langfuseSvc.GetProjectID(filter.DatapackID)
 
 	return ok(c, http.StatusOK, response)
 }
