@@ -22,14 +22,18 @@ type MemoriesRepo struct {
 	openAIAPIKey         string
 	openAILLMModel       string
 	openAIEmbeddingModel string
+	// skipVectorSort, when true, bypasses the OpenAI summary + embedding step
+	// in ListByFilter and orders results by meko_created_at DESC, id DESC.
+	skipVectorSort bool
 }
 
-func NewMemoriesRepo(db *sql.DB, openAIAPIKey, openAILLMModel, openAIEmbeddingModel string) *MemoriesRepo {
+func NewMemoriesRepo(db *sql.DB, openAIAPIKey, openAILLMModel, openAIEmbeddingModel string, skipVectorSort bool) *MemoriesRepo {
 	return &MemoriesRepo{
 		db:                   db,
 		openAIAPIKey:         openAIAPIKey,
 		openAILLMModel:       openAILLMModel,
 		openAIEmbeddingModel: openAIEmbeddingModel,
+		skipVectorSort:       skipVectorSort,
 	}
 }
 
@@ -173,14 +177,19 @@ func (repo *MemoriesRepo) ListByFilter(
 
 	var vector []float64
 	if filter.IsPaidUserType() {
-		v, err := repo.resolveQueryVector(ctx, filter)
-		if err != nil {
-			return nil, 0, err
-		}
-		vector = v
-		if len(vector) == 0 {
-			slog.Info("memories list: no KB chunks available, falling back to plain ordering",
+		if repo.skipVectorSort {
+			slog.Debug("memories list: vector sort disabled by config",
 				"datapack_id", filter.DatapackID, "user_type", filter.UserType)
+		} else {
+			v, err := repo.resolveQueryVector(ctx, filter)
+			if err != nil {
+				return nil, 0, err
+			}
+			vector = v
+			if len(vector) == 0 {
+				slog.Debug("memories list: no KB chunks available, falling back to plain ordering",
+					"datapack_id", filter.DatapackID, "user_type", filter.UserType)
+			}
 		}
 	}
 

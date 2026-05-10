@@ -27,8 +27,12 @@ type ServerConfig struct {
 	OpenAIAPIKey         string
 	OpenAILLMModel       string
 	OpenAIEmbeddingModel string
-	Port                 int
-	CRDNamespace         string
+	// MemoryListSkipVectorSort, when true, skips the OpenAI summary +
+	// embedding step in the memory/learning list path and orders results by
+	// meko_created_at DESC, id DESC. Default true.
+	MemoryListSkipVectorSort bool
+	Port                     int
+	CRDNamespace             string
 	S3AccessKey         string
 	S3AuthMode          string
 	S3Bucket            string

@@ -71,6 +71,11 @@ func run() error {
 	openAILLMModel := flag.String("openai-llm-model", os.Getenv("OPEN_AI_LLM_MODEL"), "OpenAI LLM model (default: gpt-4o)")
 	openAIEmbeddingModel := flag.String("openai-embedding-model", os.Getenv("OPEN_AI_EMBEDDING_MODEL"), "OpenAI embedding model (default: text-embedding-3-small)")
 
+	// When true (default), the memory/learning list endpoints skip the OpenAI
+	// summary + embedding pre-step and order by meko_created_at DESC. Set to
+	// false to restore the legacy vector-similarity sort.
+	memoryListSkipVectorSort := flag.Bool("memory-list-skip-vector-sort", envBoolOrDefault("MEMORY_LIST_SKIP_VECTOR_SORT", true), "Skip OpenAI vector embedding for memory/learning list and sort by created_at DESC")
+
 	// S3 configuration
 	s3AuthMode := flag.String("s3-auth-mode", envOrDefault("S3_AUTH_MODE", "minio"), "S3 auth mode: minio, iam-user, iam-role")
 	s3Endpoint := flag.String("s3-endpoint", envOrDefault("S3_ENDPOINT", "http://localhost:19094"), "S3-compatible endpoint URL (minio mode)")
@@ -140,26 +145,27 @@ func run() error {
 	slog.Info("provisioning config", "crd_namespace", *crdNamespace)
 
 	return api.Run(api.ServerConfig{
-		DB:                   conn,
-		Port:                 *port,
-		CognitoRegion:        *cognitoRegion,
-		CognitoPoolID:        *cognitoPoolID,
-		CognitoClientID:      *cognitoClientID,
-		CognitoClientSecret:  *cognitoClientSecret,
-		CognitoDomain:        *cognitoDomain,
-		CRDNamespace:         *crdNamespace,
-		LangfuseHost:         *langfuseHost,
-		LangfuseAdminAPIKey:  *langfuseAdminAPIKey,
-		LangfuseDB:           langfuseDBConn,
-		OpenAIAPIKey:         *openAIAPIKey,
-		OpenAILLMModel:       *openAILLMModel,
-		OpenAIEmbeddingModel: *openAIEmbeddingModel,
-		S3AuthMode:           *s3AuthMode,
-		S3Endpoint:           *s3Endpoint,
-		S3AccessKey:          *s3AccessKey,
-		S3SecretKey:          *s3SecretKey,
-		S3Bucket:             *s3Bucket,
-		S3Region:             *s3Region,
+		DB:                       conn,
+		Port:                     *port,
+		CognitoRegion:            *cognitoRegion,
+		CognitoPoolID:            *cognitoPoolID,
+		CognitoClientID:          *cognitoClientID,
+		CognitoClientSecret:      *cognitoClientSecret,
+		CognitoDomain:            *cognitoDomain,
+		CRDNamespace:             *crdNamespace,
+		LangfuseHost:             *langfuseHost,
+		LangfuseAdminAPIKey:      *langfuseAdminAPIKey,
+		LangfuseDB:               langfuseDBConn,
+		OpenAIAPIKey:             *openAIAPIKey,
+		OpenAILLMModel:           *openAILLMModel,
+		OpenAIEmbeddingModel:     *openAIEmbeddingModel,
+		MemoryListSkipVectorSort: *memoryListSkipVectorSort,
+		S3AuthMode:               *s3AuthMode,
+		S3Endpoint:               *s3Endpoint,
+		S3AccessKey:              *s3AccessKey,
+		S3SecretKey:              *s3SecretKey,
+		S3Bucket:                 *s3Bucket,
+		S3Region:                 *s3Region,
 	})
 }
 
@@ -181,6 +187,15 @@ func envIntOrDefault(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return fallback
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback

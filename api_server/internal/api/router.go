@@ -53,8 +53,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
 	ragSvc := service.NewRagService(cfg.DB, service.DatapackIndexSchema, service.DatapackIndexName)
 
-	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel)
-	memoriesSvc := service.NewMemoriesService(memoriesRepo)
+	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel, cfg.MemoryListSkipVectorSort)
+	memoriesSvc := service.NewMemoriesService(memoriesRepo, cfg.MemoryListSkipVectorSort)
 
 	promoteMemoriesRepo := repository.NewPromoteMemoriesRepo(cfg.DB)
 	promoteMemoriesSvc := service.NewPromoteMemoriesService(promoteMemoriesRepo)

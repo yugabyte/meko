@@ -11,11 +11,12 @@ import (
 )
 
 type MemoriesService struct {
-	memoriesRepo *repository.MemoriesRepo
+	memoriesRepo   *repository.MemoriesRepo
+	skipVectorSort bool
 }
 
-func NewMemoriesService(memoriesRepo *repository.MemoriesRepo) *MemoriesService {
-	return &MemoriesService{memoriesRepo: memoriesRepo}
+func NewMemoriesService(memoriesRepo *repository.MemoriesRepo, skipVectorSort bool) *MemoriesService {
+	return &MemoriesService{memoriesRepo: memoriesRepo, skipVectorSort: skipVectorSort}
 }
 
 const (
@@ -56,7 +57,7 @@ func (svc *MemoriesService) List(
 	}
 
 	topK := 5
-	if !filter.IsPaidUserType() {
+	if !filter.IsPaidUserType() || svc.skipVectorSort {
 		topK = 0
 	}
 
