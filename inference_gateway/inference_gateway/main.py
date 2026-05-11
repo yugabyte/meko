@@ -36,7 +36,7 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
     p = argparse.ArgumentParser(prog="inference-gateway")
     p.add_argument(
         "--llm-provider",
-        default=os.getenv("INFERENCE_LLM_PROVIDER", "bedrock"),
+        default=os.getenv("INFERENCE_LLM_PROVIDER", "openai"),
         choices=["openai", "bedrock"],
     )
     p.add_argument(

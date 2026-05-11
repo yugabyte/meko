@@ -1,8 +1,12 @@
-// Markdown renderer for assistant chat bubbles. Mirrors
-// `ConversationThreadPane.MarkdownMessage` so styling stays consistent
-// between the Playground chat and the Conversations viewer. `remark-gfm`
-// adds tables / strikethrough / task lists. Falls back to a plain `<p>`
-// for very long messages to keep parser cost in check.
+// Shared markdown renderer for assistant text — used by the Playground chat
+// and the Conversations viewer. Centralising it keeps styling consistent
+// across surfaces and prevents the "two parallel copies that slowly drift"
+// problem we had before this extraction.
+//
+// `remark-gfm` adds tables / strikethrough / task lists. Long replies skip
+// markdown rendering entirely — react-markdown's parse cost grows with
+// content length and the LLM rarely needs >150k chars of formatting, so
+// the fallback is a plain `<p>` with preserved whitespace.
 
 import {
   Children,
@@ -16,8 +20,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 
-// Long replies skip markdown rendering — react-markdown's parse cost grows
-// with content length and the LLM rarely needs >150k chars of formatting.
+/** Hard cap on text length we'll hand to react-markdown. Above this we
+ *  render a plain `<p>` so a massive paste-in doesn't burn the renderer. */
 const MARKDOWN_RENDER_CHARACTER_LIMIT = 150_000;
 const MemoizedReactMarkdown = memo(ReactMarkdown);
 

@@ -73,3 +73,24 @@ export function buildSampleKnowledgeFile(): File {
     type: "text/markdown",
   });
 }
+
+/**
+ * Open the bundled sample knowledge file as a preview in a new tab.
+ *
+ * Uses a temporary blob URL so we don't need a hosted asset. The URL is
+ * revoked after a short delay — long enough for the browser to load the
+ * tab, short enough to release the memory. Returns true if the new tab
+ * was opened (the user may have blocked popups; we surface that to the
+ * caller so it can fall back / toast).
+ */
+export function openSampleKnowledgePreview(): boolean {
+  const blob = new Blob([SAMPLE_KNOWLEDGE_CONTENT], {
+    type: "text/markdown;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, "_blank", "noopener,noreferrer");
+  // Revoke after the browser has had time to load the URL. Anything below
+  // ~1s risks the tab seeing an invalid URL on slow machines.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return Boolean(win);
+}

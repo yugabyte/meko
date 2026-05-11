@@ -3,15 +3,17 @@
 // (seeded with europe-travel-guide.md). Both flows reuse DatapackKnowledgeUploadDialog.
 
 import { useCallback, useEffect, useState } from "react";
-import { BookOpen, FileText, Sparkles, Upload } from "lucide-react";
+import { BookOpen, ExternalLink, FileText, Sparkles, Upload } from "lucide-react";
 import {
   getApiErrorMessage,
   getKnowledgeBaseDocuments,
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
+import { toast } from "@/hooks/use-toast";
 import { DatapackKnowledgeUploadDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
 import {
   buildSampleKnowledgeFile,
+  openSampleKnowledgePreview,
   SAMPLE_KNOWLEDGE_FILENAME,
 } from "@/features/playground/data/sampleKnowledge";
 
@@ -25,6 +27,11 @@ type Props = {
 
 /** Polling interval while at least one doc is still being processed. */
 const KB_POLL_INTERVAL_MS = 5_000;
+
+/** Steady-state refresh interval — runs even when all docs are COMPLETED so
+ *  files uploaded from another client / the CLI / the datapack detail page
+ *  show up here without a hard refresh. Paused while the tab is hidden. */
+const KB_STEADY_REFRESH_MS = 30_000;
 
 export function PlaygroundKnowledgePanel({ datapackName, onDocumentsChange }: Props) {
   const [docs, setDocs] = useState<KnowledgeBaseDocument[]>([]);
@@ -81,6 +88,37 @@ export function PlaygroundKnowledgePanel({ datapackName, onDocumentsChange }: Pr
     return () => clearInterval(id);
   }, [datapackName, docs, fetchDocs]);
 
+  // Steady-state refresh — every 30s, surface uploads that landed via
+  // another client (CLI, datapack detail page, another browser tab) so
+  // the panel mirrors the server without a manual refresh. Paused while
+  // the tab is hidden so background tabs don't burn API calls.
+  useEffect(() => {
+    if (!datapackName) return;
+    let id: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (id !== null) return;
+      id = setInterval(() => {
+        void fetchDocs();
+      }, KB_STEADY_REFRESH_MS);
+    };
+    const stop = () => {
+      if (id !== null) {
+        clearInterval(id);
+        id = null;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") start();
+      else stop();
+    };
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      stop();
+    };
+  }, [datapackName, fetchDocs]);
+
   // Refresh after the upload dialog closes so newly added files appear in the list.
   const handleUploadOpenChange = (open: boolean) => {
     setUploadOpen(open);
@@ -100,6 +138,10 @@ export function PlaygroundKnowledgePanel({ datapackName, onDocumentsChange }: Pr
     setUploadOpen(true);
   };
 
+  const handleViewSample = () => {
+    openSampleKnowledgePreview();
+  };
+
   const sourceCount = docs.length;
 
   return (
@@ -116,89 +158,120 @@ export function PlaygroundKnowledgePanel({ datapackName, onDocumentsChange }: Pr
         ) : null}
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-4">
-        <section className="flex min-h-0 flex-col">
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Loaded sources
-          </h3>
-          {!datapackName ? (
-            <p className="text-xs text-muted-foreground">
-              Select a datapack to see its knowledge sources.
-            </p>
-          ) : docsLoading && docs.length === 0 ? (
-            <p className="text-xs text-muted-foreground">Loading sources…</p>
-          ) : docsError ? (
-            <p className="text-xs text-red-400">{docsError}</p>
-          ) : docs.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              No sources yet. Upload your own or add the sample below.
-            </p>
-          ) : (
-            <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
-              {docs.map((d, i) => {
-                const filename = d.document_name.split("/").pop() ?? d.document_name;
-                const display = filename.replace(/^\d+_/, "");
-                return (
-                  <li
-                    key={`${d.document_name}-${i}`}
-                    className="flex items-center gap-2 rounded-lg border border-border bg-[#1C2333] px-3 py-2"
-                    title={d.document_name}
-                  >
-                    <FileText className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
-                    <span className="min-w-0 flex-1 truncate text-xs text-white">{display}</span>
-                    <span
-                      className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground"
-                      aria-label={`status ${d.status}`}
+      {/*
+        Split body so "Loaded sources" + "Add your own" stay in the scrollable
+        top region and "Add sample" sits in a shrink-0 footer pinned to the
+        bottom of the panel. `mt-auto` inside overflow-y-auto does not consume
+        leftover height — the scroll box only grows to content height.
+      */}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-4">
+          <section className="flex min-h-0 shrink-0 flex-col">
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Loaded sources
+            </h3>
+            {!datapackName ? (
+              <p className="text-xs text-muted-foreground">
+                Select a datapack to see its knowledge sources.
+              </p>
+            ) : docsLoading && docs.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Loading sources…</p>
+            ) : docsError ? (
+              <p className="text-xs text-red-400">{docsError}</p>
+            ) : docs.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No sources yet. Upload your own or add the sample below.
+              </p>
+            ) : (
+              <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                {docs.map((d, i) => {
+                  const filename = d.document_name.split("/").pop() ?? d.document_name;
+                  const display = filename.replace(/^\d+_/, "");
+                  return (
+                    <li
+                      key={`${d.document_name}-${i}`}
+                      className="flex items-center gap-2 rounded-lg border border-border bg-[#1C2333] px-3 py-2"
+                      title={d.document_name}
                     >
-                      {d.status}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
+                      <FileText className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate text-xs text-white">{display}</span>
+                      <span
+                        className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground"
+                        aria-label={`status ${d.status}`}
+                      >
+                        {d.status}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
 
-        <section>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Add your own
-          </h3>
-          <button
-            type="button"
-            onClick={openOwnUpload}
-            disabled={!datapackName}
-            className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-[#1C2333] px-3 py-3 text-sm font-medium text-white transition-colors hover:border-blue-400/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Upload className="h-4 w-4 text-blue-400" aria-hidden />
-            File
-          </button>
-        </section>
-
-        <section>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Add sample
-          </h3>
-          <div className="space-y-2 rounded-lg border border-border bg-[#1C2333] p-3">
-            <div className="flex items-center gap-2">
-              <FileText className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-white">
-                {SAMPLE_KNOWLEDGE_FILENAME}
-              </span>
-            </div>
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              A short Europe travel guide covering Spain, UK, Greece, Italy, and Portugal.
-            </p>
+          <section className="shrink-0">
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Add your own
+            </h3>
             <button
               type="button"
-              onClick={openSampleUpload}
+              onClick={openOwnUpload}
               disabled={!datapackName}
-              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-[#1C2333] px-3 py-3 text-sm font-medium text-white transition-colors hover:border-blue-400/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Sparkles className="h-3.5 w-3.5" aria-hidden />
-              Add the sample
+              <Upload className="h-4 w-4 text-blue-400" aria-hidden />
+              File
             </button>
-          </div>
-        </section>
+          </section>
+        </div>
+
+        {/*
+          "Get started" affordance — hide once the user has at least one source.
+          Footer is outside the scroll region so it stays pinned to the bottom
+          of the panel while Loaded sources + Add your own scroll above.
+        */}
+        {sourceCount === 0 ? (
+          <section className="shrink-0 border-t border-border/70 px-4 pb-4 pt-3">
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Add sample
+            </h3>
+            <div className="space-y-2 rounded-lg border border-border bg-[#1C2333] p-3">
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-white">
+                  {SAMPLE_KNOWLEDGE_FILENAME}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                A short Europe travel guide covering Spain, UK, Greece, Italy, and Portugal.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openSampleUpload}
+                  disabled={!datapackName}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden />
+                  Add the sample
+                </button>
+                {/*
+                  View opens the sample's raw markdown in a new tab via a
+                  blob URL — lets the user preview what they'd be adding
+                  before actually uploading it.
+                */}
+                <button
+                  type="button"
+                  onClick={handleViewSample}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-xs font-medium text-foreground/80 transition-colors hover:border-border/80 hover:text-white"
+                  title="Open the sample file in a new tab"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                  View
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : null}
       </div>
 
       {datapackName ? (

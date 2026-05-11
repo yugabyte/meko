@@ -35,13 +35,14 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
   const onProtectedRoute = isProtectedRoute(location);
   const onOnboardingRoute = isOnboardingRoute(location);
 
-  if (authenticated && onAuthRoute) {
-    return ROUTES.onboarding;
-  }
-
   if (authenticated && !hasCompletedOnboarding && !onOnboardingRoute) {
     return ROUTES.onboarding;
   }
+
+  if (authenticated && onAuthRoute) {
+    return ROUTES.datapacks;
+  }
+
 
   if (authenticated && hasCompletedOnboarding && location === ROUTES.home) {
     return ROUTES.home;

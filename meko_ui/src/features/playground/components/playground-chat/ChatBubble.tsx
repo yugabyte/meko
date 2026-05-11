@@ -4,8 +4,9 @@
 
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { MarkdownMessage } from "@/components/markdown-message";
+import { AgentReasoningBlock } from "./AgentReasoningBlock";
 import { AssistantMetaRow } from "./AssistantMetaRow";
-import { MarkdownMessage } from "./MarkdownMessage";
 import type { Message } from "./types";
 
 export function ChatBubble({
@@ -29,7 +30,20 @@ export function ChatBubble({
         {isUser ? (
           <div className="whitespace-pre-wrap break-words">{message.content}</div>
         ) : (
-          <MarkdownMessage text={message.content} />
+          <>
+            {/*
+              Agent reasoning sits ABOVE the answer per spec — gives the
+              user a one-glance signal of what the agent grounded against
+              before scrolling into the response. Self-hides when no
+              memories / KB chunks / steps are present.
+            */}
+            <AgentReasoningBlock
+              memoryHits={message.memoryHits ?? []}
+              kbHits={message.kbHits ?? []}
+              processingSteps={message.processingSteps ?? []}
+            />
+            <MarkdownMessage text={message.content} />
+          </>
         )}
         {!isUser && (
           <AssistantMetaRow

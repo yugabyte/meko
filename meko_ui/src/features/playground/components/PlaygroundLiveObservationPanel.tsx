@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   getApiErrorMessage,
   getCurrentUser,
@@ -72,6 +73,18 @@ export function PlaygroundLiveObservationPanel({
   // — used to defer polling so the tile a user is actively reading doesn't
   // shift / disappear out from under them.
   const [isInteracting, setIsInteracting] = useState(false);
+  // Sticky-true once the user sends the first chat turn for this datapack.
+  // Drives the "Extracting memories…" placeholder in the Memories section
+  // while Mem0's background extractor is still working (typically 30–60s
+  // after the turn lands). Resets whenever the datapack changes — a fresh
+  // datapack should fall back to the standard "Add a conversation" copy.
+  const [chatTurnOccurred, setChatTurnOccurred] = useState(false);
+  useEffect(() => {
+    setChatTurnOccurred(false);
+  }, [datapackId]);
+  useEffect(() => {
+    if (refreshTick > 0) setChatTurnOccurred(true);
+  }, [refreshTick]);
 
   useEffect(() => {
     // Skip while the user is reading the panel — resume on next render
@@ -128,28 +141,32 @@ export function PlaygroundLiveObservationPanel({
           <Activity className="h-4 w-4 text-purple-400" aria-hidden />
           <h2 className="text-sm font-medium text-white">Live observation</h2>
         </div>
-        <span
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors",
-            isInteracting
-              ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-              : "border-purple-500/30 bg-purple-500/10 text-purple-200",
-          )}
-          title={
-            isInteracting
-              ? "Auto-refresh paused while you're reading."
-              : "Auto-refreshes every 10 seconds."
-          }
-        >
-          <span
-            className={cn(
-              "h-1.5 w-1.5 rounded-full",
-              isInteracting ? "bg-amber-300" : "animate-pulse bg-purple-300",
-            )}
-            aria-hidden
-          />
-          {isInteracting ? "paused" : "live"}
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors",
+                isInteracting
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                  : "border-purple-500/30 bg-purple-500/10 text-purple-200",
+              )}
+            >
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  isInteracting ? "bg-amber-300" : "animate-pulse bg-purple-300",
+                )}
+                aria-hidden
+              />
+              {isInteracting ? "paused" : "live"}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[260px] text-center">
+            {isInteracting
+              ? "Auto-refresh paused while you're reading a tile, so it doesn't shift or vanish mid-read. Resumes when your cursor leaves the panel."
+              : "Auto-refreshes every 10 seconds while this tab is visible."}
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col divide-y divide-border/50 overflow-y-auto px-4">
@@ -157,6 +174,7 @@ export function PlaygroundLiveObservationPanel({
           <LearningsSection
             datapackId={datapackId}
             refreshTick={effectiveTick}
+            chatTurnOccurred={chatTurnOccurred}
             // Bump the internal poll tick so siblings (Collective Memory in
             // particular) refetch immediately after the user promotes a
             // memory — the new entry shows up there without waiting for
@@ -168,6 +186,7 @@ export function PlaygroundLiveObservationPanel({
           <CollectiveMemorySection
             datapackId={datapackId}
             refreshTick={effectiveTick}
+            chatTurnOccurred={chatTurnOccurred}
           />
         </div>
         {/* <div style={{ marginTop: '16px' }}>
@@ -256,10 +275,15 @@ const MEMORY_TONE = {
 function LearningsSection({
   datapackId,
   refreshTick,
+  chatTurnOccurred,
   onPromoted,
 }: {
   datapackId: string | null;
   refreshTick: number;
+  /** True once at least one chat turn has completed since the datapack was
+   *  selected. Lets us swap the empty-state copy from "Add a conversation"
+   *  to "Extracting memories…" while Mem0's extractor catches up. */
+  chatTurnOccurred: boolean;
   /** Fired after a successful Promote to Ko so siblings (e.g. the
    *  Collective Memory section) can refetch immediately instead of
    *  waiting up to 10s for the next auto-poll. */
@@ -362,9 +386,19 @@ function LearningsSection({
       {!datapackId ? (
         <p className="text-xs text-muted-foreground">Select a datapack to see learnings.</p>
       ) : loading && items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Loading learnings…</p>
+        <p className="text-xs text-muted-foreground">Loading memories…</p>
       ) : items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Add a conversation to view learnings.</p>
+        chatTurnOccurred ? (
+          // Mem0's background extractor takes 30–60s after each turn. The
+          // panel auto-polls every 10s so the placeholder swaps to real
+          // tiles as soon as the extractor finishes.
+          <p className="inline-flex items-center gap-2 text-xs text-purple-200/80">
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+            Extracting learnings from your recent chat — usually 30–60 seconds.
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">Add a conversation to view memories.</p>
+        )
       ) : (
         <ul className="space-y-2">
           {items.slice(0, TOP_N).map((m) => {
@@ -536,9 +570,14 @@ const COLLECTIVE_TONE = {
 function CollectiveMemorySection({
   datapackId,
   refreshTick,
+  chatTurnOccurred,
 }: {
   datapackId: string | null;
   refreshTick: number;
+  /** Lets us swap the empty-state hint once a chat turn has fired —
+   *  promotion needs memories upstream, so a "still extracting" line
+   *  reads better than the static "Promote a learning" copy. */
+  chatTurnOccurred: boolean;
 }) {
   const [items, setItems] = useState<PromotedMemory[]>([]);
   const [total, setTotal] = useState(0);
@@ -595,9 +634,19 @@ function CollectiveMemorySection({
       ) : loading && items.length === 0 ? (
         <p className="text-xs text-muted-foreground">Loading collective memory…</p>
       ) : items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          Nothing here yet. Promote a learning above to seed collective memory.
-        </p>
+        chatTurnOccurred ? (
+          // Collective memory needs upstream memories to exist first — so
+          // right after a turn the more honest message is "wait for Mem0,
+          // then promote." We surface the extraction-in-progress hint too.
+          <p className="inline-flex items-center gap-2 text-xs text-sky-200/80">
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+            Extracting memories from your recent chat. Promote one above to seed collective memory.
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Nothing here yet. Promote a memory above to seed collective memory.
+          </p>
+        )
       ) : (
         <ul className="space-y-2">
           {items.slice(0, TOP_N).map((m) => (

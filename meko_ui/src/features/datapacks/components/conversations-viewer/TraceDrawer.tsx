@@ -27,6 +27,7 @@ import {
   Clock,
   Cpu,
   Database,
+  ExternalLink,
   Loader2,
   Sparkles,
   Wrench,
@@ -40,6 +41,7 @@ import {
   getDatapackMessageTrace,
   type DatapackTraceSpan,
 } from "@/lib/mekoApi";
+import { ROUTES } from "@/app/routes/paths";
 import { parseMemoryOutput } from "./parseMemoryOutput";
 
 type Props = {
@@ -69,6 +71,10 @@ export function TraceDrawer({
   onShimmerMemoriesDone,
 }: Props) {
   const [spans, setSpans] = useState<DatapackTraceSpan[]>([]);
+  // `langfuse_project_id` rides along on the same trace response — the
+  // drawer pulls it itself so callers don't have to plumb it through.
+  // Drives the "View Detailed Trace" deep-link in the footer.
+  const [langfuseProjectId, setLangfuseProjectId] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -92,7 +98,7 @@ export function TraceDrawer({
     setLoading(true);
     setError(null);
     setSpans([]);
-    setCollapsed({});
+    setLangfuseProjectId("");
     getDatapackMessageTrace(datapackName, conversationId, messageId, {
       signal: ac.signal,
       datapackId,
@@ -100,6 +106,7 @@ export function TraceDrawer({
       .then((resp) => {
         if (ac.signal.aborted) return;
         setSpans(resp.spans ?? []);
+        setLangfuseProjectId(resp.langfuse_project_id ?? "");
       })
       .catch((err) => {
         if (ac.signal.aborted) return;
@@ -132,6 +139,17 @@ export function TraceDrawer({
       if (end > max) max = end;
     }
     return Math.max(1, max);
+  }, [spans]);
+
+  /** Shallow traces (at most one nested level under any root) start with every
+   *  parent collapsed so the drawer stays compact; deeper trees default to expanded. */
+  useEffect(() => {
+    if (!spans.length) {
+      setCollapsed({});
+      return;
+    }
+    const { childrenOf, roots } = buildTree(spans);
+    setCollapsed(defaultCollapsedForShallowTree(childrenOf, roots));
   }, [spans]);
 
   /** Top-level memory spans that have output. We exclude child spans
@@ -259,7 +277,7 @@ export function TraceDrawer({
             )}
           </div>
 
-          {/* ── Right: extracted memories ── shown only when present */}
+          {/* Right: extracted memories — shown only when present */}
           {hasMemories ? (
             <div className="relative w-[320px] shrink-0 overflow-hidden px-4 py-4">
               {/* Diagonal shimmer sweep: bottom-left → top-right */}
@@ -302,6 +320,32 @@ export function TraceDrawer({
             </div>
           ) : null}
         </div>
+
+        {/*
+          Footer — deep-links into the Observe Hub for this Langfuse
+          session. Opens in a new tab (this drawer is contextual; we
+          don't want to lose the user's place in the chat / thread).
+          Renders only when we have both ids; if Langfuse hasn't
+          surfaced a project id yet (e.g. trace fetch failed) we just
+          hide the row rather than rendering a dead button.
+        */}
+        {langfuseProjectId && conversationId ? (
+          <footer className="border-t border-border px-5 py-3 shrink-0">
+            <a
+              href={`${ROUTES.observeHub}?${new URLSearchParams({
+                project: langfuseProjectId,
+                session: conversationId.replace(/-/g, ""),
+              }).toString()}`}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-3 py-2 text-xs font-medium text-purple-200 transition-colors hover:bg-purple-500/15 hover:text-purple-100"
+              title="Open this conversation in the full Langfuse trace view (new tab)"
+            >
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+              View Detailed Trace
+            </a>
+          </footer>
+        ) : null}
       </aside>
     </>
   );
@@ -534,6 +578,33 @@ function buildTree(spans: DatapackTraceSpan[]): {
   roots.sort(sortByOffset);
 
   return { byId, childrenOf, roots };
+}
+
+/** Max depth from any root (root row = 0, first child row = 1, …). */
+function maxSpanTreeDepthFromRoots(
+  childrenOf: Record<string, string[]>,
+  roots: string[],
+): number {
+  let globalMax = 0;
+  const walk = (id: string, depth: number) => {
+    globalMax = Math.max(globalMax, depth);
+    for (const c of childrenOf[id] ?? []) walk(c, depth + 1);
+  };
+  for (const r of roots) walk(r, 0);
+  return globalMax;
+}
+
+/** When the forest depth is ≤ 1, collapse every span that has children by default. */
+function defaultCollapsedForShallowTree(
+  childrenOf: Record<string, string[]>,
+  roots: string[],
+): Record<string, boolean> {
+  if (maxSpanTreeDepthFromRoots(childrenOf, roots) > 1) return {};
+  const out: Record<string, boolean> = {};
+  for (const [parentId, kids] of Object.entries(childrenOf)) {
+    if (kids.length > 0) out[parentId] = true;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

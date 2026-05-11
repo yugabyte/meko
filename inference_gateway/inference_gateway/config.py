@@ -27,10 +27,9 @@ DEFAULT_AWS_REGION = "us-east-1"
 DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
     "https://app.mekodev.com",
     "https://cloud.mekodata.ai",
+    # "http://localhost:5173",
+    # "http://localhost:3010",
 )
-
-# "http://localhost:5173",
-# "http://localhost:3010",
 
 # Per the SessionStart hook from the meko MCP server: always use "agent".
 DEFAULT_AGENT_ID = "meko"
@@ -39,8 +38,14 @@ DEFAULT_AGENT_ID = "meko"
 # Override via `--max-history` flag or `INFERENCE_MAX_HISTORY` env var.
 DEFAULT_MAX_HISTORY_MESSAGES = 15
 
-# Top-K passed to MCP `memory_search` per turn.
-DEFAULT_MEMORY_TOP_K = 5
+# Top-K passed to MCP `memory_search` and `knowledgebase_search` per turn.
+# Bumped from 5 → 10 to give the relevance thresholds (MEMORY_MIN_SCORE,
+# KB_MAX_DISTANCE in chain.py) more material to keep the genuinely useful
+# hits from — Meko's KB embedding model has under-spread distances, so a
+# tight window risks the right chunk landing just outside it. After
+# threshold filtering you typically still end up with ~3–5 final hits,
+# and the prompt cost of the extra raw rows is negligible.
+DEFAULT_MEMORY_TOP_K = 10
 
 
 @dataclass(frozen=True)

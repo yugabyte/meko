@@ -24,6 +24,7 @@ import {
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
+import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/playground/data/sampleKnowledge";
 
 // Optional dev override for the MCP bearer. When unset (the normal case), we
 // fetch the token from /provision-status per datapack instead.
@@ -135,6 +136,19 @@ export default function PlaygroundPage() {
           ? "ready"
           : "processing";
 
+  // True when the bundled travel sample is uploaded for the active
+  // datapack. Drives the EmptyState — the example prompts are tailored
+  // to that sample, so we only show them when it's actually loaded.
+  const hasSampleKnowledge = useMemo(
+    () =>
+      (kbDocs ?? []).some((d) => {
+        const filename = (d.document_name || "").split("/").pop() ?? "";
+        // Tolerate the `<timestamp>_<name>` prefix the uploader prepends.
+        return filename.replace(/^\d+_/, "") === SAMPLE_KNOWLEDGE_FILENAME;
+      }),
+    [kbDocs],
+  );
+
   useEffect(() => {
     const ac = new AbortController();
     setDatapacksLoading(true);
@@ -217,6 +231,7 @@ export default function PlaygroundPage() {
           // the per-datapack token from /provision-status.
           userToken={DEV_MCP_TOKEN || mcpToken}
           knowledgeReadiness={knowledgeReadiness}
+          hasSampleKnowledge={hasSampleKnowledge}
           onTurnComplete={() => {
             setRefreshTick((t) => t + 1);
           }}

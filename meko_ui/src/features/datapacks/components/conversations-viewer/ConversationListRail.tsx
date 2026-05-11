@@ -23,8 +23,8 @@ import {
   listDatapackConversations,
   type DatapackConversation,
 } from "@/lib/mekoApi";
+import { MemoryIcon } from "@/components/conversation-telemetry";
 import { formatRelativeTime, useNowMs } from "./useRelativeTime";
-import { MemoryIcon } from "./MemoryIcon";
 
 /** Page size for the infinite-scroll. Same as the API default; small
  *  enough to keep first paint snappy, big enough that most users won't

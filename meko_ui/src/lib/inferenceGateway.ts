@@ -35,6 +35,45 @@ export type GatewayChatRequest = {
   datapack_id?: string | null;
 };
 
+/** One structured memory hit returned by `memory_search`. `kind`
+ *  separates Mem0's three parallel arrays:
+ *    "mem"      — vector-matched fact
+ *    "graph"    — Apache AGE graph triple (relations)
+ *    "promoted" — relation elevated to the tenant KB
+ */
+export type MemoryHit = {
+  kind: "mem" | "graph" | "promoted";
+  text: string;
+  /** Mem0 cosine-similarity in [0..1]. Missing for graph triples. */
+  score?: number;
+  char_count?: number;
+};
+
+/** One structured KB chunk hit from `knowledgebase_search`. */
+export type KbHit = {
+  /** `document_id` (UUID) or its basename when the source carried a path.
+   *  The UI groups chunks by this value so each document shows up once. */
+  document_id: string;
+  chunk_text: string;
+  /** Normalized [0..1] similarity (1 - cosine_distance, clamped) so it
+   *  sorts the same way as memory scores. */
+  score?: number;
+  /** Raw cosine distance from pgvector. Kept for debugging / tuning. */
+  distance?: number;
+  char_count?: number;
+};
+
+/** One operation in the per-turn observability timeline. `name` matches
+ *  the MCP tool / pipeline stage; `status` distinguishes successful
+ *  invocations from errors (chain continued in best-effort mode) and
+ *  skips (trivial query, missing datapack id, fire-and-forget). */
+export type ProcessingStep = {
+  name: string;
+  duration_ms: number;
+  status: "ok" | "error" | "skipped";
+  detail?: string;
+};
+
 /** Response shape from POST /chat. */
 export type GatewayChatResponse = {
   message: string;
@@ -44,6 +83,21 @@ export type GatewayChatResponse = {
    *  deep-link into the trace drawer. Empty when persistence didn't
    *  return one (best-effort). */
   message_id?: string;
+  /** Bulleted retrieval context fed into the LLM's system prompt. Kept
+   *  for raw-prompt debug UX; the UI's Agent Reasoning panel renders
+   *  the structured `memory_hits` / `kb_hits` arrays below instead. */
+  memory_context?: string;
+  kb_context?: string;
+  /** Structured retrieval hits — drives the per-bubble Agent Reasoning
+   *  panel (groups KB chunks by document, shows score per hit). */
+  memory_hits?: MemoryHit[];
+  kb_hits?: KbHit[];
+  /** Per-turn pipeline timeline (conversation_create, memory_search,
+   *  knowledgebase_search, llm_invoke, conversation_add_message,
+   *  memory_add). Rendered as a short list in the Agent Reasoning panel
+   *  so users see what ran and how long it took without opening the
+   *  full trace drawer. */
+  processing_steps?: ProcessingStep[];
 };
 
 export async function postChat(body: GatewayChatRequest): Promise<GatewayChatResponse> {

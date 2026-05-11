@@ -45,6 +45,9 @@ export type PlaygroundChatProps = {
   userToken: string | null;
   /** Knowledge readiness for the active datapack. Chat is gated on `ready`. */
   knowledgeReadiness: KnowledgeReadiness;
+  /** True when the bundled travel sample (`europe-travel-guide.md`) is in
+   *  the KB — drives the EmptyState example prompts. */
+  hasSampleKnowledge: boolean;
   /** Fired after each successful turn so the right rail can refetch memories/conversations. */
   onTurnComplete?: () => void;
   /** Fired when the user clicks "View trace" on an assistant message.
@@ -58,6 +61,7 @@ export function PlaygroundChat({
   userId,
   userToken,
   knowledgeReadiness,
+  hasSampleKnowledge,
   onTurnComplete,
   onOpenTrace,
 }: PlaygroundChatProps) {
@@ -155,6 +159,16 @@ export function PlaygroundChat({
           // Empty when the gateway couldn't capture it — that's fine; the
           // View trace button just won't render for that one bubble.
           langfuseMessageId: resp.message_id || undefined,
+          // Bulleted strings kept for parity / debug; the panel reads
+          // the structured hits below.
+          memoryContext: resp.memory_context || "",
+          kbContext: resp.kb_context || "",
+          // Structured grounding context + per-turn timeline. The Agent
+          // Reasoning panel renders these directly so chunks group by
+          // document and each hit shows its score.
+          memoryHits: resp.memory_hits ?? [],
+          kbHits: resp.kb_hits ?? [],
+          processingSteps: resp.processing_steps ?? [],
         };
         setMessages((prev) => [...prev, assistantMsg]);
         onTurnComplete?.();
@@ -229,6 +243,7 @@ export function PlaygroundChat({
           <EmptyState
             disabled={inputDisabled || !datapackName}
             onPick={(prompt) => void send(prompt)}
+            showSamplePrompts={hasSampleKnowledge}
           />
         ) : (
           <div className="mx-auto w-full max-w-3xl space-y-5 px-6 py-6">

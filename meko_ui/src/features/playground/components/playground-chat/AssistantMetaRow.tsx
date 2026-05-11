@@ -96,10 +96,16 @@ export function AssistantMetaRow({
             title="Open the Langfuse trace for this message"
           >
             <Activity className="h-3 w-3" aria-hidden />
-            View trace
+            View decision trace
           </button>
         </>
       ) : null}
+      {/*
+        Note: the per-bubble Observe deep-link used to live here too. It's
+        been moved into the TraceDrawer's footer ("View Detailed Trace")
+        so the meta row stays compact and the deep-link sits next to the
+        trace it links to.
+      */}
     </div>
   );
 }

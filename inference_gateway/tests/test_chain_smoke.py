@@ -251,9 +251,12 @@ async def test_kb_search_skipped_when_no_datapack_id() -> None:
     }
     store = InMemorySessionStore()
 
+    # Use a non-trivial message so the trivial-query short-circuit doesn't
+    # mask what this test is actually verifying (kb_search skipped because
+    # of missing datapack_id, not because the query is "hi").
     out = await run_chat_turn(
         cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="hi", datapack_id=None,
+        session_id="s1", user_message="plan a trip to spain", datapack_id=None,
     )
     assert out.assistant_text == "fine"
 
@@ -375,6 +378,89 @@ async def test_unwraps_langchain_mcp_content_block_format() -> None:
     # Memory context unwrapped + bullet-formatted into the system prompt
     sys_msg = llm.calls[0][0].content
     assert "user prefers hiking" in sys_msg
+
+
+async def test_trivial_query_short_circuits_retrieval() -> None:
+    """A greeting like "hi" must NOT trigger memory_search or kb_search.
+
+    Vector search returns top-K regardless of relevance, so a vague query
+    embeds into five random hits that smear the system prompt. The chain
+    skips both round-trips and feeds the LLM empty grounding context
+    (which renders as `(none yet)` in the prompt).
+    """
+    cfg = _make_cfg()
+    llm = _FakeLLM(["hi back"])
+    create = _mock_tool({"conversation_id": "c1"})
+    # The mocks would error if invoked — we want to PROVE they aren't.
+    mem_search = MagicMock()
+    mem_search.ainvoke = AsyncMock(side_effect=AssertionError("memory_search must not be called for trivial query"))
+    kb_search = MagicMock()
+    kb_search.ainvoke = AsyncMock(side_effect=AssertionError("kb_search must not be called for trivial query"))
+    addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
+    addmem = _mock_tool({"status": "accepted"})
+
+    tools = {
+        "conversation_create": create,
+        "memory_search": mem_search,
+        "knowledgebase_search": kb_search,
+        "conversation_add_message": addmsg,
+        "memory_add": addmem,
+    }
+    store = InMemorySessionStore()
+
+    out = await run_chat_turn(
+        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+        session_id="s1", user_message="hi", datapack_id="dp-1",
+    )
+    assert out.assistant_text == "hi back"
+
+    # Retrieval round-trips skipped.
+    mem_search.ainvoke.assert_not_awaited()
+    kb_search.ainvoke.assert_not_awaited()
+
+    # System prompt rendered with empty placeholders for both retrieval blocks.
+    sys_content = llm.calls[0][0].content
+    assert sys_content.count("(none yet)") == 2  # memory + kb
+
+    # `memory_add` still fires (the turn itself is real data worth extracting from).
+    await _drain_background_tasks()
+    addmem.ainvoke.assert_awaited_once()
+
+    # And the returned ChatTurnResult still carries empty context for the
+    # UI's Agent Reasoning panel — which self-hides when both are empty.
+    assert out.memory_context == ""
+    assert out.kb_context == ""
+
+
+async def test_real_question_still_triggers_retrieval() -> None:
+    """Counterpart to the trivial-query test — verifies the short-circuit
+    doesn't accidentally skip legitimate prompts. A genuine question must
+    still hit both searches."""
+    cfg = _make_cfg()
+    llm = _FakeLLM(["ok"])
+    create = _mock_tool({"conversation_id": "c1"})
+    mem_search = _mock_tool({"results": []})
+    kb_search = _mock_tool({"results": []})
+    addmsg = _mock_tool({"status": "accepted"})
+    addmem = _mock_tool({"status": "accepted"})
+
+    tools = {
+        "conversation_create": create,
+        "memory_search": mem_search,
+        "knowledgebase_search": kb_search,
+        "conversation_add_message": addmsg,
+        "memory_add": addmem,
+    }
+    store = InMemorySessionStore()
+
+    await run_chat_turn(
+        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+        session_id="s1", user_message="what does Raj like?", datapack_id="dp-1",
+    )
+
+    mem_search.ainvoke.assert_awaited_once()
+    kb_search.ainvoke.assert_awaited_once()
+    await _drain_background_tasks()
 
 
 async def test_missing_conversation_create_raises_clearly() -> None:
