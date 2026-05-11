@@ -9,18 +9,20 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"meko/api_server/internal/repository"
 )
 
 // ServerConfig holds the configuration for the API server.
 type ServerConfig struct {
-	DB                   *sql.DB
-	CognitoRegion        string
-	CognitoPoolID        string
-	CognitoClientID      string
-	CognitoClientSecret  string
-	CognitoDomain        string
-	LangfuseHost         string
-	LangfuseAdminAPIKey  string
+	DB                  *sql.DB
+	CognitoRegion       string
+	CognitoPoolID       string
+	CognitoClientID     string
+	CognitoClientSecret string
+	CognitoDomain       string
+	LangfuseHost        string
+	LangfuseAdminAPIKey string
 	// Optional Langfuse Postgres pool. Nil when unconfigured; dependent
 	// endpoints return 503.
 	LangfuseDB           *sql.DB
@@ -33,12 +35,14 @@ type ServerConfig struct {
 	MemoryListSkipVectorSort bool
 	Port                     int
 	CRDNamespace             string
-	S3AccessKey         string
-	S3AuthMode          string
-	S3Bucket            string
-	S3Endpoint          string
-	S3Region            string
-	S3SecretKey         string
+	S3AccessKey              string
+	S3AuthMode               string
+	S3Bucket                 string
+	S3Endpoint               string
+	S3Region                 string
+	S3SecretKey              string
+	MCPServerURL             string
+	DeployEnv                repository.DeployEnv
 }
 
 // Run starts the Echo server and blocks until a shutdown signal is received.

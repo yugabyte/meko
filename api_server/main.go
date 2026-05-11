@@ -25,6 +25,7 @@ import (
 
 	"meko/api_server/internal/api"
 	"meko/api_server/internal/db"
+	"meko/api_server/internal/repository"
 )
 
 func run() error {
@@ -75,6 +76,7 @@ func run() error {
 	// summary + embedding pre-step and order by meko_created_at DESC. Set to
 	// false to restore the legacy vector-similarity sort.
 	memoryListSkipVectorSort := flag.Bool("memory-list-skip-vector-sort", envBoolOrDefault("MEMORY_LIST_SKIP_VECTOR_SORT", true), "Skip OpenAI vector embedding for memory/learning list and sort by created_at DESC")
+	deployEnv := flag.String("deploy-env", envOrDefault("MEKO_DEPLOY_ENV", "prod"), "deployment environment: prod or dev")
 
 	// S3 configuration
 	s3AuthMode := flag.String("s3-auth-mode", envOrDefault("S3_AUTH_MODE", "minio"), "S3 auth mode: minio, iam-user, iam-role")
@@ -166,6 +168,8 @@ func run() error {
 		S3SecretKey:              *s3SecretKey,
 		S3Bucket:                 *s3Bucket,
 		S3Region:                 *s3Region,
+		MCPServerURL:             mcpServerURLForEnv(repository.ParseDeployEnv(*deployEnv)),
+		DeployEnv:                repository.ParseDeployEnv(*deployEnv),
 	})
 }
 
@@ -199,4 +203,16 @@ func envBoolOrDefault(key string, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+const (
+	mcpServerURLProd = "https://mcp.mekodata.ai/mcp"
+	mcpServerURLDev  = "https://mcp.mekodev.com/mcp"
+)
+
+func mcpServerURLForEnv(env repository.DeployEnv) string {
+	if env == repository.DeployEnvDev {
+		return mcpServerURLDev
+	}
+	return mcpServerURLProd
 }

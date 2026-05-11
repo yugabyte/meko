@@ -14,6 +14,22 @@ import (
 	"meko/api_server/internal/models"
 )
 
+// DeployEnv identifies the deployment environment.
+type DeployEnv string
+
+const (
+	DeployEnvProd DeployEnv = "prod"
+	DeployEnvDev  DeployEnv = "dev"
+)
+
+// ParseDeployEnv parses a string into a DeployEnv, defaulting to prod for unknown values.
+func ParseDeployEnv(s string) DeployEnv {
+	if DeployEnv(s) == DeployEnvDev {
+		return DeployEnvDev
+	}
+	return DeployEnvProd
+}
+
 // QuoteIdent quotes a SQL identifier (table, column, role) by wrapping
 // it in double quotes and escaping any embedded double quotes. Used
 // when building dynamic SQL where bind parameters cannot be applied
@@ -33,12 +49,14 @@ const DefaultAgentID = "meko_agent"
 // constraint that lets us look up by name for the URL-friendly
 // /datapacks/:name routes.
 type DatapackRepo struct {
-	db *sql.DB
+	db           *sql.DB
+	mcpServerURL string
+	deployEnv    DeployEnv
 }
 
 // NewDatapackRepo creates a new DatapackRepo.
-func NewDatapackRepo(db *sql.DB) *DatapackRepo {
-	return &DatapackRepo{db: db}
+func NewDatapackRepo(db *sql.DB, mcpServerURL string, deployEnv DeployEnv) *DatapackRepo {
+	return &DatapackRepo{db: db, mcpServerURL: mcpServerURL, deployEnv: deployEnv}
 }
 
 // CreateDatapackParams holds the inputs for registering a new datapack.
@@ -521,13 +539,14 @@ func (r *DatapackRepo) Delete(userID, name string) error {
 // by GetDatapackProvisionDetails (and surfaced through the per-
 // datapack /provision-status endpoint).
 type DefaultDatapackDetails struct {
-	DatapackID   string `json:"datapack_id"`
-	DatapackName string `json:"datapack_name"`
-	MCPServerURL string `json:"mcp_server_url"`
-	MCPAPIKey    string `json:"mcp_api_key"`
-	DBUserName   string `json:"db_user_name"`
-	DBPassword   string `json:"db_password"`
-	DBConnStr    string `json:"db_conn_str"`
+	DatapackID   string    `json:"datapack_id"`
+	DatapackName string    `json:"datapack_name"`
+	MCPServerURL string    `json:"mcp_server_url"`
+	MCPAPIKey    string    `json:"mcp_api_key"`
+	DBUserName   string    `json:"db_user_name"`
+	DBPassword   string    `json:"db_password"`
+	DBConnStr    string    `json:"db_conn_str"`
+	DeployEnv    DeployEnv `json:"deploy_env"`
 }
 
 // GetDatapackProvisionDetails returns the connection details for the
@@ -557,7 +576,8 @@ func (r *DatapackRepo) GetDatapackProvisionDetails(datapackID string) (*DefaultD
 		return nil, fmt.Errorf("failed to get datapack provision details: %w", err)
 	}
 
-	d.MCPServerURL = "https://mcp.mekodata.ai/mcp"
+	d.MCPServerURL = r.mcpServerURL
+	d.DeployEnv = r.deployEnv
 	return &d, nil
 }
 

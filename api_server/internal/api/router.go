@@ -42,7 +42,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	accountRepo := repository.NewAccountRepo(cfg.DB)
 	ybaRepo := repository.NewYBARepo(cfg.DB)
-	dpRepo := repository.NewDatapackRepo(cfg.DB)
+	dpRepo := repository.NewDatapackRepo(cfg.DB, cfg.MCPServerURL, cfg.DeployEnv)
 
 	ybaSvc := service.NewYBAService(ybaRepo)
 

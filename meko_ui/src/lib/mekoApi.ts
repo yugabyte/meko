@@ -216,6 +216,7 @@ export type ProvisionStatus = {
   db_user_name: string;
   db_password: string;
   db_conn_str: string;
+  deploy_env: "prod" | "dev";
 };
 
 const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(
