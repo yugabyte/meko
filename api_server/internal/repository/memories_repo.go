@@ -169,6 +169,11 @@ func (repo *MemoriesRepo) ListByFilter(
 		return nil, 0, fmt.Errorf("memories count query: %w", err)
 	}
 
+	if total == 0 {
+		slog.Info("memories list: no memories found", "datapack_id", filter.DatapackID, "user_type", filter.UserType)
+		return []models.Memory{}, 0, nil
+	}
+
 	const selectCols = `
 			id::text,
 			COALESCE(payload->>'data', '') AS data,
