@@ -44,6 +44,7 @@ type mockCognito struct {
 	loginFn                 func(ctx context.Context, email, password string) (*auth.Result, error)
 	completeNewPasswordFn   func(ctx context.Context, email, newPassword, session, firstName, lastName string) (*auth.Result, error)
 	logoutFn                func(ctx context.Context, accessToken string) error
+	changePasswordFn        func(ctx context.Context, accessToken, previousPassword, proposedPassword string) error
 }
 
 func (m *mockCognito) SignUp(
@@ -106,6 +107,15 @@ func (m *mockCognito) Logout(
 	ctx context.Context, accessToken string,
 ) error {
 	return m.logoutFn(ctx, accessToken)
+}
+
+func (m *mockCognito) ChangePassword(
+	ctx context.Context, accessToken, previousPassword, proposedPassword string,
+) error {
+	if m.changePasswordFn != nil {
+		return m.changePasswordFn(ctx, accessToken, previousPassword, proposedPassword)
+	}
+	return nil
 }
 
 // --- mock AccountStore ---

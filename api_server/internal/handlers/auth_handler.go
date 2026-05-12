@@ -155,6 +155,59 @@ func (h *AuthHandler) ForgotPasswordConfirm(c echo.Context) error {
 	})
 }
 
+// ChangePassword handles POST /api/v1/auth/change-password (Cognito ChangePassword).
+//
+// Identifies the user via the access token attached to the request
+// (cookie first, then `Authorization: Bearer …` header — same fallback
+// as Logout). Cognito's ChangePassword API takes the token + the
+// previous & proposed passwords; we don't (and can't) send a user_id.
+//
+//	@Summary	Change password for a signed-in user
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.ChangePasswordRequest	true	"Change-password payload"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/auth/change-password [post]
+func (h *AuthHandler) ChangePassword(c echo.Context) error {
+	accessToken := ""
+	if cookie, err := c.Cookie("access_token"); err == nil {
+		accessToken = strings.TrimSpace(cookie.Value)
+	}
+	if accessToken == "" {
+		header := c.Request().Header.Get("Authorization")
+		if header != "" {
+			parts := strings.SplitN(header, " ", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+				accessToken = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	if accessToken == "" {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "access token is required")
+	}
+
+	var req service.ChangePasswordRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+
+	if err := h.svc.ChangePasswordWithToken(
+		c.Request().Context(), accessToken, req,
+	); err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+
+	return ok(c, http.StatusOK, map[string]string{
+		"message": "password updated",
+	})
+}
+
 // Login handles POST /api/v1/auth/login.
 //
 // On success returns either tokens (and sets HttpOnly auth cookies)

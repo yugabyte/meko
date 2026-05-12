@@ -59,6 +59,11 @@ type mockCognitoAPI struct {
 		ctx context.Context, params *cip.RespondToAuthChallengeInput,
 		optFns ...cipOpt,
 	) (*cip.RespondToAuthChallengeOutput, error)
+
+	changePasswordFn func(
+		ctx context.Context, params *cip.ChangePasswordInput,
+		optFns ...cipOpt,
+	) (*cip.ChangePasswordOutput, error)
 }
 
 func (m *mockCognitoAPI) SignUp(
@@ -135,6 +140,17 @@ func (m *mockCognitoAPI) ConfirmForgotPassword(
 		return m.confirmForgotPasswordFn(ctx, params, optFns...)
 	}
 	return &cip.ConfirmForgotPasswordOutput{}, nil
+}
+
+func (m *mockCognitoAPI) ChangePassword(
+	ctx context.Context,
+	params *cip.ChangePasswordInput,
+	optFns ...func(*cip.Options),
+) (*cip.ChangePasswordOutput, error) {
+	if m.changePasswordFn != nil {
+		return m.changePasswordFn(ctx, params, optFns...)
+	}
+	return &cip.ChangePasswordOutput{}, nil
 }
 
 func (m *mockCognitoAPI) RespondToAuthChallenge(

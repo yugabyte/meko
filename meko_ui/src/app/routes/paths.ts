@@ -11,6 +11,8 @@ export const ROUTES = {
   playground: "/playground",
   datapacks: "/datapacks",
   observeHub: "/observe-hub",
+  /** Account-scoped settings page (profile + change password). */
+  settings: "/settings",
 } as const;
 
 /** Default datapack provisioned for new accounts; used from onboarding (“Choose your tool” → configure). */

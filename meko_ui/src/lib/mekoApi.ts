@@ -805,6 +805,34 @@ export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
   );
 }
 
+/** Payload for the signed-in change-password flow. Mirrors Cognito's
+ *  `ChangePassword` API (PreviousPassword + ProposedPassword) but takes
+ *  a `confirm_password` so the BE can echo the same validation we run
+ *  in the UI. */
+export type ChangePasswordPayload = {
+  old_password: string;
+  new_password: string;
+  confirm_password: string;
+};
+
+/**
+ * POST /auth/change-password — Cognito ChangePassword on the current
+ * session. Distinct from the unauthenticated forgot-password flow
+ * (which goes through email + code). Requires the user to be signed in;
+ * the BE uses the session cookies to identify the account.
+ *
+ * NOTE: Backend handler is not yet implemented at the time of writing —
+ * the UI will surface the standard 404/501 message until the Go handler
+ * lands. Once the handler exists this client function works as-is.
+ */
+export async function changePassword(payload: ChangePasswordPayload) {
+  return request<{ message: string }>("/auth/change-password", "POST", {
+    old_password: payload.old_password,
+    new_password: payload.new_password,
+    confirm_password: payload.confirm_password,
+  });
+}
+
 export async function bootstrapObserveSession() {
   return request<{ message: string; org_id?: string }>("/observe/session/bootstrap", "POST");
 }

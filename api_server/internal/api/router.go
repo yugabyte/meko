@@ -218,6 +218,10 @@ func registerAuthRoutes(
 	authGroup.POST("/login", authH.Login)
 	authGroup.POST("/complete-new-password", authH.CompleteNewPassword)
 	authGroup.POST("/logout", authH.Logout)
+	// Change password is gated by requireAuth so the access-token cookie
+	// is guaranteed present when the handler runs; Cognito then verifies
+	// the previous-password against the user resolved from that token.
+	authGroup.POST("/change-password", authH.ChangePassword, requireAuth)
 	authGroup.GET("/me", authH.Me, requireAuth)
 	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
 

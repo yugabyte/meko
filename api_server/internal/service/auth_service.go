@@ -33,6 +33,10 @@ type CognitoProvider interface {
 		email, newPassword, session, firstName, lastName string,
 	) (*auth.Result, error)
 	Logout(ctx context.Context, accessToken string) error
+	ChangePassword(
+		ctx context.Context,
+		accessToken, previousPassword, proposedPassword string,
+	) error
 }
 
 // ErrForgotPasswordNoAccount is returned when Cognito has no user for this email
@@ -455,6 +459,61 @@ func (s *AuthService) Logout(
 	}
 
 	slog.Info("user logout succeeded")
+	return nil
+}
+
+// ChangePasswordRequest is the body for POST /auth/change-password.
+// The user is identified by the AccessToken extracted from the request
+// (cookie or Authorization header) — there's no user_id on the wire.
+type ChangePasswordRequest struct {
+	OldPassword     string `json:"old_password"`
+	NewPassword     string `json:"new_password"`
+	ConfirmPassword string `json:"confirm_password"`
+}
+
+// ChangePasswordWithToken validates the request body and delegates to
+// Cognito ChangePassword. Cognito itself enforces the password policy on
+// the new value (length, character classes, history), so we only do
+// minimum-sanity checks here:
+//   - all three fields present
+//   - new == confirm
+//   - new ≠ old (cheap guard so we don't waste a Cognito round-trip
+//     on the obvious mistake)
+//
+// The handler maps typed errors (ErrPasswordTooShort, ErrPasswordMismatch)
+// to HTTP 400 VALIDATION_ERROR. Cognito's own errors (wrong old password,
+// policy violation, etc.) fall through to the existing classifier.
+func (s *AuthService) ChangePasswordWithToken(
+	ctx context.Context, accessToken string, req ChangePasswordRequest,
+) error {
+	if accessToken == "" {
+		return fmt.Errorf("access token is required")
+	}
+	if req.OldPassword == "" {
+		return fmt.Errorf("old password is required")
+	}
+	// Re-use the same min-length sentinel the forgot-password flow uses
+	// (`minForgotPasswordLen`) so the handler maps the response
+	// identically across both surfaces.
+	if len(req.NewPassword) < minForgotPasswordLen {
+		return ErrPasswordTooShort
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		return ErrPasswordMismatch
+	}
+	if req.NewPassword == req.OldPassword {
+		return fmt.Errorf("new password must be different from the current one")
+	}
+
+	slog.Info("user change password attempt")
+
+	if err := s.cognito.ChangePassword(
+		ctx, accessToken, req.OldPassword, req.NewPassword,
+	); err != nil {
+		return fmt.Errorf("cognito change password: %w", err)
+	}
+
+	slog.Info("user change password succeeded")
 	return nil
 }
 

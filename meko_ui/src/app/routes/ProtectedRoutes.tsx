@@ -7,6 +7,7 @@ import ObservePage from "@/features/observe/pages/ObservePage";
 import HomePage from "@/features/home/pages/HomePage";
 import OnboardingPage from "@/features/onboarding/pages/OnboardingPage";
 import PlaygroundPage from "@/features/playground/pages/PlaygroundPage";
+import SettingsPage from "@/features/settings/pages/SettingsPage";
 
 type Props = {
   isOnboardingRoute: boolean;
@@ -27,8 +28,10 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const isHome = pathname === ROUTES.home || pathname.startsWith(`${ROUTES.home}/`);
   const isPlayground =
     pathname === ROUTES.playground || pathname.startsWith(`${ROUTES.playground}/`);
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes home, observe, playground. */
-  const isDatapacks = !isObserve && !isHome && !isPlayground;
+  const isSettings =
+    pathname === ROUTES.settings || pathname.startsWith(`${ROUTES.settings}/`);
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes home, observe, playground, settings. */
+  const isDatapacks = !isObserve && !isHome && !isPlayground && !isSettings;
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden text-foreground">
@@ -41,6 +44,9 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
           </div>
           <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isPlayground ? "contents" : "none" }}>
             <PlaygroundPage />
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isSettings ? "contents" : "none" }}>
+            <SettingsPage />
           </div>
           <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isDatapacks ? "contents" : "none" }}>
             <DatapacksPage />

@@ -84,6 +84,15 @@ type CognitoAPI interface {
 		params *cip.ConfirmForgotPasswordInput,
 		optFns ...func(*cip.Options),
 	) (*cip.ConfirmForgotPasswordOutput, error)
+
+	// ChangePassword changes the password for a signed-in user. The user
+	// is identified by the AccessToken (Cognito resolves the sub from the
+	// JWT signature) — no email/user_id needed.
+	ChangePassword(
+		ctx context.Context,
+		params *cip.ChangePasswordInput,
+		optFns ...func(*cip.Options),
+	) (*cip.ChangePasswordOutput, error)
 }
 
 // Result holds the tokens returned by a successful login. When
@@ -462,6 +471,35 @@ func (c *CognitoClient) Logout(
 	}
 
 	slog.Info("cognito logout succeeded")
+	return nil
+}
+
+// ChangePassword changes the password for the user identified by
+// `accessToken`. Cognito verifies `previousPassword` against the current
+// stored value and applies `proposedPassword` — both arguments are
+// validated by Cognito (password policy compliance, etc.) and any
+// failure (wrong old password, weak new one) surfaces as a typed
+// `classifyCognitoErr` value the handler maps to HTTP 400 / 401.
+//
+// Unlike forgot-password, this flow does NOT require an emailed code —
+// the access token IS the identity proof. So the user must be signed in.
+func (c *CognitoClient) ChangePassword(
+	ctx context.Context,
+	accessToken, previousPassword, proposedPassword string,
+) error {
+	input := &cip.ChangePasswordInput{
+		AccessToken:      &accessToken,
+		PreviousPassword: &previousPassword,
+		ProposedPassword: &proposedPassword,
+	}
+
+	_, err := c.api.ChangePassword(ctx, input)
+	if err != nil {
+		slog.Warn("cognito change password failed", "error", err)
+		return classifyCognitoErr(err)
+	}
+
+	slog.Info("cognito change password succeeded")
 	return nil
 }
 
