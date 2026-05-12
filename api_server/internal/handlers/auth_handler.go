@@ -173,22 +173,9 @@ func (h *AuthHandler) ForgotPasswordConfirm(c echo.Context) error {
 //	@Security	BearerAuth
 //	@Router		/auth/change-password [post]
 func (h *AuthHandler) ChangePassword(c echo.Context) error {
-	accessToken := ""
-	if cookie, err := c.Cookie("access_token"); err == nil {
-		accessToken = strings.TrimSpace(cookie.Value)
-	}
-	if accessToken == "" {
-		header := c.Request().Header.Get("Authorization")
-		if header != "" {
-			parts := strings.SplitN(header, " ", 2)
-			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-				accessToken = strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	if accessToken == "" {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "access token is required")
+	accessToken, err := h.extractAccessToken(c)
+	if err != nil {
+		return err
 	}
 
 	var req service.ChangePasswordRequest
@@ -206,6 +193,36 @@ func (h *AuthHandler) ChangePassword(c echo.Context) error {
 	return ok(c, http.StatusOK, map[string]string{
 		"message": "password updated",
 	})
+}
+
+// extractAccessToken pulls the Cognito access token off the request. It
+// looks at the `access_token` cookie first (the default for browser
+// clients post-login) and falls back to `Authorization: Bearer …` for
+// headless clients (CLI, scripts).
+//
+// Returns `(token, nil)` on success. On failure, returns `("", err)`
+// where `err` is already an `apiError` with HTTP 401 — callers should
+// `return err` directly. Used by Logout and ChangePassword today, and
+// anything else that needs the raw Cognito token outside of the standard
+// `requireAuth` middleware path (e.g. operations that call Cognito APIs
+// directly which require AccessToken as a parameter, like ChangePassword
+// and GlobalSignOut).
+func (h *AuthHandler) extractAccessToken(c echo.Context) (string, error) {
+	if cookie, err := c.Cookie("access_token"); err == nil {
+		if v := strings.TrimSpace(cookie.Value); v != "" {
+			return v, nil
+		}
+	}
+	if header := c.Request().Header.Get("Authorization"); header != "" {
+		parts := strings.SplitN(header, " ", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			if v := strings.TrimSpace(parts[1]); v != "" {
+				return v, nil
+			}
+		}
+	}
+	return "", apiError(c, http.StatusUnauthorized,
+		"UNAUTHORIZED", "access token is required")
 }
 
 // Login handles POST /api/v1/auth/login.
@@ -296,22 +313,9 @@ func (h *AuthHandler) CompleteNewPassword(c echo.Context) error {
 //	@Security	BearerAuth
 //	@Router		/auth/logout [post]
 func (h *AuthHandler) Logout(c echo.Context) error {
-	accessToken := ""
-	if cookie, err := c.Cookie("access_token"); err == nil {
-		accessToken = strings.TrimSpace(cookie.Value)
-	}
-	if accessToken == "" {
-		header := c.Request().Header.Get("Authorization")
-		if header != "" {
-			parts := strings.SplitN(header, " ", 2)
-			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-				accessToken = strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	if accessToken == "" {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "access token is required")
+	accessToken, err := h.extractAccessToken(c)
+	if err != nil {
+		return err
 	}
 
 	if err := h.svc.Logout(c.Request().Context(), accessToken); err != nil {
