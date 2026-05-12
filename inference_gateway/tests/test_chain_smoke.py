@@ -63,20 +63,78 @@ def _mock_tool(response: Any) -> MagicMock:
 
 
 class _FakeLLM:
-    """Minimal stand-in for `BaseChatModel` — returns scripted AIMessages."""
+    """Minimal stand-in for `BaseChatModel`.
 
-    def __init__(self, responses: list[str]) -> None:
+    Each scripted entry in `responses` may be either:
+      - a `str`  — text content of the reply, no tool calls
+      - a `dict` — `{"content": "...", "tool_calls": [ToolCall, ...]}`
+                   exercise the `save_user_facts` extraction flow
+
+    `bind_tools(...)` returns `self` (no-op) so production code paths
+    like `llm.bind_tools([...]).ainvoke(...)` work — tests opt into a
+    tool-call response by scripting a dict at the right position.
+
+    The chain calls `ainvoke` TWICE per turn now (main reply + the
+    fire-and-forget extraction call inside `_add_memory`), so tests
+    should script two responses per `run_chat_turn` invocation.
+    """
+
+    def __init__(self, responses: "list[str | dict]") -> None:
         self._responses = list(responses)
         self.calls: list[list[Any]] = []
 
+    def bind_tools(self, _tools: Any) -> "_FakeLLM":
+        # No-op binding: scripted response queue is consumed regardless
+        # of whether a tool was bound. Tests opt in to tool-call shape
+        # by scripting a dict response.
+        return self
+
     async def ainvoke(self, messages: list[Any], *_, **__) -> AIMessage:
         self.calls.append(messages)
-        return AIMessage(content=self._responses.pop(0))
+        if not self._responses:
+            # Empty queue: return a neutral AIMessage so background tasks
+            # that need a 2nd response can still finish without raising
+            # IndexError. Tests asserting on exact call counts should
+            # script enough responses to cover both the main and
+            # extraction calls.
+            return AIMessage(content="")
+        resp = self._responses.pop(0)
+        if isinstance(resp, dict):
+            return AIMessage(
+                content=resp.get("content", ""),
+                tool_calls=resp.get("tool_calls", []),
+            )
+        return AIMessage(content=resp)
 
 
 async def test_full_turn_wires_everything() -> None:
     cfg = _make_cfg()
-    llm = _FakeLLM(["hello back"])
+    # Two scripted LLM responses:
+    #   1) Main chat reply ("hello back")
+    #   2) Extraction call — returns a `save_user_facts` tool call
+    #      that the fire-and-forget memory pipeline parses and forwards
+    #      to Mem0.
+    llm = _FakeLLM(
+        [
+            "hello back",
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "name": "save_user_facts",
+                        "args": {
+                            "facts": [
+                                "User is planning a trip",
+                                "User wants budget travel",
+                            ],
+                        },
+                        "id": "tc-1",
+                        "type": "tool_call",
+                    }
+                ],
+            },
+        ]
+    )
     create = _mock_tool({"conversation_id": "conv-uuid-1"})
     mem_search = _mock_tool({"results": [{"memory": "user prefers hiking"}]})
     kb_search = _mock_tool(
@@ -163,20 +221,31 @@ async def test_full_turn_wires_everything() -> None:
     assert addmem_args["agent_id"] == "agent"
     assert addmem_args["datapack_id"] == "dp-1"
     parsed = json.loads(addmem_args["messages"])
-    assert parsed == [
-        {"role": "user", "content": "plan a trip"},
-        {"role": "assistant", "content": "hello back"},
-    ]
+    # memory_add now receives the user message PLUS the user-attributed
+    # facts the extraction LLM call surfaced via `save_user_facts`.
+    # The facts are bulleted underneath so Mem0's extractor sees clean
+    # user-perspective input and labels every resulting memory with
+    # "User …" — sidestepping the speaker-attribution pollution Mem0
+    # produced when we fed it the raw assistant reply.
+    assert len(parsed) == 1
+    assert parsed[0]["role"] == "user"
+    content = parsed[0]["content"]
+    assert "plan a trip" in content
+    assert "- User is planning a trip" in content
+    assert "- User wants budget travel" in content
+    # Two LLM calls: main chat (index 0) + background extraction (index 1).
+    assert len(llm.calls) == 2
 
-    # LLM saw [system, user]; system contains BOTH memory and KB context.
-    assert len(llm.calls) == 1
-    msgs = llm.calls[0]
-    assert isinstance(msgs[0], SystemMessage)
-    assert "user prefers hiking" in msgs[0].content       # memory_context
-    assert "Patagonia trek W circuit" in msgs[0].content  # kb_context
-    assert "[europe.md]" in msgs[0].content               # KB source attribution
-    assert isinstance(msgs[-1], HumanMessage)
-    assert msgs[-1].content == "plan a trip"
+    # The MAIN call saw [system, user]; system contains BOTH memory and
+    # KB context. The extraction call has its own system prompt — we
+    # only assert on the main call here.
+    main_msgs = llm.calls[0]
+    assert isinstance(main_msgs[0], SystemMessage)
+    assert "user prefers hiking" in main_msgs[0].content       # memory_context
+    assert "Patagonia trek W circuit" in main_msgs[0].content  # kb_context
+    assert "[europe.md]" in main_msgs[0].content               # KB source attribution
+    assert isinstance(main_msgs[-1], HumanMessage)
+    assert main_msgs[-1].content == "plan a trip"
 
     # Session store updated.
     history = await store.get_messages("s1")
@@ -187,7 +256,10 @@ async def test_full_turn_wires_everything() -> None:
 async def test_second_turn_reuses_conversation_and_includes_history() -> None:
     """conversation_create runs once; everything else runs every turn."""
     cfg = _make_cfg()
-    llm = _FakeLLM(["a", "b"])
+    # Four scripted responses across two turns: main reply + extraction
+    # call per turn. Both extraction calls return empty tool_calls so
+    # `_add_memory` skips Mem0 (still exercises the call path).
+    llm = _FakeLLM(["a", "", "b", ""])
     create = _mock_tool({"conversation_id": "conv-uuid-1"})
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
@@ -216,26 +288,35 @@ async def test_second_turn_reuses_conversation_and_includes_history() -> None:
 
     # conversation_create only on the first turn.
     create.ainvoke.assert_awaited_once()
-    # everything else runs every turn.
+    # Search + persistence run every turn.
     assert mem_search.ainvoke.await_count == 2
     assert kb_search.ainvoke.await_count == 2
     assert addmsg.ainvoke.await_count == 2
-    assert addmem.ainvoke.await_count == 2
+    # memory_add is gated on the extraction LLM call emitting
+    # `save_user_facts` tool calls. The two extraction responses here
+    # are empty strings (no tool calls), so Mem0 is skipped both times.
+    # That's the new expected behaviour.
+    assert addmem.ainvoke.await_count == 0
 
-    # On the second turn the LLM should see prior turn in history.
-    second_call = llm.calls[1]
-    roles = [type(m).__name__ for m in second_call]
+    # The MAIN LLM call is what we inspect for history — extraction
+    # calls also land in `llm.calls` but they're separate invocations.
+    # Main calls are at indices 0 (first turn) and 2 (second turn);
+    # extraction calls are at 1 and 3.
+    second_main_call = llm.calls[2]
+    roles = [type(m).__name__ for m in second_main_call]
     # system, user(first), assistant(a), user(second)
     assert roles == ["SystemMessage", "HumanMessage", "AIMessage", "HumanMessage"]
-    assert second_call[1].content == "first"
-    assert second_call[2].content == "a"
-    assert second_call[3].content == "second"
+    assert second_main_call[1].content == "first"
+    assert second_main_call[2].content == "a"
+    assert second_main_call[3].content == "second"
 
 
 async def test_kb_search_skipped_when_no_datapack_id() -> None:
     """kb_search requires datapack_id; gateway must skip it (not error) when missing."""
     cfg = _make_cfg()
-    llm = _FakeLLM(["fine"])
+    # Two responses: main reply + extraction call (returns no tool_calls,
+    # so memory_add is skipped — not what this test cares about).
+    llm = _FakeLLM(["fine", ""])
     create = _mock_tool({"conversation_id": "c1"})
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
@@ -275,7 +356,8 @@ async def test_search_failure_does_not_break_turn() -> None:
     all three are best-effort and must not fail the user's request.
     """
     cfg = _make_cfg()
-    llm = _FakeLLM(["ok"])
+    # Two responses: main reply + extraction call (no tool_calls).
+    llm = _FakeLLM(["ok", ""])
     create = _mock_tool({"conversation_id": "c1"})
     addmsg = _mock_tool({"status": "accepted"})
 
@@ -319,7 +401,8 @@ async def test_unwraps_langchain_mcp_content_block_format() -> None:
     and the parser returned the outer list unchanged.
     """
     cfg = _make_cfg()
-    llm = _FakeLLM(["wrapped-ok"])
+    # Main reply + extraction call (no tool_calls).
+    llm = _FakeLLM(["wrapped-ok", ""])
 
     inner_payload = {
         "id": "1c9f1fb23f2146ca8b79e3071fabe41c",
@@ -389,7 +472,8 @@ async def test_trivial_query_short_circuits_retrieval() -> None:
     (which renders as `(none yet)` in the prompt).
     """
     cfg = _make_cfg()
-    llm = _FakeLLM(["hi back"])
+    # Main reply + extraction call (no tool_calls).
+    llm = _FakeLLM(["hi back", ""])
     create = _mock_tool({"conversation_id": "c1"})
     # The mocks would error if invoked — we want to PROVE they aren't.
     mem_search = MagicMock()
@@ -422,9 +506,12 @@ async def test_trivial_query_short_circuits_retrieval() -> None:
     sys_content = llm.calls[0][0].content
     assert sys_content.count("(none yet)") == 2  # memory + kb
 
-    # `memory_add` still fires (the turn itself is real data worth extracting from).
+    # memory_add is gated on the extraction LLM call returning facts.
+    # The scripted extraction response here has no tool_calls, so
+    # `_add_memory` skips the Mem0 round-trip. In production, "hi"
+    # would likely produce no facts either — so this matches reality.
     await _drain_background_tasks()
-    addmem.ainvoke.assert_awaited_once()
+    addmem.ainvoke.assert_not_awaited()
 
     # And the returned ChatTurnResult still carries empty context for the
     # UI's Agent Reasoning panel — which self-hides when both are empty.
@@ -437,7 +524,8 @@ async def test_real_question_still_triggers_retrieval() -> None:
     doesn't accidentally skip legitimate prompts. A genuine question must
     still hit both searches."""
     cfg = _make_cfg()
-    llm = _FakeLLM(["ok"])
+    # Main reply + extraction call (no tool_calls).
+    llm = _FakeLLM(["ok", ""])
     create = _mock_tool({"conversation_id": "c1"})
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
@@ -455,7 +543,7 @@ async def test_real_question_still_triggers_retrieval() -> None:
 
     await run_chat_turn(
         cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
-        session_id="s1", user_message="what does Raj like?", datapack_id="dp-1",
+        session_id="s1", user_message="what does John like?", datapack_id="dp-1",
     )
 
     mem_search.ainvoke.assert_awaited_once()

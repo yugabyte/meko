@@ -23,7 +23,7 @@ import {
   type Datapack,
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
-import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
+import { isDatapackGrantEligibleForPlayground } from "@/lib/datapackShareGrants";
 import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/playground/data/sampleKnowledge";
 
 // Optional dev override for the MCP bearer. When unset (the normal case), we
@@ -54,13 +54,17 @@ export default function PlaygroundPage() {
   // at the page level so the drawer survives chat re-renders cleanly.
   const [traceTarget, setTraceTarget] = useState<{ messageId: string; conversationId: string } | null>(null);
 
-  const ownedDatapacks = useMemo(
-    () => datapacks.filter(isDatapackListGrantOwner),
+  // Datapacks the user can actually use in the Playground: own them, OR
+  // were shared in as maintainer / contributor. Viewers are excluded
+  // because chat writes (memory_add, conversation_add_message) require
+  // at least contributor — see `isDatapackGrantEligibleForPlayground`.
+  const accessibleDatapacks = useMemo(
+    () => datapacks.filter(isDatapackGrantEligibleForPlayground),
     [datapacks],
   );
   const selectedDatapack = useMemo(
-    () => ownedDatapacks.find((dp) => dp.datapack_name === selectedName) ?? null,
-    [ownedDatapacks, selectedName],
+    () => accessibleDatapacks.find((dp) => dp.datapack_name === selectedName) ?? null,
+    [accessibleDatapacks, selectedName],
   );
 
   // Bumped after each successful chat turn so the right-rail panels (memories
@@ -165,12 +169,14 @@ export default function PlaygroundPage() {
     return () => ac.abort();
   }, []);
 
-  // Default-select the first owned datapack once they load.
+  // Default-select the first accessible datapack once they load. Owners
+  // come back first from the API today; if that changes we may want to
+  // sort here to keep the user's own packs at the top of the picker.
   useEffect(() => {
     if (selectedName) return;
-    const first = ownedDatapacks[0];
+    const first = accessibleDatapacks[0];
     if (first) setSelectedName(first.datapack_name);
-  }, [ownedDatapacks, selectedName]);
+  }, [accessibleDatapacks, selectedName]);
 
   // Fetch agents for the selected datapack (held for future use).
   useEffect(() => {
@@ -206,7 +212,7 @@ export default function PlaygroundPage() {
       <AppWorkspaceHeader
         leading={
           <PlaygroundHeader
-            ownedDatapacks={ownedDatapacks}
+            accessibleDatapacks={accessibleDatapacks}
             selectedDatapackName={selectedName}
             onSelectDatapack={handleSelectDatapack}
             loading={datapacksLoading}

@@ -72,5 +72,23 @@ export function isDatapackGrantEligibleToPromoteMemoryToKnowledge(dp: { grant?: 
   return userGrant === DATAPACK_SHARE_GRANT_OWNER || userGrant === DATAPACK_SHARE_GRANT_MAINTAINER;
 }
 
+/**
+ * True when the signed-in user can use this datapack in the Playground:
+ * owner, maintainer, or contributor. Viewer is excluded because the
+ * Playground writes (memory_add, conversation_add_message) and viewer
+ * is read-only — letting a viewer "chat" would fail on the first turn
+ * with a permission error from MCP.
+ */
+export function isDatapackGrantEligibleForPlayground(
+  dp: { grant?: DatapackShareGrant | null },
+): boolean {
+  const userGrant = dp.grant;
+  return (
+    userGrant === DATAPACK_SHARE_GRANT_OWNER ||
+    userGrant === DATAPACK_SHARE_GRANT_MAINTAINER ||
+    userGrant === DATAPACK_SHARE_GRANT_CONTRIBUTOR
+  );
+}
+
 /** Human-readable list for validation error copy (mock server, etc.). */
 export const DATAPACK_SHARE_GRANT_VALIDATION_MESSAGE = `grant must be ${DATAPACK_SHARE_GRANT_VIEWER}, ${DATAPACK_SHARE_GRANT_CONTRIBUTOR}, or ${DATAPACK_SHARE_GRANT_MAINTAINER}`;

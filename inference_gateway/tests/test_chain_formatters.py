@@ -117,11 +117,11 @@ def test_kb_long_source_path_trimmed_to_basename() -> None:
     stays readable in the LLM prompt."""
     payload = {
         "results": [
-            {"chunk_text": "x", "source": "s3://bucket/path/to/raj.txt"},
+            {"chunk_text": "x", "source": "s3://bucket/path/to/john.txt"},
         ],
     }
     rendered = _format_knowledge_context(payload)
-    assert rendered == "- [raj.txt] x"
+    assert rendered == "- [john.txt] x"
 
 
 # --------------------------------------------------------------------------- #
@@ -133,27 +133,27 @@ def test_memory_real_meko_payload_surfaces_results_and_relations() -> None:
     """The exact shape Meko's `memory_search` returns today.
 
     Captured live from `mcp__meko__memory_search` after seeding three
-    memories about Raj. Three vector hits plus one graph relation must
+    memories about John. Three vector hits plus one graph relation must
     all reach the rendered context, each with its provenance tag.
     """
     payload = {
         "results": [
-            {"id": "1", "memory": "Name is Raj",                  "score": 0.342},
+            {"id": "1", "memory": "Name is John",                  "score": 0.342},
             {"id": "2", "memory": "Likes basketball and soccer",  "score": 0.734},
             {"id": "3", "memory": "Would love to coach kids",     "score": 0.834},
         ],
         "relations": [
-            {"source": "user", "relationship": "CONNECTED_TO", "destination": "raj"},
+            {"source": "user", "relationship": "CONNECTED_TO", "destination": "john"},
         ],
         "promoted_relations": [],
     }
     rendered = _format_memory_context(payload)
     # All three vector hits carry the [mem] tag.
-    assert "- [mem] Name is Raj" in rendered
+    assert "- [mem] Name is John" in rendered
     assert "- [mem] Likes basketball and soccer" in rendered
     assert "- [mem] Would love to coach kids" in rendered
     # Graph relation flattens to subject ─predicate→ object with [graph] tag.
-    assert "- [graph] user CONNECTED_TO raj" in rendered
+    assert "- [graph] user CONNECTED_TO john" in rendered
     # Order matters: results first, then relations, then promoted.
     assert rendered.index("[mem]") < rendered.index("[graph]")
 
@@ -166,11 +166,11 @@ def test_memory_promoted_relations_get_distinct_provenance_tag() -> None:
         "results": [],
         "relations": [],
         "promoted_relations": [
-            {"source": "raj", "relationship": "OWNS", "destination": "datapack"},
+            {"source": "john", "relationship": "OWNS", "destination": "datapack"},
         ],
     }
     rendered = _format_memory_context(payload)
-    assert rendered == "- [promoted] raj OWNS datapack"
+    assert rendered == "- [promoted] john OWNS datapack"
 
 
 def test_memory_empty_payload_returns_empty_string() -> None:
@@ -186,10 +186,10 @@ def test_memory_relations_only_no_vector_hits() -> None:
     payload = {
         "results": [],
         "relations": [
-            {"source": "raj", "relationship": "LIKES", "destination": "soccer"},
+            {"source": "john", "relationship": "LIKES", "destination": "soccer"},
         ],
     }
-    assert _format_memory_context(payload) == "- [graph] raj LIKES soccer"
+    assert _format_memory_context(payload) == "- [graph] john LIKES soccer"
 
 
 def test_memory_bare_list_payload_treated_as_vector_hits() -> None:
@@ -205,22 +205,22 @@ def test_memory_relation_alt_key_names_tolerated() -> None:
     payload = {
         "results": [],
         "relations": [
-            {"subject": "Raj", "predicate": "LIKES", "object": "soccer"},
+            {"subject": "John", "predicate": "LIKES", "object": "soccer"},
         ],
     }
-    assert _format_memory_context(payload) == "- [graph] Raj LIKES soccer"
+    assert _format_memory_context(payload) == "- [graph] John LIKES soccer"
 
 
 def test_memory_malformed_triple_dropped_not_rendered_partially() -> None:
     """A triple missing any of source/relation/target is dropped. We'd
-    rather show nothing than feed a half-fact like "raj  soccer" to the
+    rather show nothing than feed a half-fact like "john  soccer" to the
     LLM (which it could then hallucinate a predicate around)."""
     payload = {
         "results": [],
         "relations": [
-            {"source": "raj", "destination": "soccer"},          # no relation field
+            {"source": "john", "destination": "soccer"},          # no relation field
             {"relationship": "LIKES", "destination": "soccer"},  # no source
-            {"source": "raj", "relationship": "LIKES"},           # no destination
+            {"source": "john", "relationship": "LIKES"},           # no destination
         ],
     }
     assert _format_memory_context(payload) == ""
@@ -271,11 +271,11 @@ def test_memory_threshold_does_not_affect_relations() -> None:
     """Graph relations are not scored — they should always pass through."""
     payload = {
         "results": [{"memory": "Weak", "score": 0.05}],  # dropped
-        "relations": [{"source": "raj", "relationship": "LIKES", "destination": "soccer"}],
+        "relations": [{"source": "john", "relationship": "LIKES", "destination": "soccer"}],
     }
     rendered = _format_memory_context(payload)
     assert "Weak" not in rendered
-    assert "raj LIKES soccer" in rendered
+    assert "john LIKES soccer" in rendered
 
 
 def test_kb_threshold_drops_high_distance_chunks() -> None:
@@ -325,7 +325,7 @@ def test_trivial_query_very_short_inputs_are_detected() -> None:
 def test_trivial_query_real_questions_pass_through() -> None:
     """Genuine prompts must NOT be short-circuited."""
     for msg in (
-        "what does Raj like",
+        "what does John like",
         "Recommend a vacation",
         "Tell me about Spain",
         "hi, can you help me plan a trip",  # starts with greeting but is a real question

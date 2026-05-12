@@ -45,7 +45,19 @@ DEFAULT_MAX_HISTORY_MESSAGES = 15
 # tight window risks the right chunk landing just outside it. After
 # threshold filtering you typically still end up with ~3–5 final hits,
 # and the prompt cost of the extra raw rows is negligible.
-DEFAULT_MEMORY_TOP_K = 10
+DEFAULT_MEMORY_TOP_K = 50
+
+# Max output tokens we ask the LLM to budget for. Bedrock's `Converse`
+# API and OpenAI's chat completions both honor this — when the model
+# would exceed it, generation stops with `stopReason == "max_tokens"`,
+# which presents to the user as a mid-sentence cutoff.
+#
+# 8,192 is roughly Claude Sonnet 4.5's default for Bedrock, but we set
+# it explicitly so the gateway's behavior doesn't change silently when
+# AWS bumps a default. Tune up (Sonnet supports much higher with
+# extended thinking enabled) if you see legitimate long-form answers
+# getting cut off; tune down if you want to bound the per-turn cost.
+DEFAULT_LLM_MAX_TOKENS = 8192
 
 
 @dataclass(frozen=True)
@@ -61,3 +73,4 @@ class AppConfig:
     agent_id: str
     max_history: int
     memory_top_k: int
+    llm_max_tokens: int = DEFAULT_LLM_MAX_TOKENS

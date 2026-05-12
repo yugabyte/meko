@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 # Mem0 score is cosine similarity in [0, 1] — higher is better. 0.3 is
 # conservative: drops near-orthogonal hits (the "hi" failure mode) while
-# keeping moderately-related hits like "Name is Raj" → "what does Raj like"
+# keeping moderately-related hits like "Name is John Doe" → "what does John Doe like"
 # (score ~0.34) which are useful even though their score is modest.
 MEMORY_MIN_SCORE = 0.3
 
@@ -146,12 +146,104 @@ SYSTEM_TEMPLATE = """You are the Meko playground assistant.
 Use the relevant memories and knowledge sources below to ground your answer
 when they apply, and ignore them when they don't. Be concise and helpful.
 
+Response length: keep your reply complete and self-contained. You have a
+finite output budget of roughly {max_tokens} tokens (~{max_chars} characters).
+If you have a lot to cover, prioritize the most important points and finish
+your thought rather than running long and getting cut off mid-sentence. Prefer
+a brief, complete answer to a sprawling one that hits the ceiling.
+
 Relevant memories (from `memory_search`):
 {memory_context}
 
 Relevant knowledge (from `knowledgebase_search`):
 {kb_context}
 """
+
+
+# --------------------------------------------------------------------------- #
+# Background memory extraction (fire-and-forget, second LLM call)
+# --------------------------------------------------------------------------- #
+#
+# After the main chat turn returns, the fire-and-forget `_add_memory` task
+# runs a SECOND, separate LLM call whose only job is to extract
+# user-attributed facts from the turn via a tool call. Kept entirely off
+# the main path so:
+#   - The user's chat reply is never delayed or affected by extraction.
+#   - The main LLM call is plain text (no tools bound), so Claude can't
+#     produce a tool-only response that leaves the user with an empty
+#     bubble — a real failure mode we hit when we tried tool-binding the
+#     main call.
+#   - Extraction call failures log a warning and skip Mem0; they cannot
+#     reach the user.
+
+EXTRACTION_SYSTEM_PROMPT = (
+    "You are a memory-extraction helper. You will be given one turn of "
+    "chat between a user and an assistant. Identify any concrete facts, "
+    "preferences, plans, requirements, intents, technical context, or "
+    "project context the USER stated, and record them via the "
+    "`save_user_facts` tool.\n\n"
+    "What counts as a user fact (record ALL of these when present):\n"
+    "  - Identity / role: 'User is a backend engineer', "
+    "'User's name is Raj'\n"
+    "  - Personal preferences: 'User likes snowboarding', "
+    "'User prefers Python'\n"
+    "  - Plans / intents: 'User wants to use bucketized indexes', "
+    "'User is planning a trip to Spain'\n"
+    "  - Work / project context: 'User is working with YugabyteDB', "
+    "'User has an events_table with 10M rows'\n"
+    "  - Requirements / constraints: 'User has a $3,000 budget', "
+    "'User needs sub-100ms query latency'\n"
+    "  - Technical interests: 'User is interested in the NUM_BUCKETS "
+    "syntax', 'User is exploring Mem0'\n\n"
+    "Rules:\n"
+    "- Each fact in the `facts` array must start with the word 'User'.\n"
+    "- Extract ONLY what the user themselves stated or directly "
+    "implied. Do NOT record the assistant's recommendations, "
+    "suggestions, or opinions as facts.\n"
+    "- Do NOT invent or infer beyond what the user said, but DO record "
+    "intentions, context, and constraints the user explicitly "
+    "expressed (including technical ones — 'I want to use X' is a "
+    "fact, even if X is a feature rather than a hobby).\n"
+    "- Skip greetings, simple acknowledgements, and pure off-topic "
+    "chitchat with no factual content. A technical request DOES carry "
+    "factual content — record what the user is trying to do.\n\n"
+    "You should only respond by calling the tool. Do not produce any "
+    "user-facing text — your response is consumed by a background task "
+    "and never shown to anyone."
+)
+
+
+# Tool schema bound to the extraction LLM call. LangChain's
+# `bind_tools()` translates this OpenAI-style dict to the active
+# provider's native format (Bedrock Converse `toolConfig`, OpenAI
+# `tools`, etc.), so the same definition works for both providers we
+# support.
+SAVE_USER_FACTS_TOOL: Dict[str, Any] = {
+    "name": "save_user_facts",
+    "description": (
+        "Save user-attributed facts as long-term memories for future "
+        "conversations. Call this when the user has revealed "
+        "preferences, plans, constraints, or personal context worth "
+        "remembering. Do NOT save assistant recommendations. Do NOT "
+        "invent facts. Do NOT call this when there are no "
+        "user-attributable facts this turn."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "facts": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "List of user-attributed facts to remember. Each "
+                    "should start with the word 'User' (e.g. 'User "
+                    "likes snowboarding', 'User has a $3,000 budget')."
+                ),
+            },
+        },
+        "required": ["facts"],
+    },
+}
 
 
 class MemoryHit(NamedTuple):
@@ -335,11 +427,18 @@ async def run_chat_turn(
     history = await session_store.get_messages(session_id)
 
     # 4. LLM call.
+    #
+    # The system prompt's "response length" hint advertises the same budget
+    # we set in `cfg.llm_max_tokens` so the model self-paces. Rough char
+    # conversion: ~4 chars per English token; sufficient for the hint
+    # (the model doesn't need exact precision, just an order-of-magnitude).
     messages: List[BaseMessage] = [
         SystemMessage(
             content=SYSTEM_TEMPLATE.format(
                 memory_context=memory_context or "(none yet)",
                 kb_context=kb_context or "(none yet)",
+                max_tokens=cfg.llm_max_tokens,
+                max_chars=cfg.llm_max_tokens * 4,
             )
         )
     ]
@@ -406,9 +505,15 @@ async def run_chat_turn(
             )
         )
         message_id = ""
+    # Pass the full turn (user + assistant) into the fire-and-forget
+    # memory pipeline. Inside, `_add_memory` runs a SECOND tool-bound LLM
+    # call against `llm` to extract user-attributed facts before handing
+    # them to Mem0. The second call lives entirely in this background
+    # task — the user-facing chat reply has already returned.
     _spawn_background(
         _add_memory(
             tools_by_name=tools_by_name,
+            llm=llm,
             conversation_id=conversation_id,
             agent_id=cfg.agent_id,
             user_message=user_message,
@@ -633,39 +738,151 @@ async def _add_message(
     return ""
 
 
+def _collect_user_facts(tool_calls: Any) -> List[str]:
+    """Pull the `facts` list out of any `save_user_facts` tool calls
+    on an LLM response.
+
+    Defensive against shape variation between providers — LangChain
+    normalizes to `[{name, args, id, type}, …]` but the inner `args`
+    can be a JSON-encoded string on some adapters, and `args` can also
+    appear under `arguments` depending on the model surface. Items
+    failing any of those checks are silently dropped; returns `[]`
+    when nothing usable is present.
+    """
+    if not isinstance(tool_calls, list):
+        return []
+    facts: List[str] = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        if tc.get("name") != "save_user_facts":
+            continue
+        raw_args = tc.get("args")
+        if raw_args is None:
+            # Some adapters expose args under `arguments`.
+            raw_args = tc.get("arguments")
+        if isinstance(raw_args, str):
+            try:
+                raw_args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(raw_args, dict):
+            continue
+        candidate = raw_args.get("facts")
+        if not isinstance(candidate, list):
+            continue
+        for item in candidate:
+            if isinstance(item, str) and item.strip():
+                facts.append(item.strip())
+    return facts
+
+
+async def _extract_user_facts_via_tool(
+    llm: BaseChatModel,
+    user_message: str,
+    assistant_message: str,
+) -> List[str]:
+    """Run a SECOND LLM call (separate from the main chat call) with the
+    `save_user_facts` tool bound, and parse the tool call back into a
+    list of user-attributed facts.
+
+    Why a separate call instead of binding the tool to the main one:
+    Claude on Bedrock Converse sometimes responds to a tool-bound
+    request with ONLY the tool call and no text content, expecting a
+    `tool_result` back before continuing. On the main chat call that
+    would leave the user staring at an empty bubble. Confining the
+    tool binding to this background helper means the user-facing reply
+    is always plain text, while extraction still benefits from
+    tool-calling's schema-enforced output.
+
+    Returns the list of extracted facts (possibly empty). Any failure
+    (LLM error, parse failure, model judged nothing user-attributable)
+    yields `[]` — the caller treats that as "skip Mem0 for this turn".
+    """
+    llm_with_tool = llm.bind_tools([SAVE_USER_FACTS_TOOL])
+    try:
+        result = await llm_with_tool.ainvoke(
+            [
+                SystemMessage(content=EXTRACTION_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=(
+                        f"=== User message ===\n{user_message}\n\n"
+                        f"=== Assistant reply (context only) ===\n{assistant_message}"
+                    )
+                ),
+            ]
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.warning("memory extraction LLM call failed: %s", exc)
+        return []
+    return _collect_user_facts(getattr(result, "tool_calls", None))
+
+
 async def _add_memory(
     *,
     tools_by_name: Dict[str, BaseTool],
+    llm: BaseChatModel,
     conversation_id: str,
     agent_id: str,
     user_message: str,
     assistant_message: str,
     datapack_id: Optional[str],
 ) -> None:
-    """Hand Mem0 the full turn so its extractor can mine facts.
+    """Extract user-attributed facts from the turn (via a second
+    tool-bound LLM call) and hand them to Mem0.
 
-    We pass the full {user, assistant} pair as the `messages` JSON
-    parameter (per the MCP `memory_add` docstring, this overrides the
-    `text` field). Mem0 runs its own LLM extraction internally — we don't
-    pre-distill facts on the gateway. Best-effort — failure logs only.
+    Flow inside this fire-and-forget background task:
+
+      1. Call the LLM with `save_user_facts` bound, asking it to
+         extract user-side facts from {user_message, assistant_message}.
+      2. If the LLM emitted any facts via the tool call, send them
+         to Mem0 as a single user-perspective message — Mem0's own
+         extractor then labels every resulting memory with `User`
+         (no "Assistant likes …" pollution).
+      3. If the extraction yielded nothing (greeting turn, follow-up
+         question, off-topic chatter), skip the Mem0 round-trip
+         entirely. The raw user message is intentionally NOT used as
+         a fallback: if the extractor decided there were no facts,
+         feeding the raw text to Mem0 would just risk re-introducing
+         the speaker-attribution bug.
+
+    Cost: one extra LLM round-trip per turn. Since this whole function
+    runs inside the fire-and-forget background task, that latency is
+    invisible to the user — the chat reply has already returned.
+
+    Best-effort end to end: any failure (tool missing, extraction LLM
+    error, Mem0 error) logs a warning and silently skips. The chat
+    itself is unaffected.
     """
     tool = tools_by_name.get("memory_add")
     if tool is None:
         logger.warning("memory_add tool unavailable; skipping fact extraction")
         return
-    messages_json = json.dumps(
-        [
-            {"role": "user", "content": user_message},
-            {"role": "assistant", "content": assistant_message},
-        ]
+
+    extracted_facts = await _extract_user_facts_via_tool(
+        llm, user_message, assistant_message,
     )
+    if not extracted_facts:
+        logger.info(
+            "memory_add: extraction returned no user-attributable facts; skipping Mem0"
+        )
+        return
+
+    # Render facts as a bulleted user-perspective block. Keeping the
+    # original user phrasing on a leading line preserves nuance (emphasis,
+    # sentiment) the bulleted distillation may have lost.
+    user_facts_block = "\n".join(f"- {fact}" for fact in extracted_facts)
+    combined = (
+        f"User said: {user_message}\n\n"
+        f"User-attributable facts from this turn:\n{user_facts_block}"
+    )
+    messages_json = json.dumps([{"role": "user", "content": combined}])
     args: Dict[str, Any] = {
         "scope": "write",
-        # `text` is required by the tool signature; `messages` overrides it
-        # but the validation `if not (text or messages)` still wants one
-        # truthy value. Pass the user message so the validation also
-        # passes if the server rejects empty `text`.
-        "text": user_message,
+        # `text` is required by the tool signature; `messages` overrides
+        # it but the validation `if not (text or messages)` still wants
+        # one truthy value.
+        "text": combined,
         "messages": messages_json,
         "conversation_id": conversation_id,
         "agent_id": agent_id,

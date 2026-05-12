@@ -24,6 +24,7 @@ from .config import (
     DEFAULT_CORS_ORIGINS,
     DEFAULT_MAX_HISTORY_MESSAGES,
     DEFAULT_MCP_ENDPOINT,
+    DEFAULT_LLM_MAX_TOKENS,
     DEFAULT_MEMORY_TOP_K,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_PORT,
@@ -84,6 +85,15 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         help="Top-K passed to MCP memory_search per turn.",
     )
     p.add_argument(
+        "--llm-max-tokens",
+        type=int,
+        default=int(os.getenv("INFERENCE_LLM_MAX_TOKENS", str(DEFAULT_LLM_MAX_TOKENS))),
+        help=(
+            "Max output tokens budget passed to the LLM. Bedrock / OpenAI "
+            "honor this; exceeding it produces a mid-sentence cutoff."
+        ),
+    )
+    p.add_argument(
         "--log-level",
         default=os.getenv("INFERENCE_LOG_LEVEL", "INFO"),
     )
@@ -116,6 +126,7 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         agent_id=args.agent_id,
         max_history=args.max_history,
         memory_top_k=args.memory_top_k,
+        llm_max_tokens=args.llm_max_tokens,
     )
     return cfg, args.log_level
 
