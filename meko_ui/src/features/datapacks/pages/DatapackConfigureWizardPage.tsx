@@ -44,6 +44,12 @@ import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
 import { toast } from "@/hooks/use-toast";
 
 const UPLOAD_TIMEOUT_MS = 30000;
+const PERSISTED_KNOWLEDGE_FILES_PREFIX = "meko:configure-wizard:knowledge-files:v1:";
+
+type PersistedKnowledgeFile = {
+  label: string;
+  sizeBytes: number;
+};
 
 function uploadFileToS3(
   url: string,
@@ -71,6 +77,15 @@ function uploadFileToS3(
     xhr.ontimeout = () => reject(new Error(`Request timed out after ${UPLOAD_TIMEOUT_MS / 1000}s`));
     xhr.send(file);
   });
+}
+
+function isDuplicateUploadError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("duplicate_file") ||
+    normalized.includes("same name") ||
+    normalized.includes("already exists")
+  );
 }
 
 type DatapackConfigureWizardPageProps = {
@@ -120,6 +135,12 @@ export default function DatapackConfigureWizardPage({
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
   const conversationInputRef = useRef<HTMLInputElement>(null);
   const skillsInputRef = useRef<HTMLInputElement>(null);
+  const restoredPersistenceRef = useRef<string | null>(null);
+
+  const persistedKnowledgeStorageKey = (() => {
+    const identity = routeDatapackId ?? apiDatapackName ?? routeDatapackName;
+    return identity ? `${PERSISTED_KNOWLEDGE_FILES_PREFIX}${identity}` : null;
+  })();
 
   useEffect(() => {
     if (isCreateFlow) {
@@ -187,8 +208,63 @@ export default function DatapackConfigureWizardPage({
     id: `${f.name}-${f.size}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
     label: f.name,
     kind: "file",
+    sizeBytes: f.size,
     ...(includeUploadMeta ? { file: f, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.PENDING } : {}),
   });
+
+  useEffect(() => {
+    if (!persistedKnowledgeStorageKey) return;
+    if (restoredPersistenceRef.current === persistedKnowledgeStorageKey) return;
+    restoredPersistenceRef.current = persistedKnowledgeStorageKey;
+
+    try {
+      const raw = localStorage.getItem(persistedKnowledgeStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as PersistedKnowledgeFile[];
+      if (!Array.isArray(parsed) || parsed.length === 0) return;
+
+      setKnowledgeItems((prev) => {
+        const existing = new Set(prev.map((it) => it.label.toLowerCase()));
+        const restored: ListedSource[] = parsed
+          .filter((it) => it?.label && Number.isFinite(it.sizeBytes) && it.sizeBytes >= 0)
+          .filter((it) => !existing.has(it.label.toLowerCase()))
+          .map((it) => ({
+            id: `persisted-${it.label}-${it.sizeBytes}`,
+            label: it.label,
+            kind: "file",
+            sizeBytes: it.sizeBytes,
+            uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE,
+            uploadProgress: 100,
+          }));
+
+        if (restored.length === 0) return prev;
+        return [...prev, ...restored];
+      });
+    } catch {
+      // Ignore malformed persistence payloads.
+    }
+  }, [persistedKnowledgeStorageKey]);
+
+  useEffect(() => {
+    if (!persistedKnowledgeStorageKey) return;
+    try {
+      const doneFiles: PersistedKnowledgeFile[] = knowledgeItems
+        .filter((it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE)
+        .map((it) => ({
+          label: it.label,
+          sizeBytes: it.file?.size ?? it.sizeBytes ?? 0,
+        }))
+        .filter((it) => it.sizeBytes >= 0);
+
+      if (doneFiles.length === 0) {
+        localStorage.removeItem(persistedKnowledgeStorageKey);
+      } else {
+        localStorage.setItem(persistedKnowledgeStorageKey, JSON.stringify(doneFiles));
+      }
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [knowledgeItems, persistedKnowledgeStorageKey]);
 
   const addFiles = (section: SyncSectionId, files: FileList | null) => {
     if (section !== "knowledge" || !files?.length) return;
@@ -272,6 +348,22 @@ export default function DatapackConfigureWizardPage({
             ),
           );
         } catch (err) {
+          const message = getApiErrorMessage(err, "Upload failed.");
+          if (isDuplicateUploadError(message)) {
+            setKnowledgeItems((prev) =>
+              prev.map((x) =>
+                x.id === item.id
+                  ? {
+                    ...x,
+                    uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE,
+                    uploadProgress: 100,
+                    uploadError: undefined,
+                  }
+                  : x,
+              ),
+            );
+            continue;
+          }
           setKnowledgeItems((prev) =>
             prev.map((x) =>
               x.id === item.id
@@ -279,7 +371,7 @@ export default function DatapackConfigureWizardPage({
                   ...x,
                   uploadStatus: KNOWLEDGE_UPLOAD_STATUS.ERROR,
                   uploadProgress: 0,
-                  uploadError: getApiErrorMessage(err, "Upload failed."),
+                  uploadError: message,
                 }
                 : x,
             ),
@@ -427,9 +519,12 @@ export default function DatapackConfigureWizardPage({
       });
     } else {
       startKnowledgeBaseImport(finishPackName, routeDatapackId);
+      if (persistedKnowledgeStorageKey) {
+        localStorage.removeItem(persistedKnowledgeStorageKey);
+      }
     }
     navigate(datapackDetailPath(finishPackName));
-  }, [finishPackName, hasUploadedKnowledge, navigate]);
+  }, [finishPackName, hasUploadedKnowledge, navigate, persistedKnowledgeStorageKey, routeDatapackId]);
 
   const canProceedFromConfigure =
     Boolean(configureDraftName.trim()) &&

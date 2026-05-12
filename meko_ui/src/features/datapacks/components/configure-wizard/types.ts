@@ -11,6 +11,7 @@ export type ListedSource = {
   label: string;
   kind: "file" | "url";
   file?: File;
+  sizeBytes?: number;
   uploadStatus?: KnowledgeUploadStatus;
   uploadProgress?: number;
   uploadError?: string;

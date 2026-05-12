@@ -346,6 +346,11 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", "datapack context missing")
 	}
+	slog.Info("CreateKB request received",
+		"user_id", dp.UserID,
+		"datapack_id", dp.ID,
+		"datapack_name", dp.Name,
+	)
 
 	if err := h.ragSvc.EnsureVectorIndex(); err != nil {
 		slog.Error("failed to ensure vector index",
@@ -357,12 +362,6 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 	sourceURI := h.knowledgeBaseSvc.BuildDatapackPrefix(dp.UserID, dp.ID)
 	s3Prefix := fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)
 
-	slog.Info("creating knowledge base",
-		"user_id", dp.UserID,
-		"datapack_id", dp.ID,
-		"source_uri", sourceURI,
-	)
-
 	// Step 1: try to reuse a previously-cached rag_source_id from
 	// meko_system.knowledge_bases.
 	cachedSourceIDs, err := h.knowledgeBaseSvc.GetSourceIDs(dp)
@@ -371,7 +370,6 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", "failed to check cached sources")
 	}
-
 	var sourceID string
 	isNewSource := false
 
@@ -428,56 +426,111 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 				"INTERNAL_ERROR", "failed to save knowledge base")
 		}
 	}
-
-	// Step 3: sync any new S3 objects into dist_rag.documents.
-	objects, err := h.s3Svc.ListObjects(c.Request().Context(), s3Prefix)
-	if err != nil {
-		slog.Error("failed to list S3 objects",
-			"prefix", s3Prefix, "error", err)
-		return apiError(c, http.StatusInternalServerError,
-			"S3_ERROR", "failed to list uploaded files")
-	}
-
-	existingURIs, err := h.ragSvc.GetExistingDocURIs(sourceID)
-	if err != nil {
-		slog.Error("failed to get existing doc URIs", "error", err)
-		return apiError(c, http.StatusInternalServerError,
-			"RAG_ERROR", "failed to check existing documents")
-	}
+	slog.Info("CreateKB: source resolved",
+		"datapack_id", dp.ID,
+		"source_id", sourceID,
+		"is_new_source", isNewSource,
+	)
 
 	newDocs := 0
-	for _, obj := range objects {
-		docURI := fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), obj.Key)
-		if existingURIs[docURI] {
-			continue
-		}
-		if err := h.ragSvc.InsertDocument(
-			sourceID, obj.Key, docURI, obj.ETag, obj.ContentType,
-		); err != nil {
-			slog.Warn("failed to insert document",
-				"document", obj.Key, "error", err)
+	skippedDocs := 0
+	shouldSkipAPIDocumentSync := isNewSource
+	if !shouldSkipAPIDocumentSync {
+		sourceStatus, statusErr := h.ragSvc.GetSourceStatus(sourceID)
+		if statusErr != nil {
+			slog.Warn("CreateKB: failed to read source status before API-side sync; proceeding with sync",
+				"datapack_id", dp.ID,
+				"source_id", sourceID,
+				"error", statusErr,
+			)
 		} else {
-			newDocs++
+			switch sourceStatus {
+			case service.SourceStatusQueued, service.SourceStatusInProgress:
+				shouldSkipAPIDocumentSync = true
+				slog.Info("CreateKB: source is still being discovered/processed by dist_rag, skipping API-side document sync",
+					"datapack_id", dp.ID,
+					"source_id", sourceID,
+					"source_status", sourceStatus,
+				)
+			}
 		}
 	}
+	if shouldSkipAPIDocumentSync {
+		// For a brand new source, dist_rag's CREATE_SOURCE worker discovers and
+		// inserts documents. Inserting from api_server at the same time can create
+		// duplicate document rows when no UNIQUE(source_id, document_uri) exists.
+		slog.Info("CreateKB: skipping API-side document sync; relying on dist_rag source discovery",
+			"datapack_id", dp.ID,
+			"source_id", sourceID,
+			"is_new_source", isNewSource,
+		)
+	} else {
+		// Step 3: sync any new S3 objects into dist_rag.documents.
+		objects, err := h.s3Svc.ListObjects(c.Request().Context(), s3Prefix)
+		if err != nil {
+			slog.Error("failed to list S3 objects",
+				"prefix", s3Prefix, "error", err)
+			return apiError(c, http.StatusInternalServerError,
+				"S3_ERROR", "failed to list uploaded files")
+		}
+		// set of existing document URIs
+		existingURIs, err := h.ragSvc.GetExistingDocURIs(sourceID)
+		if err != nil {
+			slog.Error("failed to get existing doc URIs set", "error", err)
+			return apiError(c, http.StatusInternalServerError,
+				"RAG_ERROR", "failed to check existing documents")
+		}
 
-	slog.Info("document sync complete",
-		"datapack_id", dp.ID,
-		"total_s3_objects", len(objects),
-		"already_tracked", len(existingURIs),
-		"new_documents", newDocs)
+		for _, obj := range objects {
+			docURI := fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), obj.Key)
+			if existingURIs[docURI] {
+				skippedDocs++
+				continue
+			}
+			if err := h.ragSvc.InsertDocument(
+				sourceID, obj.Key, docURI, obj.ETag, obj.ContentType,
+			); err != nil {
+				slog.Warn("failed to insert document",
+					"document", obj.Key, "document_uri", docURI,
+					"error", err)
+			} else {
+				newDocs++
+			}
+		}
+
+		slog.Info("document sync complete",
+			"datapack_id", dp.ID,
+			"total_s3_objects", len(objects),
+			"already_tracked", len(existingURIs),
+			"skipped_documents", skippedDocs,
+			"new_documents", newDocs)
+	}
 
 	// Step 4: trigger index build.
 	switch {
 	case isNewSource:
+		slog.Info("CreateKB: new source path, scheduling WaitAndBuild",
+			"datapack_id", dp.ID,
+			"source_id", sourceID,
+		)
 		go h.ragSvc.WaitAndBuild(sourceID)
 	case newDocs > 0:
+		slog.Info("CreateKB: source path already exists and new docs were added, triggering BuildIndex",
+			"datapack_id", dp.ID,
+			"source_id", sourceID,
+			"new_docs", newDocs,
+		)
 		if err := h.ragSvc.BuildIndex(); err != nil {
 			slog.Error("failed to build index",
 				"datapack_id", dp.ID, "error", err)
 			return apiError(c, http.StatusInternalServerError,
 				"RAG_ERROR", "failed to build index")
 		}
+	default:
+		slog.Info("CreateKB: no new docs for existing source, skipping BuildIndex",
+			"datapack_id", dp.ID,
+			"source_id", sourceID,
+		)
 	}
 
 	slog.Info("knowledge base created",
@@ -530,6 +583,13 @@ func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", "failed to get source IDs")
 	}
+	slog.Info("KBStatus: loaded source references",
+		"datapack_id", dp.ID,
+		"source_ids_count", len(sourceIDs),
+		"source_uris_count", len(sourceURIs),
+		"source_ids", sourceIDs,
+		"source_uris", sourceURIs,
+	)
 
 	if h.ragSvc == nil || len(sourceIDs) == 0 {
 		indexName := ""

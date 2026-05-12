@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 
 	"github.com/lib/pq"
 )
@@ -136,6 +137,11 @@ func (r *RagRepo) InsertDocument(sourceID, documentName, documentURI, checksum, 
 	if err == nil {
 		return nil
 	}
+	slog.Warn("RagRepo.InsertDocument: upsert failed, entering fallback",
+		"source_id", sourceID,
+		"document_uri", documentURI,
+		"error", err,
+	)
 
 	// Fallback path: the table has no unique constraint on (source_id, document_uri).
 	// Check existence and insert/update manually.
@@ -281,8 +287,19 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 	ps := &PipelineStatus{IndexName: r.FullName()}
 
 	if len(sourceURIs) == 0 {
+		slog.Info("RagRepo.GetPipelineStatus: no source URIs, returning empty details",
+			"index_name", r.FullName(),
+		)
 		return ps, nil
 	}
+	slog.Info("RagRepo.GetPipelineStatus: querying pipeline details",
+		"index_name", r.FullName(),
+		"schema_name", r.schemaName,
+		"raw_index_name", r.indexName,
+		"source_uris_count", len(sourceURIs),
+		"source_uris", sourceURIs,
+		"status_source", "documents+latest_pipeline+active_work_queue",
+	)
 
 	rows, err := r.db.Query(
 		`SELECT DISTINCT ON (document_uri)
@@ -292,7 +309,9 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 		 WHERE schema_name = $1
 		   AND index_name  = $2
 		   AND source_uri  = ANY($3::TEXT[])
-		 ORDER BY document_uri, pipeline_created_at DESC NULLS LAST`,
+		 ORDER BY document_uri,
+		          pipeline_created_at DESC NULLS LAST,
+		          pipeline_id DESC`,
 		r.schemaName, r.indexName, pq.Array(sourceURIs),
 	)
 	if err != nil {
@@ -300,6 +319,7 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 	}
 	defer rows.Close()
 
+	rowCount := 0
 	for rows.Next() {
 		var (
 			d        PipelineDetail
@@ -314,10 +334,15 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 		}
 		d.IndexName = schema + "." + rawIndex
 		ps.Details = append(ps.Details, d)
+		rowCount++
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	slog.Info("RagRepo.GetPipelineStatus: query complete",
+		"index_name", r.FullName(),
+		"detail_rows", rowCount,
+	)
 
 	return ps, nil
 }

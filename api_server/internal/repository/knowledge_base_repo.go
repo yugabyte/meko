@@ -383,17 +383,25 @@ func (r *KnowledgeBaseRepo) Counts(
 	return c, nil
 }
 
-// ListDistRagDocuments returns (document_name, status) for every
-// dist_rag.documents row whose source belongs to the given datapack,
-// joined through dist_rag.sources.tenant_id.
+// ListDistRagDocuments returns (document_name, status) for each
+// dist_rag.documents row in the given datapack's source.
+//
+// DISTINCT ON (document_uri) hides duplicate inserts from the api_server
+// and rag_agent (no UNIQUE constraint on the table) and keeps the dedup
+// key aligned with GetPipelineStatus. ORDER BY prefers the row with a
+// non-NULL document_type (the api_server side), then latest document_id.
 func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 	datapackID string,
 ) ([]KnowledgeBaseDocument, error) {
 	rows, err := r.db.Query(
-		`SELECT d.document_name, d.status::text
-		 FROM dist_rag.documents d
-		 JOIN dist_rag.sources  s ON s.id = d.source_id
-		 WHERE s.tenant_id = $1::uuid`,
+		`SELECT DISTINCT ON (d.document_uri)
+		        d.document_name, d.status::text
+		 FROM   dist_rag.documents d
+		 JOIN   dist_rag.sources   s ON s.id = d.source_id
+		 WHERE  s.tenant_id = $1::uuid
+		 ORDER  BY d.document_uri,
+		           (d.document_type IS NOT NULL) DESC,
+		           d.document_id DESC`,
 		datapackID,
 	)
 	if err != nil {

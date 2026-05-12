@@ -132,7 +132,7 @@ func (s *RagService) WaitAndBuild(sourceID string) {
 			return
 		}
 		switch status {
-		case "COMPLETED":
+		case SourceStatusCompleted:
 			slog.Info("WaitAndBuild: source ready, triggering build_index",
 				"source_id", sourceID)
 			if err := s.BuildIndex(); err != nil {
@@ -140,10 +140,10 @@ func (s *RagService) WaitAndBuild(sourceID string) {
 					"source_id", sourceID, "error", err)
 			}
 			return
-		case "FAILED":
+		case SourceStatusFailed:
 			slog.Error("WaitAndBuild: source failed", "source_id", sourceID)
 			return
-		case "QUEUED", "DISCOVERING", "PROCESSING":
+		case SourceStatusQueued, SourceStatusInProgress:
 			slog.Info("WaitAndBuild: source not ready yet",
 				"source_id", sourceID, "status", status)
 		default:
@@ -183,6 +183,10 @@ func WaitAndBuildAsync(datapackConnStr, schemaName, indexName, sourceID string) 
 
 func (s *RagService) GetSourceStatuses(sourceIDs []string) ([]repository.SourceStatus, error) {
 	return s.repo.GetSourceStatuses(sourceIDs)
+}
+
+func (s *RagService) GetSourceStatus(sourceID string) (string, error) {
+	return s.repo.GetSourceStatus(sourceID)
 }
 
 func (s *RagService) GetPipelineStatus(sourceURIs []string) (*repository.PipelineStatus, error) {

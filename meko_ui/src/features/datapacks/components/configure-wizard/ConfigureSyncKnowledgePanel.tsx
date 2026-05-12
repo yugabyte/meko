@@ -7,18 +7,13 @@ import type { RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatFileSize } from "@/lib/fileSize";
 import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
 import { cn } from "@/lib/utils";
 import type { ListedSource } from "./types";
 import { wizardTileToneBadge } from "./configureWizardTileStyles";
 
 const ADD_URL_TOOLTIP = "Coming soon";
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10_240 ? 1 : 0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function isPendingOrError(it: ListedSource): boolean {
   if (it.kind !== "file" || !it.file) return false;
@@ -186,7 +181,7 @@ export function ConfigureSyncKnowledgePanel({
               const failed = it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.ERROR;
               const detail = failed && it.uploadError ? it.uploadError : short ?? undefined;
               const sizeLabel =
-                it.kind === "file" && it.file ? formatFileSize(it.file.size) : "—";
+                it.kind === "file" ? formatFileSize(it.file?.size ?? it.sizeBytes ?? 0) : "—";
               const canToggle = it.kind === "file" && isPendingOrError(it);
               const checked = includedIds.has(it.id);
 

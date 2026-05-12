@@ -18,6 +18,7 @@ import {
   filterFilesForKnowledgeUploadBatch,
   filterDuplicateKnowledgeFileNames,
 } from "@/lib/knowledgeFileUploadRules";
+import { formatFileSize } from "@/lib/fileSize";
 import { KNOWLEDGE_UPLOAD_STATUS, type KnowledgeUploadStatus } from "@/lib/knowledgeUploadStatus";
 
 type FileEntry = {
@@ -53,6 +54,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
   const [pollingActive, setPollingActive] = useState(false);
   const [sourceStatuses, setSourceStatuses] = useState<SourceStatus[]>([]);
   const [pipelineDetails, setPipelineDetails] = useState<PipelineDetail[]>([]);
+  const [queuedDocNames, setQueuedDocNames] = useState<string[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval>>(undefined);
   const [newUploadsAfterKB, setNewUploadsAfterKB] = useState(0);
   const pollGraceRef = useRef(0);
@@ -188,18 +190,26 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
   };
 
   const handleCreateKB = async () => {
+    const queuedNames = files
+      .filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.DONE)
+      .map((f) => f.file.name);
+    const previousKbCreated = kbCreated;
+
+    // Flip UI state immediately so users see progress feedback right away.
+    setQueuedDocNames(queuedNames);
+    setKbCreated(true);
+    setPollingActive(true);
+    setNewUploadsAfterKB(0);
+    pollGraceRef.current = 3;
     setCreatingKB(true);
     try {
       await createKnowledgeBase(datapackName, { datapackId });
-      setKbCreated(true);
-      setPollingActive(true);
-      setNewUploadsAfterKB(0);
-      pollGraceRef.current = 3;
-      // Files have been handed off to the KB pipeline; their per-document
-      // status is tracked below. Clear successfully uploaded files so the
-      // user has a fresh slate for the next batch.
-      setFiles((prev) => prev.filter((f) => f.status !== KNOWLEDGE_UPLOAD_STATUS.DONE));
+      // Prime status once immediately instead of waiting for the next poll tick.
+      await fetchStatus();
     } catch (err) {
+      setKbCreated(previousKbCreated);
+      if (!previousKbCreated) setPollingActive(false);
+      setQueuedDocNames([]);
       showWarning(getApiErrorMessage(err, "Failed to create knowledge base."));
     } finally {
       setCreatingKB(false);
@@ -213,6 +223,9 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
       const details = status.pipeline_details ?? [];
       setSourceStatuses(sources);
       setPipelineDetails(details);
+      if (details.length > 0) {
+        setQueuedDocNames([]);
+      }
 
       if (!kbCreated && (sources.length > 0 || details.length > 0)) {
         setKbCreated(true);
@@ -382,7 +395,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
                     <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
                     <span className="text-sm text-white truncate">{entry.file.name}</span>
                     <span className="text-xs text-muted-foreground shrink-0">
-                      {(entry.file.size / 1024).toFixed(0)} KB
+                      {formatFileSize(entry.file.size)}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -503,8 +516,20 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
 
           {/* Per-document details — capped + scrollable so a large batch
               doesn't push the dialog (or page) into a long stack. */}
-          {pipelineDetails.length > 0 && (
+          {(pipelineDetails.length > 0 || (queuedDocNames.length > 0 && kbCreated && !allDone)) && (
             <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+              {pipelineDetails.length === 0 &&
+                queuedDocNames.map((name, i) => (
+                  <div key={`queued-${i}-${name}`} className="flex items-center justify-between rounded-lg border border-border bg-[#0E1525] px-4 py-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Loader2 className="w-3.5 h-3.5 text-yellow-400 animate-spin shrink-0" />
+                      <span className="text-xs text-white truncate">{name}</span>
+                    </div>
+                    <span className="text-xs font-medium shrink-0 ml-3 text-yellow-400">
+                      Queued
+                    </span>
+                  </div>
+                ))}
               {pipelineDetails.map((d, i) => {
                 const filename = d.document_name.split("/").pop() ?? d.document_name;
                 const displayName = filename.replace(/^\d+_/, "");

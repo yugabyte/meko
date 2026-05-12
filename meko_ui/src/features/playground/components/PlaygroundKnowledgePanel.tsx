@@ -74,8 +74,8 @@ export function PlaygroundKnowledgePanel({ datapackName, onDocumentsChange }: Pr
     return () => ac.abort();
   }, [fetchDocs]);
 
-  // While any doc is still pre-COMPLETED (PROCESSING / QUEUED / DISCOVERING /
-  // FAILED), refetch every 5s so the UI flips from "processing" → "ready"
+  // While any doc is still pre-COMPLETED (QUEUED / PROCESSING / FAILED),
+  // refetch every 5s so the UI flips from "processing" → "ready"
   // without forcing the user to click anything. Stops polling once every doc
   // is in a terminal state (`COMPLETED`).
   useEffect(() => {
