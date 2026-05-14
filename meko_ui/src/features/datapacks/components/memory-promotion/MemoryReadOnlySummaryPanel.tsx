@@ -1,29 +1,30 @@
 /**
- * Read-only memories: same card chrome as Learnings summary, without promote / keep actions.
- * Preview shows top {@link MEMORY_READ_ONLY_PREVIEW_SIZE} rows + optional “View all” to the memory-summary route.
+ * Read-only memories: paginated list shown on the memory-summary route.
+ * Same card chrome as Learnings summary, without promote / keep actions.
  */
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { ArrowLeftRight, ChevronLeft, ChevronRight, Loader2, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { datapackConversationsPath, datapackMemorySummaryPath } from "@/app/routes/paths";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  CONVERSATION_SOURCE,
+  datapackConversationsPathWithSource,
+} from "@/app/routes/paths";
 
 import { ObserveButton } from "@/features/datapacks/components/ObserveButton";
-import { MEMORY_READ_ONLY_PREVIEW_SIZE, useMemoryReadOnlyList, type MemoryReadOnlyVariant } from "./useMemoryReadOnlyList";
+import { useMemoryReadOnlyList } from "./useMemoryReadOnlyList";
 import { PAGE_SIZE_OPTIONS } from "./useMemoryPromotion";
 import { MemoryRowBody } from "./memoryRowBody";
 
 type Props = {
   datapackName: string;
   datapackId: string;
-  variant: MemoryReadOnlyVariant;
 };
 
-export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }: Props) {
+export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) {
   const navigate = useNavigate();
   const {
-    isFull,
     loading,
     error,
     memories,
@@ -40,7 +41,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }
     loadMemories,
     goToPage,
     changePageSize,
-  } = useMemoryReadOnlyList({ datapackId, variant });
+  } = useMemoryReadOnlyList({ datapackId });
 
   const isValidConvId = (conversationId: string) =>
     !!conversationId && conversationId !== datapackId;
@@ -50,15 +51,22 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }
 
   /** Navigate to the conversation viewer, optionally pre-selecting a
    *  specific message via the memoryId query param so it can be scrolled
-   *  to and shimmered. */
+   *  to and shimmered. The `from` flag tells the viewer to add an extra
+   *  breadcrumb hop (Datapacks > Memory Summary > Conversation) so the
+   *  user can step back to where they came from. */
   const goToConversation = (conversationId: string, memoryId: string) => {
     if (!isValidConvId(conversationId)) return;
-    const path = datapackConversationsPath(datapackName, traceId(conversationId));
-    navigate(`${path}?memoryId=${encodeURIComponent(memoryId)}`);
+    navigate(
+      datapackConversationsPathWithSource(
+        datapackName,
+        traceId(conversationId),
+        CONVERSATION_SOURCE.memorySummary,
+        { memoryId },
+      ),
+    );
   };
 
-  const showPagination = isFull && total > 0;
-  const showViewAll = !isFull && total > MEMORY_READ_ONLY_PREVIEW_SIZE;
+  const showPagination = total > 0;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -87,8 +95,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }
             ) : sessionSummaryReady ? (
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                 Recent session memories for{" "}
-                <span className="font-medium text-white">{datapackName}</span>
-                {isFull ? "." : ` (showing up to ${MEMORY_READ_ONLY_PREVIEW_SIZE} here).`}
+                <span className="font-medium text-white">{datapackName}</span>.
               </p>
             ) : (
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Loading memories…</p>
@@ -216,17 +223,6 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId, variant }
               );
             })}
           </ul>
-          {showViewAll ? (
-            <div className="flex justify-center pt-1">
-              <Button
-                variant="outline"
-                className="min-w-[18rem] max-w-full border-border bg-background/80 px-6 py-2.5 text-sm sm:min-w-[22rem]"
-                asChild
-              >
-                <Link to={datapackMemorySummaryPath(datapackName)}>View all memories</Link>
-              </Button>
-            </div>
-          ) : null}
         </>
       ) : null}
     </div>

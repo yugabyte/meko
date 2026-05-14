@@ -1,6 +1,8 @@
 /**
- * Shared tab identifiers and labels for the per-datapack detail shell.
- * Keeps the tab strip and parent page in sync without duplicating string unions.
+ * Shared section identifiers for the per-datapack detail page.
+ * Each maps to a dedicated summary route navigated to from the
+ * CollectiveLearningPipeline tiles; tone palettes in the pipeline
+ * are keyed off the same union.
  */
 export const DATAPACK_DETAIL_TAB = {
   conversations: "conversations",
@@ -11,11 +13,3 @@ export const DATAPACK_DETAIL_TAB = {
 } as const;
 
 export type DatapackDetailTab = (typeof DATAPACK_DETAIL_TAB)[keyof typeof DATAPACK_DETAIL_TAB];
-
-export const DATAPACK_DETAIL_TAB_ITEMS: { id: DatapackDetailTab; label: string }[] = [
-  { id: DATAPACK_DETAIL_TAB.conversations, label: "Conversations" },
-  { id: DATAPACK_DETAIL_TAB.memories, label: "Memories" },
-  { id: DATAPACK_DETAIL_TAB.learnings, label: "Learnings" },
-  { id: DATAPACK_DETAIL_TAB.knowledge, label: "Knowledge" },
-  { id: DATAPACK_DETAIL_TAB.collectiveMemory, label: "Collective Memory" }
-];

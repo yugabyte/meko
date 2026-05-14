@@ -41,7 +41,7 @@ export function DatapackDetailConnectTile({
   return (
     <aside
       className={cn(
-        "flex h-fit min-h-0 w-full flex-col self-start rounded-xl border border-border bg-card/50 shadow-sm",
+        "flex h-full min-h-0 w-full flex-col rounded-xl border border-border bg-card/50 shadow-sm",
         className,
       )}
     >

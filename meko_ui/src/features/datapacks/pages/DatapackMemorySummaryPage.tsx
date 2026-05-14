@@ -75,7 +75,6 @@ export default function DatapackMemorySummaryPage({ datapackName }: Props) {
           <MemoryReadOnlySummaryPanel
             datapackName={datapackName}
             datapackId={datapack.datapack_id}
-            variant="full"
           />
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">

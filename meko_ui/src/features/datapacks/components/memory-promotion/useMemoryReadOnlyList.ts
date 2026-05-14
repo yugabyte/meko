@@ -1,6 +1,6 @@
 /**
- * Read-only memory list: same GET /memories contract as promotion flow, without selection or promote.
- * `preview` = first {@link MEMORY_READ_ONLY_PREVIEW_SIZE} rows (detail Memory tab); `full` = paginated (memory-summary route).
+ * Read-only memory list: same GET /memories contract as promotion flow,
+ * without selection or promote. Drives the paginated memory-summary route.
  */
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -12,19 +12,11 @@ import {
 } from "@/lib/mekoApi";
 import { DEFAULT_PAGE_SIZE } from "./useMemoryPromotion";
 
-export const MEMORY_READ_ONLY_PREVIEW_SIZE = 7;
-
-export type MemoryReadOnlyVariant = "preview" | "full";
-
 export function useMemoryReadOnlyList({
   datapackId,
-  variant,
 }: {
   datapackId: string;
-  variant: MemoryReadOnlyVariant;
 }) {
-  const isFull = variant === "full";
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -60,9 +52,6 @@ export function useMemoryReadOnlyList({
     return () => controller.abort();
   }, []);
 
-  const effectivePage = isFull ? page : 1;
-  const effectivePageSize = isFull ? pageSize : MEMORY_READ_ONLY_PREVIEW_SIZE;
-
   const loadMemories = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
@@ -72,14 +61,14 @@ export function useMemoryReadOnlyList({
         datapack_id: datapackId,
         user_id: accountId,
         user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
-        page: effectivePage,
-        page_size: effectivePageSize,
+        page,
+        page_size: pageSize,
       });
       setMemories(resp.memories ?? []);
       setTotal(resp.total ?? 0);
       setTotalPages(Math.max(1, resp.total_pages ?? 1));
       setLangfuseProjectId(resp.langfuse_project_id ?? "");
-      if (isFull && typeof resp.page === "number" && resp.page > 0 && resp.page !== effectivePage) {
+      if (typeof resp.page === "number" && resp.page > 0 && resp.page !== page) {
         setPage(resp.page);
       }
     } catch (err) {
@@ -91,7 +80,7 @@ export function useMemoryReadOnlyList({
       setLoading(false);
       setListReady(true);
     }
-  }, [accountId, datapackId, effectivePage, effectivePageSize, isFull]);
+  }, [accountId, datapackId, page, pageSize]);
 
   useEffect(() => {
     setPage(1);
@@ -106,31 +95,25 @@ export function useMemoryReadOnlyList({
 
   const goToPage = useCallback(
     (next: number) => {
-      if (!isFull) return;
       const clamped = Math.min(Math.max(1, next), totalPages);
       if (clamped === page) return;
       setPage(clamped);
     },
-    [isFull, page, totalPages],
+    [page, totalPages],
   );
 
-  const changePageSize = useCallback(
-    (next: number) => {
-      if (!isFull) return;
-      setPageSize(next);
-      setPage(1);
-    },
-    [isFull],
-  );
+  const changePageSize = useCallback((next: number) => {
+    setPageSize(next);
+    setPage(1);
+  }, []);
 
-  const rangeStart = total === 0 ? 0 : (effectivePage - 1) * effectivePageSize + 1;
-  const rangeEnd = total === 0 ? 0 : Math.min(total, effectivePage * effectivePageSize);
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = total === 0 ? 0 : Math.min(total, page * pageSize);
 
   const sessionSummaryReady =
     !accountLoading && accountError == null && Boolean(accountId) && listReady;
 
   return {
-    isFull,
     loading,
     error,
     memories,

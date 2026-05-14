@@ -1,6 +1,5 @@
-// Read-only paginated list of promoted memories for a datapack.
-// `preview` = first {@link COLLECTIVE_MEMORY_PREVIEW_SIZE} rows (Collective
-// Memory tab); `full` = paginated (collective-memory-summary route).
+// Read-only paginated list of promoted memories for a datapack
+// (collective-memory-summary route).
 //
 // Mirrors useMemoryReadOnlyList but hits GET /promoted-memories instead of
 // /memories — the promoted endpoint is datapack-scoped only (no user_id).
@@ -13,19 +12,11 @@ import {
 } from "@/lib/mekoApi";
 import { DEFAULT_PAGE_SIZE } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
 
-export const COLLECTIVE_MEMORY_PREVIEW_SIZE = 7;
-
-export type CollectiveMemoryVariant = "preview" | "full";
-
 export function usePromotedMemoryList({
   datapackId,
-  variant,
 }: {
   datapackId: string;
-  variant: CollectiveMemoryVariant;
 }) {
-  const isFull = variant === "full";
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [memories, setMemories] = useState<PromotedMemory[]>([]);
@@ -50,9 +41,6 @@ export function usePromotedMemoryList({
     setListReady(false);
   }
 
-  const effectivePage = isFull ? page : 1;
-  const effectivePageSize = isFull ? pageSize : COLLECTIVE_MEMORY_PREVIEW_SIZE;
-
   const loadMemories = useCallback(async () => {
     if (!datapackId) return;
     setLoading(true);
@@ -60,13 +48,13 @@ export function usePromotedMemoryList({
     try {
       const resp = await listPromotedMemories({
         datapack_id: datapackId,
-        page: effectivePage,
-        page_size: effectivePageSize,
+        page,
+        page_size: pageSize,
       });
       setMemories(resp.promoted_memories ?? []);
       setTotal(resp.total ?? 0);
       setTotalPages(Math.max(1, resp.total_pages ?? 1));
-      if (isFull && typeof resp.page === "number" && resp.page > 0 && resp.page !== effectivePage) {
+      if (typeof resp.page === "number" && resp.page > 0 && resp.page !== page) {
         setPage(resp.page);
       }
       setListReady(true);
@@ -78,7 +66,7 @@ export function usePromotedMemoryList({
     } finally {
       setLoading(false);
     }
-  }, [datapackId, effectivePage, effectivePageSize, isFull]);
+  }, [datapackId, page, pageSize]);
 
   useEffect(() => {
     if (!datapackId) return;
@@ -87,28 +75,22 @@ export function usePromotedMemoryList({
 
   const goToPage = useCallback(
     (next: number) => {
-      if (!isFull) return;
       const clamped = Math.min(Math.max(1, next), totalPages);
       if (clamped === page) return;
       setPage(clamped);
     },
-    [isFull, page, totalPages],
+    [page, totalPages],
   );
 
-  const changePageSize = useCallback(
-    (next: number) => {
-      if (!isFull) return;
-      setPageSize(next);
-      setPage(1);
-    },
-    [isFull],
-  );
+  const changePageSize = useCallback((next: number) => {
+    setPageSize(next);
+    setPage(1);
+  }, []);
 
-  const rangeStart = total === 0 ? 0 : (effectivePage - 1) * effectivePageSize + 1;
-  const rangeEnd = total === 0 ? 0 : Math.min(total, effectivePage * effectivePageSize);
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = total === 0 ? 0 : Math.min(total, page * pageSize);
 
   return {
-    isFull,
     loading,
     error,
     memories,

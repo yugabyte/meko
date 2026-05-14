@@ -316,12 +316,12 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
         {/* Drop zone */}
         <div
           className={cn(
-            "flex flex-col items-center justify-center rounded-lg border border-dashed p-8 transition-colors",
+            "flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors",
             batchFull || kbBusy
-              ? "border-border/40 opacity-50 cursor-not-allowed"
+              ? "border-border/60 opacity-50 cursor-not-allowed"
               : isDragOver
                 ? "border-blue-400 bg-blue-500/10 cursor-pointer"
-                : "border-border/60 hover:border-border hover:bg-white/[0.02] cursor-pointer",
+                : "border-blue-500/50 bg-blue-500/[0.04] hover:border-blue-400 hover:bg-blue-500/10 cursor-pointer",
           )}
           onDragOver={(e) => {
             e.preventDefault();

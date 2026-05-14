@@ -11,8 +11,8 @@
 // page came back empty) — the rail is still visible so the user can
 // pick one.
 
-import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { MessageSquare } from "lucide-react";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
@@ -20,11 +20,38 @@ import { ConversationListRail } from "@/features/datapacks/components/conversati
 import { ConversationThreadPane } from "@/features/datapacks/components/conversations-viewer/ConversationThreadPane";
 import { TraceDrawer } from "@/features/datapacks/components/conversations-viewer/TraceDrawer";
 import {
+  CONVERSATION_SOURCE,
+  CONVERSATION_SOURCE_QUERY_PARAM,
   ROUTES,
+  datapackCollectiveMemorySummaryPath,
   datapackConversationsPath,
   datapackDetailPath,
+  datapackMemorySummaryPath,
+  type ConversationSource,
 } from "@/app/routes/paths";
 import type { DatapackConversation } from "@/lib/mekoApi";
+
+/** Drives an extra breadcrumb hop when the viewer is reached from one of
+ *  the summary pages, so the user can step back to where they came from.
+ *  Keyed by {@link ConversationSource} so a typo or rename is caught by
+ *  the compiler. */
+const SOURCE_BREADCRUMB: Record<
+  ConversationSource,
+  (datapackName: string) => { label: string; href: string }
+> = {
+  [CONVERSATION_SOURCE.memorySummary]: (datapackName) => ({
+    label: "Memory Summary",
+    href: datapackMemorySummaryPath(datapackName),
+  }),
+  [CONVERSATION_SOURCE.collectiveMemorySummary]: (datapackName) => ({
+    label: "Collective Memory Summary",
+    href: datapackCollectiveMemorySummaryPath(datapackName),
+  }),
+};
+
+function isConversationSource(value: string): value is ConversationSource {
+  return (Object.values(CONVERSATION_SOURCE) as string[]).includes(value);
+}
 
 type Props = {
   datapackName: string;
@@ -40,6 +67,12 @@ export default function DatapackConversationsViewerPage({
   conversationId,
 }: Props) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const sourceCrumb = useMemo(() => {
+    const from = searchParams.get(CONVERSATION_SOURCE_QUERY_PARAM) ?? "";
+    if (!isConversationSource(from)) return null;
+    return SOURCE_BREADCRUMB[from](datapackName);
+  }, [searchParams, datapackName]);
 
   /** Currently open trace drawer message (null = drawer closed).
    *  Owned at the page level so the drawer survives thread re-fetches
@@ -88,6 +121,7 @@ export default function DatapackConversationsViewerPage({
             items={[
               { label: "Datapacks", href: ROUTES.datapacks },
               { label: datapackName, href: datapackDetailPath(datapackName) },
+              ...(sourceCrumb ? [sourceCrumb] : []),
               { label: "Conversations" },
             ]}
             className="mb-2"

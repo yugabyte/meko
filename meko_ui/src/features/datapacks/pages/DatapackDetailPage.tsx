@@ -15,10 +15,20 @@ import {
   ROUTES,
   DATAPACK_QUERY_FLAG_ON,
   DATAPACK_QUERY_PARAM,
+  datapackCollectiveMemorySummaryPath,
   datapackConfigurePath,
+  datapackConversationsPath,
+  datapackKnowledgePath,
+  datapackLearningsPath,
+  datapackMemorySummaryPath,
   datapackSharePath,
 } from "@/app/routes/paths";
-import { isDatapackGrantEligibleToAddKnowledgeBase, isDatapackGrantEligibleToDelete, isDatapackGrantEligibleToEdit, isDatapackGrantEligibleToPromoteMemoryToKnowledge, isDatapackGrantEligibleToShare } from "@/lib/datapackShareGrants";
+import {
+  isDatapackGrantEligibleToAddKnowledgeBase,
+  isDatapackGrantEligibleToDelete,
+  isDatapackGrantEligibleToEdit,
+  isDatapackGrantEligibleToShare
+} from "@/lib/datapackShareGrants";
 import {
   DatapackOutgoingMember,
   DatapackShareGrant,
@@ -40,11 +50,6 @@ import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
-import MemoryPromotionPanel from "@/features/datapacks/components/MemoryPromotionPanel";
-import { MemoryReadOnlySummaryPanel } from "@/features/datapacks/components/memory-promotion/MemoryReadOnlySummaryPanel";
-import { CollectiveMemoryPanel } from "@/features/datapacks/components/collective-memory/CollectiveMemoryPanel";
-import { KnowledgeDocumentsPanel } from "@/features/datapacks/components/knowledge-documents/KnowledgeDocumentsPanel";
-import ConversationsPanel from "@/features/datapacks/components/datapack-detail/ConversationsPanel";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
@@ -61,10 +66,8 @@ import {
 } from "@/features/datapacks/components/datapack-detail/dialogs";
 // Breadcrumbs, title, badges, description, metadata row, and hero action slot.
 import { DatapackDetailHero } from "@/features/datapacks/components/datapack-detail/DatapackDetailHero";
-// Tab strip driving which detail sub-view is shown.
-import { DatapackDetailTabStrip } from "@/features/datapacks/components/datapack-detail/DatapackDetailTabStrip";
 // Tab id union + ordered tab list for labels / “coming soon” fallback copy.
-import { DATAPACK_DETAIL_TAB, DATAPACK_DETAIL_TAB_ITEMS, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
+import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
 type Props = {
   datapackName: string;
@@ -97,11 +100,31 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
-  // Bump to force the datapack effect to re-fetch (e.g. after a memory
-  // promotion so `learnings_count` refreshes in the pipeline ribbon).
-  const [datapackReloadNonce, setDatapackReloadNonce] = useState(0);
-  const reloadDatapack = useCallback(() => setDatapackReloadNonce((n) => n + 1), []);
-  const [activeTab, setActiveTab] = useState<DatapackDetailTab>(DATAPACK_DETAIL_TAB.conversations);
+
+  // Each tile in CollectiveLearningPipeline routes directly to its dedicated
+  // summary page — no inline preview list is rendered on the detail page.
+  const handlePipelineSelect = useCallback(
+    (tab: DatapackDetailTab) => {
+      switch (tab) {
+        case DATAPACK_DETAIL_TAB.conversations:
+          navigate(datapackConversationsPath(datapackName));
+          return;
+        case DATAPACK_DETAIL_TAB.memories:
+          navigate(datapackMemorySummaryPath(datapackName));
+          return;
+        case DATAPACK_DETAIL_TAB.learnings:
+          navigate(datapackLearningsPath(datapackName));
+          return;
+        case DATAPACK_DETAIL_TAB.collectiveMemory:
+          navigate(datapackCollectiveMemorySummaryPath(datapackName));
+          return;
+        case DATAPACK_DETAIL_TAB.knowledge:
+          navigate(datapackKnowledgePath(datapackName));
+          return;
+      }
+    },
+    [navigate, datapackName],
+  );
 
   const [isConnectOpen, setIsConnectOpen] = useState(false);
   const [connectLoading, setConnectLoading] = useState(false);
@@ -115,7 +138,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeBaseDocument[]>([]);
   const [knowledgeDocumentsLoading, setKnowledgeDocumentsLoading] = useState(true);
   const [knowledgeDocumentsError, setKnowledgeDocumentsError] = useState<string | null>(null);
-  const [knowledgeDocumentsNonce, setKnowledgeDocumentsNonce] = useState(0);
   const [memoriesCount, setMemoriesCount] = useState(0);
   const [learningsCount, setLearningsCount] = useState(0);
   const [conversationsCount, setConversationsCount] = useState(0);
@@ -174,7 +196,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       cancelled = true;
     };
-  }, [datapackName, navigate, routeDatapackId, datapackReloadNonce]);
+  }, [datapackName, navigate, routeDatapackId]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -233,10 +255,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     };
   }, [datapackName, datapack?.datapack_id, routeDatapackId]);
 
-  const reloadKnowledgeDocuments = useCallback(() => {
-    setKnowledgeDocumentsNonce((n) => n + 1);
-  }, []);
-
   useEffect(() => {
     const ac = new AbortController();
     setKnowledgeDocumentsLoading(true);
@@ -257,7 +275,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
         if (!ac.signal.aborted) setKnowledgeDocumentsLoading(false);
       });
     return () => ac.abort();
-  }, [datapackName, knowledgeDocumentsNonce, routeDatapackId]);
+  }, [datapackName, routeDatapackId]);
 
   useEffect(() => {
     if (!isConnectOpen) return;
@@ -444,106 +462,34 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           learningsCount={learningsCount}
           datapackId={datapack?.datapack_id ?? null}
           knowledgeCount={knowledgeDocuments?.length}
-          onSelectSection={setActiveTab}
+          onSelectSection={handlePipelineSelect}
           onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
           statusLoading={statusLoading}
         />
 
-        <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,1fr)] lg:items-stretch lg:gap-6">
-          <div className="flex min-h-0 min-w-0 flex-col">
-            <DatapackDetailTabStrip activeTab={activeTab} onTabChange={setActiveTab} />
-            <div className="mt-6 min-h-0 w-full flex-1">
-              {/*
-                Conversations + Learnings panels stay MOUNTED across tab
-                switches so their internal cache (current page, fetched
-                rows) is preserved. Inactive ones are just hidden via
-                CSS — no remount, no duplicate API calls. Memory and
-                Knowledge tabs are still placeholder copy until those
-                panels are built.
-              */}
-              <div hidden={activeTab !== DATAPACK_DETAIL_TAB.conversations}>
-                <ConversationsPanel
-                  datapackName={datapackName}
-                  datapackId={routeDatapackId}
-                  total={conversationsCount}
-                />
-              </div>
-              <div hidden={activeTab !== DATAPACK_DETAIL_TAB.learnings}>
-                {datapack?.datapack_id ? (
-                  <MemoryPromotionPanel
-                    datapackName={datapackName}
-                    datapackId={datapack.datapack_id}
-                    isPromotionAllowed={isDatapackGrantEligibleToPromoteMemoryToKnowledge({ grant: datapackGrant }) ?? false}
-                    variant="preview"
-                    onPromoted={reloadDatapack}
-                  />
-                ) : (
-                  <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
-                    {statusLoading ? "Loading datapack…" : "Datapack not available."}
-                  </div>
-                )}
-              </div>
-              {activeTab === DATAPACK_DETAIL_TAB.knowledge ? (
-                <KnowledgeDocumentsPanel
-                  knowledgeBaseCount={knowledgeDocuments?.length}
-                  datapackSummaryReady={!statusLoading && datapack != null}
-                  documents={knowledgeDocuments}
-                  documentsLoading={knowledgeDocumentsLoading}
-                  documentsError={knowledgeDocumentsError}
-                  onReloadDocuments={reloadKnowledgeDocuments}
-                />
-              ) : activeTab === DATAPACK_DETAIL_TAB.memories ? (
-                datapack?.datapack_id ? (
-                  <MemoryReadOnlySummaryPanel
-                    datapackName={datapackName}
-                    datapackId={datapack.datapack_id}
-                    variant="preview"
-                  />
-                ) : (
-                  <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
-                    {statusLoading ? "Loading datapack…" : "Datapack not available."}
-                  </div>
-                )
-              ) : activeTab === DATAPACK_DETAIL_TAB.collectiveMemory ? (
-                datapack?.datapack_id ? (
-                  <CollectiveMemoryPanel
-                    datapackName={datapackName}
-                    datapackId={datapack.datapack_id}
-                    variant="preview"
-                  />
-                ) : (
-                  <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
-                    {statusLoading ? "Loading datapack…" : "Datapack not available."}
-                  </div>
-                )
-              ) : activeTab !== DATAPACK_DETAIL_TAB.conversations &&
-                activeTab !== DATAPACK_DETAIL_TAB.learnings ? (
-                <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
-                  {DATAPACK_DETAIL_TAB_ITEMS.find((t) => t.id === activeTab)?.label} — content coming soon.
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex min-h-0 min-w-0 flex-col gap-4 lg:self-start lg:w-full">
-            <DatapackDetailMembersTile
-              datapackName={datapackName}
-              currentUser={currentUser}
-              members={members}
-              membersListStatus={membersListStatus}
-            />
-            <DatapackDetailKnowledgeTile
-              documents={knowledgeDocuments}
-              documentsLoading={knowledgeDocumentsLoading}
-              documentsError={knowledgeDocumentsError}
-              canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
-              onAddSource={() => setIsUploadOpen(true)}
-            />
-            <DatapackDetailAgentsTile datapackName={datapackName} datapackId={routeDatapackId} />
-            <DatapackDetailConnectTile
-              mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
-              onOpenConnect={() => setIsConnectOpen(true)}
-            />
-          </div>
+        {/* Sidebar tiles — at-a-glance views; the pipeline above is the
+            only path into the full Conversations / Memories / Learnings /
+            Collective Memory / Knowledge summary pages. */}
+        <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch lg:gap-6">
+          <DatapackDetailMembersTile
+            datapackName={datapackName}
+            currentUser={currentUser}
+            members={members}
+            canShare={isDatapackGrantEligibleToShare({ grant: datapackGrant })}
+            membersListStatus={membersListStatus}
+          />
+          <DatapackDetailKnowledgeTile
+            documents={knowledgeDocuments}
+            documentsLoading={knowledgeDocumentsLoading}
+            documentsError={knowledgeDocumentsError}
+            canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
+            onAddSource={() => setIsUploadOpen(true)}
+          />
+          <DatapackDetailAgentsTile datapackName={datapackName} datapackId={routeDatapackId} />
+          <DatapackDetailConnectTile
+            mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
+            onOpenConnect={() => setIsConnectOpen(true)}
+          />
         </div>
       </main>
     </div>

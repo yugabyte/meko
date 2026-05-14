@@ -56,8 +56,9 @@ export function WorkbenchLMHeader({
           disabled={loading || accessibleDatapacks.length === 0}
         >
           <SelectTrigger
-            className="h-8 w-[260px] border-border/70 bg-[#1C2333] text-sm"
+            className="h-8 w-[260px] border-border/70 bg-[#1C2333] text-sm [&>span]:block [&>span]:min-w-0 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left"
             aria-label="Select datapack"
+            title={selectedDatapackName ?? undefined}
           >
             <SelectValue
               placeholder={
@@ -69,11 +70,13 @@ export function WorkbenchLMHeader({
               }
             />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="max-w-[min(28rem,calc(100vw-2rem))]">
             {accessibleDatapacks.map((dp) => (
               <SelectItem key={dp.datapack_id} value={dp.datapack_name}>
-                <span className="inline-flex items-center gap-2">
-                  <span className="truncate">{dp.datapack_name}</span>
+                <span className="inline-flex min-w-0 max-w-full items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate" title={dp.datapack_name}>
+                    {dp.datapack_name}
+                  </span>
                   {dp.grant ? (
                     <span
                       className={cn(
@@ -90,7 +93,7 @@ export function WorkbenchLMHeader({
           </SelectContent>
         </Select>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="truncate text-xs text-muted-foreground" title={selectedDatapackName ?? undefined}>
         {selectedDatapackName ? (
           <>
             Datapack:{" "}

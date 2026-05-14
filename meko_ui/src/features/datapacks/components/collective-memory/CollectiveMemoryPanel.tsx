@@ -1,29 +1,25 @@
-// Read-only Collective Memory: same card chrome as MemoryReadOnlySummaryPanel,
-// backed by GET /promoted-memories. `preview` shows the top
-// {@link COLLECTIVE_MEMORY_PREVIEW_SIZE} rows + "View all" → summary route;
-// `full` paginates.
+// Read-only paginated Collective Memory list (collective-memory-summary
+// route). Same card chrome as MemoryReadOnlySummaryPanel, backed by
+// GET /promoted-memories. Each row deep-links into the conversation viewer.
 
 import { Link } from "react-router-dom";
 import { AlertCircle, ChevronLeft, ChevronRight, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { datapackCollectiveMemorySummaryPath } from "@/app/routes/paths";
-import { PAGE_SIZE_OPTIONS } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
 import {
-  COLLECTIVE_MEMORY_PREVIEW_SIZE,
-  usePromotedMemoryList,
-  type CollectiveMemoryVariant,
-} from "./usePromotedMemoryList";
+  CONVERSATION_SOURCE,
+  datapackConversationsPathWithSource,
+} from "@/app/routes/paths";
+import { PAGE_SIZE_OPTIONS } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
+import { usePromotedMemoryList } from "./usePromotedMemoryList";
 import { PromotedMemoryRowBody } from "./PromotedMemoryRowBody";
 
 type Props = {
   datapackName: string;
   datapackId: string;
-  variant: CollectiveMemoryVariant;
 };
 
-export function CollectiveMemoryPanel({ datapackName, datapackId, variant }: Props) {
+export function CollectiveMemoryPanel({ datapackName, datapackId }: Props) {
   const {
-    isFull,
     loading,
     error,
     memories,
@@ -37,10 +33,9 @@ export function CollectiveMemoryPanel({ datapackName, datapackId, variant }: Pro
     loadMemories,
     goToPage,
     changePageSize,
-  } = usePromotedMemoryList({ datapackId, variant });
+  } = usePromotedMemoryList({ datapackId });
 
-  const showPagination = isFull && total > 0;
-  const showViewAll = !isFull && total > COLLECTIVE_MEMORY_PREVIEW_SIZE;
+  const showPagination = total > 0;
 
   return (
     <div className="rounded-xl border border-border bg-[#1C2333] p-6 space-y-4">
@@ -63,8 +58,7 @@ export function CollectiveMemoryPanel({ datapackName, datapackId, variant }: Pro
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               Memories promoted into the tenant knowledge base for{" "}
-              <span className="font-medium text-white">{datapackName}</span>
-              {isFull ? "." : ` (showing up to ${COLLECTIVE_MEMORY_PREVIEW_SIZE} here).`}
+              <span className="font-medium text-white">{datapackName}</span>.
             </p>
           </div>
         </div>
@@ -151,28 +145,31 @@ export function CollectiveMemoryPanel({ datapackName, datapackId, variant }: Pro
       {memories.length > 0 ? (
         <>
           <ul className="space-y-2">
-            {memories.map((m) => (
-              <li
-                key={m.id}
-                className="rounded-lg border border-border bg-[#0E1525] px-4 py-3"
-              >
-                <PromotedMemoryRowBody memory={m} />
-              </li>
-            ))}
+            {memories.map((m) => {
+              const conversationId = m.conversation_id ?? "";
+              return (
+                <li key={m.id}>
+                  {conversationId ? (
+                    <Link
+                      to={datapackConversationsPathWithSource(
+                        datapackName,
+                        conversationId,
+                        CONVERSATION_SOURCE.collectiveMemorySummary,
+                      )}
+                      title={`Open conversation ${conversationId}`}
+                      className="block rounded-lg border border-border bg-[#0E1525] px-4 py-3 transition-colors hover:bg-[#161d2e] hover:border-border/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <PromotedMemoryRowBody memory={m} />
+                    </Link>
+                  ) : (
+                    <div className="rounded-lg border border-border bg-[#0E1525] px-4 py-3">
+                      <PromotedMemoryRowBody memory={m} />
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
-          {showViewAll ? (
-            <div className="flex justify-center pt-1">
-              <Button
-                variant="outline"
-                className="min-w-[18rem] max-w-full border-border bg-background/80 px-6 py-2.5 text-sm sm:min-w-[22rem]"
-                asChild
-              >
-                <Link to={datapackCollectiveMemorySummaryPath(datapackName)}>
-                  View all collective memories
-                </Link>
-              </Button>
-            </div>
-          ) : null}
         </>
       ) : null}
     </div>

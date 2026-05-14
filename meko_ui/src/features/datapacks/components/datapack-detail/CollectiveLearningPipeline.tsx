@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import {
   ArrowLeftRight,
+  ArrowUpRight,
   BookOpen,
   ChevronRight,
   Loader2,
@@ -84,8 +85,13 @@ function StageShell({
   flexGrow = true,
 }: StageShellProps) {
   const interactive = Boolean(onSelect);
+  // The "open" arrow is a discoverability cue in the top-left corner —
+  // signals the whole tile navigates to a summary page. Shown on every
+  // interactive tile (top-left position doesn't conflict with the bottom
+  // "Review N promotions" button on Learnings or the top-right cornerBadge).
+  const showOpenIndicator = interactive;
   const shellClass = cn(
-    "relative flex h-fit min-w-0 shrink-0 flex-col rounded-2xl border-2 px-4 py-3 text-left sm:min-w-[160px]",
+    "group relative flex h-fit min-w-0 shrink-0 flex-col rounded-2xl border-2 px-4 py-3 text-left sm:min-w-[160px]",
     flexGrow ? "flex-1" : "w-full flex-none",
     toneStyles[tone],
     interactive &&
@@ -129,6 +135,18 @@ function StageShell({
         >
           {cornerBadge}
         </span>
+      ) : null}
+      {showOpenIndicator ? (
+        <ArrowUpRight
+          className={cn(
+            // Top-left so it never overlaps with the existing top-right
+            // cornerBadge (Shared Knowledge "+2 files", Learnings "N ready").
+            "pointer-events-none absolute left-2 top-2 h-4 w-4 text-white/85 transition-all duration-150",
+            "group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-white",
+            "group-focus-visible:text-white",
+          )}
+          aria-hidden
+        />
       ) : null}
       {eyebrow ? (
         <div className={cn("text-center text-[10px] font-semibold uppercase tracking-[0.18em]", titleTone[tone])}>

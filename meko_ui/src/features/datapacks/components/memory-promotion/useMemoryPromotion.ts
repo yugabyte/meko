@@ -1,6 +1,5 @@
 // Loads paginated memories for a datapack, selection, and POST /promote-memories (promote to KB).
-// `preview` uses page 1 with a larger fetch window but only shows 3 unpromoted rows so promoting one
-// still fills the preview; `full` uses local page/pageSize and Prev/Next navigation.
+// Uses local page/pageSize for Prev/Next navigation in the learnings summary route.
 //
 // After a successful promote we refetch from the server (which now omits the
 // just-promoted rows) and invoke `onPromoted(count)` so the parent can refresh
@@ -20,12 +19,6 @@ import {
 
 export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 export const DEFAULT_PAGE_SIZE = 10;
-/** How many unpromoted rows the preview UI shows at once. */
-export const PREVIEW_PAGE_SIZE = 5;
-/** Preview fetches this many rows from page 1 so the next memories can fill in after a promotion. */
-export const PREVIEW_FETCH_PAGE_SIZE = 30;
-
-export type MemoryPromotionVariant = "full" | "preview";
 
 type PromotionSummary = {
   attempted: number;
@@ -36,18 +29,14 @@ type PromotionSummary = {
 
 export function useMemoryPromotion({
   datapackId,
-  variant,
   onPromoted,
 }: {
   datapackId: string;
-  variant: MemoryPromotionVariant;
   /** Fired after a successful promote with the count of just-promoted memories
    *  (inserted + updated). Parent typically refetches the datapack to refresh
    *  learnings_count and shows a toast. */
   onPromoted?: (count: number) => void;
 }) {
-  const isPreview = variant === "preview";
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -90,9 +79,6 @@ export function useMemoryPromotion({
     return () => controller.abort();
   }, []);
 
-  const effectivePage = isPreview ? 1 : page;
-  const effectivePageSize = isPreview ? PREVIEW_FETCH_PAGE_SIZE : pageSize;
-
   const loadMemories = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
@@ -104,14 +90,14 @@ export function useMemoryPromotion({
         datapack_id: datapackId,
         user_id: accountId,
         user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
-        page: effectivePage,
-        page_size: effectivePageSize,
+        page,
+        page_size: pageSize,
       });
       setMemories(resp.memories ?? []);
       setSelected(new Set());
       setTotal(resp.total ?? 0);
       setTotalPages(Math.max(1, resp.total_pages ?? 1));
-      if (!isPreview && typeof resp.page === "number" && resp.page > 0 && resp.page !== effectivePage) {
+      if (typeof resp.page === "number" && resp.page > 0 && resp.page !== page) {
         setPage(resp.page);
       }
     } catch (err) {
@@ -123,7 +109,7 @@ export function useMemoryPromotion({
       setLoading(false);
       setMemoriesSummaryReady(true);
     }
-  }, [accountId, datapackId, effectivePage, effectivePageSize, isPreview]);
+  }, [accountId, datapackId, page, pageSize]);
 
   useEffect(() => {
     setPage(1);
@@ -138,25 +124,20 @@ export function useMemoryPromotion({
 
   const goToPage = useCallback(
     (next: number) => {
-      if (isPreview) return;
       const clamped = Math.min(Math.max(1, next), totalPages);
       if (clamped === page) return;
       setPage(clamped);
     },
-    [isPreview, page, totalPages],
+    [page, totalPages],
   );
 
-  const changePageSize = useCallback(
-    (next: number) => {
-      if (isPreview) return;
-      setPageSize(next);
-      setPage(1);
-    },
-    [isPreview],
-  );
+  const changePageSize = useCallback((next: number) => {
+    setPageSize(next);
+    setPage(1);
+  }, []);
 
-  const rangeStart = total === 0 ? 0 : (effectivePage - 1) * effectivePageSize + 1;
-  const rangeEnd = total === 0 ? 0 : Math.min(total, effectivePage * effectivePageSize);
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = total === 0 ? 0 : Math.min(total, page * pageSize);
 
   const toggleOne = useCallback((id: string) => {
     setSelected((prev) => {
@@ -167,7 +148,7 @@ export function useMemoryPromotion({
     });
   }, []);
 
-  const unpromotedMemories = isPreview ? memories.slice(0, PREVIEW_PAGE_SIZE) : memories;
+  const unpromotedMemories = memories;
   const selectableIds = unpromotedMemories.map((m) => m.id);
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
   const someChecked = selected.size > 0 && !allChecked;
@@ -281,7 +262,6 @@ export function useMemoryPromotion({
   );
 
   return {
-    isPreview,
     loading,
     memoriesSummaryReady,
     error,

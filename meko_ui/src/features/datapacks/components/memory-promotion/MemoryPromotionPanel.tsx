@@ -1,8 +1,7 @@
-// Renders agent memories with promote-to-KB actions: preview (3 rows + optional View All) or full pagination.
-// UI-only; state and API calls live in useMemoryPromotion so detail and learnings routes stay in sync.
+// Renders agent memories with promote-to-KB actions (full paginated list).
+// UI-only; state and API calls live in useMemoryPromotion.
 
-import { useCallback, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback } from "react";
 import {
   ArrowLeftRight,
   Loader2,
@@ -23,20 +22,15 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
-import { datapackLearningsPath } from "@/app/routes/paths";
 import {
   PAGE_SIZE_OPTIONS,
-  PREVIEW_PAGE_SIZE,
   useMemoryPromotion,
-  type MemoryPromotionVariant,
 } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
 import { MemoryRowBody } from "@/features/datapacks/components/memory-promotion/memoryRowBody";
 
 type Props = {
   datapackName: string;
   datapackId: string;
-  /** `preview`: shows 3 unpromoted rows (fetches a larger window so slots refill after promote). `full`: paginated list. */
-  variant?: MemoryPromotionVariant;
   isPromotionAllowed: boolean;
   /** Fired after a successful promote with the count of just-promoted memories.
    *  Parent typically refetches the datapack so the learnings count in the
@@ -48,7 +42,6 @@ export default function MemoryPromotionPanel({
   datapackName,
   datapackId,
   isPromotionAllowed,
-  variant = "full",
   onPromoted,
 }: Props) {
   const handlePromoted = useCallback(
@@ -64,7 +57,6 @@ export default function MemoryPromotionPanel({
     [onPromoted],
   );
   const {
-    isPreview,
     loading,
     memoriesSummaryReady,
     error,
@@ -94,11 +86,9 @@ export default function MemoryPromotionPanel({
     promote,
     promoteOne,
     accountId,
-  } = useMemoryPromotion({ datapackId, variant, onPromoted: handlePromoted });
+  } = useMemoryPromotion({ datapackId, onPromoted: handlePromoted });
 
-  const showPagination = !isPreview && total > 0;
-  // More than PREVIEW_PAGE_SIZE memories exist server-side — link out to the full learnings page.
-  const showViewAll = isPreview && total > PREVIEW_PAGE_SIZE;
+  const showPagination = total > 0;
 
   const patternCount = unpromotedMemories.length;
   /** Count + empty copy only after account is known and listMemories has settled once (avoids the frame where total is still 0 before fetch). */
@@ -293,6 +283,13 @@ export default function MemoryPromotionPanel({
             <ul className="space-y-2">
               {unpromotedMemories.map((m) => {
                 const checked = selected.has(m.id);
+                // When the user has multi-selected (2+), suppress per-row
+                // promote so an accidental click can't promote just one row
+                // while their intent is the bulk action. The top "Promote to
+                // Knowledge (N)" button is the only path in that mode.
+                const multiSelectActive = selected.size >= 2;
+                const rowPromoteDisabled =
+                  promoting || !isPromotionAllowed || multiSelectActive;
                 return (
                   <li
                     key={m.id}
@@ -318,7 +315,7 @@ export default function MemoryPromotionPanel({
                               size="sm"
                               className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-white"
                               onClick={() => promoteOne(m.id)}
-                              disabled={promoting || !isPromotionAllowed}
+                              disabled={rowPromoteDisabled}
                             >
                               {promoting && promotingId === m.id ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
@@ -329,7 +326,13 @@ export default function MemoryPromotionPanel({
                             </Button>
                           </span>
                         </TooltipTrigger>
-                        {!isPromotionAllowed && <TooltipContent side="top">You don't have permission to promote to knowledge</TooltipContent>}
+                        {!isPromotionAllowed ? (
+                          <TooltipContent side="top">You don't have permission to promote to knowledge</TooltipContent>
+                        ) : multiSelectActive ? (
+                          <TooltipContent side="top">
+                            Multiple rows selected — use the “Promote to Knowledge ({selected.size})” button above.
+                          </TooltipContent>
+                        ) : null}
                       </Tooltip>
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -353,18 +356,6 @@ export default function MemoryPromotionPanel({
               })}
 
             </ul>
-
-            {showViewAll ? (
-              <div className="flex justify-center pt-1">
-                <Button
-                  variant="outline"
-                  className="min-w-[18rem] max-w-full border-border bg-background/80 px-6 py-2.5 text-sm sm:min-w-[22rem]"
-                  asChild
-                >
-                  <Link to={datapackLearningsPath(datapackName)}>View all promotion suggestions</Link>
-                </Button>
-              </div>
-            ) : null}
           </>
         )}
       </div>

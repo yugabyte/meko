@@ -50,6 +50,7 @@ type Props = {
   datapackName: string;
   currentUser: CurrentUser | null;
   members: DatapackOutgoingMember[];
+  canShare: boolean;
   /** Drives loading / error empty copy so we do not flash a false empty state */
   membersListStatus?: DatapackMembersListStatus;
   className?: string;
@@ -62,6 +63,7 @@ type Props = {
 export function DatapackDetailMembersTile({
   datapackName,
   currentUser,
+  canShare,
   members,
   membersListStatus = "ready",
   className,
@@ -72,7 +74,7 @@ export function DatapackDetailMembersTile({
   return (
     <aside
       className={cn(
-        "flex h-fit min-h-0 w-full flex-col self-start rounded-xl border border-border bg-card/50 shadow-sm",
+        "flex h-full min-h-0 w-full flex-col rounded-xl border border-border bg-card/50 shadow-sm",
         className,
       )}
     >
@@ -84,12 +86,12 @@ export function DatapackDetailMembersTile({
             {count}
           </span>
         </div>
-        <Link
+        {canShare && <Link
           to={datapackSharePath(datapackName)}
           className="shrink-0 text-xs font-medium text-blue-400 hover:underline"
         >
           Share →
-        </Link>
+        </Link>}
       </div>
       <ul className="flex flex-col divide-y divide-border px-2 py-1">
         {membersListStatus === "loading" ? (

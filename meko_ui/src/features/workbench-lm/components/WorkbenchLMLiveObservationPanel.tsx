@@ -66,6 +66,9 @@ type Props = {
 const TOP_N = 5;
 /** How often the panel auto-refreshes its three sections while visible. */
 const AUTO_REFRESH_INTERVAL_MS = 10_000;
+/** How long the "extracting…" pulse stays lit after a chat turn. Matches the
+ *  empirical Mem0 background-extractor window. */
+const EXTRACTING_WINDOW_MS = 40_000;
 
 export function WorkbenchLMLiveObservationPanel({
   datapackId,
@@ -88,11 +91,21 @@ export function WorkbenchLMLiveObservationPanel({
   // after the turn lands). Resets whenever the datapack changes — a fresh
   // datapack should fall back to the standard "Add a conversation" copy.
   const [chatTurnOccurred, setChatTurnOccurred] = useState(false);
+  // Time-bounded version of the same signal: lights up the small
+  // "extracting…" pulse in the section headers for EXTRACTING_WINDOW_MS
+  // after each turn, even when the section already has rows (so the user
+  // knows more may arrive). Resets on datapack change.
+  const [extracting, setExtracting] = useState(false);
   useEffect(() => {
     setChatTurnOccurred(false);
+    setExtracting(false);
   }, [datapackId]);
   useEffect(() => {
-    if (refreshTick > 0) setChatTurnOccurred(true);
+    if (refreshTick <= 0) return;
+    setChatTurnOccurred(true);
+    setExtracting(true);
+    const t = setTimeout(() => setExtracting(false), EXTRACTING_WINDOW_MS);
+    return () => clearTimeout(t);
   }, [refreshTick]);
 
   useEffect(() => {
@@ -186,6 +199,7 @@ export function WorkbenchLMLiveObservationPanel({
             datapackId={datapackId}
             refreshTick={effectiveTick}
             chatTurnOccurred={chatTurnOccurred}
+            extracting={extracting}
             // Bump the internal poll tick so siblings (Collective Memory in
             // particular) refetch immediately after the user promotes a
             // memory — the new entry shows up there without waiting for
@@ -198,6 +212,7 @@ export function WorkbenchLMLiveObservationPanel({
             datapackId={datapackId}
             refreshTick={effectiveTick}
             chatTurnOccurred={chatTurnOccurred}
+            extracting={extracting}
           />
         </div>
         {/* <div style={{ marginTop: '16px' }}>
@@ -217,6 +232,10 @@ type SectionShellProps = {
   toneText: string;
   toneBadge: string;
   count?: number;
+  /** Tone classes for the small "extracting…" chip rendered next to the
+   *  count when a chat turn is being processed in the background. */
+  extracting?: boolean;
+  extractingChipTone?: string;
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
@@ -229,6 +248,8 @@ function SectionShell({
   toneText,
   toneBadge,
   count,
+  extracting = false,
+  extractingChipTone,
   loading,
   error,
   onRefresh,
@@ -237,7 +258,7 @@ function SectionShell({
   return (
     <section className="flex min-h-0 flex-col py-5 first:pt-4 last:pb-4">
       <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           {icon}
           <h3 className={cn("text-[11px] font-semibold uppercase tracking-wider", toneText)}>
             {title}
@@ -246,6 +267,25 @@ function SectionShell({
             <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-medium", toneBadge)}>
               {count}
             </span>
+          ) : null}
+          {extracting ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider",
+                    extractingChipTone ?? "border-amber-500/30 bg-amber-500/10 text-amber-200",
+                  )}
+                  aria-live="polite"
+                >
+                  <Loader2 className="h-2.5 w-2.5 animate-spin" aria-hidden />
+                  extracting
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[240px] text-center">
+                Mem0 is still pulling memories out of your last message — usually under 40 seconds. New rows will appear here automatically.
+              </TooltipContent>
+            </Tooltip>
           ) : null}
         </div>
         <button
@@ -287,6 +327,7 @@ function LearningsSection({
   datapackId,
   refreshTick,
   chatTurnOccurred,
+  extracting,
   onPromoted,
 }: {
   datapackId: string | null;
@@ -295,6 +336,9 @@ function LearningsSection({
    *  selected. Lets us swap the empty-state copy from "Add a conversation"
    *  to "Extracting memories…" while Mem0's extractor catches up. */
   chatTurnOccurred: boolean;
+  /** True for the post-turn extraction window — drives the small
+   *  "extracting" chip in the section header even when rows already exist. */
+  extracting: boolean;
   /** Fired after a successful Promote to Ko so siblings (e.g. the
    *  Collective Memory section) can refetch immediately instead of
    *  waiting up to 10s for the next auto-poll. */
@@ -390,6 +434,8 @@ function LearningsSection({
       toneText={MEMORY_TONE.text}
       toneBadge={MEMORY_TONE.badge}
       count={datapackId ? Math.min(items.length, total) : undefined}
+      extracting={Boolean(datapackId) && extracting}
+      extractingChipTone="border-purple-500/40 bg-purple-500/10 text-purple-200"
       loading={loading}
       error={error}
       onRefresh={() => void fetchMemories()}
@@ -405,7 +451,7 @@ function LearningsSection({
           // tiles as soon as the extractor finishes.
           <p className="inline-flex items-center gap-2 text-xs text-purple-200/80">
             <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-            Extracting learnings from your recent chat — usually 30–60 seconds.
+            Extracting learnings from your recent chat — usually under 40 seconds.
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">Add a conversation to view memories.</p>
@@ -582,6 +628,7 @@ function CollectiveMemorySection({
   datapackId,
   refreshTick,
   chatTurnOccurred,
+  extracting,
 }: {
   datapackId: string | null;
   refreshTick: number;
@@ -589,6 +636,9 @@ function CollectiveMemorySection({
    *  promotion needs memories upstream, so a "still extracting" line
    *  reads better than the static "Promote a learning" copy. */
   chatTurnOccurred: boolean;
+  /** Mirrors Learnings — shows a small extracting chip in the header for
+   *  the post-turn extraction window. */
+  extracting: boolean;
 }) {
   const [items, setItems] = useState<PromotedMemory[]>([]);
   const [total, setTotal] = useState(0);
@@ -636,6 +686,8 @@ function CollectiveMemorySection({
       toneText={COLLECTIVE_TONE.text}
       toneBadge={COLLECTIVE_TONE.badge}
       count={datapackId ? Math.min(items.length, total) : undefined}
+      extracting={Boolean(datapackId) && extracting}
+      extractingChipTone="border-sky-500/40 bg-sky-500/10 text-sky-200"
       loading={loading}
       error={error}
       onRefresh={() => void fetchPromoted()}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation, useSearchParams } from "react-router-dom";
-import { datapackNewConfigurePath, ROUTES } from "@/app/routes/paths";
+import { DATAPACK_SUB_ROUTE, datapackNewConfigurePath, ROUTES } from "@/app/routes/paths";
 import DatapackConfigureWizardPage from "@/features/datapacks/pages/DatapackConfigureWizardPage";
 import DatapackConversationsViewerPage from "@/features/datapacks/pages/DatapackConversationsViewerPage";
 import DatapackDetailPage from "@/features/datapacks/pages/DatapackDetailPage";
@@ -8,6 +8,7 @@ import DatapackEditPage from "@/features/datapacks/pages/DatapackEditPage";
 import DatapackLearningsPage from "@/features/datapacks/pages/DatapackLearningsPage";
 import DatapackMemorySummaryPage from "@/features/datapacks/pages/DatapackMemorySummaryPage";
 import DatapackCollectiveMemorySummaryPage from "@/features/datapacks/pages/DatapackCollectiveMemorySummaryPage";
+import DatapackKnowledgeSummaryPage from "@/features/datapacks/pages/DatapackKnowledgeSummaryPage";
 import DatapackSharePage from "@/features/datapacks/pages/DatapackSharePage";
 import DatapacksOverviewPage from "@/features/datapacks/pages/DatapacksOverviewPage";
 import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
@@ -17,6 +18,7 @@ import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
  * configure at `/datapacks/:name/configure`, learnings at `/datapacks/:name/learnings`,
  * memory-summary at `/datapacks/:name/memory-summary`,
  * collective-memory-summary at `/datapacks/:name/collective-memory-summary`,
+ * knowledge at `/datapacks/:name/knowledge`,
  * conversations viewer at `/datapacks/:name/conversations[/:conversationId]`,
  * detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
  */
@@ -45,36 +47,39 @@ export default function DatapacksPage() {
     const rest = location.pathname.slice(prefix.length);
     const segments = rest.split("/").filter(Boolean);
 
-    if (segments[0] === "new" && segments[1] === "configure") {
+    if (segments[0] === DATAPACK_SUB_ROUTE.new && segments[1] === DATAPACK_SUB_ROUTE.configure) {
       return <DatapackConfigureWizardPage isCreateFlow currentUser={currentUser} />;
     }
 
-    if (segments[0] === "new" && segments.length === 1) {
+    if (segments[0] === DATAPACK_SUB_ROUTE.new && segments.length === 1) {
       return <Navigate to={datapackNewConfigurePath()} replace />;
     }
 
     const nameEncoded = segments[0];
     if (nameEncoded) {
       const datapackName = decodeURIComponent(nameEncoded);
-      if (segments[1] === "share") {
+      if (segments[1] === DATAPACK_SUB_ROUTE.share) {
         return <DatapackSharePage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
       }
-      if (segments[1] === "edit" && segments.length === 2) {
+      if (segments[1] === DATAPACK_SUB_ROUTE.edit && segments.length === 2) {
         return <DatapackEditPage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
       }
-      if (segments[1] === "configure") {
+      if (segments[1] === DATAPACK_SUB_ROUTE.configure) {
         return <DatapackConfigureWizardPage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
       }
-      if (segments[1] === "memory-summary" && segments.length === 2) {
+      if (segments[1] === DATAPACK_SUB_ROUTE.memorySummary && segments.length === 2) {
         return <DatapackMemorySummaryPage datapackName={datapackName} />;
       }
-      if (segments[1] === "collective-memory-summary" && segments.length === 2) {
+      if (segments[1] === DATAPACK_SUB_ROUTE.collectiveMemorySummary && segments.length === 2) {
         return <DatapackCollectiveMemorySummaryPage datapackName={datapackName} />;
       }
-      if (segments[1] === "learnings" && segments.length === 2) {
+      if (segments[1] === DATAPACK_SUB_ROUTE.knowledge && segments.length === 2) {
+        return <DatapackKnowledgeSummaryPage datapackName={datapackName} datapackId={routeDatapackId} />;
+      }
+      if (segments[1] === DATAPACK_SUB_ROUTE.learnings && segments.length === 2) {
         return <DatapackLearningsPage datapackName={datapackName} />;
       }
-      if (segments[1] === "conversations" && segments.length <= 3) {
+      if (segments[1] === DATAPACK_SUB_ROUTE.conversations && segments.length <= 3) {
         const conversationId = segments[2]
           ? decodeURIComponent(segments[2])
           : undefined;
