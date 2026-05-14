@@ -321,8 +321,15 @@ func DatapackProvisionStatusHandler(dpRepo *repository.DatapackRepo) echo.Handle
 				"NOT_FOUND", "datapack no longer exists")
 		}
 
-		// API tokens are managed by the user via /me/meko-tokens in the
-		// settings page; the connect dialog no longer surfaces a bearer.
+		// We need the caller's auth token to populate MCPAPIKey as its used
+		// by the WorkbenchLM to connect to the MCP server.
+		token, err := auth.ExtractBearerToken(c.Request())
+		if err != nil {
+			return apiError(c, http.StatusUnauthorized,
+				"UNAUTHORIZED", "unable to extract access token")
+		}
+		details.MCPAPIKey = token
+
 		return ok(c, http.StatusOK, details)
 	}
 }
