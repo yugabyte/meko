@@ -15,14 +15,31 @@ import (
 )
 
 // mockAccountLookup implements auth.AccountLookup for middleware tests.
+//
+// Both EnsureAccount (JWT path) and GetByID (PAT path) return the
+// same canned (account, err) tuple so a single fixture covers both
+// methods. Tests that need divergent behaviour can set byIDAccount /
+// byIDErr to override the GetByID-only response.
 type mockAccountLookup struct {
-	account *models.Account
-	err     error
+	account     *models.Account
+	err         error
+	byIDAccount *models.Account
+	byIDErr     error
+	byIDSet     bool
 }
 
 func (m *mockAccountLookup) EnsureAccount(
 	_ context.Context, _, _ string,
 ) (*models.Account, error) {
+	return m.account, m.err
+}
+
+func (m *mockAccountLookup) GetByID(
+	_ context.Context, _ string,
+) (*models.Account, error) {
+	if m.byIDSet {
+		return m.byIDAccount, m.byIDErr
+	}
 	return m.account, m.err
 }
 

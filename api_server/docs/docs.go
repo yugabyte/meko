@@ -2072,6 +2072,197 @@ const docTemplate = `{
                 }
             }
         },
+        "/internal/meko-tokens/validate": {
+            "post": {
+                "description": "Internal endpoint called by the MCP server.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "internal"
+                ],
+                "summary": "Validate an MCP personal access token",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "shared secret protecting the internal endpoint",
+                        "name": "X-Meko-Internal-Secret",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Validation request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.ValidatePATRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/meko-tokens": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all PATs (active, expired, revoked) for the caller, newest first. Plaintext tokens are never included.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "meko-tokens"
+                ],
+                "summary": "List MCP personal access tokens",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Mints a new long-lived bearer token. The plaintext token is returned in the response exactly once and is never recoverable.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "meko-tokens"
+                ],
+                "summary": "Create an MCP personal access token",
+                "parameters": [
+                    {
+                        "description": "Token create request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.CreateMCPTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/meko-tokens/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Marks the token as revoked. Idempotent: revoking an already-revoked token returns 204 (the audit row is only emitted on the first revoke).",
+                "tags": [
+                    "meko-tokens"
+                ],
+                "summary": "Revoke an MCP personal access token",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Token ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/memories": {
             "get": {
                 "security": [
@@ -2408,6 +2599,23 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CreateMCPTokenRequest": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "ttl_days": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.PromoteMemoriesRequest": {
             "type": "object",
             "properties": {
@@ -2428,8 +2636,33 @@ const docTemplate = `{
                 }
             }
         },
+        "models.ValidatePATRequest": {
+            "type": "object",
+            "properties": {
+                "client_ip": {
+                    "type": "string"
+                },
+                "client_user_agent": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
         "service.AddRequest": {
-            "type": "object"
+            "type": "object",
+            "properties": {
+                "details": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
         },
         "service.CompleteNewPasswordRequest": {
             "type": "object",

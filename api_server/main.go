@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -32,6 +33,12 @@ func run() error {
 
 	// meko datapack api server configuration
 	port := flag.Int("port", 25433, "API server listen port")
+
+	// Logging level. Accepts debug, info, warn, error (case-insensitive).
+	// Set via flag or LOG_LEVEL env. Defaults to info.
+	logLevel := flag.String("log-level",
+		envOrDefault("LOG_LEVEL", "info"),
+		"slog level: debug, info, warn, error")
 
 	// database configuration
 	dbHost := flag.String("db-host", "127.0.0.1", "database host")
@@ -78,6 +85,30 @@ func run() error {
 	memoryListSkipVectorSort := flag.Bool("memory-list-skip-vector-sort", envBoolOrDefault("MEMORY_LIST_SKIP_VECTOR_SORT", true), "Skip OpenAI vector embedding for memory/learning list and sort by created_at DESC")
 	deployEnv := flag.String("deploy-env", envOrDefault("MEKO_DEPLOY_ENV", "prod"), "deployment environment: prod or dev")
 
+	// MCP internal validation endpoint shared secret. When empty, the
+	// /api/v1/internal/meko-tokens/validate endpoint returns 503.
+	mcpInternalSecret := flag.String("mcp-internal-secret",
+		os.Getenv("MCP_INTERNAL_SECRET"),
+		"shared secret for /internal/meko-tokens/validate (MCP server -> api_server). Empty disables the endpoint.")
+
+	// MCP PAT last_used_at flush cadence. The validator coalesces
+	// touches in memory and the background goroutine drains them on
+	// this interval. Lower = fresher UI / more DB writes; higher =
+	// staler UI / fewer DB writes. Values < 1s are clamped at startup.
+	mcpPATFlushInterval := flag.Duration("mcp-pat-flush-interval",
+		envDurationOrDefault("MCP_PAT_FLUSH_INTERVAL", 30*time.Second),
+		"cadence for flushing MCP PAT last_used_at touches to the DB (e.g. 30s, 2m). Values <1s are clamped to 1s.")
+
+	// Per-PAT rate limit. Applied only on routes that opted into PAT
+	// acceptance (currently the 7 DatapackHandler routes); JWT
+	// requests are untouched. perMin <= 0 disables the limiter.
+	patRateLimitPerMin := flag.Int("pat-rate-limit-per-min",
+		envIntOrDefault("PAT_RATE_LIMIT_PER_MIN", 60),
+		"max requests per minute per PAT on opted-in routes (<=0 disables)")
+	patRateLimitBurst := flag.Int("pat-rate-limit-burst",
+		envIntOrDefault("PAT_RATE_LIMIT_BURST", 10),
+		"burst allowance on top of --pat-rate-limit-per-min")
+
 	// S3 configuration
 	s3AuthMode := flag.String("s3-auth-mode", envOrDefault("S3_AUTH_MODE", "minio"), "S3 auth mode: minio, iam-user, iam-role")
 	s3Endpoint := flag.String("s3-endpoint", envOrDefault("S3_ENDPOINT", "http://localhost:19094"), "S3-compatible endpoint URL (minio mode)")
@@ -87,11 +118,14 @@ func run() error {
 	s3Region := flag.String("s3-region", envOrDefault("S3_REGION", "us-east-2"), "S3 region")
 	flag.Parse()
 
+	resolvedLogLevel := parseLogLevel(*logLevel)
 	slog.SetDefault(slog.New(
 		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
+			Level: resolvedLogLevel,
 		}),
 	))
+	slog.Info("logger configured",
+		"requested", *logLevel, "effective", resolvedLogLevel)
 
 	connStr := fmt.Sprintf(
 		"postgresql://%s:%d/%s?user=%s&password=%s&sslmode=%s",
@@ -146,6 +180,12 @@ func run() error {
 
 	slog.Info("provisioning config", "crd_namespace", *crdNamespace)
 
+	if *mcpInternalSecret == "" {
+		slog.Warn("mcp internal validate endpoint disabled (no --mcp-internal-secret / MCP_INTERNAL_SECRET configured)")
+	} else {
+		slog.Info("mcp internal validate endpoint enabled")
+	}
+
 	return api.Run(api.ServerConfig{
 		DB:                       conn,
 		Port:                     *port,
@@ -170,6 +210,10 @@ func run() error {
 		S3Region:                 *s3Region,
 		MCPServerURL:             mcpServerURLForEnv(repository.ParseDeployEnv(*deployEnv)),
 		DeployEnv:                repository.ParseDeployEnv(*deployEnv),
+		MCPInternalSecret:        *mcpInternalSecret,
+		MCPPATFlushInterval:      *mcpPATFlushInterval,
+		PATRateLimitPerMin:       *patRateLimitPerMin,
+		PATRateLimitBurst:        *patRateLimitBurst,
 	})
 }
 
@@ -215,4 +259,43 @@ func mcpServerURLForEnv(env repository.DeployEnv) string {
 		return mcpServerURLDev
 	}
 	return mcpServerURLProd
+}
+
+// parseLogLevel maps a CLI/env string to a slog.Level. Unknown
+// values fall back to Info with a warn log so a typo never silences
+// the process or crashes boot.
+func parseLogLevel(raw string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "debug":
+		return slog.LevelDebug
+	case "info", "":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error", "err":
+		return slog.LevelError
+	default:
+		slog.Warn("unknown log level, defaulting to info",
+			"requested", raw)
+		return slog.LevelInfo
+	}
+}
+
+// envDurationOrDefault parses the named env var as a Go duration
+// (e.g. "30s", "2m", "500ms"). On parse error we log and fall back
+// to the default rather than crashing the process -- a bad value in
+// a deployment manifest should not block boot.
+func envDurationOrDefault(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		//nolint:gosec // G706: key/value are operator-supplied env config, not attacker input
+		slog.Warn("invalid duration env var, using default",
+			"key", key, "value", v, "error", err, "default", fallback)
+		return fallback
+	}
+	return d
 }

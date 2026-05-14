@@ -16,7 +16,7 @@ func TestDatapackRepo_Create_RequiresAgentID(t *testing.T) {
 	}
 	defer db.Close()
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	_, err = repo.Create(CreateDatapackParams{
 		Name:       "dp-1",
 		UserID:     "user-1",
@@ -43,7 +43,7 @@ func TestDatapackRepo_Create_AgentNotFound(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	_, err = repo.Create(CreateDatapackParams{
 		Name:        "dp-1",
 		UserID:      "user-1",
@@ -89,7 +89,7 @@ func TestDatapackRepo_Create_HappyPath_StampsAgentAndLinks(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	res, err := repo.Create(CreateDatapackParams{
 		Name:        "dp-1",
 		UserID:      "user-1",
@@ -138,7 +138,7 @@ func TestDatapackRepo_Create_WithDescription(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	res, err := repo.Create(CreateDatapackParams{
 		Name:        "dp-desc",
 		UserID:      "user-1",
@@ -180,7 +180,7 @@ func TestDatapackRepo_Create_RollsBackWhenInsertDatapackFails(t *testing.T) {
 		WillReturnError(errors.New("unique violation"))
 	mock.ExpectRollback()
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	_, err = repo.Create(CreateDatapackParams{
 		Name:        "dp-1",
 		UserID:      "user-1",
@@ -222,7 +222,7 @@ func TestDatapackRepo_Create_RollsBackWhenLinkInsertFails(t *testing.T) {
 		WillReturnError(errors.New("link insert failed"))
 	mock.ExpectRollback()
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	_, err = repo.Create(CreateDatapackParams{
 		Name:        "dp-1",
 		UserID:      "user-1",
@@ -257,7 +257,7 @@ func TestDatapackRepo_GetByName_NotFound(t *testing.T) {
 			"description", "owner_name",
 		}))
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	dp, err := repo.GetByName("user-1", "missing")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -294,7 +294,7 @@ func TestDatapackRepo_GetByName_Found(t *testing.T) {
 			"test description", "Test User", "owner@example.com",
 		))
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	dp, err := repo.GetByName("user-1", "dp-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -324,7 +324,7 @@ func TestDatapackRepo_Delete_NotFound(t *testing.T) {
 		WithArgs("user-1", "ghost").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	err = repo.Delete("user-1", "ghost")
 	if err == nil {
 		t.Fatal("expected error for missing datapack, got nil")
@@ -345,7 +345,7 @@ func TestDatapackRepo_Delete_OK(t *testing.T) {
 		WithArgs("user-1", "dp-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	if err := repo.Delete("user-1", "dp-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestDatapackRepo_Update_NoChange(t *testing.T) {
 	}
 	defer db.Close()
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	if err := repo.Update("user-1", "dp-1", UpdateDatapackParams{}); err != nil {
 		t.Errorf("unexpected error for empty params: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestDatapackRepo_Update_NotFound(t *testing.T) {
 		WithArgs("postgresql://new", "user-1", "ghost").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	err = repo.Update("user-1", "ghost", UpdateDatapackParams{
 		YBConnStr: "postgresql://new",
 	})
@@ -401,7 +401,7 @@ func TestDatapackRepo_Update_NameAndDescription(t *testing.T) {
 		WithArgs("new-name", `{"description":"new desc"}`, "user-1", "dp-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	err = repo.Update("user-1", "dp-1", UpdateDatapackParams{
 		Name:        "new-name",
 		Description: "new desc",
@@ -432,7 +432,7 @@ func TestDatapackRepo_GetStatus_NotFound(t *testing.T) {
 			"agent_count", "kb_count",
 		}))
 
-	repo := NewDatapackRepo(db)
+	repo := NewDatapackRepo(db, "", DeployEnvProd)
 	st, err := repo.GetStatus("user-1", "ghost")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

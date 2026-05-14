@@ -26,7 +26,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *sql.DB) {
 
 	cleanupDatapacks(t, db)
 
-	router, err := api.NewRouter(api.ServerConfig{DB: db})
+	router, _, err := api.NewRouter(api.ServerConfig{DB: db})
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}

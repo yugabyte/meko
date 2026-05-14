@@ -313,6 +313,191 @@ type DatapackMembersResponse struct {
 	Members []OutgoingShareMember `json:"members"`
 }
 
+// MCPPersonalAccessToken represents one row from
+// meko_system.mcp_personal_access_tokens.
+//
+// The `token_hash` column is intentionally NOT exposed -- it never
+// leaves the repo layer. `TokenPrefix` is the first ~16 chars of the
+// plaintext token (e.g. "mko_tkn_3KvL9X8z") and is shown in the UI as
+// the visual identifier after the one-time create reveal. The full
+// plaintext is only available in CreateMCPTokenResponse, returned
+// once at create time.
+//
+// Scopes is the set of permission strings the token was minted with.
+// Default vocabulary: "*" (full access), "read", "write". The set is
+// always non-empty; rows created before scopes existed are migrated to
+// {"*"} by the schema default.
+//
+// ExpiresAt is mandatory at the storage layer (NOT NULL since
+// migration 000004). The non-pointer type makes "no expiry" not
+// representable in Go, eliminating an entire class of nil-handling
+// bugs in callers.
+type MCPPersonalAccessToken struct {
+	CreatedAt   time.Time  `json:"created_at"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt   time.Time  `json:"expires_at"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	ID          string     `json:"id"`
+	UserID      string     `json:"-"`
+	Name        string     `json:"name"`
+	TokenPrefix string     `json:"token_prefix"`
+	Scopes      []string   `json:"scopes"`
+}
+
+// IsActive reports whether the token can still authenticate. A token
+// is active when it has not been revoked and has not expired.
+func (t MCPPersonalAccessToken) IsActive(now time.Time) bool {
+	if t.RevokedAt != nil {
+		return false
+	}
+	if !t.ExpiresAt.After(now) {
+		return false
+	}
+	return true
+}
+
+// CreateMCPTokenRequest is the JSON body for POST /me/meko-tokens.
+//
+// TTLDays is optional: when zero (or omitted) the service applies the
+// default TTL; values larger than the platform max are clamped down.
+//
+// Scopes is optional: when nil/empty the service defaults to {"*"}.
+// Each entry must come from the service-layer allowlist; otherwise the
+// request is rejected at create time.
+type CreateMCPTokenRequest struct {
+	Name    string   `json:"name"`
+	TTLDays int      `json:"ttl_days,omitempty"`
+	Scopes  []string `json:"scopes,omitempty"`
+}
+
+// CreateMCPTokenResponse is the body returned exactly once at token
+// creation time. The plaintext `Token` is NEVER stored or returned
+// again; clients must persist it themselves (e.g. paste into mcp.json).
+type CreateMCPTokenResponse struct {
+	Token       string                 `json:"token"`
+	TokenRecord MCPPersonalAccessToken `json:"token_record"`
+}
+
+// ValidatePATRequest is the JSON body for
+// POST /api/v1/internal/meko-tokens/validate. Sent by the MCP server
+// once per inbound tool call.
+//
+// ClientIP / ClientUserAgent are optional forwarding fields: when the
+// MCP server populates them, the api_server uses those values for the
+// audit row (actor_ip / actor_app_client) instead of the direct HTTP
+// connection's RemoteAddr / User-Agent. This is how the originating
+// end-user's IP and client identity (e.g. "Cursor/0.42.5 (mcp-client)")
+// reach the audit log -- the api_server only sees the MCP server pod
+// otherwise.
+//
+// Both fields are best-effort and additive. Missing values fall back
+// to whatever the api_server can read off the inbound HTTP connection,
+// so old MCP server builds keep working but produce less useful audit
+// rows for revoked/expired token reuse events.
+type ValidatePATRequest struct {
+	Token           string `json:"token"`
+	ClientIP        string `json:"client_ip,omitempty"`
+	ClientUserAgent string `json:"client_user_agent,omitempty"`
+}
+
+// MCPPATValidationReason is the closed set of outcomes the validator
+// returns for a non-active token. Empty when Valid is true.
+type MCPPATValidationReason string
+
+const (
+	// MCPPATValidationExpired indicates the token row exists but its
+	// expires_at is in the past.
+	MCPPATValidationExpired MCPPATValidationReason = "expired"
+
+	// MCPPATValidationRevoked indicates the token row exists but
+	// revoked_at is set.
+	MCPPATValidationRevoked MCPPATValidationReason = "revoked"
+
+	// MCPPATValidationUnknown indicates either the format is wrong
+	// (cheap reject) or no row matches the hash. Cannot be
+	// distinguished from outside without leaking the existence of a
+	// hashed bearer.
+	MCPPATValidationUnknown MCPPATValidationReason = "unknown"
+)
+
+// ValidatePATResponse is the JSON body returned by the validator.
+//
+// When Valid is true: TokenID, UserID, ExpiresAt and Scopes are
+// populated and Reason is empty. When Valid is false: only Reason is
+// populated.
+//
+// All requests that are syntactically well-formed return HTTP 200;
+// the verdict lives in the body so the MCP server can distinguish
+// "api_server is up and says no" from "api_server is unreachable".
+type ValidatePATResponse struct {
+	ExpiresAt *time.Time             `json:"expires_at,omitempty"`
+	TokenID   string                 `json:"token_id,omitempty"`
+	UserID    string                 `json:"user_id,omitempty"`
+	Scopes    []string               `json:"scopes,omitempty"`
+	Reason    MCPPATValidationReason `json:"reason,omitempty"`
+	Valid     bool                   `json:"valid"`
+}
+
+// MCPPATAuditAction is the discrete set of actions captured in
+// meko_system.mcp_pat_audit_log.action.
+type MCPPATAuditAction string
+
+const (
+	// MCPPATAuditCreated is logged when a user mints a new PAT.
+	MCPPATAuditCreated MCPPATAuditAction = "created"
+
+	// MCPPATAuditRevoked is logged when a user revokes a PAT from the
+	// management UI / API.
+	MCPPATAuditRevoked MCPPATAuditAction = "revoked"
+
+	// MCPPATAuditExpiredUsed is logged (rate-limited) by the MCP
+	// server when an expired token is presented.
+	MCPPATAuditExpiredUsed MCPPATAuditAction = "expired_used"
+
+	// MCPPATAuditRevokedUsed is logged (rate-limited) by the MCP
+	// server when a revoked token is presented -- a strong signal of
+	// possible token leak.
+	MCPPATAuditRevokedUsed MCPPATAuditAction = "revoked_used"
+)
+
+// MCPPATActorType is the actor classification for an audit row.
+type MCPPATActorType string
+
+const (
+	// MCPPATActorUser is the self-service caller acting on their own
+	// tokens.
+	MCPPATActorUser MCPPATActorType = "user"
+
+	// MCPPATActorAdmin is reserved for admin / support users acting
+	// on another user's tokens. Not used by the self-service flow.
+	MCPPATActorAdmin MCPPATActorType = "admin"
+
+	// MCPPATActorSystem is reserved for automated processes (e.g. the
+	// MCP server logging revoked-used / expired-used).
+	MCPPATActorSystem MCPPATActorType = "system"
+)
+
+// MCPPATAuditEntry represents one row from meko_system.mcp_pat_audit_log.
+//
+// ActorIP and ActorAppClient are captured best-effort from the request
+// (or forwarded by the MCP server on the validate path) and may be
+// empty. ActorAppClient is intentionally broader than HTTP User-Agent:
+// it carries browser UAs on user-driven rows and tool identifiers
+// (e.g. "Cursor/0.42.5 (mcp-client)") on validator-driven rows.
+// Metadata is free-form JSONB for forward-compatibility.
+type MCPPATAuditEntry struct {
+	CreatedAt      time.Time         `json:"created_at"`
+	ID             string            `json:"id"`
+	TokenID        string            `json:"token_id"`
+	UserID         string            `json:"user_id"`
+	Action         MCPPATAuditAction `json:"action"`
+	ActorID        string            `json:"actor_id"`
+	ActorType      MCPPATActorType   `json:"actor_type"`
+	ActorIP        *string           `json:"actor_ip,omitempty"`
+	ActorAppClient string            `json:"actor_app_client,omitempty"`
+	Metadata       json.RawMessage   `json:"metadata,omitempty"`
+}
+
 // EmbeddingDims returns the vector dimension for a given embedding model name.
 // Defaults to 1536 for unrecognized models.
 func EmbeddingDims(embedModel string) int {

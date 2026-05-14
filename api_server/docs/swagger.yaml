@@ -58,6 +58,17 @@ definitions:
       user_path:
         type: string
     type: object
+  models.CreateMCPTokenRequest:
+    properties:
+      name:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      ttl_days:
+        type: integer
+    type: object
   models.PromoteMemoriesRequest:
     properties:
       agent_id:
@@ -71,7 +82,23 @@ definitions:
       user_id:
         type: string
     type: object
+  models.ValidatePATRequest:
+    properties:
+      client_ip:
+        type: string
+      client_user_agent:
+        type: string
+      token:
+        type: string
+    type: object
   service.AddRequest:
+    properties:
+      details:
+        items:
+          type: integer
+        type: array
+      url:
+        type: string
     type: object
   service.CompleteNewPasswordRequest:
     properties:
@@ -1500,6 +1527,131 @@ paths:
       summary: Health check
       tags:
       - health
+  /internal/meko-tokens/validate:
+    post:
+      consumes:
+      - application/json
+      description: Internal endpoint called by the MCP server.
+      parameters:
+      - description: shared secret protecting the internal endpoint
+        in: header
+        name: X-Meko-Internal-Secret
+        required: true
+        type: string
+      - description: Validation request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/models.ValidatePATRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: Validate an MCP personal access token
+      tags:
+      - internal
+  /me/meko-tokens:
+    get:
+      description: Returns all PATs (active, expired, revoked) for the caller, newest
+        first. Plaintext tokens are never included.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List MCP personal access tokens
+      tags:
+      - meko-tokens
+    post:
+      consumes:
+      - application/json
+      description: Mints a new long-lived bearer token. The plaintext token is returned
+        in the response exactly once and is never recoverable.
+      parameters:
+      - description: Token create request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateMCPTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Create an MCP personal access token
+      tags:
+      - meko-tokens
+  /me/meko-tokens/{id}:
+    delete:
+      description: 'Marks the token as revoked. Idempotent: revoking an already-revoked
+        token returns 204 (the audit row is only emitted on the first revoke).'
+      parameters:
+      - description: Token ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Revoke an MCP personal access token
+      tags:
+      - meko-tokens
   /memories:
     get:
       parameters:

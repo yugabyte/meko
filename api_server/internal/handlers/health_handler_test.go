@@ -19,10 +19,24 @@ func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("postgres", testConnStr)
 	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
+		t.Skipf("test database unavailable: open: %v", err)
 	}
 	if err := db.Ping(); err != nil {
-		t.Fatalf("failed to ping test database: %v", err)
+		t.Skipf("test database unavailable: ping: %v", err)
+	}
+	// Sanity-check that migrations have been applied. Without this the
+	// per-test cleanup helpers spew cryptic "relation does not exist"
+	// errors and assertions fail in unhelpful ways.
+	var exists bool
+	if err := db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
+		                WHERE table_schema = 'meko_system' AND table_name = 'users')`,
+	).Scan(&exists); err != nil {
+		t.Skipf("test database unavailable: schema probe: %v", err)
+	}
+	if !exists {
+		t.Skip("test database missing meko_system schema; run migrations first " +
+			"(e.g. migrate -path ./internal/db/migrations -database <conn> up)")
 	}
 	return db
 }

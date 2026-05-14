@@ -537,12 +537,13 @@ func (r *DatapackRepo) Delete(userID, name string) error {
 
 // DefaultDatapackDetails is the connection-details payload returned
 // by GetDatapackProvisionDetails (and surfaced through the per-
-// datapack /provision-status endpoint).
+// datapack /provision-status endpoint). API tokens are intentionally
+// not included; users mint and manage their own via /me/meko-tokens
+// in the settings page.
 type DefaultDatapackDetails struct {
 	DatapackID   string    `json:"datapack_id"`
 	DatapackName string    `json:"datapack_name"`
 	MCPServerURL string    `json:"mcp_server_url"`
-	MCPAPIKey    string    `json:"mcp_api_key"`
 	DBUserName   string    `json:"db_user_name"`
 	DBPassword   string    `json:"db_password"`
 	DBConnStr    string    `json:"db_conn_str"`
@@ -551,8 +552,8 @@ type DefaultDatapackDetails struct {
 
 // GetDatapackProvisionDetails returns the connection details for the
 // datapack with the given ID, or (nil, nil) if it doesn't exist.
-// MCPServerURL is set to the static MCP endpoint; MCPAPIKey is left
-// empty — the handler layer populates it from the caller's auth token.
+// MCPServerURL is set to the static MCP endpoint configured at
+// startup.
 func (r *DatapackRepo) GetDatapackProvisionDetails(datapackID string) (*DefaultDatapackDetails, error) {
 	var d DefaultDatapackDetails
 	err := r.db.QueryRow(

@@ -14,7 +14,7 @@ func TestAPIResponse_SuccessEnvelope(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	e, routerErr := api.NewRouter(api.ServerConfig{DB: db})
+	e, _, routerErr := api.NewRouter(api.ServerConfig{DB: db})
 	if routerErr != nil {
 		t.Fatalf("failed to create router: %v", routerErr)
 	}
@@ -44,7 +44,7 @@ func TestAPIResponse_ErrorEnvelope(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 
-	e, routerErr := api.NewRouter(api.ServerConfig{DB: db})
+	e, _, routerErr := api.NewRouter(api.ServerConfig{DB: db})
 	if routerErr != nil {
 		t.Fatalf("failed to create router: %v", routerErr)
 	}

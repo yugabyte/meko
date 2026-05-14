@@ -33,6 +33,9 @@ type serviceRegistry struct {
 	sharingRepo        *repository.SharingRepo
 	sharingSvc         *service.SharingService
 	feedbackRepo       *repository.FeedbackRepo
+	mcpPATRepo         *repository.MCPPATRepo
+	mcpPATAuditRepo    *repository.MCPPATAuditRepo
+	mcpPATSvc          *service.MCPPATService
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -91,6 +94,10 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc)
 
+	mcpPATRepo := repository.NewMCPPATRepo(cfg.DB)
+	mcpPATAuditRepo := repository.NewMCPPATAuditRepo(cfg.DB)
+	mcpPATSvc := service.NewMCPPATService(mcpPATRepo, mcpPATAuditRepo)
+
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
 		accountRepo:        accountRepo,
@@ -108,6 +115,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		sharingRepo:        sharingRepo,
 		sharingSvc:         sharingSvc,
 		feedbackRepo:       feedbackRepo,
+		mcpPATRepo:         mcpPATRepo,
+		mcpPATAuditRepo:    mcpPATAuditRepo,
+		mcpPATSvc:          mcpPATSvc,
 	}
 }
 
@@ -115,7 +125,12 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 // When Cognito config is provided, auth routes are registered and
 // datapack routes require a valid JWT. When Cognito config is empty
 // (e.g. in tests), all routes are public.
-func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
+//
+// The constructed *serviceRegistry is also returned so the caller
+// (api.Run) can wire long-lived background workers -- specifically
+// the MCP PAT last_used_at flusher -- against the same repo
+// instances that are serving requests.
+func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = handlers.CustomHTTPErrorHandler
@@ -131,16 +146,31 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 
 	v1.GET("/health", handlers.HealthHandler(cfg.DB))
 
+	// Internal machine-to-machine routes. Protected by a static
+	// shared secret rather than the user-facing JWT path, so they
+	// hang off v1 directly and not under datapackGroup. When the
+	// secret is unset on cfg, the middleware short-circuits every
+	// request with 503.
+	internalGroup := v1.Group("/internal", auth.RequireInternalSecret(cfg.MCPInternalSecret))
+	patIntH := handlers.NewMCPPATInternalHandler(reg.mcpPATSvc)
+	internalGroup.POST("/meko-tokens/validate", patIntH.Validate)
+
 	authEnabled := cfg.CognitoRegion != "" &&
 		cfg.CognitoPoolID != "" &&
 		cfg.CognitoClientID != ""
 
 	datapackGroup := v1.Group("")
+	// dpDirect is the only group that opts into PAT acceptance via
+	// auth.WithPAT. The 7 DatapackHandler routes hang off it; every
+	// other route stays JWT-only on datapackGroup. In dev mode (auth
+	// disabled) the two groups are identical -- DevAuth synthesises
+	// pat_scopes=["*"] so RequireScope is a no-op.
+	dpDirect := datapackGroup
 
 	if authEnabled {
-		authDeps, err := registerAuthRoutes(cfg, v1, &datapackGroup, reg)
+		authDeps, err := registerAuthRoutes(cfg, v1, &datapackGroup, &dpDirect, reg)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if cfg.CognitoDomain != "" {
 			successCfg = &handlers.SuccessConfig{
@@ -152,13 +182,14 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, error) {
 	} else {
 		slog.Warn("cognito config not set, auth disabled – using dev account for all requests")
 		datapackGroup = v1.Group("", auth.DevAuth(reg.accountRepo))
+		dpDirect = datapackGroup
 	}
 
 	e.GET("/success", handlers.SuccessHandler(successCfg))
 
-	registerDatapackRoutes(datapackGroup, reg)
+	registerDatapackRoutes(datapackGroup, dpDirect, reg)
 
-	return e, nil
+	return e, reg, nil
 }
 
 // authRouteDeps holds the initialized auth objects needed by the
@@ -169,11 +200,16 @@ type authRouteDeps struct {
 }
 
 // registerAuthRoutes wires the public /auth endpoints and configures
-// the datapackGroup to require JWT authentication.
+// the datapackGroup to require JWT authentication. It also builds
+// dpDirect, a sibling group that accepts EITHER a Cognito JWT or a
+// meko PAT and is wrapped by the per-PAT rate limiter. dpDirect is
+// the only group that opts into PAT acceptance; everything attached
+// to datapackGroup remains JWT-only and 401s on a PAT bearer.
 func registerAuthRoutes(
 	cfg ServerConfig,
 	v1 *echo.Group,
 	datapackGroup **echo.Group,
+	dpDirect **echo.Group,
 	reg *serviceRegistry,
 ) (*authRouteDeps, error) {
 	cognitoClient, err := auth.NewCognitoClient(
@@ -207,7 +243,40 @@ func registerAuthRoutes(
 		cfg.CognitoPoolID,
 		cfg.CognitoClientID,
 	)
+	// JWT-only middleware: every route under datapackGroup keeps
+	// today's behaviour (PAT bearers fall through to the JWT
+	// validator and 401 cleanly).
 	requireAuth := auth.RequireAuth(jwtValidator, reg.accountRepo)
+
+	// PAT-accepting middleware: only used by dpDirect below. The
+	// adapter converts the auth-package interface to the service-
+	// package call without leaking service types into auth (which
+	// would create a service<->auth import cycle).
+	patAdapter := auth.PATValidatorFunc(func(
+		ctx context.Context,
+		in auth.PATValidateInput,
+	) (*auth.PATValidateResult, error) {
+		resp, err := reg.mcpPATSvc.ValidatePAT(ctx, service.MCPPATValidateInput{
+			Plaintext:      in.Plaintext,
+			ActorIP:        in.ActorIP,
+			ActorUserAgent: in.ActorUserAgent,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &auth.PATValidateResult{
+			Valid:   resp.Valid,
+			TokenID: resp.TokenID,
+			UserID:  resp.UserID,
+			Scopes:  resp.Scopes,
+			Reason:  string(resp.Reason),
+		}, nil
+	})
+	requireAuthWithPAT := auth.RequireAuth(
+		jwtValidator,
+		reg.accountRepo,
+		auth.WithPAT(patAdapter),
+	)
 
 	authGroup := v1.Group("/auth")
 	authGroup.POST("/signup", authH.Signup)
@@ -226,7 +295,15 @@ func registerAuthRoutes(
 	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
 
 	*datapackGroup = v1.Group("", requireAuth)
-	slog.Info("auth routes registered")
+	*dpDirect = v1.Group("",
+		requireAuthWithPAT,
+		PerPATRateLimiter(cfg.PATRateLimitPerMin, cfg.PATRateLimitBurst),
+	)
+
+	slog.Info("auth routes registered",
+		"pat_rate_limit_per_min", cfg.PATRateLimitPerMin,
+		"pat_rate_limit_burst", cfg.PATRateLimitBurst,
+	)
 	return &authRouteDeps{
 		cognitoClient: cognitoClient,
 		authService:   authSvc,
@@ -248,14 +325,23 @@ func buildProvisioner(_ ServerConfig, reg *serviceRegistry) service.Provisioner 
 }
 
 // registerDatapackRoutes wires all datapack, observe, agent, and
-// knowledge-base routes onto the given group.
-func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
+// knowledge-base routes onto the given groups.
+//
+// g is the JWT-only group used by everything except the 7
+// DatapackHandler endpoints that the MCP server / cli_app need to
+// reach with a PAT bearer.
+//
+// dpDirect is the PAT-accepting group (auth.WithPAT applied) that
+// also has the per-PAT rate limiter attached. Each PAT-bearing
+// route is additionally guarded by auth.RequireScope so a token
+// minted with scopes={"read"} can't issue mutations.
+func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	dpH := handlers.NewDatapackHandler(reg.dpSvc, reg.langfuseSvc, reg.memoriesSvc, reg.kbSvc)
 	observeH := handlers.NewObserveHandler(reg.langfuseSvc)
 	agentH := handlers.NewAgentHandler(reg.agentSvc)
 
-	g.POST("/datapacks", dpH.Create)
-	g.GET("/datapacks", dpH.List)
+	dpDirect.POST("/datapacks", dpH.Create, auth.RequireScope(auth.ScopeWrite))
+	dpDirect.GET("/datapacks", dpH.List, auth.RequireScope(auth.ScopeRead))
 	g.POST("/observe/session/bootstrap", observeH.BootstrapSession)
 
 	g.POST("/agents", agentH.CreateUser)
@@ -265,6 +351,11 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	memoriesH := handlers.NewMemoriesHandler(reg.memoriesSvc, reg.langfuseSvc)
 	g.GET("/memories", memoriesH.ListGET)
 	g.GET("/memories/count", memoriesH.CountGET)
+
+	patH := handlers.NewMCPPATHandler(reg.mcpPATSvc)
+	g.POST("/me/meko-tokens", patH.Create)
+	g.GET("/me/meko-tokens", patH.List)
+	g.DELETE("/me/meko-tokens/:id", patH.Revoke)
 
 	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc)
 	g.POST("/promote-memories", promoteMemoriesH.Promote)
@@ -278,8 +369,10 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	g.GET("/datapacks/incoming-shares", shareH.IncomingShares)
 	g.POST("/datapacks/invite-action", shareH.InviteAction)
 
-	// Describe allows both owners and shared users.
-	g.GET("/datapacks/:name", dpH.Describe,
+	// Describe allows both owners and shared users. Reachable via PAT
+	// (read scope) so MCP clients can resolve a datapack by name.
+	dpDirect.GET("/datapacks/:name", dpH.Describe,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
@@ -333,11 +426,20 @@ func registerDatapackRoutes(g *echo.Group, reg *serviceRegistry) {
 	named := g.Group("/datapacks/:name",
 		auth.RequireDatapackOwnership(reg.dpRepo),
 	)
+	// dpNamedDirect mirrors `named` but lives on the PAT-accepting
+	// group with per-route scope guards. Splitting the named subgroup
+	// in two keeps the agent link/unlink routes JWT-only (admin-style
+	// operations) while letting MCP clients hit the four datapack
+	// owner mutations with a PAT.
+	dpNamedDirect := dpDirect.Group("/datapacks/:name",
+		auth.RequireDatapackOwnership(reg.dpRepo),
+	)
 
-	named.PATCH("", dpH.Update)
-	named.DELETE("", dpH.Delete)
-	named.GET("/status", dpH.Status)
-	named.POST("/langfuse/project-keys", dpH.GenerateLangfuseProjectKeys)
+	dpNamedDirect.PATCH("", dpH.Update, auth.RequireScope(auth.ScopeWrite))
+	dpNamedDirect.DELETE("", dpH.Delete, auth.RequireScope(auth.ScopeWrite))
+	dpNamedDirect.GET("/status", dpH.Status, auth.RequireScope(auth.ScopeRead))
+	dpNamedDirect.POST("/langfuse/project-keys",
+		dpH.GenerateLangfuseProjectKeys, auth.RequireScope(auth.ScopeWrite))
 
 	named.POST("/agents", agentH.Link)
 	named.DELETE("/agents/:agent_id", agentH.Unlink)
