@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -47,12 +47,24 @@ class KbHitOut(BaseModel):
 
 class ProcessingStepOut(BaseModel):
     """One pipeline step with timing — drives the per-bubble
-    observability timeline. `status`: "ok" | "error" | "skipped"."""
+    observability timeline. `status`: "ok" | "error" | "skipped".
+
+    `query` is populated for retrieval steps (`memory_search`,
+    `knowledgebase_search`) — the exact string the gateway sent to MCP.
+    None for non-retrieval steps.
+
+    `tool_args` is the rest of the args sent to MCP for this step —
+    everything except `query`, which has its own dedicated field. The
+    full payload (scope, conversation_id, agent_id, limit, datapack_id)
+    is surfaced so the UI's "MCP args" sub-expand is an honest "what
+    we sent" view. None when the step has no extra args worth showing."""
 
     name: str
     duration_ms: int
     status: str
     detail: str = ""
+    query: Optional[str] = None
+    tool_args: Optional[Dict[str, Any]] = None
 
 logger = logging.getLogger(__name__)
 

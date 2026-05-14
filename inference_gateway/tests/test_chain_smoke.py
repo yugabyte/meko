@@ -551,6 +551,74 @@ async def test_real_question_still_triggers_retrieval() -> None:
     await _drain_background_tasks()
 
 
+async def test_processing_steps_capture_tool_args_for_observability() -> None:
+    """Retrieval steps and `conversation_create` must surface their MCP
+    args (other than `query`, `scope`, `conversation_id`) on the step's
+    `tool_args` field — drives the "MCP args" sub-expand in the Agent
+    Reasoning panel. Locks in what the UI relies on so a future refactor
+    doesn't silently drop these fields from the response."""
+    cfg = _make_cfg()
+    llm = _FakeLLM(["ok", ""])  # main reply + empty extraction
+    create = _mock_tool({"conversation_id": "conv-uuid-tools"})
+    mem_search = _mock_tool({"results": []})
+    kb_search = _mock_tool({"results": []})
+    addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
+    addmem = _mock_tool({"status": "accepted"})
+
+    tools = {
+        "conversation_create": create,
+        "memory_search": mem_search,
+        "knowledgebase_search": kb_search,
+        "conversation_add_message": addmsg,
+        "memory_add": addmem,
+    }
+    store = InMemorySessionStore()
+
+    out = await run_chat_turn(
+        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+        session_id="s1", user_message="plan a trip to spain", datapack_id="dp-x",
+    )
+    await _drain_background_tasks()
+
+    by_name = {s.name: s for s in out.processing_steps}
+
+    # tool_args mirrors the FULL payload sent to MCP (minus `query`,
+    # which has its own dedicated ProcessingStep field). Users get an
+    # honest "what we sent" view instead of a curated subset.
+
+    # conversation_create takes scope/agent_id/title/datapack_id; it
+    # mints a conversation_id rather than receiving one, so that
+    # field is naturally absent.
+    cc_args = by_name["conversation_create"].tool_args
+    assert cc_args is not None
+    assert cc_args["scope"] == "write"
+    assert cc_args["agent_id"] == "agent"
+    assert cc_args["title"].startswith("plan a trip to spain")
+    assert cc_args["datapack_id"] == "dp-x"
+    assert "conversation_id" not in cc_args  # this call MINTS it
+
+    # memory_search payload — `query` lives on its own field, every
+    # other arg is present.
+    ms_args = by_name["memory_search"].tool_args
+    assert ms_args is not None
+    assert ms_args["scope"] == "read"
+    assert ms_args["conversation_id"] == "conv-uuid-tools"
+    assert ms_args["agent_id"] == "agent"
+    assert ms_args["limit"] == cfg.memory_top_k
+    assert ms_args["datapack_id"] == "dp-x"
+    assert "query" not in ms_args  # query lives on its own field
+
+    # knowledgebase_search — same shape as memory_search.
+    ks_args = by_name["knowledgebase_search"].tool_args
+    assert ks_args is not None
+    assert ks_args["scope"] == "read"
+    assert ks_args["conversation_id"] == "conv-uuid-tools"
+    assert ks_args["agent_id"] == "agent"
+    assert ks_args["limit"] == cfg.memory_top_k
+    assert ks_args["datapack_id"] == "dp-x"
+    assert "query" not in ks_args
+
+
 async def test_missing_conversation_create_raises_clearly() -> None:
     cfg = _make_cfg()
     llm = _FakeLLM(["unused"])

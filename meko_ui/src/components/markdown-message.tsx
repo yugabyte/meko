@@ -1,4 +1,4 @@
-// Shared markdown renderer for assistant text — used by the Playground chat
+// Shared markdown renderer for assistant text — used by the WorkbenchLM chat
 // and the Conversations viewer. Centralising it keeps styling consistent
 // across surfaces and prevents the "two parallel copies that slowly drift"
 // problem we had before this extraction.

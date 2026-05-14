@@ -1,4 +1,4 @@
-// Bottom input bar for the Playground chat. Textarea grows to a max of
+// Bottom input bar for the WorkbenchLM chat. Textarea grows to a max of
 // ~6 lines, Enter submits, Shift+Enter inserts a newline. The Send button
 // shows a spinner while a turn is in flight, and a sub-line under the bar
 // surfaces the active blocker (no datapack, no token, knowledge not ready,

@@ -8,7 +8,9 @@ export const ROUTES = {
   completeNewPassword: "/complete-new-password",
   onboarding: "/onboarding",
   home: "/home",
-  playground: "/playground",
+  // URL kept as `/playground` for backward-compat with existing bookmarks
+  // and links; the product is renamed to "WorkbenchLM" elsewhere in the UI.
+  workbenchLm: "/playground",
   datapacks: "/datapacks",
   observeHub: "/observe-hub",
   /** Account-scoped settings page (profile + change password). */
@@ -100,7 +102,7 @@ export const AUTH_ROUTES = [
 export const PROTECTED_ROUTE_PREFIXES = [
   ROUTES.onboarding,
   ROUTES.home,
-  ROUTES.playground,
+  ROUTES.workbenchLm,
   ROUTES.datapacks,
   ROUTES.observeHub,
 ] as const;

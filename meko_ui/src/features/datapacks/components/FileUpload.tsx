@@ -293,7 +293,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
             <div>
               <h3 className="text-sm font-medium text-white">Upload files to Knowledge Base</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                PDF, TXT, MD, JSON, MP4 — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}MB each,{" "}
+                PDF, TXT, MD, JSON, CSV — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}MB each,{" "}
                 {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch.
                 {totalUploaded > 0 && ` ${totalUploaded} uploaded so far.`}
               </p>

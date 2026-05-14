@@ -338,3 +338,80 @@ def test_trivial_query_whitespace_only_is_trivial() -> None:
     assert _is_trivial_query("")
     assert _is_trivial_query("   ")
     assert _is_trivial_query("\n\t")
+
+
+# --------------------------------------------------------------------------- #
+# Sort + dedup contracts. Mem0 doesn't guarantee a sort order on its side,
+# and the KB indexer empirically emits duplicate chunks we need to filter.
+# --------------------------------------------------------------------------- #
+
+
+def test_memory_hits_sorted_by_score_desc() -> None:
+    """Mem0 doesn't guarantee an order — we sort mem hits by score
+    descending so the strongest match leads the list (and the prompt)."""
+    payload = {
+        "results": [
+            {"memory": "Mid-strength",  "score": 0.50},
+            {"memory": "Strongest",      "score": 0.90},
+            {"memory": "Just above bar", "score": 0.35},
+        ],
+    }
+    rendered = _format_memory_context(payload)
+    # All three should be present (all above the 0.3 threshold).
+    assert "Strongest" in rendered
+    assert "Mid-strength" in rendered
+    assert "Just above bar" in rendered
+    # And in score-DESC order in the bulleted output.
+    assert rendered.index("Strongest") < rendered.index("Mid-strength")
+    assert rendered.index("Mid-strength") < rendered.index("Just above bar")
+
+
+def test_memory_hits_keep_mem_then_graph_then_promoted_order() -> None:
+    """Sorting by score is within the `mem` kind only — kind grouping
+    (mem → graph → promoted) is preserved so callers don't have to
+    re-bucket them."""
+    payload = {
+        "results": [{"memory": "vector hit", "score": 0.5}],
+        "relations": [
+            {"source": "user", "relationship": "LIKES", "destination": "soccer"},
+        ],
+        "promoted_relations": [
+            {"source": "raj", "relationship": "OWNS", "destination": "datapack"},
+        ],
+    }
+    rendered = _format_memory_context(payload)
+    assert rendered.index("[mem]") < rendered.index("[graph]")
+    assert rendered.index("[graph]") < rendered.index("[promoted]")
+
+
+def test_kb_hits_sorted_by_distance_asc() -> None:
+    """Closest match (lowest distance) leads the list. Explicit sort
+    because the indexer isn't contractually obligated to return ordered
+    results, even if it usually does."""
+    payload = {
+        "results": [
+            {"chunk_text": "Far",     "distance": 1.10},
+            {"chunk_text": "Closest", "distance": 0.40},
+            {"chunk_text": "Middle",  "distance": 0.80},
+        ],
+    }
+    rendered = _format_knowledge_context(payload)
+    assert rendered.index("Closest") < rendered.index("Middle")
+    assert rendered.index("Middle") < rendered.index("Far")
+
+
+def test_kb_hits_preserve_indexer_duplicates() -> None:
+    """We intentionally do NOT dedupe duplicate chunk_text. If the
+    indexer surfaces the same chunk multiple times we render it as-is
+    — the agent reasoning panel and the LLM prompt should be an honest
+    view of what MCP returned. If duplicates become a UX problem the
+    fix belongs upstream in the indexer, not here."""
+    payload = {
+        "results": [
+            {"chunk_text": "duplicate body", "distance": 0.94, "document_id": "doc-a"},
+            {"chunk_text": "duplicate body", "distance": 0.94, "document_id": "doc-a"},
+            {"chunk_text": "duplicate body", "distance": 0.94, "document_id": "doc-a"},
+        ],
+    }
+    rendered = _format_knowledge_context(payload)
+    assert rendered.count("duplicate body") == 3

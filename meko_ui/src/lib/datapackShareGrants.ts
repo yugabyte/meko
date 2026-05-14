@@ -73,13 +73,13 @@ export function isDatapackGrantEligibleToPromoteMemoryToKnowledge(dp: { grant?: 
 }
 
 /**
- * True when the signed-in user can use this datapack in the Playground:
+ * True when the signed-in user can use this datapack in the WorkbenchLM:
  * owner, maintainer, or contributor. Viewer is excluded because the
- * Playground writes (memory_add, conversation_add_message) and viewer
+ * WorkbenchLM writes (memory_add, conversation_add_message) and viewer
  * is read-only — letting a viewer "chat" would fail on the first turn
  * with a permission error from MCP.
  */
-export function isDatapackGrantEligibleForPlayground(
+export function isDatapackGrantEligibleForWorkbenchLM(
   dp: { grant?: DatapackShareGrant | null },
 ): boolean {
   const userGrant = dp.grant;

@@ -1,4 +1,4 @@
-// Right-rail "Live observation" panel for the Playground.
+// Right-rail "Live observation" panel for the WorkbenchLM.
 // Three stacked sections (top 5 each):
 //   - Learnings        (purple) — agent memories not yet promoted to KB.
 //                                  Each tile has a "Promote to Ko" button.
@@ -59,7 +59,7 @@ const TOP_N = 5;
 /** How often the panel auto-refreshes its three sections while visible. */
 const AUTO_REFRESH_INTERVAL_MS = 10_000;
 
-export function PlaygroundLiveObservationPanel({
+export function WorkbenchLMLiveObservationPanel({
   datapackId,
   datapackName,
   refreshTick = 0,

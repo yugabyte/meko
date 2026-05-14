@@ -66,12 +66,26 @@ export type KbHit = {
 /** One operation in the per-turn observability timeline. `name` matches
  *  the MCP tool / pipeline stage; `status` distinguishes successful
  *  invocations from errors (chain continued in best-effort mode) and
- *  skips (trivial query, missing datapack id, fire-and-forget). */
+ *  skips (trivial query, missing datapack id, fire-and-forget).
+ *
+ *  `query` is populated for retrieval steps (`memory_search`,
+ *  `knowledgebase_search`) — the exact string sent to MCP. UI shows
+ *  it in the Agent Reasoning panel so users see what slice of their
+ *  prompt the gateway actually searched on. None for non-retrieval
+ *  steps. */
 export type ProcessingStep = {
   name: string;
   duration_ms: number;
   status: "ok" | "error" | "skipped";
   detail?: string;
+  query?: string;
+  /** Rest of the args sent to MCP for this step — everything except
+   *  `query`, which has its own dedicated field. Includes the full
+   *  payload (scope, conversation_id, agent_id, limit, datapack_id)
+   *  so the "MCP args" sub-expand is an honest "what we sent" view.
+   *  Null for steps with no extra args worth showing (llm_invoke,
+   *  conversation_add_message, fire-and-forget memory_add). */
+  tool_args?: Record<string, unknown>;
 };
 
 /** Response shape from POST /chat. */

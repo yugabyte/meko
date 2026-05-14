@@ -1,4 +1,4 @@
-// Empty state for the Playground chat: a "try asking…" pill and two
+// Empty state for the WorkbenchLM chat: a "try asking…" pill and two
 // clickable example prompts that immediately send.
 //
 // The two example prompts are tailored to the bundled sample knowledge file

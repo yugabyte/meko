@@ -1,4 +1,4 @@
-// Sample knowledge content for the Playground "Add sample" flow.
+// Sample knowledge content for the WorkbenchLM "Add sample" flow.
 // Inlined as a string so we can synthesize a File on demand without a public-asset fetch.
 
 export const SAMPLE_KNOWLEDGE_FILENAME = "europe-travel-guide.md";

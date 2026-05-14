@@ -1,4 +1,4 @@
-// Header content for the Playground page: title + a datapack picker
+// Header content for the WorkbenchLM page: title + a datapack picker
 // across every pack the user can chat against (own, maintainer, or
 // contributor — viewer is excluded because chat writes memories).
 // Rendered inside `AppWorkspaceHeader`'s `leading` slot.
@@ -19,9 +19,9 @@ import {
 } from "@/lib/datapackShareGrants";
 
 type Props = {
-  /** Datapacks the signed-in user can use in the Playground: own + shared
+  /** Datapacks the signed-in user can use in the WorkbenchLM: own + shared
    *  with maintainer / contributor grant. Pre-filtered by the parent via
-   *  `isDatapackGrantEligibleForPlayground`. */
+   *  `isDatapackGrantEligibleForWorkbenchLM`. */
   accessibleDatapacks: Datapack[];
   selectedDatapackName: string | null;
   onSelectDatapack: (name: string) => void;
@@ -39,7 +39,7 @@ const GRANT_CHIP_CLASSES: Record<DatapackShareGrant, string> = {
   viewer: "border-border bg-muted/30 text-muted-foreground",
 };
 
-export function PlaygroundHeader({
+export function WorkbenchLMHeader({
   accessibleDatapacks,
   selectedDatapackName,
   onSelectDatapack,
@@ -49,7 +49,7 @@ export function PlaygroundHeader({
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 items-center gap-2.5">
         <PlayCircle className="h-4 w-4 shrink-0 text-purple-400" aria-hidden />
-        <h1 className="text-lg font-semibold text-white">Playground</h1>
+        <h1 className="text-lg font-semibold text-white">WorkbenchLM</h1>
         <Select
           value={selectedDatapackName ?? undefined}
           onValueChange={onSelectDatapack}

@@ -1,5 +1,5 @@
 // Tiny shared helpers for the assistant-turn telemetry strip ("⏱ 1.2s · 🧠 3
-// memories · 🖥 2 llm"). Used by the Conversations viewer and the Playground
+// memories · 🖥 2 llm"). Used by the Conversations viewer and the WorkbenchLM
 // chat so both surfaces format the same numbers identically.
 //
 // Kept intentionally lean — no styling decisions live here beyond the literal

@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
-  const [action, setAction] = useState<"playground" | "datapacks" | "skip" | null>(null);
+  const [action, setAction] = useState<"workbenchLm" | "datapacks" | "skip" | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** From server: drives first-time vs returning copy; “Choose your tool” path uses configure for first-time only. */
   const [serverOnboardingDone, setServerOnboardingDone] = useState<boolean | null>(null);
@@ -36,7 +36,7 @@ export default function OnboardingPage() {
     };
   }, []);
 
-  const finishAndGo = async (target: "playground" | "datapacks" | "skip") => {
+  const finishAndGo = async (target: "workbenchLm" | "datapacks" | "skip") => {
     setError(null);
     setAction(target);
     const previous = localStorage.getItem(ONBOARDING_STATUS_CACHE_KEY);
@@ -45,8 +45,8 @@ export default function OnboardingPage() {
       has_completed_onboarding: true,
     });
     const path =
-      target === "playground"
-        ? ROUTES.playground
+      target === "workbenchLm"
+        ? ROUTES.workbenchLm
         : target === "datapacks"
           ? serverOnboardingDone
             ? ROUTES.datapacks
@@ -115,7 +115,7 @@ export default function OnboardingPage() {
                     </div>
                   </div>
                   <h2 className="mb-2 text-lg font-semibold tracking-tight text-foreground">
-                    Try the Playground
+                    Try the WorkbenchLM
                   </h2>
                   <p className="mb-5 flex-1 text-sm leading-relaxed text-muted-foreground">
                     Start with a sample knowledge base (vacation spots). Upload a file, ask a question,
@@ -135,9 +135,9 @@ export default function OnboardingPage() {
                     type="button"
                     className="w-full gap-2 bg-blue-600 text-white hover:bg-blue-500"
                     disabled={busy}
-                    onClick={() => void finishAndGo("playground")}
+                    onClick={() => void finishAndGo("workbenchLm")}
                   >
-                    {action === "playground" ? "Opening…" : "Open Playground"}
+                    {action === "workbenchLm" ? "Opening…" : "Open WorkbenchLM"}
                     <ArrowRight className="h-4 w-4" />
                   </Button>
                 </CardContent>

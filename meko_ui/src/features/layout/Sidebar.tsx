@@ -77,9 +77,9 @@ export default function Sidebar() {
   const onHomeInstallRoute =
     location.pathname === ROUTES.home || location.pathname.startsWith(`${ROUTES.home}/`);
   const onDatapacksRoute = location.pathname.startsWith(ROUTES.datapacks);
-  const onPlaygroundRoute =
-    location.pathname === ROUTES.playground ||
-    location.pathname.startsWith(`${ROUTES.playground}/`);
+  const onWorkbenchLMRoute =
+    location.pathname === ROUTES.workbenchLm ||
+    location.pathname.startsWith(`${ROUTES.workbenchLm}/`);
   const activeDatapackId = (new URLSearchParams(location.search).get("datapack_id") ?? "").trim();
   // Fetch once when entering the datapacks area, not on every `/datapacks/...` subpath change
   // (otherwise opening a datapack from overview triggers an extra listDatapacks call).
@@ -115,10 +115,10 @@ export default function Sidebar() {
   }, [location.pathname]);
 
   useEffect(() => {
-    if (onPlaygroundRoute) {
+    if (onWorkbenchLMRoute) {
       setIsCollapsed(true);
     }
-  }, [onPlaygroundRoute]);
+  }, [onWorkbenchLMRoute]);
 
   const expandSidebar = () => setIsCollapsed(false);
 
@@ -231,19 +231,19 @@ export default function Sidebar() {
         )}
 
         <NavLink
-          to={ROUTES.playground}
+          to={ROUTES.workbenchLm}
           className={cn(
             "flex items-center rounded-md text-sm font-medium transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-            location.pathname === ROUTES.playground ||
-              location.pathname.startsWith(`${ROUTES.playground}/`)
+            location.pathname === ROUTES.workbenchLm ||
+              location.pathname.startsWith(`${ROUTES.workbenchLm}/`)
               ? "bg-white/10 text-white"
               : "text-gray-400 hover:bg-white/5 hover:text-white",
           )}
-          title={isCollapsed ? "Playground" : undefined}
+          title={isCollapsed ? "WorkbenchLM" : undefined}
         >
           <PlayCircle className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Playground</span>}
+          {!isCollapsed && <span className="animate-in fade-in truncate">WorkbenchLM</span>}
         </NavLink>
 
         {/* Datapacks + children */}

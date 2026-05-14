@@ -6,7 +6,7 @@ import DatapacksPage from "@/features/datapacks/pages/DatapacksPage";
 import ObservePage from "@/features/observe/pages/ObservePage";
 import HomePage from "@/features/home/pages/HomePage";
 import OnboardingPage from "@/features/onboarding/pages/OnboardingPage";
-import PlaygroundPage from "@/features/playground/pages/PlaygroundPage";
+import WorkbenchLMPage from "@/features/workbench-lm/pages/WorkbenchLMPage";
 import SettingsPage from "@/features/settings/pages/SettingsPage";
 
 type Props = {
@@ -26,12 +26,12 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
 
   const isObserve = pathname === ROUTES.observeHub || pathname.startsWith(`${ROUTES.observeHub}/`);
   const isHome = pathname === ROUTES.home || pathname.startsWith(`${ROUTES.home}/`);
-  const isPlayground =
-    pathname === ROUTES.playground || pathname.startsWith(`${ROUTES.playground}/`);
+  const isWorkbenchLM =
+    pathname === ROUTES.workbenchLm || pathname.startsWith(`${ROUTES.workbenchLm}/`);
   const isSettings =
     pathname === ROUTES.settings || pathname.startsWith(`${ROUTES.settings}/`);
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes home, observe, playground, settings. */
-  const isDatapacks = !isObserve && !isHome && !isPlayground && !isSettings;
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes home, observe, workbench-lm, settings. */
+  const isDatapacks = !isObserve && !isHome && !isWorkbenchLM && !isSettings;
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden text-foreground">
@@ -42,8 +42,8 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
           <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isHome ? "contents" : "none" }}>
             <HomePage />
           </div>
-          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isPlayground ? "contents" : "none" }}>
-            <PlaygroundPage />
+          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isWorkbenchLM ? "contents" : "none" }}>
+            <WorkbenchLMPage />
           </div>
           <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isSettings ? "contents" : "none" }}>
             <SettingsPage />

@@ -1,4 +1,4 @@
-// Per-turn metadata enrichment for the Playground chat.
+// Per-turn metadata enrichment for the WorkbenchLM chat.
 //
 // The gateway's `POST /chat` returns a `message_id` but not the latency /
 // memories_extracted / llm_calls breakdown. Those come from Langfuse via

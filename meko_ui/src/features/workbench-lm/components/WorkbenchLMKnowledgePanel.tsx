@@ -1,4 +1,4 @@
-// Left-nav Knowledge panel for the Playground: lists indexed sources for the
+// Left-nav Knowledge panel for the WorkbenchLM: lists indexed sources for the
 // selected datapack and exposes "Add your own" (file upload) and "Add sample"
 // (seeded with europe-travel-guide.md). Both flows reuse DatapackKnowledgeUploadDialog.
 
@@ -15,12 +15,12 @@ import {
   buildSampleKnowledgeFile,
   openSampleKnowledgePreview,
   SAMPLE_KNOWLEDGE_FILENAME,
-} from "@/features/playground/data/sampleKnowledge";
+} from "@/features/workbench-lm/data/sampleKnowledge";
 
 type Props = {
   datapackName: string | null;
   /** Fired whenever the docs list changes (initial load, after upload, or
-   *  after a status-change poll). PlaygroundPage uses this to gate the chat
+   *  after a status-change poll). WorkbenchLMPage uses this to gate the chat
    *  input until at least one doc is `COMPLETED`. */
   onDocumentsChange?: (docs: KnowledgeBaseDocument[]) => void;
 };
@@ -33,7 +33,7 @@ const KB_POLL_INTERVAL_MS = 5_000;
  *  show up here without a hard refresh. Paused while the tab is hidden. */
 const KB_STEADY_REFRESH_MS = 30_000;
 
-export function PlaygroundKnowledgePanel({ datapackName, onDocumentsChange }: Props) {
+export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange }: Props) {
   const [docs, setDocs] = useState<KnowledgeBaseDocument[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);

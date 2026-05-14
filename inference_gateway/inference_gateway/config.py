@@ -36,7 +36,15 @@ DEFAULT_AGENT_ID = "meko"
 
 # Sliding-window size for in-memory session history.
 # Override via `--max-history` flag or `INFERENCE_MAX_HISTORY` env var.
-DEFAULT_MAX_HISTORY_MESSAGES = 15
+#
+# Holds entries, NOT turns — each turn writes two (user + assistant), so 6
+# entries = 3 full turns of immediate co-reference context. Past ~3 turns
+# the marginal coherence benefit drops off; longer-term context is carried
+# by `memory_search` + `knowledgebase_search` instead of this window.
+# Bumped DOWN from 15 → 6 to trim ~450 input tokens per turn without
+# losing the cases that need history (positional follow-ups like "the
+# second one", "make that shorter", "why?").
+DEFAULT_MAX_HISTORY_MESSAGES = 6
 
 # Top-K passed to MCP `memory_search` and `knowledgebase_search` per turn.
 # Bumped from 5 → 10 to give the relevance thresholds (MEMORY_MIN_SCORE,

@@ -4,7 +4,7 @@
  * Renders nothing when either value is absent.
  *
  * Always opens in a new tab — the Observe Hub is a side-trip from whatever
- * the user was looking at (conversations, memories, playground chat) and
+ * the user was looking at (conversations, memories, WorkbenchLM chat) and
  * jumping in-place would lose their scroll position + chat state. `noopener`
  * keeps the new tab from holding a reference back to our window object.
  */

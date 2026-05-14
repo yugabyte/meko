@@ -1,6 +1,6 @@
-// Shared types for the Playground chat module. Pulled into its own file so
+// Shared types for the WorkbenchLM chat module. Pulled into its own file so
 // the bubble / meta-row / enrichment / download submodules can reference the
-// `Message` shape without circular imports back to `PlaygroundChat.tsx`.
+// `Message` shape without circular imports back to `WorkbenchLMChat.tsx`.
 
 import type {
   KbHit,
@@ -42,7 +42,7 @@ export type Message = {
   llmCalls?: number;
   // NOTE: `langfuseProjectId` lives at the page level — it's a per-datapack
   // constant fetched once per session and passed to each bubble via prop,
-  // rather than carried per-message. See `PlaygroundPage`.
+  // rather than carried per-message. See `WorkbenchLMPage`.
   /** Retrieval context the gateway fed into the system prompt for this
    *  turn — bulleted text blocks of memories / KB chunks. Kept for the
    *  "Show me the exact prompt" debug UX; the Agent Reasoning panel

@@ -1,16 +1,16 @@
-// Playground entry: header (datapack picker) + left knowledge panel + center
+// WorkbenchLM entry: header (datapack picker) + left knowledge panel + center
 // chat (talks to the inference gateway) + right "live observation" rail.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import {
-  PlaygroundChat,
+  WorkbenchLMChat,
   type KnowledgeReadiness,
-} from "@/features/playground/components/PlaygroundChat";
-import { PlaygroundHeader } from "@/features/playground/components/PlaygroundHeader";
-import { PlaygroundKnowledgePanel } from "@/features/playground/components/PlaygroundKnowledgePanel";
-import { PlaygroundLiveObservationPanel } from "@/features/playground/components/PlaygroundLiveObservationPanel";
-import { PlaygroundSwitchConfirmDialog } from "@/features/playground/components/PlaygroundSwitchConfirmDialog";
+} from "@/features/workbench-lm/components/WorkbenchLMChat";
+import { WorkbenchLMHeader } from "@/features/workbench-lm/components/WorkbenchLMHeader";
+import { WorkbenchLMKnowledgePanel } from "@/features/workbench-lm/components/WorkbenchLMKnowledgePanel";
+import { WorkbenchLMLiveObservationPanel } from "@/features/workbench-lm/components/WorkbenchLMLiveObservationPanel";
+import { WorkbenchLMSwitchConfirmDialog } from "@/features/workbench-lm/components/WorkbenchLMSwitchConfirmDialog";
 import { TraceDrawer } from "@/features/datapacks/components/conversations-viewer/TraceDrawer";
 import {
   getApiErrorMessage,
@@ -23,14 +23,14 @@ import {
   type Datapack,
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
-import { isDatapackGrantEligibleForPlayground } from "@/lib/datapackShareGrants";
-import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/playground/data/sampleKnowledge";
+import { isDatapackGrantEligibleForWorkbenchLM } from "@/lib/datapackShareGrants";
+import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/workbench-lm/data/sampleKnowledge";
 
 // Optional dev override for the MCP bearer. When unset (the normal case), we
 // fetch the token from /provision-status per datapack instead.
 const DEV_MCP_TOKEN = (import.meta.env.VITE_MEKO_MCP_BEARER as string | undefined) ?? "";
 
-export default function PlaygroundPage() {
+export default function WorkbenchLMPage() {
   const [datapacks, setDatapacks] = useState<Datapack[]>([]);
   const [datapacksLoading, setDatapacksLoading] = useState(true);
   const [datapacksError, setDatapacksError] = useState<string | null>(null);
@@ -40,8 +40,8 @@ export default function PlaygroundPage() {
   const [, setAgents] = useState<Agent[]>([]);
   // Account id is required by the gateway's `/chat` endpoint; load once.
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  // KB docs are owned by `PlaygroundKnowledgePanel`; we mirror them here so
-  // `PlaygroundChat` can gate the input until at least one doc is COMPLETED.
+  // KB docs are owned by `WorkbenchLMKnowledgePanel`; we mirror them here so
+  // `WorkbenchLMChat` can gate the input until at least one doc is COMPLETED.
   // `null` (vs `[]`) distinguishes "not loaded yet" from "no docs."
   const [kbDocs, setKbDocs] = useState<KnowledgeBaseDocument[] | null>(null);
   // mcp_api_key resolved from /provision-status for the active datapack.
@@ -54,12 +54,12 @@ export default function PlaygroundPage() {
   // at the page level so the drawer survives chat re-renders cleanly.
   const [traceTarget, setTraceTarget] = useState<{ messageId: string; conversationId: string } | null>(null);
 
-  // Datapacks the user can actually use in the Playground: own them, OR
+  // Datapacks the user can actually use in the WorkbenchLM: own them, OR
   // were shared in as maintainer / contributor. Viewers are excluded
   // because chat writes (memory_add, conversation_add_message) require
-  // at least contributor — see `isDatapackGrantEligibleForPlayground`.
+  // at least contributor — see `isDatapackGrantEligibleForWorkbenchLM`.
   const accessibleDatapacks = useMemo(
-    () => datapacks.filter(isDatapackGrantEligibleForPlayground),
+    () => datapacks.filter(isDatapackGrantEligibleForWorkbenchLM),
     [datapacks],
   );
   const selectedDatapack = useMemo(
@@ -97,7 +97,7 @@ export default function PlaygroundPage() {
     return () => ac.abort();
   }, [selectedName]);
 
-  // Stable callback so `PlaygroundKnowledgePanel`'s `useEffect` deps don't
+  // Stable callback so `WorkbenchLMKnowledgePanel`'s `useEffect` deps don't
   // churn each render.
   const handleKbDocsChange = useCallback(
     (docs: KnowledgeBaseDocument[]) => setKbDocs(docs),
@@ -211,7 +211,7 @@ export default function PlaygroundPage() {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background text-foreground">
       <AppWorkspaceHeader
         leading={
-          <PlaygroundHeader
+          <WorkbenchLMHeader
             accessibleDatapacks={accessibleDatapacks}
             selectedDatapackName={selectedName}
             onSelectDatapack={handleSelectDatapack}
@@ -225,11 +225,11 @@ export default function PlaygroundPage() {
         </div>
       ) : null}
       <div className="grid min-h-0 flex-1 grid-cols-[320px_1fr_360px] overflow-hidden">
-        <PlaygroundKnowledgePanel
+        <WorkbenchLMKnowledgePanel
           datapackName={selectedName}
           onDocumentsChange={handleKbDocsChange}
         />
-        <PlaygroundChat
+        <WorkbenchLMChat
           datapackName={selectedName}
           datapackId={selectedDatapack?.datapack_id ?? null}
           userId={currentUser?.account_id ?? null}
@@ -245,14 +245,14 @@ export default function PlaygroundPage() {
             setTraceTarget({ messageId, conversationId })
           }
         />
-        <PlaygroundLiveObservationPanel
+        <WorkbenchLMLiveObservationPanel
           datapackId={selectedDatapack?.datapack_id ?? null}
           datapackName={selectedName}
           refreshTick={refreshTick}
         />
       </div>
 
-      <PlaygroundSwitchConfirmDialog
+      <WorkbenchLMSwitchConfirmDialog
         open={pendingSwitch !== null}
         onOpenChange={(open) => {
           if (!open) setPendingSwitch(null);

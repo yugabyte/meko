@@ -1,4 +1,4 @@
-// Download the current Playground chat as a .txt file. The header carries
+// Download the current WorkbenchLM chat as a .txt file. The header carries
 // datapack / conversation / session metadata; the body alternates speakers
 // separated by `---`. Markdown syntax in assistant messages is preserved
 // verbatim — still readable as plain text and renders cleanly when opened
@@ -18,7 +18,7 @@ type DownloadArgs = {
  *
  * Layout:
  *
- *   Meko Playground chat
+ *   Meko WorkbenchLM chat
  *   Datapack: <name>
  *   Conversation: <uuid>
  *   Session: <id>
@@ -45,7 +45,7 @@ export function serializeChat({
   const iso = now.toISOString().slice(0, 16).replace("T", " ") + " UTC";
 
   const headerLines = [
-    "Meko Playground chat",
+    "Meko WorkbenchLM chat",
     datapackName ? `Datapack: ${datapackName}` : null,
     conversationId ? `Conversation: ${conversationId}` : null,
     sessionId ? `Session: ${sessionId}` : null,
@@ -80,7 +80,7 @@ export function downloadChat(opts: DownloadArgs): void {
     .slice(0, 16)
     .replace("T", "-")
     .replace(":", "");
-  const safeName = (opts.datapackName ?? "playground").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeName = (opts.datapackName ?? "workbench-lm").replace(/[^a-zA-Z0-9_-]/g, "_");
   const filename = `meko-chat-${safeName}-${stamp}.txt`;
 
   const a = document.createElement("a");

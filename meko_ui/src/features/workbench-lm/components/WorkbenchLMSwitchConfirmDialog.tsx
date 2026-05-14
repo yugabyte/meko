@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-export type PlaygroundSwitchConfirmDialogProps = {
+export type WorkbenchLMSwitchConfirmDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Datapack the user is currently chatting in. */
@@ -27,13 +27,13 @@ export type PlaygroundSwitchConfirmDialogProps = {
   onConfirm: () => void;
 };
 
-export function PlaygroundSwitchConfirmDialog({
+export function WorkbenchLMSwitchConfirmDialog({
   open,
   onOpenChange,
   currentDatapackName,
   targetDatapackName,
   onConfirm,
-}: PlaygroundSwitchConfirmDialogProps) {
+}: WorkbenchLMSwitchConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-[#1C2333] border-border text-foreground">
@@ -46,7 +46,7 @@ export function PlaygroundSwitchConfirmDialog({
             Switching to <span className="font-medium text-foreground">{targetDatapackName}</span> will end your
             current chat session with{" "}
             <span className="font-medium text-foreground">{currentDatapackName}</span>. The in-flight conversation
-            won't be resumable from the playground after the switch (it stays available in Observe).
+            won't be resumable from WorkbenchLM after the switch (it stays available in Observe).
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2 sm:gap-0">

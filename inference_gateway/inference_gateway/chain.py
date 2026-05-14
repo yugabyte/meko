@@ -146,16 +146,30 @@ SYSTEM_TEMPLATE = """You are the Meko playground assistant.
 Use the relevant memories and knowledge sources below to ground your answer
 when they apply, and ignore them when they don't. Be concise and helpful.
 
+Source priority — IMPORTANT:
+  - The knowledge base is content the user has curated and treats as
+    authoritative for this conversation — uploaded documents, guides,
+    specs, references, or any material they've added. Treat it as the
+    source of truth on whatever topics it covers. When a KB chunk and
+    a memory disagree on something covered by the KB, the KB wins.
+  - Memories capture the user's intents, preferences, plans, and personal
+    context (extracted from prior chat turns). Use them to TAILOR the
+    answer to who the user is and what they're trying to do — not to
+    contradict ground-truth content from the KB.
+  - If a memory looks stale or contradicts a KB chunk on a factual
+    matter, prefer the KB and don't surface the contradiction unless the
+    user asks.
+
 Response length: keep your reply complete and self-contained. You have a
 finite output budget of roughly {max_tokens} tokens (~{max_chars} characters).
 If you have a lot to cover, prioritize the most important points and finish
 your thought rather than running long and getting cut off mid-sentence. Prefer
 a brief, complete answer to a sprawling one that hits the ceiling.
 
-Relevant memories (from `memory_search`):
+Relevant memories (from `memory_search`) — user intent/context:
 {memory_context}
 
-Relevant knowledge (from `knowledgebase_search`):
+Relevant knowledge (from `knowledgebase_search`) — source of truth:
 {kb_context}
 """
 
@@ -290,12 +304,29 @@ class ProcessingStep(NamedTuple):
         "error"   — raised; chain continued in best-effort mode
         "skipped" — short-circuited (trivial query, missing datapack id,
                     fire-and-forget background task, cached conversation id)
+
+    `query` is populated only for retrieval steps (`memory_search`,
+    `knowledgebase_search`); it's the exact string we sent as the
+    `query` argument to MCP. Lets the UI's Agent Reasoning panel show
+    "we searched for X" — useful when the user's prompt is long and
+    they want to know what slice the gateway actually used.
+
+    `tool_args` is the rest of the args we sent to MCP for this step —
+    everything except `query`, which has its own dedicated field. We
+    surface the full payload (`scope`, `conversation_id`, `agent_id`,
+    `limit`, `datapack_id`, etc.) so the "MCP args" sub-expand in the
+    Agent Reasoning panel is an honest "what we sent" view, not a
+    curated subset. None when the step doesn't have extra args worth
+    surfacing (`llm_invoke`, `conversation_add_message`, fire-and-forget
+    `memory_add`).
     """
 
     name: str
     duration_ms: int
     status: str
     detail: str = ""
+    query: Optional[str] = None
+    tool_args: Optional[Dict[str, Any]] = None
 
 
 class ChatTurnResult(NamedTuple):
@@ -347,12 +378,28 @@ async def run_chat_turn(
     conversation_id = await session_store.get_conversation_id(session_id)
     if conversation_id is None:
         step_start = time.monotonic()
+        # Pre-compute the title so we can surface it on the step's
+        # `tool_args` for the Agent Reasoning panel without recomputing.
+        conv_title = _truncate(user_message, 80)
+        # Capture every arg we'll send to MCP (minus `query`, which has
+        # its own dedicated field on ProcessingStep). The Agent Reasoning
+        # panel's "MCP args" sub-expand renders this verbatim so users
+        # see EVERY field, not a curated subset — easier to debug.
+        # conversation_create doesn't take a conversation_id (it mints
+        # one) so that field is naturally absent here.
+        conv_tool_args: Dict[str, Any] = {
+            "scope": "write",
+            "agent_id": cfg.agent_id,
+            "title": conv_title,
+        }
+        if datapack_id:
+            conv_tool_args["datapack_id"] = datapack_id
         try:
             conversation_id = await _create_conversation(
                 tools_by_name=tools_by_name,
                 agent_id=cfg.agent_id,
                 datapack_id=datapack_id,
-                title=_truncate(user_message, 80),
+                title=conv_title,
             )
         except Exception as exc:
             steps.append(
@@ -361,6 +408,7 @@ async def run_chat_turn(
                     int((time.monotonic() - step_start) * 1000),
                     "error",
                     str(exc),
+                    tool_args=conv_tool_args,
                 )
             )
             raise
@@ -369,6 +417,7 @@ async def run_chat_turn(
                 "conversation_create",
                 int((time.monotonic() - step_start) * 1000),
                 "ok",
+                tool_args=conv_tool_args,
             )
         )
         await session_store.set_conversation_id(session_id, conversation_id)
@@ -393,8 +442,16 @@ async def run_chat_turn(
         )
         memory_hits: List[MemoryHit] = []
         kb_hits: List[KbHit] = []
-        steps.append(ProcessingStep("memory_search", 0, "skipped", "trivial query"))
-        steps.append(ProcessingStep("knowledgebase_search", 0, "skipped", "trivial query"))
+        steps.append(
+            ProcessingStep(
+                "memory_search", 0, "skipped", "trivial query", query=user_message,
+            )
+        )
+        steps.append(
+            ProcessingStep(
+                "knowledgebase_search", 0, "skipped", "trivial query", query=user_message,
+            )
+        )
     else:
         memory_hits, kb_hits = await asyncio.gather(
             _search_memories(
@@ -590,11 +647,29 @@ async def _search_memories(
     timeline reflects what actually happened (ok / skipped / error).
     """
     start = time.monotonic()
+    # Capture every MCP arg we'll send (minus `query`, which has its
+    # own dedicated ProcessingStep field). Drives the "MCP args"
+    # sub-expand in the Agent Reasoning panel — the user sees the
+    # entire payload, not a curated subset.
+    mem_tool_args: Dict[str, Any] = {
+        "scope": "read",
+        "conversation_id": conversation_id,
+        "agent_id": agent_id,
+        "limit": top_k,
+    }
+    if datapack_id:
+        mem_tool_args["datapack_id"] = datapack_id
+
     tool = tools_by_name.get("memory_search")
     if tool is None:
         logger.warning("memory_search tool unavailable; skipping memory grounding")
         if steps is not None:
-            steps.append(ProcessingStep("memory_search", 0, "skipped", "tool unavailable"))
+            steps.append(
+                ProcessingStep(
+                    "memory_search", 0, "skipped", "tool unavailable",
+                    query=query, tool_args=mem_tool_args,
+                )
+            )
         return []
     args: Dict[str, Any] = {
         "scope": "read",
@@ -616,6 +691,8 @@ async def _search_memories(
                     int((time.monotonic() - start) * 1000),
                     "error",
                     str(exc),
+                    query=query,
+                    tool_args=mem_tool_args,
                 )
             )
         return []
@@ -627,6 +704,8 @@ async def _search_memories(
                 int((time.monotonic() - start) * 1000),
                 "ok",
                 f"{len(hits)} hit{'' if len(hits) == 1 else 's'}",
+                query=query,
+                tool_args=mem_tool_args,
             )
         )
     return hits
@@ -649,15 +728,38 @@ async def _search_knowledge(
     as `_search_memories` on tool failures.
     """
     start = time.monotonic()
+    # Capture every MCP arg we'll send (minus `query`). Same shape as
+    # memory_search above — the panel shows the full payload, not a
+    # curated subset. When datapack_id is missing we still surface
+    # whatever we WOULD have sent so the skip reason is contextualised.
+    kb_tool_args: Dict[str, Any] = {
+        "scope": "read",
+        "conversation_id": conversation_id,
+        "agent_id": agent_id,
+        "limit": top_k,
+    }
+    if datapack_id:
+        kb_tool_args["datapack_id"] = datapack_id
+
     if not datapack_id:
         if steps is not None:
-            steps.append(ProcessingStep("knowledgebase_search", 0, "skipped", "no datapack_id"))
+            steps.append(
+                ProcessingStep(
+                    "knowledgebase_search", 0, "skipped", "no datapack_id",
+                    query=query, tool_args=kb_tool_args,
+                )
+            )
         return []
     tool = tools_by_name.get("knowledgebase_search")
     if tool is None:
         logger.warning("knowledgebase_search tool unavailable; skipping KB grounding")
         if steps is not None:
-            steps.append(ProcessingStep("knowledgebase_search", 0, "skipped", "tool unavailable"))
+            steps.append(
+                ProcessingStep(
+                    "knowledgebase_search", 0, "skipped", "tool unavailable",
+                    query=query, tool_args=kb_tool_args,
+                )
+            )
         return []
     args: Dict[str, Any] = {
         "scope": "read",
@@ -678,6 +780,8 @@ async def _search_knowledge(
                     int((time.monotonic() - start) * 1000),
                     "error",
                     str(exc),
+                    query=query,
+                    tool_args=kb_tool_args,
                 )
             )
         return []
@@ -689,6 +793,8 @@ async def _search_knowledge(
                 int((time.monotonic() - start) * 1000),
                 "ok",
                 f"{len(hits)} hit{'' if len(hits) == 1 else 's'}",
+                query=query,
+                tool_args=kb_tool_args,
             )
         )
     return hits
@@ -940,7 +1046,9 @@ def _extract_memory_hits(payload: object) -> List[MemoryHit]:
     elif isinstance(payload, list):
         vector_items = payload
 
-    hits: List[MemoryHit] = []
+    mem_hits: List[MemoryHit] = []
+    graph_hits: List[MemoryHit] = []
+    promoted_hits: List[MemoryHit] = []
 
     # Vector hits — `memory` is the documented Meko key; the others are
     # kept for shape-tolerance against older MCP servers. The slice is
@@ -962,26 +1070,40 @@ def _extract_memory_hits(payload: object) -> List[MemoryHit]:
                 or ""
             )
             if text:
-                hits.append(MemoryHit(kind="mem", text=text, score=score, char_count=len(text)))
+                mem_hits.append(MemoryHit(kind="mem", text=text, score=score, char_count=len(text)))
         elif isinstance(item, str):
-            hits.append(MemoryHit(kind="mem", text=item, score=None, char_count=len(item)))
+            mem_hits.append(MemoryHit(kind="mem", text=item, score=None, char_count=len(item)))
+
+    # Sort mem hits by score DESC so the highest-relevance memory ends
+    # up at the top of the panel and at the front of the prompt. Mem0
+    # doesn't guarantee an order on the server side, so we make it
+    # explicit here. Items missing a score (legacy / bare-string shapes)
+    # sort to the bottom rather than dropping; treat None as 0.
+    mem_hits.sort(
+        key=lambda h: h.score if h.score is not None else 0.0,
+        reverse=True,
+    )
 
     # Graph triples — flatten subject ─predicate→ object.
+    # Order is the MCP response order (relations aren't scored, so we
+    # have nothing better to sort on).
     for item in relations[:MAX_RETRIEVAL_ITEMS]:
         triple = _format_relation_triple(item)
         if triple:
-            hits.append(MemoryHit(kind="graph", text=triple, score=None, char_count=len(triple)))
+            graph_hits.append(MemoryHit(kind="graph", text=triple, score=None, char_count=len(triple)))
 
     # Promoted relations — same shape, different provenance tag so the
     # UI (and a future debugger) can tell them apart.
     for item in promoted_relations[:MAX_RETRIEVAL_ITEMS]:
         triple = _format_relation_triple(item)
         if triple:
-            hits.append(
+            promoted_hits.append(
                 MemoryHit(kind="promoted", text=triple, score=None, char_count=len(triple))
             )
 
-    return hits
+    # Preserve kind grouping in the returned list (mem → graph → promoted)
+    # so downstream renderers don't have to bucket them again.
+    return mem_hits + graph_hits + promoted_hits
 
 
 def _extract_kb_hits(payload: object) -> List[KbHit]:
@@ -1028,6 +1150,8 @@ def _extract_kb_hits(payload: object) -> List[KbHit]:
                 or item.get("chunk")
                 or ""
             )
+            if not text:
+                continue
             # `document_id` (UUID) is the only attribution Meko returns
             # today — not as nice as a filename but enough for grouping.
             source = (
@@ -1041,20 +1165,34 @@ def _extract_kb_hits(payload: object) -> List[KbHit]:
             # in the UI / system prompt without losing identity.
             if source and "/" in source:
                 source = source.split("/")[-1]
-            if text:
-                hits.append(
-                    KbHit(
-                        document_id=source,
-                        chunk_text=text,
-                        score=score,
-                        distance=distance,
-                        char_count=len(text),
-                    )
+            hits.append(
+                KbHit(
+                    document_id=source,
+                    chunk_text=text,
+                    score=score,
+                    distance=distance,
+                    char_count=len(text),
                 )
+            )
         elif isinstance(item, str):
             hits.append(
                 KbHit(document_id="", chunk_text=item, score=None, distance=None, char_count=len(item))
             )
+
+    # Sort by distance ASC so the closest match leads the list (and the
+    # prompt). MCP usually returns in this order already but the indexer
+    # is not contractually obligated to — make it explicit. Items with
+    # no distance (legacy / bare-string shapes) sort to the bottom
+    # rather than the top, since we can't claim they're the strongest.
+    #
+    # Note: we deliberately do NOT dedupe chunks with identical
+    # chunk_text. If the indexer surfaces the same chunk multiple times
+    # (e.g. repeated source content), we render it as-is — that's the
+    # honest view of what MCP returned.
+    hits.sort(
+        key=lambda h: h.distance if h.distance is not None else float("inf"),
+    )
+
     return hits
 
 
