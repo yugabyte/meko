@@ -30,7 +30,18 @@ import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/workbench-lm/data/sampleKn
 // fetch the token from /provision-status per datapack instead.
 const DEV_MCP_TOKEN = (import.meta.env.VITE_MEKO_MCP_BEARER as string | undefined) ?? "";
 
-export default function WorkbenchLMPage() {
+type Props = {
+  /**
+   * True only when `/playground` is the currently-routed path. Because
+   * ProtectedRoutes keeps every page mounted (`display: none` toggle)
+   * to preserve state across navigation, the page can't infer this from
+   * its own lifecycle — it has to be told. When false, child polling
+   * panels skip their intervals so the API isn't hit from a hidden tree.
+   */
+  isRouteActive: boolean;
+};
+
+export default function WorkbenchLMPage({ isRouteActive }: Props) {
   const [datapacks, setDatapacks] = useState<Datapack[]>([]);
   const [datapacksLoading, setDatapacksLoading] = useState(true);
   const [datapacksError, setDatapacksError] = useState<string | null>(null);
@@ -228,6 +239,7 @@ export default function WorkbenchLMPage() {
         <WorkbenchLMKnowledgePanel
           datapackName={selectedName}
           onDocumentsChange={handleKbDocsChange}
+          paused={!isRouteActive}
         />
         <WorkbenchLMChat
           datapackName={selectedName}
@@ -249,6 +261,7 @@ export default function WorkbenchLMPage() {
           datapackId={selectedDatapack?.datapack_id ?? null}
           datapackName={selectedName}
           refreshTick={refreshTick}
+          paused={!isRouteActive}
         />
       </div>
 

@@ -23,6 +23,13 @@ type Props = {
    *  after a status-change poll). WorkbenchLMPage uses this to gate the chat
    *  input until at least one doc is `COMPLETED`. */
   onDocumentsChange?: (docs: KnowledgeBaseDocument[]) => void;
+  /**
+   * True when WorkbenchLM is not the active route — the page tree stays
+   * mounted (ProtectedRoutes preserves state via `display: none`) so
+   * polling has to be paused explicitly. Both the processing-state poll
+   * (5s) and the steady-state refresh (30s) skip while this is true.
+   */
+  paused?: boolean;
 };
 
 /** Polling interval while at least one doc is still being processed. */
@@ -33,7 +40,7 @@ const KB_POLL_INTERVAL_MS = 5_000;
  *  show up here without a hard refresh. Paused while the tab is hidden. */
 const KB_STEADY_REFRESH_MS = 30_000;
 
-export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange }: Props) {
+export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange, paused = false }: Props) {
   const [docs, setDocs] = useState<KnowledgeBaseDocument[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
@@ -77,23 +84,25 @@ export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange }: P
   // While any doc is still pre-COMPLETED (QUEUED / PROCESSING / FAILED),
   // refetch every 5s so the UI flips from "processing" → "ready"
   // without forcing the user to click anything. Stops polling once every doc
-  // is in a terminal state (`COMPLETED`).
+  // is in a terminal state (`COMPLETED`) — or when the WorkbenchLM route is
+  // not active (parent passes `paused`).
   useEffect(() => {
-    if (!datapackName) return;
+    if (!datapackName || paused) return;
     const stillWorking = docs.length > 0 && docs.some((d) => d.status !== "COMPLETED");
     if (!stillWorking) return;
     const id = setInterval(() => {
       void fetchDocs();
     }, KB_POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [datapackName, docs, fetchDocs]);
+  }, [datapackName, docs, fetchDocs, paused]);
 
   // Steady-state refresh — every 30s, surface uploads that landed via
   // another client (CLI, datapack detail page, another browser tab) so
   // the panel mirrors the server without a manual refresh. Paused while
-  // the tab is hidden so background tabs don't burn API calls.
+  // the tab is hidden OR the WorkbenchLM route is not active (parent
+  // passes `paused` — the page tree stays mounted under ProtectedRoutes).
   useEffect(() => {
-    if (!datapackName) return;
+    if (!datapackName || paused) return;
     let id: ReturnType<typeof setInterval> | null = null;
     const start = () => {
       if (id !== null) return;
@@ -117,7 +126,7 @@ export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange }: P
       document.removeEventListener("visibilitychange", onVisibilityChange);
       stop();
     };
-  }, [datapackName, fetchDocs]);
+  }, [datapackName, fetchDocs, paused]);
 
   // Refresh after the upload dialog closes so newly added files appear in the list.
   const handleUploadOpenChange = (open: boolean) => {

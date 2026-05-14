@@ -53,6 +53,14 @@ type Props = {
   datapackName: string | null;
   /** Bumped by the parent (e.g. after a chat turn) to force refetch. */
   refreshTick?: number;
+  /**
+   * True when the WorkbenchLM route is not the active one (the page is
+   * kept mounted by ProtectedRoutes via `display: none` to preserve
+   * state). All auto-poll intervals stop in this state so the API isn't
+   * hit from a hidden tree. The parent-driven `refreshTick` is still
+   * honored if it changes — that's a one-shot signal, not a timer.
+   */
+  paused?: boolean;
 };
 
 const TOP_N = 5;
@@ -63,6 +71,7 @@ export function WorkbenchLMLiveObservationPanel({
   datapackId,
   datapackName,
   refreshTick = 0,
+  paused = false,
 }: Props) {
   // Internal ticker that bumps every AUTO_REFRESH_INTERVAL_MS while the tab
   // is visible AND the user isn't interacting with the panel. Combined with
@@ -87,9 +96,11 @@ export function WorkbenchLMLiveObservationPanel({
   }, [refreshTick]);
 
   useEffect(() => {
-    // Skip while the user is reading the panel — resume on next render
-    // when isInteracting flips back to false (this effect re-runs).
-    if (isInteracting) return;
+    // Skip when:
+    //  - the user is reading the panel (tile-shift prevention), OR
+    //  - the WorkbenchLM route is not active (parent passes `paused`).
+    // Effect re-runs when either flips, so polling resumes automatically.
+    if (isInteracting || paused) return;
     let id: ReturnType<typeof setInterval> | null = null;
     const start = () => {
       if (id !== null) return;
@@ -111,7 +122,7 @@ export function WorkbenchLMLiveObservationPanel({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       stop();
     };
-  }, [isInteracting]);
+  }, [isInteracting, paused]);
 
   // Effective tick passed to each section: either source bumps will
   // trigger their refetch effects.

@@ -1,4 +1,16 @@
-import { useEffect, useState } from "react";
+// Connect-to-datapack dialog.
+//
+// Surfaces the MCP server URL + the user's Meko personal access tokens
+// (NOT the legacy datapack-scoped mcp_api_key). Tokens are fetched lazily
+// when the dialog opens via GET /me/meko-tokens, and only active ones
+// are shown — expired / revoked rows live in Settings → Security.
+//
+// When the user has no active tokens, the body collapses to an empty
+// state that links to /settings (closes the dialog on click — the user
+// pressed Connect, an auto-redirect would feel like a bug).
+
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Check, Copy, Link as LinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,10 +24,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTruncatableCodeDisplay } from "@/hooks/useTruncatableCodeDisplay";
 import { copyToClipboard } from "@/lib/clipboard";
 import { buildMekoInstallerCommand } from "@/lib/mekoInstallerCommand";
-import type { ProvisionStatus } from "@/lib/mekoApi";
-
-/** Collapsed API key preview length; copy always uses the full key. */
-const MCP_API_KEY_PREVIEW_MAX_CHARS = 220;
+import {
+  getApiErrorMessage,
+  listMekoTokens,
+  type MekoToken,
+  type ProvisionStatus,
+} from "@/lib/mekoApi";
+import {
+  MEKO_TOKEN_INSTALLER_PLACEHOLDER,
+  filterActiveMekoTokens,
+} from "@/lib/mekoTokens";
+import { ROUTES } from "@/app/routes/paths";
+import { ConnectApiTokensField } from "./ConnectApiTokensField";
 
 /** Collapsed one-line installer preview; copy always uses the full command. */
 const INSTALLER_COMMAND_PREVIEW_MAX_CHARS = 320;
@@ -85,30 +105,50 @@ export function DatapackConnectDialog({
   error,
   provisionStatus,
 }: DatapackConnectDialogProps) {
+  const navigate = useNavigate();
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [apiKeyExpanded, setApiKeyExpanded] = useState(false);
+  const [tokens, setTokens] = useState<MekoToken[]>([]);
+  const [tokensLoading, setTokensLoading] = useState(false);
+  const [tokensError, setTokensError] = useState<string | null>(null);
 
-  const mcpApiKey = provisionStatus?.mcp_api_key ?? "";
-  const apiKeyNeedsToggle = mcpApiKey.length > MCP_API_KEY_PREVIEW_MAX_CHARS;
-  const apiKeyDisplay =
-    apiKeyNeedsToggle && !apiKeyExpanded
-      ? `${mcpApiKey.slice(0, MCP_API_KEY_PREVIEW_MAX_CHARS)}\u2026`
-      : mcpApiKey;
-
+  // Lazy-fetch on open so the dialog isn't an extra page-load API call.
+  // Refetches on every open so a token created in another tab shows up
+  // here without a full reload.
   useEffect(() => {
-    if (!open) setApiKeyExpanded(false);
+    if (!open) return;
+    const ac = new AbortController();
+    setTokensLoading(true);
+    setTokensError(null);
+    void listMekoTokens({ signal: ac.signal })
+      .then((list) => {
+        if (ac.signal.aborted) return;
+        setTokens(list ?? []);
+      })
+      .catch((err) => {
+        if (ac.signal.aborted) return;
+        if ((err as { name?: string })?.name === "CanceledError") return;
+        setTokensError(getApiErrorMessage(err, "Failed to load API tokens."));
+        setTokens([]);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setTokensLoading(false);
+      });
+    return () => ac.abort();
   }, [open]);
 
-  useEffect(() => {
-    setApiKeyExpanded(false);
-  }, [mcpApiKey]);
-
-  const handleCopy = async (text: string, field: string) => {
+  const handleCopy = useCallback(async (text: string, field: string) => {
     const copied = await copyToClipboard(text);
     if (!copied) return;
     setCopiedField(field);
     window.setTimeout(() => setCopiedField(null), 2000);
-  };
+  }, []);
+
+  const goToSettings = useCallback(() => {
+    onOpenChange(false);
+    navigate(ROUTES.settings);
+  }, [navigate, onOpenChange]);
+
+  const activeTokens = filterActiveMekoTokens(tokens);
 
   return (
     <Dialog
@@ -130,6 +170,7 @@ export function DatapackConnectDialog({
             Use these credentials to connect your MCP server and database.
           </DialogDescription>
         </DialogHeader>
+
         {loading ? (
           <div className="px-6 pb-6 py-8 text-sm text-muted-foreground text-center overflow-y-auto">
             Loading connection details...
@@ -153,7 +194,7 @@ export function DatapackConnectDialog({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-muted-foreground hover:text-white"
-                  onClick={() => handleCopy(provisionStatus.datapack_name, "dp")}
+                  onClick={() => void handleCopy(provisionStatus.datapack_name, "dp")}
                 >
                   {copiedField === "dp" ? (
                     <Check className="h-4 w-4 text-green-500" />
@@ -175,7 +216,7 @@ export function DatapackConnectDialog({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-muted-foreground hover:text-white"
-                  onClick={() => handleCopy(provisionStatus.mcp_server_url, "mcpurl")}
+                  onClick={() => void handleCopy(provisionStatus.mcp_server_url, "mcpurl")}
                 >
                   {copiedField === "mcpurl" ? (
                     <Check className="h-4 w-4 text-green-500" />
@@ -185,42 +226,25 @@ export function DatapackConnectDialog({
                 </Button>
               </div>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground">API Key</label>
-              <div className="rounded-md bg-[#0E1525] border border-border p-3">
-                <div className="flex items-start gap-2 min-w-0">
-                  <code className="block min-w-0 flex-1 text-sm text-white break-all pr-2">{apiKeyDisplay}</code>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-white"
-                    onClick={() => handleCopy(provisionStatus.mcp_api_key, "mcpkey")}
-                  >
-                    {copiedField === "mcpkey" ? (
-                      <Check className="h-4 w-4 text-green-500" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-                {apiKeyNeedsToggle ? (
-                  <button
-                    type="button"
-                    className="mt-2 text-sm font-medium text-blue-400 hover:text-blue-300"
-                    onClick={() => setApiKeyExpanded((v) => !v)}
-                  >
-                    {apiKeyExpanded ? "Show less" : "Show more"}
-                  </button>
-                ) : null}
-              </div>
-            </div>
+
+            <ConnectApiTokensField
+              loading={tokensLoading}
+              error={tokensError}
+              tokens={activeTokens}
+              totalCount={tokens.length}
+              copiedField={copiedField}
+              onCopy={handleCopy}
+              onOpenSettings={goToSettings}
+            />
 
             <div className="space-y-2 pt-1">
               <label className="text-sm font-medium text-muted-foreground">One-line installer</label>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Run from the directory that contains the <code className="text-muted-foreground/90">installer</code>{" "}
-                folder (see product docs). Values below use this datapack&apos;s MCP URL and API key.
+                Replace{" "}
+                <code className="rounded bg-[#0E1525] px-1 text-foreground/90">
+                  {MEKO_TOKEN_INSTALLER_PLACEHOLDER}
+                </code>{" "}
+                in the command with the API token you saved when generating it.
               </p>
               <Tabs defaultValue="claude-code" className="w-full">
                 <TabsList className="h-9 w-full justify-start bg-[#0E1525] p-1 border border-border">
@@ -246,11 +270,7 @@ export function DatapackConnectDialog({
                 <TabsContent value="claude-desktop" className="mt-3 space-y-2 outline-none">
                   <InstallerCommandRow
                     dialogOpen={open}
-                    command={buildMekoInstallerCommand(
-                      "claude-desktop",
-                      provisionStatus.mcp_server_url,
-                      provisionStatus.mcp_api_key,
-                    )}
+                    command={buildMekoInstallerCommand("claude-desktop", provisionStatus.mcp_server_url)}
                     copyField="mcpInstallClaudeDesktop"
                     copiedField={copiedField}
                     onCopy={handleCopy}
@@ -259,11 +279,7 @@ export function DatapackConnectDialog({
                 <TabsContent value="claude-code" className="mt-3 space-y-2 outline-none">
                   <InstallerCommandRow
                     dialogOpen={open}
-                    command={buildMekoInstallerCommand(
-                      "claude-code",
-                      provisionStatus.mcp_server_url,
-                      provisionStatus.mcp_api_key,
-                    )}
+                    command={buildMekoInstallerCommand("claude-code", provisionStatus.mcp_server_url)}
                     copyField="mcpInstallClaudeCode"
                     copiedField={copiedField}
                     onCopy={handleCopy}
@@ -272,11 +288,7 @@ export function DatapackConnectDialog({
                 <TabsContent value="cursor" className="mt-3 space-y-2 outline-none">
                   <InstallerCommandRow
                     dialogOpen={open}
-                    command={buildMekoInstallerCommand(
-                      "cursor",
-                      provisionStatus.mcp_server_url,
-                      provisionStatus.mcp_api_key,
-                    )}
+                    command={buildMekoInstallerCommand("cursor", provisionStatus.mcp_server_url)}
                     copyField="mcpInstallCursor"
                     copiedField={copiedField}
                     onCopy={handleCopy}

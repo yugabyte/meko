@@ -17,6 +17,7 @@ import {
 } from "@/lib/mekoApi";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { UpdatePasswordDialog } from "@/features/settings/components/UpdatePasswordDialog";
+import { SecurityTokensSection } from "@/features/settings/components/SecurityTokensSection";
 
 export default function SettingsPage() {
   const [user, setUser] = useState<CurrentUser | null>(null);
@@ -115,13 +116,13 @@ export default function SettingsPage() {
                 </dl>
               </section>
 
-              {/* Security section — currently just the change-password
-                  entry point. Other knobs (MFA, sessions, etc.) can be
-                  added here later without restructuring the page. */}
+              {/* Security section — password + API tokens. The tokens
+                  subsection is its own component so the create/list
+                  lifecycle and the plaintext-reveal state are isolated. */}
               <section className="rounded-xl border border-border bg-[#0F1626] p-5">
                 <header className="mb-4 flex items-start justify-between gap-3">
                   <div>
-                    <h2 className="text-sm font-semibold text-white">Security</h2>
+                    <h2 className="text-sm font-semibold text-white">Password</h2>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       Change the password for this account.
                     </p>
@@ -138,6 +139,8 @@ export default function SettingsPage() {
                   </Button>
                 </header>
               </section>
+
+              <SecurityTokensSection />
             </>
           ) : null}
         </div>

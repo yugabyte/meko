@@ -43,7 +43,15 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
             <HomePage />
           </div>
           <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isWorkbenchLM ? "contents" : "none" }}>
-            <WorkbenchLMPage />
+            {/*
+              All five pages stay mounted (toggled via `display: none`) to
+              preserve in-memory state across navigation. WorkbenchLMPage
+              runs background polling on /memories, /promoted-memories,
+              and /documents — passing `isRouteActive` lets it pause those
+              intervals while the user is on another route. Without this
+              the page would keep hammering the API from a hidden tree.
+            */}
+            <WorkbenchLMPage isRouteActive={isWorkbenchLM} />
           </div>
           <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isSettings ? "contents" : "none" }}>
             <SettingsPage />

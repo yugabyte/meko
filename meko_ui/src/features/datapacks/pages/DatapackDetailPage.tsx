@@ -541,7 +541,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             <DatapackDetailAgentsTile datapackName={datapackName} datapackId={routeDatapackId} />
             <DatapackDetailConnectTile
               mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
-              mcpApiKey={provisionStatus?.mcp_api_key ?? null}
               onOpenConnect={() => setIsConnectOpen(true)}
             />
           </div>

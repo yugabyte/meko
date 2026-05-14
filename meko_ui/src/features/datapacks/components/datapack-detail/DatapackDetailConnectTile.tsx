@@ -3,30 +3,32 @@ import { Check, Copy, Link as LinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
+import { MEKO_TOKEN_INSTALLER_PLACEHOLDER } from "@/lib/mekoTokens";
 
-function buildMekoSetupCommand(mcpServerUrl: string, mcpApiKey: string): string {
-  return `npx @yugabytedb/meko-mcp --client <client-name> --url ${mcpServerUrl} --api-key <mcp-api-key>`;
+function buildMekoSetupCommand(mcpServerUrl: string): string {
+  return `npx @yugabytedb/meko-mcp --client <client-name> --url ${mcpServerUrl} --api-key ${MEKO_TOKEN_INSTALLER_PLACEHOLDER}`;
 }
 
 type Props = {
   mcpServerUrl: string | null;
-  mcpApiKey: string | null;
   onOpenConnect: () => void;
   className?: string;
 };
 
 /**
- * Sidebar tile: one-line installer command (truncated + copy) using MCP URL + API key from provision status.
+ * Sidebar tile: one-line installer command (truncated + copy). The
+ * command uses the {@link MEKO_TOKEN_INSTALLER_PLACEHOLDER} placeholder
+ * for the API key — the user copies the actual token from Settings →
+ * Security (also linked from the Connect dialog).
  */
 export function DatapackDetailConnectTile({
   mcpServerUrl,
-  mcpApiKey,
   onOpenConnect,
   className,
 }: Props) {
   const [copied, setCopied] = useState(false);
-  const ready = Boolean(mcpServerUrl && mcpApiKey);
-  const command = ready ? buildMekoSetupCommand(mcpServerUrl!, mcpApiKey!) : "";
+  const ready = Boolean(mcpServerUrl);
+  const command = ready ? buildMekoSetupCommand(mcpServerUrl!) : "";
 
   const handleCopy = async () => {
     if (!ready) return;
@@ -69,7 +71,9 @@ export function DatapackDetailConnectTile({
               </Button>
             </div>
             <p className="text-[11px] leading-snug text-muted-foreground">
-              Uses the same MCP server URL and API key as{" "}
+              Replace{" "}
+              <code className="font-mono text-foreground/90">{MEKO_TOKEN_INSTALLER_PLACEHOLDER}</code>{" "}
+              with a Meko token from{" "}
               <button
                 type="button"
                 className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-300"
@@ -90,7 +94,7 @@ export function DatapackDetailConnectTile({
             >
               Connect
             </button>{" "}
-            to load your MCP URL and API key; the command will appear here.
+            to load your MCP URL; the command will appear here.
           </p>
         )}
       </div>

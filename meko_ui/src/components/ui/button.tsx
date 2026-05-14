@@ -19,7 +19,14 @@ const buttonVariants = cva(
           // @replit Shows the background color of whatever card / sidebar / accent background it is inside of.
           // Inherits the current text color. Uses shadow-xs. no shadow on active
           // No hover state
-          " border [border-color:var(--button-outline)] shadow-xs active:shadow-none ",
+          //
+          // `--button-outline` is undefined globally in this app, which used
+          // to make the border fall back to `currentColor` (= bright white
+          // on dark backgrounds). We fall back to the muted `--border`
+          // token so every outline button looks consistent; callsites can
+          // still set `--button-outline` (or pass `border-...` classes) to
+          // override.
+          " border [border-color:var(--button-outline,hsl(var(--border)))] shadow-xs active:shadow-none ",
         secondary:
           // @replit border, no hover, no shadow, secondary border.
           "border bg-secondary text-secondary-foreground border border-secondary-border ",

@@ -805,6 +805,73 @@ export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
   );
 }
 
+// --- Meko personal access tokens (MCP PATs) ---
+//
+// Self-service tokens minted from Settings → Security. Used in place of
+// the legacy datapack-scoped mcp_api_key when connecting MCP clients.
+// Plaintext is returned exactly once from POST /me/meko-tokens; thereafter
+// only the `token_prefix` (first ~16 chars) is visible to the user.
+
+/** One row of `meko_system.mcp_personal_access_tokens` as returned by the
+ *  `GET /me/meko-tokens` list endpoint. Mirrors `models.MCPPersonalAccessToken`.
+ *  The full plaintext token is NEVER part of this shape — see {@link CreateMekoTokenResponse}. */
+export type MekoToken = {
+  id: string;
+  name: string;
+  token_prefix: string;
+  scopes: string[];
+  created_at: string;
+  expires_at: string;
+  last_used_at?: string | null;
+  revoked_at?: string | null;
+};
+
+/** Body for `POST /me/meko-tokens`. `ttl_days` and `scopes` are optional —
+ *  the server applies defaults when omitted. */
+export type CreateMekoTokenPayload = {
+  name: string;
+  ttl_days?: number;
+  scopes?: string[];
+};
+
+/** Response from `POST /me/meko-tokens`. `token` is the plaintext value
+ *  returned exactly once; persist it client-side immediately or it's lost. */
+export type CreateMekoTokenResponse = {
+  token: string;
+  token_record: MekoToken;
+};
+
+export async function listMekoTokens(options: { signal?: AbortSignal } = {}) {
+  return request<MekoToken[]>("/me/meko-tokens", "GET", undefined, options);
+}
+
+export async function createMekoToken(
+  payload: CreateMekoTokenPayload,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<CreateMekoTokenResponse>(
+    "/me/meko-tokens",
+    "POST",
+    payload,
+    options,
+  );
+}
+
+export async function revokeMekoToken(
+  tokenId: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  // DELETE returns 204 No Content. The request<T> helper expects an
+  // envelope; the underlying handler treats null bodies as `data: null`
+  // so we just claim void here.
+  return request<void>(
+    `/me/meko-tokens/${encodeURIComponent(tokenId)}`,
+    "DELETE",
+    undefined,
+    options,
+  );
+}
+
 /** Payload for the signed-in change-password flow. Mirrors Cognito's
  *  `ChangePassword` API (PreviousPassword + ProposedPassword) but takes
  *  a `confirm_password` so the BE can echo the same validation we run
