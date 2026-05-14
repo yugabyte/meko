@@ -11,7 +11,7 @@ export default function PublicRoutes() {
     <Routes>
       <Route path={ROUTES.root} element={<SignInPage />} />
       <Route path={ROUTES.login} element={<Navigate to={ROUTES.signin} replace />} />
-      <Route path={ROUTES.signup} element={<SignUpPage />} />
+      {/* <Route path={ROUTES.signup} element={<SignUpPage />} /> */}
       <Route path={ROUTES.forgotPassword} element={<ForgotPasswordPage />} />
       <Route path={ROUTES.completeNewPassword} element={<CompleteNewPasswordPage />} />
       <Route path={ROUTES.signin} element={<SignInPage />} />

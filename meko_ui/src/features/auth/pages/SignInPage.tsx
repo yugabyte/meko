@@ -208,12 +208,12 @@ export default function SignInPage() {
           <Link to={ROUTES.forgotPassword} className="font-medium text-blue-400 hover:underline">
             Forgot password?
           </Link>
-          <p>
+          {/* <p>
             New to Meko?{" "}
             <Link to={ROUTES.signup} className="font-medium text-blue-400 hover:underline">
               Sign up
             </Link>
-          </p>
+          </p> */}
           <Button variant="outline" className="h-11 w-full border-border bg-[#0E1525] text-white hover:bg-white/10" asChild>
             <a href={MEKO_REQUEST_ACCESS_URL} target="_blank" rel="noopener noreferrer">
               Request Access

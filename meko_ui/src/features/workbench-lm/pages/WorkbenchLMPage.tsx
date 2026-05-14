@@ -13,6 +13,7 @@ import { WorkbenchLMLiveObservationPanel } from "@/features/workbench-lm/compone
 import { WorkbenchLMSwitchConfirmDialog } from "@/features/workbench-lm/components/WorkbenchLMSwitchConfirmDialog";
 import { TraceDrawer } from "@/features/datapacks/components/conversations-viewer/TraceDrawer";
 import {
+  DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
   getCurrentUser,
   getDatapackProvisionStatus,
@@ -23,6 +24,7 @@ import {
   type Datapack,
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
+import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import { isDatapackGrantEligibleForWorkbenchLM } from "@/lib/datapackShareGrants";
 import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/workbench-lm/data/sampleKnowledge";
 
@@ -164,21 +166,36 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
     [kbDocs],
   );
 
-  useEffect(() => {
-    const ac = new AbortController();
+  // Stable fetcher so both the mount effect and the cross-page event
+  // subscription below can call it without churn.
+  const refreshDatapacks = useCallback(() => {
     setDatapacksLoading(true);
     setDatapacksError(null);
     listDatapacks()
-      .then((rows) => {
-        setDatapacks(rows ?? []);
-      })
+      .then((rows) => setDatapacks(rows ?? []))
       .catch((err) => {
         if ((err as { name?: string })?.name === "CanceledError") return;
         setDatapacksError(getApiErrorMessage(err, "Failed to load datapacks."));
       })
       .finally(() => setDatapacksLoading(false));
-    return () => ac.abort();
   }, []);
+
+  useEffect(() => {
+    refreshDatapacks();
+  }, [refreshDatapacks]);
+
+  // ProtectedRoutes keeps WorkbenchLMPage permanently mounted (display
+  // toggle), so the mount effect above only runs once per session. Without
+  // this, datapacks created from /datapacks (or shared in) while the
+  // user was on Playground wouldn't appear in the picker until a full
+  // page reload. notifyDatapacksListChanged() is fired by every page
+  // that mutates the list (create / update / delete / share-accept).
+  useEffect(() => {
+    addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refreshDatapacks);
+    return () => {
+      removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refreshDatapacks);
+    };
+  }, [refreshDatapacks]);
 
   // Default-select the first accessible datapack once they load. Owners
   // come back first from the API today; if that changes we may want to

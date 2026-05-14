@@ -1,57 +1,45 @@
 /**
  * MCP client install guide: Claude Code, Claude Desktop, Cursor, and manual MCP install with copyable shell steps.
  * Shared by the Home “Install” page and the datapack configure wizard’s Install step.
+ *
+ * The API key is NEVER injected from provision-status anymore (the legacy
+ * datapack-scoped `mcp_api_key` flow). Templates render with the
+ * {@link MEKO_TOKEN_INSTALLER_PLACEHOLDER} literal so users substitute a
+ * Meko personal access token they minted in Settings → Security.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Copy, Code2, Monitor, MousePointer2, Terminal } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useTruncatableCodeDisplay } from "@/hooks/useTruncatableCodeDisplay";
+import { MEKO_TOKEN_INSTALLER_PLACEHOLDER } from "@/lib/mekoTokens";
 
 /** Bash-safe single-quoted literal for use in generated install commands. */
 function shellSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** When both URL and API key are set, swap placeholders for quoted values; otherwise leave placeholders. */
-function injectMcpProvisionIntoCode(code: string, mcpServerUrl?: string | null, mcpApiKey?: string | null): string {
+/**
+ * When a URL is provided, swap URL placeholders for the quoted value. API
+ * key placeholders are normalized to {@link MEKO_TOKEN_INSTALLER_PLACEHOLDER}
+ * (and never substituted with a real key — see file header).
+ */
+function injectMcpProvisionIntoCode(code: string, mcpServerUrl?: string | null): string {
   const url = mcpServerUrl?.trim();
-  const key = mcpApiKey?.trim();
-  if (!url || !key) return code;
+  const withKey = code
+    .replaceAll("<mcp-server-api-key>", MEKO_TOKEN_INSTALLER_PLACEHOLDER)
+    .replaceAll("<meko-server-api-key>", MEKO_TOKEN_INSTALLER_PLACEHOLDER);
+  if (!url) return withKey;
   const qUrl = shellSingleQuoted(url);
-  const qKey = shellSingleQuoted(key);
-  return code
+  return withKey
     .replaceAll("<mcp-server-url>", qUrl)
-    .replaceAll("<mcp-server-api-key>", qKey)
-    .replaceAll("<meko-mcp-url>", qUrl)
-    .replaceAll("<meko-server-api-key>", qKey);
+    .replaceAll("<meko-mcp-url>", qUrl);
 }
 
 /** Collapsed install-step code preview; copy always uses the full injected command. */
 const INSTALL_GUIDE_CODE_BLOCK_PREVIEW_MAX_CHARS = 320;
-
-const API_KEY_DISPLAY_HEAD_CHARS = 6;
-const API_KEY_DISPLAY_TAIL_CHARS = 4;
-
-/** Middle-ellipsis only inside `--api-key '…'` for long keys; copy still uses full `code`. */
-function getApiKeyTruncatedShellDisplay(code: string, expanded: boolean): {
-  display: string;
-  needsToggle: boolean;
-} {
-  const re = /--api-key\s+'([^']*)'/;
-  const m = code.match(re);
-  if (!m) return { display: code, needsToggle: false };
-  const key = m[1];
-  const minLen = API_KEY_DISPLAY_HEAD_CHARS + API_KEY_DISPLAY_TAIL_CHARS + 2;
-  if (key.length <= minLen) return { display: code, needsToggle: false };
-  if (expanded) return { display: code, needsToggle: true };
-  const start = m.index ?? 0;
-  const end = start + m[0].length;
-  const shortened = `--api-key '${key.slice(0, API_KEY_DISPLAY_HEAD_CHARS)}…${key.slice(-API_KEY_DISPLAY_TAIL_CHARS)}'`;
-  return { display: code.slice(0, start) + shortened + code.slice(end), needsToggle: true };
-}
 
 type IdeTab = "claude_code" | "claude_desktop" | "cursor" | "manual_mcp";
 
@@ -170,12 +158,11 @@ const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
 
 function buildInstallGuide(
   mcpServerUrl?: string | null,
-  mcpApiKey?: string | null,
 ): Record<IdeTab, InstallStep[]> {
   const inject = (steps: InstallStep[]) =>
     steps.map((step) => ({
       ...step,
-      code: step.code != null ? injectMcpProvisionIntoCode(step.code, mcpServerUrl, mcpApiKey) : undefined,
+      code: step.code != null ? injectMcpProvisionIntoCode(step.code, mcpServerUrl) : undefined,
     }));
 
   return {
@@ -208,31 +195,15 @@ function CodeBlock({
   onCopy: (text: string, id: string) => void;
   codeSingleRowScroll?: boolean;
 }) {
-  const apiKeyPreview = useMemo(() => getApiKeyTruncatedShellDisplay(code, false), [code]);
-  const [apiKeyExpanded, setApiKeyExpanded] = useState(false);
-
-  useEffect(() => {
-    setApiKeyExpanded(false);
-  }, [code]);
-
-  const apiKeyDisplay = useMemo(
-    () => getApiKeyTruncatedShellDisplay(code, apiKeyExpanded),
-    [code, apiKeyExpanded],
-  );
-
-  const charTruncate = useTruncatableCodeDisplay(
+  // Long-API-key middle-ellipsis is no longer needed — the API key in
+  // every template is the short {@link MEKO_TOKEN_INSTALLER_PLACEHOLDER}
+  // literal. Char-count truncation still kicks in for the multi-line
+  // manual-MCP block.
+  const { displayText, needsToggle, expanded, toggleExpanded } = useTruncatableCodeDisplay(
     code,
     INSTALL_GUIDE_CODE_BLOCK_PREVIEW_MAX_CHARS,
     code,
   );
-
-  const useApiKeyTruncation = apiKeyPreview.needsToggle;
-  const displayText = useApiKeyTruncation ? apiKeyDisplay.display : charTruncate.displayText;
-  const needsToggle = useApiKeyTruncation ? apiKeyDisplay.needsToggle : charTruncate.needsToggle;
-  const expanded = useApiKeyTruncation ? apiKeyExpanded : charTruncate.expanded;
-  const toggleExpanded = useApiKeyTruncation
-    ? () => setApiKeyExpanded((v) => !v)
-    : charTruncate.toggleExpanded;
 
   return (
     <div className="max-w-full overflow-hidden rounded-lg border border-border bg-[#0E1525]/80 shadow-sm">
@@ -344,20 +315,23 @@ function InstallSteps({ tab, steps }: { tab: IdeTab; steps: InstallStep[] }) {
 type McpInstallGuideProps = {
   className?: string;
   /**
-   * When both are non-empty (e.g. from `getDatapackProvisionStatus`), placeholders in commands are replaced
-   * with bash-quoted values. Omit on pages like Home where the user has no datapack context yet.
+   * When provided (e.g. from `getDatapackProvisionStatus`), `<mcp-server-url>`
+   * placeholders are replaced with the bash-quoted value. Omit on pages
+   * like Home where the user has no datapack context yet.
+   *
+   * The API key is NEVER injected — it's always rendered as
+   * {@link MEKO_TOKEN_INSTALLER_PLACEHOLDER} for the user to paste in.
    */
   mcpServerUrl?: string | null;
-  mcpApiKey?: string | null;
 };
 
 /**
  * MCP install steps (Claude Code / Claude Desktop / Cursor / Manual MCP Install).
  */
-export function McpInstallGuide({ className, mcpServerUrl = null, mcpApiKey = null }: McpInstallGuideProps) {
+export function McpInstallGuide({ className, mcpServerUrl = null }: McpInstallGuideProps) {
   const installGuide = useMemo(
-    () => buildInstallGuide(mcpServerUrl, mcpApiKey),
-    [mcpServerUrl, mcpApiKey],
+    () => buildInstallGuide(mcpServerUrl),
+    [mcpServerUrl],
   );
 
   return (

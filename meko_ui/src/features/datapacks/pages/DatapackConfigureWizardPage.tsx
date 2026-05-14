@@ -589,7 +589,6 @@ export default function DatapackConfigureWizardPage({
           {stepId === WIZARD_STEP_ID.install ? (
             <ConfigureWizardInstallStep
               mcpServerUrl={installProvision?.mcp_server_url ?? null}
-              mcpApiKey={installProvision?.mcp_api_key ?? null}
               provisionLoading={installProvisionLoading}
             />
           ) : null}
