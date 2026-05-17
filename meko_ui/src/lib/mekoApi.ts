@@ -1052,6 +1052,16 @@ export type DatapackTraceSpan = {
   /** Raw output blob, populated only for memory-related spans.
    *  May be a JSON string; UI parses and surfaces the memory text. */
   output?: string;
+  /** Backend-expanded memory rows for this span with exact metrics. */
+  memory_items?: Array<{
+    memory_id?: string;
+    text: string;
+    vector: number;
+    entities: number;
+    relations: number;
+    entity_names?: string[];
+    relation_names?: string[];
+  }>;
 };
 
 export type GetDatapackMessageTraceResponse = {

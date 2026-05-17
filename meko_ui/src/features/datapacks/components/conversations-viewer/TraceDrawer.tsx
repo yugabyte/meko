@@ -17,7 +17,7 @@
 // visible behind a translucent backdrop so users can still see
 // where they are in the conversation.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -35,6 +35,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   getApiErrorMessage,
@@ -43,6 +44,7 @@ import {
 } from "@/lib/mekoApi";
 import { ROUTES } from "@/app/routes/paths";
 import { parseMemoryOutput } from "./parseMemoryOutput";
+import { MemoryIcon } from "@/components/conversation-telemetry";
 
 type Props = {
   open: boolean;
@@ -59,6 +61,14 @@ type Props = {
   shimmerMemories?: boolean;
   onShimmerMemoriesDone?: () => void;
 };
+
+/** Which side of the drawer triggered the current hover.
+ *  `"tree"` → cursor is on a span row (left); auto-scroll the memory card list.
+ *  `"memory"` → cursor is on a memory card (right); auto-scroll the span tree.
+ *  We never auto-scroll the side the cursor is already on — that would
+ *  shift another row under the pointer and start a runaway hover loop.
+ */
+type HoverSource = "tree" | "memory" | null;
 
 export function TraceDrawer({
   open,
@@ -78,7 +88,16 @@ export function TraceDrawer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [hoveredSpanId, setHoveredSpanId] = useState<string | null>(null);
+  // Tracks which span is hovered AND which side the cursor is on.
+  // We use the source to only auto-scroll the *opposite* side; scrolling
+  // the side that has the cursor would slide a different row under the
+  // pointer and trigger a runaway hover/scroll loop.
+  const [hover, setHover] = useState<{
+    id: string | null;
+    source: HoverSource;
+  }>({ id: null, source: null });
+  const hoveredSpanId = hover.id;
+  const hoverSource = hover.source;
   const [shimmering, setShimmering] = useState(false);
 
   // When the parent signals a shimmer, run the sweep then report done.
@@ -152,28 +171,93 @@ export function TraceDrawer({
     setCollapsed(defaultCollapsedForShallowTree(childrenOf, roots));
   }, [spans]);
 
-  /** Top-level memory spans that have output. We exclude child spans
-   *  whose parent is also a memory span to avoid showing duplicates
-   *  (e.g. "Memory Add (Meko MCP)" and its child "Create a new memory
-   *  in Mem0" carry the same output — we only show the parent). */
+  /** Top-level memory spans that have output.
+   *
+   * Rules:
+   * 1) Exclude child spans whose parent is also memory-related
+   *    (e.g. parent "Memory Add" + child "Create a new memory in Mem0").
+   * 2) Exclude later spans when their parsed memory text is already shown
+   *    by an earlier span (common for "Updating Existing Memories").
+   */
   const memorySpans = useMemo(() => {
     const memoryIds = new Set(
       spans
         .filter((s) => /memor/i.test(s.name) && s.output)
         .map((s) => s.id),
     );
-    return spans.filter(
+    const topLevelMemorySpans = spans.filter(
       (s) =>
         /memor/i.test(s.name) &&
         s.output &&
         (!s.parent_observation_id || !memoryIds.has(s.parent_observation_id)),
     );
+
+    const seenMemoryTexts = new Set<string>();
+    const latestFirst: DatapackTraceSpan[] = [];
+    // Walk from newest -> oldest so duplicate memory text keeps the latest span.
+    for (let i = topLevelMemorySpans.length - 1; i >= 0; i -= 1) {
+      const span = topLevelMemorySpans[i];
+      const parsed = parseMemoryOutput(span.output ?? "");
+      const normalizedTexts = parsed.map(normalizeMemoryTextForDedupe).filter(Boolean);
+
+      // If this span contributes only memory text already represented by a newer
+      // span, skip it so we show the latest memory state.
+      if (normalizedTexts.length > 0 && normalizedTexts.every((t) => seenMemoryTexts.has(t))) {
+        continue;
+      }
+
+      normalizedTexts.forEach((t) => seenMemoryTexts.add(t));
+      latestFirst.push(span);
+    }
+    // Restore chronological ordering for rendering.
+    return latestFirst.reverse();
   }, [spans]);
-  const hasMemories = memorySpans.length > 0;
+  /**
+   * Flatten memory span outputs into one renderable memory item each.
+   * This keeps the right panel at one-card-per-memory instead of
+   * grouping multiple extracted memories into a single card.
+   */
+  const memoryItems = useMemo(
+    () =>
+      memorySpans.flatMap((span) =>
+        // Prefer backend-expanded memory items (exact counts from DB/graph).
+        // Fallback to parsed output when older API responses don't include them.
+        (span.memory_items && span.memory_items.length > 0
+          ? span.memory_items.map((item, index) => ({
+              id: `${span.id}:${index}:${item.memory_id ?? "na"}`,
+              span,
+              memoryId: item.memory_id,
+              text: item.text,
+              entityNames: item.entity_names ?? [],
+              relationNames: item.relation_names ?? [],
+              signals: {
+                vector: item.vector ?? 0,
+                entities: item.entities ?? 0,
+                relations: item.relations ?? 0,
+              },
+            }))
+          : parseMemoryOutput(span.output ?? "").map((text, index) => ({
+              id: `${span.id}:${index}`,
+              span,
+              memoryId: undefined,
+              text,
+              entityNames: [],
+              relationNames: [],
+              signals: { vector: 0, entities: 0, relations: 0 },
+            }))),
+      ),
+    [memorySpans],
+  );
+  const hasMemories = memoryItems.length > 0;
 
   const handleHoverSpan = useCallback(
-    (id: string | null) => setHoveredSpanId(id),
+    (id: string | null, source: HoverSource) =>
+      setHover({ id, source: id === null ? null : source }),
     [],
+  );
+  const activePathSpanIds = useMemo(
+    () => collectPathSpanIDs(hoveredSpanId, tree.byId, tree.childrenOf),
+    [hoveredSpanId, tree.byId, tree.childrenOf],
   );
 
   return (
@@ -256,24 +340,29 @@ export function TraceDrawer({
                 No trace spans recorded for this message.
               </p>
             ) : (
-              <ul className="space-y-1">
-                {tree.roots.map((rootId) => (
-                  <SpanTreeNode
-                    key={rootId}
-                    spanId={rootId}
-                    depth={0}
-                    byId={tree.byId}
-                    childrenOf={tree.childrenOf}
-                    totalMs={totalMs}
-                    collapsed={collapsed}
-                    onToggle={(id) =>
-                      setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))
-                    }
-                    hoveredSpanId={hoveredSpanId}
-                    onHoverSpan={handleHoverSpan}
-                  />
-                ))}
-              </ul>
+              <>
+                <TimeAxis totalMs={totalMs} />
+                <ul className="space-y-1">
+                  {tree.roots.map((rootId) => (
+                    <SpanTreeNode
+                      key={rootId}
+                      spanId={rootId}
+                      depth={0}
+                      byId={tree.byId}
+                      childrenOf={tree.childrenOf}
+                      totalMs={totalMs}
+                      collapsed={collapsed}
+                      onToggle={(id) =>
+                        setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))
+                      }
+                      hoveredSpanId={hoveredSpanId}
+                      hoverSource={hoverSource}
+                      activePathSpanIds={activePathSpanIds}
+                      onHoverSpan={handleHoverSpan}
+                    />
+                  ))}
+                </ul>
+              </>
             )}
           </div>
 
@@ -303,15 +392,22 @@ export function TraceDrawer({
                     Extracted memories
                   </h4>
                   <span className="ml-auto rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] text-blue-300">
-                    {memorySpans.length}
+                    {memoryItems.length}
                   </span>
                 </div>
                 <ul className="space-y-2">
-                  {memorySpans.map((s) => (
+                  {memoryItems.map((item, idx) => (
                     <MemoryCard
-                      key={s.id}
-                      span={s}
-                      highlighted={hoveredSpanId === s.id}
+                      key={item.id}
+                      span={item.span}
+                      memoryId={item.memoryId}
+                      memoryText={item.text}
+                      entityNames={item.entityNames}
+                      relationNames={item.relationNames}
+                      signals={item.signals}
+                      ordinal={idx + 1}
+                      highlighted={hoveredSpanId === item.span.id}
+                      hoverSource={hoverSource}
                       onHoverSpan={handleHoverSpan}
                     />
                   ))}
@@ -359,56 +455,255 @@ export function TraceDrawer({
 
 type MemoryCardProps = {
   span: DatapackTraceSpan;
+  memoryId?: string;
+  memoryText: string;
+  entityNames: string[];
+  relationNames: string[];
+  signals: MemorySignals;
+  ordinal: number;
   highlighted: boolean;
-  onHoverSpan: (id: string | null) => void;
+  /** Side of the drawer that originated the current hover. We only scroll
+   *  this card into view when the hover came from the *tree*, never when the
+   *  user's cursor is already inside the memory list. */
+  hoverSource: HoverSource;
+  onHoverSpan: (id: string | null, source: HoverSource) => void;
 };
 
-function MemoryCard({ span, highlighted, onHoverSpan }: MemoryCardProps) {
-  const memories = useMemo(
-    () => parseMemoryOutput(span.output ?? ""),
-    [span.output],
-  );
+function MemoryCard({
+  span,
+  memoryId,
+  memoryText,
+  entityNames,
+  relationNames,
+  signals,
+  ordinal,
+  highlighted,
+  hoverSource,
+  onHoverSpan,
+}: MemoryCardProps) {
+  const topNodes = entityNames.slice(0, 2);
+  const topRelations = relationNames.slice(0, 2);
+  const hasPreview = topNodes.length > 0 || topRelations.length > 0;
 
-  if (!memories.length) return null;
+  const cardRef = useRef<HTMLLIElement>(null);
+
+  // Only auto-scroll when the hover originated from the tree side. If the
+  // cursor is already on the memory list, scrolling would shift another card
+  // under the pointer and start a hover/scroll feedback loop.
+  useEffect(() => {
+    if (highlighted && hoverSource === "tree" && cardRef.current) {
+      cardRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  }, [highlighted, hoverSource]);
 
   return (
     <li
+      ref={cardRef}
       className={cn(
         "rounded-lg border px-3 py-2.5 transition-colors duration-100 cursor-default",
         highlighted
           ? "border-blue-400/60 bg-blue-500/15 ring-1 ring-blue-400/30"
           : "border-blue-500/20 bg-blue-500/5 hover:border-blue-400/40 hover:bg-blue-500/10",
       )}
-      onMouseEnter={() => onHoverSpan(span.id)}
-      onMouseLeave={() => onHoverSpan(null)}
+      onMouseEnter={() => onHoverSpan(span.id, "memory")}
+      onMouseLeave={() => onHoverSpan(null, "memory")}
     >
       <div className="mb-1.5 flex items-center gap-1.5">
         <Sparkles className="h-3 w-3 shrink-0 text-blue-300" aria-hidden />
         <span className="truncate text-[11px] text-blue-200/70" title={span.name}>
-          {span.name}
+          {`${span.name} #${ordinal}`}
         </span>
         <span className="ml-auto shrink-0 tabular-nums text-[10px] text-muted-foreground">
           {formatDuration(span.duration_ms)}
         </span>
       </div>
-      <ul className="space-y-1.5">
-        {memories.map((text, i) => (
-          <li
-            // eslint-disable-next-line react/no-array-index-key
-            key={i}
-            className="text-[12.5px] leading-relaxed text-foreground/85"
-          >
-            {memories.length > 1 ? (
-              <span className="mr-1 font-mono text-[10px] text-muted-foreground">
-                {i + 1}.
+      <p className="text-[12.5px] leading-relaxed text-foreground/85">
+        {memoryText}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 overflow-visible">
+        <MemoryMetaBadge
+          label={`vector ${signals.vector}`}
+          metricName="Vector"
+          metricValue={signals.vector}
+          description="Vector rows linked to this memory (1 means it is embedded)."
+          detail="Stored embedding row in mem0 vector collection for this memory."
+          memoryId={memoryId}
+          spanDurationMs={span.duration_ms}
+          entityNames={entityNames}
+          relationNames={relationNames}
+        />
+        <MemoryMetaBadge
+          label={`entities ${signals.entities}`}
+          metricName="Entities"
+          metricValue={signals.entities}
+          description="Unique graph entities (nodes) referenced by this memory."
+          detail="Counted from unique graph_nodes attached to this persisted memory."
+          memoryId={memoryId}
+          spanDurationMs={span.duration_ms}
+          entityNames={entityNames}
+          relationNames={relationNames}
+        />
+        <MemoryMetaBadge
+          label={`relations ${signals.relations}`}
+          metricName="Relations"
+          metricValue={signals.relations}
+          description="Unique graph relations (edges) connected to this memory's entities."
+          detail="Edges touching those entities within this datapack and conversation."
+          memoryId={memoryId}
+          spanDurationMs={span.duration_ms}
+          entityNames={entityNames}
+          relationNames={relationNames}
+        />
+      </div>
+      {hasPreview ? (
+        <div className="mt-1.5 space-y-1">
+          {topNodes.length > 0 ? (
+            <div className="flex min-w-0 items-start gap-1 text-[10px] text-blue-100/65">
+              <span className="shrink-0 text-blue-100/55">Sample nodes:</span>
+              <span className="flex min-w-0 flex-1 flex-wrap gap-1">
+                {topNodes.map((name) => (
+                  <span
+                    key={name}
+                    className="max-w-full truncate rounded border border-blue-300/25 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-100/90"
+                    title={name}
+                  >
+                    {name}
+                  </span>
+                ))}
               </span>
-            ) : null}
-            {text}
-          </li>
-        ))}
-      </ul>
+            </div>
+          ) : null}
+          {topRelations.length > 0 ? (
+            <div className="flex min-w-0 items-start gap-1 text-[10px] text-blue-100/65">
+              <span className="shrink-0 text-blue-100/55">Sample relations:</span>
+              <span className="flex min-w-0 flex-1 flex-wrap gap-1">
+                {topRelations.map((name) => (
+                  <span
+                    key={name}
+                    className="max-w-full truncate rounded border border-blue-300/25 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-100/90"
+                    title={name}
+                  >
+                    {name}
+                  </span>
+                ))}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </li>
   );
+}
+
+function MemoryMetaBadge({
+  label,
+  metricName,
+  metricValue,
+  description,
+  detail,
+  memoryId,
+  spanDurationMs,
+  entityNames,
+  relationNames,
+}: {
+  label: string;
+  metricName: string;
+  metricValue: number;
+  description: string;
+  detail: string;
+  memoryId?: string;
+  spanDurationMs: number;
+  entityNames: string[];
+  relationNames: string[];
+}) {
+  const dynamicSummary =
+    metricName === "Vector"
+      ? metricValue > 0
+        ? "Embedding present for this memory."
+        : "No embedding row linked to this memory."
+      : metricName === "Entities"
+      ? `${metricValue} graph node${metricValue === 1 ? "" : "s"} referenced.`
+      : `${metricValue} edge${metricValue === 1 ? "" : "s"} connected to those nodes.`;
+
+  const sampledNames =
+    metricName === "Entities"
+      ? entityNames
+      : metricName === "Relations"
+      ? relationNames
+      : [];
+
+  const sampledLabel =
+    metricName === "Entities"
+      ? "Sample nodes (subset)"
+      : metricName === "Relations"
+      ? "Sample relations (subset)"
+      : "Sample graph labels";
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Tooltip delayDuration={0} open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="rounded-full border border-blue-400/20 bg-blue-400/10 px-1.5 py-0.5 text-[10px] text-blue-200/80"
+          aria-label={`${label}: ${description}`}
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setOpen(false)}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {label}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        sideOffset={8}
+        side="top"
+        align="start"
+        collisionPadding={12}
+        className="z-[90] w-[280px] rounded-lg border border-blue-400/20 bg-[#0A1222]/95 px-2.5 py-2 text-left text-[10px] text-blue-100 shadow-lg"
+      >
+        <span className="mb-1 block text-[11px] font-medium text-blue-200">
+          {metricName}: {metricValue}
+        </span>
+        <span className="block text-[10px] text-blue-100/85">{description}</span>
+        <span className="mt-1 block text-[10px] text-blue-100/65">{detail}</span>
+        <span className="mt-1 block text-[10px] text-blue-100/75">{dynamicSummary}</span>
+        <span className="mt-1 block text-[10px] text-blue-100/60">
+          Span latency: {formatDuration(spanDurationMs)} · Source: persisted mem0 + graph DB
+        </span>
+        {sampledNames.length > 0 ? (
+          <span className="mt-1 block text-[10px] text-blue-100/75">
+            {sampledLabel}
+            <span className="mt-1 flex flex-wrap gap-1">
+              {sampledNames.slice(0, 4).map((name) => (
+                <span
+                  key={name}
+                  className="rounded border border-blue-300/25 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-100/90"
+                >
+                  {name}
+                </span>
+              ))}
+            </span>
+          </span>
+        ) : null}
+        {memoryId ? (
+          <span className="mt-1 block font-mono text-[10px] text-blue-100/60">
+            Memory ID: {compactTraceMemoryID(memoryId)}
+          </span>
+        ) : null}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function compactTraceMemoryID(id: string): string {
+  const trimmed = id.trim();
+  if (trimmed.length <= 14) return trimmed;
+  return `${trimmed.slice(0, 8)}...${trimmed.slice(-4)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +721,12 @@ type NodeProps = {
   collapsed: Record<string, boolean>;
   onToggle: (id: string) => void;
   hoveredSpanId: string | null;
-  onHoverSpan: (id: string | null) => void;
+  /** Side of the drawer that originated the current hover. We only scroll
+   *  this row into view when the hover came from the *memory* side, never
+   *  when the user is moving the cursor inside the tree itself. */
+  hoverSource: HoverSource;
+  activePathSpanIds: Set<string> | null;
+  onHoverSpan: (id: string | null, source: HoverSource) => void;
 };
 
 function SpanTreeNode({
@@ -438,15 +738,33 @@ function SpanTreeNode({
   collapsed,
   onToggle,
   hoveredSpanId,
+  hoverSource,
+  activePathSpanIds,
   onHoverSpan,
 }: NodeProps) {
   const span = byId[spanId];
   if (!span) return null;
-  const kids = childrenOf[spanId] ?? [];
-  const hasKids = kids.length > 0;
+  const children = childrenOf[spanId] ?? [];
+  const hasChildren = children.length > 0;
   const isCollapsed = !!collapsed[spanId];
   const isHovered = hoveredSpanId === spanId;
-  const isMemorySpan = /memor/i.test(span.name);
+  const hasHoverContext = hoveredSpanId !== null;
+  const isOnActivePath = activePathSpanIds?.has(spanId) ?? false;
+
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // Only auto-scroll when the hover came from the memory cards. If the
+  // user is moving the cursor inside the tree, scrolling this row would
+  // shift a different row under the pointer and cause a hover/scroll loop
+  // — exactly the runaway "drift downward" behaviour we want to avoid.
+  useEffect(() => {
+    if (isHovered && hoverSource === "memory" && rowRef.current) {
+      rowRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  }, [isHovered, hoverSource]);
 
   // Waterfall sizing — left offset and width are percentages of the
   // total message wall time.
@@ -454,54 +772,87 @@ function SpanTreeNode({
   const widthPct = Math.max(0.5, (span.duration_ms / totalMs) * 100);
 
   const accent = spanAccent(span);
+  const usage = parseTraceUsage(span.usage);
+  const totalCost = parseTraceCost(span.total_cost);
+  const tokenText = usage ? formatTokenUsage(usage) : null;
+  const costText = totalCost !== null ? formatUsdCompact(totalCost) : null;
 
   return (
     <li>
       <div
+        ref={rowRef}
         className={cn(
-          "group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors duration-100",
-          isHovered && isMemorySpan
+          "group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors duration-100 cursor-default",
+          isHovered
             ? "bg-blue-500/15 ring-1 ring-inset ring-blue-400/30"
             : "hover:bg-[#141C2E]",
+          hasHoverContext && !isOnActivePath && "opacity-45",
         )}
         style={{ paddingLeft: `${depth * 14 + 6}px` }}
-        onMouseEnter={() => isMemorySpan && onHoverSpan(spanId)}
-        onMouseLeave={() => isMemorySpan && onHoverSpan(null)}
+        onMouseEnter={() => onHoverSpan(spanId, "tree")}
+        onMouseLeave={() => onHoverSpan(null, "tree")}
       >
-        <button
-          type="button"
-          onClick={() => hasKids && onToggle(spanId)}
-          className={cn(
-            "flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground",
-            hasKids ? "hover:text-foreground" : "opacity-0",
-          )}
-          aria-label={isCollapsed ? "Expand" : "Collapse"}
-          tabIndex={hasKids ? 0 : -1}
-        >
-          {isCollapsed ? (
-            <ChevronRight className="h-3 w-3" aria-hidden />
-          ) : (
-            <ChevronDown className="h-3 w-3" aria-hidden />
-          )}
-        </button>
+        {hasChildren ? (
+          <button
+            type="button"
+            onClick={() => onToggle(spanId)}
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+            aria-label={isCollapsed ? "Expand" : "Collapse"}
+            tabIndex={0}
+          >
+            {isCollapsed ? (
+              <ChevronRight className="h-3 w-3" aria-hidden />
+            ) : (
+              <ChevronDown className="h-3 w-3" aria-hidden />
+            )}
+          </button>
+        ) : (
+          <span
+            className="flex h-4 w-4 shrink-0 items-center justify-center"
+            aria-hidden
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
+          </span>
+        )}
 
         <span className={cn("inline-flex h-4 w-4 shrink-0 items-center justify-center", accent.iconColor)}>
           {accent.icon}
         </span>
 
-        <span className="min-w-0 flex-1 truncate text-[13px] text-foreground/90" title={span.name}>
+        <span className="min-w-0 flex-1 max-w-full truncate text-[13px] text-foreground/90" title={span.name}>
           {span.name}
         </span>
 
-        {span.model ? (
-          <code className="hidden truncate font-mono text-[10px] text-muted-foreground sm:inline">
-            {span.model}
-          </code>
-        ) : null}
+        <div className="flex items-center gap-3 shrink-0 ml-auto">
+          {span.model ? (
+            <code className="hidden w-20 truncate text-right font-mono text-[10px] text-muted-foreground sm:inline">
+              {span.model}
+            </code>
+          ) : null}
 
-        <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
-          {formatDuration(span.duration_ms)}
-        </span>
+          {tokenText ? (
+            <span
+              className="hidden w-28 shrink-0 text-right tabular-nums text-[10px] text-muted-foreground md:inline"
+              title={`Tokens: ${tokenText}`}
+            >
+              {tokenText}
+            </span>
+          ) : null}
+
+          {costText ? (
+            <span
+              className="hidden w-14 shrink-0 text-right tabular-nums text-[10px] text-emerald-300/85 md:inline"
+              title={`Cost: ${costText}`}
+            >
+              {costText}
+            </span>
+          ) : null}
+
+          <div className="shrink-0 flex items-center gap-3 text-[11px] tabular-nums text-muted-foreground">
+            <span className="hidden sm:inline-block w-14 text-right">{`+${formatDuration(span.offset_ms)}`}</span>
+            <span className="inline-block w-14 text-right">{formatDuration(span.duration_ms)}</span>
+          </div>
+        </div>
       </div>
 
       {/* Waterfall bar: renders directly under the row, indented to
@@ -512,15 +863,19 @@ function SpanTreeNode({
         style={{ marginLeft: `${depth * 14 + 32}px`, marginRight: "12px" }}
       >
         <div
-          className={cn("absolute h-1 rounded-full", accent.barColor)}
+          className={cn(
+            "absolute h-1 rounded-full",
+            accent.barColor,
+            hasHoverContext && !isOnActivePath && "opacity-40",
+          )}
           style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-          title={`${formatDuration(span.offset_ms)} offset · ${formatDuration(span.duration_ms)} duration`}
+          title={`starts +${formatDuration(span.offset_ms)} · runs ${formatDuration(span.duration_ms)}`}
         />
       </div>
 
-      {hasKids && !isCollapsed ? (
+      {hasChildren && !isCollapsed ? (
         <ul>
-          {kids.map((childId) => (
+          {children.map((childId) => (
             <SpanTreeNode
               key={childId}
               spanId={childId}
@@ -531,6 +886,8 @@ function SpanTreeNode({
               collapsed={collapsed}
               onToggle={onToggle}
               hoveredSpanId={hoveredSpanId}
+              hoverSource={hoverSource}
+              activePathSpanIds={activePathSpanIds}
               onHoverSpan={onHoverSpan}
             />
           ))}
@@ -540,8 +897,27 @@ function SpanTreeNode({
   );
 }
 
+function TimeAxis({ totalMs }: { totalMs: number }) {
+  const ticks = [0, 25, 50, 75, 100];
+  return (
+    <div className="mb-2 ml-8 mr-3 relative h-5">
+      <div className="absolute inset-x-0 top-2 h-px bg-white/10" />
+      {ticks.map((pct) => (
+        <div
+          key={pct}
+          className="absolute top-0 -translate-x-1/2 text-[10px] text-muted-foreground tabular-nums"
+          style={{ left: `${pct}%` }}
+        >
+          {pct === 0 ? "0ms" : pct === 100 ? formatDuration(totalMs) : `${pct}%`}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Tree builder: turn a flat list of spans into a parent→children index.
+// Tree builder: turn a flat list of spans into a tree data structure
+// (`byId` + `childrenOf` + `roots`) used by the UI renderer.
 //
 // Roots are spans whose parent_observation_id is empty OR whose parent
 // isn't present in the result set (windowed query may legitimately
@@ -580,6 +956,32 @@ function buildTree(spans: DatapackTraceSpan[]): {
   return { byId, childrenOf, roots };
 }
 
+function collectPathSpanIDs(
+  spanId: string | null,
+  byId: Record<string, DatapackTraceSpan>,
+  childrenOf: Record<string, string[]>,
+): Set<string> | null {
+  if (!spanId || !byId[spanId]) return null;
+  const out = new Set<string>([spanId]);
+
+  // Ancestors
+  let parentId = byId[spanId].parent_observation_id;
+  while (parentId && byId[parentId]) {
+    out.add(parentId);
+    parentId = byId[parentId].parent_observation_id;
+  }
+
+  // Descendants
+  const stack = [...(childrenOf[spanId] ?? [])];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (out.has(id)) continue;
+    out.add(id);
+    stack.push(...(childrenOf[id] ?? []));
+  }
+  return out;
+}
+
 /** Max depth from any root (root row = 0, first child row = 1, …). */
 function maxSpanTreeDepthFromRoots(
   childrenOf: Record<string, string[]>,
@@ -601,8 +1003,8 @@ function defaultCollapsedForShallowTree(
 ): Record<string, boolean> {
   if (maxSpanTreeDepthFromRoots(childrenOf, roots) > 1) return {};
   const out: Record<string, boolean> = {};
-  for (const [parentId, kids] of Object.entries(childrenOf)) {
-    if (kids.length > 0) out[parentId] = true;
+  for (const [parentId, children] of Object.entries(childrenOf)) {
+    if (children.length > 0) out[parentId] = true;
   }
   return out;
 }
@@ -620,6 +1022,26 @@ type SpanAccent = {
 
 function spanAccent(span: DatapackTraceSpan): SpanAccent {
   const t = (span.type || "").toUpperCase();
+  const memoryLikeName = isMemoryLikeSpanName(span.name);
+  const databaseLikeName = isDatabaseLikeSpanName(span.name);
+
+  // Use one consistent icon for memory operations regardless of span type.
+  if (memoryLikeName) {
+    return {
+      icon: <MemoryIcon className="text-[13px]" />,
+      iconColor: "text-blue-300",
+      barColor: "bg-blue-400/70",
+    };
+  }
+
+  if (databaseLikeName) {
+    return {
+      icon: <Database className="h-3 w-3" aria-hidden />,
+      iconColor: "text-cyan-300",
+      barColor: "bg-cyan-400/70",
+    };
+  }
+
   if (t === "GENERATION" || t === "LLM") {
     return {
       icon: <Cpu className="h-3 w-3" aria-hidden />,
@@ -628,15 +1050,6 @@ function spanAccent(span: DatapackTraceSpan): SpanAccent {
     };
   }
   if (t === "TOOL") {
-    // Distinguish memory tools so the common "memory.search" / "memory.add"
-    // pattern lights up blue at a glance.
-    if (/memor/i.test(span.name)) {
-      return {
-        icon: <Sparkles className="h-3 w-3" aria-hidden />,
-        iconColor: "text-blue-300",
-        barColor: "bg-blue-400/70",
-      };
-    }
     return {
       icon: <Wrench className="h-3 w-3" aria-hidden />,
       iconColor: "text-emerald-300",
@@ -662,6 +1075,97 @@ function spanAccent(span: DatapackTraceSpan): SpanAccent {
     iconColor: "text-foreground/60",
     barColor: "bg-foreground/40",
   };
+}
+
+function isMemoryLikeSpanName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  return normalized.includes("memory") || /mem\d/.test(normalized);
+}
+
+function isDatabaseLikeSpanName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  return /(\bvector\b|\bgraph\b|\bdatabase\b|\bdb\b|\bquery\b|\bsql\b|\bpostgres\b|\byugabyte\b|\bretriev|\bembed|\bmage\b|\bage\b|\bcypher\b|\bpgvector\b)/.test(
+    normalized,
+  );
+}
+
+function normalizeMemoryTextForDedupe(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+type MemorySignals = {
+  vector: number;
+  entities: number;
+  relations: number;
+};
+
+function parseTraceUsage(
+  raw: string | undefined,
+): { input?: number; output?: number; total?: number } | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    if (!obj || typeof obj !== "object") return null;
+    const input = toNumberOrNull(obj.input);
+    const output = toNumberOrNull(obj.output);
+    const total = toNumberOrNull(obj.total);
+    if (input === null && output === null && total === null) return null;
+    return {
+      ...(input !== null ? { input } : {}),
+      ...(output !== null ? { output } : {}),
+      ...(total !== null ? { total } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseTraceCost(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function toNumberOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return null;
+}
+
+function formatTokenUsage(usage: {
+  input?: number;
+  output?: number;
+  total?: number;
+}): string {
+  const inTokens = usage.input ?? 0;
+  const outTokens = usage.output ?? 0;
+  const totalTokens = usage.total ?? inTokens + outTokens;
+  return `${formatCompactInt(inTokens)}→${formatCompactInt(outTokens)} (∑${formatCompactInt(totalTokens)})`;
+}
+
+function formatCompactInt(n: number): string {
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Math.round(n));
+}
+
+function formatUsdCompact(v: number): string {
+  if (v < 0.001) return `$${v.toFixed(4)}`;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 3,
+  }).format(v);
 }
 
 function formatDuration(ms: number): string {

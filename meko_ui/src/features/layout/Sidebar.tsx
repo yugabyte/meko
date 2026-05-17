@@ -310,7 +310,11 @@ export default function Sidebar() {
                       const basePath = datapackDetailPath(dp.datapack_name);
                       const onDatapackSubroute =
                         location.pathname === basePath || location.pathname.startsWith(`${basePath}/`);
-                      const isActive = onDatapackSubroute && activeDatapackId === dp.datapack_id;
+                      // Keep the datapack highlighted whenever the current route is
+                      // under that datapack path. If a datapack_id query is present,
+                      // also require id match to avoid ambiguity on stale links.
+                      const idMatches = !activeDatapackId || activeDatapackId === dp.datapack_id;
+                      const isActive = onDatapackSubroute && idMatches;
                       return cn(
                         "flex items-center rounded-md py-1.5 pl-2 pr-2 text-xs font-medium transition-colors min-w-0",
                         isActive

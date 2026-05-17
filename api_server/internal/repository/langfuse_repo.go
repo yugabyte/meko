@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -146,6 +147,21 @@ type TraceSpan struct {
 	// for memory-related spans (name ILIKE '%memor%') to keep payloads
 	// small. The UI uses it to surface extracted memory text.
 	Output string `json:"output,omitempty"`
+	// MemoryItems is a per-memory expansion for memory spans. Each item maps one
+	// extracted memory text to persisted-memory metadata and graph/vector counts.
+	MemoryItems []TraceMemoryItem `json:"memory_items,omitempty"`
+}
+
+type TraceMemoryItem struct {
+	MemoryID  string `json:"memory_id,omitempty"`
+	Text      string `json:"text"`
+	Vector    int64  `json:"vector"`
+	Entities  int64  `json:"entities"`
+	Relations int64  `json:"relations"`
+	// EntityNames are sampled graph-node names linked to this memory (if present).
+	EntityNames []string `json:"entity_names,omitempty"`
+	// RelationNames are sampled relation labels/types linked to those nodes (if present).
+	RelationNames []string `json:"relation_names,omitempty"`
 }
 
 // LangfuseRepo encapsulates database operations for Langfuse mappings
@@ -715,118 +731,55 @@ LIMIT 1`
 		header.LastActivityAt = header.StartedAt
 	}
 
+	// Spans are attributed to the *next* Conversation Message Added bookmark
+	// (work happens before the bookmark, which is written at turn end). We
+	// compute each bookmark's owning interval (prev_bm_time, bm_time] once
+	// in a window pass over bookmarks (M rows), then join observations to
+	// their interval in a single O(N) range scan rather than running two
+	// correlated subqueries per observation.
 	const threadQ = `
-WITH msg AS (
-    SELECT id           AS observation_id,
-           parent_observation_id,
-           start_time, end_time,
-           input::text  AS input,
-           output::text AS output,
-           metadata ->> 'message_id' AS message_id
+WITH raw_obs AS (
+    SELECT id, parent_observation_id, type, name, start_time, end_time, input::text AS input, output::text AS output,
+           metadata ->> 'message_id' AS msg_id,
+           (metadata ->> 'message_id' IS NOT NULL AND name = 'Conversation Message Added') AS is_bookmark
     FROM   clickhouse.observations
     WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
-      AND  name = 'Conversation Message Added'
-      AND  (metadata ->> 'message_id') IS NOT NULL
-), parents AS (
-    -- The Conversation Add Message tool span is the *write-the-row*
-    -- wrapper around the bookmark — it's only ~30ms long and does NOT
-    -- enclose the agent's reasoning, memory_add calls, etc. We grab
-    -- its start_time so the per-turn window begins where the agent
-    -- actually started working on the turn (not at the zero-duration
-    -- bookmark).
-    SELECT id, start_time AS p_start
-    FROM   clickhouse.observations
-    WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
-      AND  name = 'Conversation Add Message(Meko MCP)'
-), conv_start AS (
-    -- Earliest observation in the trace (Conversation Create span).
-    -- Used to extend the first message's window backward so out-of-order
-    -- tool calls (e.g. memory_add before conversation_add_message) are
-    -- attributed to the first turn rather than dropped.
-    SELECT MIN(start_time) AS trace_start
-    FROM   clickhouse.observations
-    WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
-), raw_windows AS (
-    SELECT m.observation_id, m.message_id, m.start_time, m.end_time,
-           m.input, m.output,
-           COALESCE(p.p_start, m.start_time) AS msg_start
-    FROM   msg m LEFT JOIN parents p ON p.id = m.parent_observation_id
-), windows AS (
-    -- root_start is the canonical start for this message window.
-    -- For the first message only, extend root_start back to conv_start
-    -- so spans written before conversation_add_message (out-of-order
-    -- memory_add, etc.) are included in latency and the trace drawer.
-    -- next_start always uses the unextended msg_start so the extension
-    -- does not bleed into subsequent message windows.
-    SELECT observation_id, message_id, start_time, end_time,
-           input, output,
-           CASE
-               WHEN ROW_NUMBER() OVER (ORDER BY msg_start, start_time) = 1
-               THEN LEAST(msg_start, (SELECT trace_start FROM conv_start))
-               ELSE msg_start
-           END AS root_start,
-           LEAD(msg_start) OVER (ORDER BY msg_start, start_time) AS next_start
-    FROM   raw_windows
-), reasoning_raw AS (
-    SELECT NULLIF(o.metadata ->> 'message_id', '') AS metadata_message_id,
-           o.parent_observation_id,
-           o.start_time,
-           o.output::text                           AS thinking
-    FROM   clickhouse.observations o
-    WHERE  o.project_id = $1 AND o.trace_id = $2 AND o.is_deleted = false
-      AND  o.type       = 'GENERATION'
-      AND  o.name       = 'Reasoning'
-), reasoning AS (
-    -- Robust join priority:
-    --   1) explicit metadata.message_id (best)
-    --   2) fallback parent_observation_id == Conversation Message Added.id
-    SELECT COALESCE(rr.metadata_message_id, m.message_id) AS message_id,
-           STRING_AGG(rr.thinking, E'\n\n' ORDER BY rr.start_time) AS thinking
-    FROM   reasoning_raw rr
-    LEFT   JOIN msg m ON m.observation_id = rr.parent_observation_id
-    WHERE  COALESCE(rr.metadata_message_id, m.message_id) IS NOT NULL
-    GROUP  BY COALESCE(rr.metadata_message_id, m.message_id)
+), bookmarks AS (
+    SELECT msg_id, start_time AS bm_time,
+           LAG(start_time)  OVER (ORDER BY start_time)      AS prev_bm_time,
+           (ROW_NUMBER() OVER (ORDER BY start_time DESC) = 1) AS is_last
+    FROM   raw_obs
+    WHERE  is_bookmark
 ), windowed AS (
-    -- Tool / LLM / memory observations falling between this message's
-    -- root_start and the next message's root_start
-    -- start. Attributes inline tool work to the turn that spawned it.
-    -- start_time / end_time are projected so per_msg can compute
-    -- wall-clock latency over the same span set the trace drawer
-    -- renders (max(end) - min(start)).
-    SELECT w.message_id, o.name, o.type, o.start_time, o.end_time
-    FROM   windows w
-    JOIN   clickhouse.observations o
-           ON o.project_id = $1 AND o.trace_id = $2 AND o.is_deleted = false
-          AND o.start_time >= w.root_start
-          AND (w.next_start IS NULL OR o.start_time < w.next_start)
-), per_msg AS (
-    SELECT message_id,
+    SELECT b.msg_id, o.id, o.parent_observation_id, o.type, o.name, o.start_time, o.end_time, o.output
+    FROM   raw_obs o
+    JOIN   bookmarks b
+      ON   (o.start_time <= b.bm_time AND (b.prev_bm_time IS NULL OR o.start_time > b.prev_bm_time))
+        OR (b.is_last AND o.start_time > b.bm_time)
+), turn_stats AS (
+    SELECT msg_id AS message_id,
+           MIN(start_time) AS root_start,
            COUNT(*) FILTER (WHERE type = 'GENERATION') AS llm_calls,
-           -- Wall-clock time of the turn = MAX(end) - MIN(start) over
-           -- the windowed observation set (same number the trace drawer
-           -- shows in its header). Using COALESCE(end,start) matches
-           -- Langfuse's own latency semantics for open spans. Using
-           -- MAX/MIN handles overlap and
-           -- parallel work correctly; SUM(durations) would double-count.
-           COALESCE(
-             (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000)::bigint,
-             0::bigint
-           ) AS latency_ms
-    FROM   windowed GROUP BY message_id
+           COALESCE((EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000)::bigint, 0) AS latency_ms
+    FROM   windowed
+    GROUP  BY msg_id
+), reasoning AS (
+    SELECT w.msg_id AS message_id,
+           STRING_AGG(w.output, E'\n\n' ORDER BY w.start_time) AS thinking
+    FROM   windowed w
+    WHERE  w.type = 'GENERATION' AND w.name = 'Reasoning'
+    GROUP  BY w.msg_id
 )
-SELECT w.message_id, w.observation_id,
-       w.root_start                                            AS window_start,
-       w.start_time, w.next_start, w.input, w.output,
-       COALESCE(r.thinking, '')                                  AS reasoning,
-       COALESCE(p.latency_ms, 0)     AS latency_ms,
-       COALESCE(
-         NULLIF(p.llm_calls, 0),
-         CASE WHEN NULLIF(BTRIM(w.output), '') IS NOT NULL THEN 1 ELSE 0 END
-       ) AS llm_calls
-FROM   windows w
-LEFT   JOIN reasoning r USING (message_id)
-LEFT   JOIN per_msg   p USING (message_id)
-ORDER  BY w.start_time ASC
+SELECT b.msg_id AS message_id, b.id AS observation_id, s.root_start, b.start_time,
+       LEAD(s.root_start) OVER (ORDER BY s.root_start, b.start_time) AS next_start,
+       b.input, b.output,
+       COALESCE(r.thinking, '') AS reasoning, s.latency_ms,
+       COALESCE(s.llm_calls, 0) AS llm_calls
+FROM   raw_obs b
+JOIN   turn_stats s ON s.message_id = b.msg_id
+LEFT JOIN reasoning r ON r.message_id = b.msg_id
+WHERE  b.is_bookmark
+ORDER  BY b.start_time ASC
 LIMIT  $3 OFFSET $4`
 
 	threadRows, err := r.langfuseDB.Query(threadQ, projectID, sessionID, messagesLimit, messagesOffset)
@@ -900,7 +853,7 @@ LIMIT  $3 OFFSET $4`
 	// conversation-level MemoriesAdded metric), and the UI can deep-link
 	// to the specific message that extracted a given memory.
 	if len(header.Thread) > 0 {
-		memRes, err := r.memoriesPerMessageWindow(datapackID, sessionID, windows)
+		memRes, err := r.memoriesPerMessageWindow(projectID, sessionID, windows)
 		if err != nil {
 			return nil, err
 		}
@@ -920,32 +873,57 @@ type memoryWindowResult struct {
 }
 
 func (r *LangfuseRepo) memoriesPerMessageWindow(
-	datapackID, sessionID string,
+	projectID, sessionID string,
 	windows []messageWindow,
 ) (memoryWindowResult, error) {
 	empty := memoryWindowResult{
 		counts:    map[string]int64{},
 		memoryIDs: map[string][]string{},
 	}
-	if r == nil || r.metaDB == nil {
-		return empty, fmt.Errorf("meta database is not configured")
+	if !r.LangfuseDBConfigured() {
+		return empty, ErrLangfuseDBNotConfigured
 	}
 	if len(windows) == 0 {
 		return empty, nil
 	}
 
+	// One row per 'Memory Add' tool call, with `memory_count` set to the
+	// number of memories that call actually extracted. mem0 returns
+	// `{"results": [{...}, {...}, ...]}` and a single tool invocation can
+	// extract multiple memories at once — counting tool calls (the old
+	// COUNT(*)) under-reports those, which is exactly what made the
+	// thread badge disagree with the trace drawer.
+	//
+	// The JSON cast is guarded so we never attempt jsonb on a malformed
+	// payload (output starts with `{` and mentions `"results"`); plain-
+	// text legacy output falls through to count = 1.
 	const q = `
-SELECT id::text, meko_created_at
-FROM   datapacks.meko_mem0_collection
-WHERE  meko_datapack_id = $1::uuid
-  AND  meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action
-  AND  meko_conversation_id IS NOT NULL
-  AND  REPLACE(meko_conversation_id::text, '-', '') = $2
-ORDER  BY meko_created_at ASC`
+SELECT id,
+       start_time,
+       GREATEST(
+         COALESCE(
+           CASE WHEN btrim(output::text) LIKE '{%}'
+                 AND output::text LIKE '%"results"%'
+                THEN jsonb_array_length((output::text)::jsonb -> 'results')
+                ELSE NULL
+           END,
+           1
+         ),
+         1
+       )::bigint AS memory_count
+FROM   clickhouse.observations
+WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
+  AND  type = 'TOOL'
+  AND  name ILIKE '%memory add%'
+  AND  output::text IS NOT NULL
+  AND  output::text <> ''
+  AND  output::text NOT LIKE '%"results": []%'
+  AND  output::text NOT LIKE '%"added_entities": []%'
+ORDER  BY start_time ASC`
 
-	rows, err := r.metaDB.Query(q, datapackID, strings.ReplaceAll(sessionID, "-", ""))
+	rows, err := r.langfuseDB.Query(q, projectID, sessionID)
 	if err != nil {
-		return empty, fmt.Errorf("meta db: load mem0 rows for message windows: %w", err)
+		return empty, fmt.Errorf("langfuse db: count meaningful memory spans: %w", err)
 	}
 	defer rows.Close()
 
@@ -958,46 +936,48 @@ ORDER  BY meko_created_at ASC`
 		res.memoryIDs[w.MessageID] = nil
 	}
 
-	assign := func(messageID, memID string) {
-		res.counts[messageID]++
-		res.memoryIDs[messageID] = append(res.memoryIDs[messageID], memID)
+	assign := func(messageID, spanID string, memoryCount int64) {
+		if memoryCount <= 0 {
+			memoryCount = 1
+		}
+		res.counts[messageID] += memoryCount
+		// We don't have per-extracted-memory IDs here (would require
+		// parsing each output payload), so we record the span ID as a
+		// stand-in. The UI uses memoryIDs to highlight the badge, not
+		// to deep-link, so this is fine.
+		res.memoryIDs[messageID] = append(res.memoryIDs[messageID], spanID)
 	}
 
-	// Two-pointer attribution over ascending timestamps.
 	winIdx := 0
 	for rows.Next() {
-		var memID string
-		var createdAt sql.NullTime
-		if err := rows.Scan(&memID, &createdAt); err != nil {
-			return empty, fmt.Errorf("meta db: scan mem0 row: %w", err)
+		var spanID string
+		var startTime time.Time
+		var memoryCount int64
+		if err := rows.Scan(&spanID, &startTime, &memoryCount); err != nil {
+			return empty, fmt.Errorf("langfuse db: scan memory span: %w", err)
 		}
-		if !createdAt.Valid {
-			continue
-		}
-		ct := createdAt.Time
-		// Some memories are persisted slightly before the first
-		// Conversation Message Added bookmark is written. Attribute those
-		// to the first message so per-message totals still reconcile with
-		// the conversation-level mem0 total.
-		if ct.Before(windows[0].Start) {
-			assign(windows[0].MessageID, memID)
-			continue
-		}
+
+		// Attribute to the correct message window.
 		for winIdx < len(windows) {
 			w := windows[winIdx]
-			if ct.Before(w.Start) {
+			if startTime.Before(w.Start) {
+				// This span is before the current window.
+				// If it's the first window, attribute it there.
+				if winIdx == 0 {
+					assign(w.MessageID, spanID, memoryCount)
+				}
 				break
 			}
-			if w.NextStart != nil && !ct.Before(*w.NextStart) {
+			if w.NextStart != nil && !startTime.Before(*w.NextStart) {
 				winIdx++
 				continue
 			}
-			assign(w.MessageID, memID)
+			assign(w.MessageID, spanID, memoryCount)
 			break
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return empty, fmt.Errorf("meta db: iterate mem0 rows for message windows: %w", err)
+		return empty, fmt.Errorf("langfuse db: iterate memory spans: %w", err)
 	}
 	return res, nil
 }
@@ -1022,24 +1002,16 @@ ORDER  BY meko_created_at ASC`
 // fan-out is a langfuse-listing concern; MemoriesRepo continues to own
 // the canonical Memories tab read path.
 func (r *LangfuseRepo) MemoriesPerConversation(
-	datapackID string,
+	projectID string,
 	conversationIDs []string,
 ) (map[string]int64, error) {
-	if r == nil || r.metaDB == nil {
-		return nil, fmt.Errorf("meta database is not configured")
-	}
-	datapackID = strings.TrimSpace(datapackID)
-	if datapackID == "" {
-		return nil, fmt.Errorf("datapack_id is required")
+	if !r.LangfuseDBConfigured() {
+		return nil, ErrLangfuseDBNotConfigured
 	}
 	if len(conversationIDs) == 0 {
 		return map[string]int64{}, nil
 	}
 
-	// mem0 stores meko_conversation_id as a real UUID (with hyphens);
-	// langfuse stores trace_id / session_id as the unhyphenated 32-char
-	// hex form. Compare on the stripped projection so callers don't
-	// have to format UUIDs in Go.
 	stripped := make([]string, 0, len(conversationIDs))
 	for _, id := range conversationIDs {
 		id = strings.ReplaceAll(strings.TrimSpace(id), "-", "")
@@ -1052,19 +1024,45 @@ func (r *LangfuseRepo) MemoriesPerConversation(
 		return map[string]int64{}, nil
 	}
 
+	// Sum extracted-memory counts per trace. Each 'Memory Add' tool call
+	// in mem0 can extract multiple memories at once (returned as the
+	// `results` array in the output payload), so we count those array
+	// entries instead of doing COUNT(*) on tool calls — that mismatch is
+	// what made the conversation badge disagree with the trace drawer.
+	//
+	// Same guarded JSON cast as memoriesPerMessageWindow: only attempt
+	// the jsonb conversion when output looks like a `{...}` object that
+	// mentions `"results"`; everything else falls through to count = 1.
 	const q = `
-SELECT REPLACE(meko_conversation_id::text, '-', '') AS conversation_id,
-       COUNT(*) AS memories
-FROM   datapacks.meko_mem0_collection
-WHERE  meko_datapack_id = $1::uuid
-  AND  meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action
-  AND  meko_conversation_id IS NOT NULL
-  AND  REPLACE(meko_conversation_id::text, '-', '') = ANY($2::text[])
-GROUP  BY meko_conversation_id`
+SELECT trace_id,
+       SUM(
+         GREATEST(
+           COALESCE(
+             CASE WHEN btrim(output::text) LIKE '{%}'
+                   AND output::text LIKE '%"results"%'
+                  THEN jsonb_array_length((output::text)::jsonb -> 'results')
+                  ELSE NULL
+             END,
+             1
+           ),
+           1
+         )
+       )::bigint AS memories
+FROM   clickhouse.observations
+WHERE  project_id = $1
+  AND  trace_id = ANY($2::text[])
+  AND  is_deleted = false
+  AND  type = 'TOOL'
+  AND  name ILIKE '%memory add%'
+  AND  output::text IS NOT NULL
+  AND  output::text <> ''
+  AND  output::text NOT LIKE '%"results": []%'
+  AND  output::text NOT LIKE '%"added_entities": []%'
+GROUP  BY trace_id`
 
-	rows, err := r.metaDB.Query(q, datapackID, pq.Array(stripped))
+	rows, err := r.langfuseDB.Query(q, projectID, pq.Array(stripped))
 	if err != nil {
-		return nil, fmt.Errorf("meta db: count mem0 per conversation: %w", err)
+		return nil, fmt.Errorf("langfuse db: count meaningful memories per conversation: %w", err)
 	}
 	defer rows.Close()
 
@@ -1075,12 +1073,12 @@ GROUP  BY meko_conversation_id`
 			cnt int64
 		)
 		if err := rows.Scan(&id, &cnt); err != nil {
-			return nil, fmt.Errorf("meta db: scan mem0 per conversation: %w", err)
+			return nil, fmt.Errorf("langfuse db: scan memory count: %w", err)
 		}
 		out[id] = cnt
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("meta db: iterate mem0 per conversation: %w", err)
+		return nil, fmt.Errorf("langfuse db: iterate memory counts: %w", err)
 	}
 	return out, nil
 }
@@ -1112,82 +1110,44 @@ func (r *LangfuseRepo) GetMessageTrace(
 		return nil, fmt.Errorf("message_id is required")
 	}
 
+	// Spans are attributed to the *next* Conversation Message Added bookmark
+	// (the bookmark is written at the end of a turn, so all the agent's work
+	// happens before it). For target message $3, the owning window is
+	// (prev_bookmark_time, target_bookmark_time]; if $3 is the last bookmark,
+	// any tail observations also belong to it.
 	const q = `
-WITH msg AS (
-    SELECT id, parent_observation_id, start_time, end_time
+WITH bookmarks AS (
+    SELECT (metadata ->> 'message_id') AS msg_id,
+           start_time AS bm_time,
+           LAG(start_time) OVER (ORDER BY start_time) AS prev_bm_time,
+           (ROW_NUMBER() OVER (ORDER BY start_time DESC) = 1) AS is_last
     FROM   clickhouse.observations
     WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
-      AND  name       = 'Conversation Message Added'
-      AND  (metadata ->> 'message_id') = $3
-    LIMIT 1
-), conv_start AS (
-    -- Earliest observation in the trace — the Conversation Create(Meko MCP)
-    -- tool span or the Conversation Created bookmark. Used as a floor for
-    -- the first message's window so that any tool calls the agent made
-    -- between conversation_create and conversation_add_message (e.g. an
-    -- out-of-order memory_add) are still visible in the trace drawer.
-    SELECT MIN(start_time) AS trace_start
-    FROM   clickhouse.observations
-    WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
+      AND  name = 'Conversation Message Added'
+      AND  (metadata ->> 'message_id') IS NOT NULL
+), bounds AS (
+    SELECT bm_time, prev_bm_time, is_last FROM bookmarks WHERE msg_id = $3
+), windowed AS (
+    SELECT o.id, o.parent_observation_id, o.name, o.type, o.start_time, o.end_time,
+           o.provided_model_name, o.usage_details, o.total_cost, o.output
+    FROM   clickhouse.observations o, bounds b
+    WHERE  o.project_id = $1 AND o.trace_id = $2 AND o.is_deleted = false
+      AND  ((o.start_time <= b.bm_time AND (b.prev_bm_time IS NULL OR o.start_time > b.prev_bm_time))
+           OR (b.is_last AND o.start_time > b.bm_time))
 ), root AS (
-    -- Anchor the window at the parent Add Message tool span when one
-    -- exists (its start time is slightly earlier than the bookmark);
-    -- this way the tree includes the wrapper itself.
-    --
-    -- For the first message (no earlier Conversation Message Added exists),
-    -- fall back to conv_start so out-of-order pre-message tool calls
-    -- (memory_add, etc.) are included in the window rather than dropped.
-    SELECT
-        CASE
-            WHEN NOT EXISTS (
-                SELECT 1 FROM clickhouse.observations
-                WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
-                  AND  name = 'Conversation Message Added'
-                  AND  (metadata ->> 'message_id') <> $3
-                  AND  start_time < COALESCE(p.start_time, m.start_time)
-            )
-            THEN LEAST(COALESCE(p.start_time, m.start_time),
-                       (SELECT trace_start FROM conv_start))
-            ELSE COALESCE(p.start_time, m.start_time)
-        END AS root_start
-    FROM msg m
-    LEFT JOIN clickhouse.observations p
-           ON p.id = m.parent_observation_id
-          AND p.project_id = $1 AND p.trace_id = $2 AND p.is_deleted = false
-), nxt AS (
-    -- Next message window starts at its own root_start (parent tool start
-    -- when present, else bookmark start). This prevents the next
-    -- Conversation Add Message wrapper from leaking into this window.
-    SELECT COALESCE(p2.start_time, m2.start_time) AS next_start
-    FROM   clickhouse.observations m2
-    LEFT JOIN clickhouse.observations p2
-           ON p2.id = m2.parent_observation_id
-          AND p2.project_id = $1 AND p2.trace_id = $2 AND p2.is_deleted = false
-    WHERE  m2.project_id = $1 AND m2.trace_id = $2 AND m2.is_deleted = false
-      AND  m2.name = 'Conversation Message Added'
-      AND  (m2.metadata ->> 'message_id') <> $3
-      AND  COALESCE(p2.start_time, m2.start_time) > (SELECT root_start FROM root)
-    ORDER  BY COALESCE(p2.start_time, m2.start_time), m2.start_time ASC
-    LIMIT 1
+    SELECT MIN(start_time) AS root_start FROM windowed
 )
-SELECT o.id,
-       COALESCE(o.parent_observation_id, ''),
-       o.name,
-       o.type::text                                                                  AS type,
+SELECT o.id, COALESCE(o.parent_observation_id, ''), o.name, o.type::text AS type,
        (EXTRACT(EPOCH FROM (COALESCE(o.end_time, o.start_time) - o.start_time))*1000)::bigint AS dur_ms,
-       (EXTRACT(EPOCH FROM (o.start_time - (SELECT root_start FROM root)))*1000)::bigint AS offset_ms,
-       COALESCE(o.provided_model_name, '')                                           AS model,
+       (EXTRACT(EPOCH FROM (o.start_time - r.root_start))*1000)::bigint AS offset_ms,
+       COALESCE(o.provided_model_name, '') AS model,
        CASE WHEN o.usage_details::text = '{}' THEN '' ELSE o.usage_details::text END AS usage,
-       COALESCE(o.total_cost::text, '')                                              AS total_cost,
-       -- Include output only for memory-related spans to keep payload small.
-       CASE WHEN o.name ILIKE '%memory%' OR o.name ILIKE '%memories%'
-            THEN COALESCE(LEFT(o.output::text, 4000), '')
-            ELSE ''
-       END                                                                           AS output
-FROM   clickhouse.observations o
-WHERE  o.project_id = $1 AND o.trace_id = $2 AND o.is_deleted = false
-  AND  o.start_time >= (SELECT root_start FROM root)
-  AND  (NOT EXISTS (SELECT 1 FROM nxt) OR o.start_time < (SELECT next_start FROM nxt))
+       COALESCE(o.total_cost::text, '') AS total_cost,
+       CASE WHEN (o.type = 'TOOL' AND o.name ILIKE '%memory add%'
+                  AND o.output::text NOT LIKE '%"results": []%'
+                  AND o.output::text NOT LIKE '%"added_entities": []%')
+            THEN COALESCE(o.output::text, '') ELSE '' END AS output
+FROM   windowed o, root r
 ORDER  BY o.start_time ASC`
 
 	rows, err := r.langfuseDB.Query(q, projectID, sessionID, messageID)
@@ -1232,4 +1192,505 @@ ORDER  BY o.start_time ASC`
 		return nil, nil
 	}
 	return out, nil
+}
+
+type traceMemoryMetrics struct {
+	MemoryID      string
+	Vector        int64
+	Entities      int64
+	Relations     int64
+	EntityNames   []string
+	RelationNames []string
+}
+
+type traceMemoryParsedItem struct {
+	MemoryID string
+	Text     string
+}
+
+// EnrichTraceMemoryItems expands memory span output into per-memory items and
+// annotates each item with vector / entity / relation counts pulled from
+// `datapacks.meko_mem0_collection` and `meko_multi_tenant_graph`.
+//
+// Performance: this used to issue one DB round-trip per memory item, which
+// landed as N+1 on traces with multiple memory_add calls (each running the
+// same heavy graph join). We now do at most two batched queries regardless
+// of memory count — one keyed by mem0 row id (the modern structured-output
+// path) and one keyed by normalized memory text (legacy fallback for spans
+// that don't surface an id). Most traces only need the by-id query; the
+// by-text path is skipped entirely when every item carries an id.
+func (r *LangfuseRepo) EnrichTraceMemoryItems(
+	datapackID, conversationID string,
+	spans []TraceSpan,
+) ([]TraceSpan, error) {
+	if r == nil || r.metaDB == nil || len(spans) == 0 {
+		return spans, nil
+	}
+	convID := strings.ReplaceAll(strings.TrimSpace(conversationID), "-", "")
+	if strings.TrimSpace(datapackID) == "" || convID == "" {
+		return spans, nil
+	}
+
+	out := make([]TraceSpan, len(spans))
+	copy(out, spans)
+
+	// itemAddr points into perSpanItems so the resolved metrics can be
+	// stitched back to the right (span, item) slot in a single pass at the
+	// end. Each parsed memory either gets a mem0 row id (refsByID) or a
+	// normalized-text + occurrence-offset bucket (textRefs).
+	type itemAddr struct{ span, item int }
+	type textRef struct {
+		key    string
+		offset int
+		addr   itemAddr
+	}
+
+	perSpanItems := make([][]TraceMemoryItem, len(out))
+	refsByID := make(map[string][]itemAddr)
+	textCursor := make(map[string]int, 16)
+	var textRefs []textRef
+
+	// Pass 1 — parse every span, bucket each item by its lookup key.
+	for i := range out {
+		parsedItems := parseTraceMemoryItems(out[i].Output)
+		if len(parsedItems) == 0 {
+			continue
+		}
+		items := make([]TraceMemoryItem, len(parsedItems))
+		for j, parsed := range parsedItems {
+			items[j] = TraceMemoryItem{Text: parsed.Text}
+			addr := itemAddr{span: i, item: j}
+			if parsed.MemoryID != "" {
+				refsByID[parsed.MemoryID] = append(refsByID[parsed.MemoryID], addr)
+				continue
+			}
+			key := normalizeTraceMemoryText(parsed.Text)
+			if key == "" {
+				continue
+			}
+			offset := textCursor[key]
+			textCursor[key] = offset + 1
+			textRefs = append(textRefs, textRef{key: key, offset: offset, addr: addr})
+		}
+		perSpanItems[i] = items
+	}
+
+	// Pass 2a — one batched query for every mem0 row id we saw.
+	if len(refsByID) > 0 {
+		ids := make([]string, 0, len(refsByID))
+		for id := range refsByID {
+			ids = append(ids, id)
+		}
+		metricsByID, err := r.batchLookupTraceMemoryMetricsByIDs(datapackID, convID, ids)
+		if err != nil {
+			return spans, err
+		}
+		for id, addrs := range refsByID {
+			m := metricsByID[id]
+			if m == nil {
+				continue
+			}
+			for _, a := range addrs {
+				applyTraceMemoryMetrics(&perSpanItems[a.span][a.item], m)
+			}
+		}
+	}
+
+	// Pass 2b — one batched query for every (text, occurrence) we saw.
+	if len(textRefs) > 0 {
+		keys := make([]string, len(textRefs))
+		offsets := make([]int, len(textRefs))
+		for i, t := range textRefs {
+			keys[i] = t.key
+			offsets[i] = t.offset
+		}
+		metricsByText, err := r.batchLookupTraceMemoryMetricsByTexts(datapackID, convID, keys, offsets)
+		if err != nil {
+			return spans, err
+		}
+		for _, t := range textRefs {
+			m := metricsByText[traceMemoryTextRefKey{Key: t.key, Offset: t.offset}]
+			if m == nil {
+				continue
+			}
+			applyTraceMemoryMetrics(&perSpanItems[t.addr.span][t.addr.item], m)
+		}
+	}
+
+	// Pass 3 — attach the (now-resolved) items back onto their spans.
+	for i := range out {
+		if perSpanItems[i] != nil {
+			out[i].MemoryItems = perSpanItems[i]
+		}
+	}
+	return out, nil
+}
+
+func applyTraceMemoryMetrics(item *TraceMemoryItem, m *traceMemoryMetrics) {
+	item.MemoryID = m.MemoryID
+	item.Vector = m.Vector
+	item.Entities = m.Entities
+	item.Relations = m.Relations
+	item.EntityNames = m.EntityNames
+	item.RelationNames = m.RelationNames
+}
+
+// traceMemoryTextRefKey is the composite key used to look up text-resolved
+// metrics in the per-text batched result map. We use a struct rather than
+// a separator-encoded string so there's no escaping concern (a normalized
+// memory text containing the separator would silently collide) and no
+// per-lookup allocation — Go map keys can be any comparable type.
+type traceMemoryTextRefKey struct {
+	Key    string
+	Offset int
+}
+
+// traceMemoryAggregationCTEs is the shared aggregation tail used by every
+// batched memory-metrics query. Callers prepend their own `matched` CTE that
+// exposes `(id, payload, vector, ...)` and append a SELECT that pulls per-
+// memory counts and sample names off of it. The two `%d` placeholders are
+// the parameter positions of the tenant `ILIKE` patterns (datapack_id and
+// conversation_id projected into the agtype properties JSON), so each caller
+// can keep its own parameter numbering. Everything is grouped on
+// `nodes.memory_id` / `edges.memory_id` so a single query handles many
+// memories at once.
+const traceMemoryAggregationCTEs = `,
+nodes AS (
+    SELECT DISTINCT
+           m.id AS memory_id,
+           (n->>'node_graphid')::bigint AS node_graphid,
+           NULLIF(
+             btrim(
+               COALESCE(
+                 n->>'name',
+                 n->>'entity',
+                 n->>'node_name',
+                 n->>'label',
+                 n->>'text'
+               )
+             ),
+             ''
+           ) AS node_name
+    FROM   matched m
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.payload->'graph_nodes', '[]'::jsonb)) AS n
+    -- graph_nodes is JSON written by mem0/agent code, so the id field
+    -- could be missing, empty, or non-numeric. Keep digits-only rows so
+    -- the bigint cast above can't fail the whole trace query.
+    WHERE  (n->>'node_graphid') ~ '^\d+$'
+),
+edges AS (
+    SELECT DISTINCT
+           ns.memory_id,
+           e.id AS edge_id,
+           COALESCE(
+             NULLIF(
+               COALESCE(
+                 ep ->> 'relationship',
+                 ep ->> 'relation',
+                 ep ->> 'type',
+                 ep ->> 'edge_type',
+                 ep ->> 'label'
+               ),
+               ''
+             ),
+             NULLIF(
+               CONCAT(
+                 COALESCE(
+                   ns.node_name,
+                   NULLIF(esp ->> 'name', ''),
+                   'node:' || (e.start_id::text)::bigint::text
+                 ),
+                 ' -> ',
+                 COALESCE(
+                   ne.node_name,
+                   NULLIF(eep ->> 'name', ''),
+                   'node:' || (e.end_id::text)::bigint::text
+                 )
+               ),
+               ''
+             )
+           ) AS relation_name
+    FROM   meko_multi_tenant_graph."CONNECTED_TO" e
+    CROSS JOIN LATERAL (SELECT e.properties::text::jsonb) AS ep_lat(ep)
+    JOIN   nodes ns ON ns.node_graphid = (e.start_id::text)::bigint
+    JOIN   nodes ne ON ne.node_graphid = (e.end_id::text)::bigint
+                   AND ne.memory_id    = ns.memory_id
+    LEFT JOIN meko_multi_tenant_graph."Entity" es
+           ON (es.id::text)::bigint = (e.start_id::text)::bigint
+          AND es.meko_datapack_id = $1::uuid
+          AND REPLACE(es.meko_conversation_id::text, '-', '') = $2
+    LEFT JOIN LATERAL (SELECT es.properties::text::jsonb) AS esp_lat(esp) ON TRUE
+    LEFT JOIN meko_multi_tenant_graph."Entity" ee
+           ON (ee.id::text)::bigint = (e.end_id::text)::bigint
+          AND ee.meko_datapack_id = $1::uuid
+          AND REPLACE(ee.meko_conversation_id::text, '-', '') = $2
+    LEFT JOIN LATERAL (SELECT ee.properties::text::jsonb) AS eep_lat(eep) ON TRUE
+    WHERE  e.properties::text ILIKE $%d
+      AND  e.properties::text ILIKE $%d
+)`
+
+// traceMemoryAggregationSelectByID is the SELECT half of the by-id batched
+// query. One row per memory in `matched`. Sample name arrays are capped at
+// six entries via an inner subquery so a single noisy memory can't blow up
+// the response payload.
+const traceMemoryAggregationSelectByID = `
+SELECT m.id::text,
+       m.vector,
+       COALESCE((SELECT COUNT(DISTINCT n.node_graphid) FROM nodes n WHERE n.memory_id = m.id), 0) AS entities,
+       COALESCE((SELECT COUNT(DISTINCT e.edge_id)      FROM edges e WHERE e.memory_id = m.id), 0) AS relations,
+       COALESCE(
+         (SELECT array_agg(t.node_name ORDER BY t.node_name)
+          FROM   (
+                   SELECT DISTINCT n.node_name
+                   FROM   nodes n
+                   WHERE  n.memory_id = m.id AND n.node_name IS NOT NULL
+                   ORDER  BY n.node_name
+                   LIMIT  6
+                 ) t),
+         ARRAY[]::text[]
+       ) AS entity_names,
+       COALESCE(
+         (SELECT array_agg(t.relation_name ORDER BY t.relation_name)
+          FROM   (
+                   SELECT DISTINCT e.relation_name
+                   FROM   edges e
+                   WHERE  e.memory_id = m.id AND e.relation_name IS NOT NULL
+                   ORDER  BY e.relation_name
+                   LIMIT  6
+                 ) t),
+         ARRAY[]::text[]
+       ) AS relation_names
+FROM   matched m`
+
+// traceMemoryAggregationSelectByText extends the by-id SELECT with the
+// (text_key, text_off) tuple the caller used to find this memory so the Go
+// side can stitch results back into the right slot.
+const traceMemoryAggregationSelectByText = traceMemoryAggregationSelectByID + `,
+       m.text_key,
+       m.text_off`
+
+// batchLookupTraceMemoryMetricsByIDs resolves vector / entity / relation
+// counts and sample node / relation names for every supplied mem0 row id in
+// a single round-trip. Missing ids are simply absent from the returned map.
+func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByIDs(
+	datapackID, conversationID string,
+	ids []string,
+) (map[string]*traceMemoryMetrics, error) {
+	out := make(map[string]*traceMemoryMetrics, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	const matchedCTE = `WITH matched AS (
+    SELECT id,
+           payload,
+           CASE WHEN embeddings IS NOT NULL THEN 1 ELSE 0 END AS vector
+    FROM   datapacks.meko_mem0_collection
+    WHERE  meko_datapack_id = $1::uuid
+      AND  meko_conversation_id IS NOT NULL
+      AND  REPLACE(meko_conversation_id::text, '-', '') = $2
+      AND  id::text = ANY($3::text[])
+)`
+
+	// Tenant ILIKE patterns occupy $4 and $5.
+	q := matchedCTE + fmt.Sprintf(traceMemoryAggregationCTEs, 4, 5) + traceMemoryAggregationSelectByID
+	datapackPattern := fmt.Sprintf("%%\"meko_datapack_id\": \"%s\"%%", datapackID)
+	conversationPattern := fmt.Sprintf("%%\"meko_conversation_id\": \"%s\"%%", conversationID)
+
+	rows, err := r.metaDB.Query(q, datapackID, conversationID, pq.Array(ids), datapackPattern, conversationPattern)
+	if err != nil {
+		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by id: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m traceMemoryMetrics
+		var entityNames, relationNames pq.StringArray
+		if err := rows.Scan(&m.MemoryID, &m.Vector, &m.Entities, &m.Relations, &entityNames, &relationNames); err != nil {
+			return nil, fmt.Errorf("meta db: scan trace memory metrics by id: %w", err)
+		}
+		m.EntityNames = []string(entityNames)
+		m.RelationNames = []string(relationNames)
+		out[m.MemoryID] = &m
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("meta db: iterate trace memory metrics by id: %w", err)
+	}
+	return out, nil
+}
+
+// batchLookupTraceMemoryMetricsByTexts is the legacy-fallback batched variant
+// that resolves metrics for memory items whose span output didn't carry a
+// mem0 row id. Keys are normalized memory texts and offsets are 0-based
+// "Nth occurrence of the same normalized text within this conversation
+// (oldest first)" — `EnrichTraceMemoryItems` walks spans in trace-time
+// ascending order and we want trace-time-1st → oldest DB row, trace-time-Nth
+// → Nth-oldest, so the partition ranks rows ASC by `meko_created_at`.
+// Folded into one ROW_NUMBER pass so the cost is independent of how many
+// items we have to resolve. Unlike the old per-item helper this only takes
+// the exact-equality branch; the substring LIKE fallbacks were heuristic
+// and could resolve to the wrong memory, so we drop them in favour of just
+// returning no metrics when there's no exact normalized match.
+func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByTexts(
+	datapackID, conversationID string,
+	keys []string,
+	offsets []int,
+) (map[traceMemoryTextRefKey]*traceMemoryMetrics, error) {
+	out := make(map[traceMemoryTextRefKey]*traceMemoryMetrics, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	if len(keys) != len(offsets) {
+		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by text: keys/offsets length mismatch (%d vs %d)", len(keys), len(offsets))
+	}
+
+	// `wanted` is the (text, occurrence_offset) request set, joined back
+	// against `ranked` so each input row resolves to at most one mem0 row.
+	// `ranked.rn` is 0-based and increases with age (oldest = 0): the
+	// caller assigns offsets in trace-time ascending order, and mem0 rows
+	// are persisted in the same order their spans fire, so rn=0 → oldest
+	// match → trace-time-first occurrence is the correct alignment.
+	const matchedCTE = `WITH wanted AS (
+    SELECT key, off
+    FROM   UNNEST($3::text[], $4::int[]) AS t(key, off)
+),
+candidates AS (
+    SELECT id,
+           payload,
+           embeddings,
+           meko_created_at,
+           btrim(regexp_replace(lower(COALESCE(payload->>'data', payload->>'memory', payload->>'text', payload->>'content', '')), '[^a-z0-9]+', ' ', 'g')) AS normalized
+    FROM   datapacks.meko_mem0_collection
+    WHERE  meko_datapack_id = $1::uuid
+      AND  meko_conversation_id IS NOT NULL
+      AND  REPLACE(meko_conversation_id::text, '-', '') = $2
+),
+ranked AS (
+    SELECT id, payload, embeddings, normalized,
+           (ROW_NUMBER() OVER (PARTITION BY normalized ORDER BY meko_created_at ASC) - 1) AS rn
+    FROM   candidates
+    WHERE  normalized IN (SELECT key FROM wanted)
+),
+matched AS (
+    SELECT r.id,
+           r.payload,
+           CASE WHEN r.embeddings IS NOT NULL THEN 1 ELSE 0 END AS vector,
+           w.key AS text_key,
+           w.off AS text_off
+    FROM   ranked r
+    JOIN   wanted w ON w.key = r.normalized AND w.off = r.rn
+)`
+
+	// Tenant ILIKE patterns occupy $5 and $6.
+	q := matchedCTE + fmt.Sprintf(traceMemoryAggregationCTEs, 5, 6) + traceMemoryAggregationSelectByText
+	datapackPattern := fmt.Sprintf("%%\"meko_datapack_id\": \"%s\"%%", datapackID)
+	conversationPattern := fmt.Sprintf("%%\"meko_conversation_id\": \"%s\"%%", conversationID)
+
+	rows, err := r.metaDB.Query(q, datapackID, conversationID, pq.Array(keys), pq.Array(offsets), datapackPattern, conversationPattern)
+	if err != nil {
+		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by text: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m traceMemoryMetrics
+		var entityNames, relationNames pq.StringArray
+		var textKey string
+		var textOff int
+		if err := rows.Scan(&m.MemoryID, &m.Vector, &m.Entities, &m.Relations, &entityNames, &relationNames, &textKey, &textOff); err != nil {
+			return nil, fmt.Errorf("meta db: scan trace memory metrics by text: %w", err)
+		}
+		m.EntityNames = []string(entityNames)
+		m.RelationNames = []string(relationNames)
+		out[traceMemoryTextRefKey{Key: textKey, Offset: textOff}] = &m
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("meta db: iterate trace memory metrics by text: %w", err)
+	}
+	return out, nil
+}
+
+func parseTraceMemoryItems(raw string) []traceMemoryParsedItem {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "null" || trimmed == `""` || trimmed == "{}" {
+		return nil
+	}
+
+	var parsed any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return []traceMemoryParsedItem{{Text: trimmed}}
+	}
+
+	if s, ok := parsed.(string); ok {
+		inner := strings.TrimSpace(s)
+		if inner == "" {
+			return nil
+		}
+		var nested any
+		if err := json.Unmarshal([]byte(inner), &nested); err != nil {
+			return []traceMemoryParsedItem{{Text: inner}}
+		}
+		parsed = nested
+	}
+
+	obj, ok := parsed.(map[string]any)
+	if !ok {
+		return []traceMemoryParsedItem{{Text: fmt.Sprint(parsed)}}
+	}
+
+	if results, ok := obj["results"].([]any); ok {
+		if len(results) == 0 {
+			return nil
+		}
+		items := make([]traceMemoryParsedItem, 0, len(results))
+		for _, r := range results {
+			ro, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			mem := strings.TrimSpace(fmt.Sprint(ro["memory"]))
+			if mem == "" || mem == "<nil>" {
+				continue
+			}
+			id := strings.TrimSpace(fmt.Sprint(ro["id"]))
+			if id == "<nil>" {
+				id = ""
+			}
+			items = append(items, traceMemoryParsedItem{MemoryID: id, Text: mem})
+		}
+		if len(items) > 0 {
+			return items
+		}
+		return nil
+	}
+
+	for _, key := range []string{"memory", "data", "text", "content", "message"} {
+		if v, ok := obj[key].(string); ok {
+			v = strings.TrimSpace(v)
+			if v != "" {
+				return []traceMemoryParsedItem{{Text: v}}
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeTraceMemoryText(text string) string {
+	text = strings.ToLower(text)
+	replacer := strings.NewReplacer(
+		".", " ",
+		",", " ",
+		";", " ",
+		":", " ",
+		"!", " ",
+		"?", " ",
+		"(", " ",
+		")", " ",
+		"[", " ",
+		"]", " ",
+		"{", " ",
+		"}", " ",
+		"\"", " ",
+		"'", " ",
+	)
+	text = replacer.Replace(text)
+	return strings.Join(strings.Fields(text), " ")
 }

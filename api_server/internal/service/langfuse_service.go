@@ -741,7 +741,7 @@ func (s *LangfuseService) ListConversations(
 		for i, c := range conversations {
 			ids[i] = c.ID
 		}
-		counts, mErr := s.repo.MemoriesPerConversation(datapackID, ids)
+		counts, mErr := s.repo.MemoriesPerConversation(projectID, ids)
 		if mErr != nil {
 			slog.Warn("conversations: failed to fetch mem0 counts; defaulting to 0",
 				"datapack_id", datapackID, "err", mErr)
@@ -844,7 +844,7 @@ func (s *LangfuseService) GetConversation(
 		return projectID, nil, ErrConversationNotFound
 	}
 
-	counts, mErr := s.repo.MemoriesPerConversation(datapackID, []string{conversationID})
+	counts, mErr := s.repo.MemoriesPerConversation(projectID, []string{conversationID})
 	if mErr != nil {
 		slog.Warn("conversation detail: failed to fetch mem0 count; defaulting to 0",
 			"datapack_id", datapackID, "conversation_id", conversationID, "err", mErr)
@@ -903,7 +903,18 @@ func (s *LangfuseService) GetMessageTrace(
 	if spans == nil {
 		return projectID, nil, ErrConversationNotFound
 	}
-	return projectID, spans, nil
+	spans = pruneRedundantSingleLeafChildren(spans)
+	enriched, enrichErr := s.repo.EnrichTraceMemoryItems(datapackID, conversationID, spans)
+	if enrichErr != nil {
+		slog.Warn("message trace memory enrichment failed; returning trace without memory metrics",
+			"datapack_id", datapackID,
+			"conversation_id", conversationID,
+			"message_id", messageID,
+			"error", enrichErr,
+		)
+		return projectID, spans, nil
+	}
+	return projectID, enriched, nil
 }
 
 // normalizeSessionID strips hyphens from the input; MCP's
@@ -913,6 +924,70 @@ func (s *LangfuseService) GetMessageTrace(
 // so handlers don't have to.
 func normalizeSessionID(s string) string {
 	return strings.ReplaceAll(strings.TrimSpace(s), "-", "")
+}
+
+// pruneRedundantSingleLeafChildren hides each leaf child whose parent/child
+// name pair matches redundantLeafChildByParentName. Single-child non-leaf
+// chains are left alone so deeper structure stays visible.
+func pruneRedundantSingleLeafChildren(spans []TraceSpan) []TraceSpan {
+	if len(spans) < 2 {
+		return spans
+	}
+
+	indexByID := make(map[string]int, len(spans))
+	for i := range spans {
+		indexByID[spans[i].ID] = i
+	}
+	childrenByParent := make(map[string][]string, len(spans))
+	for _, span := range spans {
+		parentID := strings.TrimSpace(span.ParentObservationID)
+		if parentID == "" {
+			continue
+		}
+		if _, ok := indexByID[parentID]; !ok {
+			continue
+		}
+		childrenByParent[parentID] = append(childrenByParent[parentID], span.ID)
+	}
+
+	hidden := make(map[string]struct{})
+	for parentID, children := range childrenByParent {
+		if len(children) != 1 {
+			continue
+		}
+		onlyChildID := children[0]
+		if len(childrenByParent[onlyChildID]) > 0 {
+			continue
+		}
+		expected, known := redundantLeafChildByParentName[spans[indexByID[parentID]].Name]
+		if !known {
+			continue
+		}
+		if spans[indexByID[onlyChildID]].Name == expected {
+			hidden[onlyChildID] = struct{}{}
+		}
+	}
+
+	if len(hidden) == 0 {
+		return spans
+	}
+	out := make([]TraceSpan, 0, len(spans)-len(hidden))
+	for _, span := range spans {
+		if _, ok := hidden[span.ID]; ok {
+			continue
+		}
+		out = append(out, span)
+	}
+	return out
+}
+
+// redundantLeafChildByParentName lists the meko-mcp-server tools whose only
+// inner span carries the same semantic step (see meko-mcp-server/src/tools.py
+// and langfuse_store.py). Extend the below map explicitly; never via fuzzy matching.
+var redundantLeafChildByParentName = map[string]string{
+	"Conversation Create(Meko MCP)":      "Conversation Created",
+	"Conversation Add Message(Meko MCP)": "Conversation Message Added",
+	"Conversation Update(Meko MCP)":      "Conversation Updated",
 }
 
 type createOrgReq struct {

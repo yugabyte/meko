@@ -178,6 +178,19 @@ export function ConversationListRail({
                       ? "bg-[#141C2E] border-l-purple-400"
                       : "border-l-transparent hover:bg-[#11192A]",
                   )}
+                  // Announce the conversation by its headline so screen-reader
+                  // users hear what the row is about, not just the visible
+                  // message/memory counts. Cap at 80 chars so long agent
+                  // payloads don't drown out the action verb.
+                  aria-label={
+                    c.title || c.first_message
+                      ? `Open conversation: ${
+                          headline.length > 80
+                            ? `${headline.slice(0, 80)}…`
+                            : headline
+                        }`
+                      : `Open conversation ${c.id.slice(0, 8)}…`
+                  }
                 >
                   <div className="flex items-center justify-between gap-2 mb-1">
                     {c.agent_id ? (
@@ -191,11 +204,19 @@ export function ConversationListRail({
                       {formatRelativeTime(c.last_activity_at, now)}
                     </span>
                   </div>
+                  {/* Headline is clamped to two lines. `line-clamp-2` already
+                      handles the ellipsis on the last visible line; we add
+                      `break-words` so a single very long token (no spaces)
+                      doesn't silently disable the ellipsis, and `text-ellipsis`
+                      explicitly forces the dots even when the browser is
+                      borderline about whether overflow exists. The full text
+                      is always available on hover via `title`. */}
                   <p
                     className={cn(
-                      "mb-2 line-clamp-2 text-[13px] leading-snug",
+                      "mb-2 line-clamp-2 break-words text-ellipsis text-[13px] leading-snug",
                       active ? "text-white" : "text-foreground/85",
                     )}
+                    title={headline}
                   >
                     {headline}
                   </p>
