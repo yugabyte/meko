@@ -111,6 +111,13 @@ export default function SignUpPage() {
               </div>
               <Input
                 type="email"
+                autoComplete="username"
+                name="email"
+                aria-label="Email address"
+                inputMode="email"
+                autoCapitalize="none"
+                spellCheck={false}
+                enterKeyHint="next"
                 placeholder="Your email address"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -119,6 +126,10 @@ export default function SignUpPage() {
               />
               <Input
                 type="password"
+                autoComplete="new-password"
+                name="password"
+                aria-label="Password"
+                enterKeyHint="go"
                 placeholder="Create password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

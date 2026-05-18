@@ -141,6 +141,13 @@ export default function SignInPage() {
         <form className="space-y-4" onSubmit={handleSubmit}>
           <Input
             type="email"
+            autoComplete="username"
+            name="email"
+            aria-label="Email address"
+            inputMode="email"
+            autoCapitalize="none"
+            spellCheck={false}
+            enterKeyHint="next"
             placeholder="Your email address"
             value={email}
             onChange={(e) => {
@@ -155,6 +162,10 @@ export default function SignInPage() {
           />
           <Input
             type="password"
+            autoComplete="current-password"
+            name="password"
+            aria-label="Password"
+            enterKeyHint="go"
             placeholder="Your password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}

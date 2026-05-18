@@ -108,6 +108,13 @@ export default function ForgotPasswordPage() {
         <form className="space-y-4" onSubmit={handleSendCode}>
           <Input
             type="email"
+            autoComplete="username"
+            name="email"
+            aria-label="Email address"
+            inputMode="email"
+            autoCapitalize="none"
+            spellCheck={false}
+            enterKeyHint="send"
             placeholder="Your email address"
             value={email}
             onChange={(e) => {
@@ -118,7 +125,6 @@ export default function ForgotPasswordPage() {
               }
             }}
             required
-            autoComplete="email"
             className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
           />
           <Button
