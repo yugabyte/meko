@@ -12,7 +12,7 @@ import {
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES, datapackConfigurePath } from "@/app/routes/paths";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
-import { ArrowRight, Check, Play, Sparkles, Terminal } from "lucide-react";
+import { ArrowRight, Check, Code, MessageSquare, MousePointer2, Play, Sparkles, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function OnboardingPage() {
@@ -77,9 +77,6 @@ export default function OnboardingPage() {
       <AppWorkspaceHeader
         padding="page"
         className="pl-4 pr-8"
-        leading={
-          <img src="/meko-logo.svg" alt="meko" className="h-12 w-auto" />
-        }
       />
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center px-8 pb-16 pt-8">
@@ -118,7 +115,7 @@ export default function OnboardingPage() {
                     Try the WorkbenchLM
                   </h2>
                   <p className="mb-5 flex-1 text-sm leading-relaxed text-muted-foreground">
-                    Start with a sample knowledge base (vacation spots). Upload a file, ask a question,
+                    Start with a sample knowledge base. Upload a file, ask a question,
                     and watch memories form in real time — all inside your default datapack.
                   </p>
                   <ul className="mb-6 space-y-2.5 text-sm text-foreground/90">
@@ -151,21 +148,30 @@ export default function OnboardingPage() {
                     </div>
                   </div>
                   <h2 className="mb-2 text-lg font-semibold tracking-tight text-foreground">
-                    Connect to your coding agent
+                    Connect to AI agent
                   </h2>
                   <p className="mb-5 flex-1 text-sm leading-relaxed text-muted-foreground">
-                    Point Claude Code, Codex, or Cursor at an existing project. Meko detects your
-                    knowledge, conversation history, and skills — and turns them into a live datapack.
+                    Use meko with any MCP-compatible agent, such as Codex, Cursor or Claude. Meko detects your
+                    knowledge, conversation history, and agent memories — and turns them into a live datapack to share with others.
                   </p>
+                  {/* Supported clients shown as static badges (NOT
+                      buttons) — they were misread as interactive
+                      because of the hover/transition styling. The
+                      actual selection happens on the next wizard
+                      step; here they're just an at-a-glance preview. */}
                   <div className="mb-6 flex flex-wrap gap-2">
-                    {["Claude Code", "Claude Desktop", "Cursor"].map((label) => (
-                      <button
+                    {[
+                      { label: "AI Assistant" },
+                      { label: "Coding Harnesses" },
+                      { label: "AI Frameworks" },
+                    ].map(({ label }) => (
+                      <span
                         key={label}
-                        type="button"
-                        className="rounded-md border border-border bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground"
                       >
+                        {/* <Icon className="h-3 w-3" aria-hidden /> */}
                         {label}
-                      </button>
+                      </span>
                     ))}
                   </div>
                   <Button

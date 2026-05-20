@@ -9,6 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { WarningBanner } from "@/components/ui/warning-banner";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import {
   DEFAULT_ACCOUNT_DATAPACK_NAME,
@@ -449,11 +450,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           }
         />
 
-        {statusError ? (
-          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            {statusError}
-          </div>
-        ) : null}
+        {statusError ? <WarningBanner>{statusError}</WarningBanner> : null}
 
         <CollectiveLearningPipeline
           currentUser={currentUser}

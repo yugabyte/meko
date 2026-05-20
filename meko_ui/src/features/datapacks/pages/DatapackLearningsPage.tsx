@@ -6,6 +6,7 @@ import { BookMarked } from "lucide-react";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import MemoryPromotionPanel from "@/features/datapacks/components/memory-promotion/MemoryPromotionPanel";
+import { WarningBanner } from "@/components/ui/warning-banner";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/mekoApi";
 import { isDatapackGrantEligibleToPromoteMemoryToKnowledge } from "@/lib/datapackShareGrants";
@@ -72,11 +73,7 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
           </p>
         </div>
 
-        {statusError ? (
-          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            {statusError}
-          </div>
-        ) : null}
+        {statusError ? <WarningBanner>{statusError}</WarningBanner> : null}
 
         {datapack?.datapack_id ? (
           <MemoryPromotionPanel datapackName={datapackName} datapackId={datapack.datapack_id} isPromotionAllowed={isPromotionAllowed} />

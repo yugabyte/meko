@@ -1,4 +1,4 @@
-// Bottom input bar for the Playground chat. Textarea auto-grows with the
+// Bottom input bar for the WorkbenchLM chat. Textarea auto-grows with the
 // content up to MAX_TEXTAREA_HEIGHT_PX (then scrolls). Enter submits,
 // Shift+Enter inserts a newline. The Send button shows a spinner while a
 // turn is in flight, and a sub-line under the bar surfaces the active

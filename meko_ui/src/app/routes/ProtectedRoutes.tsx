@@ -17,9 +17,17 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const { pathname } = useLocation();
 
   if (isOnboardingRoute) {
+    // Keep the same shell (Sidebar + workspace) as the rest of the
+    // app so users see the standard navigation while they're picking
+    // an onboarding path. Previously this rendered full-screen with
+    // no sidebar; the change makes the onboarding experience
+    // continuous with the post-onboarding workspace.
     return (
-      <div className="min-h-screen w-full bg-background text-foreground overflow-y-auto">
-        <OnboardingPage />
+      <div className="flex h-screen w-full bg-background overflow-hidden text-foreground">
+        <Sidebar />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+          <OnboardingPage />
+        </div>
       </div>
     );
   }
@@ -42,17 +50,27 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
           <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isHome ? "contents" : "none" }}>
             <HomePage />
           </div>
-          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isWorkbenchLM ? "contents" : "none" }}>
-            {/*
-              All five pages stay mounted (toggled via `display: none`) to
-              preserve in-memory state across navigation. WorkbenchLMPage
-              runs background polling on /memories, /promoted-memories,
-              and /documents — passing `isRouteActive` lets it pause those
-              intervals while the user is on another route. Without this
-              the page would keep hammering the API from a hidden tree.
-            */}
-            <WorkbenchLMPage isRouteActive={isWorkbenchLM} />
-          </div>
+          {/*
+            WorkbenchLM is the ONE page we deliberately conditionally
+            mount. The other four (Home / Settings / Datapacks / Observe)
+            stay mounted under `display: none` to preserve in-memory
+            state across navigation. WorkbenchLM previously did the
+            same with an `isRouteActive` prop meant to pause its
+            background polling (memories / promoted-memories /
+            documents), but several effects still tick — so we
+            unmount it instead. Trade-off: in-memory state (chat
+            scroll position, expanded panels) resets on tab return,
+            but the API stops getting hit from a hidden tree.
+
+            No wrapper div here on purpose: the other pages render
+            their wrappers with `display: contents` so the page
+            itself is a direct flex child of this column. Adding a
+            real wrapper would inject an extra layout level and
+            break the page's internal `flex-1` height chain (the
+            chat composer would float mid-screen instead of pinning
+            to the bottom).
+          */}
+          {isWorkbenchLM ? <WorkbenchLMPage isRouteActive={true} /> : null}
           <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isSettings ? "contents" : "none" }}>
             <SettingsPage />
           </div>

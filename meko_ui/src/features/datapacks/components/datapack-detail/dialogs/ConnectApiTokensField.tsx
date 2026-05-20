@@ -121,7 +121,7 @@ function NoTokensEmptyState({
     <div className="flex items-start gap-3 rounded-md border border-dashed border-border bg-[#0E1525]/60 px-4 py-3">
       <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
-        <p className="text-sm text-white">No active API tokens.</p>
+        <p className="text-sm text-white">No active API keys.</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {totalCount > 0
             ? "Your tokens are expired or revoked. Generate a new one in Settings."

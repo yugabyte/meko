@@ -116,7 +116,7 @@ export default function SettingsPage() {
                 </dl>
               </section>
 
-              {/* Security section — password + API tokens. The tokens
+              {/* Security section — password + API keys. The tokens
                   subsection is its own component so the create/list
                   lifecycle and the plaintext-reveal state are isolated. */}
               <section className="rounded-xl border border-border bg-[#0F1626] p-5">

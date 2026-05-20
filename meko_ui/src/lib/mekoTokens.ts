@@ -30,7 +30,7 @@ export const MEKO_TOKEN_DEFAULT_TTL_DAYS = 365;
  * saved token here; the literal value also doubles as something that's
  * visually obvious in a terminal so it can't be confused with a real key.
  */
-export const MEKO_TOKEN_INSTALLER_PLACEHOLDER = "<paste-your-meko-token>" as const;
+export const MEKO_TOKEN_INSTALLER_PLACEHOLDER = "<paste-your-api-key>" as const;
 
 /** Derived runtime status of a token. */
 export const MEKO_TOKEN_STATUS = {

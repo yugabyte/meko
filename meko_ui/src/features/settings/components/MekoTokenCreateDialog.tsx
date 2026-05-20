@@ -124,7 +124,7 @@ export function MekoTokenCreateDialog({ open, onOpenChange, onCreated }: Props) 
           <div className="flex items-center gap-2">
             <KeyRound className="h-5 w-5 shrink-0 text-blue-400" aria-hidden />
             <DialogTitle className="text-white">
-              {revealed ? "Token created" : "Generate API token"}
+              {revealed ? "API key created" : "Generate API key"}
             </DialogTitle>
           </div>
           <DialogDescription className="text-muted-foreground">

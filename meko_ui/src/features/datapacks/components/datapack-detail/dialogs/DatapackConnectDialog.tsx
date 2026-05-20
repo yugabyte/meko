@@ -127,7 +127,7 @@ export function DatapackConnectDialog({
       .catch((err) => {
         if (ac.signal.aborted) return;
         if ((err as { name?: string })?.name === "CanceledError") return;
-        setTokensError(getApiErrorMessage(err, "Failed to load API tokens."));
+        setTokensError(getApiErrorMessage(err, "Failed to load API keys."));
         setTokens([]);
       })
       .finally(() => {

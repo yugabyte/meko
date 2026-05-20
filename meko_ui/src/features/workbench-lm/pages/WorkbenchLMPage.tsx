@@ -34,7 +34,7 @@ const DEV_MCP_TOKEN = (import.meta.env.VITE_MEKO_MCP_BEARER as string | undefine
 
 type Props = {
   /**
-   * True only when `/playground` is the currently-routed path. Because
+   * True only when `/workbench-lm` is the currently-routed path. Because
    * ProtectedRoutes keeps every page mounted (`display: none` toggle)
    * to preserve state across navigation, the page can't infer this from
    * its own lifecycle — it has to be told. When false, child polling
@@ -187,7 +187,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   // ProtectedRoutes keeps WorkbenchLMPage permanently mounted (display
   // toggle), so the mount effect above only runs once per session. Without
   // this, datapacks created from /datapacks (or shared in) while the
-  // user was on Playground wouldn't appear in the picker until a full
+  // user was on WorkbenchLM wouldn't appear in the picker until a full
   // page reload. notifyDatapacksListChanged() is fired by every page
   // that mutates the list (create / update / delete / share-accept).
   useEffect(() => {

@@ -8,9 +8,9 @@ export const ROUTES = {
   completeNewPassword: "/complete-new-password",
   onboarding: "/onboarding",
   home: "/home",
-  // URL kept as `/playground` for backward-compat with existing bookmarks
+  // URL kept as `/workbench-lm` for backward-compat with existing bookmarks
   // and links; the product is renamed to "WorkbenchLM" elsewhere in the UI.
-  workbenchLm: "/playground",
+  workbenchLm: "/workbench-lm",
   datapacks: "/datapacks",
   observeHub: "/observe-hub",
   /** Account-scoped settings page (profile + change password). */

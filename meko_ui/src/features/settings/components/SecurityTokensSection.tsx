@@ -1,4 +1,4 @@
-// Settings → Security → API tokens.
+// Settings → Security → API keys.
 //
 // Owns the list/create/delete lifecycle for Meko personal access tokens
 // (MCP PATs). Plaintext only ever lives transiently inside
@@ -13,7 +13,6 @@ import {
   KeyRound,
   Loader2,
   Plus,
-  RefreshCw,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -131,7 +130,7 @@ export function SecurityTokensSection() {
       <section className="rounded-xl border border-border bg-[#0F1626] p-5">
         <header className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-white">API tokens</h2>
+            <h2 className="text-sm font-semibold text-white">API Keys</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               Personal access tokens for connecting MCP clients (Claude, Cursor, …) to your datapacks.{" "}
               <span className="text-foreground/80">
@@ -140,45 +139,39 @@ export function SecurityTokensSection() {
               .
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => void load()}
-              disabled={loading}
-              className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
-              aria-label="Refresh tokens"
-            >
-              {loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-              )}
-            </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5"
-                    onClick={() => setCreateOpen(true)}
-                    disabled={atCap}
-                  >
-                    <Plus className="h-3.5 w-3.5" aria-hidden />
-                    Generate token
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              {atCap ? (
-                <TooltipContent side="top" className="max-w-[260px] text-center">
-                  You've reached the {MEKO_TOKEN_MAX_COUNT}-token limit. Revoke an unused token to generate a new one.
-                </TooltipContent>
-              ) : null}
-            </Tooltip>
-          </div>
+          {/* Header CTA: only shown when there's at least one token.
+              The empty-state (rendered below) carries its own Generate
+              button — having both visible at once was a duplicate
+              affordance. The refresh button was also removed: token
+              changes happen via the same dialog that's already wired
+              to call `load()` on success, so a manual refresh has no
+              practical use. */}
+          {tokens.length > 0 ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={() => setCreateOpen(true)}
+                      disabled={atCap}
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden />
+                      Generate API key
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {atCap ? (
+                  <TooltipContent side="top" className="max-w-[260px] text-center">
+                    You've reached the {MEKO_TOKEN_MAX_COUNT}-key limit. Revoke an unused key to generate a new one.
+                  </TooltipContent>
+                ) : null}
+              </Tooltip>
+            </div>
+          ) : null}
         </header>
 
         {error ? (
@@ -263,7 +256,7 @@ function EmptyState({ onGenerate }: { onGenerate: () => void }) {
     <div className="rounded-lg border border-dashed border-border bg-[#0E1525]/40 px-4 py-6 text-center">
       <KeyRound className="mx-auto mb-2 h-5 w-5 text-muted-foreground" aria-hidden />
       <p className="text-xs text-muted-foreground">
-        No API tokens yet. Generate one to connect MCP clients to your datapacks.
+        No API keys yet. Generate one to connect MCP clients to your datapacks.
       </p>
       <Button
         type="button"
