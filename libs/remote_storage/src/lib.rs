@@ -18,6 +18,7 @@ mod metrics;
 mod s3_bucket;
 mod simulate_failures;
 mod support;
+mod yb_store;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -48,7 +49,10 @@ pub use self::gcs_bucket::GCSBucket;
 pub use self::local_fs::LocalFs;
 pub use self::s3_bucket::S3Bucket;
 pub use self::simulate_failures::UnreliableWrapper;
-pub use crate::config::{AzureConfig, GCSConfig, RemoteStorageConfig, RemoteStorageKind, S3Config};
+pub use self::yb_store::YbStore;
+pub use crate::config::{
+    AzureConfig, GCSConfig, RemoteStorageConfig, RemoteStorageKind, S3Config, YbStoreConfig,
+};
 
 /// Default concurrency limit for S3 operations
 ///
@@ -530,6 +534,7 @@ pub enum GenericRemoteStorage<Other: Clone = Arc<UnreliableWrapper>> {
     AzureBlob(Arc<AzureBlobStorage>),
     Unreliable(Other),
     GCS(Arc<GCSBucket>),
+    YbStore(Arc<YbStore>),
 }
 
 impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
@@ -547,6 +552,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.list(prefix, mode, max_keys, cancel).await,
             Self::Unreliable(s) => s.list(prefix, mode, max_keys, cancel).await,
             Self::GCS(s) => s.list(prefix, mode, max_keys, cancel).await,
+            Self::YbStore(s) => s.list(prefix, mode, max_keys, cancel).await,
         }
     }
 
@@ -565,6 +571,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
             Self::Unreliable(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
             Self::GCS(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
+            Self::YbStore(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
         }
     }
 
@@ -582,6 +589,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
             Self::Unreliable(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
             Self::GCS(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
+            Self::YbStore(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
         }
     }
 
@@ -597,6 +605,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.head_object(key, cancel).await,
             Self::Unreliable(s) => s.head_object(key, cancel).await,
             Self::GCS(s) => s.head_object(key, cancel).await,
+            Self::YbStore(s) => s.head_object(key, cancel).await,
         }
     }
 
@@ -615,6 +624,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
             Self::Unreliable(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
             Self::GCS(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
+            Self::YbStore(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
         }
     }
 
@@ -631,6 +641,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.download(from, opts, cancel).await,
             Self::Unreliable(s) => s.download(from, opts, cancel).await,
             Self::GCS(s) => s.download(from, opts, cancel).await,
+            Self::YbStore(s) => s.download(from, opts, cancel).await,
         }
     }
 
@@ -646,6 +657,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.delete(path, cancel).await,
             Self::Unreliable(s) => s.delete(path, cancel).await,
             Self::GCS(s) => s.delete(path, cancel).await,
+            Self::YbStore(s) => s.delete(path, cancel).await,
         }
     }
 
@@ -661,6 +673,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.delete_objects(paths, cancel).await,
             Self::Unreliable(s) => s.delete_objects(paths, cancel).await,
             Self::GCS(s) => s.delete_objects(paths, cancel).await,
+            Self::YbStore(s) => s.delete_objects(paths, cancel).await,
         }
     }
 
@@ -672,6 +685,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.max_keys_per_delete(),
             Self::Unreliable(s) => s.max_keys_per_delete(),
             Self::GCS(s) => s.max_keys_per_delete(),
+            Self::YbStore(s) => s.max_keys_per_delete(),
         }
     }
 
@@ -687,6 +701,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.delete_prefix(prefix, cancel).await,
             Self::Unreliable(s) => s.delete_prefix(prefix, cancel).await,
             Self::GCS(s) => s.delete_prefix(prefix, cancel).await,
+            Self::YbStore(s) => s.delete_prefix(prefix, cancel).await,
         }
     }
 
@@ -703,6 +718,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
             Self::AzureBlob(s) => s.copy(from, to, cancel).await,
             Self::Unreliable(s) => s.copy(from, to, cancel).await,
             Self::GCS(s) => s.copy(from, to, cancel).await,
+            Self::YbStore(s) => s.copy(from, to, cancel).await,
         }
     }
 
@@ -733,6 +749,10 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
                     .await
             }
             Self::GCS(s) => {
+                s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
+                    .await
+            }
+            Self::YbStore(s) => {
                 s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
                     .await
             }
@@ -810,6 +830,13 @@ impl GenericRemoteStorage {
                 );
                 Self::GCS(Arc::new(GCSBucket::new(gcs_config, timeout).await?))
             }
+            RemoteStorageKind::YbStore(yb_config) => {
+                info!(
+                    "Using YugabyteDB table '{}' at {}:{} as a remote storage, prefix: '{:?}'",
+                    yb_config.table_name, yb_config.host, yb_config.port, yb_config.prefix
+                );
+                Self::YbStore(Arc::new(YbStore::new(yb_config, timeout).await?))
+            }
         })
     }
 
@@ -846,6 +873,7 @@ impl GenericRemoteStorage {
             Self::AzureBlob(s) => Some(s.container_name()),
             Self::Unreliable(_s) => None,
             Self::GCS(s) => Some(s.bucket_name()),
+            Self::YbStore(s) => Some(s.table_name()),
         }
     }
 }

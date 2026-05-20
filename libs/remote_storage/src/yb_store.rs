@@ -1,0 +1,696 @@
+//! YugabyteDB-backed `RemoteStorage` implementation.
+//!
+//! Objects are stored as rows in a single user-managed table reached over the
+//! Postgres wire protocol (`tokio_postgres`). Because YB is wire-compatible
+//! with Postgres, the same code works against vanilla Postgres for local
+//! development.
+//!
+//! The table is **not** created by this module; the operator is expected to
+//! provision it with the schema below (column names are hard-coded):
+//!
+//! ```sql
+//! CREATE TABLE <table_name> (
+//!     key              TEXT    NOT NULL,
+//!     chunk_idx        INT     NOT NULL,
+//!     data             BYTEA   NOT NULL,
+//!     size_bytes       BIGINT  NOT NULL,    -- total object size, duplicated per chunk
+//!     etag             TEXT    NOT NULL,    -- total-object etag, duplicated per chunk
+//!     last_modified_us BIGINT  NOT NULL,
+//!     metadata_json    TEXT,
+//!     PRIMARY KEY (key HASH, chunk_idx)
+//! );
+//! ```
+//!
+//! Each object is split into chunks of `YB_CHUNK_SIZE` bytes (8 MiB) and stored
+//! as one row per chunk, ordered by `chunk_idx`. This works around YB's default
+//! `rpc_max_message_size` (256 MiB) which can't accept a single bytea larger
+//! than that. The `size_bytes` / `etag` / `last_modified_us` / `metadata_json`
+//! columns are denormalized — copied onto every chunk row for the same key —
+//! so a `head` lookup is a single-row read.
+//!
+//! `last_modified_us` is microseconds since the Unix epoch, written by the
+//! server with `(extract(epoch from now()) * 1000000)::bigint`. Metadata is
+//! kept as a serialized JSON string in `metadata_json`; the column is TEXT so
+//! that no extra `tokio_postgres` features are required.
+//!
+//! `list_versions` and `time_travel_recover` are intentionally unsupported,
+//! matching the posture of `LocalFs`.
+
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use anyhow::{Context, anyhow, bail};
+use bytes::Bytes;
+use futures::TryStreamExt;
+use futures::stream::Stream;
+use tokio_postgres::types::ToSql;
+use tokio_util::sync::CancellationToken;
+
+use crate::config::YbStoreConfig;
+use crate::error::{Cancelled, TimeoutOrCancel};
+use crate::metrics::RequestKind;
+use crate::{
+    ConcurrencyLimiter, Download, DownloadError, DownloadOpts, DownloadStream, Etag, Listing,
+    ListingMode, ListingObject, REMOTE_STORAGE_PREFIX_SEPARATOR, RemotePath, RemoteStorage,
+    StorageMetadata, TimeTravelError, VersionListing,
+};
+
+/// Cap on the number of keys we advertise as deletable in a single
+/// `delete_objects` call. The SQL layer can handle larger arrays, but this
+/// matches what the other backends do.
+const YB_MAX_KEYS_PER_DELETE: usize = 1000;
+
+/// Size of each chunk row. Must stay below YB's `rpc_max_message_size`
+/// default (256 MiB). 100 MiB keeps the chunk count low for typical
+/// pageserver layer files (1 chunk for the common case, 3 chunks for an
+/// upper-bound ~290 MiB layer).
+const YB_CHUNK_SIZE: usize = 100 * 1024 * 1024;
+
+pub struct YbStore {
+    client: Arc<tokio_postgres::Client>,
+    table_name: String,
+    /// Configured prefix, normalized to always end in `/` when non-empty.
+    prefix: Option<String>,
+    timeout: Duration,
+    concurrency_limiter: ConcurrencyLimiter,
+}
+
+impl std::fmt::Debug for YbStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("YbStore")
+            .field("table_name", &self.table_name)
+            .field("prefix", &self.prefix)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
+impl YbStore {
+    pub async fn new(config: &YbStoreConfig, timeout: Duration) -> anyhow::Result<Self> {
+        let mut pg_config = tokio_postgres::Config::new();
+        pg_config
+            .host(&config.host)
+            .port(config.port)
+            .user(&config.user)
+            .dbname(&config.dbname)
+            .application_name("pageserver:yb_store");
+
+        if let Some(env_name) = &config.password_env {
+            let password = std::env::var(env_name).with_context(|| {
+                format!("YbStore password env var `{env_name}` is not set")
+            })?;
+            pg_config.password(password);
+        }
+
+        let (client, connection) = pg_config
+            .connect(tokio_postgres::NoTls)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to connect to YugabyteDB at {}:{} as user `{}`",
+                    config.host, config.port, config.user
+                )
+            })?;
+
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                tracing::warn!("YbStore connection ended with error: {e}");
+            }
+        });
+
+        // Best-effort: enable YugabyteDB's per-session upsert mode so plain
+        // `INSERT` skips DocDB's read-before-write conflict check. With this
+        // set, a duplicate-PK insert silently overwrites instead of erroring,
+        // which lets us drop `ON CONFLICT` (and avoid the round-trip + storage
+        // engine read it forces). Vanilla Postgres doesn't have this GUC, so
+        // an "unrecognized parameter" error here is expected and ignored.
+        if let Err(e) = client
+            .execute("SET yb_enable_upsert_mode = true", &[])
+            .await
+        {
+            tracing::debug!(
+                "YbStore: SET yb_enable_upsert_mode failed (likely vanilla Postgres): {e}"
+            );
+        }
+
+        let prefix = config.prefix.as_ref().map(|p| {
+            if p.is_empty() || p.ends_with(REMOTE_STORAGE_PREFIX_SEPARATOR) {
+                p.clone()
+            } else {
+                format!("{p}/")
+            }
+        });
+
+        Ok(Self {
+            client: Arc::new(client),
+            table_name: config.table_name.clone(),
+            prefix,
+            timeout,
+            concurrency_limiter: ConcurrencyLimiter::new(config.concurrency_limit.get()),
+        })
+    }
+
+    pub fn table_name(&self) -> &str {
+        &self.table_name
+    }
+
+    fn full_key(&self, p: &RemotePath) -> String {
+        match &self.prefix {
+            Some(prefix) => format!("{prefix}{}", p.get_path().as_str()),
+            None => p.get_path().as_str().to_string(),
+        }
+    }
+
+    fn db_key_to_remote_path(&self, key: &str) -> anyhow::Result<RemotePath> {
+        let stripped = match &self.prefix {
+            Some(prefix) => key
+                .strip_prefix(prefix.as_str())
+                .ok_or_else(|| anyhow!("key `{key}` does not start with configured prefix"))?,
+            None => key,
+        };
+        RemotePath::from_string(stripped)
+    }
+
+    fn full_prefix(&self, prefix: Option<&RemotePath>) -> String {
+        let configured = self.prefix.as_deref().unwrap_or("");
+        match prefix {
+            Some(p) => format!("{configured}{}", p.get_path().as_str()),
+            None => configured.to_string(),
+        }
+    }
+
+    fn compute_etag(data: &[u8]) -> String {
+        format!("{:x}", md5::compute(data))
+    }
+
+    async fn with_timeout<F, T>(&self, fut: F, cancel: &CancellationToken) -> anyhow::Result<T>
+    where
+        F: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
+    {
+        tokio::select! {
+            res = fut => res.map_err(anyhow::Error::from),
+            _ = tokio::time::sleep(self.timeout) => Err(TimeoutOrCancel::Timeout.into()),
+            _ = cancel.cancelled() => Err(TimeoutOrCancel::Cancel.into()),
+        }
+    }
+
+    async fn with_timeout_download<F, T>(
+        &self,
+        fut: F,
+        cancel: &CancellationToken,
+    ) -> Result<T, DownloadError>
+    where
+        F: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
+    {
+        tokio::select! {
+            res = fut => res.map_err(|e| DownloadError::Other(e.into())),
+            _ = tokio::time::sleep(self.timeout) => Err(DownloadError::Timeout),
+            _ = cancel.cancelled() => Err(DownloadError::Cancelled),
+        }
+    }
+
+    async fn permit(
+        &self,
+        kind: RequestKind,
+        cancel: &CancellationToken,
+    ) -> Result<tokio::sync::SemaphorePermit<'_>, Cancelled> {
+        let acquire = self.concurrency_limiter.acquire(kind);
+        tokio::select! {
+            permit = acquire => Ok(permit.expect("semaphore is never closed")),
+            _ = cancel.cancelled() => Err(Cancelled),
+        }
+    }
+}
+
+fn system_time_from_micros(micros: i64) -> SystemTime {
+    if micros >= 0 {
+        SystemTime::UNIX_EPOCH + Duration::from_micros(micros as u64)
+    } else {
+        SystemTime::UNIX_EPOCH - Duration::from_micros((-micros) as u64)
+    }
+}
+
+impl RemoteStorage for YbStore {
+    fn list_streaming(
+        &self,
+        prefix: Option<&RemotePath>,
+        mode: ListingMode,
+        max_keys: Option<NonZeroU32>,
+        cancel: &CancellationToken,
+    ) -> impl Stream<Item = Result<Listing, DownloadError>> + Send {
+        let listing = self.list(prefix, mode, max_keys, cancel);
+        futures::stream::once(listing)
+    }
+
+    async fn list(
+        &self,
+        prefix: Option<&RemotePath>,
+        mode: ListingMode,
+        max_keys: Option<NonZeroU32>,
+        cancel: &CancellationToken,
+    ) -> Result<Listing, DownloadError> {
+        let _permit = self
+            .permit(RequestKind::List, cancel)
+            .await
+            .map_err(|_| DownloadError::Cancelled)?;
+
+        let full_prefix = self.full_prefix(prefix);
+        let like_pattern = format!("{}%", escape_like(&full_prefix));
+
+        // chunk_idx = 0 always exists per key and carries the denormalized
+        // size/timestamp; restricting on it dedupes chunked rows.
+        let sql = format!(
+            "SELECT key, size_bytes, last_modified_us FROM {} \
+             WHERE key LIKE $1 ESCAPE '\\' AND chunk_idx = 0 ORDER BY key{}",
+            quote_ident(&self.table_name),
+            match max_keys {
+                Some(_) => " LIMIT $2",
+                None => "",
+            }
+        );
+
+        let rows = if let Some(max_keys) = max_keys {
+            let limit = max_keys.get() as i64;
+            let params: [&(dyn ToSql + Sync); 2] = [&like_pattern, &limit];
+            self.with_timeout_download(self.client.query(&sql, &params), cancel)
+                .await?
+        } else {
+            let params: [&(dyn ToSql + Sync); 1] = [&like_pattern];
+            self.with_timeout_download(self.client.query(&sql, &params), cancel)
+                .await?
+        };
+
+        let mut result = Listing::default();
+
+        match mode {
+            ListingMode::NoDelimiter => {
+                for row in rows {
+                    let key: String = row.get("key");
+                    let size_bytes: i64 = row.get("size_bytes");
+                    let last_modified_us: i64 = row.get("last_modified_us");
+                    let remote_path = self
+                        .db_key_to_remote_path(&key)
+                        .map_err(DownloadError::Other)?;
+                    result.keys.push(ListingObject {
+                        key: remote_path,
+                        last_modified: system_time_from_micros(last_modified_us),
+                        size: size_bytes.max(0) as u64,
+                    });
+                }
+            }
+            ListingMode::WithDelimiter => {
+                // Mirror `LocalFs`: if the caller's prefix does not end in
+                // `/`, treat its parent directory as the "group root" so that
+                // sibling keys still group correctly.
+                let listing_prefix = match prefix {
+                    Some(p) => {
+                        let s = p.get_path().as_str().to_string();
+                        if s.ends_with(REMOTE_STORAGE_PREFIX_SEPARATOR) || s.is_empty() {
+                            full_prefix.clone()
+                        } else {
+                            let configured = self.prefix.as_deref().unwrap_or("");
+                            match s.rfind(REMOTE_STORAGE_PREFIX_SEPARATOR) {
+                                Some(i) => format!("{configured}{}", &s[..=i]),
+                                None => configured.to_string(),
+                            }
+                        }
+                    }
+                    None => full_prefix.clone(),
+                };
+
+                let mut prefixes: HashSet<String> = HashSet::new();
+                for row in rows {
+                    let key: String = row.get("key");
+                    let size_bytes: i64 = row.get("size_bytes");
+                    let last_modified_us: i64 = row.get("last_modified_us");
+
+                    let relative = match key.strip_prefix(listing_prefix.as_str()) {
+                        Some(r) => r,
+                        None => continue,
+                    };
+
+                    if let Some(i) = relative.find(REMOTE_STORAGE_PREFIX_SEPARATOR) {
+                        prefixes.insert(relative[..i].to_string());
+                    } else {
+                        result.keys.push(ListingObject {
+                            key: RemotePath::from_string(relative)
+                                .map_err(DownloadError::Other)?,
+                            last_modified: system_time_from_micros(last_modified_us),
+                            size: size_bytes.max(0) as u64,
+                        });
+                    }
+                }
+
+                result.prefixes = prefixes
+                    .into_iter()
+                    .map(|s| RemotePath::from_string(&s))
+                    .collect::<anyhow::Result<Vec<_>>>()
+                    .map_err(DownloadError::Other)?;
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn list_versions(
+        &self,
+        _prefix: Option<&RemotePath>,
+        _mode: ListingMode,
+        _max_keys: Option<NonZeroU32>,
+        _cancel: &CancellationToken,
+    ) -> Result<VersionListing, DownloadError> {
+        Err(DownloadError::Other(anyhow!(
+            "list_versions is not supported by YbStore"
+        )))
+    }
+
+    async fn head_object(
+        &self,
+        key: &RemotePath,
+        cancel: &CancellationToken,
+    ) -> Result<ListingObject, DownloadError> {
+        let _permit = self
+            .permit(RequestKind::Head, cancel)
+            .await
+            .map_err(|_| DownloadError::Cancelled)?;
+
+        let db_key = self.full_key(key);
+        // chunk_idx=0 always exists for any object (including zero-byte ones),
+        // and carries the denormalized size/etag/timestamp — one-row lookup.
+        let sql = format!(
+            "SELECT size_bytes, last_modified_us FROM {} \
+             WHERE key = $1 AND chunk_idx = 0",
+            quote_ident(&self.table_name)
+        );
+        let params: [&(dyn ToSql + Sync); 1] = [&db_key];
+        let row_opt = self
+            .with_timeout_download(self.client.query_opt(&sql, &params), cancel)
+            .await?;
+        let row = row_opt.ok_or(DownloadError::NotFound)?;
+        let size_bytes: i64 = row.get("size_bytes");
+        let last_modified_us: i64 = row.get("last_modified_us");
+        Ok(ListingObject {
+            key: key.clone(),
+            last_modified: system_time_from_micros(last_modified_us),
+            size: size_bytes.max(0) as u64,
+        })
+    }
+
+    async fn upload(
+        &self,
+        from: impl Stream<Item = std::io::Result<Bytes>> + Send + Sync + 'static,
+        data_size_bytes: usize,
+        to: &RemotePath,
+        metadata: Option<StorageMetadata>,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<()> {
+        let _permit = self.permit(RequestKind::Put, cancel).await?;
+
+        let chunks: Vec<Bytes> = from
+            .try_collect()
+            .await
+            .context("read upload stream")?;
+        let mut buffer = Vec::with_capacity(data_size_bytes);
+        for chunk in chunks {
+            buffer.extend_from_slice(&chunk);
+        }
+
+        if buffer.len() < data_size_bytes {
+            bail!(
+                "upload stream shorter than expected: got {} bytes, expected {}",
+                buffer.len(),
+                data_size_bytes
+            );
+        }
+        if buffer.len() > data_size_bytes {
+            buffer.truncate(data_size_bytes);
+        }
+
+        let etag = Self::compute_etag(&buffer);
+        let size: i64 = i64::try_from(buffer.len()).context("data size exceeds i64::MAX")?;
+        let db_key = self.full_key(to);
+        let metadata_json: Option<String> = match metadata {
+            Some(StorageMetadata(m)) => Some(
+                serde_json::to_string(&m).context("serialize storage metadata")?,
+            ),
+            None => None,
+        };
+
+        // Delete any prior rows for this key first — this handles overwrite +
+        // chunk-count shrinking (the upsert GUC handles same-PK conflict but
+        // wouldn't remove rows for keys that no longer exist in the new write).
+        let table = quote_ident(&self.table_name);
+        let delete_sql = format!("DELETE FROM {table} WHERE key = $1");
+        {
+            let params: [&(dyn ToSql + Sync); 1] = [&db_key];
+            self.with_timeout(self.client.execute(&delete_sql, &params), cancel)
+                .await
+                .with_context(|| format!("YbStore upload: pre-delete `{db_key}`"))?;
+        }
+
+        let now_us: i64 = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(0);
+
+        // Plain INSERT; relies on `yb_enable_upsert_mode = true` (set at
+        // session start) to skip the read-before-write check on YB. Each chunk
+        // is its own statement so the wire-level message stays well below
+        // `rpc_max_message_size`, but we fire them concurrently via
+        // `execute_raw` + `try_join_all` — `tokio_postgres`'s Client
+        // multiplexes all the Bind/Execute messages on the connection without
+        // serial round-trip waits, so N inserts cost ~one round-trip's worth
+        // of latency.
+        let insert_sql = format!(
+            "INSERT INTO {table} \
+             (key, chunk_idx, data, size_bytes, etag, last_modified_us, metadata_json) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)"
+        );
+
+        // Materialize all chunk rows up front so each pipelined future can own
+        // its params (no borrow-into-loop-local issues).
+        let row_chunks: Vec<(i32, Vec<u8>)> = if buffer.is_empty() {
+            vec![(0i32, Vec::new())]
+        } else {
+            buffer
+                .chunks(YB_CHUNK_SIZE)
+                .enumerate()
+                .map(|(i, c)| (i as i32, c.to_vec()))
+                .collect()
+        };
+
+        let pipeline_fut = async {
+            let futures = row_chunks.into_iter().map(|(idx, chunk)| {
+                let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+                    Box::new(db_key.clone()),
+                    Box::new(idx),
+                    Box::new(chunk),
+                    Box::new(size),
+                    Box::new(etag.clone()),
+                    Box::new(now_us),
+                    Box::new(metadata_json.clone()),
+                ];
+                self.client.execute_raw(&insert_sql, params)
+            });
+            futures::future::try_join_all(futures).await?;
+            Ok::<_, tokio_postgres::Error>(())
+        };
+
+        self.with_timeout(pipeline_fut, cancel)
+            .await
+            .with_context(|| format!("YbStore upload of `{db_key}`"))?;
+        Ok(())
+    }
+
+    async fn download(
+        &self,
+        from: &RemotePath,
+        opts: &DownloadOpts,
+        cancel: &CancellationToken,
+    ) -> Result<Download, DownloadError> {
+        let _permit = self
+            .permit(RequestKind::Get, cancel)
+            .await
+            .map_err(|_| DownloadError::Cancelled)?;
+
+        let db_key = self.full_key(from);
+        let sql = format!(
+            "SELECT chunk_idx, data, size_bytes, etag, last_modified_us, metadata_json \
+             FROM {} WHERE key = $1 ORDER BY chunk_idx",
+            quote_ident(&self.table_name)
+        );
+        let params: [&(dyn ToSql + Sync); 1] = [&db_key];
+        let rows = self
+            .with_timeout_download(self.client.query(&sql, &params), cancel)
+            .await?;
+        if rows.is_empty() {
+            return Err(DownloadError::NotFound);
+        }
+
+        // Header info is duplicated across chunks; read from the first row.
+        let first = &rows[0];
+        let total_size: i64 = first.get("size_bytes");
+        let etag_str: String = first.get("etag");
+        let last_modified_us: i64 = first.get("last_modified_us");
+        let metadata_json: Option<String> = first.get("metadata_json");
+
+        let mut data: Vec<u8> = Vec::with_capacity(total_size.max(0) as usize);
+        for row in &rows {
+            let chunk: Vec<u8> = row.get("data");
+            data.extend_from_slice(&chunk);
+        }
+
+        if let Some(if_none_match) = &opts.etag {
+            if if_none_match.to_string() == etag_str {
+                return Err(DownloadError::Unmodified);
+            }
+        }
+
+        let sliced = match opts.byte_range() {
+            None => data,
+            Some((start, end)) => {
+                let start = start as usize;
+                let end = end.map(|e| e as usize).unwrap_or(data.len());
+                let end = end.min(data.len());
+                if start >= data.len() {
+                    Vec::new()
+                } else {
+                    data[start..end].to_vec()
+                }
+            }
+        };
+
+        let metadata = match metadata_json {
+            Some(s) => {
+                let m: HashMap<String, String> =
+                    serde_json::from_str(&s).map_err(|e| DownloadError::Other(e.into()))?;
+                Some(StorageMetadata(m))
+            }
+            None => None,
+        };
+
+        let bytes = Bytes::from(sliced);
+        let stream: DownloadStream =
+            Box::pin(futures::stream::once(async move { Ok(bytes) }));
+
+        Ok(Download {
+            download_stream: stream,
+            last_modified: system_time_from_micros(last_modified_us),
+            etag: Etag::from(etag_str),
+            metadata,
+        })
+    }
+
+    async fn delete(&self, path: &RemotePath, cancel: &CancellationToken) -> anyhow::Result<()> {
+        let _permit = self.permit(RequestKind::Delete, cancel).await?;
+        let db_key = self.full_key(path);
+        let sql = format!(
+            "DELETE FROM {} WHERE key = $1",
+            quote_ident(&self.table_name)
+        );
+        let params: [&(dyn ToSql + Sync); 1] = [&db_key];
+        self.with_timeout(self.client.execute(&sql, &params), cancel)
+            .await
+            .with_context(|| format!("YbStore delete of `{db_key}`"))?;
+        Ok(())
+    }
+
+    async fn delete_objects(
+        &self,
+        paths: &[RemotePath],
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let _permit = self.permit(RequestKind::Delete, cancel).await?;
+        let keys: Vec<String> = paths.iter().map(|p| self.full_key(p)).collect();
+        let sql = format!(
+            "DELETE FROM {} WHERE key = ANY($1)",
+            quote_ident(&self.table_name)
+        );
+        let params: [&(dyn ToSql + Sync); 1] = [&keys];
+        self.with_timeout(self.client.execute(&sql, &params), cancel)
+            .await
+            .context("YbStore delete_objects")?;
+        Ok(())
+    }
+
+    fn max_keys_per_delete(&self) -> usize {
+        YB_MAX_KEYS_PER_DELETE
+    }
+
+    async fn copy(
+        &self,
+        from: &RemotePath,
+        to: &RemotePath,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<()> {
+        let _permit = self.permit(RequestKind::Copy, cancel).await?;
+        let from_key = self.full_key(from);
+        let to_key = self.full_key(to);
+        let table = quote_ident(&self.table_name);
+        // Wipe the destination first so a copy that shrinks chunk count is
+        // clean, then copy all source chunk rows over.
+        let delete_dst = format!("DELETE FROM {table} WHERE key = $1");
+        {
+            let params: [&(dyn ToSql + Sync); 1] = [&to_key];
+            self.with_timeout(self.client.execute(&delete_dst, &params), cancel)
+                .await
+                .with_context(|| format!("YbStore copy: pre-delete `{to_key}`"))?;
+        }
+        let insert_sql = format!(
+            "INSERT INTO {table} \
+             (key, chunk_idx, data, size_bytes, etag, last_modified_us, metadata_json) \
+             SELECT $2, chunk_idx, data, size_bytes, etag, \
+                    (extract(epoch from now()) * 1000000)::bigint, metadata_json \
+             FROM {table} WHERE key = $1"
+        );
+        let params: [&(dyn ToSql + Sync); 2] = [&from_key, &to_key];
+        let affected = self
+            .with_timeout(self.client.execute(&insert_sql, &params), cancel)
+            .await
+            .with_context(|| format!("YbStore copy of `{from_key}` -> `{to_key}`"))?;
+        if affected == 0 {
+            bail!("YbStore copy: source key `{from_key}` not found");
+        }
+        Ok(())
+    }
+
+    async fn time_travel_recover(
+        &self,
+        _prefix: Option<&RemotePath>,
+        _timestamp: SystemTime,
+        _done_if_after: SystemTime,
+        _cancel: &CancellationToken,
+        _complexity_limit: Option<NonZeroU32>,
+    ) -> Result<(), TimeTravelError> {
+        Err(TimeTravelError::Unimplemented)
+    }
+}
+
+/// Quote a SQL identifier with double quotes, escaping embedded double quotes.
+/// The identifier comes from config so this is defense-in-depth.
+fn quote_ident(ident: &str) -> String {
+    let escaped = ident.replace('"', "\"\"");
+    format!("\"{escaped}\"")
+}
+
+/// Escape `_` and `%` in a LIKE-pattern literal so that callers' raw key
+/// fragments aren't interpreted as wildcards. The accompanying SQL uses
+/// `ESCAPE '\\'`.
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}

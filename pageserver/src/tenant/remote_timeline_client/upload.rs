@@ -159,6 +159,7 @@ pub(super) async fn upload_timeline_layer<'a>(
         GenericRemoteStorage::AwsS3(_) => {}
         GenericRemoteStorage::Unreliable(_) => {}
         GenericRemoteStorage::GCS(_) => {}
+        GenericRemoteStorage::YbStore(_) => {}
     };
     /* END_HADRON */
     let reader = tokio_util::io::ReaderStream::with_capacity(source_file, super::BUFFER_SIZE);

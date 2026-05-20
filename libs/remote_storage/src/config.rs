@@ -42,6 +42,7 @@ impl RemoteStorageKind {
             RemoteStorageKind::AwsS3(config) => Some(&config.bucket_name),
             RemoteStorageKind::AzureContainer(config) => Some(&config.container_name),
             RemoteStorageKind::GCS(config) => Some(&config.bucket_name),
+            RemoteStorageKind::YbStore(config) => Some(&config.table_name),
         }
     }
 }
@@ -54,6 +55,7 @@ impl RemoteStorageConfig {
             RemoteStorageKind::AwsS3(c) => c.concurrency_limit.into(),
             RemoteStorageKind::GCS(c) => c.concurrency_limit.into(),
             RemoteStorageKind::AzureContainer(c) => c.concurrency_limit.into(),
+            RemoteStorageKind::YbStore(c) => c.concurrency_limit.into(),
         }
     }
 }
@@ -90,6 +92,9 @@ pub enum RemoteStorageKind {
     /// Google Cloud based storage, storing all files in the GCS bucket
     /// specified by the config
     GCS(GCSConfig),
+    /// YugabyteDB based storage, storing all files as rows in a YB table over a
+    /// Postgres-wire-compatible SQL connection.
+    YbStore(YbStoreConfig),
 }
 
 #[derive(Deserialize)]
@@ -203,6 +208,57 @@ impl Debug for GCSConfig {
                 "max_keys_per_list_response",
                 &self.max_keys_per_list_response,
             )
+            .finish()
+    }
+}
+
+/// YugabyteDB-backed storage configuration.
+///
+/// The pageserver connects to a YB cluster over the Postgres wire protocol and
+/// stores objects as rows in a single user-managed table. The table itself must
+/// already exist; the schema this code expects is documented on `YbStore`.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct YbStoreConfig {
+    /// Host (or comma-separated host list) for the YB cluster's YSQL endpoint.
+    pub host: String,
+    /// YSQL port (default 5433).
+    #[serde(default = "default_yb_port")]
+    pub port: u16,
+    /// Database user.
+    pub user: String,
+    /// Name of an environment variable holding the password. If unset, no
+    /// password is sent (suitable for trust-auth dev clusters).
+    pub password_env: Option<String>,
+    /// Database name to connect to.
+    pub dbname: String,
+    /// Name of the table that holds the objects.
+    pub table_name: String,
+    /// Optional "subfolder" prefix that's prepended to every key, allowing
+    /// multiple tenants to share a single backing table.
+    pub prefix: Option<String>,
+    /// Maximum number of concurrent in-flight DB requests.
+    #[serde(default = "default_yb_concurrency_limit")]
+    pub concurrency_limit: NonZeroUsize,
+}
+
+fn default_yb_port() -> u16 {
+    5433
+}
+
+fn default_yb_concurrency_limit() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_REMOTE_STORAGE_LOCALFS_CONCURRENCY_LIMIT).unwrap()
+}
+
+impl Debug for YbStoreConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("YbStoreConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("dbname", &self.dbname)
+            .field("table_name", &self.table_name)
+            .field("prefix", &self.prefix)
+            .field("concurrency_limit", &self.concurrency_limit)
             .finish()
     }
 }
@@ -411,6 +467,39 @@ timeout = '5s'";
             let deserialized: Wrapper = serde_json::from_str(&serialized).unwrap();
             assert_eq!(class, deserialized.class);
         }
+    }
+
+    #[test]
+    fn test_yb_store_parsing() {
+        let toml = "\
+    host = 'yb-cluster.example.com'
+    port = 5433
+    user = 'yugabyte'
+    password_env = 'YB_STORAGE_PASSWORD'
+    dbname = 'neon_storage'
+    table_name = 'pageserver_objects'
+    prefix = 'tenant-a/'
+    ";
+
+        let config = parse(toml).unwrap();
+
+        assert_eq!(
+            config,
+            RemoteStorageConfig {
+                storage: RemoteStorageKind::YbStore(YbStoreConfig {
+                    host: "yb-cluster.example.com".into(),
+                    port: 5433,
+                    user: "yugabyte".into(),
+                    password_env: Some("YB_STORAGE_PASSWORD".into()),
+                    dbname: "neon_storage".into(),
+                    table_name: "pageserver_objects".into(),
+                    prefix: Some("tenant-a/".into()),
+                    concurrency_limit: default_yb_concurrency_limit(),
+                }),
+                timeout: RemoteStorageConfig::DEFAULT_TIMEOUT,
+                small_timeout: RemoteStorageConfig::DEFAULT_SMALL_TIMEOUT,
+            }
+        );
     }
 
     #[test]
