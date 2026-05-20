@@ -5,15 +5,18 @@ description: The isolation unit for agent data in Meko
 weight: 10
 ---
 
-A **datapack** is Meko's fundamental unit of isolation. Each datapack provides a self-contained persistent store for conversations, memory, and knowledge, accessible via a single MCP server endpoint.
+A **datapack** is Meko's fundamental unit of isolation. Each datapack provides a self-contained persistent store for conversations, memory, and knowledge. MCP clients connect to the shared endpoint (`https://mcp.mekodata.ai/mcp`) and target a datapack by passing the datapack ID in tool calls.
 
 ## What's in a datapack
 
-When you create a datapack, Meko provisions:
+When you create a datapack, Meko provisions isolated storage, scoped to your agent(s), and managed internally by Meko.
 
-- **An MCP server endpoint**. A unique URL that your agent uses to discover and interact with the datapack.
-- **An MCP server API key**. For authenticating MCP requests.
-- **Isolated storage**. Data storage scoped to your agent(s), managed internally by Meko.
+To connect an external MCP client (Cursor, Claude Code, and so on), you need:
+
+- The **MCP server URL**, `https://mcp.mekodata.ai/mcp` (the same for every datapack and user).
+- A **user API key**: a long-lived key you generate under **Settings>API Keys** in the portal (values start with `mko_tkn_`).
+
+Agents select the datapack to connect to by passing the `datapack_id` inside each MCP tool call, not by using a different URL per datapack.
 
 ## Create a datapack
 
@@ -54,14 +57,13 @@ To share your datapack with colleagues:
 1. Enter the email of the person you want to share with, and select the permission level.
 1. Click **Send Invite**.
 
-
 ## Isolation model
 
 Each datapack is fully isolated:
 
 - **Data isolation**. Separate database per datapack. One agent cannot access another's data.
-- **Credential isolation**. Unique credentials per datapack with an MCP endpoint.
-- **MCP isolation**. Each datapack's MCP server only exposes that datapack's tools and data.
+- **Credential isolation**. User API keys and database credentials are scoped to your account; datapack data is separated in storage.
+- **MCP isolation**. Tool calls include a `datapack_id` so the shared MCP server only reads and writes that datapack's data.
 
 ## Connect via MCP
 

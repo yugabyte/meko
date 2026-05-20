@@ -124,7 +124,7 @@ meko datapack create --name my-datapack
 
 The request typically takes a few seconds.
 
-You should see an output similar to the following, and you should save them somewhere safe for future reference:
+You should see an output similar to the following:
 
 ```output
  ✅ Datapack Created
@@ -146,6 +146,10 @@ You should see an output similar to the following, and you should save them some
   Password         <my-db-password>
   Connection String  <postgres-sql-connection-string>
 ```
+
+> [!NOTE]
+>
+> To connect Cursor, Claude, or other MCP clients, use a long-lived **API key** from the Meko portal (**Settings>API Keys**), not the datapack API key shown in this CLI output. See [Integrations](../../integrations/#mcp-server-url-and-api-key).
 
 For machine-readable output, use the `--json` flag:
 

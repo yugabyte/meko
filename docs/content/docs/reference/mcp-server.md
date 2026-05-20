@@ -7,7 +7,7 @@ weight: 40
 
 The Meko MCP Server provides the primary tools for managing datapacks, conversations, memories, knowledge base, and related search.
 
-To connect from IDEs and MCP-compatible clients using your datapack URL and API key, see [Quick start — Connect your AI client](../../quick-start/#connect-your-ai-client).
+To connect from IDEs and MCP-compatible clients, use the Meko MCP URL `https://mcp.mekodata.ai/mcp` and a user **API key** from **Settings>API Keys**. See [Integrations](../../integrations/) and [Quick start](../../quick-start/).
 
 ## Tools
 
@@ -23,8 +23,6 @@ The Meko MCP Server provides the following tools.
 <!-- 
 | [Database](#database-tools)<br>`db_*` | Structured operational data you want to query or modify with SQL.<br><br>Example: _Run SQL on my data_ |
 -->
-
-
 
 ### Conversation tools
 

@@ -17,13 +17,49 @@ You follow the same basic pattern with all tools and frameworks:
 2. **Register the Meko MCP server** with your AI agent or with your application's MCP Client.
 3. **Start using Meko** through natural language prompts.
 
-## MCP Server URL and API Key
+## MCP server URL and API key
 
-To register the hosted MCP server, you will need your datapack MCP URL and API key.
+External MCP clients (Cursor, Claude Desktop, Claude Code, and similar tools) need two values:
 
-1. In the Meko portal, select your datapack.
-1. In the **Connect** box, click **Connect**.
-1. Copy the MCP **URL** and **API key**.
+| Value | Scope | Where to get it |
+| :---- | :---- | :-------------- |
+| **Meko MCP server URL** | Shared (same for all users and datapacks) | `https://mcp.mekodata.ai/mcp` — also shown in any datapack **Connect** dialog. |
+| **API key** | Per user | **Settings>API Keys** section (or, if there are no existing keys, **Generate API key** on the datapack **Connect** wizard). |
+
+### Generate an API key
+
+Meko issues long-lived API keys (personal access tokens) for MCP authentication. Each key starts with `mko_tkn_` and is shown in full **only once** when you create it.
+
+**From Settings**
+
+1. In the Meko portal, open **Settings**.
+1. In the **API Keys** section, click **Generate API key** (if you have no keys yet).
+1. Enter a **Name** (for example `cursor-laptop`), then click **Generate key** in the dialog.
+1. Copy or Download **.txt**, then click **Close**. The dialog requires you to save the key before closing.
+
+**From the datapack Configure wizard**
+
+On the **Connect** step, if you have no active API key, click **Generate API key** in the warning banner (same create dialog as Settings). If you already have keys, the banner lists them by name and prefix so you know which saved key to paste into install commands.
+
+You can have up to **10 active API keys** per account. Each key expires after up to **365 days** (the portal defaults to one year). Revoke a key from **Settings** if it is no longer needed.
+
+> [!WARNING]
+>
+> Meko cannot show the full API key again after you close the create dialog. If you lose it, revoke the old key and generate a new one.
+
+### MCP server URL
+
+Every account and datapack uses the same hosted endpoint:
+
+```text
+https://mcp.mekodata.ai/mcp
+```
+
+The datapack **Connect** dialog also shows this URL (it does not change when you switch datapacks).
+
+Which datapack your agent reads or writes is determined by the `datapack_id` (or datapack name) passed in MCP tool calls — not by a different URL per datapack.
+
+The datapack **Connect** dialog lists your active key **prefixes** (for example `mko_tkn_3KvL9X8z…`) so you can tell keys apart. Paste the full key you saved at creation into your client configuration or installer command. Use the placeholder `<paste-your-api-key>` in portal install commands, not the prefix alone.
 
 ## Connect to an AI agent
 

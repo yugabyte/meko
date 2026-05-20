@@ -6,37 +6,33 @@ weight: 1000
 type: docs
 ---
 
+External AI agents can connect to Meko's hosted **Meko MCP server** at:
+
+```text
+https://mcp.mekodata.ai/mcp
+```
+
 ## Get started
 
 Get from zero to a working Meko integration in minutes:
 
-1. [Request access](https://info.yugabyte.com/meko-request-access).
-
-1. Create a Meko account at the [Meko portal](https://cloud.mekodata.ai/).
-
-1. Sign in to your account.
+1. Sign in to your account at the [Meko portal](https://cloud.mekodata.ai/).
 
     The first time you sign in, Meko displays the **Welcome to Meko** page.
 
-1. Click **Choose Your Tool**.
+1. Choose how you want to start:
 
-    Meko displays the **Configure** wizard, where you will create your first [datapack](../architecture/core-concepts/datapacks/).
+    - **Try the WorkbenchLM** — Chat in the portal with your default datapack, sample knowledge, and live memory traces. No MCP install required. See [WorkbenchLM](../guides/workbench-lm/).
+    - **Connect to AI agent** — Opens the **Configure** wizard to name your datapack, [install Meko MCP](../integrations/connect-to-ai-agent) on Cursor / Claude Code / Claude Desktop, and optionally add [knowledge](../architecture/core-concepts/knowledgebase/).
 
-    Follow the instructions in the wizard to:
-
-    - Name your datapack
-    - [Configure](../integrations/connect-to-ai-agent) the Meko MCP server on your AI tool of choice.
-    - Optionally, add [knowledge](../architecture/core-concepts/knowledgebase/) to your datapack.
-
-That's it - when you finish, Meko displays your datapack, and you're ready to start adding knowledge and creating memories using your favorite agent.
+That's it — when you finish, you can use **WorkbenchLM** in the sidebar, or connect an external agent with the MCP URL above and an API key from **Settings** → **API Keys**.
 
 > [!TIP]
 >
-> You may need to restart your client to start the MCP server connection.
->
-> To add additional clients, you can return to the configure wizard by selecting your datapack and choosing **Actions>Edit**.
->
-> The connection instructions use node.js and nvm. If you need to connect your client manually, refer to [Integrations](../../integrations/) for instructions.
+> - You may need to restart your client to start the MCP server connection.
+> - Generate an API key under **Settings** → **API Keys** (or **Generate API key** on the configure wizard **Install** step) before running install commands. Copy or download the key before closing the dialog — it is shown only once.
+> - To add additional clients, return to the configure wizard by selecting your datapack and choosing **Actions>Edit**, or open **Install** from the sidebar.
+> - The connection instructions use Node.js and nvm. For manual setup, see [Integrations](../../integrations/).
 
 With your first datapack live, you can transition from a basic demo to a robust, context-aware development environment.
 

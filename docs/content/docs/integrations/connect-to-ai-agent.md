@@ -11,6 +11,15 @@ rightNav:
 
 Integrate with AI agents for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
 
+## Before you connect
+
+1. **Generate an API key**. In the portal, open **Settings>API Keys>Generate API key**, enter a name, then copy or download the key before closing the dialog (it starts with `mko_tkn_` and is shown only once). You can also use **Generate API key** on the configure wizard **Install** step.
+1. **Use the MCP server URL** `https://mcp.mekodata.ai/mcp` (the same URL appears in any datapack **Connect** dialog).
+
+For any of the following integrations, replace `<paste-your-api-key>` with the key you saved. The portal's one-line installer uses that same placeholder.
+
+For the full workflow, see [MCP server URL and API key](../#mcp-server-url-and-api-key).
+
 ## Cursor Desktop
 
 ##### Automated setup
@@ -27,14 +36,16 @@ In the Meko portal, select **Install** and follow the steps.
     {
       "mcpServers": {
         "meko": {
-          "url": "<mcp-server-url>",
+          "url": "https://mcp.mekodata.ai/mcp",
           "headers": {
-            "API_KEY": "<mcp-server-api-key>"
+            "API_KEY": "<paste-your-api-key>"
           }
         }
       }
     }
     ```
+
+    Replace `<paste-your-api-key>` with the API key you saved from **Settings>API Keys**.
 
     The result should look like the following:
 
@@ -62,8 +73,8 @@ In the Meko portal, select **Install** and follow the steps.
 
 In Claude Desktop (whether used for Chat, Cowork, or Code):
 
-1. On a Mac, choose **Claude>Settings>Developer>Edit Config**.
-1. Edit the `claude_desktop_config.json` file to add the following MCP Server entry.
+1. Choose **Claude>Settings>Developer>Edit Config**.
+1. Edit the `claude_desktop_config.json` file to add the following MCP Server entry. Replace `<paste-your-api-key>` with the token you saved.
 
     ```json
     {
@@ -73,11 +84,11 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
           "args": [
             "-y",
             "mcp-remote",
-            "<mcp-server-url>",
+            "https://mcp.mekodata.ai/mcp",
             "--allow-http"
           ],
           "env": {
-            "API_KEY": "<mcp-server-api-key>"
+            "API_KEY": "<paste-your-api-key>"
           }
         }
       }
@@ -111,8 +122,10 @@ In the Meko portal, select **Install** and follow the steps.
 1. Run the setup command in your shell to add the Meko MCP server to Claude Code:
 
     ```sh
-    > claude mcp add --scope user --transport http meko <mcp-server-url> --header "API_KEY: <mcp-server-api-key>"
+    > claude mcp add --scope user --transport http meko https://mcp.mekodata.ai/mcp --header "API_KEY: <paste-your-api-key>"
     ```
+
+    Replace `<paste-your-api-key>` with the API key you saved from **Settings>API Keys**.
 
 2. Verify the connection by entering the following at the command-line console:
 
@@ -130,20 +143,20 @@ In the Meko portal, select **Install** and follow the steps.
 
 1. In Codex Desktop, choose **Codex>Settings>MCP servers>Add server>Streamable HTTP**.
 2. Enter a name for the Meko MCP server.
-3. Enter the URL of the Meko MCP server.
-4. Enter a name (such as 'MEKO_MCP_TOKEN') for the Bearer token env var, and click **Save**.
+3. Enter the Meko MCP server URL (`https://mcp.mekodata.ai/mcp`).
+4. Enter a name (such as `MEKO_MCP_TOKEN`) for the Bearer token environment variable, and click **Save**.
 
    The result should look like the following:
 
     ![Codex Desktop](/images/integrations-codex-desktop.png)
 
-5. Set the MEKO_MCP_TOKEN environment variable with your Meko API key in your terminal using the following command:
+5. Set the `MEKO_MCP_TOKEN` environment variable with your Meko API key in your terminal using the following command:
 
     ```sh
-    launchctl setenv MEKO_MCP_TOKEN <mcp-server-api-key>
+    launchctl setenv MEKO_MCP_TOKEN <paste-your-api-key>
     ```
 
-6. Verify that you set the MEKO_MCP_TOKEN correctly with your Meko MCP Server API Key.
+6. Verify that you set `MEKO_MCP_TOKEN` correctly with your API key.
 
     ```sh
     launchctl getenv MEKO_MCP_TOKEN
@@ -170,14 +183,14 @@ In the Meko portal, select **Install** and follow the steps.
     npx mcp-add@latest \
       --name meko \
       --type stdio \
-      --command 'npx -y mcp-remote <mcp-server-url> --allow-http' \
-      --env 'MEKO_API_KEY=<mcp-server-api-key>' \
-      --headers 'MEKO_API_KEY=<mcp-server-api-key>' \
+      --command 'npx -y mcp-remote https://mcp.mekodata.ai/mcp --allow-http' \
+      --env 'MEKO_API_KEY=<paste-your-api-key>' \
+      --headers 'MEKO_API_KEY=<paste-your-api-key>' \
       --scope global \
       --clients 'vscode'
     ```
 
-    Replace `<mcp-server-url>` and `<mcp-server-api-key>` with the URL and API key you saved.
+    Replace `<paste-your-api-key>` with the API key you saved from **Settings>API Keys**.
 
 1. Verify the connection by entering the following in chat:
 

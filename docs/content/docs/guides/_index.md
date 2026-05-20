@@ -11,6 +11,11 @@ Use the following guides to learn key concepts and workflows for Meko.
 
 {{< card-group >}}
   {{< card
+    href="guides/workbench-lm/"
+    title="WorkbenchLM"
+    desc="Chat in the portal with knowledge, memory, and traces — no MCP install."
+  >}}
+  {{< card
     href="guides/working-with-memory/"
     title="Work with memory"
     desc="Add, search, and manage agent memories."
