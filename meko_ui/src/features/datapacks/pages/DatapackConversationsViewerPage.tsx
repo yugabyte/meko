@@ -37,15 +37,15 @@ import type { DatapackConversation } from "@/lib/mekoApi";
  *  the compiler. */
 const SOURCE_BREADCRUMB: Record<
   ConversationSource,
-  (datapackName: string) => { label: string; href: string }
+  (datapackName: string, datapackId?: string) => { label: string; href: string }
 > = {
-  [CONVERSATION_SOURCE.memorySummary]: (datapackName) => ({
+  [CONVERSATION_SOURCE.memorySummary]: (datapackName, datapackId) => ({
     label: "Memory Summary",
-    href: datapackMemorySummaryPath(datapackName),
+    href: datapackMemorySummaryPath(datapackName, datapackId),
   }),
-  [CONVERSATION_SOURCE.collectiveMemorySummary]: (datapackName) => ({
+  [CONVERSATION_SOURCE.collectiveMemorySummary]: (datapackName, datapackId) => ({
     label: "Collective Memory Summary",
-    href: datapackCollectiveMemorySummaryPath(datapackName),
+    href: datapackCollectiveMemorySummaryPath(datapackName, datapackId),
   }),
 };
 
@@ -71,8 +71,10 @@ export default function DatapackConversationsViewerPage({
   const sourceCrumb = useMemo(() => {
     const from = searchParams.get(CONVERSATION_SOURCE_QUERY_PARAM) ?? "";
     if (!isConversationSource(from)) return null;
-    return SOURCE_BREADCRUMB[from](datapackName);
-  }, [searchParams, datapackName]);
+    // Pass datapackId so the breadcrumb link preserves the
+    // `?datapack_id=` pin when the user clicks back.
+    return SOURCE_BREADCRUMB[from](datapackName, datapackId);
+  }, [searchParams, datapackName, datapackId]);
 
   /** Currently open trace drawer message (null = drawer closed).
    *  Owned at the page level so the drawer survives thread re-fetches
@@ -91,9 +93,10 @@ export default function DatapackConversationsViewerPage({
   const handleSelect = useCallback(
     (id: string) => {
       if (id === conversationId) return;
-      navigate(datapackConversationsPath(datapackName, id), { replace: false });
+      // Preserve datapack_id across in-rail switches.
+      navigate(datapackConversationsPath(datapackName, id, datapackId), { replace: false });
     },
-    [navigate, datapackName, conversationId],
+    [navigate, datapackName, datapackId, conversationId],
   );
 
   /** Auto-pick newest conversation when the user lands on the bare
@@ -104,11 +107,11 @@ export default function DatapackConversationsViewerPage({
       if (conversationId) return;
       const first = conversations[0];
       if (!first) return;
-      navigate(datapackConversationsPath(datapackName, first.id), {
+      navigate(datapackConversationsPath(datapackName, first.id, datapackId), {
         replace: true,
       });
     },
-    [navigate, datapackName, conversationId],
+    [navigate, datapackName, datapackId, conversationId],
   );
 
   return (
@@ -120,7 +123,7 @@ export default function DatapackConversationsViewerPage({
           <DatapackBreadcrumbs
             items={[
               { label: "Datapacks", href: ROUTES.datapacks },
-              { label: datapackName, href: datapackDetailPath(datapackName) },
+              { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
               ...(sourceCrumb ? [sourceCrumb] : []),
               { label: "Conversations" },
             ]}

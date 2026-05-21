@@ -490,7 +490,7 @@ export default function DatapackConfigureWizardPage({
       if (isCreateFlow) {
         navigate(ROUTES.datapacks);
       } else if (apiDatapackName ?? routeDatapackName) {
-        navigate(datapackDetailPath(apiDatapackName ?? routeDatapackName ?? ""));
+        navigate(datapackDetailPath(apiDatapackName ?? routeDatapackName ?? "", routeDatapackId));
       } else {
         navigate(ROUTES.datapacks);
       }
@@ -523,7 +523,7 @@ export default function DatapackConfigureWizardPage({
         localStorage.removeItem(persistedKnowledgeStorageKey);
       }
     }
-    navigate(datapackDetailPath(finishPackName));
+    navigate(datapackDetailPath(finishPackName, routeDatapackId));
   }, [finishPackName, hasUploadedKnowledge, navigate, persistedKnowledgeStorageKey, routeDatapackId]);
 
   const canProceedFromConfigure =
@@ -546,7 +546,7 @@ export default function DatapackConfigureWizardPage({
     ]
     : [
       { label: "Datapacks", href: ROUTES.datapacks },
-      { label: routeDatapackName ?? "", href: datapackDetailPath(routeDatapackName ?? "") },
+      { label: routeDatapackName ?? "", href: datapackDetailPath(routeDatapackName ?? "", routeDatapackId) },
       { label: "configure" },
     ];
 

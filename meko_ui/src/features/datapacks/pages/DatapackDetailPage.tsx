@@ -104,27 +104,29 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
 
   // Each tile in CollectiveLearningPipeline routes directly to its dedicated
   // summary page — no inline preview list is rendered on the detail page.
+  // Carries `routeDatapackId` through every navigation so the next page's
+  // URL keeps the disambiguating `?datapack_id=` (name-collision safety).
   const handlePipelineSelect = useCallback(
     (tab: DatapackDetailTab) => {
       switch (tab) {
         case DATAPACK_DETAIL_TAB.conversations:
-          navigate(datapackConversationsPath(datapackName));
+          navigate(datapackConversationsPath(datapackName, undefined, routeDatapackId));
           return;
         case DATAPACK_DETAIL_TAB.memories:
-          navigate(datapackMemorySummaryPath(datapackName));
+          navigate(datapackMemorySummaryPath(datapackName, routeDatapackId));
           return;
         case DATAPACK_DETAIL_TAB.learnings:
-          navigate(datapackLearningsPath(datapackName));
+          navigate(datapackLearningsPath(datapackName, routeDatapackId));
           return;
         case DATAPACK_DETAIL_TAB.collectiveMemory:
-          navigate(datapackCollectiveMemorySummaryPath(datapackName));
+          navigate(datapackCollectiveMemorySummaryPath(datapackName, routeDatapackId));
           return;
         case DATAPACK_DETAIL_TAB.knowledge:
-          navigate(datapackKnowledgePath(datapackName));
+          navigate(datapackKnowledgePath(datapackName, routeDatapackId));
           return;
       }
     },
-    [navigate, datapackName],
+    [navigate, datapackName, routeDatapackId],
   );
 
   const [isConnectOpen, setIsConnectOpen] = useState(false);

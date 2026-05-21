@@ -84,7 +84,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName) },
+            { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
             { label: "Knowledge" },
           ]}
         />

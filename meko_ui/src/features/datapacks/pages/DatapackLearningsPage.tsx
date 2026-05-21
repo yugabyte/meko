@@ -13,9 +13,13 @@ import { isDatapackGrantEligibleToPromoteMemoryToKnowledge } from "@/lib/datapac
 
 type Props = {
   datapackName: string;
+  /** Optional URL-pinned id from `?datapack_id=`. Disambiguates between
+   *  same-named datapacks across share boundaries; falls back to
+   *  name-only resolution when omitted. */
+  datapackId?: string;
 };
 
-export default function DatapackLearningsPage({ datapackName }: Props) {
+export default function DatapackLearningsPage({ datapackName, datapackId }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -27,7 +31,7 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const d = await getDatapack(datapackName);
+        const d = await getDatapack(datapackName, { datapackId });
         if (!cancelled) {
           setDatapack(d);
           setIsPromotionAllowed(isDatapackGrantEligibleToPromoteMemoryToKnowledge({ grant: d.grant }));
@@ -45,7 +49,7 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [datapackName]);
+  }, [datapackName, datapackId]);
 
   return (
     <div className="flex-1 h-screen overflow-y-auto bg-background text-foreground flex flex-col">
@@ -55,7 +59,7 @@ export default function DatapackLearningsPage({ datapackName }: Props) {
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName) },
+            { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
             { label: "Learnings Summary" },
           ]}
         />

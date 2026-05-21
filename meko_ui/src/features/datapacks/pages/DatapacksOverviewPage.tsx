@@ -256,13 +256,14 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           isLoading={isLoading}
           currentUser={currentUser}
           onOpenDatapack={(dp) =>
-            navigate(
-              `${datapackDetailPath(dp.datapack_name)}?datapack_id=${encodeURIComponent(dp.datapack_id)}`,
-            )}
+            // datapackDetailPath now accepts the id and appends
+            // ?datapack_id= via the shared `appendDatapackId` helper;
+            // manual concat is no longer needed.
+            navigate(datapackDetailPath(dp.datapack_name, dp.datapack_id))
+          }
           onConnectDatapack={(dp) =>
-            navigate(
-              `${datapackDetailUrlOpenConnect(dp.datapack_name)}&datapack_id=${encodeURIComponent(dp.datapack_id)}`,
-            )}
+            navigate(datapackDetailUrlOpenConnect(dp.datapack_name, dp.datapack_id))
+          }
           onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_name))}
           onNewDatapack={() => navigate(datapackNewConfigurePath())}
         />

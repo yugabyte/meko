@@ -31,3 +31,5 @@ build/
 user-journey-ui-standalone/
 
 .claude/
+
+api_server/api_server

@@ -54,7 +54,7 @@ export default function DatapackSharePage({ datapackName, datapackId, currentUse
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName) },
+            { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
             { label: "Share" },
           ]}
         />

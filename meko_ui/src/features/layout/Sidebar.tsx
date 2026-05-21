@@ -306,7 +306,7 @@ export default function Sidebar() {
                 {datapackList.map((dp) => (
                   <NavLink
                     key={dp.datapack_id}
-                    to={`${datapackDetailPath(dp.datapack_name)}?datapack_id=${encodeURIComponent(dp.datapack_id)}`}
+                    to={datapackDetailPath(dp.datapack_name, dp.datapack_id)}
                     title={dp.datapack_name}
                     className={() => {
                       const basePath = datapackDetailPath(dp.datapack_name);

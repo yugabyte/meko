@@ -68,16 +68,16 @@ export default function DatapacksPage() {
         return <DatapackConfigureWizardPage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.memorySummary && segments.length === 2) {
-        return <DatapackMemorySummaryPage datapackName={datapackName} />;
+        return <DatapackMemorySummaryPage datapackName={datapackName} datapackId={routeDatapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.collectiveMemorySummary && segments.length === 2) {
-        return <DatapackCollectiveMemorySummaryPage datapackName={datapackName} />;
+        return <DatapackCollectiveMemorySummaryPage datapackName={datapackName} datapackId={routeDatapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.knowledge && segments.length === 2) {
         return <DatapackKnowledgeSummaryPage datapackName={datapackName} datapackId={routeDatapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.learnings && segments.length === 2) {
-        return <DatapackLearningsPage datapackName={datapackName} />;
+        return <DatapackLearningsPage datapackName={datapackName} datapackId={routeDatapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.conversations && segments.length <= 3) {
         const conversationId = segments[2]

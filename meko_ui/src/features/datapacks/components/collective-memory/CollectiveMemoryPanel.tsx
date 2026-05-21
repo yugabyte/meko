@@ -155,6 +155,10 @@ export function CollectiveMemoryPanel({ datapackName, datapackId }: Props) {
                         datapackName,
                         conversationId,
                         CONVERSATION_SOURCE.collectiveMemorySummary,
+                        undefined,
+                        // Carry datapack_id through (name collisions
+                        // across share boundaries) — see paths.ts.
+                        datapackId,
                       )}
                       title={`Open conversation ${conversationId}`}
                       className="block rounded-lg border border-border bg-[#0E1525] px-4 py-3 transition-colors hover:bg-[#161d2e] hover:border-border/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"

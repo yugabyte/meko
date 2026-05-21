@@ -11,9 +11,14 @@ import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/mekoApi";
 
 type Props = {
   datapackName: string;
+  /** Optional URL-pinned id from `?datapack_id=`. Forwarded to the
+   *  initial /datapacks/:name fetch so name collisions across share
+   *  boundaries resolve unambiguously. Falling back to name-only
+   *  resolution when omitted keeps old bookmarks working. */
+  datapackId?: string;
 };
 
-export default function DatapackMemorySummaryPage({ datapackName }: Props) {
+export default function DatapackMemorySummaryPage({ datapackName, datapackId }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -24,7 +29,7 @@ export default function DatapackMemorySummaryPage({ datapackName }: Props) {
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const d = await getDatapack(datapackName);
+        const d = await getDatapack(datapackName, { datapackId });
         if (!cancelled) setDatapack(d);
       } catch (e) {
         if (!cancelled) {
@@ -39,7 +44,7 @@ export default function DatapackMemorySummaryPage({ datapackName }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [datapackName]);
+  }, [datapackName, datapackId]);
 
   return (
     <div className="flex h-screen flex-1 flex-col overflow-y-auto bg-background text-foreground">
@@ -49,7 +54,7 @@ export default function DatapackMemorySummaryPage({ datapackName }: Props) {
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName) },
+            { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
             { label: "Memory Summary" },
           ]}
         />

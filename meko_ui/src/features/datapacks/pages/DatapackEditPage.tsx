@@ -62,7 +62,7 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
       navigate(ROUTES.onboarding);
       return;
     }
-    navigate(datapackDetailPath(datapackName));
+    navigate(datapackDetailPath(datapackName, datapackId));
   };
 
   const handleUpdate = async () => {
@@ -90,7 +90,11 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
             : "Description updated successfully.",
         });
       }
-      navigate(datapackDetailPath(trimmedName), { replace: true });
+      // After a successful update (which may have renamed the datapack)
+      // navigate by NAME — `trimmedName` is the new canonical name and
+      // we keep the id pin so a name-collision elsewhere can't swallow
+      // the redirect to the wrong row.
+      navigate(datapackDetailPath(trimmedName, datapackId), { replace: true });
     } catch (err) {
       setError(getApiErrorMessage(err, "Failed to update datapack."));
     } finally {
@@ -118,7 +122,7 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
           <DatapackBreadcrumbs
             items={[
               { label: "Datapacks", href: ROUTES.datapacks },
-              { label: datapackName, href: datapackDetailPath(datapackName) },
+              { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
               { label: "edit" },
             ]}
           />

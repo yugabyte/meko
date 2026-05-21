@@ -11,9 +11,13 @@ import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/mekoApi";
 
 type Props = {
   datapackName: string;
+  /** Optional URL-pinned id from `?datapack_id=`. See sibling pages
+   *  for the rationale (name-collision disambiguation across share
+   *  boundaries). Falling back to name-only resolution when omitted. */
+  datapackId?: string;
 };
 
-export default function DatapackCollectiveMemorySummaryPage({ datapackName }: Props) {
+export default function DatapackCollectiveMemorySummaryPage({ datapackName, datapackId }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -24,7 +28,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName }: Pr
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const d = await getDatapack(datapackName);
+        const d = await getDatapack(datapackName, { datapackId });
         if (!cancelled) setDatapack(d);
       } catch (e) {
         if (!cancelled) {
@@ -39,7 +43,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName }: Pr
     return () => {
       cancelled = true;
     };
-  }, [datapackName]);
+  }, [datapackName, datapackId]);
 
   return (
     <div className="flex h-screen flex-1 flex-col overflow-y-auto bg-background text-foreground">
@@ -49,7 +53,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName }: Pr
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName) },
+            { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
             { label: "Collective Memory Summary" },
           ]}
         />
