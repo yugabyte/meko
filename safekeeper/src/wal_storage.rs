@@ -657,6 +657,7 @@ async fn remove_segments_from_disk(
 }
 
 pub struct WalReader {
+    ttid: TenantTimelineId,
     remote_path: RemotePath,
     timeline_dir: Utf8PathBuf,
     wal_seg_size: usize,
@@ -707,6 +708,7 @@ impl WalReader {
         }
 
         Ok(Self {
+            ttid: *ttid,
             remote_path: remote_timeline_path(ttid)?,
             timeline_dir,
             wal_seg_size: state.server.wal_seg_size as usize,
@@ -814,6 +816,28 @@ impl WalReader {
                 return Ok(Box::pin(file));
             } else {
                 // NotFound is expected, fall through to remote read
+            }
+        }
+
+        // Phase 2: try the live-WAL YB mirror (`yb_storage.wals`). When the
+        // safekeeper writes WAL with `--wal-yb-config`, every byte is
+        // synchronously INSERT'd into that table — so an absent local file is
+        // not a data-loss event, it's just a cache miss.
+        if let Some((client, table)) = self.wal_backup.get_wal_yb() {
+            if let Some(reader) = crate::yb_wal_storage::read_segment_from_yb(
+                &client,
+                &table,
+                &self.ttid,
+                segno,
+                self.wal_seg_size,
+                xlogoff,
+            )
+            .await?
+            {
+                tracing::info!(
+                    "WalReader: served segment {segno} (offset {xlogoff}) from YB table `{table}`"
+                );
+                return Ok(reader);
             }
         }
 

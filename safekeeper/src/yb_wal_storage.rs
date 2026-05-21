@@ -39,13 +39,16 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use futures::future::{BoxFuture, FutureExt};
 use postgres_ffi::XLogSegNo;
+use tokio::io::{AsyncRead, ReadBuf};
 use tokio_postgres::types::ToSql;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
@@ -309,6 +312,84 @@ impl Storage for YbWalStorage {
 fn quote_ident(ident: &str) -> String {
     let escaped = ident.replace('"', "\"\"");
     format!("\"{escaped}\"")
+}
+
+/// Fetch a WAL segment from `yb_storage.wals`, reassemble all chunks in
+/// `chunk_seq` order (so later writes at the same offset overwrite earlier
+/// ones, matching local-FS semantics), and return an `AsyncRead` positioned at
+/// `start_xlogoff`.
+///
+/// Returns `Ok(None)` when the segment has no rows in YB (caller should fall
+/// through to the next source). Returns `Ok(Some(reader))` on success.
+pub async fn read_segment_from_yb(
+    client: &tokio_postgres::Client,
+    table: &str,
+    ttid: &TenantTimelineId,
+    segno: XLogSegNo,
+    wal_seg_size: usize,
+    start_xlogoff: usize,
+) -> Result<Option<Pin<Box<dyn AsyncRead + Send + Sync>>>> {
+    let sql = format!(
+        "SELECT chunk_offset, chunk_size, data FROM {} \
+         WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
+         ORDER BY chunk_seq",
+        quote_ident(table)
+    );
+    let tenant_id_str = ttid.tenant_id.to_string();
+    let timeline_id_str = ttid.timeline_id.to_string();
+    let segno_i: i64 = segno as i64;
+    let params: [&(dyn ToSql + Sync); 3] = [&tenant_id_str, &timeline_id_str, &segno_i];
+    let rows = client
+        .query(&sql, &params)
+        .await
+        .context("YB WAL read: query chunks")?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    // Reassemble into a flat segment buffer. Later chunk_seqs over the same
+    // byte range win (last-write semantics).
+    let mut segment = vec![0u8; wal_seg_size];
+    for row in &rows {
+        let off: i64 = row.get("chunk_offset");
+        let size: i32 = row.get("chunk_size");
+        let data: Vec<u8> = row.get("data");
+        let off = off as usize;
+        let size = size as usize;
+        if off + size > wal_seg_size {
+            anyhow::bail!(
+                "YB WAL chunk extends past segment: off={off} size={size} > seg_size={wal_seg_size}"
+            );
+        }
+        segment[off..off + size].copy_from_slice(&data);
+    }
+    Ok(Some(Box::pin(VecAsyncRead {
+        buf: segment,
+        pos: start_xlogoff,
+    })))
+}
+
+/// Minimal `AsyncRead` over an owned `Vec<u8>` cursor. Used to return a
+/// segment reassembled from YB.
+pub struct VecAsyncRead {
+    buf: Vec<u8>,
+    pos: usize,
+}
+
+impl AsyncRead for VecAsyncRead {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+        dst: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let remaining = self.buf.len().saturating_sub(self.pos);
+        let n = remaining.min(dst.remaining());
+        if n > 0 {
+            dst.put_slice(&self.buf[self.pos..self.pos + n]);
+            self.pos += n;
+        }
+        Poll::Ready(Ok(()))
+    }
 }
 
 /// Dispatcher across WAL-storage backends. Mirrors `ControlFileStorage`.
