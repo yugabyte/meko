@@ -244,7 +244,7 @@ export function DatapackConnectDialog({
                 <code className="rounded bg-[#0E1525] px-1 text-foreground/90">
                   {MEKO_TOKEN_INSTALLER_PLACEHOLDER}
                 </code>{" "}
-                in the command with the API token you saved when generating it.
+                in the command with the API key you saved when generating it.
               </p>
               <Tabs defaultValue="claude-code" className="w-full">
                 <TabsList className="h-9 w-full justify-start bg-[#0E1525] p-1 border border-border">

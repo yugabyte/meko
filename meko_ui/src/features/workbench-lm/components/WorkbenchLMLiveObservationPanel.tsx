@@ -283,7 +283,7 @@ function SectionShell({
                 </span>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-[240px] text-center">
-                Mem0 is still pulling memories out of your last message — usually under 40 seconds. New rows will appear here automatically.
+                Mem0 is still pulling memories out of your last message — usually takes a few seconds. New rows will appear here automatically.
               </TooltipContent>
             </Tooltip>
           ) : null}
@@ -451,7 +451,7 @@ function LearningsSection({
           // tiles as soon as the extractor finishes.
           <p className="inline-flex items-center gap-2 text-xs text-purple-200/80">
             <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-            Extracting learnings from your recent chat — usually under 40 seconds.
+            Extracting learnings from your recent chat...
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">Add a conversation to view memories.</p>

@@ -10,6 +10,8 @@ import {
   MessageSquare,
   PlayCircle,
   Sparkles,
+  Hash,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
@@ -380,6 +382,37 @@ export default function Sidebar() {
           <MessageSquare className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
           {!isCollapsed && <span className="animate-in fade-in truncate">Feedback</span>}
         </button>
+
+        <a
+          href="https://www.yugabyte.com/slack"
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
+            "mt-2",
+            "flex items-center rounded-md text-sm font-medium text-gray-400 hover:bg-white/5 hover:text-white transition-colors",
+            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+          )}
+          title={isCollapsed ? "Join us on Slack" : undefined}
+          aria-label="Join us on Slack"
+        >
+          <Hash className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} aria-hidden />
+          {!isCollapsed && <span className="animate-in fade-in truncate">Join us on Slack</span>}
+        </a>
+
+        <a
+          href="https://docs.mekodata.ai/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
+            "flex items-center rounded-md text-sm font-medium text-gray-400 hover:bg-white/5 hover:text-white transition-colors",
+            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+          )}
+          title={isCollapsed ? "Docs" : undefined}
+          aria-label="Open documentation"
+        >
+          <BookOpen className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} aria-hidden />
+          {!isCollapsed && <span className="animate-in fade-in truncate">Docs</span>}
+        </a>
 
         <button
           type="button"

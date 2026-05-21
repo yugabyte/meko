@@ -45,7 +45,7 @@ export function ConnectApiTokensField({
 }: Props) {
   return (
     <div className="space-y-2">
-      <label className="text-sm font-medium text-muted-foreground">API token</label>
+      <label className="text-sm font-medium text-muted-foreground">API key</label>
       {loading ? (
         <div className="flex items-center gap-2 rounded-md border border-border bg-[#0E1525] px-3 py-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />

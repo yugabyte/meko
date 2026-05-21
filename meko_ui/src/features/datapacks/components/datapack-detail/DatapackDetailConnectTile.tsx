@@ -73,7 +73,7 @@ export function DatapackDetailConnectTile({
             <p className="text-[11px] leading-snug text-muted-foreground">
               Replace{" "}
               <code className="font-mono text-foreground/90">{MEKO_TOKEN_INSTALLER_PLACEHOLDER}</code>{" "}
-              with a Meko token from{" "}
+              with a Meko API key from{" "}
               <button
                 type="button"
                 className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-300"

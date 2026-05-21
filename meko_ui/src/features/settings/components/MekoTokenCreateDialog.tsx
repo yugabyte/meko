@@ -230,7 +230,7 @@ function FormPhase({
           ) : (
             <KeyRound className="h-3.5 w-3.5" aria-hidden />
           )}
-          Generate token
+          Generate API key
         </Button>
       </div>
     </form>

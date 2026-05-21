@@ -188,6 +188,20 @@ export default function CompleteNewPasswordPage() {
           >
             {loading ? "Please wait..." : "Continue"}
           </Button>
+
+          <p className="text-center text-xs text-gray-300">
+            By clicking &ldquo;Continue&rdquo;, you are creating a Meko account, and you agree to
+            Yugabyte&apos;s{" "}
+            <a
+              href="https://mekodata.ai/early-access-terms-of-service/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-white"
+            >
+              Terms of Use
+            </a>
+            .
+          </p>
         </form>
 
         {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
