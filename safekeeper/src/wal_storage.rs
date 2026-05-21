@@ -92,6 +92,13 @@ pub struct PhysicalStorage {
     /// Disables fsync if true.
     no_sync: bool,
 
+    /// When true, skip every local-filesystem write (open/write/truncate/
+    /// remove/fsync). LSN tracking and WAL-record decoding still run so the
+    /// in-memory state stays correct; we just don't touch disk. Used when
+    /// the safekeeper has been configured to keep WAL only in YugabyteDB
+    /// (`--wal-yb-config` set) — local files become unnecessary.
+    no_local_writes: bool,
+
     /// Size of WAL segment in bytes.
     wal_seg_size: usize,
     pg_version: PgVersionId,
@@ -223,6 +230,7 @@ impl PhysicalStorage {
             metrics: WalStorageMetrics::default(),
             timeline_dir: timeline_dir.to_path_buf(),
             no_sync,
+            no_local_writes: false,
             wal_seg_size,
             pg_version: state.server.pg_version,
             system_id: state.server.system_id,
@@ -237,6 +245,52 @@ impl PhysicalStorage {
             file: None,
             pending_wal_truncation: true,
         })
+    }
+
+    /// Build an "ephemeral" PhysicalStorage that never touches the local
+    /// filesystem. Used by `YbWalStorage` when WAL is durably held in YB and
+    /// the local FS shouldn't be written. `write_lsn` is taken from the
+    /// caller (rehydrated from YB) instead of `find_end_of_wal` scanning disk.
+    pub fn new_no_local_writes(
+        ttid: &TenantTimelineId,
+        timeline_dir: &Utf8Path,
+        state: &TimelinePersistentState,
+        write_lsn: Lsn,
+    ) -> Result<PhysicalStorage> {
+        let wal_seg_size = state.server.wal_seg_size as usize;
+        debug!(
+            "initialized no-local-writes WAL storage for timeline {}, write_lsn={}, commit_lsn={}",
+            ttid.timeline_id, write_lsn, state.commit_lsn,
+        );
+        Ok(PhysicalStorage {
+            metrics: WalStorageMetrics::default(),
+            timeline_dir: timeline_dir.to_path_buf(),
+            no_sync: true,
+            no_local_writes: true,
+            wal_seg_size,
+            pg_version: state.server.pg_version,
+            system_id: state.server.system_id,
+            write_lsn,
+            write_record_lsn: write_lsn,
+            flush_lsn: write_lsn,
+            flush_record_lsn: write_lsn,
+            decoder: WalStreamDecoder::new(
+                write_lsn,
+                PgMajorVersion::try_from(state.server.pg_version).unwrap(),
+            ),
+            file: None,
+            pending_wal_truncation: false,
+        })
+    }
+
+    /// Read-only access to the PG version stored on this instance.
+    pub fn pg_version_id(&self) -> PgVersionId {
+        self.pg_version
+    }
+
+    /// Read-only access to the system identifier carried on the segment header.
+    pub fn system_id(&self) -> u64 {
+        self.system_id
     }
 
     /// Get all known state of the storage.
@@ -322,6 +376,14 @@ impl PhysicalStorage {
     /// Write WAL bytes, which are known to be located in a single WAL segment. Returns true if the
     /// segment was completed, closed, and flushed to disk.
     async fn write_in_segment(&mut self, segno: u64, xlogoff: usize, buf: &[u8]) -> Result<bool> {
+        if self.no_local_writes {
+            // No local FS — caller (YbWalStorage) has already pushed the
+            // bytes to durable storage. Mirror the "segment completed"
+            // signal solely from `xlogoff + buf.len() == wal_seg_size` so
+            // callers behave the same.
+            let _ = segno;
+            return Ok(xlogoff + buf.len() == self.wal_seg_size);
+        }
         let mut file = if let Some(file) = self.file.take() {
             file
         } else {
@@ -421,6 +483,15 @@ impl Storage for PhysicalStorage {
             .start_timer();
 
         let segno = init_lsn.segment_number(self.wal_seg_size);
+        if self.no_local_writes {
+            // No local FS. YbWalStorage's wrapper handles initializing the
+            // segment header bytes in YB.
+            info!(
+                "skipped local-FS initialize for segno {} at lsn {} (no_local_writes)",
+                segno, init_lsn
+            );
+            return Ok(());
+        }
         let (mut file, _) = self.open_or_create(segno).await?;
         let major_pg_version = PgMajorVersion::try_from(self.pg_version).unwrap();
         let wal_seg =
@@ -498,6 +569,14 @@ impl Storage for PhysicalStorage {
             return Ok(());
         }
 
+        if self.no_local_writes {
+            // YB-only mode: WAL is already durable in YB after write_wal.
+            // Just advance the in-memory flush watermarks.
+            self.flush_lsn = self.write_lsn;
+            self.flush_record_lsn = self.write_record_lsn;
+            return Ok(());
+        }
+
         if let Some(unflushed_file) = self.file.take() {
             self.fdatasync_file(&unflushed_file)
                 .await
@@ -567,6 +646,13 @@ impl Storage for PhysicalStorage {
         self.write_record_lsn = end_pos;
         self.flush_record_lsn = end_pos;
 
+        if self.no_local_writes {
+            // YB-only mode: caller (YbWalStorage::truncate_wal) has already
+            // deleted the YB rows past end_pos. Nothing else to do locally.
+            self.pending_wal_truncation = false;
+            return Ok(());
+        }
+
         // Close previously opened file, if any
         if let Some(unflushed_file) = self.file.take() {
             self.fdatasync_file(&unflushed_file).await?;
@@ -598,6 +684,13 @@ impl Storage for PhysicalStorage {
     }
 
     fn remove_up_to(&self, segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
+        if self.no_local_writes {
+            return Box::pin(async move {
+                // No local files to remove. Caller (YbWalStorage) handles YB.
+                let _ = segno_up_to;
+                Ok(())
+            });
+        }
         let timeline_dir = self.timeline_dir.clone();
         let wal_seg_size = self.wal_seg_size;
         Box::pin(async move {

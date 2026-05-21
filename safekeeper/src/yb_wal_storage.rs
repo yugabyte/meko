@@ -73,30 +73,47 @@ impl YbWalStorage {
         ttid: &TenantTimelineId,
         timeline_dir: &Utf8Path,
         state: &TimelinePersistentState,
-        no_sync: bool,
+        _no_sync: bool,
         client: Arc<tokio_postgres::Client>,
         table_name: String,
     ) -> Result<Self> {
-        let inner = PhysicalStorage::new(ttid, timeline_dir, state, no_sync)?;
         let wal_seg_size = state.server.wal_seg_size as usize;
+        let tenant_id_str = ttid.tenant_id.to_string();
+        let timeline_id_str = ttid.timeline_id.to_string();
+
+        // Rehydrate `write_lsn` from YB rather than scanning local FS. Take
+        // the highest `chunk_offset + chunk_size` across all segnos for this
+        // (tenant, timeline) as the end-of-WAL position.
+        let write_lsn = Self::load_write_lsn(
+            &client,
+            &table_name,
+            &tenant_id_str,
+            &timeline_id_str,
+            wal_seg_size,
+            state.commit_lsn,
+        )
+        .await?;
+
+        // Construct the inner PhysicalStorage in `no_local_writes` mode so all
+        // of its disk operations are no-ops. The struct still holds the
+        // LSN tracker + WAL decoder, which we want to reuse.
+        let inner = PhysicalStorage::new_no_local_writes(ttid, timeline_dir, state, write_lsn)?;
 
         let mut me = YbWalStorage {
             inner,
             client,
-            tenant_id: ttid.tenant_id.to_string(),
-            timeline_id: ttid.timeline_id.to_string(),
+            tenant_id: tenant_id_str,
+            timeline_id: timeline_id_str,
             table_name,
             wal_seg_size,
             next_chunk_seq: HashMap::new(),
         };
 
-        // Reconcile YB with the local-FS view of where WAL ends. The inner
-        // `PhysicalStorage::new` ran `find_end_of_wal` against local disk and
-        // set its `flush_lsn` to that point. Any YB chunk whose end offset
-        // lies past that LSN is stale (left over from a previous run that
-        // crashed before its writes hit a durable Raft commit). Drop them.
-        let end_of_wal = me.inner.flush_lsn();
-        me.delete_after(end_of_wal).await?;
+        // Clean any rows past write_lsn left over from a crash where we
+        // INSERT'd but never returned to the caller (could happen if YB
+        // accepted the row but the safekeeper crashed before its in-memory
+        // bookkeeping advanced).
+        me.delete_after(write_lsn).await?;
         me.next_chunk_seq = Self::load_next_chunk_seq(
             &me.client,
             &me.table_name,
@@ -105,6 +122,39 @@ impl YbWalStorage {
         )
         .await?;
         Ok(me)
+    }
+
+    /// Find the end of the persisted WAL by scanning the YB table for the
+    /// highest end-byte across all segnos for this timeline. Falls back to
+    /// `commit_lsn` when the table is empty (fresh timeline).
+    async fn load_write_lsn(
+        client: &tokio_postgres::Client,
+        table: &str,
+        tenant_id: &str,
+        timeline_id: &str,
+        wal_seg_size: usize,
+        commit_lsn: Lsn,
+    ) -> Result<Lsn> {
+        let sql = format!(
+            "SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM {} \
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+             GROUP BY segno ORDER BY segno DESC LIMIT 1",
+            quote_ident(table)
+        );
+        let params: [&(dyn ToSql + Sync); 2] = [&tenant_id, &timeline_id];
+        let row_opt = client
+            .query_opt(&sql, &params)
+            .await
+            .context("YbWalStorage: rehydrate write_lsn from YB")?;
+        let lsn = match row_opt {
+            Some(row) => {
+                let segno: i64 = row.get("segno");
+                let end_off: i64 = row.get("end_off");
+                Lsn((segno as u64) * (wal_seg_size as u64) + end_off as u64)
+            }
+            None => commit_lsn,
+        };
+        Ok(lsn)
     }
 
     async fn load_next_chunk_seq(
@@ -137,6 +187,14 @@ impl YbWalStorage {
         let seq = *entry;
         *entry = seq + 1;
         seq
+    }
+
+    fn inner_pg_version_id(&self) -> postgres_versioninfo::PgVersionId {
+        self.inner.pg_version_id()
+    }
+
+    fn inner_system_id(&self) -> u64 {
+        self.inner.system_id()
     }
 
     /// Split a write at segment boundaries and INSERT one row per segment-spanning
@@ -252,11 +310,49 @@ impl Storage for YbWalStorage {
         self.inner.flush_lsn()
     }
 
-    fn initialize_first_segment(
-        &mut self,
-        init_lsn: Lsn,
-    ) -> impl Future<Output = Result<()>> + Send {
-        self.inner.initialize_first_segment(init_lsn)
+    async fn initialize_first_segment(&mut self, init_lsn: Lsn) -> Result<()> {
+        // Generate the standard PG segment header + zero padding, then push
+        // the whole 16 MiB blob into YB as a single chunk. Inner's
+        // initialize_first_segment is a no-op in no_local_writes mode.
+        let segno = init_lsn.segment_number(self.wal_seg_size);
+        let major_pg_version = postgres_ffi::PgMajorVersion::try_from(self.inner_pg_version_id())
+            .map_err(|e| anyhow::anyhow!("invalid pg version: {e:?}"))?;
+        let wal_seg = postgres_ffi::generate_wal_segment(
+            segno,
+            self.inner_system_id(),
+            major_pg_version,
+            init_lsn,
+        )?;
+        let now_us: i64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(0);
+        let insert_sql = format!(
+            "INSERT INTO {} \
+             (tenant_id, timeline_id, segno, chunk_seq, chunk_offset, chunk_size, data, last_modified_us) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            quote_ident(&self.table_name)
+        );
+        let segno_i: i64 = segno as i64;
+        let seq: i32 = self.allocate_seq(segno);
+        let offset_i: i64 = 0;
+        let size_i: i32 = wal_seg.len() as i32;
+        let data_vec: Vec<u8> = wal_seg.to_vec();
+        let params: [&(dyn ToSql + Sync); 8] = [
+            &self.tenant_id,
+            &self.timeline_id,
+            &segno_i,
+            &seq,
+            &offset_i,
+            &size_i,
+            &data_vec,
+            &now_us,
+        ];
+        self.client
+            .execute(&insert_sql, &params)
+            .await
+            .context("YbWalStorage: initialize_first_segment INSERT")?;
+        self.inner.initialize_first_segment(init_lsn).await
     }
 
     async fn write_wal(&mut self, startpos: Lsn, buf: &[u8]) -> Result<()> {
