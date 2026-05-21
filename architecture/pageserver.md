@@ -307,6 +307,95 @@ lands as N rows in `yb_storage.blobs`. The `Key` abstraction never
 crosses the `RemoteStorage` boundary — it lives entirely inside the
 pageserver.
 
+### Cache miss → download: it's the whole file, by design
+
+When the pageserver doesn't have a layer locally and needs to serve a
+page out of it, it does **not** issue a byte-range read for just that
+page. The full layer file is downloaded from `remote_storage` into a
+temp file on local disk, then renamed into place; subsequent reads of
+that layer are local-disk reads.
+
+Code path: `pageserver/src/tenant/storage_layer/layer.rs:Layer::download`
+→ `pageserver/src/tenant/remote_timeline_client/download.rs::download_layer_file`
+→ `download_object`, which calls
+
+```rust
+storage.download(src_path, &DownloadOpts::default(), cancel).await?;
+```
+
+`DownloadOpts::default()` has `byte_start = Unbounded`, `byte_end =
+Unbounded` — the entire layer is requested.
+
+Why the whole file, not byte ranges:
+
+1. **The B-tree index lives at the *end* of the file**, after the
+   VALUES section. Just one page lookup would need three or more
+   round-trips: Summary (block 0) + several B-tree nodes near
+   `index_start_blk` + the actual blob somewhere in VALUES. With a
+   remote object store, each round-trip has 10–100 ms latency. One
+   bulk download is cheaper.
+2. **Layer files are bounded** (~128 MiB target, ~256 MiB L0 cap,
+   ~294 MiB worst-case in our bench, 4.5 GB hard ceiling). A single
+   sequential read amortises across every subsequent page lookup from
+   that layer.
+
+The `RemoteStorage` trait *does* support byte ranges
+(`DownloadOpts { byte_start, byte_end }`) — the S3 backend implements
+them via the HTTP `Range:` header — but the pageserver doesn't use them
+for layer downloads. The only place ranged reads happen is the
+safekeeper's WAL fetch path.
+
+### Streaming the download (so memory stays small)
+
+The download is **streaming on the wire**, not "load 4 GB into RAM". The
+trait shape is:
+
+```rust
+pub struct Download {
+    pub download_stream: Pin<Box<dyn Stream<Item = io::Result<Bytes>> + Send + Sync + 'static>>,
+    pub last_modified: SystemTime,
+    pub etag: Etag,
+    pub metadata: Option<StorageMetadata>,
+}
+```
+
+`download_layer_file` pulls chunks off `download_stream` via
+`StreamExt::next` and writes them to a `BufferedWriter<TempVirtualFile>`.
+Only a small fixed-size buffer ever sits in pageserver RAM.
+
+For **S3/Azure/GCS/LocalFs**, this is true straightforwardly: each
+backend's `download` returns a real byte stream backed by the upstream
+HTTP body / file read syscall, so memory peaks at the buffer size
+regardless of object size.
+
+For **`YbStore`**, this required some care. The first cut bulk-fetched
+all chunks with `client.query(...)`, concatenated the BYTEAs into one
+`Vec<u8>`, and wrapped it in `futures::stream::once` — pageserver RAM
+peak was the full layer size. Fixed in `libs/remote_storage/src/yb_store.rs::download`
+by:
+
+1. **Phase 1 (metadata):** single-row `SELECT size_bytes, etag,
+   last_modified_us, metadata_json … WHERE key = $1 AND chunk_idx = 0`
+   so we can serve the `If-None-Match` shortcut and compute byte-range
+   math without touching the bulk data.
+2. **Phase 2 (streaming chunks):** open a `tokio_postgres::RowStream`
+   via `client.query_raw(...)` filtered to the chunk_idx range that
+   overlaps the requested byte range. Wrap it in
+   `async_stream::stream!` and yield one chunk's bytea as a `Bytes`
+   per stream poll. `Bytes::from(Vec<u8>)` is zero-copy and `slice(..)`
+   on it is pointer+length adjustment — no copies for the common
+   whole-file case.
+3. **Byte-range math:** chunks are predictably sized (each is
+   `YB_CHUNK_SIZE = 100 MiB` except possibly the last), so
+   `start_chunk = start_byte / YB_CHUNK_SIZE`,
+   `end_chunk = (end_byte - 1) / YB_CHUNK_SIZE`, with trim offsets
+   `start_byte % YB_CHUNK_SIZE` on the first chunk and
+   `(end_byte - 1) % YB_CHUNK_SIZE + 1` on the last. No request
+   reads chunks it doesn't need.
+
+After the fix, `YbStore` peaks at one chunk (up to 100 MiB) in flight,
+matching S3/Azure/GCS modulo chunk granularity.
+
 ### `getpage` RPC
 
 Custom Postgres-message-typed gRPC (in `pageserver/page_api`) issued by the

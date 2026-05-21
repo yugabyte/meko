@@ -516,51 +516,31 @@ impl RemoteStorage for YbStore {
             .map_err(|_| DownloadError::Cancelled)?;
 
         let db_key = self.full_key(from);
-        let sql = format!(
-            "SELECT chunk_idx, data, size_bytes, etag, last_modified_us, metadata_json \
-             FROM {} WHERE key = $1 ORDER BY chunk_idx",
+
+        // Phase 1: cheap single-row lookup to get the denormalized metadata
+        // (size_bytes / etag / last_modified_us / metadata_json) sitting on
+        // chunk_idx = 0. Lets us honor If-None-Match and compute the byte
+        // range without ever loading bulk data into memory.
+        let head_sql = format!(
+            "SELECT size_bytes, etag, last_modified_us, metadata_json \
+             FROM {} WHERE key = $1 AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 1] = [&db_key];
-        let rows = self
-            .with_timeout_download(self.client.query(&sql, &params), cancel)
+        let head_params: [&(dyn ToSql + Sync); 1] = [&db_key];
+        let head_opt = self
+            .with_timeout_download(self.client.query_opt(&head_sql, &head_params), cancel)
             .await?;
-        if rows.is_empty() {
-            return Err(DownloadError::NotFound);
-        }
-
-        // Header info is duplicated across chunks; read from the first row.
-        let first = &rows[0];
-        let total_size: i64 = first.get("size_bytes");
-        let etag_str: String = first.get("etag");
-        let last_modified_us: i64 = first.get("last_modified_us");
-        let metadata_json: Option<String> = first.get("metadata_json");
-
-        let mut data: Vec<u8> = Vec::with_capacity(total_size.max(0) as usize);
-        for row in &rows {
-            let chunk: Vec<u8> = row.get("data");
-            data.extend_from_slice(&chunk);
-        }
+        let head = head_opt.ok_or(DownloadError::NotFound)?;
+        let total_size: i64 = head.get("size_bytes");
+        let etag_str: String = head.get("etag");
+        let last_modified_us: i64 = head.get("last_modified_us");
+        let metadata_json: Option<String> = head.get("metadata_json");
 
         if let Some(if_none_match) = &opts.etag {
             if if_none_match.to_string() == etag_str {
                 return Err(DownloadError::Unmodified);
             }
         }
-
-        let sliced = match opts.byte_range() {
-            None => data,
-            Some((start, end)) => {
-                let start = start as usize;
-                let end = end.map(|e| e as usize).unwrap_or(data.len());
-                let end = end.min(data.len());
-                if start >= data.len() {
-                    Vec::new()
-                } else {
-                    data[start..end].to_vec()
-                }
-            }
-        };
 
         let metadata = match metadata_json {
             Some(s) => {
@@ -571,12 +551,96 @@ impl RemoteStorage for YbStore {
             None => None,
         };
 
-        let bytes = Bytes::from(sliced);
-        let stream: DownloadStream =
-            Box::pin(futures::stream::once(async move { Ok(bytes) }));
+        let total_size_u64 = total_size.max(0) as u64;
+        let (start_byte, end_byte) = match opts.byte_range() {
+            None => (0u64, total_size_u64),
+            Some((s, Some(e))) => (s.min(total_size_u64), e.min(total_size_u64)),
+            Some((s, None)) => (s.min(total_size_u64), total_size_u64),
+        };
+
+        // Empty range (after clamping) — return an empty download stream.
+        if start_byte >= end_byte {
+            let empty: DownloadStream =
+                Box::pin(futures::stream::empty::<std::io::Result<Bytes>>());
+            return Ok(Download {
+                download_stream: empty,
+                last_modified: system_time_from_micros(last_modified_us),
+                etag: Etag::from(etag_str),
+                metadata,
+            });
+        }
+
+        // Phase 2: stream chunks. Chunks are predictably sized
+        // (`YB_CHUNK_SIZE` bytes each except possibly the last) so we can
+        // compute which chunk_idx values overlap [start_byte, end_byte) and
+        // how much to trim off the first and last.
+        let chunk_size = YB_CHUNK_SIZE as u64;
+        let start_chunk = (start_byte / chunk_size) as i32;
+        // end is exclusive; compute the chunk holding the last byte
+        let last_byte_inclusive = end_byte - 1;
+        let end_chunk = (last_byte_inclusive / chunk_size) as i32;
+        let start_off_in_first = (start_byte % chunk_size) as usize;
+        let end_off_in_last = ((last_byte_inclusive % chunk_size) + 1) as usize;
+
+        let client = self.client.clone();
+        let table = self.table_name.clone();
+        let stream_sql = format!(
+            "SELECT chunk_idx, data FROM {} \
+             WHERE key = $1 AND chunk_idx >= $2 AND chunk_idx <= $3 \
+             ORDER BY chunk_idx",
+            quote_ident(&table)
+        );
+        let timeout = self.timeout;
+
+        // Open the row stream first (so any query error fails the
+        // `download()` call cleanly with `DownloadError::Other` rather than
+        // surfacing as an io::Error mid-stream after the caller has already
+        // started writing to disk).
+        let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+            Box::new(db_key.clone()),
+            Box::new(start_chunk),
+            Box::new(end_chunk),
+        ];
+        let row_stream = match tokio::time::timeout(
+            timeout,
+            client.query_raw(&stream_sql, params),
+        )
+        .await
+        {
+            Ok(Ok(rs)) => rs,
+            Ok(Err(e)) => return Err(DownloadError::Other(e.into())),
+            Err(_) => return Err(DownloadError::Timeout),
+        };
+
+        // `row_stream` is a `tokio_postgres::RowStream` that pulls bytes off
+        // the wire as we poll it — we never have more than one chunk's
+        // `data` resident.
+        let download_stream: DownloadStream = Box::pin(async_stream::stream! {
+            let mut row_stream = std::pin::pin!(row_stream);
+            while let Some(row_res) = futures::StreamExt::next(&mut row_stream).await {
+                match row_res {
+                    Ok(row) => {
+                        let idx: i32 = row.get("chunk_idx");
+                        let data: Vec<u8> = row.get("data");
+                        let len = data.len();
+                        let lo = if idx == start_chunk { start_off_in_first.min(len) } else { 0 };
+                        let hi = if idx == end_chunk { end_off_in_last.min(len) } else { len };
+                        if lo < hi {
+                            // `Bytes::from(Vec<u8>)` is zero-copy; the slice
+                            // is then a pointer + length adjustment.
+                            yield Ok(Bytes::from(data).slice(lo..hi));
+                        }
+                    }
+                    Err(e) => {
+                        yield Err(std::io::Error::other(e));
+                        return;
+                    }
+                }
+            }
+        });
 
         Ok(Download {
-            download_stream: stream,
+            download_stream,
             last_modified: system_time_from_micros(last_modified_us),
             etag: Etag::from(etag_str),
             metadata,
