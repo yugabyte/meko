@@ -60,7 +60,6 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:21\0";
 
 const PID_FILE_NAME: &str = "safekeeper.pid";
-const ID_FILE_NAME: &str = "safekeeper.id";
 
 project_git_version!(GIT_VERSION);
 project_build_tag!(BUILD_TAG);
@@ -90,9 +89,10 @@ struct Args {
     /// Path to the safekeeper data directory.
     #[arg(short = 'D', long, default_value = "./")]
     datadir: Utf8PathBuf,
-    /// Safekeeper node id.
+    /// Safekeeper node id. Required — must be the same value on every
+    /// restart of this safekeeper instance.
     #[arg(long)]
-    id: Option<u64>,
+    id: u64,
     /// Initialize safekeeper with given id and exit.
     #[arg(long)]
     init: bool,
@@ -363,8 +363,9 @@ async fn main() -> anyhow::Result<()> {
     // we need to release the lock file only when the current process is gone
     std::mem::forget(lock_file);
 
-    // Set or read our ID.
-    let id = set_id(&workdir, args.id.map(NodeId))?;
+    // Take the ID purely from CLI / config; no on-disk `safekeeper.id`.
+    let id = NodeId(args.id);
+    info!("safekeeper ID {}", id);
     if args.init {
         return Ok(());
     }
@@ -800,51 +801,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
 }
 
 /// Determine safekeeper id.
-fn set_id(workdir: &Utf8Path, given_id: Option<NodeId>) -> Result<NodeId> {
-    let id_file_path = workdir.join(ID_FILE_NAME);
-
-    let my_id: NodeId;
-    // If file with ID exists, read it in; otherwise set one passed.
-    match fs::read(&id_file_path) {
-        Ok(id_serialized) => {
-            my_id = NodeId(
-                std::str::from_utf8(&id_serialized)
-                    .context("failed to parse safekeeper id")?
-                    .parse()
-                    .context("failed to parse safekeeper id")?,
-            );
-            if let Some(given_id) = given_id {
-                if given_id != my_id {
-                    bail!(
-                        "safekeeper already initialized with id {}, can't set {}",
-                        my_id,
-                        given_id
-                    );
-                }
-            }
-            info!("safekeeper ID {}", my_id);
-        }
-        Err(error) => match error.kind() {
-            ErrorKind::NotFound => {
-                my_id = if let Some(given_id) = given_id {
-                    given_id
-                } else {
-                    bail!("safekeeper id is not specified");
-                };
-                let mut f = File::create(&id_file_path)
-                    .with_context(|| format!("Failed to create id file at {id_file_path:?}"))?;
-                f.write_all(my_id.to_string().as_bytes())?;
-                f.sync_all()?;
-                info!("initialized safekeeper id {}", my_id);
-            }
-            _ => {
-                return Err(error.into());
-            }
-        },
-    }
-    Ok(my_id)
-}
-
 fn parse_remote_storage(storage_conf: &str) -> anyhow::Result<RemoteStorageConfig> {
     RemoteStorageConfig::from_toml(&storage_conf.parse()?)
 }
