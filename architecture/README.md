@@ -34,7 +34,7 @@ upstream Neon can skim) and **changes in yb-neon**.
                   push  v               v
               +----------------+   +----------------+
               |   Safekeeper   |   |   Pageserver   |
-              | (Raft, 1..N)   |-->| (per-tenant)   |
+              |                |-->|  (per-tenant)  |
               +----------------+   +----------------+
                         \                 |
                          \                |
