@@ -201,15 +201,33 @@ Two flavors:
   (`(Key, Lsn) → (will_init | WalRecord | Image)`). Append-only output of
   WAL ingestion + L0→L1 compaction.
 
-Filename encodes the layer's coverage:
+Filename encodes the layer's coverage. The format is:
 
 ```
-000000…0000-FFFF…FFFF__0000000001540438-00000000015404B1-00000001
-└── key_start ────┘ ──┘└── lsn_start ──┘-└── lsn_end ──┘-└─ gen ─┘
+<key_start>-<key_end>__<lsn_start>-<lsn_end>-<generation>
 ```
 
-— so a directory listing alone tells the pageserver which file covers
-which `(key_range, lsn_range)` (image layers have `lsn_start == lsn_end`).
+with widths:
+
+| Field | Width | Encoding |
+|---|---|---|
+| `key_start` | 36 hex chars (18 bytes) | the full `Key` struct, big-endian |
+| `key_end` | 36 hex chars (18 bytes) | exclusive upper bound |
+| `lsn_start` | 16 hex chars (8 bytes) | `Lsn` as `u64`, big-endian |
+| `lsn_end` | 16 hex chars (8 bytes) | exclusive upper bound; for image layers `lsn_start == lsn_end` |
+| `generation` | 8 hex chars (4 bytes) | tenant attach generation |
+
+A real example from `.neon-yb/pageserver_1/...`:
+
+```
+000000000000000000000000000000000000-FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF__0000000001540438-00000000015404B1-00000001
+└─────────── key_start (18 B) ──────┘└──────────  key_end (18 B) ──────┘  └─ lsn_start ──┘ └── lsn_end ──┘ └─ gen ─┘
+```
+
+So a directory listing alone tells the pageserver which file covers
+which `(key_range, lsn_range)`. Image layers have `lsn_start == lsn_end`
+because their Summary uses a single `lsn: Lsn`, not a range — see
+"Image layers vs delta layers" below.
 
 ### Layer file internal layout
 
