@@ -30,19 +30,165 @@ The on-disk dir is a **cache** of what's in `remote_storage`. The pageserver
 serves reads from local layer files when present; on miss it downloads from
 remote.
 
+### The `Key` abstraction
+
+`pageserver_api::key::Key` (`libs/pageserver_api/src/key.rs:19`) is the
+single 18-byte identifier the pageserver uses for *everything* it stores
+— not just relation pages, but also rel-size sentinels, SLRUs (`pg_xact`,
+`pg_subtrans`, `pg_multixact`), aux files, replication origins, and
+per-DB / per-rel directory listings.
+
+```rust
+pub struct Key {
+    pub field1: u8,     // namespace / type tag
+    pub field2: u32,
+    pub field3: u32,
+    pub field4: u32,
+    pub field5: u8,
+    pub field6: u32,
+}
+```
+
+The first byte is the namespace:
+
+| `field1` prefix | Meaning | Field layout |
+|---|---|---|
+| `0x00` | **Relation page** (the common case) | `(0, spcnode, dbnode, relnode, forknum, blknum)` |
+| `0x00`, `field6 = u32::MAX` | Legacy rel-size sentinel | tracks current block count for the rel |
+| `0x01..0x5F` | SLRUs, control file, twophase, etc. | encoded by `SlruKind` + segment + block |
+| `0x60` | `RELATION_SIZE_PREFIX` | new-style sparse rel size |
+| `0x62` | `AUX_KEY_PREFIX` | aux files (logical replication state, etc.) |
+| `0x63` | `REPL_ORIGIN_KEY_PREFIX` | replication origins |
+| `0x64` | `DB_DIR_KEY_PREFIX` | per-DB directory listings |
+| `0x65` | `REL_DIR_KEY_PREFIX` | per-DB relation directories |
+| `0x60..0x7F` | "Metadata keys" — sparse keyspace (16-byte logical encoding wrapped in the 18-byte storage key) | — |
+
+Encoders live alongside `Key` in the same module: `rel_block_to_key`,
+`rel_size_to_key`, `slru_block_to_key`, etc.
+
+A store operation is therefore `(Key, LSN) → bytes`: "at version `LSN`,
+key `K` is this blob". Reads are time-traveling — every read takes an
+LSN, and the pageserver returns the value of `K` as of that LSN by
+walking the layer stack.
+
+For hot in-memory work there's also `CompactKey(i128)`, which packs all
+six fields into a single 128-bit integer without loss (`field5` is only
+1 byte so it fits).
+
 ### Layer files
 
 Two flavors:
 
-- **Delta layer**: WAL records over an LSN range, organized by key.
-- **Image layer**: full materialized pages at a specific LSN.
+- **Image layer**: full materialized pages (`(Key, Lsn) → page bytes`) at
+  a single LSN. Read-cheap, build-expensive.
+- **Delta layer**: WAL-record deltas over an LSN range
+  (`(Key, Lsn) → (will_init | WalRecord | Image)`). Append-only output of
+  WAL ingestion + L0→L1 compaction.
 
-Layer files have names of the form
-`<key_start>-<key_end>__<lsn_start>-<lsn_end>-vN-<generation>`.
-File format: per-key segments + a chunked block index. The pageserver
-reads them sequentially during reconstruction. A "page reconstruct" walks
-the layer stack at the requested LSN, finds the most recent image layer
-plus all newer delta layers, and replays them.
+Filename encodes the layer's coverage:
+
+```
+000000…0000-FFFF…FFFF__0000000001540438-00000000015404B1-00000001
+└── key_start ────┘ ──┘└── lsn_start ──┘-└── lsn_end ──┘-└─ gen ─┘
+```
+
+— so a directory listing alone tells the pageserver which file covers
+which `(key_range, lsn_range)` (image layers have `lsn_start == lsn_end`).
+
+### Layer file internal layout
+
+Both formats are 8 KiB-aligned (`PAGE_SZ = postgres_ffi::BLCKSZ = 8192`)
+so they share alignment with Postgres. A layer file looks like:
+
+```
++---------------------------+  ← block 0       (PAGE_SZ = 8192 bytes)
+|        Summary            |  bincode header, zero-padded to 8 KiB
++---------------------------+  ← block 1
+|                           |
+|        VALUES             |  concatenated blobs (one per (key, lsn) entry)
+|                           |
+|         ...               |
++---------------------------+  ← index_start_blk
+|                           |
+|         INDEX             |  on-disk B-tree
+|                           |
++---------------------------+
+```
+
+**Summary** (`pageserver/src/tenant/storage_layer/{delta,image}_layer.rs`):
+
+```rust
+struct Summary {
+    magic: u16,                 // DELTA_FILE_MAGIC (0x5A61) or IMAGE_FILE_MAGIC (0x5A60)
+    format_version: u16,        // STORAGE_FORMAT_VERSION = 3
+    tenant_id, timeline_id,
+    key_range: Range<Key>,      // what keys this file covers
+    lsn_range: Range<Lsn>,      // delta only; image has a single `lsn: Lsn`
+    index_start_blk: u32,       // where INDEX section starts
+    index_root_blk: u32,        // root B-tree page within INDEX
+}
+```
+
+**VALUES** — concatenated blobs, no padding between them. The B-tree
+gives the byte offsets:
+
+- **Image layer**: each blob is a full 8 KiB Postgres page (possibly
+  compressed by the codec configured at write time).
+- **Delta layer**: each blob is a serialized `Value`:
+  - `Value::Image(Bytes)` — a full page snapshot.
+  - `Value::WalRecord(NeonWalRecord)` — one WAL record's contribution to
+    one page. To reconstruct, replay records in LSN order; a `will_init`
+    record resets the chain.
+
+**INDEX** — a disk-resident B-tree implemented in
+`pageserver/src/tenant/disk_btree.rs`. Nodes are sized to `PAGE_SZ`.
+
+- **Image layer index key**: `Key` itself — 18 bytes.
+- **Delta layer index key**: `DeltaKey = Key ++ LSN` — `KEY_SIZE + 8 = 26`
+  bytes. LSN appended big-endian so byte order matches `(key, lsn)` order.
+- **Index leaf value**: `BlobRef(u64)` — 8 bytes, packed:
+
+  ```text
+  BlobRef = (byte_offset_in_VALUES << 1) | will_init_bit
+  ```
+
+  Putting `will_init` in the BlobRef means the reader can decide whether
+  to keep walking back through older deltas *without* dereferencing the
+  blob — cuts I/O during page reconstruction.
+
+### Lookup procedure
+
+To answer "give me page `K` as of LSN `L`":
+
+1. Read block 0; deserialize `Summary`. Confirm `K ∈ key_range` and `L`
+   is consistent with `lsn_range`/`lsn`.
+2. Open the B-tree at `(index_start_blk + index_root_blk) * PAGE_SZ`.
+3. Walk the B-tree:
+   - Delta: largest `DeltaKey ≤ (K, L)`.
+   - Image: exact `K`.
+4. Decode the `BlobRef` → seek into VALUES, read the blob.
+5. Decode the blob:
+   - Image: that's the page, done.
+   - Delta value is an `Image` or carries `will_init`: done.
+   - Otherwise: keep walking *back* through delta records (across more
+     layer files if needed) until an image or `will_init` is hit, then
+     replay forward, applying each record on top of the previous page
+     state.
+
+For batch reads (the common case — reconstructing many pages for a
+single compute query), `VectoredReadPlanner` /
+`StreamingVectoredReadPlanner` (`pageserver/src/tenant/vectored_blob_io.rs`)
+coalesce adjacent blobs in VALUES into single read syscalls.
+
+### How layer files map to `YbStore`
+
+From `YbStore`'s perspective, none of the internal Summary/Values/Index
+structure matters: a layer file is just an opaque `Bytes` blob keyed by
+its `RemotePath` (`tenants/<id>/timelines/<id>/<layer-file-name>`). The
+file arrives 8 KiB-aligned, gets chunked at 100 MiB boundaries, and
+lands as N rows in `yb_storage.blobs`. The `Key` abstraction never
+crosses the `RemoteStorage` boundary — it lives entirely inside the
+pageserver.
 
 ### `getpage` RPC
 
