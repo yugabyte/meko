@@ -180,6 +180,123 @@ single compute query), `VectoredReadPlanner` /
 `StreamingVectoredReadPlanner` (`pageserver/src/tenant/vectored_blob_io.rs`)
 coalesce adjacent blobs in VALUES into single read syscalls.
 
+### Layer file sizes & when the pageserver splits them
+
+Layer files are not infinitely long-lived single objects — the
+pageserver runs a multi-stage lifecycle that bounds their size and
+periodically rewrites them. The relevant knobs (defaults from
+`libs/pageserver_api/src/config.rs::tenant_conf_defaults`):
+
+| Knob | Default | Meaning |
+|---|---:|---|
+| `checkpoint_distance` | **256 MiB** | An open in-memory layer ("frozen layer") gets sealed and written as an L0 delta file when its accumulated WAL crosses this. **Hard cap on L0 delta size.** |
+| `checkpoint_timeout` | 10 min | Even if `checkpoint_distance` isn't hit, the layer is frozen after this much wall time. |
+| `compaction_target_size` | **128 MiB** | Output size target when L0 → L1 compaction rewrites layers. **Soft cap on L1 delta and image layer size.** A single output that grows past this triggers a split. |
+| `compaction_threshold` | 10 | Number of L0 layers that must accumulate before L0→L1 compaction kicks in. |
+| `compaction_period` | 20 s | Background compaction loop period. |
+| `image_creation_threshold` | 3 | Per key-range, after this many delta layers have stacked on top of the last image, the pageserver materializes a new image layer to short-circuit reconstruction. |
+| `S3_UPLOAD_LIMIT` | **4.5 GB** | Absolute upper bound any layer is allowed to reach. `BatchLayerWriter` force-splits above this. (`pageserver/src/tenant/storage_layer/layer.rs:39`) |
+| `gc_horizon` | 64 MiB | Garbage-collection horizon for stale layers below the PITR window. |
+| `pitr_interval` | 7 days | How far back time-travel reads stay supported (gates GC). |
+
+### Layer lifecycle: where each split happens
+
+```
+                          WAL records arrive
+                                  │
+                                  ▼
+                  ┌──────────────────────────────────┐
+                  │  In-memory layer (writable)      │  ← per timeline, grows as WAL ingests
+                  └──────────────────────────────────┘
+                                  │
+                                  │  size ≥ checkpoint_distance (256 MiB)
+                                  │  OR   age ≥ checkpoint_timeout (10 min)
+                                  ▼
+                  ┌──────────────────────────────────┐
+                  │  Frozen layer (read-only, mem)   │
+                  └──────────────────────────────────┘
+                                  │
+                                  │  flush_loop writes to disk
+                                  ▼
+                  ┌──────────────────────────────────┐
+                  │  L0 delta file (≤ checkpoint_distance) │  ← ~256 MiB cap
+                  └──────────────────────────────────┘
+                                  │
+                                  │  ≥ compaction_threshold (10) L0 layers accumulate
+                                  ▼
+                  ┌──────────────────────────────────┐
+                  │  L0 → L1 compaction              │  background task, period 20s
+                  └──────────────────────────────────┘
+                                  │
+                                  │  rewrites N L0 deltas into M L1 deltas,
+                                  │  splitting at compaction_target_size (128 MiB)
+                                  │  per key range
+                                  ▼
+                  ┌──────────────────────────────────┐
+                  │  L1 delta files (~128 MiB each)  │  ← key-range partitioned
+                  └──────────────────────────────────┘
+                                  │
+                                  │  for any key range that's been deltas-only
+                                  │  for ≥ image_creation_threshold (3) layers
+                                  ▼
+                  ┌──────────────────────────────────┐
+                  │  Image layer (~128 MiB per shard)│  ← materialized snapshot,
+                  └──────────────────────────────────┘    short-circuits delta replay
+                                  │
+                                  │  layer is < disk_consistent_lsn - pitr_interval
+                                  ▼
+                                 GC
+                                  │
+                                  ▼
+                              dropped
+```
+
+### How splits actually happen mechanically
+
+The writer that turns a stream of (Key, Lsn, Value) entries into one or
+more layer files is `BatchLayerWriter`
+(`pageserver/src/tenant/storage_layer/batch_split_writer.rs`). It tracks
+`estimated_size()` as the input stream advances and rotates to a new
+output file when:
+
+1. The current writer's `estimated_size() >= compaction_target_size`
+   (the configured 128 MiB target), **and** the next entry would start
+   a new key — i.e. we don't split mid-key.
+2. **Or** the current writer's `estimated_size() >= S3_UPLOAD_LIMIT`
+   (4.5 GB) — a hard split even mid-key, to keep individual upload
+   objects under cloud-provider per-object limits.
+
+Image-layer creation has its own size logic in
+`pageserver/src/tenant/timeline/compaction.rs:2261` onward: it iterates
+keys in order, accumulates `key_values_total_size`, and starts a new
+output file whenever `written_size + key_values_total_size >
+target_file_size` and we're at a key boundary.
+
+If a single key's accumulated values are themselves bigger than
+`target_file_size` (a hot rel with many WAL records), the writer just
+emits that one as an oversized layer and logs a warning at
+`target_file_size * 2 + 2*PAGE_SZ` — the layer is still functionally
+correct, just bigger than the configured target.
+
+### Practical sizes in the running yb-neon cluster
+
+Snapshot from the YB table after the cold-cache stress test
+(`benchmarks/yb-store/`):
+
+| Layer kind | Observed sizes |
+|---|---|
+| Initial `initdb.tar.zst` (per timeline, written once) | ~1.6 MiB |
+| Initial image layer (timeline bootstrap, fits the empty DB state) | ~24 MiB |
+| `index_part.json-<gen>` | < 1 KiB |
+| `tenant-manifest-<gen>.json` | < 200 B |
+| Sealed L1 delta on a small bench | 23–294 MiB (cluster of similar sizes around the 128 MiB target, with occasional outliers near the L0 cap of 256 MiB before compaction) |
+| Largest single object ever produced by our bench | ~294 MiB (a freshly-flushed L0 that hadn't yet been compacted) |
+
+The 294 MiB case is what motivated `YbStore`'s **100 MiB chunking** —
+without it, the single `INSERT` of a 294 MiB BYTEA tripped YB's
+`rpc_max_message_size` (256 MiB) and the upload retry-looped. See
+[`remote-storage.md`](remote-storage.md) for the chunk-size derivation.
+
 ### How layer files map to `YbStore`
 
 From `YbStore`'s perspective, none of the internal Summary/Values/Index
