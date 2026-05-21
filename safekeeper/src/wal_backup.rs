@@ -16,6 +16,7 @@ use remote_storage::{
 };
 use safekeeper_api::models::PeerInfo;
 use tokio::fs::File;
+use tokio_postgres;
 use tokio::select;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::watch;
@@ -250,13 +251,54 @@ fn determine_offloader(
 
 pub struct WalBackup {
     storage: Option<Arc<GenericRemoteStorage>>,
+    /// Optional dedicated YB connection for the live WAL mirror.
+    /// Populated when `--wal-yb-config` is set.
+    wal_yb_client: Option<Arc<tokio_postgres::Client>>,
+    wal_yb_table: Option<String>,
 }
 
 impl WalBackup {
     /// Create a new WalBackup instance.
     pub async fn new(conf: &SafeKeeperConf) -> Result<Self> {
+        let (wal_yb_client, wal_yb_table) = match &conf.wal_yb_config {
+            Some(yb) => {
+                let mut pg_config = tokio_postgres::Config::new();
+                pg_config
+                    .host(&yb.host)
+                    .port(yb.port)
+                    .user(&yb.user)
+                    .dbname(&yb.dbname)
+                    .application_name("safekeeper:yb_wal_mirror");
+                if let Some(env_name) = &yb.password_env {
+                    let pw = std::env::var(env_name)
+                        .with_context(|| format!("wal_yb_config password env `{env_name}` unset"))?;
+                    pg_config.password(pw);
+                }
+                let (client, connection) = pg_config
+                    .connect(tokio_postgres::NoTls)
+                    .await
+                    .with_context(|| format!(
+                        "connect WAL mirror YB at {}:{}",
+                        yb.host, yb.port
+                    ))?;
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        tracing::warn!("WAL mirror YB connection ended: {e}");
+                    }
+                });
+                // Enable upsert mode so re-flushes / chunk_seq retries are cheap.
+                let _ = client.execute("SET yb_enable_upsert_mode = true", &[]).await;
+                (Some(Arc::new(client)), Some(yb.table_name.clone()))
+            }
+            None => (None, None),
+        };
+
         if !conf.wal_backup_enabled {
-            return Ok(Self { storage: None });
+            return Ok(Self {
+                storage: None,
+                wal_yb_client,
+                wal_yb_table,
+            });
         }
 
         match conf.remote_storage.as_ref() {
@@ -264,14 +306,28 @@ impl WalBackup {
                 let storage = GenericRemoteStorage::from_config(config).await?;
                 Ok(Self {
                     storage: Some(Arc::new(storage)),
+                    wal_yb_client,
+                    wal_yb_table,
                 })
             }
-            None => Ok(Self { storage: None }),
+            None => Ok(Self {
+                storage: None,
+                wal_yb_client,
+                wal_yb_table,
+            }),
         }
     }
 
     pub fn get_storage(&self) -> Option<Arc<GenericRemoteStorage>> {
         self.storage.clone()
+    }
+
+    /// Returns `(client, table_name)` for the live-WAL YB mirror, if configured.
+    pub fn get_wal_yb(&self) -> Option<(Arc<tokio_postgres::Client>, String)> {
+        match (&self.wal_yb_client, &self.wal_yb_table) {
+            (Some(c), Some(t)) => Some((c.clone(), t.clone())),
+            _ => None,
+        }
     }
 }
 

@@ -45,6 +45,7 @@ pub mod wal_backup_partial;
 pub mod wal_reader_stream;
 pub mod wal_service;
 pub mod wal_storage;
+pub mod yb_wal_storage;
 
 #[cfg(any(test, feature = "benchmarking"))]
 pub mod test_utils;
@@ -120,6 +121,11 @@ pub struct SafeKeeperConf {
     /// Where to persist the per-timeline control file: local FS or the
     /// configured `remote_storage`.
     pub control_file_backend: control_file::ControlFileBackend,
+    /// Optional YB connection for mirroring live WAL writes. When `Some`,
+    /// every `write_wal` is INSERT'd into the YB table named here in
+    /// addition to being written to the local-FS shadow. When `None`,
+    /// WAL only lives on local FS (default).
+    pub wal_yb_config: Option<remote_storage::YbStoreConfig>,
     pub max_offloader_lag_bytes: u64,
     /* BEGIN_HADRON */
     pub max_reelect_offloader_lag_bytes: u64,
@@ -169,6 +175,7 @@ impl SafeKeeperConf {
             availability_zone: None,
             remote_storage: None,
             control_file_backend: control_file::ControlFileBackend::File,
+            wal_yb_config: None,
             my_id: NodeId(0),
             broker_endpoint: storage_broker::DEFAULT_ENDPOINT
                 .parse()

@@ -42,7 +42,8 @@ use crate::timelines_set::TimelinesSet;
 use crate::wal_backup;
 use crate::wal_backup::{WalBackup, remote_timeline_path};
 use crate::wal_backup_partial::PartialRemoteSegment;
-use crate::wal_storage::{Storage as wal_storage_iface, WalReader};
+use crate::wal_storage::{PhysicalStorage, Storage as wal_storage_iface, WalReader};
+use crate::yb_wal_storage::{self, YbWalStorage};
 use crate::{SafeKeeperConf, control_file, debug_dump, timeline_manager, wal_storage};
 
 fn peer_info_from_sk_info(sk_info: &SafekeeperTimelineInfo, ts: Instant) -> PeerInfo {
@@ -145,7 +146,7 @@ impl Drop for WriteGuardSharedState<'_> {
 /// operations can be done only with control file.
 #[allow(clippy::large_enum_variant, reason = "TODO")]
 pub enum StateSK {
-    Loaded(SafeKeeper<control_file::ControlFileStorage, wal_storage::PhysicalStorage>),
+    Loaded(SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>),
     Offloaded(Box<TimelineState<control_file::ControlFileStorage>>),
     // Not used, required for moving between states.
     Empty,
@@ -280,7 +281,7 @@ impl StateSK {
     /// Access to SafeKeeper object. Panics if offloaded, should be good to use from WalResidentTimeline.
     pub fn safekeeper(
         &mut self,
-    ) -> &mut SafeKeeper<control_file::ControlFileStorage, wal_storage::PhysicalStorage> {
+    ) -> &mut SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore> {
         match self {
             StateSK::Loaded(sk) => sk,
             StateSK::Offloaded(_) => {
@@ -343,12 +344,25 @@ impl SharedState {
 
         let sk = match control_store.eviction_state {
             EvictionState::Present => {
-                let wal_store = wal_storage::PhysicalStorage::new(
-                    ttid,
-                    &timeline_dir,
-                    &control_store,
-                    conf.no_sync,
-                )?;
+                let wal_store = match wal_backup.get_wal_yb() {
+                    Some((client, table)) => yb_wal_storage::WalStore::Yb(
+                        YbWalStorage::new(
+                            ttid,
+                            &timeline_dir,
+                            &control_store,
+                            conf.no_sync,
+                            client,
+                            table,
+                        )
+                        .await?,
+                    ),
+                    None => yb_wal_storage::WalStore::Physical(PhysicalStorage::new(
+                        ttid,
+                        &timeline_dir,
+                        &control_store,
+                        conf.no_sync,
+                    )?),
+                };
                 StateSK::Loaded(SafeKeeper::new(
                     TimelineState::new(control_store),
                     wal_store,
@@ -1266,12 +1280,25 @@ impl ManagerTimeline {
         let mut shared = self.write_shared_state().await;
 
         // trying to restore WAL storage
-        let wal_store = wal_storage::PhysicalStorage::new(
-            &self.ttid,
-            &self.timeline_dir,
-            shared.sk.state(),
-            self.conf.no_sync,
-        )?;
+        let wal_store = match self.wal_backup.get_wal_yb() {
+            Some((client, table)) => yb_wal_storage::WalStore::Yb(
+                YbWalStorage::new(
+                    &self.ttid,
+                    &self.timeline_dir,
+                    shared.sk.state(),
+                    self.conf.no_sync,
+                    client,
+                    table,
+                )
+                .await?,
+            ),
+            None => yb_wal_storage::WalStore::Physical(PhysicalStorage::new(
+                &self.ttid,
+                &self.timeline_dir,
+                shared.sk.state(),
+                self.conf.no_sync,
+            )?),
+        };
 
         // updating control file
         let mut pstate = shared.sk.state_mut().start_change();

@@ -151,6 +151,13 @@ struct Args {
     /// instead of `<workdir>/<tenant>/<timeline>/safekeeper.control`.
     #[arg(long, value_enum, default_value_t = safekeeper::control_file::ControlFileBackend::File)]
     control_file_backend: safekeeper::control_file::ControlFileBackend,
+    /// Optional YugabyteDB connection for mirroring live WAL writes. TOML
+    /// inline-table format, same fields as a `YbStore` `remote_storage`
+    /// entry (host, port, user, dbname, table_name, prefix?). When set,
+    /// each `write_wal` is INSERT'd into the named table in addition to
+    /// being written to local FS. Reads still use local FS (Phase 1).
+    #[arg(long, value_parser = parse_yb_store_config, verbatim_doc_comment)]
+    wal_yb_config: Option<remote_storage::YbStoreConfig>,
     /// Safekeeper won't be elected for WAL offloading if it is lagging for more than this value in bytes
     #[arg(long, default_value_t = DEFAULT_MAX_OFFLOADER_LAG_BYTES)]
     max_offloader_lag: u64,
@@ -436,6 +443,7 @@ async fn main() -> anyhow::Result<()> {
         peer_recovery_enabled: args.peer_recovery,
         remote_storage: args.remote_storage,
         control_file_backend: args.control_file_backend,
+        wal_yb_config: args.wal_yb_config,
         max_offloader_lag_bytes: args.max_offloader_lag,
         /* BEGIN_HADRON */
         max_reelect_offloader_lag_bytes: args.max_reelect_offloader_lag_bytes,
@@ -839,6 +847,19 @@ fn set_id(workdir: &Utf8Path, given_id: Option<NodeId>) -> Result<NodeId> {
 
 fn parse_remote_storage(storage_conf: &str) -> anyhow::Result<RemoteStorageConfig> {
     RemoteStorageConfig::from_toml(&storage_conf.parse()?)
+}
+
+fn parse_yb_store_config(s: &str) -> anyhow::Result<remote_storage::YbStoreConfig> {
+    // Reuse the same TOML-parsing path the pageserver uses for its remote
+    // storage config: deserialize as a single RemoteStorageConfig and assert
+    // it's the YbStore variant.
+    let cfg = RemoteStorageConfig::from_toml(&s.parse()?)?;
+    match cfg.storage {
+        remote_storage::RemoteStorageKind::YbStore(yb) => Ok(yb),
+        other => anyhow::bail!(
+            "--wal-yb-config must be a YbStore-shaped config (got {other:?})"
+        ),
+    }
 }
 
 #[test]

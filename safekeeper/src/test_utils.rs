@@ -19,7 +19,7 @@ use crate::state::{TimelinePersistentState, TimelineState};
 use crate::timeline::{SharedState, StateSK, Timeline, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
 use crate::wal_backup::{WalBackup, remote_timeline_path};
-use crate::{SafeKeeperConf, control_file, receive_wal, wal_storage};
+use crate::{SafeKeeperConf, control_file, receive_wal, wal_storage, yb_wal_storage};
 
 /// A Safekeeper testing or benchmarking environment. Uses a tempdir for storage, removed on drop.
 pub struct Env {
@@ -51,13 +51,13 @@ impl Env {
     /// TODO: we should support using in-memory storage, to measure non-IO costs. This would be
     /// easier if SafeKeeper used trait objects for storage rather than generics. It's also not
     /// currently possible to construct a timeline using non-file storage since StateSK only accepts
-    /// SafeKeeper<control_file::ControlFileStorage, wal_storage::PhysicalStorage>.
+    /// SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>.
     pub async fn make_safekeeper(
         &self,
         node_id: NodeId,
         ttid: TenantTimelineId,
         start_lsn: Lsn,
-    ) -> anyhow::Result<SafeKeeper<control_file::ControlFileStorage, wal_storage::PhysicalStorage>> {
+    ) -> anyhow::Result<SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>> {
         let conf = self.make_conf(node_id);
 
         let timeline_dir = get_timeline_dir(&conf, &ttid);
@@ -67,7 +67,12 @@ impl Env {
         pstate.tenant_id = ttid.tenant_id;
         pstate.timeline_id = ttid.timeline_id;
 
-        let wal = wal_storage::PhysicalStorage::new(&ttid, &timeline_dir, &pstate, conf.no_sync)?;
+        let wal = yb_wal_storage::WalStore::Physical(wal_storage::PhysicalStorage::new(
+            &ttid,
+            &timeline_dir,
+            &pstate,
+            conf.no_sync,
+        )?);
         let ctrl = control_file::ControlFileStorage::File(
             control_file::FileStorage::create_new(&timeline_dir, pstate, conf.no_sync).await?,
         );
