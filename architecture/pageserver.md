@@ -11,6 +11,31 @@ all the YB stuff is plumbed via the existing `RemoteStorage` trait.
 
 ## Inherited from Neon
 
+### Sharding (tenants vs shards)
+
+A **tenant** can be horizontally striped across multiple pageservers
+for scaling. The unit of striping is a **shard**: each tenant has
+`ShardCount` shards, identified by `(TenantId, ShardNumber, ShardCount)`
+(`libs/pageserver_api/src/shard.rs::TenantShardId`). The
+`ShardIdentity` carries the `stripe_size`; keys are mapped to shard
+numbers by hashing `(spcnode, dbnode, relnode)` and indexing by
+`stripe_size`. The storage controller's `tenant_shards` table is the
+source of truth for "which pageserver owns shard N of tenant T".
+
+On-disk directory layout reflects shards:
+
+```
+pageserver_*/tenants/<tenant_id>-<shard_count>-<shard_number>/
+                     timelines/<timeline_id>/<layer-files…>
+```
+
+In the running yb-neon dev cluster we use `ShardCount = 0` (unsharded;
+the tenant is a single shard hosted on a single pageserver), but the
+machinery is there for production deployments to scale a single tenant
+across multiple pageservers. From the layer-file machinery's
+perspective, each shard is independent — it has its own layer files,
+its own compactor, its own remote_storage prefix.
+
 ### Tenant / timeline layout
 
 ```
@@ -74,6 +99,97 @@ walking the layer stack.
 For hot in-memory work there's also `CompactKey(i128)`, which packs all
 six fields into a single 128-bit integer without loss (`field5` is only
 1 byte so it fits).
+
+#### Concrete example: page 7 of `bench_t`'s main fork
+
+From the live yb-neon cluster:
+
+| Source | Value |
+|---|---|
+| `pg_tablespace.oid` for `pg_default` | `1663` |
+| `pg_database.oid` for `postgres` | `5` |
+| `pg_class.relfilenode` for `bench_t` | `16384` |
+| Fork (heap data) | `MAIN_FORKNUM = 0` |
+| Block within fork | `7` |
+
+`rel_block_to_key` produces:
+
+```rust
+Key {
+    field1: 0x00,    // u8  — relation-page namespace
+    field2: 1663,    // u32 — spcNode
+    field3: 5,       // u32 — dbNode
+    field4: 16384,   // u32 — relfilenode
+    field5: 0,       // u8  — forknum
+    field6: 7,       // u32 — blknum
+}
+```
+
+`Key::write_to_byte_slice` lays the fields out big-endian, giving the
+18-byte storage key:
+
+```
+offset:   0    1  2  3  4    5  6  7  8    9 10 11 12   13   14 15 16 17
+        ┌────┬───────────┬───────────┬───────────┬────┬───────────┐
+bytes:  │0x00│00 00 06 7F│00 00 00 05│00 00 40 00│ 00 │00 00 00 07│
+        └────┴───────────┴───────────┴───────────┴────┴───────────┘
+        field1   field2      field3      field4    f5     field6
+        (ns)   (spcnode)   (dbnode)   (relnode)   (fork) (blknum)
+```
+
+A delta-layer B-tree search key for this page at LSN `0/1E000000`
+appends the LSN as big-endian u64, producing the 26-byte `DeltaKey`:
+
+```
+00  00 00 06 7F  00 00 00 05  00 00 40 00  00  00 00 00 07  ║  00 00 00 00 1E 00 00 00
+└─────────────────────── 18-byte Key ──────────────────────┘  └──── LSN (u64 be) ────┘
+```
+
+#### Sort-order properties this layout buys
+
+Because all fields are big-endian and the encoding order is
+`(spcnode, dbnode, relnode, forknum, blknum)`:
+
+- All pages of one relation are **contiguous** in the keyspace.
+- All relations of one database are contiguous.
+- All databases of one tablespace are contiguous.
+- Within a relation, adjacent block numbers have adjacent keys, so a
+  layer covering blocks 0..10 000 of one rel is a single tight
+  `Range<Key>`, not a scattered set.
+- `forknum` lives between `relnode` and `blknum`, so all main-fork
+  pages of a rel come first, then the FSM pages, then the VM. The
+  compactor processes one fork at a time without seeking around.
+
+This is why the layer file's `key_range: Range<Key>` in the Summary
+header is expressive enough to describe its coverage in two `Key`
+values — start and end — rather than an arbitrary set.
+
+#### End-to-end: one `SELECT … WHERE id = 42`
+
+Walking through a query that does an index lookup:
+
+1. PG planner picks an index scan on `bench_t_pkey` (a different rel,
+   say `relfilenode = 16386`).
+2. Index scan needs page X of the index: `smgrread(spcnode=1663,
+   dbnode=5, relnode=16386, forknum=0, blknum=X)`.
+3. `NEON_SMGR` sends a `GetPageAtLsnRequest` with those four ints +
+   the snapshot LSN.
+4. Pageserver builds `Key { 0, 1663, 5, 16386, 0, X }` via
+   `rel_block_to_key`.
+5. Finds the layer whose `key_range` contains that `Key` at the
+   requested LSN; walks its B-tree (`DeltaKey` or `Key` depending on
+   layer kind); gets a `BlobRef`; reads the value.
+6. Returns the 8 KiB page to the compute.
+7. Compute decodes the index tuple, gets the heap row's `ctid`, then
+   does a **second** `getpage` RPC for the heap block — but now
+   `relnode = 16384` (bench_t's main relfilenode), so `field4`
+   changes, a different `key_range` gets hit, possibly a different
+   layer file.
+
+So one user-level SELECT translates into a small handful of `Key`
+lookups, each one a tightly-encoded 18-byte tuple whose ordering
+properties drive everything from layer-file design through
+compaction.
 
 ### Layer files
 
@@ -156,6 +272,89 @@ gives the byte offsets:
   to keep walking back through older deltas *without* dereferencing the
   blob — cuts I/O during page reconstruction.
 
+### LSN-versioned MVCC and time-travel reads
+
+The pageserver doesn't store "the current state of each page" — it stores
+**every version of every page within the configured retention window**.
+Every read takes an explicit LSN, and the pageserver materializes what
+that page looked like at that LSN by walking the layer stack.
+
+This is a different concept from Postgres tuple-level MVCC (`xmin` /
+`xmax` / visibility maps), which operates *inside* page bytes and is
+what individual transactions use to decide which row versions to see.
+LSN-versioned MVCC is one level deeper: at any given LSN, a page has
+*one* set of bytes, and that's what the pageserver returns. The
+compute then runs its own tuple-level MVCC on those bytes.
+
+Two LSNs that matter:
+
+| LSN | Source | Meaning |
+|---|---|---|
+| **`last_record_lsn`** | timeline state | The latest WAL the pageserver has ingested. Reads at this LSN see the most recent durable state. |
+| **`applied_gc_cutoff_lsn`** | timeline state | The oldest LSN you can still read. Layers below this are eligible for GC; once they're gone, history before this LSN is unrecoverable. |
+
+Bounded by the tenant config:
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `pitr_interval` | 7 days | How far back time-travel reads stay supported. GC waits this long before pruning. |
+| `gc_horizon` | 64 MiB | LSN window above `last_record_lsn` to retain regardless of time. |
+
+The active window between `applied_gc_cutoff_lsn` and `last_record_lsn`
+is what makes branching ("create a new timeline as of LSN L") and PITR
+("restore the database as of yesterday 14:00") possible — those
+operations just point a new timeline at an LSN inside the window.
+
+### Image layers vs delta layers: one LSN vs an LSN range
+
+This is the central asymmetry in the storage format. The `Summary`
+fields tell the story:
+
+| Layer | `lsn` field shape | What that means |
+|---|---|---|
+| **Image** | `lsn: Lsn` (singular) | Every entry in this file is the page bytes **at exactly this one LSN**. Many keys, one LSN. |
+| **Delta** | `lsn_range: Range<Lsn>` | Every entry is a WAL record (or image) at *some* LSN inside the range. Many keys, many LSNs per key. |
+
+So **an image layer contains many 8 KiB pages, all materialised at the
+same single LSN**. The B-tree index on an image layer is keyed by `Key`
+alone (18 bytes) — no LSN — because the LSN is implicit and identical
+for the whole file. If you want page `K` at a different LSN, you go
+find a *different* image layer (or stack of delta layers on top of
+this one).
+
+A delta layer holds the *changes* over an LSN range. One key can appear
+multiple times in a delta layer — once per WAL record affecting it
+within that range. The B-tree on a delta layer is keyed by
+`DeltaKey = Key ++ LSN` (26 bytes) for exactly this reason.
+
+#### Reconstruction across layer kinds (the read path)
+
+For a read of `(K, target_lsn)`:
+
+1. Find the most recent **image layer** that covers `K` with
+   `image.lsn ≤ target_lsn`. That's the **starting state**.
+2. Find all **delta layers** that cover `K` with
+   `delta.lsn_range ∩ (image.lsn, target_lsn] ≠ ∅`.
+3. Within each delta layer, fetch the records for `K` whose LSN is in
+   `(image.lsn, target_lsn]`, in LSN order.
+4. Apply those records on top of the starting image via walredo
+   (a Postgres binary running in a sidecar that knows how to replay
+   WAL records onto pages). Each `Value::WalRecord` mutates the
+   page; a `Value::Image` (in a delta layer) or a record with
+   `will_init = true` resets the page from scratch.
+5. After replaying the last record at or before `target_lsn`, return
+   the page bytes.
+
+If no image layer exists for `K`, walk the delta layers backwards
+until you hit a record with `will_init = true` (or an embedded
+`Value::Image`), then forward-replay from there.
+
+This is why **image layers are an optimization, not a requirement**.
+Without them, every read would walk every delta record back to the
+timeline's creation — fast at the start of a timeline's life,
+catastrophically slow after enough churn. Compaction materializes
+image layers periodically to bound replay depth.
+
 ### Lookup procedure
 
 To answer "give me page `K` as of LSN `L`":
@@ -195,7 +394,7 @@ periodically rewrites them. The relevant knobs (defaults from
 | `compaction_threshold` | 10 | Number of L0 layers that must accumulate before L0→L1 compaction kicks in. |
 | `compaction_period` | 20 s | Background compaction loop period. |
 | `image_creation_threshold` | 3 | Per key-range, after this many delta layers have stacked on top of the last image, the pageserver materializes a new image layer to short-circuit reconstruction. |
-| `S3_UPLOAD_LIMIT` | **4.5 GB** | Absolute upper bound any layer is allowed to reach. `BatchLayerWriter` force-splits above this. (`pageserver/src/tenant/storage_layer/layer.rs:39`) |
+| `S3_UPLOAD_LIMIT` | **4.5 GB** | Emergency ceiling, not a target. The only way to hit it is the pathological "single hot key with > 4.5 GB of WAL accumulated since the last image" case, at which point `BatchLayerWriter` **bails with an error** ("a single key is updated too often") rather than producing the layer. Set to stay under S3's 5 GB single-PUT object limit. (`pageserver/src/tenant/storage_layer/layer.rs:39`) |
 | `gc_horizon` | 64 MiB | Garbage-collection horizon for stale layers below the PITR window. |
 | `pitr_interval` | 7 days | How far back time-travel reads stay supported (gates GC). |
 
@@ -240,7 +439,7 @@ periodically rewrites them. The relevant knobs (defaults from
                                   │  for ≥ image_creation_threshold (3) layers
                                   ▼
                   ┌──────────────────────────────────┐
-                  │  Image layer (~128 MiB per shard)│  ← materialized snapshot,
+                  │  Image layer (~128 MiB target)   │  ← materialized snapshot,
                   └──────────────────────────────────┘    short-circuits delta replay
                                   │
                                   │  layer is < disk_consistent_lsn - pitr_interval
@@ -263,8 +462,11 @@ output file when:
    (the configured 128 MiB target), **and** the next entry would start
    a new key — i.e. we don't split mid-key.
 2. **Or** the current writer's `estimated_size() >= S3_UPLOAD_LIMIT`
-   (4.5 GB) — a hard split even mid-key, to keep individual upload
-   objects under cloud-provider per-object limits.
+   (4.5 GB) — at which point it actually **errors out** with
+   *"a single key is updated too often"*. The 4.5 GB number is not
+   a routine split point; it's the floor at which the writer
+   refuses to produce a layer at all, because the result couldn't
+   be PUT to S3 in a single request.
 
 Image-layer creation has its own size logic in
 `pageserver/src/tenant/timeline/compaction.rs:2261` onward: it iterates
@@ -277,6 +479,53 @@ If a single key's accumulated values are themselves bigger than
 emits that one as an oversized layer and logs a warning at
 `target_file_size * 2 + 2*PAGE_SZ` — the layer is still functionally
 correct, just bigger than the configured target.
+
+#### The "single hot key" pathological case
+
+A "hot key" means a single Postgres 8 KiB page being updated repeatedly.
+Recall a `Key` corresponds to one `(rel, fork, blknum)` triple — so
+many updates to *different rows* on the *same page* all stack records
+on the same `Key`. Real workloads where this happens:
+
+| Workload | Why one key stays hot |
+|---|---|
+| Counter table (`UPDATE counters SET n = n + 1` on a single row) | Same heap block every update |
+| Small hot-pinned lookup row | Same page |
+| Index leaf for a monotonic PK (`bigserial`) | Inserts target the rightmost leaf until it splits |
+| Heap-page tail during a bulk-INSERT | Same block while it fills |
+| `pg_class` / `pg_attribute` row in a heavily-DDL'd schema | Same catalog page |
+
+Why this builds up: WAL records for the same key get stacked as
+`Value::WalRecord` entries in delta layers. Image-layer materialization
+(`image_creation_threshold = 3`) is supposed to short-circuit
+reconstruction by snapshotting the page's current state, but if WAL
+arrives for one key faster than image-layer creation can keep up,
+delta records keep piling. L0→L1 compaction won't split mid-key, so
+all the records for that key go into one output file. The file grows
+past the 128 MiB target (warning at ~256 MiB), past 1 GB, …
+
+At `S3_UPLOAD_LIMIT = 4.5 GB` the writer **errors out** with:
+
+```
+a single key is updated too often: key={…}, estimated_size={…}, and
+the layer file cannot be produced
+```
+
+— because the resulting object wouldn't fit in a single S3 PUT.
+
+**Back-of-envelope**: a NeonWalRecord is ~30–100 bytes serialized.
+4.5 GB ÷ 80 B ≈ 56 M records. So you need on the order of tens of
+millions of WAL records targeting one page since the last image layer
+was materialized to hit this. A single-row counter table at 50K ops/s
+gets there in ~20 minutes if image-layer creation is starved.
+
+**Mitigations** when the error fires:
+- Trigger a manual image layer:
+  `PUT /v1/tenant/<id>/timeline/<id>/compact?force_image_layer_creation=true`.
+- Tune `image_creation_threshold` lower for the affected tenant.
+- Fix the application: a workload that updates one page 56 M times
+  before an image layer materializes is almost certainly contention
+  on a hot row that ought to be partitioned.
 
 ### Practical sizes in the running yb-neon cluster
 
@@ -306,6 +555,132 @@ file arrives 8 KiB-aligned, gets chunked at 100 MiB boundaries, and
 lands as N rows in `yb_storage.blobs`. The `Key` abstraction never
 crosses the `RemoteStorage` boundary — it lives entirely inside the
 pageserver.
+
+### What compaction actually does
+
+A timeline that just keeps ingesting WAL forever, with no compaction,
+would become useless: every `getpage` would walk an ever-growing stack
+of L0 delta layers, paying the cost of every WAL record ever applied
+to that key. Compaction is the background work that bounds that cost.
+
+There are three distinct things happening under the umbrella name
+"compaction", in `pageserver/src/tenant/timeline/compaction.rs`. The
+entry point is `Timeline::compact_legacy` (line 1206), called on a
+20-second loop by default.
+
+#### 1. L0 → L1 compaction
+
+L0 layers come out of WAL ingest. Each L0 is a delta layer covering
+**the full key range** over a **small LSN range** (one
+`checkpoint_distance` worth of WAL). After 10 L0s accumulate, you have
+10 layers each spanning the entire keyspace — every page read has to
+consult all of them.
+
+`compact_level0` rewrites those N L0s into M L1 delta layers, where
+each L1 covers a **smaller key range** over a **larger LSN range**.
+That's a transpose:
+
+```
+Before (10 L0s — wide key range, narrow LSN range each):
+  ┌───────────────────────────────────────────────────┐
+  │ L0:  keyspace-wide │ lsn 100..120  │              │
+  │ L0:  keyspace-wide │ lsn 120..140  │              │
+  │ L0:  keyspace-wide │ lsn 140..160  │              │
+  │ ...                                               │
+  │ L0:  keyspace-wide │ lsn 280..300  │              │
+  └───────────────────────────────────────────────────┘
+  Every page read must scan all 10 layers.
+
+After L0→L1 compaction (each L1 — narrow key range, wide LSN range):
+  ┌─────────┬─────────┬─────────┬─────────┬─────────┐
+  │ L1: keys│ L1: keys│ L1: keys│ L1: keys│ L1: keys│
+  │  0..100 │ 100..200│ 200..300│ 300..400│ 400..500│
+  │ lsn 100 │ lsn 100 │ lsn 100 │ lsn 100 │ lsn 100 │
+  │  ..300  │  ..300  │  ..300  │  ..300  │  ..300  │
+  └─────────┴─────────┴─────────┴─────────┴─────────┘
+  A page read only touches the one L1 whose key range covers it.
+```
+
+The split happens at `compaction_target_size = 128 MiB` boundaries at
+key transitions. Within one L1, all records for a given key are still
+grouped together in LSN order, so a single key's history can be
+replayed by reading one contiguous chunk of the file (this is what the
+`VectoredReadPlanner` exploits).
+
+L0 compaction is **read-amplification critical**: too many L0s and
+every read is slow. The compaction loop runs aggressively on L0s
+(default `compaction_l0_first = true` + a dedicated semaphore), and
+the `--compact?force-l0-compaction` HTTP endpoint forces an immediate
+pass.
+
+#### 2. Image-layer creation
+
+L1 deltas still require walredo to materialize each page (each read is
+"start from the image, apply records"). If a key range accumulates
+deep delta stacks, reads get slow even with L0→L1 done — they're
+walking many L1s.
+
+When `repartition` detects that a key range has `image_creation_threshold`
+(default 3) delta layers above its last image, the compactor
+materializes a new image layer:
+
+1. Pick an LSN — typically the current `last_record_lsn` (or the L0→L1
+   boundary).
+2. For every key in that partition's range, do a vectored read at the
+   chosen LSN: reconstruct the page once.
+3. Write all those reconstructed pages into a new image-layer file
+   (Summary's `lsn` = the chosen LSN; `key_range` = the partition).
+
+After this, page reads in that key range start from the new image
+instead of walking deep delta stacks. The deltas it superseded
+become eligible for GC once they're older than `pitr_interval`.
+
+Image layers are **expensive to create** (you have to reconstruct
+every page in the partition), so the compactor partitions the
+keyspace and only creates images for partitions that need them —
+guided by `image_creation_threshold` plus heuristics in
+`repartition`.
+
+#### 3. GC and gc-compaction
+
+After `pitr_interval` (default 7 days), data older than the retention
+window can be dropped. The simple GC path drops whole layer files
+whose `lsn_range.end < applied_gc_cutoff_lsn`. Layers that straddle
+the cutoff stay.
+
+`gc_compaction` (a newer pass, `DEFAULT_GC_COMPACTION_ENABLED = true`)
+is the smarter variant: it rewrites partially-stale layers, dropping
+records below the cutoff while preserving the still-needed tail. It
+also drops obsolete delta records that have been superseded by image
+layers within the PITR window. This recovers space without losing
+PITR capability.
+
+#### Compaction algorithms
+
+There are two algorithms in the tree:
+
+- **Legacy** (`DEFAULT_COMPACTION_ALGORITHM = Legacy`) — the one
+  described above. The `compact_legacy` entry point in
+  `compaction.rs:1206`.
+- **Tiered** — a newer leveled algorithm with finer control over
+  layer densities. Opt-in via tenant config; not the default in our
+  cluster.
+
+#### Why this matters for `YbStore`
+
+Compaction is mostly invisible to the storage backend: it produces
+new layer files and deletes old ones. From `YbStore`'s perspective:
+
+- New layer file → `upload` (multi-row INSERT, chunked at 100 MiB).
+- Compacted-away layer file → `delete`.
+- Two layers that compaction merged into one → first `upload` of the
+  new one, then `delete` of the two old ones. No in-place updates.
+
+The throughput cost of compaction on the YB side is mostly DELETE
+load: each compaction pass drops the layers it just superseded.
+Because every blob row is keyed by `(key HASH, chunk_idx)`, a
+`DELETE FROM blobs WHERE key = $1` is a hash-shard lookup + tablet
+write — fast in YB terms but real load if compaction is busy.
 
 ### Cache miss → download: it's the whole file, by design
 
