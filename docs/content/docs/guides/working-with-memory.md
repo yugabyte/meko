@@ -1,43 +1,26 @@
 ---
 title: Work with memory
 linkTitle: Use memory
-description: Add, search, and manage agent memories in Meko
+description: Add, search, and list agent memories in Meko through MCP
 weight: 4300
 ---
-Meko's memory system gives agents persistent recall across sessions. Memories flow through a three-stage pipeline before contributing to an agent's knowledge base.
+Meko's memory system gives agents persistent recall across sessions.
 
-## Overview
+This guide covers per-agent memory operations you drive from a coding agent over MCP: add a memory, search for relevant memories, and list everything stored for a user or agent.
 
-A pipeline of activities occur to create Collective Memory and Shared Knowledge from conversations.
+Meko can also move memories into shared, institutional knowledge through a separate review flow (learnings, collective memory, and shared knowledge). That lifecycle, including how candidates are identified and promoted from the **Learnings** tab in the Meko UI, is described in [Learnings](../../architecture/core-concepts/learnings/). For how extraction and dual storage (vectors + graph) work under the hood, see [Memory](../../architecture/core-concepts/memory/).
 
-**1. Extraction** Memories are automatically extracted from agent conversations as they occur.
+> [!NOTE] Knowledge base composition
+>
+> Private memories are one part of a datapack's knowledge base. The other major component is source data, which includes unstructured files (text, PDFs, documents) and structured sources (databases, tabular data). See [Knowledge bases](../../architecture/core-concepts/knowledgebase/).
 
-**2. Learning Identification** Extracted memories are evaluated for relevance and importance. Those deemed particularly significant for the agent's tasks are promoted to _learnings_. This identification is currently a manual process.
-
-**3. Promotion to Collective Memory and Shared Knowledge** Users review identified learnings and selectively promote them into the Datapack's shared area, comprised of both collective memory and shared knowledge.
-
----
-##### Knowledge Base Composition
-
-Memories and learnings are one component of a Datapack's knowledge base. The other major component is **source data**, which includes:
-
-- **Unstructured data** — text files, PDFs, and other documents
-- **Structured data** — databases and tabular sources
-
----
-##### Underlying Storage: The Semantic Graph
-
-Memories and all their downstream derivatives are stored internally in a **semantic graph**. This structure supports two complementary retrieval mechanisms:
-
-- **Graph edges** — capture entity-to-entity relationships (e.g., _John likes bananas_)
-- **Document chunks and vectors** — enable semantic similarity search against graph entities and relationships
-
-Together, these allow a memory to be retrieved not just by exact match, but by semantic relevance. For example, the memory _"John likes bananas"_ can be surfaced in response to a later query such as _"Who likes fruits?"_
-
+> [!NOTE] Underlying storage
+>
+> Memories are stored in a semantic graph with graph edges for entity relationships (for example, _John_ likes _bananas_) and document chunks with vectors for similarity search. That combination supports retrieval by relationship and by meaning, not only by exact text match.
 
 ## Add memories
 
-##### Via MCP (from your coding agent)
+### Via MCP (from your coding agent)
 
 The simplest way to add memories is through natural language in your coding agent:
 
@@ -53,17 +36,15 @@ The MCP server calls `memory_add` behind the scenes, which uses an LLM to extrac
 
 ## Search memories
 
-##### Via MCP (from your coding agent)
+### Via MCP (from your coding agent)
 
-If Meko is properly configured with your AI agent, the agent will automatically access Meko when formulating responses. To retrieve stored information, ask your agent to recall it directly.
-
+With Meko connected through MCP, your agent can retrieve memories on its own when answering questions that clearly depend on stored preferences or facts. You do not have to name a tool for that to happen. When you want to inspect or force a lookup, for example, to confirm what was saved, ask in natural language, as in the following examples.
 
 Example 1:
 
 ```text
 What are my vacation preferences?
 ```
-
 
 Example 2:
 
@@ -74,22 +55,14 @@ What coding standards have I set?
 The MCP server performs a semantic similarity search across your memories and returns the most relevant results with relevance scores.
 
 <!-- 
-
 ### Via CLI
 
 ```bash
 meko datapack search_memories --name my-datapack --user_prompt "vacation preferences"
 ```
-
-
-### Via CLI
-
-```bash
-meko datapack search_memories --name my-datapack --user_prompt "query text"
-```
 --> 
 
-##### How search works
+### How search works
 
 Memory search combines two strategies:
 
@@ -100,9 +73,19 @@ Results from both strategies are combined and ranked, allowing a memory to be re
 
 ## View all memories
 
-To see everything Meko has remembered for a user or agent, use the `get_all` operation. This returns every stored memory, and is useful for debugging or building a memory dashboard.
+To see every memory Meko has stored for a user or agent, ask your coding agent in plain language. For example:
 
-<!--
+```text
+List every memory Meko has for me in my default datapack.
+```
+
+```text
+Show all stored memories for my cursor agent — I want the complete list, not just the top matches.
+```
+
+You should see the agent use the [MCP tool](../../reference/mcp-server/#memory-tools) `memory_get_all` to return the full list (not ranked like search), which is useful for auditing or building a memory dashboard.
+
+<!-- These are CLI actions not exposed for now
 ## Clear memories
 
 To remove all memories for a user or agent:
@@ -124,11 +107,12 @@ meko datapack compress_memories --name my-datapack
 ```
 --> 
 
+<!-- The following example is already used in Quick Start/Explore
 ## Example
 
 This example demonstrates the difference memory makes.
 
-##### Without Meko
+### Without Meko
 
 ```text
 Prompt: "Propose a 5 day vacation for me."
@@ -136,7 +120,7 @@ Prompt: "Propose a 5 day vacation for me."
 
 The agent has no context about you. It asks generic follow-up questions: "What kind of vacation?", "Budget?", "Where?"
 
-##### With Meko
+### With Meko
 
 First, store your preferences:
 
@@ -151,8 +135,10 @@ Prompt: "Propose a 5 day vacation for me."
 ```
 
 The agent retrieves your stored preferences and immediately proposes a tropical beach vacation within budget; no follow-up questions are needed.
+-->
 
 ## Next steps
 
 - [Learn about memory](../../architecture/core-concepts/memory/)
+- [Learnings](../../architecture/core-concepts/learnings/) — review, identification, and promotion to shared knowledge
 - [Work with knowledge bases](../working-with-knowledge-bases/)

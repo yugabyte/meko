@@ -60,5 +60,5 @@ Remove all memories for a user or agent. This is a destructive operation - clear
 
 ## Next steps
 
-- [Work with memory](../../../guides/working-with-memory/) - How to add and search memories
+- [Work with memory](../../../guides/working-with-memory/) - How to add, search, and list memories
 - [Graph RAG](../graph-rag/) - How Apache AGE powers entity-relationship memory

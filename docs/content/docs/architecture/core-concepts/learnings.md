@@ -55,4 +55,4 @@ Reviewers choose the destination at promotion time. A learning can be promoted t
 
 - [Memory](../memory/) &mdash; how per-agent memory is extracted and stored
 - [Knowledge bases](../knowledgebase/) &mdash; how Shared Knowledge is indexed and queried
-- [Work with memory](../../../guides/working-with-memory/) &mdash; the hands-on guide that walks through extraction, identification, and promotion
+- [Work with memory](../../../guides/working-with-memory/) &mdash; add, search, and list per-agent memories over MCP; use the **Learnings** flow in the Meko UI for identification and promotion

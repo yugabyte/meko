@@ -5,7 +5,7 @@ linkTitle: Integrations
 headcontent: Connect Meko to your tools and frameworks
 description: Integrate Meko with AI coding tools, agent frameworks, and consumer AI applications
 body_class: full-width
-weight: 3000
+weight: 4000
 type: docs
 ---
 
