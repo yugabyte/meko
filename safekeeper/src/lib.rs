@@ -117,6 +117,9 @@ pub struct SafeKeeperConf {
     pub heartbeat_timeout: Duration,
     pub peer_recovery_enabled: bool,
     pub remote_storage: Option<RemoteStorageConfig>,
+    /// Where to persist the per-timeline control file: local FS or the
+    /// configured `remote_storage`.
+    pub control_file_backend: control_file::ControlFileBackend,
     pub max_offloader_lag_bytes: u64,
     /* BEGIN_HADRON */
     pub max_reelect_offloader_lag_bytes: u64,
@@ -165,6 +168,7 @@ impl SafeKeeperConf {
             advertise_pg_addr: None,
             availability_zone: None,
             remote_storage: None,
+            control_file_backend: control_file::ControlFileBackend::File,
             my_id: NodeId(0),
             broker_endpoint: storage_broker::DEFAULT_ENDPOINT
                 .parse()

@@ -23,7 +23,7 @@ use tracing::{Instrument, debug, info, info_span, instrument, warn};
 use utils::lsn::Lsn;
 
 use crate::SafeKeeperConf;
-use crate::control_file::{FileStorage, Storage};
+use crate::control_file::{ControlFileStorage, Storage};
 use crate::metrics::{
     MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS, NUM_EVICTED_TIMELINES,
 };
@@ -80,7 +80,7 @@ impl StateSnapshot {
         }
     }
 
-    fn has_unflushed_inmem_state(state: &TimelineState<FileStorage>) -> bool {
+    fn has_unflushed_inmem_state(state: &TimelineState<ControlFileStorage>) -> bool {
         state.inmem.commit_lsn > state.commit_lsn
             || state.inmem.backup_lsn > state.backup_lsn
             || state.inmem.peer_horizon_lsn > state.peer_horizon_lsn

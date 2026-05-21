@@ -229,7 +229,7 @@ impl GlobalTimelines {
                         TimelineId::from_str(timeline_dir_entry.file_name().to_str().unwrap_or(""))
                     {
                         let ttid = TenantTimelineId::new(tenant_id, timeline_id);
-                        match Timeline::load_timeline(conf.clone(), ttid, wal_backup.clone()) {
+                        match Timeline::load_timeline(conf.clone(), ttid, wal_backup.clone()).await {
                             Ok(tli) => {
                                 let mut shared_state = tli.write_shared_state().await;
                                 self.state
@@ -296,7 +296,7 @@ impl GlobalTimelines {
     ) -> Result<Arc<Timeline>> {
         let generation = Some(mconf.generation);
 
-        let (conf, _, _, _) = {
+        let (conf, _, _, wal_backup) = {
             let state = self.state.lock().unwrap();
             if let Ok(timeline) = state.get(&ttid) {
                 // Timeline already exists, return it.
@@ -318,7 +318,16 @@ impl GlobalTimelines {
         // TODO: currently we create only cfile. It would be reasonable to
         // immediately initialize first WAL segment as well.
         let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn, commit_lsn)?;
-        control_file::FileStorage::create_new(&tmp_dir_path, state, conf.no_sync).await?;
+        let remote_storage = wal_backup.get_storage();
+        control_file::ControlFileStorage::create_new(
+            conf.control_file_backend,
+            &tmp_dir_path,
+            &ttid,
+            state,
+            conf.no_sync,
+            remote_storage.as_ref(),
+        )
+        .await?;
         let timeline = self
             .load_temp_timeline(ttid, &tmp_dir_path, generation)
             .await?;
@@ -463,7 +472,7 @@ impl GlobalTimelines {
         // Do the move.
         durable_rename(tmp_path, &timeline_path, !conf.no_sync).await?;
 
-        Timeline::load_timeline(conf, ttid, wal_backup)
+        Timeline::load_timeline(conf, ttid, wal_backup).await
     }
 
     /// Get a timeline from the global map. If it's not present, it doesn't exist on disk,

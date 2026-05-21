@@ -145,8 +145,8 @@ impl Drop for WriteGuardSharedState<'_> {
 /// operations can be done only with control file.
 #[allow(clippy::large_enum_variant, reason = "TODO")]
 pub enum StateSK {
-    Loaded(SafeKeeper<control_file::FileStorage, wal_storage::PhysicalStorage>),
-    Offloaded(Box<TimelineState<control_file::FileStorage>>),
+    Loaded(SafeKeeper<control_file::ControlFileStorage, wal_storage::PhysicalStorage>),
+    Offloaded(Box<TimelineState<control_file::ControlFileStorage>>),
     // Not used, required for moving between states.
     Empty,
 }
@@ -164,7 +164,7 @@ impl StateSK {
     }
 
     /// Get a reference to the control file's timeline state.
-    pub fn state(&self) -> &TimelineState<control_file::FileStorage> {
+    pub fn state(&self) -> &TimelineState<control_file::ControlFileStorage> {
         match self {
             StateSK::Loaded(sk) => &sk.state,
             StateSK::Offloaded(s) => s,
@@ -172,7 +172,7 @@ impl StateSK {
         }
     }
 
-    pub fn state_mut(&mut self) -> &mut TimelineState<control_file::FileStorage> {
+    pub fn state_mut(&mut self) -> &mut TimelineState<control_file::ControlFileStorage> {
         match self {
             StateSK::Loaded(sk) => &mut sk.state,
             StateSK::Offloaded(s) => s,
@@ -280,7 +280,7 @@ impl StateSK {
     /// Access to SafeKeeper object. Panics if offloaded, should be good to use from WalResidentTimeline.
     pub fn safekeeper(
         &mut self,
-    ) -> &mut SafeKeeper<control_file::FileStorage, wal_storage::PhysicalStorage> {
+    ) -> &mut SafeKeeper<control_file::ControlFileStorage, wal_storage::PhysicalStorage> {
         match self {
             StateSK::Loaded(sk) => sk,
             StateSK::Offloaded(_) => {
@@ -291,7 +291,7 @@ impl StateSK {
     }
 
     /// Moves control file's state structure out of the enum. Used to switch states.
-    fn take_state(self) -> TimelineState<control_file::FileStorage> {
+    fn take_state(self) -> TimelineState<control_file::ControlFileStorage> {
         match self {
             StateSK::Loaded(sk) => sk.state,
             StateSK::Offloaded(state) => *state,
@@ -322,9 +322,21 @@ impl SharedState {
     }
 
     /// Restore SharedState from control file. If file doesn't exist, bails out.
-    pub fn restore(conf: &SafeKeeperConf, ttid: &TenantTimelineId) -> Result<Self> {
+    pub async fn restore(
+        conf: &SafeKeeperConf,
+        ttid: &TenantTimelineId,
+        wal_backup: &WalBackup,
+    ) -> Result<Self> {
         let timeline_dir = get_timeline_dir(conf, ttid);
-        let control_store = control_file::FileStorage::restore_new(&timeline_dir, conf.no_sync)?;
+        let remote_storage = wal_backup.get_storage();
+        let control_store = control_file::ControlFileStorage::restore_new(
+            conf.control_file_backend,
+            &timeline_dir,
+            ttid,
+            conf.no_sync,
+            remote_storage.as_ref(),
+        )
+        .await?;
         if control_store.server.wal_seg_size == 0 {
             bail!(TimelineError::UninitializedWalSegSize(*ttid));
         }
@@ -536,25 +548,30 @@ impl Timeline {
     }
 
     /// Load existing timeline from disk.
-    pub fn load_timeline(
+    pub async fn load_timeline(
         conf: Arc<SafeKeeperConf>,
         ttid: TenantTimelineId,
         wal_backup: Arc<WalBackup>,
     ) -> Result<Arc<Timeline>> {
-        let _enter = info_span!("load_timeline", timeline = %ttid.timeline_id).entered();
+        use tracing::Instrument;
+        let span = info_span!("load_timeline", timeline = %ttid.timeline_id);
+        async move {
+            let shared_state =
+                SharedState::restore(conf.as_ref(), &ttid, &wal_backup).await?;
+            let timeline_dir = get_timeline_dir(conf.as_ref(), &ttid);
+            let remote_path = remote_timeline_path(&ttid)?;
 
-        let shared_state = SharedState::restore(conf.as_ref(), &ttid)?;
-        let timeline_dir = get_timeline_dir(conf.as_ref(), &ttid);
-        let remote_path = remote_timeline_path(&ttid)?;
-
-        Ok(Timeline::new(
-            ttid,
-            &timeline_dir,
-            &remote_path,
-            shared_state,
-            conf,
-            wal_backup,
-        ))
+            Ok(Timeline::new(
+                ttid,
+                &timeline_dir,
+                &remote_path,
+                shared_state,
+                conf,
+                wal_backup,
+            ))
+        }
+        .instrument(span)
+        .await
     }
 
     /// Bootstrap new or existing timeline starting background tasks.

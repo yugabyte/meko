@@ -4,16 +4,22 @@ use std::future::Future;
 use std::io::Read;
 use std::ops::Deref;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use bytes::Bytes;
 use camino::{Utf8Path, Utf8PathBuf};
+use futures::StreamExt;
+use remote_storage::{DownloadError, DownloadOpts, GenericRemoteStorage, RemotePath};
 use safekeeper_api::membership::INVALID_GENERATION;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+use tokio_util::sync::CancellationToken;
 use utils::bin_ser::LeSer;
 use utils::crashsafe::durable_rename;
+use utils::id::TenantTimelineId;
 
 use crate::control_file_upgrade::{downgrade_v10_to_v9, upgrade_control_file};
 use crate::metrics::PERSIST_CONTROL_FILE_SECONDS;
@@ -236,6 +242,233 @@ impl Storage for FileStorage {
 
     fn last_persist_at(&self) -> Instant {
         self.last_persist_at
+    }
+}
+
+/// Which backend stores the control file. See [`ControlFileStorage`].
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControlFileBackend {
+    /// Local filesystem (`safekeeper.control` under the timeline dir).
+    #[default]
+    File,
+    /// Reuse the safekeeper's `--remote-storage` to persist the control
+    /// blob in a `GenericRemoteStorage` (intended for the `YbStore`
+    /// variant, but any backend works).
+    RemoteStorage,
+}
+
+/// Control file backed by a `GenericRemoteStorage`. The on-the-wire bytes
+/// are bit-identical to what `FileStorage` would write to disk, so the
+/// backends are interchangeable on a per-timeline basis (migrate by
+/// copying the blob).
+pub struct YbControlFileStorage {
+    storage: Arc<GenericRemoteStorage>,
+    /// Absolute key in the remote store. Pattern:
+    /// `safekeeper-control/<tenant_id>/<timeline_id>`.
+    path: RemotePath,
+    state: TimelinePersistentState,
+    last_persist_at: Instant,
+}
+
+impl std::fmt::Debug for YbControlFileStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("YbControlFileStorage")
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
+impl YbControlFileStorage {
+    fn key_for(ttid: &TenantTimelineId) -> Result<RemotePath> {
+        RemotePath::from_string(&format!(
+            "safekeeper-control/{}/{}",
+            ttid.tenant_id, ttid.timeline_id
+        ))
+        .context("build safekeeper control-file remote path")
+    }
+
+    /// Load + deserialize the control blob from remote.
+    pub async fn restore_new(
+        storage: Arc<GenericRemoteStorage>,
+        ttid: &TenantTimelineId,
+    ) -> Result<YbControlFileStorage> {
+        let path = Self::key_for(ttid)?;
+        let cancel = CancellationToken::new();
+        let mut download = match storage
+            .download(&path, &DownloadOpts::default(), &cancel)
+            .await
+        {
+            Ok(d) => d,
+            Err(DownloadError::NotFound) => {
+                bail!(
+                    "control file not found in remote storage at {}",
+                    path
+                );
+            }
+            Err(e) => return Err(anyhow::anyhow!(e)),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = download.download_stream.next().await {
+            let chunk: Bytes = chunk.context("read control file chunk")?;
+            buf.extend_from_slice(&chunk);
+        }
+        if buf.len() < CHECKSUM_SIZE {
+            bail!(
+                "control file in remote storage is truncated ({} bytes)",
+                buf.len()
+            );
+        }
+        let calculated = crc32c::crc32c(&buf[..buf.len() - CHECKSUM_SIZE]);
+        let expected_bytes: &[u8; CHECKSUM_SIZE] =
+            buf[buf.len() - CHECKSUM_SIZE..].try_into()?;
+        let expected = u32::from_le_bytes(*expected_bytes);
+        ensure!(
+            calculated == expected,
+            "safekeeper control file checksum mismatch: expected {expected} got {calculated}"
+        );
+        let state = FileStorage::deser_sk_state(&mut &buf[..buf.len() - CHECKSUM_SIZE])
+            .with_context(|| format!("reading remote control file {path}"))?;
+        Ok(YbControlFileStorage {
+            storage,
+            path,
+            state,
+            last_persist_at: Instant::now(),
+        })
+    }
+
+    /// Create + persist a fresh control file in remote storage.
+    pub async fn create_new(
+        storage: Arc<GenericRemoteStorage>,
+        ttid: &TenantTimelineId,
+        state: TimelinePersistentState,
+    ) -> Result<YbControlFileStorage> {
+        assert!(matches!(state.eviction_state, EvictionState::Present));
+        let mut store = YbControlFileStorage {
+            storage,
+            path: Self::key_for(ttid)?,
+            state: state.clone(),
+            last_persist_at: Instant::now(),
+        };
+        store.persist(&state).await?;
+        Ok(store)
+    }
+}
+
+impl Deref for YbControlFileStorage {
+    type Target = TimelinePersistentState;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl Storage for YbControlFileStorage {
+    async fn persist(&mut self, s: &TimelinePersistentState) -> Result<()> {
+        let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
+        let buf: Vec<u8> = s.write_to_buf()?;
+        let size = buf.len();
+        let bytes = Bytes::from(buf);
+        let stream = futures::stream::once(async move {
+            Ok::<_, std::io::Error>(bytes)
+        });
+        let cancel = CancellationToken::new();
+        self.storage
+            .upload(stream, size, &self.path, None, &cancel)
+            .await
+            .with_context(|| format!("upload safekeeper control file to {}", self.path))
+            .inspect_err(|_| WAL_DISK_IO_ERRORS.inc())?;
+        self.state = s.clone();
+        Ok(())
+    }
+
+    fn last_persist_at(&self) -> Instant {
+        self.last_persist_at
+    }
+}
+
+/// Dispatcher across backend implementations. Pick a variant per timeline at
+/// load time; the rest of the safekeeper holds this type generically as
+/// `<CTRL: Storage>`, so dispatch is monomorphized.
+#[derive(Debug)]
+pub enum ControlFileStorage {
+    File(FileStorage),
+    Yb(YbControlFileStorage),
+}
+
+impl Deref for ControlFileStorage {
+    type Target = TimelinePersistentState;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            ControlFileStorage::File(s) => s,
+            ControlFileStorage::Yb(s) => s,
+        }
+    }
+}
+
+impl Storage for ControlFileStorage {
+    async fn persist(&mut self, s: &TimelinePersistentState) -> Result<()> {
+        match self {
+            ControlFileStorage::File(f) => f.persist(s).await,
+            ControlFileStorage::Yb(y) => y.persist(s).await,
+        }
+    }
+
+    fn last_persist_at(&self) -> Instant {
+        match self {
+            ControlFileStorage::File(f) => f.last_persist_at(),
+            ControlFileStorage::Yb(y) => y.last_persist_at(),
+        }
+    }
+}
+
+impl ControlFileStorage {
+    /// Load an existing control file from whichever backend is configured.
+    pub async fn restore_new(
+        backend: ControlFileBackend,
+        timeline_dir: &Utf8Path,
+        ttid: &TenantTimelineId,
+        no_sync: bool,
+        remote_storage: Option<&Arc<GenericRemoteStorage>>,
+    ) -> Result<ControlFileStorage> {
+        match backend {
+            ControlFileBackend::File => {
+                FileStorage::restore_new(timeline_dir, no_sync).map(ControlFileStorage::File)
+            }
+            ControlFileBackend::RemoteStorage => {
+                let storage = remote_storage
+                    .context("--control-file-backend=remote-storage requires --remote-storage")?
+                    .clone();
+                YbControlFileStorage::restore_new(storage, ttid)
+                    .await
+                    .map(ControlFileStorage::Yb)
+            }
+        }
+    }
+
+    /// Create + persist a new control file in whichever backend is configured.
+    pub async fn create_new(
+        backend: ControlFileBackend,
+        timeline_dir: &Utf8Path,
+        ttid: &TenantTimelineId,
+        state: TimelinePersistentState,
+        no_sync: bool,
+        remote_storage: Option<&Arc<GenericRemoteStorage>>,
+    ) -> Result<ControlFileStorage> {
+        match backend {
+            ControlFileBackend::File => {
+                FileStorage::create_new(timeline_dir, state, no_sync)
+                    .await
+                    .map(ControlFileStorage::File)
+            }
+            ControlFileBackend::RemoteStorage => {
+                let storage = remote_storage
+                    .context("--control-file-backend=remote-storage requires --remote-storage")?
+                    .clone();
+                YbControlFileStorage::create_new(storage, ttid, state)
+                    .await
+                    .map(ControlFileStorage::Yb)
+            }
+        }
     }
 }
 

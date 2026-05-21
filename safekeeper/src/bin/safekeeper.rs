@@ -145,6 +145,12 @@ struct Args {
     /// structure on the file system.
     #[arg(long, value_parser = parse_remote_storage, verbatim_doc_comment)]
     remote_storage: Option<RemoteStorageConfig>,
+    /// Where to persist the per-timeline control file. With `remote-storage`
+    /// the safekeeper writes `safekeeper-control/<tenant>/<timeline>` into
+    /// the configured `--remote-storage` (intended for the YbStore variant)
+    /// instead of `<workdir>/<tenant>/<timeline>/safekeeper.control`.
+    #[arg(long, value_enum, default_value_t = safekeeper::control_file::ControlFileBackend::File)]
+    control_file_backend: safekeeper::control_file::ControlFileBackend,
     /// Safekeeper won't be elected for WAL offloading if it is lagging for more than this value in bytes
     #[arg(long, default_value_t = DEFAULT_MAX_OFFLOADER_LAG_BYTES)]
     max_offloader_lag: u64,
@@ -429,6 +435,7 @@ async fn main() -> anyhow::Result<()> {
         heartbeat_timeout: args.heartbeat_timeout,
         peer_recovery_enabled: args.peer_recovery,
         remote_storage: args.remote_storage,
+        control_file_backend: args.control_file_backend,
         max_offloader_lag_bytes: args.max_offloader_lag,
         /* BEGIN_HADRON */
         max_reelect_offloader_lag_bytes: args.max_reelect_offloader_lag_bytes,

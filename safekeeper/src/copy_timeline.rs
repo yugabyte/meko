@@ -12,7 +12,7 @@ use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
 
 use crate::GlobalTimelines;
-use crate::control_file::FileStorage;
+use crate::control_file::ControlFileStorage;
 use crate::state::TimelinePersistentState;
 use crate::timeline::{TimelineError, WalResidentTimeline};
 use crate::timelines_global_map::{create_temp_timeline_dir, validate_temp_timeline};
@@ -158,7 +158,15 @@ pub async fn handle_request(
     new_state.peer_horizon_lsn = request.until_lsn;
     new_state.backup_lsn = new_backup_lsn;
 
-    FileStorage::create_new(&tli_dir_path, new_state.clone(), conf.no_sync).await?;
+    ControlFileStorage::create_new(
+        conf.control_file_backend,
+        &tli_dir_path,
+        &request.destination_ttid,
+        new_state.clone(),
+        conf.no_sync,
+        Some(&storage),
+    )
+    .await?;
 
     // now we have a ready timeline in a temp directory
     validate_temp_timeline(conf, request.destination_ttid, &tli_dir_path, None).await?;

@@ -51,13 +51,13 @@ impl Env {
     /// TODO: we should support using in-memory storage, to measure non-IO costs. This would be
     /// easier if SafeKeeper used trait objects for storage rather than generics. It's also not
     /// currently possible to construct a timeline using non-file storage since StateSK only accepts
-    /// SafeKeeper<control_file::FileStorage, wal_storage::PhysicalStorage>.
+    /// SafeKeeper<control_file::ControlFileStorage, wal_storage::PhysicalStorage>.
     pub async fn make_safekeeper(
         &self,
         node_id: NodeId,
         ttid: TenantTimelineId,
         start_lsn: Lsn,
-    ) -> anyhow::Result<SafeKeeper<control_file::FileStorage, wal_storage::PhysicalStorage>> {
+    ) -> anyhow::Result<SafeKeeper<control_file::ControlFileStorage, wal_storage::PhysicalStorage>> {
         let conf = self.make_conf(node_id);
 
         let timeline_dir = get_timeline_dir(&conf, &ttid);
@@ -68,8 +68,9 @@ impl Env {
         pstate.timeline_id = ttid.timeline_id;
 
         let wal = wal_storage::PhysicalStorage::new(&ttid, &timeline_dir, &pstate, conf.no_sync)?;
-        let ctrl =
-            control_file::FileStorage::create_new(&timeline_dir, pstate, conf.no_sync).await?;
+        let ctrl = control_file::ControlFileStorage::File(
+            control_file::FileStorage::create_new(&timeline_dir, pstate, conf.no_sync).await?,
+        );
         let state = TimelineState::new(ctrl);
         let mut safekeeper = SafeKeeper::new(state, wal, conf.my_id)?;
 
