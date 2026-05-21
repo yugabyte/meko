@@ -46,6 +46,7 @@ The Meko MCP Server provides the following tools.
 | `memory_update` | Replace the text of an existing memory.<br>Use this to correct a remembered fact.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id, memory_id, text` |
 | `memory_delete_by_id` | Delete one memory.<br>Use this to remove a specific stored memory.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id, memory_id` |
 | `memory_delete_all` | Delete all memories in a scope.<br>Use this for a full reset or broad cleanup.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id, run_id` |
+| `flush_pending_memory_candidates` | Return a directive instructing the agent to scan recent user turns for unsaved memory candidates and call `memory_add` for each.<br>Use this at session start and periodically to capture facts shared in conversation. No database write is performed by this tool itself; deduplication is handled during the resulting `memory_add` calls.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id` |
 
 ### Knowledgebase tools
 

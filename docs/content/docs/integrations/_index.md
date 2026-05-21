@@ -30,18 +30,7 @@ External MCP clients (Cursor, Claude Desktop, Claude Code, and similar tools) ne
 
 Meko issues long-lived API keys (personal access tokens) for MCP authentication. Each key starts with `mko_tkn_` and is shown in full **only once** when you create it.
 
-**From Settings**
-
-1. In the Meko portal, open **Settings**.
-1. In the **API Keys** section, click **Generate API key** (if you have no keys yet).
-1. Enter a **Name** (for example `cursor-laptop`), then click **Generate key** in the dialog.
-1. Copy or Download **.txt**, then click **Close**. The dialog requires you to save the key before closing.
-
-**From the datapack Configure wizard**
-
-On the **Connect** step, if you have no active API key, click **Generate API key** in the warning banner (same create dialog as Settings). If you already have keys, the banner lists them by name and prefix so you know which saved key to paste into install commands.
-
-You can have up to **10 active API keys** per account. Each key expires after up to **365 days** (the portal defaults to one year). Revoke a key from **Settings** if it is no longer needed.
+Generate keys from **Settings > API Keys** or from the datapack **Connect** dialog. For the full walkthrough — naming, limits, revocation, and best practices — see [API keys](../reference/api-keys/).
 
 > [!WARNING]
 >
