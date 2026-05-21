@@ -1301,51 +1301,13 @@ export const MEMORY_LIST_DEFAULT_USER_TYPE: MemoryUserType = "pro";
 
 /**
  * One row in GET /memories `data.memories` (same shape used in UI + promoted cache).
- *
- * `user_id` + `user_name` + `user_email` identify which account added the
- * memory. In a shared datapack the listing returns memories from every
- * member, so the UI uses these to label the author and to gate the
- * delete affordance (only memories where `user_id === current account`
- * are deletable).
  */
 export type Memory = {
   id: string;
   data: string;
   agent_id?: string;
   conversation_id?: string;
-  user_id?: string;
-  user_name?: string;
-  user_email?: string;
 };
-
-/**
- * Render the author of a memory as a single short string. Used by both the
- * Playground panel and the datapack-detail Memory tiles so the fallback
- * chain (full name → email → short UUID → fallback) stays in one place.
- *
- * Pass `currentUserId` + `selfLabel` to special-case "you authored this"
- * views: the Playground shows "you" on your own rows while the detail
- * roster shows the actual name even on your own rows (no selfLabel).
- */
-export function formatMemoryAuthor(
-  memory: Pick<Memory, "user_id" | "user_name" | "user_email">,
-  opts?: { currentUserId?: string; selfLabel?: string; fallback?: string },
-): string {
-  const fallback = opts?.fallback ?? "-";
-  if (
-    opts?.selfLabel &&
-    opts.currentUserId &&
-    memory.user_id &&
-    memory.user_id === opts.currentUserId
-  ) {
-    return opts.selfLabel;
-  }
-  const name = (memory.user_name ?? "").trim();
-  if (name) return name;
-  if (memory.user_email) return memory.user_email;
-  if (memory.user_id) return memory.user_id.slice(0, 8);
-  return fallback;
-}
 
 /**
  * GET /memories query params — only these keys are sent:
@@ -1383,11 +1345,19 @@ export type MemoryListResponse = {
   langfuse_project_id?: string;
 };
 
+const MEMORIES_MOCK_ON =
+  import.meta.env.VITE_MOCK_MEMORIES === "true" || import.meta.env.VITE_MOCK_MEMORIES === "1";
+const MEMORIES_MOCK_OFF = import.meta.env.VITE_MOCK_MEMORIES === "false";
+
+function useMockMemoriesList(): boolean {
+  if (MEMORIES_MOCK_OFF) return false;
+  if (MEMORIES_MOCK_ON) return true;
+  return import.meta.env.DEV;
+}
 
 /**
- * GET /memories.
- *
- * Default behaviour calls the real API.
+ * GET /memories. In dev, returns {@link buildMockMemoryListResponse} unless `VITE_MOCK_MEMORIES=false`;
+ * set `VITE_MOCK_MEMORIES=true` in any mode to force mock; omit both to use the real API in production.
  */
 export async function listMemories(
   params: MemoryListFilter,
@@ -1436,29 +1406,6 @@ export type PromoteMemoriesResult = {
 
 export async function promoteMemories(payload: PromoteMemoriesRequest) {
   return request<PromoteMemoriesResult>("/promote-memories", "POST", payload);
-}
-
-/**
- * DELETE /memories/:memory_id?datapack_id=...
- *
- * The backend resolves the caller from the bearer token and only deletes
- * rows where `meko_user_id` matches that account — so the UI does not
- * pass `user_id` itself. Memories belonging to other members of a shared
- * datapack return 404 (collapsed with "doesn't exist" on purpose).
- */
-export async function deleteMemory(
-  memoryId: string,
-  datapackId: string,
-  options: { signal?: AbortSignal } = {},
-): Promise<Memory> {
-  const qs = new URLSearchParams();
-  qs.set("datapack_id", datapackId);
-  return request<Memory>(
-    `/memories/${encodeURIComponent(memoryId)}?${qs.toString()}`,
-    "DELETE",
-    undefined,
-    options,
-  );
 }
 
 // --- Feedback (POST /feedback) ---

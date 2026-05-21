@@ -143,68 +143,6 @@ func (repo *MemoriesRepo) CountByDatapack(ctx context.Context, datapackID string
 	return count, nil
 }
 
-// DeleteByIDForUser deletes a single mem0 memory, scoped to the given
-// (memoryID, datapackID, userID) triple. The userID predicate is the
-// authorization gate: it ensures a caller can only delete memories they
-// added themselves, even when other members of a shared datapack see
-// the row in the listing.
-//
-// Returns (true, nil) when the row was deleted, (false, nil) when no row
-// matched (either the memory does not exist, lives in a different
-// datapack, or belongs to another user — collapsed to a single 404 on
-// the handler side so we don't leak existence to unauthorised callers).
-func (repo *MemoriesRepo) DeleteByIDForUser(
-	ctx context.Context,
-	memoryID, datapackID, userID string,
-) (bool, error) {
-	if repo.db == nil {
-		return false, fmt.Errorf("database connection is required")
-	}
-	memoryID = strings.TrimSpace(memoryID)
-	datapackID = strings.TrimSpace(datapackID)
-	userID = strings.TrimSpace(userID)
-	if memoryID == "" {
-		return false, fmt.Errorf("memory_id is required")
-	}
-	if datapackID == "" {
-		return false, fmt.Errorf("datapack_id is required")
-	}
-	if userID == "" {
-		return false, fmt.Errorf("user_id is required")
-	}
-
-	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE id = $1::uuid AND meko_datapack_id = $2::uuid AND meko_user_id = $3::uuid`,
-		memoriesTableSQL,
-	)
-
-	// Single-row indexed DELETE — 10s is plenty even with light contention.
-	// Other queries in this file use 30s because they do vector ordering /
-	// chunk fetching; that bound doesn't apply here.
-	delCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	slog.Debug("executing SQL", "func", "DeleteByIDForUser", "query", query,
-		"args", []any{memoryID, datapackID, userID})
-	result, err := repo.db.ExecContext(delCtx, query, memoryID, datapackID, userID)
-	if err != nil {
-		return false, fmt.Errorf("memories delete query: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("memories delete rows affected: %w", err)
-	}
-
-	slog.Info("deleting memory",
-		"layer", "repository",
-		"memory_id", memoryID,
-		"datapack_id", datapackID,
-		"user_id", userID,
-		"rows_affected", rows,
-	)
-	return rows > 0, nil
-}
-
 func (repo *MemoriesRepo) ListByFilter(
 	ctx context.Context,
 	filter models.MemoryListFilter,
@@ -217,12 +155,12 @@ func (repo *MemoriesRepo) ListByFilter(
 		return nil, 0, fmt.Errorf("datapack_id is required")
 	}
 
-	whereSQL := "m.meko_datapack_id = $1::uuid" +
-		" AND m.meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action"
+	whereSQL := "meko_datapack_id = $1::uuid" +
+		" AND meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action"
 	args := []any{datapackID}
 	n := 2
 
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s m WHERE %s`, memoriesTableSQL, whereSQL)
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, memoriesTableSQL, whereSQL)
 	countCtx, cancelCount := context.WithTimeout(ctx, 30*time.Second)
 	defer cancelCount()
 	slog.Debug("executing SQL", "func", "ListByFilter", "query", countQuery, "args", args)
@@ -236,18 +174,11 @@ func (repo *MemoriesRepo) ListByFilter(
 		return []models.Memory{}, 0, nil
 	}
 
-	// LEFT JOIN to meko_system.users so a deleted/orphaned account still
-	// returns the memory (with empty user_name/user_email) rather than
-	// dropping the row.
 	const selectCols = `
-			m.id::text,
-			COALESCE(m.payload->>'data', '') AS data,
-			m.meko_agent_id,
-			COALESCE(m.meko_conversation_id::text, '') AS conversation_id,
-			m.meko_user_id::text,
-			COALESCE(NULLIF(TRIM(COALESCE(u.user_first_name, '') || ' ' || COALESCE(u.user_last_name, '')), ''), '') AS user_name,
-			COALESCE(u.user_email, '') AS user_email`
-	const fromSQL = memoriesTableSQL + ` m LEFT JOIN meko_system.users u ON u.user_id = m.meko_user_id`
+			id::text,
+			COALESCE(payload->>'data', '') AS data,
+			meko_agent_id,
+			COALESCE(meko_conversation_id::text, '') AS conversation_id`
 
 	var vector []float64
 	if filter.IsPaidUserType() {
@@ -276,13 +207,13 @@ func (repo *MemoriesRepo) ListByFilter(
 			SELECT %s
 			FROM %s
 			WHERE %s
-			ORDER BY m.embeddings <=> %s::vector`, selectCols, fromSQL, whereSQL, vecParam)
+			ORDER BY embeddings <=> %s::vector`, selectCols, memoriesTableSQL, whereSQL, vecParam)
 	} else {
 		query = fmt.Sprintf(`
 			SELECT %s
 			FROM %s
 			WHERE %s
-			ORDER BY m.meko_created_at DESC, m.id DESC`, selectCols, fromSQL, whereSQL)
+			ORDER BY meko_created_at DESC, id DESC`, selectCols, memoriesTableSQL, whereSQL)
 	}
 
 	offset := (filter.Page - 1) * filter.PageSize
@@ -305,15 +236,7 @@ func (repo *MemoriesRepo) ListByFilter(
 	var matched []models.Memory
 	for sqlRows.Next() {
 		var row models.Memory
-		if err := sqlRows.Scan(
-			&row.ID,
-			&row.Data,
-			&row.AgentID,
-			&row.ConversationID,
-			&row.UserID,
-			&row.UserName,
-			&row.UserEmail,
-		); err != nil {
+		if err := sqlRows.Scan(&row.ID, &row.Data, &row.AgentID, &row.ConversationID); err != nil {
 			return nil, 0, fmt.Errorf("memories scan: %w", err)
 		}
 		matched = append(matched, row)

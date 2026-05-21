@@ -25,38 +25,41 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowUpToLine,
+  BookOpen,
+  FileText,
   Layers,
   Loader2,
   RefreshCw,
   Sparkles,
-  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  deleteMemory,
-  formatMemoryAuthor,
   getApiErrorMessage,
   getCurrentUser,
+  getKnowledgeBaseDocuments,
   listMemories,
   listPromotedMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
   promoteMemories,
+  type KnowledgeBaseDocument,
   type Memory,
   type PromotedMemory,
 } from "@/lib/mekoApi";
-import {
-  isDatapackGrantEligibleToPromoteMemoryToKnowledge,
-  type DatapackShareGrant,
-} from "@/lib/datapackShareGrants";
 
 type Props = {
   datapackId: string | null;
   datapackName: string | null;
   /** Bumped by the parent (e.g. after a chat turn) to force refetch. */
   refreshTick?: number;
-  datapackGrant?: DatapackShareGrant | null;
+  /**
+   * True when the WorkbenchLM route is not the active one (the page is
+   * kept mounted by ProtectedRoutes via `display: none` to preserve
+   * state). All auto-poll intervals stop in this state so the API isn't
+   * hit from a hidden tree. The parent-driven `refreshTick` is still
+   * honored if it changes — that's a one-shot signal, not a timer.
+   */
   paused?: boolean;
 };
 
@@ -71,7 +74,6 @@ export function WorkbenchLMLiveObservationPanel({
   datapackId,
   datapackName,
   refreshTick = 0,
-  datapackGrant = null,
   paused = false,
 }: Props) {
   // Internal ticker that bumps every AUTO_REFRESH_INTERVAL_MS while the tab
@@ -86,11 +88,13 @@ export function WorkbenchLMLiveObservationPanel({
   // Sticky-true once the user sends the first chat turn for this datapack.
   // Drives the "Extracting memories…" placeholder in the Memories section
   // while Mem0's background extractor is still working (typically 30–60s
-  // after the turn lands). Resets whenever the datapack changes
+  // after the turn lands). Resets whenever the datapack changes — a fresh
+  // datapack should fall back to the standard "Add a conversation" copy.
   const [chatTurnOccurred, setChatTurnOccurred] = useState(false);
   // Time-bounded version of the same signal: lights up the small
   // "extracting…" pulse in the section headers for EXTRACTING_WINDOW_MS
-  // after each turn. Resets on datapack change.
+  // after each turn, even when the section already has rows (so the user
+  // knows more may arrive). Resets on datapack change.
   const [extracting, setExtracting] = useState(false);
   useEffect(() => {
     setChatTurnOccurred(false);
@@ -193,7 +197,6 @@ export function WorkbenchLMLiveObservationPanel({
         <div style={{ marginTop: '16px' }}>
           <LearningsSection
             datapackId={datapackId}
-            datapackGrant={datapackGrant}
             refreshTick={effectiveTick}
             chatTurnOccurred={chatTurnOccurred}
             extracting={extracting}
@@ -322,17 +325,12 @@ const MEMORY_TONE = {
 
 function LearningsSection({
   datapackId,
-  datapackGrant,
   refreshTick,
   chatTurnOccurred,
   extracting,
   onPromoted,
 }: {
   datapackId: string | null;
-  /** Caller's grant on the active datapack. Contributors see the
-   *  Promote button disabled (with a tooltip explaining why); the
-   *  server enforces the same rule so this is purely a UX hint. */
-  datapackGrant: DatapackShareGrant | null;
   refreshTick: number;
   /** True once at least one chat turn has completed since the datapack was
    *  selected. Lets us swap the empty-state copy from "Add a conversation"
@@ -350,18 +348,11 @@ function LearningsSection({
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // account_id captured during fetch — needed for promoteMemories and to
-  // gate the per-tile delete button (only the author can delete).
+  // account_id captured during fetch — needed for promoteMemories.
   const [accountId, setAccountId] = useState<string>("");
   // Memory id currently being promoted (drives spinner + button disable).
   // Single-string state since one promote at a time keeps the UX predictable.
   const [promotingId, setPromotingId] = useState<string | null>(null);
-  // Memory id currently being deleted (same single-flight pattern).
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  const canPromote = isDatapackGrantEligibleToPromoteMemoryToKnowledge({
-    grant: datapackGrant ?? undefined,
-  });
 
   const fetchMemories = useCallback(
     async (signal?: AbortSignal) => {
@@ -407,7 +398,7 @@ function LearningsSection({
 
   const handlePromote = useCallback(
     async (memoryId: string) => {
-      if (!datapackId || !accountId || promotingId || !canPromote) return;
+      if (!datapackId || !accountId || promotingId) return;
       setPromotingId(memoryId);
       try {
         await promoteMemories({
@@ -433,31 +424,7 @@ function LearningsSection({
         setPromotingId(null);
       }
     },
-    [accountId, datapackId, promotingId, canPromote, onPromoted],
-  );
-
-  const handleDelete = useCallback(
-    async (memoryId: string) => {
-      if (!datapackId || deletingId) return;
-      setDeletingId(memoryId);
-      try {
-        await deleteMemory(memoryId, datapackId);
-        // Server confirmed the delete — drop the tile locally so the UI
-        // updates without waiting up to 10s for the next auto-poll. On
-        // failure we never reach this line, so no rollback is needed.
-        setItems((prev) => prev.filter((m) => m.id !== memoryId));
-        setTotal((prev) => Math.max(0, prev - 1));
-        toast({ title: "Memory deleted" });
-      } catch (err) {
-        toast({
-          title: "Couldn't delete",
-          description: getApiErrorMessage(err, "Delete failed."),
-        });
-      } finally {
-        setDeletingId(null);
-      }
-    },
-    [datapackId, deletingId],
+    [accountId, datapackId, promotingId, onPromoted],
   );
 
   return (
@@ -493,26 +460,7 @@ function LearningsSection({
         <ul className="space-y-2">
           {items.slice(0, TOP_N).map((m) => {
             const isPromoting = promotingId === m.id;
-            const isDeleting = deletingId === m.id;
-            // Promote is disabled while any tile is in flight, before the
-            // account_id is resolved, or when the caller's grant doesn't
-            // allow promotion (contributors). Server enforces the same gate.
-            const promoteDisabled = promotingId !== null || !accountId || !canPromote;
-            const promoteTooltip = canPromote
-              ? "Promote this memory to the shared knowledge base"
-              : "Contributors can't promote memories. Ask the datapack owner or a maintainer.";
-            // Only the author of a memory may delete it. In a shared
-            // datapack other members appear in the list; those tiles
-            // render without the delete affordance.
-            const isMine = Boolean(m.user_id) && m.user_id === accountId;
-            // Centralised fallback chain (name → email → short UUID → "-")
-            // lives in formatMemoryAuthor; we pass `selfLabel: "you"` so
-            // your own rows read "by you" in this personal-session view.
-            const authorLabel = formatMemoryAuthor(m, {
-              currentUserId: accountId,
-              selfLabel: "you",
-              fallback: "",
-            });
+            const promoteDisabled = promotingId !== null || !accountId;
             return (
               <li
                 key={m.id}
@@ -525,58 +473,31 @@ function LearningsSection({
                 tabIndex={0}
               >
                 <p className="line-clamp-2 text-xs text-white/95">{m.data}</p>
-                {authorLabel ? (
-                  <p className="mt-0.5 truncate text-[10px] text-purple-200/60">
-                    by {authorLabel}
-                  </p>
-                ) : null}
                 <div className="mt-1.5 flex items-center justify-between gap-2">
                   <span className="truncate text-[10px] text-purple-200/70">
                     {m.agent_id ? `agent · ${m.agent_id}` : " "}
                   </span>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {isMine ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleDelete(m.id)}
-                        disabled={deletingId !== null}
-                        className={cn(
-                          "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors",
-                          "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20",
-                          "disabled:cursor-not-allowed disabled:opacity-50",
-                        )}
-                        title="Delete this memory (only you can delete your own)"
-                        aria-label="Delete memory"
-                      >
-                        {isDeleting ? (
-                          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-                        ) : (
-                          <Trash2 className="h-3 w-3" aria-hidden />
-                        )}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => void handlePromote(m.id)}
-                      disabled={promoteDisabled}
-                      className={cn(
-                        // Match MemoryPromotionPanel's "Promote to Knowledge"
-                        // styling (purple-600 / purple-700) so the action
-                        // looks the same wherever it shows up.
-                        "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium text-white transition-colors",
-                        "bg-purple-600 hover:bg-purple-700",
-                        "disabled:cursor-not-allowed disabled:opacity-50",
-                      )}
-                      title={promoteTooltip}
-                    >
-                      {isPromoting ? (
-                        <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-                      ) : (
-                        <ArrowUpToLine className="h-3 w-3" aria-hidden />
-                      )}
-                      {isPromoting ? "Promoting…" : "Promote to Ko"}
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handlePromote(m.id)}
+                    disabled={promoteDisabled}
+                    className={cn(
+                      // Match MemoryPromotionPanel's "Promote to Knowledge"
+                      // styling (purple-600 / purple-700) so the action
+                      // looks the same wherever it shows up.
+                      "inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium text-white transition-colors",
+                      "bg-purple-600 hover:bg-purple-700",
+                      "disabled:cursor-not-allowed disabled:opacity-50",
+                    )}
+                    title="Promote this memory to the shared knowledge base"
+                  >
+                    {isPromoting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                    ) : (
+                      <ArrowUpToLine className="h-3 w-3" aria-hidden />
+                    )}
+                    {isPromoting ? "Promoting…" : "Promote to Ko"}
+                  </button>
                 </div>
               </li>
             );
@@ -586,6 +507,111 @@ function LearningsSection({
     </SectionShell>
   );
 }
+
+// --- Shared Knowledge (emerald) ---
+
+// const KNOWLEDGE_TONE = {
+//   border: "border-emerald-900/50",
+//   bg: "bg-gradient-to-br from-emerald-950/55 via-[#0c1814] to-[#0b1220]",
+//   text: "text-emerald-200/95",
+//   badge: "border border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+// };
+
+// function SharedKnowledgeSection({
+//   datapackName,
+//   refreshTick,
+// }: {
+//   datapackName: string | null;
+//   refreshTick: number;
+// }) {
+//   const [items, setItems] = useState<KnowledgeBaseDocument[]>([]);
+//   const [loading, setLoading] = useState(false);
+//   const [error, setError] = useState<string | null>(null);
+
+//   const fetchDocs = useCallback(
+//     async (signal?: AbortSignal) => {
+//       if (!datapackName) {
+//         setItems([]);
+//         return;
+//       }
+//       setLoading(true);
+//       setError(null);
+//       try {
+//         const list = await getKnowledgeBaseDocuments(datapackName, { signal });
+//         setItems(list ?? []);
+//       } catch (err) {
+//         if ((err as { name?: string })?.name === "CanceledError") return;
+//         setError(getApiErrorMessage(err, "Failed to load knowledge sources."));
+//         setItems([]);
+//       } finally {
+//         setLoading(false);
+//       }
+//     },
+//     [datapackName],
+//   );
+
+//   useEffect(() => {
+//     const ac = new AbortController();
+//     void fetchDocs(ac.signal);
+//     return () => ac.abort();
+//   }, [fetchDocs, refreshTick]);
+
+//   const top = items.slice(0, TOP_N);
+
+//   return (
+//     <SectionShell
+//       title="Shared knowledge"
+//       icon={<BookOpen className="h-3.5 w-3.5 text-emerald-400" aria-hidden />}
+//       toneText={KNOWLEDGE_TONE.text}
+//       toneBadge={KNOWLEDGE_TONE.badge}
+//       count={datapackName ? items.length : undefined}
+//       loading={loading}
+//       error={error}
+//       onRefresh={() => void fetchDocs()}
+//     >
+//       {!datapackName ? (
+//         <p className="text-xs text-muted-foreground">Select a datapack to see knowledge.</p>
+//       ) : loading && top.length === 0 ? (
+//         <p className="text-xs text-muted-foreground">Loading sources…</p>
+//       ) : top.length === 0 ? (
+//         <p className="text-xs text-muted-foreground">No knowledge sources yet.</p>
+//       ) : (
+//         <ul className="space-y-2">
+//           {top.map((d) => {
+//             const filename = d.document_name.split("/").pop() ?? d.document_name;
+//             const display = filename.replace(/^\d+_/, "");
+//             return (
+//               <li
+//                 // Stable key: drop the index suffix so a reorder/insert
+//                 // doesn't churn keys for existing tiles (which would
+//                 // remount + re-animate every poll).
+//                 key={d.document_name}
+//                 className={cn(
+//                   "flex items-center gap-2 rounded-lg border px-3 py-2 animate-in fade-in slide-in-from-bottom-1 duration-300",
+//                   KNOWLEDGE_TONE.border,
+//                   KNOWLEDGE_TONE.bg,
+//                 )}
+//                 title={d.document_name}
+//                 tabIndex={0}
+//               >
+//                 <FileText className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
+//                 <span className="min-w-0 flex-1 truncate text-xs font-medium text-white/95">
+//                   {display}
+//                 </span>
+//                 <span
+//                   className="shrink-0 text-[10px] uppercase tracking-wide text-emerald-200/70"
+//                   aria-label={`status ${d.status}`}
+//                 >
+//                   {d.status}
+//                 </span>
+//               </li>
+//             );
+//           })}
+//         </ul>
+//       )}
+//     </SectionShell>
+//   );
+// }
 
 // --- Collective Memory (sky: distinct from blue/memories + purple/learnings
 // + emerald/knowledge so each section has its own accent). Pulls memories

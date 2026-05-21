@@ -348,17 +348,9 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	g.GET("/agents", agentH.ListUser)
 	g.DELETE("/agents/:agent_id", agentH.DeleteUser)
 
-	memoriesH := handlers.NewMemoriesHandler(reg.memoriesSvc, reg.langfuseSvc, reg.dpRepo)
+	memoriesH := handlers.NewMemoriesHandler(reg.memoriesSvc, reg.langfuseSvc)
 	g.GET("/memories", memoriesH.ListGET)
 	g.GET("/memories/count", memoriesH.CountGET)
-	// Deletion is gated inside the handler (not via Echo middleware) because
-	// the datapack id arrives as a query param, not a `:name` path segment —
-	// auth.RequireDatapackAccess expects the latter. The handler runs two
-	// checks of its own: (1) caller is currently a member of the datapack
-	// (owner or accepted share) and (2) the row's meko_user_id matches the
-	// caller. Together these let any member delete their own rows while
-	// blocking revoked members and cross-member deletes.
-	g.DELETE("/memories/:memory_id", memoriesH.DeleteByID)
 
 	patH := handlers.NewMCPPATHandler(reg.mcpPATSvc)
 	g.POST("/me/meko-tokens", patH.Create)

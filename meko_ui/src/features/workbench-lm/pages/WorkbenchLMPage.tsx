@@ -278,10 +278,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           datapackId={selectedDatapack?.datapack_id ?? null}
           datapackName={selectedName}
           refreshTick={refreshTick}
-          // "Promote to Ko" for contributors (owner/maintainer keep it).
-          datapackGrant={selectedDatapack?.grant ?? null}
           paused={!isRouteActive}
-
         />
       </div>
 

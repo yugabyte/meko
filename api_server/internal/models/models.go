@@ -78,19 +78,11 @@ type KnowledgeBase struct {
 // Memory represents one row from datapacks.meko_mem0_collection as exposed
 // to the UI. Only the memory text (payload->>'data') and the owning agent
 // are surfaced; all other payload fields are intentionally dropped.
-//
-// UserID + UserName + UserEmail identify which account added the memory.
-// In a shared datapack the listing surfaces memories from every member, so
-// the UI uses these fields to label the author and to gate per-memory
-// actions (e.g. "delete" only on memories the current user owns).
 type Memory struct {
 	ID             string `json:"id"`
 	Data           string `json:"data"`
 	AgentID        string `json:"agent_id"`
 	ConversationID string `json:"conversation_id,omitempty"`
-	UserID         string `json:"user_id,omitempty"`
-	UserName       string `json:"user_name,omitempty"`
-	UserEmail      string `json:"user_email,omitempty"`
 }
 
 // MemoryListFilter is the filter for the Mem0 collection (datapacks.meko_mem0_collection).

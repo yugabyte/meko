@@ -77,37 +77,6 @@ func (svc *MemoriesService) List(
 	}, nil
 }
 
-// Delete removes a single mem0 memory row that was added by the given
-// user. Returns (true, nil) on success, (false, nil) when no matching
-// row exists or it belongs to a different user — both surface to the
-// caller as 404 so we don't leak existence across users.
-func (svc *MemoriesService) Delete(
-	ctx context.Context,
-	memoryID, datapackID, userID string,
-) (bool, error) {
-	memoryID = strings.TrimSpace(memoryID)
-	datapackID = strings.TrimSpace(datapackID)
-	userID = strings.TrimSpace(userID)
-	if memoryID == "" {
-		return false, fmt.Errorf("memory_id is required")
-	}
-	if datapackID == "" {
-		return false, fmt.Errorf("datapack_id is required")
-	}
-	if userID == "" {
-		return false, fmt.Errorf("user_id is required")
-	}
-
-	slog.Info("deleting memory",
-		"layer", "service",
-		"memory_id", memoryID,
-		"datapack_id", datapackID,
-		"user_id", userID,
-	)
-
-	return svc.memoriesRepo.DeleteByIDForUser(ctx, memoryID, datapackID, userID)
-}
-
 // Count returns the total number of memory rows for a datapack. This is a
 // straight COUNT(*) on datapacks.meko_mem0_collection scoped by
 // meko_datapack_id with no additional filtering.

@@ -121,7 +121,6 @@ export function useMemoryReadOnlyList({
     totalPages,
     page,
     pageSize,
-    accountId,
     accountLoading,
     accountError,
     sessionSummaryReady,
