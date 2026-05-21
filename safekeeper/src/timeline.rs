@@ -342,6 +342,14 @@ impl SharedState {
             bail!(TimelineError::UninitializedWalSegSize(*ttid));
         }
 
+        // YB WAL mode forbids multi-member safekeeper configurations (see
+        // `SafeKeeperConf::is_yb_wal_mode`). Fail fast at boot if the
+        // loaded control file says otherwise — better than silently
+        // accepting a config we can't honor.
+        if conf.is_yb_wal_mode() {
+            crate::require_single_safekeeper(&control_store.mconf)?;
+        }
+
         let sk = match control_store.eviction_state {
             EvictionState::Present => {
                 let wal_store = match wal_backup.get_wal_yb() {
@@ -367,6 +375,7 @@ impl SharedState {
                     TimelineState::new(control_store),
                     wal_store,
                     conf.my_id,
+                    conf.is_yb_wal_mode(),
                 )?)
             }
             EvictionState::Offloaded(_) => {
@@ -1324,7 +1333,12 @@ impl ManagerTimeline {
         // now we can switch shared.sk to Present, shouldn't fail
         let prev_sk = std::mem::replace(&mut shared.sk, StateSK::Empty);
         let cfile_state = prev_sk.take_state();
-        shared.sk = StateSK::Loaded(SafeKeeper::new(cfile_state, wal_store, self.conf.my_id)?);
+        shared.sk = StateSK::Loaded(SafeKeeper::new(
+            cfile_state,
+            wal_store,
+            self.conf.my_id,
+            self.conf.is_yb_wal_mode(),
+        )?);
 
         Ok(())
     }

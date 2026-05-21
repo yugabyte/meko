@@ -163,6 +163,121 @@ pub struct SafeKeeperConf {
 }
 
 impl SafeKeeperConf {
+    /// Are we in YB-only WAL mode? When true, every byte of WAL is mirrored
+    /// to a YugabyteDB table on each `write_wal()` and the local FS is left
+    /// empty of segment files. In this mode the *only* durable copy of WAL
+    /// is in YB — which is itself a quorum-replicated store — so running
+    /// multiple safekeepers + Paxos on top of YB would be double consensus.
+    /// The system therefore requires exactly one safekeeper in this mode;
+    /// see [`require_single_safekeeper`] and call sites that enforce this.
+    pub fn is_yb_wal_mode(&self) -> bool {
+        self.wal_yb_config.is_some()
+    }
+}
+
+/// Validate that the configured safekeeper membership has at most one
+/// active member when running in YB WAL mode. YB itself provides the
+/// durability + replication guarantees the safekeeper's Raft acceptor
+/// would otherwise provide; layering Paxos on top is redundant and
+/// (worse) means two consensus protocols racing on different LSN views.
+///
+/// Called at boot (against the loaded control-file membership) and at
+/// runtime when a walproposer requests a membership switch.
+pub fn require_single_safekeeper(
+    mconf: &safekeeper_api::membership::Configuration,
+) -> anyhow::Result<()> {
+    use anyhow::bail;
+    let n_now = mconf.members.m.len();
+    let n_new = mconf.new_members.as_ref().map(|s| s.m.len()).unwrap_or(0);
+    if n_now > 1 {
+        bail!(
+            "YB WAL mode requires exactly one safekeeper, but membership has \
+             {n_now} members: {}. YB already provides quorum replication; \
+             running multiple safekeepers on top would be double consensus.",
+            mconf.members
+        );
+    }
+    if n_new > 1 {
+        bail!(
+            "YB WAL mode requires exactly one safekeeper, but a joint \
+             configuration is requesting {n_new} new members: {}. \
+             Refusing to switch.",
+            mconf.new_members.as_ref().unwrap()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod yb_mode_tests {
+    use super::require_single_safekeeper;
+    use safekeeper_api::membership::{
+        Configuration, MemberSet, SafekeeperGeneration, SafekeeperId,
+    };
+    use utils::id::NodeId;
+
+    fn member(id: u64) -> SafekeeperId {
+        SafekeeperId {
+            id: NodeId(id),
+            host: "h".into(),
+            pg_port: 5474,
+        }
+    }
+
+    fn conf(members: Vec<SafekeeperId>, new_members: Option<Vec<SafekeeperId>>) -> Configuration {
+        let mut ms = MemberSet::empty();
+        for m in members {
+            ms.add(m).unwrap();
+        }
+        let nm = new_members.map(|v| {
+            let mut s = MemberSet::empty();
+            for m in v {
+                s.add(m).unwrap();
+            }
+            s
+        });
+        Configuration {
+            generation: SafekeeperGeneration::new(1),
+            members: ms,
+            new_members: nm,
+        }
+    }
+
+    #[test]
+    fn empty_config_is_accepted() {
+        // pre-generations timelines have empty MemberSet; YB mode shouldn't
+        // misfire on that initial state.
+        require_single_safekeeper(&conf(vec![], None)).unwrap();
+    }
+
+    #[test]
+    fn single_member_is_accepted() {
+        require_single_safekeeper(&conf(vec![member(1)], None)).unwrap();
+    }
+
+    #[test]
+    fn two_members_is_rejected() {
+        let err = require_single_safekeeper(&conf(vec![member(1), member(2)], None)).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("YB WAL mode requires exactly one safekeeper"),
+            "unexpected error message: {msg}"
+        );
+        assert!(msg.contains("2 members"), "unexpected error message: {msg}");
+    }
+
+    #[test]
+    fn joint_with_two_new_members_is_rejected() {
+        let err = require_single_safekeeper(&conf(
+            vec![member(1)],
+            Some(vec![member(2), member(3)]),
+        ))
+        .unwrap_err();
+        assert!(format!("{err}").contains("2 new members"));
+    }
+}
+
+impl SafeKeeperConf {
     pub fn dummy() -> Self {
         SafeKeeperConf {
             workdir: Utf8PathBuf::from("./"),

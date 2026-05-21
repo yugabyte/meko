@@ -176,7 +176,36 @@ Plus a defensive `delete_after(write_lsn)` at construction to drop any
 rows past the durable end-of-WAL (left over from a crash that INSERTed but
 didn't return).
 
-### 5. Node id from CLI, not from `safekeeper.id` (commit `8027e06c4`)
+### 5. Single-safekeeper constraint in YB WAL mode
+
+YB itself is a quorum-replicated store. The safekeeper's Raft acceptor
+exists to give Neon's local-FS storage durability + replication. Once WAL
+lives in YB, layering Paxos on top of YB would be double consensus — two
+protocols racing on different LSN views, harder semantics, no extra
+safety.
+
+The yb-neon build therefore **requires exactly one safekeeper** when
+`--wal-yb-config` is set. The enforcement is in two places:
+
+- **Boot**: `SharedState::restore` loads the control file, and if YB WAL
+  mode is on (`SafeKeeperConf::is_yb_wal_mode()`), calls
+  `require_single_safekeeper(&control_store.mconf)`. Fails fast at startup
+  if the persisted membership has > 1 member or a joint configuration
+  with > 1 new members.
+- **Runtime**: `SafeKeeper::process_greeting` (which handles every
+  walproposer `ProposerGreeting`) calls the same check on `msg.mconf`
+  before passing it to `state.membership_switch`. A walproposer that
+  tries to add a sibling safekeeper gets a hard error response.
+
+The check itself is `require_single_safekeeper` in `safekeeper/src/lib.rs`:
+allows `len == 0` (pre-generations / empty configs) and `len == 1`; rejects
+anything larger with a descriptive error pointing at the redundant-consensus
+issue.
+
+Unit tests in `yb_mode_tests` cover: empty config accepted, single-member
+accepted, two-member rejected, joint config with two new members rejected.
+
+### 6. Node id from CLI, not from `safekeeper.id` (commit `8027e06c4`)
 
 The 50-line `set_id()` helper that read/wrote `<workdir>/safekeeper.id` is
 gone. `--id` is now a required CLI flag; the binary fails fast at startup

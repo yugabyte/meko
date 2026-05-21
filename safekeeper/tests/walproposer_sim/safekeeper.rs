@@ -68,7 +68,12 @@ impl GlobalMap {
             let control_store = DiskStateStorage::new(disk.clone());
             let wal_store = DiskWALStorage::new(disk.clone(), &control_store)?;
 
-            let sk = SafeKeeper::new(TimelineState::new(control_store), wal_store, conf.my_id)?;
+            let sk = SafeKeeper::new(
+                TimelineState::new(control_store),
+                wal_store,
+                conf.my_id,
+                conf.is_yb_wal_mode(),
+            )?;
             timelines.insert(
                 ttid,
                 SharedState {
@@ -111,6 +116,7 @@ impl GlobalMap {
             TimelineState::new(control_store),
             wal_store,
             self.conf.my_id,
+            self.conf.is_yb_wal_mode(),
         )?;
 
         self.timelines.insert(
@@ -158,6 +164,8 @@ pub fn run_server(os: NodeOs, disk: Arc<SafekeeperDisk>) -> Result<()> {
         broker_keepalive_interval: Duration::from_secs(0),
         heartbeat_timeout: Duration::from_secs(0),
         remote_storage: None,
+        control_file_backend: safekeeper::control_file::ControlFileBackend::File,
+        wal_yb_config: None,
         max_offloader_lag_bytes: 0,
         /* BEGIN_HADRON */
         max_reelect_offloader_lag_bytes: 0,

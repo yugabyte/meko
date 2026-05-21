@@ -77,7 +77,7 @@ impl Env {
             control_file::FileStorage::create_new(&timeline_dir, pstate, conf.no_sync).await?,
         );
         let state = TimelineState::new(ctrl);
-        let mut safekeeper = SafeKeeper::new(state, wal, conf.my_id)?;
+        let mut safekeeper = SafeKeeper::new(state, wal, conf.my_id, conf.is_yb_wal_mode())?;
 
         // Emulate an initial election.
         safekeeper

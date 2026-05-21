@@ -880,6 +880,13 @@ pub struct SafeKeeper<CTRL: control_file::Storage, WAL: wal_storage::Storage> {
     pub wal_store: WAL,
 
     node_id: NodeId, // safekeeper's node id
+
+    /// When true, this safekeeper is running with YB as the durable WAL
+    /// store. YB itself replicates via Raft, so any walproposer-driven
+    /// membership change that would create a multi-safekeeper set is
+    /// rejected (would be double consensus on different LSN views).
+    /// See [`crate::require_single_safekeeper`].
+    yb_wal_mode: bool,
 }
 
 impl<CTRL, WAL> SafeKeeper<CTRL, WAL>
@@ -894,6 +901,7 @@ where
         state: TimelineState<CTRL>,
         wal_store: WAL,
         node_id: NodeId,
+        yb_wal_mode: bool,
     ) -> Result<SafeKeeper<CTRL, WAL>> {
         if state.tenant_id == TenantId::from([0u8; 16])
             || state.timeline_id == TimelineId::from([0u8; 16])
@@ -910,6 +918,7 @@ where
             state,
             wal_store,
             node_id,
+            yb_wal_mode,
         })
     }
 
@@ -1033,6 +1042,13 @@ where
                 self.node_id,
             );
         }
+
+        // In YB WAL mode, only single-safekeeper configurations are valid
+        // (YB already replicates the WAL; multi-SK would be double consensus).
+        if self.yb_wal_mode {
+            crate::require_single_safekeeper(&msg.mconf)?;
+        }
+
         // Switch into conf given by proposer conf if it is higher.
         self.state.membership_switch(msg.mconf.clone()).await?;
 
@@ -1511,7 +1527,7 @@ mod tests {
             persisted_state: test_sk_state(),
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
-        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0)).unwrap();
+        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
 
         // Vote with generation mismatch should be rejected.
         let gen_mismatch_vote_request = ProposerAcceptorMessage::VoteRequest(VoteRequest {
@@ -1537,7 +1553,7 @@ mod tests {
             persisted_state: state,
         };
 
-        sk = SafeKeeper::new(TimelineState::new(storage), sk.wal_store, NodeId(0)).unwrap();
+        sk = SafeKeeper::new(TimelineState::new(storage), sk.wal_store, NodeId(0), false).unwrap();
 
         // and ensure voting second time for 1 is not ok
         vote_resp = sk.process_msg(&vote_request).await;
@@ -1554,7 +1570,7 @@ mod tests {
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
 
-        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0)).unwrap();
+        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
 
         let mut ar_hdr = AppendRequestHeader {
             generation: Generation::new(0),
@@ -1624,7 +1640,7 @@ mod tests {
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
 
-        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0)).unwrap();
+        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
 
         let pem = ProposerElected {
             generation: Generation::new(0),

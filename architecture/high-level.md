@@ -6,7 +6,7 @@
 |---|---|---|
 | Compute | User-facing Postgres backend. Speaks Postgres wire protocol to clients. | `pg_install/v17/bin/postgres` (with Neon smgr patches) |
 | `compute_ctl` | Supervisor for the compute: applies config, starts/stops PG, runs catalog migrations. | `target/debug/compute_ctl` |
-| Safekeeper | Raft acceptor for WAL. Receives WAL from compute, durably stores it, streams to pageserver. | `target/debug/safekeeper` |
+| Safekeeper | Raft acceptor for WAL. Receives WAL from compute, durably stores it, streams to pageserver. **Limited to one instance per cluster in YB WAL mode** — YB's own Raft already provides quorum durability. | `target/debug/safekeeper` |
 | Pageserver | Materializes pages from WAL and serves them to compute on demand. Holds the only durable copy of relfiles (via `remote_storage`). | `target/debug/pageserver` |
 | Storage controller | Tracks cluster topology: which tenants are on which pageservers, which safekeepers hold which timelines, generations, etc. | `target/debug/storage_controller` |
 | Storage broker | Pub/sub bus that lets safekeepers and pageservers find each other and exchange LSN watermarks. In-memory, no persistent state. | `target/debug/storage_broker` |
@@ -126,6 +126,9 @@ yb-neon binaries (target/debug/)
     +-- postgres (v17.5 + Neon patches)  :55440
 ```
 
-A production deployment would have N safekeepers (Raft quorum), M pageservers
-sharded by tenant, and a YB cluster that's actually distributed. The shape
-above is the dev-loop shape.
+A production deployment would have M pageservers sharded by tenant and a
+YB cluster that's actually distributed. **The safekeeper count stays at 1**
+when `--wal-yb-config` is set — YB already provides the quorum durability
+that a multi-safekeeper Raft would. Running two protocols (YB's Raft + the
+safekeeper's Paxos) on top of each other is rejected at boot and at
+runtime; see [`safekeeper.md`](safekeeper.md) §5.
