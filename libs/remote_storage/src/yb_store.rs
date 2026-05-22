@@ -211,6 +211,103 @@ impl YbStore {
         (tenant, timeline)
     }
 
+    /// Map a full key to the four storage columns:
+    ///   `(namespace, tenant_id, timeline_id, key_body)`
+    ///
+    /// - `namespace`: `"pageserver"` / `"safekeeper"`. Derived from
+    ///   `YbStoreConfig::prefix`.
+    /// - `tenant_id` / `timeline_id`: first two Neon-id-shaped tokens in
+    ///   the path (empty when absent).
+    /// - `key_body`: the path *after the configured prefix is stripped*,
+    ///   with these segments **dropped**:
+    ///     - the literal `tenants` and `timelines` markers,
+    ///     - the tenant_id and timeline_id values themselves.
+    ///   What's left is the trailing discriminator the object would have
+    ///   relative to its `(namespace, tenant_id, timeline_id)` bucket —
+    ///   e.g. `000000-FFF__layer-1`, `tenant-manifest-1.json`,
+    ///   `safekeeper-control`, or `000000010000000000000005`.
+    ///
+    /// [`reconstruct_key`] is the inverse — it knows the per-namespace
+    /// layout convention and reassembles the original path.
+    fn parse_key(&self, full_key: &str) -> (&'static str, String, String, String) {
+        let cfg_prefix = self.prefix.as_deref().unwrap_or("");
+        let rest = full_key.strip_prefix(cfg_prefix).unwrap_or(full_key);
+        let namespace: &'static str = if cfg_prefix.contains("safekeeper")
+            || full_key.starts_with("safekeeper")
+        {
+            "safekeeper"
+        } else {
+            "pageserver"
+        };
+        let (tenant_id, timeline_id) = Self::extract_neon_ids(rest);
+
+        let key_body: String = rest
+            .split('/')
+            .filter(|seg| {
+                *seg != "tenants"
+                    && *seg != "timelines"
+                    && (tenant_id.is_empty() || *seg != tenant_id)
+                    && (timeline_id.is_empty() || *seg != timeline_id)
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+
+        (namespace, tenant_id, timeline_id, key_body)
+    }
+
+    /// Inverse of [`parse_key`]: rebuild the full key from
+    /// `(namespace, tenant_id, timeline_id, key_body)` using the
+    /// per-namespace layout convention.
+    ///
+    /// Layout reference:
+    /// - `pageserver`, timeline known: `<prefix>tenants/<T>/timelines/<TL>/<body>`
+    /// - `pageserver`, no timeline:    `<prefix>tenants/<T>/<body>`
+    /// - `safekeeper`, body is `safekeeper-control`: `<prefix>safekeeper-control/<T>/<TL>`
+    /// - `safekeeper`, anything else (WAL backup):   `<prefix><T>/<TL>/<body>`
+    fn reconstruct_key(
+        &self,
+        namespace: &str,
+        tenant_id: &str,
+        timeline_id: &str,
+        key_body: &str,
+    ) -> String {
+        let cfg_prefix = self.prefix.as_deref().unwrap_or("");
+        let body = if namespace == "safekeeper" {
+            if key_body == "safekeeper-control" {
+                if timeline_id.is_empty() {
+                    format!("safekeeper-control/{tenant_id}")
+                } else {
+                    format!("safekeeper-control/{tenant_id}/{timeline_id}")
+                }
+            } else if timeline_id.is_empty() {
+                if key_body.is_empty() {
+                    tenant_id.to_string()
+                } else {
+                    format!("{tenant_id}/{key_body}")
+                }
+            } else if key_body.is_empty() {
+                format!("{tenant_id}/{timeline_id}")
+            } else {
+                format!("{tenant_id}/{timeline_id}/{key_body}")
+            }
+        } else if tenant_id.is_empty() {
+            // pageserver-namespace blob with no tenant — unusual but we shouldn't
+            // synthesize a `tenants/` segment if there's no value to fill in
+            key_body.to_string()
+        } else if timeline_id.is_empty() {
+            if key_body.is_empty() {
+                format!("tenants/{tenant_id}")
+            } else {
+                format!("tenants/{tenant_id}/{key_body}")
+            }
+        } else if key_body.is_empty() {
+            format!("tenants/{tenant_id}/timelines/{timeline_id}")
+        } else {
+            format!("tenants/{tenant_id}/timelines/{timeline_id}/{key_body}")
+        };
+        format!("{cfg_prefix}{body}")
+    }
+
     fn looks_like_neon_id(s: &str) -> bool {
         // bare 32-hex-char tenant/timeline id
         if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -303,29 +400,59 @@ impl RemoteStorage for YbStore {
             .map_err(|_| DownloadError::Cancelled)?;
 
         let full_prefix = self.full_prefix(prefix);
-        let like_pattern = format!("{}%", escape_like(&full_prefix));
 
-        // chunk_idx = 0 always exists per key and carries the denormalized
-        // size/timestamp; restricting on it dedupes chunked rows.
-        let sql = format!(
-            "SELECT key, size_bytes, last_modified_us FROM {} \
-             WHERE key LIKE $1 ESCAPE '\\' AND chunk_idx = 0 ORDER BY key{}",
+        // Parse the prefix into the new column form. When the prefix
+        // contains tenant/timeline ids (the common case — pageserver
+        // lists by `tenants/<X>/timelines/<Y>/…`), we filter on those
+        // columns directly so the query hits a single hash tablet.
+        // The LIKE pattern is the **placeholder form** of the prefix
+        // since stored keys carry `{T}` / `{TL}` placeholders.
+        let (namespace, tenant_id, timeline_id, key_body_prefix) =
+            self.parse_key(&full_prefix);
+        let like_pattern = format!("{}%", escape_like(&key_body_prefix));
+
+        let mut where_clauses: Vec<String> =
+            vec!["namespace = $1::text::blob_namespace".to_string()];
+        let mut bind_params: Vec<Box<dyn ToSql + Sync + Send>> =
+            vec![Box::new(namespace)];
+        if !tenant_id.is_empty() {
+            where_clauses.push(format!("tenant_id = ${}", bind_params.len() + 1));
+            bind_params.push(Box::new(tenant_id.clone()));
+        }
+        if !timeline_id.is_empty() {
+            where_clauses.push(format!("timeline_id = ${}", bind_params.len() + 1));
+            bind_params.push(Box::new(timeline_id.clone()));
+        }
+        let like_idx = bind_params.len() + 1;
+        where_clauses.push(format!("key LIKE ${like_idx} ESCAPE '\\'"));
+        bind_params.push(Box::new(like_pattern));
+        where_clauses.push("chunk_idx = 0".to_string());
+
+        let mut sql = format!(
+            "SELECT tenant_id, timeline_id, key, size_bytes, last_modified_us \
+             FROM {} WHERE {} \
+             ORDER BY tenant_id, timeline_id, key",
             quote_ident(&self.table_name),
-            match max_keys {
-                Some(_) => " LIMIT $2",
-                None => "",
-            }
+            where_clauses.join(" AND "),
         );
+        if let Some(mk) = max_keys {
+            let limit_idx = bind_params.len() + 1;
+            sql += &format!(" LIMIT ${limit_idx}");
+            bind_params.push(Box::new(mk.get() as i64));
+        }
 
-        let rows = if let Some(max_keys) = max_keys {
-            let limit = max_keys.get() as i64;
-            let params: [&(dyn ToSql + Sync); 2] = [&like_pattern, &limit];
-            self.with_timeout_download(self.client.query(&sql, &params), cancel)
-                .await?
-        } else {
-            let params: [&(dyn ToSql + Sync); 1] = [&like_pattern];
-            self.with_timeout_download(self.client.query(&sql, &params), cancel)
-                .await?
+        let rows = {
+            let fut = self.client.query_raw(&sql, bind_params);
+            let row_stream = self
+                .with_timeout_download(fut, cancel)
+                .await?;
+            use futures::StreamExt;
+            let mut row_stream = std::pin::pin!(row_stream);
+            let mut acc = Vec::new();
+            while let Some(r) = row_stream.next().await {
+                acc.push(r.map_err(|e| DownloadError::Other(e.into()))?);
+            }
+            acc
         };
 
         let mut result = Listing::default();
@@ -333,11 +460,14 @@ impl RemoteStorage for YbStore {
         match mode {
             ListingMode::NoDelimiter => {
                 for row in rows {
-                    let key: String = row.get("key");
+                    let row_tenant: String = row.get("tenant_id");
+                    let row_timeline: String = row.get("timeline_id");
+                    let row_key_body: String = row.get("key");
                     let size_bytes: i64 = row.get("size_bytes");
                     let last_modified_us: i64 = row.get("last_modified_us");
+                    let full_key = self.reconstruct_key(namespace, &row_tenant, &row_timeline, &row_key_body);
                     let remote_path = self
-                        .db_key_to_remote_path(&key)
+                        .db_key_to_remote_path(&full_key)
                         .map_err(DownloadError::Other)?;
                     result.keys.push(ListingObject {
                         key: remote_path,
@@ -368,12 +498,15 @@ impl RemoteStorage for YbStore {
 
                 let mut prefixes: HashSet<String> = HashSet::new();
                 for row in rows {
-                    let key: String = row.get("key");
+                    let row_tenant: String = row.get("tenant_id");
+                    let row_timeline: String = row.get("timeline_id");
+                    let row_key_body: String = row.get("key");
                     let size_bytes: i64 = row.get("size_bytes");
                     let last_modified_us: i64 = row.get("last_modified_us");
 
-                    let relative = match key.strip_prefix(listing_prefix.as_str()) {
-                        Some(r) => r,
+                    let full_key = self.reconstruct_key(namespace, &row_tenant, &row_timeline, &row_key_body);
+                    let relative = match full_key.strip_prefix(listing_prefix.as_str()) {
+                        Some(r) => r.to_string(),
                         None => continue,
                     };
 
@@ -381,7 +514,7 @@ impl RemoteStorage for YbStore {
                         prefixes.insert(relative[..i].to_string());
                     } else {
                         result.keys.push(ListingObject {
-                            key: RemotePath::from_string(relative)
+                            key: RemotePath::from_string(&relative)
                                 .map_err(DownloadError::Other)?,
                             last_modified: system_time_from_micros(last_modified_us),
                             size: size_bytes.max(0) as u64,
@@ -423,15 +556,17 @@ impl RemoteStorage for YbStore {
             .map_err(|_| DownloadError::Cancelled)?;
 
         let db_key = self.full_key(key);
-        let (tenant_id, timeline_id) = Self::extract_neon_ids(&db_key);
+        let (namespace, tenant_id, timeline_id, key_body) = self.parse_key(&db_key);
         // chunk_idx=0 always exists for any object (including zero-byte ones),
         // and carries the denormalized size/etag/timestamp — one-row lookup.
         let sql = format!(
             "SELECT size_bytes, last_modified_us FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3 AND chunk_idx = 0",
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND namespace = $3::text::blob_namespace AND key = $4 AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &db_key];
+        let params: [&(dyn ToSql + Sync); 4] =
+            [&tenant_id, &timeline_id, &namespace, &key_body];
         let row_opt = self
             .with_timeout_download(self.client.query_opt(&sql, &params), cancel)
             .await?;
@@ -489,13 +624,15 @@ impl RemoteStorage for YbStore {
         // chunk-count shrinking (the upsert GUC handles same-PK conflict but
         // wouldn't remove rows for keys that no longer exist in the new write).
         let table = quote_ident(&self.table_name);
-        let (pre_tenant, pre_timeline) = Self::extract_neon_ids(&db_key);
+        let (namespace, tenant_id, timeline_id, key_body) = self.parse_key(&db_key);
         let delete_sql = format!(
             "DELETE FROM {table} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3"
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND namespace = $3::text::blob_namespace AND key = $4"
         );
         {
-            let params: [&(dyn ToSql + Sync); 3] = [&pre_tenant, &pre_timeline, &db_key];
+            let params: [&(dyn ToSql + Sync); 4] =
+                [&tenant_id, &timeline_id, &namespace, &key_body];
             self.with_timeout(self.client.execute(&delete_sql, &params), cancel)
                 .await
                 .with_context(|| format!("YbStore upload: pre-delete `{db_key}`"))?;
@@ -516,12 +653,10 @@ impl RemoteStorage for YbStore {
         // of latency.
         let insert_sql = format!(
             "INSERT INTO {table} \
-             (tenant_id, timeline_id, key, chunk_idx, data, size_bytes, etag, \
-              last_modified_us, metadata_json) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+             (tenant_id, timeline_id, namespace, key, chunk_idx, data, size_bytes, \
+              etag, last_modified_us, metadata_json) \
+             VALUES ($1, $2, $3::text::blob_namespace, $4, $5, $6, $7, $8, $9, $10)"
         );
-
-        let (tenant_id, timeline_id) = Self::extract_neon_ids(&db_key);
 
         // Materialize all chunk rows up front so each pipelined future can own
         // its params (no borrow-into-loop-local issues).
@@ -540,7 +675,8 @@ impl RemoteStorage for YbStore {
                 let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
                     Box::new(tenant_id.clone()),
                     Box::new(timeline_id.clone()),
-                    Box::new(db_key.clone()),
+                    Box::new(namespace),
+                    Box::new(key_body.clone()),
                     Box::new(idx),
                     Box::new(chunk),
                     Box::new(size),
@@ -573,7 +709,7 @@ impl RemoteStorage for YbStore {
 
         let db_key = self.full_key(from);
 
-        let (tenant_id, timeline_id) = Self::extract_neon_ids(&db_key);
+        let (namespace, tenant_id, timeline_id, key_body) = self.parse_key(&db_key);
 
         // Phase 1: cheap single-row lookup to get the denormalized metadata
         // (size_bytes / etag / last_modified_us / metadata_json) sitting on
@@ -581,11 +717,13 @@ impl RemoteStorage for YbStore {
         // range without ever loading bulk data into memory.
         let head_sql = format!(
             "SELECT size_bytes, etag, last_modified_us, metadata_json \
-             FROM {} WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3 \
-             AND chunk_idx = 0",
+             FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND namespace = $3::text::blob_namespace AND key = $4 \
+               AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let head_params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &db_key];
+        let head_params: [&(dyn ToSql + Sync); 4] =
+            [&tenant_id, &timeline_id, &namespace, &key_body];
         let head_opt = self
             .with_timeout_download(self.client.query_opt(&head_sql, &head_params), cancel)
             .await?;
@@ -645,14 +783,17 @@ impl RemoteStorage for YbStore {
         let table = self.table_name.clone();
         let stream_sql = format!(
             "SELECT chunk_idx, data FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3 \
-             AND chunk_idx >= $4 AND chunk_idx <= $5 \
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND namespace = $3::text::blob_namespace AND key = $4 \
+               AND chunk_idx >= $5 AND chunk_idx <= $6 \
              ORDER BY chunk_idx",
             quote_ident(&table)
         );
         let timeout = self.timeout;
         let stream_tenant = tenant_id.clone();
         let stream_timeline = timeline_id.clone();
+        let stream_namespace = namespace;
+        let stream_key = key_body.clone();
 
         // Open the row stream first (so any query error fails the
         // `download()` call cleanly with `DownloadError::Other` rather than
@@ -661,7 +802,8 @@ impl RemoteStorage for YbStore {
         let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
             Box::new(stream_tenant),
             Box::new(stream_timeline),
-            Box::new(db_key.clone()),
+            Box::new(stream_namespace),
+            Box::new(stream_key),
             Box::new(start_chunk),
             Box::new(end_chunk),
         ];
@@ -714,13 +856,15 @@ impl RemoteStorage for YbStore {
     async fn delete(&self, path: &RemotePath, cancel: &CancellationToken) -> anyhow::Result<()> {
         let _permit = self.permit(RequestKind::Delete, cancel).await?;
         let db_key = self.full_key(path);
-        let (tenant_id, timeline_id) = Self::extract_neon_ids(&db_key);
+        let (namespace, tenant_id, timeline_id, key_body) = self.parse_key(&db_key);
         let sql = format!(
             "DELETE FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3",
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND namespace = $3::text::blob_namespace AND key = $4",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &db_key];
+        let params: [&(dyn ToSql + Sync); 4] =
+            [&tenant_id, &timeline_id, &namespace, &key_body];
         self.with_timeout(self.client.execute(&sql, &params), cancel)
             .await
             .with_context(|| format!("YbStore delete of `{db_key}`"))?;
@@ -736,13 +880,36 @@ impl RemoteStorage for YbStore {
             return Ok(());
         }
         let _permit = self.permit(RequestKind::Delete, cancel).await?;
-        let keys: Vec<String> = paths.iter().map(|p| self.full_key(p)).collect();
         let sql = format!(
-            "DELETE FROM {} WHERE key = ANY($1)",
+            "DELETE FROM {} \
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND namespace = $3::text::blob_namespace AND key = $4",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 1] = [&keys];
-        self.with_timeout(self.client.execute(&sql, &params), cancel)
+
+        // Each key has its own (namespace, tenant, timeline, key_body)
+        // tuple, so we fan out one DELETE per object pipelined via
+        // `execute_raw` + `try_join_all`. Same wire-level batching trick
+        // as `upload`; each DELETE hits one hash tablet directly.
+        let parsed: Vec<(&'static str, String, String, String)> = paths
+            .iter()
+            .map(|p| self.parse_key(&self.full_key(p)))
+            .collect();
+
+        let pipeline_fut = async {
+            let futures = parsed.into_iter().map(|(ns, tenant, timeline, key_body)| {
+                let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+                    Box::new(tenant),
+                    Box::new(timeline),
+                    Box::new(ns),
+                    Box::new(key_body),
+                ];
+                self.client.execute_raw(&sql, params)
+            });
+            futures::future::try_join_all(futures).await?;
+            Ok::<_, tokio_postgres::Error>(())
+        };
+        self.with_timeout(pipeline_fut, cancel)
             .await
             .context("YbStore delete_objects")?;
         Ok(())
@@ -761,37 +928,43 @@ impl RemoteStorage for YbStore {
         let _permit = self.permit(RequestKind::Copy, cancel).await?;
         let from_key = self.full_key(from);
         let to_key = self.full_key(to);
-        let (from_tenant, from_timeline) = Self::extract_neon_ids(&from_key);
-        let (to_tenant, to_timeline) = Self::extract_neon_ids(&to_key);
+        let (from_ns, from_tenant, from_timeline, from_body) = self.parse_key(&from_key);
+        let (to_ns, to_tenant, to_timeline, to_body) = self.parse_key(&to_key);
         let table = quote_ident(&self.table_name);
         // Wipe the destination first so a copy that shrinks chunk count is
         // clean, then copy all source chunk rows over.
         let delete_dst = format!(
             "DELETE FROM {table} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3"
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND namespace = $3::text::blob_namespace AND key = $4"
         );
         {
-            let params: [&(dyn ToSql + Sync); 3] = [&to_tenant, &to_timeline, &to_key];
+            let params: [&(dyn ToSql + Sync); 4] =
+                [&to_tenant, &to_timeline, &to_ns, &to_body];
             self.with_timeout(self.client.execute(&delete_dst, &params), cancel)
                 .await
                 .with_context(|| format!("YbStore copy: pre-delete `{to_key}`"))?;
         }
         let insert_sql = format!(
             "INSERT INTO {table} \
-             (tenant_id, timeline_id, key, chunk_idx, data, size_bytes, etag, \
-              last_modified_us, metadata_json) \
-             SELECT $4, $5, $6, chunk_idx, data, size_bytes, etag, \
+             (tenant_id, timeline_id, namespace, key, chunk_idx, data, \
+              size_bytes, etag, last_modified_us, metadata_json) \
+             SELECT $5, $6, $7::text::blob_namespace, $8, chunk_idx, data, \
+                    size_bytes, etag, \
                     (extract(epoch from now()) * 1000000)::bigint, metadata_json \
              FROM {table} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3"
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND namespace = $3::text::blob_namespace AND key = $4"
         );
-        let params: [&(dyn ToSql + Sync); 6] = [
+        let params: [&(dyn ToSql + Sync); 8] = [
             &from_tenant,
             &from_timeline,
-            &from_key,
+            &from_ns,
+            &from_body,
             &to_tenant,
             &to_timeline,
-            &to_key,
+            &to_ns,
+            &to_body,
         ];
         let affected = self
             .with_timeout(self.client.execute(&insert_sql, &params), cancel)

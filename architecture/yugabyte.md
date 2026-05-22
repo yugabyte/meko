@@ -27,21 +27,54 @@ Generic chunked blob store used by:
 Subsystems are segregated by **key prefix**, not by separate tables.
 
 ```sql
+CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper');
+
 CREATE TABLE blobs (
-    tenant_id        TEXT    NOT NULL,    -- Neon tenant UUID (32 hex), or "" for non-tenant-scoped blobs
-    timeline_id      TEXT    NOT NULL,    -- Neon timeline UUID, or "" for tenant-scope-only blobs (e.g. tenant manifest)
-    key              TEXT    NOT NULL,    -- full RemoteStorage key path (e.g. `pageserver-yb/tenants/<id>/timelines/<id>/<layer>`)
-    chunk_idx        INT     NOT NULL,
-    data             BYTEA   NOT NULL,
-    size_bytes       BIGINT  NOT NULL,    -- total object size, denormalized
-    etag             TEXT    NOT NULL,    -- total-object etag, denormalized
-    last_modified_us BIGINT  NOT NULL,
+    tenant_id        TEXT             NOT NULL,    -- Neon tenant UUID, or "" if not extractable
+    timeline_id      TEXT             NOT NULL,    -- Neon timeline UUID, or "" for tenant-scoped blobs
+    namespace        blob_namespace   NOT NULL,    -- 'pageserver' or 'safekeeper'
+    key              TEXT             NOT NULL,    -- path body with {T}/{TL} placeholders in place of the UUIDs
+    chunk_idx        INT              NOT NULL,
+    data             BYTEA            NOT NULL,
+    size_bytes       BIGINT           NOT NULL,    -- total object size, denormalized
+    etag             TEXT             NOT NULL,    -- total-object etag, denormalized
+    last_modified_us BIGINT           NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, key, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
 );
 ```
 
-`tenant_id` and `timeline_id` are **extracted by the YbStore code at write time** from the incoming `RemotePath` (it scans path segments for Neon-id-shaped tokens — 32 hex chars, optionally with `-<count>-<num>` shard suffix). They're redundant with the `key` (which still carries the full path) but having them as explicit columns lets every point-lookup hit a single hash tablet via the PK, and makes per-tenant inspection / GC queries trivial. Mirrors the `wals` table shape exactly.
+The four-way split (`namespace` + `tenant_id` + `timeline_id` + `key`) is
+populated at write time by `YbStore::parse_key`:
+
+- **`namespace`** is the typed `blob_namespace` ENUM. Today only
+  `pageserver` and `safekeeper`. Derived from the configured `prefix`:
+  if it contains `safekeeper` → `safekeeper`; else → `pageserver`.
+- **`tenant_id`** and **`timeline_id`** are the first two Neon-id-shaped
+  tokens in the path (32 hex chars, optionally with a `-<count>-<num>`
+  shard suffix). Empty strings when absent.
+- **`key`** is the **discriminating suffix only** — the path with the
+  configured prefix stripped *and* with the segments `tenants`,
+  `timelines`, the tenant_id value, and the timeline_id value all
+  removed. What's left is just the trailing filename / identifier
+  that distinguishes one object from another within its
+  `(namespace, tenant_id, timeline_id)` bucket. `YbStore::reconstruct_key`
+  knows the per-namespace layout convention and rebuilds the original
+  `RemotePath` for `list` outputs.
+
+A row in this schema looks like:
+
+| namespace | tenant_id | timeline_id | key |
+|---|---|---|---|
+| `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `000000-FFF__layer-1` |
+| `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `index_part.json-00000001` |
+| `pageserver` | `c8178f5e…1f966a` | *(empty)* | `tenant-manifest-00000001.json` |
+| `safekeeper` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `safekeeper-control` |
+| `safekeeper` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `000000010000000000000005` |
+
+The PK puts `(tenant_id, timeline_id)` in the hash partition so every
+point-lookup hits a single tablet. Within a bucket rows are sorted by
+`(namespace, key, chunk_idx)`.
 
 Schema documented in detail in [`remote-storage.md`](remote-storage.md).
 
@@ -60,30 +93,31 @@ sealed WAL segments that wal_backup has uploaded.)
 ### Useful diagnostic queries
 
 ```sql
--- Per-subsystem breakdown by key prefix
-SELECT split_part(key, '/', 1) AS prefix,
-       count(DISTINCT key)      AS objects,
-       count(*)                 AS chunks,
-       pg_size_pretty(sum(length(data))::bigint) AS stored
+-- Per-subsystem breakdown
+SELECT namespace,
+       count(DISTINCT (tenant_id, timeline_id, key)) AS objects,
+       count(*)                                       AS chunks,
+       pg_size_pretty(sum(length(data))::bigint)      AS stored
 FROM blobs
-GROUP BY 1
-ORDER BY 1;
+GROUP BY namespace
+ORDER BY namespace;
 
 -- Per-tenant breakdown (fast — hits the (tenant_id, timeline_id) hash partition)
 SELECT tenant_id,
        timeline_id,
+       namespace,
        count(DISTINCT key) AS objects,
        count(*)            AS chunks,
        pg_size_pretty(sum(length(data))::bigint) AS stored
 FROM blobs
-GROUP BY tenant_id, timeline_id
+GROUP BY tenant_id, timeline_id, namespace
 ORDER BY sum(length(data)) DESC;
 
 -- Largest objects
-SELECT tenant_id, timeline_id, key,
+SELECT tenant_id, timeline_id, namespace, key,
        count(*) AS chunks, pg_size_pretty(max(size_bytes)) AS total
 FROM blobs
-GROUP BY tenant_id, timeline_id, key
+GROUP BY tenant_id, timeline_id, namespace, key
 ORDER BY max(size_bytes) DESC
 LIMIT 10;
 ```
@@ -178,17 +212,20 @@ CREATE DATABASE storage_controller;   -- controller will run migrations itself
 
 \c yb_storage
 
+CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper');
+
 CREATE TABLE blobs (
-    tenant_id        TEXT    NOT NULL,
-    timeline_id      TEXT    NOT NULL,
-    key              TEXT    NOT NULL,
-    chunk_idx        INT     NOT NULL,
-    data             BYTEA   NOT NULL,
-    size_bytes       BIGINT  NOT NULL,
-    etag             TEXT    NOT NULL,
-    last_modified_us BIGINT  NOT NULL,
+    tenant_id        TEXT             NOT NULL,
+    timeline_id      TEXT             NOT NULL,
+    namespace        blob_namespace   NOT NULL,
+    key              TEXT             NOT NULL,
+    chunk_idx        INT              NOT NULL,
+    data             BYTEA            NOT NULL,
+    size_bytes       BIGINT           NOT NULL,
+    etag             TEXT             NOT NULL,
+    last_modified_us BIGINT           NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, key, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
 );
 
 CREATE TABLE wals (

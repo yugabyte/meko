@@ -73,6 +73,11 @@ disk. See [`pageserver.md`](pageserver.md) for details.
 
 ## What's durable where
 
+(The `Path / key` column below describes the **logical** RemoteStorage
+key the pageserver/safekeeper use. In YB the path is split across the
+`namespace` / `tenant_id` / `timeline_id` / `key` columns — see
+[`yugabyte.md`](yugabyte.md). The mapping is round-trip lossless.)
+
 | Subsystem state | yb-neon backend | Path / key |
 |---|---|---|
 | Pageserver layer files | YB `yb_storage.blobs` | `pageserver-yb/tenants/<id>/timelines/<id>/<layer>` (one BYTEA chunk per row, ≤ 100 MiB each) |
@@ -111,8 +116,13 @@ Single host, single YB instance, single pageserver, single safekeeper.
 ```
 yugabyted                       :7100 (master), :5433 (ysql)
   +-- db `yb_storage`
+  |     +-- type `blob_namespace` ENUM ('pageserver', 'safekeeper')
   |     +-- table `blobs`        chunked BYTEA + denormalized metadata,
-  |     |                        PK ((tenant_id, timeline_id) HASH, key, chunk_idx)
+  |     |                        PK ((tenant_id, timeline_id) HASH,
+  |     |                            namespace, key, chunk_idx)
+  |     |                        key column holds the bare filename — tenants/
+  |     |                        and timelines/ literals + the UUID values are
+  |     |                        not stored, they live in their own columns
   |     +-- table `wals`         per-write rows,
   |                              PK ((tenant_id, timeline_id) HASH, segno, chunk_seq)
   +-- db `storage_controller`    Diesel-managed; 11 tables

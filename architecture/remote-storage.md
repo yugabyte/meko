@@ -51,41 +51,81 @@ method against a YugabyteDB table reached via `tokio_postgres`.
 ### Schema (operator-provisioned)
 
 ```sql
+CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper');
+
 CREATE TABLE <table_name> (
-    tenant_id        TEXT    NOT NULL,    -- Neon tenant UUID, "" if not extractable
-    timeline_id      TEXT    NOT NULL,    -- Neon timeline UUID, "" for tenant-scope-only blobs
-    key              TEXT    NOT NULL,    -- full RemoteStorage key (with configured prefix)
-    chunk_idx        INT     NOT NULL,
-    data             BYTEA   NOT NULL,
-    size_bytes       BIGINT  NOT NULL,    -- total object size, denormalized
-    etag             TEXT    NOT NULL,    -- total-object etag, denormalized
-    last_modified_us BIGINT  NOT NULL,    -- denormalized
+    tenant_id        TEXT             NOT NULL,    -- Neon tenant UUID, "" if not extractable
+    timeline_id      TEXT             NOT NULL,    -- Neon timeline UUID, "" for tenant-scope-only blobs
+    namespace        blob_namespace   NOT NULL,    -- 'pageserver' or 'safekeeper'
+    key              TEXT             NOT NULL,    -- path body with {T}/{TL} placeholders
+    chunk_idx        INT              NOT NULL,
+    data             BYTEA            NOT NULL,
+    size_bytes       BIGINT           NOT NULL,
+    etag             TEXT             NOT NULL,
+    last_modified_us BIGINT           NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, key, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
 );
 ```
 
-- One row per **chunk** of the object. `chunk_idx` is sequential 0, 1, 2…
-- `size_bytes`, `etag`, `last_modified_us`, `metadata_json` are **denormalized**
-  onto every chunk row so `head_object()` is a one-row read against
-  `chunk_idx = 0`.
-- `tenant_id` + `timeline_id` are **extracted at write time** by
-  `YbStore::extract_neon_ids` — it scans the key's path segments for
-  Neon-id-shaped tokens (32 hex chars, or 32 hex chars with a
-  `-<count>-<num>` shard suffix). The first such token becomes
-  `tenant_id`; the second becomes `timeline_id`. Tokens that don't
-  appear in the path produce empty strings. The extractor is heuristic
-  but covers every key the pageserver and safekeeper write today
-  (`pageserver-yb/tenants/<id>/timelines/<id>/…`,
-  `safekeeper-yb/<id>/<id>/…`, `safekeeper-yb/safekeeper-control/<id>/<id>`,
-  `pageserver-yb/tenants/<id>/tenant-manifest-…`). For any future key
-  that doesn't carry a tenant/timeline, both columns are empty strings
-  — schema still accepts the row.
-- The PK puts `(tenant_id, timeline_id)` in the hash partition so
-  every point-lookup (`head_object`, `download`, `delete`, `upload`'s
-  pre-DELETE, `copy`) goes to one tablet directly — no scans. Same
-  shape as the `wals` table. `list` and `delete_objects` remain
-  scan-style because they're prefix / multi-key by nature.
+`YbStore::parse_key` splits each incoming `RemotePath` into the four
+storage columns + the chunk index:
+
+- **`namespace`**: derived from `YbStoreConfig::prefix`. If the prefix
+  contains `safekeeper` → `safekeeper`; everything else → `pageserver`.
+  Must match one of the variants of the `blob_namespace` ENUM. Stored
+  via a `text::blob_namespace` cast in SQL (tokio_postgres can't bind
+  Rust `&str` directly to a custom ENUM type, so the cast happens
+  server-side).
+- **`tenant_id`** / **`timeline_id`**: first two Neon-id-shaped tokens
+  in the path *after* stripping the configured prefix. A Neon id is
+  32 hex characters, optionally followed by `-<count>-<num>` for
+  sharded tenants. The extractor is heuristic but covers every key the
+  pageserver and safekeeper write. Empty strings when a level is absent
+  (tenant manifests have no `timeline_id`; future generic blobs may
+  have neither).
+- **`key`**: the **discriminating suffix only**. `parse_key` strips
+  the configured prefix *plus* the literal segments `tenants` and
+  `timelines`, *plus* the tenant_id and timeline_id values
+  themselves. What's left is the filename / identifier that
+  distinguishes one object from another within its
+  `(namespace, tenant_id, timeline_id)` bucket. The per-namespace
+  layout convention (where to put `tenants/`, where to put `timelines/`,
+  what the safekeeper-control case looks like) lives in
+  `reconstruct_key` — see below.
+- **`chunk_idx`** + **`data`**: object split into ≤ 100 MiB chunks.
+
+`reconstruct_key(namespace, tenant_id, timeline_id, key_body)` rebuilds
+the original `RemotePath` for `list` outputs by applying the layout:
+
+| namespace | timeline_id | layout |
+|---|---|---|
+| `pageserver` | non-empty | `<prefix>tenants/<T>/timelines/<TL>/<body>` |
+| `pageserver` | empty | `<prefix>tenants/<T>/<body>` |
+| `safekeeper` | body == `safekeeper-control` | `<prefix>safekeeper-control/<T>/<TL>` |
+| `safekeeper` | otherwise (WAL backup) | `<prefix><T>/<TL>/<body>` |
+
+Sample rows:
+
+| namespace | tenant_id | timeline_id | key |
+|---|---|---|---|
+| pageserver | c8178f5e…1f966a | 77ffde89…089eaa | `000000-FFF__layer-1` |
+| pageserver | c8178f5e…1f966a | 77ffde89…089eaa | `index_part.json-00000001` |
+| pageserver | c8178f5e…1f966a | *(empty)* | `tenant-manifest-00000001.json` |
+| safekeeper | c8178f5e…1f966a | 77ffde89…089eaa | `safekeeper-control` |
+| safekeeper | c8178f5e…1f966a | 77ffde89…089eaa | `000000010000000000000005` |
+
+The PK puts `(tenant_id, timeline_id)` in the hash partition so every
+point-lookup (`head_object`, `download`'s metadata + streaming SELECT,
+`delete`, `upload`'s pre-DELETE, `copy`'s pre-DELETE and INSERT…SELECT)
+hits one tablet via hash routing. `list` constructs the LIKE pattern
+in placeholder form and filters by tenant_id / timeline_id when
+extractable from the user-supplied prefix; `delete_objects` fans out
+one DELETE per object, each pinned to its own tablet.
+
+`size_bytes`, `etag`, `last_modified_us`, `metadata_json` are
+**denormalized** onto every chunk row so `head_object()` is a one-row
+read against `chunk_idx = 0`.
 
 ### Chunking
 
