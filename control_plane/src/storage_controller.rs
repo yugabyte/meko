@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
@@ -295,6 +296,54 @@ impl StorageController {
         Ok(database_url)
     }
 
+    /// Ensure the target database in an externally-managed Postgres (e.g.
+    /// YugabyteDB) exists before pointing the storage_controller at it.
+    /// We connect to the admin database (`postgres`) using the same
+    /// host/user/credentials as the target URL, and issue
+    /// `CREATE DATABASE`. "Already exists" is treated as success.
+    async fn ensure_external_database(&self, url: &str) -> anyhow::Result<()> {
+        let mut target = tokio_postgres::Config::from_str(url)
+            .context("parsing storage_controller.database_url")?;
+        let target_db = target
+            .get_dbname()
+            .context("storage_controller.database_url must include a database name")?
+            .to_string();
+
+        // Connect to the admin DB (`postgres` exists on both vanilla PG and
+        // YugabyteDB) using the same credentials.
+        target.dbname("postgres");
+        let (client, conn) = target
+            .connect(tokio_postgres::NoTls)
+            .await
+            .context("connecting to admin database 'postgres' to ensure controller DB exists")?;
+        let conn_task = tokio::spawn(conn);
+
+        // Quote the identifier safely. `replace('"', "\"\"")` handles any
+        // embedded double-quotes; legitimate DB names won't have them.
+        let create_sql = format!("CREATE DATABASE \"{}\"", target_db.replace('"', "\"\""));
+        match client.batch_execute(&create_sql).await {
+            Ok(()) => {
+                println!("Created database '{target_db}'");
+            }
+            Err(e) => {
+                if let Some(db_err) = e.as_db_error() {
+                    if db_err.code() == &tokio_postgres::error::SqlState::DUPLICATE_DATABASE {
+                        println!("Database '{target_db}' already exists");
+                    } else {
+                        return Err(anyhow::Error::from(e)
+                            .context(format!("creating database '{target_db}'")));
+                    }
+                } else {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("creating database '{target_db}'")));
+                }
+            }
+        }
+        drop(client);
+        conn_task.await??;
+        Ok(())
+    }
+
     pub async fn connect_to_database(
         &self,
         postgres_port: u16,
@@ -365,26 +414,55 @@ impl StorageController {
         let scheme = listen_url.scheme();
         let host = listen_url.host_str().unwrap();
 
-        let (listen_port, postgres_port) = if let Some(base_port) = start_args.base_port {
-            (
-                base_port,
-                self.config
-                    .database_url
-                    .expect("--base-port requires NeonStorageControllerConf::database_url")
-                    .port(),
-            )
-        } else {
-            let port = listen_url.port().unwrap();
-            (port, port + 1)
+        // If `database_url` is set in NeonStorageControllerConf, the operator
+        // is pointing the controller at an externally-managed Postgres (in
+        // yb-neon: a YugabyteDB cluster). In that case we skip the local-PG
+        // bootstrap entirely.
+        let external_database_url = self.config.database_url.clone();
+
+        let (listen_port, postgres_port) = match (start_args.base_port, &external_database_url) {
+            (Some(base_port), Some(url)) => {
+                // HA / multi-instance mode against an external DB: derive
+                // postgres_port from the URL so the connect_to_database()
+                // path below (used only for the startup script) still works
+                // when external_database_url is None at some sites. The port
+                // here is otherwise unused on the external path.
+                let parsed =
+                    Url::parse(url).context("parsing storage_controller.database_url")?;
+                let port = parsed.port().unwrap_or(5432);
+                (base_port, port)
+            }
+            (Some(_), None) => {
+                anyhow::bail!("--base-port requires NeonStorageControllerConf::database_url");
+            }
+            (None, _) => {
+                let port = listen_url.port().unwrap();
+                (port, port + 1)
+            }
         };
 
         self.listen_port
             .set(listen_port)
             .expect("StorageController::listen_port is only set here");
 
-        // Do we remove the pid file on stop?
-        let pg_started = self.is_postgres_running().await?;
+        // Needed below to set LD_LIBRARY_PATH for the storage_controller
+        // process itself (it links against libpq).
         let pg_lib_dir = self.get_pg_lib_dir().await?;
+
+        // Against an external database (e.g. YugabyteDB), make sure the
+        // target database itself exists before pointing the controller at
+        // it. The controller's Diesel migrations create the schema inside
+        // the DB, but they don't create the DB container.
+        if let Some(url) = &external_database_url {
+            self.ensure_external_database(url).await?;
+        }
+
+        // Local-PG bootstrap, skipped when an external database URL is configured.
+        let pg_started = if external_database_url.is_none() {
+            self.is_postgres_running().await?
+        } else {
+            true
+        };
 
         if !pg_started {
             // Start a vanilla Postgres process used by the storage controller for persistence.
@@ -485,36 +563,41 @@ impl StorageController {
             self.setup_database(postgres_port).await?;
         }
 
-        let database_url = format!("postgresql://localhost:{postgres_port}/{DB_NAME}");
+        let database_url = match &external_database_url {
+            Some(url) => url.clone(),
+            None => format!("postgresql://localhost:{postgres_port}/{DB_NAME}"),
+        };
 
         // We support running a startup SQL script to fiddle with the database before we launch storcon.
-        // This is used by the test suite.
-        let startup_script_path = self
-            .env
-            .base_data_dir
-            .join("storage_controller_db.startup.sql");
-        let startup_script = match tokio::fs::read_to_string(&startup_script_path).await {
-            Ok(script) => {
-                tokio::fs::remove_file(startup_script_path).await?;
-                script
-            }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    // always run some startup script so that this code path doesn't bit rot
-                    "BEGIN; COMMIT;".to_string()
-                } else {
-                    anyhow::bail!("Failed to read startup script: {e}")
+        // This is used by the test suite — only meaningful against the local-PG bootstrap path.
+        if external_database_url.is_none() {
+            let startup_script_path = self
+                .env
+                .base_data_dir
+                .join("storage_controller_db.startup.sql");
+            let startup_script = match tokio::fs::read_to_string(&startup_script_path).await {
+                Ok(script) => {
+                    tokio::fs::remove_file(startup_script_path).await?;
+                    script
                 }
-            }
-        };
-        let (mut client, conn) = self.connect_to_database(postgres_port).await?;
-        let conn = tokio::spawn(conn);
-        let tx = client.build_transaction();
-        let tx = tx.start().await?;
-        tx.batch_execute(&startup_script).await?;
-        tx.commit().await?;
-        drop(client);
-        conn.await??;
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        // always run some startup script so that this code path doesn't bit rot
+                        "BEGIN; COMMIT;".to_string()
+                    } else {
+                        anyhow::bail!("Failed to read startup script: {e}")
+                    }
+                }
+            };
+            let (mut client, conn) = self.connect_to_database(postgres_port).await?;
+            let conn = tokio::spawn(conn);
+            let tx = client.build_transaction();
+            let tx = tx.start().await?;
+            tx.batch_execute(&startup_script).await?;
+            tx.commit().await?;
+            drop(client);
+            conn.await??;
+        }
 
         let addr = format!("{host}:{listen_port}");
         let address_for_peers = Uri::builder()
@@ -727,6 +810,12 @@ impl StorageController {
                 // and leave the database running.
                 return Ok(());
             }
+        }
+
+        // When pointed at an external database (e.g. YugabyteDB), neon_local
+        // never started a local Postgres, so there's nothing to stop here.
+        if self.config.database_url.is_some() {
+            return Ok(());
         }
 
         let pg_data_path = self.env.base_data_dir.join("storage_controller_db");

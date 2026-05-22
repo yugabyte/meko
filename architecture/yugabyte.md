@@ -11,8 +11,10 @@ expected to provision before pointing yb-neon at YB.
 | `yb_storage` | yugabyte | All blob storage for the pageserver and safekeeper. Holds `blobs` (chunked binary objects) and `wals` (per-write WAL chunks). | operator |
 | `storage_controller` | yugabyte | The storage controller's 11 relational tables (Diesel-managed). | the controller binary on first start (runs migrations) |
 
-The `storage_controller` DB is created externally (e.g. `CREATE DATABASE
-storage_controller`); migrations populate the tables.
+The `storage_controller` DB is auto-created by `neon_local` on first start
+(it connects to YB's `postgres` admin DB with the same credentials and
+issues `CREATE DATABASE storage_controller`); the controller's Diesel
+migrations then populate the 11 tables.
 `yb_storage` and its two tables are entirely operator-provisioned —
 yb-neon never runs DDL against them.
 
@@ -208,7 +210,7 @@ A one-time setup script:
 ```sql
 -- on a fresh YB cluster
 CREATE DATABASE yb_storage;
-CREATE DATABASE storage_controller;   -- controller will run migrations itself
+-- storage_controller DB is auto-created by neon_local; no operator DDL needed.
 
 \c yb_storage
 

@@ -96,15 +96,34 @@ YSQL frontend is Postgres-protocol-compatible.
 ## Local FS footprint in YB-backed mode
 
 ```
-<workdir>/storage_controller_db/    (empty - PG v16 is no longer used)
+(none)
 ```
 
-The dev wrapper still creates a `storage_controller_db/` directory because
-upstream `control_plane/src/storage_controller.rs` does an `initdb` there
-during `neon_local start`. With our setup we run the controller binary
-directly (bypassing the wrapper's PG-spawn step), so that directory stays
-empty. A cleanup PR could remove the wrapper's initdb step when YB is
-configured; for now it's harmless overhead.
+`neon_local` looks at `storage_controller.database_url` in `.neon/config`:
+when it's set (e.g. to a YugabyteDB URL — local or remote), the wrapper
+**skips the entire local-Postgres bootstrap** (`initdb`, `pg_ctl start`,
+the startup-script transaction) and passes the URL straight through to
+the controller as `--database-url`. `neon_local stop` likewise skips
+`pg_ctl stop`. No `storage_controller_db/` directory is created.
+
+Before pointing the controller at the URL, neon_local **connects to the
+admin database** (`postgres`) on the same host with the same credentials
+and runs `CREATE DATABASE <target>` — so on a fresh YB cluster you do
+**not** need to pre-create the `storage_controller` database. "Already
+exists" is treated as success. The controller's own Diesel migrations
+then create the 11 tables inside that DB on first start.
+
+Set it via the init TOML (`neon_local init --config <file>`):
+
+```toml
+[storage_controller]
+database_url = "postgresql://yugabyte@127.0.0.1:5433/storage_controller"
+# or against a remote YB cluster:
+# database_url = "postgresql://yugabyte@yb-host.example.com:5433/storage_controller"
+```
+
+The controller itself still links against `libpq`, so the Postgres v17
+libs must exist locally — but no Postgres *server* runs.
 
 ## Run / configure
 

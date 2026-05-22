@@ -187,8 +187,14 @@ pub struct NeonStorageControllerConf {
 
     pub start_as_candidate: bool,
 
-    /// Database url used when running multiple storage controller instances
-    pub database_url: Option<SocketAddr>,
+    /// Database connection string for the storage controller's persistence
+    /// layer. When `Some`, neon_local skips the local Postgres bootstrap
+    /// (initdb / pg_ctl / createdb / startup-script tx) and passes this URL
+    /// straight through to the storage controller as `--database-url`. This
+    /// is how yb-neon points the controller at YugabyteDB; it's also useful
+    /// for running multiple controller instances against a shared DB.
+    /// Example: `postgresql://yugabyte@127.0.0.1:5433/storage_controller`.
+    pub database_url: Option<String>,
 
     /// Thresholds for auto-splitting a tenant into shards.
     pub split_threshold: Option<u64>,
