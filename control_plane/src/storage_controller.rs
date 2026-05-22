@@ -296,49 +296,137 @@ impl StorageController {
         Ok(database_url)
     }
 
-    /// Ensure the target database in an externally-managed Postgres (e.g.
-    /// YugabyteDB) exists before pointing the storage_controller at it.
-    /// We connect to the admin database (`postgres`) using the same
-    /// host/user/credentials as the target URL, and issue
-    /// `CREATE DATABASE`. "Already exists" is treated as success.
+    /// Provision the external (YugabyteDB) cluster before the rest of
+    /// neon_local starts: ensure both the `storage_controller` database
+    /// (Diesel migrations populate the tables) and the `yb_storage`
+    /// database with its `blob_namespace` type + `blobs` / `wals` tables
+    /// (operator schema that pageserver+safekeeper `YbStore` writes to)
+    /// exist. All steps are idempotent.
+    ///
+    /// We connect to YugabyteDB's `yugabyte` admin database with the same
+    /// host/user/credentials as the controller URL to issue
+    /// `CREATE DATABASE`.
     async fn ensure_external_database(&self, url: &str) -> anyhow::Result<()> {
-        let mut target = tokio_postgres::Config::from_str(url)
+        let target = tokio_postgres::Config::from_str(url)
             .context("parsing storage_controller.database_url")?;
-        let target_db = target
+        let controller_db = target
             .get_dbname()
             .context("storage_controller.database_url must include a database name")?
             .to_string();
 
-        // Connect to the admin DB (`postgres` exists on both vanilla PG and
-        // YugabyteDB) using the same credentials.
-        target.dbname("postgres");
-        let (client, conn) = target
+        // Step 1: connect to the YB admin DB ('yugabyte') and CREATE the
+        // controller DB + the yb_storage DB.
+        Self::create_database(&target, &controller_db).await?;
+        Self::create_database(&target, "yb_storage").await?;
+
+        // Step 2: connect to yb_storage and run its DDL.
+        Self::ensure_yb_storage_schema(&target).await?;
+
+        Ok(())
+    }
+
+    /// `CREATE DATABASE <name>` against the `yugabyte` admin DB on the
+    /// cluster described by `base`. Treats "already exists" as success.
+    async fn create_database(base: &tokio_postgres::Config, name: &str) -> anyhow::Result<()> {
+        let mut admin = base.clone();
+        admin.dbname("yugabyte");
+        let (client, conn) = admin
             .connect(tokio_postgres::NoTls)
             .await
-            .context("connecting to admin database 'postgres' to ensure controller DB exists")?;
+            .context("connecting to YB admin database 'yugabyte'")?;
         let conn_task = tokio::spawn(conn);
 
-        // Quote the identifier safely. `replace('"', "\"\"")` handles any
-        // embedded double-quotes; legitimate DB names won't have them.
-        let create_sql = format!("CREATE DATABASE \"{}\"", target_db.replace('"', "\"\""));
+        let create_sql = format!("CREATE DATABASE \"{}\"", name.replace('"', "\"\""));
         match client.batch_execute(&create_sql).await {
             Ok(()) => {
-                println!("Created database '{target_db}'");
+                println!("Created database '{name}'");
             }
             Err(e) => {
-                if let Some(db_err) = e.as_db_error() {
-                    if db_err.code() == &tokio_postgres::error::SqlState::DUPLICATE_DATABASE {
-                        println!("Database '{target_db}' already exists");
-                    } else {
-                        return Err(anyhow::Error::from(e)
-                            .context(format!("creating database '{target_db}'")));
-                    }
+                let is_dup = e
+                    .as_db_error()
+                    .is_some_and(|d| d.code() == &tokio_postgres::error::SqlState::DUPLICATE_DATABASE);
+                if is_dup {
+                    println!("Database '{name}' already exists");
                 } else {
                     return Err(anyhow::Error::from(e)
-                        .context(format!("creating database '{target_db}'")));
+                        .context(format!("creating database '{name}'")));
                 }
             }
         }
+        drop(client);
+        conn_task.await??;
+        Ok(())
+    }
+
+    /// Connect to the `yb_storage` database on the cluster described by
+    /// `base` and create the `blob_namespace` ENUM type plus the `blobs`
+    /// and `wals` tables. All statements are idempotent.
+    async fn ensure_yb_storage_schema(base: &tokio_postgres::Config) -> anyhow::Result<()> {
+        let mut cfg = base.clone();
+        cfg.dbname("yb_storage");
+        let (client, conn) = cfg
+            .connect(tokio_postgres::NoTls)
+            .await
+            .context("connecting to yb_storage to provision schema")?;
+        let conn_task = tokio::spawn(conn);
+
+        // CREATE TYPE has no IF NOT EXISTS — swallow the duplicate-object
+        // error on retries.
+        match client
+            .batch_execute("CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper')")
+            .await
+        {
+            Ok(()) => println!("Created type yb_storage.blob_namespace"),
+            Err(e) => {
+                let is_dup = e
+                    .as_db_error()
+                    .is_some_and(|d| d.code() == &tokio_postgres::error::SqlState::DUPLICATE_OBJECT);
+                if is_dup {
+                    println!("Type yb_storage.blob_namespace already exists");
+                } else {
+                    return Err(anyhow::Error::from(e).context("creating blob_namespace type"));
+                }
+            }
+        }
+
+        client
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS blobs (
+                    tenant_id        TEXT             NOT NULL,
+                    timeline_id      TEXT             NOT NULL,
+                    namespace        blob_namespace   NOT NULL,
+                    key              TEXT             NOT NULL,
+                    chunk_idx        INT              NOT NULL,
+                    data             BYTEA            NOT NULL,
+                    size_bytes       BIGINT           NOT NULL,
+                    etag             TEXT             NOT NULL,
+                    last_modified_us BIGINT           NOT NULL,
+                    metadata_json    TEXT,
+                    PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
+                )",
+            )
+            .await
+            .context("creating yb_storage.blobs")?;
+        println!("Ensured table yb_storage.blobs");
+
+        client
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS wals (
+                    tenant_id        TEXT    NOT NULL,
+                    timeline_id      TEXT    NOT NULL,
+                    segno            BIGINT  NOT NULL,
+                    chunk_seq        INT     NOT NULL,
+                    chunk_offset     BIGINT  NOT NULL,
+                    chunk_size       INT     NOT NULL,
+                    data             BYTEA   NOT NULL,
+                    last_modified_us BIGINT  NOT NULL,
+                    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)
+                )",
+            )
+            .await
+            .context("creating yb_storage.wals")?;
+        println!("Ensured table yb_storage.wals");
+
         drop(client);
         conn_task.await??;
         Ok(())

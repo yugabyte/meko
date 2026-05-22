@@ -8,15 +8,16 @@ expected to provision before pointing yb-neon at YB.
 
 | Database | Owner | Purpose | Provisioned by |
 |---|---|---|---|
-| `yb_storage` | yugabyte | All blob storage for the pageserver and safekeeper. Holds `blobs` (chunked binary objects) and `wals` (per-write WAL chunks). | operator |
-| `storage_controller` | yugabyte | The storage controller's 11 relational tables (Diesel-managed). | the controller binary on first start (runs migrations) |
+| `yb_storage` | yugabyte | All blob storage for the pageserver and safekeeper. Holds `blobs` (chunked binary objects) and `wals` (per-write WAL chunks). | `neon_local` (auto) |
+| `storage_controller` | yugabyte | The storage controller's 11 relational tables (Diesel-managed). | `neon_local` creates the DB; the controller binary runs migrations on first start |
 
-The `storage_controller` DB is auto-created by `neon_local` on first start
-(it connects to YB's `postgres` admin DB with the same credentials and
-issues `CREATE DATABASE storage_controller`); the controller's Diesel
-migrations then populate the 11 tables.
-`yb_storage` and its two tables are entirely operator-provisioned —
-yb-neon never runs DDL against them.
+`neon_local` auto-provisions everything on first start: it connects to
+YB's `yugabyte` admin DB with the same credentials as the controller's
+`database_url`, then `CREATE DATABASE storage_controller`,
+`CREATE DATABASE yb_storage`, and inside `yb_storage` the
+`blob_namespace` ENUM type plus the `blobs` and `wals` tables.
+All idempotent — re-runs are no-ops. No operator DDL is required on a
+fresh YB cluster.
 
 ## `yb_storage.blobs`
 
@@ -204,13 +205,15 @@ controller's transactional updates to behave as expected.
 
 ## Provisioning DDL — full reference
 
-The yb-neon system expects these to already exist when its binaries start.
-A one-time setup script:
+`neon_local` runs this DDL itself on first start (see
+`control_plane/src/storage_controller.rs::ensure_external_database`).
+Listed here for reference / disaster-recovery; you do **not** need to
+run any of it by hand.
 
 ```sql
--- on a fresh YB cluster
+-- on a fresh YB cluster (auto-run by neon_local)
 CREATE DATABASE yb_storage;
--- storage_controller DB is auto-created by neon_local; no operator DDL needed.
+-- storage_controller DB is also auto-created by neon_local.
 
 \c yb_storage
 

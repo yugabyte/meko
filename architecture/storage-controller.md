@@ -106,12 +106,19 @@ the startup-script transaction) and passes the URL straight through to
 the controller as `--database-url`. `neon_local stop` likewise skips
 `pg_ctl stop`. No `storage_controller_db/` directory is created.
 
-Before pointing the controller at the URL, neon_local **connects to the
-admin database** (`postgres`) on the same host with the same credentials
-and runs `CREATE DATABASE <target>` — so on a fresh YB cluster you do
-**not** need to pre-create the `storage_controller` database. "Already
-exists" is treated as success. The controller's own Diesel migrations
-then create the 11 tables inside that DB on first start.
+Before pointing the controller at the URL, neon_local **connects to
+YB's `yugabyte` admin database** on the same host with the same
+credentials and provisions everything yb-neon needs:
+
+- `CREATE DATABASE storage_controller` — the controller's Diesel
+  migrations then create the 11 tables inside it on first start.
+- `CREATE DATABASE yb_storage` — the pageserver / safekeeper YbStore
+  schema home.
+- Inside `yb_storage`: `CREATE TYPE blob_namespace` (ENUM), plus
+  `CREATE TABLE IF NOT EXISTS blobs` and `CREATE TABLE IF NOT EXISTS
+  wals` — see [`yugabyte.md`](yugabyte.md) for the schemas.
+
+All steps are idempotent. A fresh YB cluster needs no operator DDL.
 
 Set it via the init TOML (`neon_local init --config <file>`):
 
