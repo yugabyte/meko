@@ -21,7 +21,7 @@
 //! );
 //! ```
 //!
-//! Each object is split into chunks of `YB_CHUNK_SIZE` bytes (8 MiB) and stored
+//! Each object is split into chunks of `YB_CHUNK_SIZE` bytes (100 MiB) and stored
 //! as one row per chunk, ordered by `chunk_idx`. This works around YB's default
 //! `rpc_max_message_size` (256 MiB) which can't accept a single bytea larger
 //! than that. The `size_bytes` / `etag` / `last_modified_us` / `metadata_json`
