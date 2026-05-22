@@ -185,6 +185,14 @@ impl SafekeeperNode {
             args.extend(["--remote-storage".to_owned(), remote_storage.clone()]);
         }
 
+        if let Some(ref backend) = self.conf.control_file_backend {
+            args.extend(["--control-file-backend".to_owned(), backend.clone()]);
+        }
+
+        if let Some(ref wal_yb) = self.conf.wal_yb_config {
+            args.extend(["--wal-yb-config".to_owned(), wal_yb.clone()]);
+        }
+
         let key_path = self.env.base_data_dir.join("auth_public_key.pem");
         if self.conf.auth_enabled {
             let key_path_string = key_path

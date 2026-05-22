@@ -382,6 +382,17 @@ pub struct SafekeeperConf {
     pub backup_threads: Option<u32>,
     pub auth_enabled: bool,
     pub listen_addr: Option<String>,
+    /// Selects the safekeeper's control-file backend. Allowed values:
+    /// `"file"` (local FS, default) or `"remote-storage"` (writes the
+    /// 388-byte control blob into the `remote_storage` configured above —
+    /// typically `YbStore` in yb-neon). Maps to the safekeeper's
+    /// `--control-file-backend` CLI flag.
+    pub control_file_backend: Option<String>,
+    /// If `Some`, mirrors every live WAL write into YugabyteDB via the
+    /// `wals` table. Value is the full `YbStoreConfig` TOML inline string
+    /// that the safekeeper accepts as `--wal-yb-config`. Single-safekeeper
+    /// constraint applies (see architecture/safekeeper.md §5).
+    pub wal_yb_config: Option<String>,
 }
 
 impl Default for SafekeeperConf {
@@ -397,6 +408,8 @@ impl Default for SafekeeperConf {
             backup_threads: None,
             auth_enabled: false,
             listen_addr: None,
+            control_file_backend: None,
+            wal_yb_config: None,
         }
     }
 }
