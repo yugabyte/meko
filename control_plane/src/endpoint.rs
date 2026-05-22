@@ -106,6 +106,12 @@ pub struct EndpointConf {
     cluster: Option<Cluster>,
     compute_ctl_config: ComputeCtlConfig,
     privileged_role_name: Option<String>,
+    #[serde(default)]
+    shared_buffers: Option<String>,
+    #[serde(default)]
+    lfc_size: Option<String>,
+    #[serde(default)]
+    pg_settings: Vec<(String, String)>,
 }
 
 //
@@ -207,6 +213,9 @@ impl ComputeControlPlane {
         skip_pg_catalog_updates: bool,
         drop_subscriptions_before_start: bool,
         privileged_role_name: Option<String>,
+        shared_buffers: Option<String>,
+        lfc_size: Option<String>,
+        pg_settings: Vec<(String, String)>,
     ) -> Result<Arc<Endpoint>> {
         let pg_port = pg_port.unwrap_or_else(|| self.get_port());
         let external_http_port = external_http_port.unwrap_or_else(|| self.get_port() + 1);
@@ -245,6 +254,9 @@ impl ComputeControlPlane {
             cluster: None,
             compute_ctl_config: compute_ctl_config.clone(),
             privileged_role_name: privileged_role_name.clone(),
+            shared_buffers: shared_buffers.clone(),
+            lfc_size: lfc_size.clone(),
+            pg_settings: pg_settings.clone(),
         });
 
         ep.create_endpoint_dir()?;
@@ -267,6 +279,9 @@ impl ComputeControlPlane {
                 cluster: None,
                 compute_ctl_config,
                 privileged_role_name,
+                shared_buffers,
+                lfc_size,
+                pg_settings,
             })?,
         )?;
         std::fs::write(
@@ -345,6 +360,23 @@ pub struct Endpoint {
 
     /// The name of the privileged role for the endpoint.
     privileged_role_name: Option<String>,
+
+    /// Value of `shared_buffers` to write into the generated postgresql.conf.
+    /// Defaults to `1MB` (matches upstream behaviour) when unset; raise it
+    /// (e.g. `32GB`) for benchmarking on larger hosts.
+    shared_buffers: Option<String>,
+
+    /// If set, enables Neon's Local File Cache (LFC) on the compute by
+    /// writing both `neon.max_file_cache_size` (postmaster, hard cap) and
+    /// `neon.file_cache_size_limit` (SIGHUP, soft cap) to this value
+    /// (e.g. `8GB`). Without this, LFC is disabled and every shared_buffers
+    /// miss is a getpage RPC.
+    lfc_size: Option<String>,
+
+    /// Arbitrary `name = value` pairs to append to the generated
+    /// postgresql.conf. Use for tuning knobs that don't have a dedicated
+    /// CLI flag — e.g. `max_connections=200`, `effective_cache_size=96GB`.
+    pg_settings: Vec<(String, String)>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -445,6 +477,9 @@ impl Endpoint {
             cluster: conf.cluster,
             compute_ctl_config: conf.compute_ctl_config,
             privileged_role_name: conf.privileged_role_name,
+            shared_buffers: conf.shared_buffers,
+            lfc_size: conf.lfc_size,
+            pg_settings: conf.pg_settings,
         })
     }
 
@@ -464,11 +499,16 @@ impl Endpoint {
         conf.append("wal_log_hints", "off");
         conf.append("max_replication_slots", "10");
         conf.append("hot_standby", "on");
-        // Set to 1MB to both exercise getPage requests/LFC, and still have enough room for
-        // Postgres to operate. Everything smaller might be not enough for Postgres under load,
-        // and can cause errors like 'no unpinned buffers available', see
-        // <https://github.com/neondatabase/neon/issues/9956>
-        conf.append("shared_buffers", "1MB");
+        // Set to 1MB by default to both exercise getPage requests/LFC, and still have enough
+        // room for Postgres to operate. Everything smaller might be not enough for Postgres
+        // under load, and can cause errors like 'no unpinned buffers available', see
+        // <https://github.com/neondatabase/neon/issues/9956>.
+        // Override via the `--shared-buffers` flag on `neon_local endpoint create` (or by
+        // editing endpoint.json) — e.g. `32GB` on benchmarking hosts.
+        conf.append(
+            "shared_buffers",
+            self.shared_buffers.as_deref().unwrap_or("1MB"),
+        );
         // Postgres defaults to effective_io_concurrency=1, which does not exercise the pageserver's
         // batching logic.  Set this to 2 so that we exercise the code a bit without letting
         // individual tests do a lot of concurrent work on underpowered test machines
@@ -487,6 +527,21 @@ impl Endpoint {
 
         // Load the 'neon' extension
         conf.append("shared_preload_libraries", "neon");
+
+        // Neon Local File Cache: when --lfc-size=<v> was passed at create,
+        // enable LFC by setting both the postmaster hard cap and the
+        // SIGHUP-tunable soft cap to the same value. Without this, both
+        // GUCs default to 0 and LFC is fully disabled.
+        if let Some(lfc) = self.lfc_size.as_deref() {
+            conf.append("neon.max_file_cache_size", lfc);
+            conf.append("neon.file_cache_size_limit", lfc);
+        }
+
+        // User-supplied --pg-setting overrides (or extras). These come
+        // last so they win over the defaults set above.
+        for (k, v) in &self.pg_settings {
+            conf.append(k, v);
+        }
 
         conf.append_line("");
         // Replication-related configurations, such as WAL sending

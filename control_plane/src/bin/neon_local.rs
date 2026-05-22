@@ -589,6 +589,40 @@ struct EndpointCreateCmdArgs {
     // Only allow changing it on creation.
     #[clap(long)]
     privileged_role_name: Option<String>,
+
+    /// `shared_buffers` value written into the generated postgresql.conf.
+    /// Defaults to `1MB` (upstream-compatible smoke-test sizing). Pass
+    /// e.g. `--shared-buffers=32GB` when running on a large host. Can
+    /// also be edited later in `endpoints/<id>/endpoint.json`.
+    #[clap(long)]
+    shared_buffers: Option<String>,
+
+    /// Enables Neon's Local File Cache (LFC) on the compute by setting
+    /// both `neon.max_file_cache_size` (postmaster) and
+    /// `neon.file_cache_size_limit` (SIGHUP) to this value. Pass a
+    /// Postgres size literal, e.g. `--lfc-size=8GB`. Without this, LFC
+    /// is disabled and every shared_buffers miss is a getpage RPC.
+    #[clap(long)]
+    lfc_size: Option<String>,
+
+    /// Repeatable: `--pg-setting NAME=VALUE` appends arbitrary settings
+    /// to the generated postgresql.conf. Use for knobs that don't have a
+    /// dedicated flag — `--pg-setting max_connections=200
+    /// --pg-setting effective_cache_size=96GB`.
+    #[clap(long = "pg-setting", value_parser = parse_pg_setting)]
+    pg_settings: Vec<(String, String)>,
+}
+
+fn parse_pg_setting(s: &str) -> Result<(String, String), String> {
+    let (k, v) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected NAME=VALUE, got '{s}'"))?;
+    let k = k.trim();
+    let v = v.trim();
+    if k.is_empty() {
+        return Err(format!("empty setting name in '{s}'"));
+    }
+    Ok((k.to_string(), v.to_string()))
 }
 
 /// Start Postgres. If the endpoint doesn't exist yet, it is created.
@@ -1431,6 +1465,9 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
                 !args.update_catalog,
                 false,
                 args.privileged_role_name.clone(),
+                args.shared_buffers.clone(),
+                args.lfc_size.clone(),
+                args.pg_settings.clone(),
             )?;
         }
         EndpointCmd::Start(args) => {
