@@ -239,6 +239,13 @@ pub struct YbStoreConfig {
     /// Maximum number of concurrent in-flight DB requests.
     #[serde(default = "default_yb_concurrency_limit")]
     pub concurrency_limit: NonZeroUsize,
+    /// `"disable"` (default) → plain TCP, no TLS. Anything else (`"require"`,
+    /// `"prefer"`, ...) → rustls with an AcceptAll verifier — server cert
+    /// validation is skipped, mirroring what the storage_controller's
+    /// existing TLS connector does. Set this when YB's `pg_hba.conf` only
+    /// allows `hostssl ...` rules.
+    #[serde(default)]
+    pub sslmode: Option<String>,
 }
 
 fn default_yb_port() -> u16 {
@@ -259,6 +266,7 @@ impl Debug for YbStoreConfig {
             .field("table_name", &self.table_name)
             .field("prefix", &self.prefix)
             .field("concurrency_limit", &self.concurrency_limit)
+            .field("sslmode", &self.sslmode)
             .finish()
     }
 }

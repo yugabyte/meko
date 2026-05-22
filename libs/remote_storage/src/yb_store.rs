@@ -104,21 +104,43 @@ impl YbStore {
             pg_config.password(password);
         }
 
-        let (client, connection) = pg_config
-            .connect(tokio_postgres::NoTls)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to connect to YugabyteDB at {}:{} as user `{}`",
-                    config.host, config.port, config.user
-                )
-            })?;
-
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                tracing::warn!("YbStore connection ended with error: {e}");
+        let client = match config.sslmode.as_deref() {
+            None | Some("disable") => {
+                let (client, connection) = pg_config
+                    .connect(tokio_postgres::NoTls)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to connect to YugabyteDB at {}:{} as user `{}`",
+                            config.host, config.port, config.user
+                        )
+                    })?;
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        tracing::warn!("YbStore connection ended with error: {e}");
+                    }
+                });
+                client
             }
-        });
+            Some(mode) => {
+                let tls = build_yb_rustls_connector().with_context(|| {
+                    format!("building rustls connector for YbStore sslmode={mode}")
+                })?;
+                let (client, connection) =
+                    pg_config.connect(tls).await.with_context(|| {
+                        format!(
+                            "failed to connect to YugabyteDB at {}:{} as user `{}` (TLS)",
+                            config.host, config.port, config.user
+                        )
+                    })?;
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        tracing::warn!("YbStore (TLS) connection ended with error: {e}");
+                    }
+                });
+                client
+            }
+        };
 
         // Best-effort: enable YugabyteDB's per-session upsert mode so plain
         // `INSERT` skips DocDB's read-before-write conflict check. With this
@@ -1010,4 +1032,79 @@ fn escape_like(s: &str) -> String {
         }
     }
     out
+}
+
+/// rustls connector for YbStore. Loads system roots but installs an
+/// AcceptAll verifier that ignores cert validation failures — mirroring
+/// the storage_controller's default behaviour against YB clusters whose
+/// certs aren't in the local trust store. For stricter checks, change
+/// this to use the loaded roots without the wrapper.
+fn build_yb_rustls_connector(
+) -> anyhow::Result<tokio_postgres_rustls::MakeRustlsConnect> {
+    use rustls::client::WebPkiServerVerifier;
+    use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
+    use rustls::crypto::ring;
+
+    let der_certs = rustls_native_certs::load_native_certs();
+    let mut store = rustls::RootCertStore::empty();
+    store.add_parsable_certificates(der_certs.certs);
+    let roots = Arc::new(store);
+
+    #[derive(Debug)]
+    struct AcceptAll(Arc<WebPkiServerVerifier>);
+    impl ServerCertVerifier for AcceptAll {
+        fn verify_server_cert(
+            &self,
+            end_entity: &rustls::pki_types::CertificateDer<'_>,
+            intermediates: &[rustls::pki_types::CertificateDer<'_>],
+            server_name: &rustls::pki_types::ServerName<'_>,
+            ocsp_response: &[u8],
+            now: rustls::pki_types::UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            if let Err(err) = self.0.verify_server_cert(
+                end_entity,
+                intermediates,
+                server_name,
+                ocsp_response,
+                now,
+            ) {
+                tracing::info!(
+                    ?server_name,
+                    "YbStore: ignoring TLS validation error: {err:?}"
+                );
+            }
+            Ok(ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            self.0.verify_tls12_signature(message, cert, dss)
+        }
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            self.0.verify_tls13_signature(message, cert, dss)
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            self.0.supported_verify_schemes()
+        }
+    }
+
+    let provider = Arc::new(ring::default_provider());
+    let verifier = Arc::new(AcceptAll(
+        WebPkiServerVerifier::builder_with_provider(roots, provider.clone()).build()?,
+    ));
+    let client_config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring should support default protocol versions")
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    Ok(tokio_postgres_rustls::MakeRustlsConnect::new(client_config))
 }

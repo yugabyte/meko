@@ -45,6 +45,9 @@ sync_wrapper = { workspace = true, features = ["futures"] }
 gcp_auth = "0.12.3"
 md5.workspace = true
 tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+rustls = { workspace = true, default-features = false, features = ["ring"] }
+rustls-native-certs.workspace = true
 url.workspace = true
 http.workspace = true
 uuid.workspace = true
