@@ -28,16 +28,20 @@ Subsystems are segregated by **key prefix**, not by separate tables.
 
 ```sql
 CREATE TABLE blobs (
-    key              TEXT    NOT NULL,
+    tenant_id        TEXT    NOT NULL,    -- Neon tenant UUID (32 hex), or "" for non-tenant-scoped blobs
+    timeline_id      TEXT    NOT NULL,    -- Neon timeline UUID, or "" for tenant-scope-only blobs (e.g. tenant manifest)
+    key              TEXT    NOT NULL,    -- full RemoteStorage key path (e.g. `pageserver-yb/tenants/<id>/timelines/<id>/<layer>`)
     chunk_idx        INT     NOT NULL,
     data             BYTEA   NOT NULL,
     size_bytes       BIGINT  NOT NULL,    -- total object size, denormalized
     etag             TEXT    NOT NULL,    -- total-object etag, denormalized
     last_modified_us BIGINT  NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((key) HASH, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, key, chunk_idx)
 );
 ```
+
+`tenant_id` and `timeline_id` are **extracted by the YbStore code at write time** from the incoming `RemotePath` (it scans path segments for Neon-id-shaped tokens — 32 hex chars, optionally with `-<count>-<num>` shard suffix). They're redundant with the `key` (which still carries the full path) but having them as explicit columns lets every point-lookup hit a single hash tablet via the PK, and makes per-tenant inspection / GC queries trivial. Mirrors the `wals` table shape exactly.
 
 Schema documented in detail in [`remote-storage.md`](remote-storage.md).
 
@@ -65,10 +69,21 @@ FROM blobs
 GROUP BY 1
 ORDER BY 1;
 
--- Largest objects
-SELECT key, count(*) AS chunks, pg_size_pretty(max(size_bytes)) AS total
+-- Per-tenant breakdown (fast — hits the (tenant_id, timeline_id) hash partition)
+SELECT tenant_id,
+       timeline_id,
+       count(DISTINCT key) AS objects,
+       count(*)            AS chunks,
+       pg_size_pretty(sum(length(data))::bigint) AS stored
 FROM blobs
-GROUP BY key
+GROUP BY tenant_id, timeline_id
+ORDER BY sum(length(data)) DESC;
+
+-- Largest objects
+SELECT tenant_id, timeline_id, key,
+       count(*) AS chunks, pg_size_pretty(max(size_bytes)) AS total
+FROM blobs
+GROUP BY tenant_id, timeline_id, key
 ORDER BY max(size_bytes) DESC
 LIMIT 10;
 ```
@@ -164,6 +179,8 @@ CREATE DATABASE storage_controller;   -- controller will run migrations itself
 \c yb_storage
 
 CREATE TABLE blobs (
+    tenant_id        TEXT    NOT NULL,
+    timeline_id      TEXT    NOT NULL,
     key              TEXT    NOT NULL,
     chunk_idx        INT     NOT NULL,
     data             BYTEA   NOT NULL,
@@ -171,7 +188,7 @@ CREATE TABLE blobs (
     etag             TEXT    NOT NULL,
     last_modified_us BIGINT  NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((key) HASH, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, key, chunk_idx)
 );
 
 CREATE TABLE wals (

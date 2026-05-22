@@ -52,14 +52,16 @@ method against a YugabyteDB table reached via `tokio_postgres`.
 
 ```sql
 CREATE TABLE <table_name> (
-    key              TEXT    NOT NULL,
+    tenant_id        TEXT    NOT NULL,    -- Neon tenant UUID, "" if not extractable
+    timeline_id      TEXT    NOT NULL,    -- Neon timeline UUID, "" for tenant-scope-only blobs
+    key              TEXT    NOT NULL,    -- full RemoteStorage key (with configured prefix)
     chunk_idx        INT     NOT NULL,
     data             BYTEA   NOT NULL,
     size_bytes       BIGINT  NOT NULL,    -- total object size, denormalized
     etag             TEXT    NOT NULL,    -- total-object etag, denormalized
     last_modified_us BIGINT  NOT NULL,    -- denormalized
     metadata_json    TEXT,
-    PRIMARY KEY ((key) HASH, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, key, chunk_idx)
 );
 ```
 
@@ -67,6 +69,23 @@ CREATE TABLE <table_name> (
 - `size_bytes`, `etag`, `last_modified_us`, `metadata_json` are **denormalized**
   onto every chunk row so `head_object()` is a one-row read against
   `chunk_idx = 0`.
+- `tenant_id` + `timeline_id` are **extracted at write time** by
+  `YbStore::extract_neon_ids` — it scans the key's path segments for
+  Neon-id-shaped tokens (32 hex chars, or 32 hex chars with a
+  `-<count>-<num>` shard suffix). The first such token becomes
+  `tenant_id`; the second becomes `timeline_id`. Tokens that don't
+  appear in the path produce empty strings. The extractor is heuristic
+  but covers every key the pageserver and safekeeper write today
+  (`pageserver-yb/tenants/<id>/timelines/<id>/…`,
+  `safekeeper-yb/<id>/<id>/…`, `safekeeper-yb/safekeeper-control/<id>/<id>`,
+  `pageserver-yb/tenants/<id>/tenant-manifest-…`). For any future key
+  that doesn't carry a tenant/timeline, both columns are empty strings
+  — schema still accepts the row.
+- The PK puts `(tenant_id, timeline_id)` in the hash partition so
+  every point-lookup (`head_object`, `download`, `delete`, `upload`'s
+  pre-DELETE, `copy`) goes to one tablet directly — no scans. Same
+  shape as the `wals` table. `list` and `delete_objects` remain
+  scan-style because they're prefix / multi-key by nature.
 
 ### Chunking
 

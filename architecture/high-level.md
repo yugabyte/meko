@@ -111,8 +111,10 @@ Single host, single YB instance, single pageserver, single safekeeper.
 ```
 yugabyted                       :7100 (master), :5433 (ysql)
   +-- db `yb_storage`
-  |     +-- table `blobs`        chunked BYTEA + denormalized metadata
-  |     +-- table `wals`         per-write rows, keyed by (tenant, timeline, segno, chunk_seq)
+  |     +-- table `blobs`        chunked BYTEA + denormalized metadata,
+  |     |                        PK ((tenant_id, timeline_id) HASH, key, chunk_idx)
+  |     +-- table `wals`         per-write rows,
+  |                              PK ((tenant_id, timeline_id) HASH, segno, chunk_seq)
   +-- db `storage_controller`    Diesel-managed; 11 tables
 
 yb-neon binaries (target/debug/)

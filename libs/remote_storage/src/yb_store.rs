@@ -185,6 +185,52 @@ impl YbStore {
         format!("{:x}", md5::compute(data))
     }
 
+    /// Extract `(tenant_id, timeline_id)` from a `blobs` key by scanning
+    /// the path for Neon-id-shaped tokens. Returns empty strings when the
+    /// path doesn't carry the ids (e.g. tenant-scope-only blobs have an
+    /// empty `timeline_id`; future generic blobs may have neither).
+    ///
+    /// A Neon id is 32 hex characters, optionally followed by `-<count>-<num>`
+    /// for sharded tenants (e.g. `c8178f5e…1f966a-0004-0002`). The function
+    /// is heuristic — it returns the first two such tokens it finds, in
+    /// path order — which is sufficient for every key the pageserver and
+    /// safekeeper write today and benign (both empty) for any future key
+    /// that doesn't follow the convention.
+    fn extract_neon_ids(key: &str) -> (String, String) {
+        let mut found = Vec::with_capacity(2);
+        for part in key.split('/') {
+            if Self::looks_like_neon_id(part) {
+                found.push(part.to_string());
+                if found.len() == 2 {
+                    break;
+                }
+            }
+        }
+        let tenant = found.first().cloned().unwrap_or_default();
+        let timeline = found.get(1).cloned().unwrap_or_default();
+        (tenant, timeline)
+    }
+
+    fn looks_like_neon_id(s: &str) -> bool {
+        // bare 32-hex-char tenant/timeline id
+        if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+            return true;
+        }
+        // sharded tenant id: 32-hex + "-XXXX-XXXX" (count + shard number, each 4 hex)
+        if s.len() == 32 + 1 + 4 + 1 + 4 && s.as_bytes()[32] == b'-' && s.as_bytes()[37] == b'-' {
+            let core = &s[..32];
+            let count = &s[33..37];
+            let num = &s[38..];
+            if core.chars().all(|c| c.is_ascii_hexdigit())
+                && count.chars().all(|c| c.is_ascii_hexdigit())
+                && num.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     async fn with_timeout<F, T>(&self, fut: F, cancel: &CancellationToken) -> anyhow::Result<T>
     where
         F: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
@@ -377,14 +423,15 @@ impl RemoteStorage for YbStore {
             .map_err(|_| DownloadError::Cancelled)?;
 
         let db_key = self.full_key(key);
+        let (tenant_id, timeline_id) = Self::extract_neon_ids(&db_key);
         // chunk_idx=0 always exists for any object (including zero-byte ones),
         // and carries the denormalized size/etag/timestamp — one-row lookup.
         let sql = format!(
             "SELECT size_bytes, last_modified_us FROM {} \
-             WHERE key = $1 AND chunk_idx = 0",
+             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3 AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 1] = [&db_key];
+        let params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &db_key];
         let row_opt = self
             .with_timeout_download(self.client.query_opt(&sql, &params), cancel)
             .await?;
@@ -442,9 +489,13 @@ impl RemoteStorage for YbStore {
         // chunk-count shrinking (the upsert GUC handles same-PK conflict but
         // wouldn't remove rows for keys that no longer exist in the new write).
         let table = quote_ident(&self.table_name);
-        let delete_sql = format!("DELETE FROM {table} WHERE key = $1");
+        let (pre_tenant, pre_timeline) = Self::extract_neon_ids(&db_key);
+        let delete_sql = format!(
+            "DELETE FROM {table} \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3"
+        );
         {
-            let params: [&(dyn ToSql + Sync); 1] = [&db_key];
+            let params: [&(dyn ToSql + Sync); 3] = [&pre_tenant, &pre_timeline, &db_key];
             self.with_timeout(self.client.execute(&delete_sql, &params), cancel)
                 .await
                 .with_context(|| format!("YbStore upload: pre-delete `{db_key}`"))?;
@@ -465,9 +516,12 @@ impl RemoteStorage for YbStore {
         // of latency.
         let insert_sql = format!(
             "INSERT INTO {table} \
-             (key, chunk_idx, data, size_bytes, etag, last_modified_us, metadata_json) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)"
+             (tenant_id, timeline_id, key, chunk_idx, data, size_bytes, etag, \
+              last_modified_us, metadata_json) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
         );
+
+        let (tenant_id, timeline_id) = Self::extract_neon_ids(&db_key);
 
         // Materialize all chunk rows up front so each pipelined future can own
         // its params (no borrow-into-loop-local issues).
@@ -484,6 +538,8 @@ impl RemoteStorage for YbStore {
         let pipeline_fut = async {
             let futures = row_chunks.into_iter().map(|(idx, chunk)| {
                 let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+                    Box::new(tenant_id.clone()),
+                    Box::new(timeline_id.clone()),
                     Box::new(db_key.clone()),
                     Box::new(idx),
                     Box::new(chunk),
@@ -517,16 +573,19 @@ impl RemoteStorage for YbStore {
 
         let db_key = self.full_key(from);
 
+        let (tenant_id, timeline_id) = Self::extract_neon_ids(&db_key);
+
         // Phase 1: cheap single-row lookup to get the denormalized metadata
         // (size_bytes / etag / last_modified_us / metadata_json) sitting on
         // chunk_idx = 0. Lets us honor If-None-Match and compute the byte
         // range without ever loading bulk data into memory.
         let head_sql = format!(
             "SELECT size_bytes, etag, last_modified_us, metadata_json \
-             FROM {} WHERE key = $1 AND chunk_idx = 0",
+             FROM {} WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3 \
+             AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let head_params: [&(dyn ToSql + Sync); 1] = [&db_key];
+        let head_params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &db_key];
         let head_opt = self
             .with_timeout_download(self.client.query_opt(&head_sql, &head_params), cancel)
             .await?;
@@ -586,17 +645,22 @@ impl RemoteStorage for YbStore {
         let table = self.table_name.clone();
         let stream_sql = format!(
             "SELECT chunk_idx, data FROM {} \
-             WHERE key = $1 AND chunk_idx >= $2 AND chunk_idx <= $3 \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3 \
+             AND chunk_idx >= $4 AND chunk_idx <= $5 \
              ORDER BY chunk_idx",
             quote_ident(&table)
         );
         let timeout = self.timeout;
+        let stream_tenant = tenant_id.clone();
+        let stream_timeline = timeline_id.clone();
 
         // Open the row stream first (so any query error fails the
         // `download()` call cleanly with `DownloadError::Other` rather than
         // surfacing as an io::Error mid-stream after the caller has already
         // started writing to disk).
         let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+            Box::new(stream_tenant),
+            Box::new(stream_timeline),
             Box::new(db_key.clone()),
             Box::new(start_chunk),
             Box::new(end_chunk),
@@ -650,11 +714,13 @@ impl RemoteStorage for YbStore {
     async fn delete(&self, path: &RemotePath, cancel: &CancellationToken) -> anyhow::Result<()> {
         let _permit = self.permit(RequestKind::Delete, cancel).await?;
         let db_key = self.full_key(path);
+        let (tenant_id, timeline_id) = Self::extract_neon_ids(&db_key);
         let sql = format!(
-            "DELETE FROM {} WHERE key = $1",
+            "DELETE FROM {} \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 1] = [&db_key];
+        let params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &db_key];
         self.with_timeout(self.client.execute(&sql, &params), cancel)
             .await
             .with_context(|| format!("YbStore delete of `{db_key}`"))?;
@@ -695,24 +761,38 @@ impl RemoteStorage for YbStore {
         let _permit = self.permit(RequestKind::Copy, cancel).await?;
         let from_key = self.full_key(from);
         let to_key = self.full_key(to);
+        let (from_tenant, from_timeline) = Self::extract_neon_ids(&from_key);
+        let (to_tenant, to_timeline) = Self::extract_neon_ids(&to_key);
         let table = quote_ident(&self.table_name);
         // Wipe the destination first so a copy that shrinks chunk count is
         // clean, then copy all source chunk rows over.
-        let delete_dst = format!("DELETE FROM {table} WHERE key = $1");
+        let delete_dst = format!(
+            "DELETE FROM {table} \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3"
+        );
         {
-            let params: [&(dyn ToSql + Sync); 1] = [&to_key];
+            let params: [&(dyn ToSql + Sync); 3] = [&to_tenant, &to_timeline, &to_key];
             self.with_timeout(self.client.execute(&delete_dst, &params), cancel)
                 .await
                 .with_context(|| format!("YbStore copy: pre-delete `{to_key}`"))?;
         }
         let insert_sql = format!(
             "INSERT INTO {table} \
-             (key, chunk_idx, data, size_bytes, etag, last_modified_us, metadata_json) \
-             SELECT $2, chunk_idx, data, size_bytes, etag, \
+             (tenant_id, timeline_id, key, chunk_idx, data, size_bytes, etag, \
+              last_modified_us, metadata_json) \
+             SELECT $4, $5, $6, chunk_idx, data, size_bytes, etag, \
                     (extract(epoch from now()) * 1000000)::bigint, metadata_json \
-             FROM {table} WHERE key = $1"
+             FROM {table} \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3"
         );
-        let params: [&(dyn ToSql + Sync); 2] = [&from_key, &to_key];
+        let params: [&(dyn ToSql + Sync); 6] = [
+            &from_tenant,
+            &from_timeline,
+            &from_key,
+            &to_tenant,
+            &to_timeline,
+            &to_key,
+        ];
         let affected = self
             .with_timeout(self.client.execute(&insert_sql, &params), cancel)
             .await
