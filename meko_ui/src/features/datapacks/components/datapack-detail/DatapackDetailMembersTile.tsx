@@ -119,7 +119,11 @@ export function DatapackDetailMembersTile({
                   )}
                 >
                   <div
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-950/80 text-sm font-semibold text-emerald-300 ring-1 ring-emerald-700/50"
+                    // Soft emerald avatar in light mode, saturated
+                    // dark-emerald in dark mode. Original light-mode
+                    // look was `bg-emerald-950/80` on white = gaudy
+                    // solid-dark circle.
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-sm font-semibold text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-700/50"
                     aria-hidden
                   >
                     {outgoingMemberInitials(m)}
@@ -160,7 +164,10 @@ export function DatapackDetailMembersTile({
                 )}
               >
                 <div
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-800/90 text-sm font-semibold text-slate-200 ring-1 ring-slate-600/40"
+                  // Soft slate avatar in light mode, saturated
+                  // dark-slate in dark. Text needs its own dark:
+                  // variant since `text-slate-200` was dark-only.
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800/90 text-sm font-semibold text-slate-700 dark:text-slate-200 ring-1 ring-slate-600/40"
                   aria-hidden
                 >
                   {outgoingMemberInitials(m)}

@@ -159,7 +159,7 @@ export function WorkbenchLMLiveObservationPanel({
       <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-purple-400" aria-hidden />
-          <h2 className="text-sm font-medium text-white">Live observation</h2>
+          <h2 className="text-sm font-medium text-foreground">Live observation</h2>
         </div>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -167,8 +167,8 @@ export function WorkbenchLMLiveObservationPanel({
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors",
                 isInteracting
-                  ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-                  : "border-purple-500/30 bg-purple-500/10 text-purple-200",
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200"
+                  : "border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-200",
               )}
             >
               <span
@@ -271,7 +271,7 @@ function SectionShell({
                 <span
                   className={cn(
                     "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider",
-                    extractingChipTone ?? "border-amber-500/30 bg-amber-500/10 text-amber-200",
+                    extractingChipTone ?? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200",
                   )}
                   aria-live="polite"
                 >
@@ -289,7 +289,7 @@ function SectionShell({
           type="button"
           onClick={onRefresh}
           disabled={loading}
-          className="text-muted-foreground transition-colors hover:text-white disabled:opacity-50"
+          className="text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
           aria-label={`Refresh ${title.toLowerCase()}`}
         >
           {loading ? (
@@ -313,11 +313,20 @@ function SectionShell({
 // promoted to the shared knowledge base yet. Each tile shows a small
 // "Promote to Ko" button; on success the tile is removed from this list.
 
+// Theme-aware: light mode = soft purple-tinted card, dark mode = the
+// brand-art dark gradient where `via-[#141228]` is a hand-tuned
+// purple-tinted midpoint smoothing the transition from `purple-950/65`
+// to `meko-navy-950`. The raw-hex midpoint is intentional — replacing
+// with a neutral navy would lose the purple blend that makes the
+// corner read as "purple section" against the other coloured tiles.
 const MEMORY_TONE = {
-  border: "border-purple-500/40",
-  bg: "bg-gradient-to-br from-purple-950/65 via-[#141228] to-[#0b1220]",
-  text: "text-purple-200/95",
-  badge: "border border-purple-500/30 bg-purple-500/10 text-purple-200",
+  border: "border-purple-400 dark:border-purple-500/40",
+  bg:
+    "bg-gradient-to-br from-purple-50 via-card to-card " +
+    "dark:from-purple-950/65 dark:via-[#141228] dark:to-meko-navy-950",
+  text: "text-purple-700 dark:text-purple-200/95",
+  badge:
+    "border border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-200",
 };
 
 function LearningsSection({
@@ -468,7 +477,7 @@ function LearningsSection({
       toneBadge={MEMORY_TONE.badge}
       count={datapackId ? Math.min(items.length, total) : undefined}
       extracting={Boolean(datapackId) && extracting}
-      extractingChipTone="border-purple-500/40 bg-purple-500/10 text-purple-200"
+      extractingChipTone="border-purple-500/40 bg-purple-500/10 text-purple-700 dark:text-purple-200"
       loading={loading}
       error={error}
       onRefresh={() => void fetchMemories()}
@@ -482,7 +491,7 @@ function LearningsSection({
           // Mem0's background extractor takes 30–60s after each turn. The
           // panel auto-polls every 10s so the placeholder swaps to real
           // tiles as soon as the extractor finishes.
-          <p className="inline-flex items-center gap-2 text-xs text-purple-200/80">
+          <p className="inline-flex items-center gap-2 text-xs text-purple-700 dark:text-purple-200/80">
             <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
             Extracting learnings from your recent chat...
           </p>
@@ -524,14 +533,14 @@ function LearningsSection({
                 title={m.data}
                 tabIndex={0}
               >
-                <p className="line-clamp-2 text-xs text-white/95">{m.data}</p>
+                <p className="line-clamp-2 text-xs text-foreground dark:text-white/95">{m.data}</p>
                 {authorLabel ? (
-                  <p className="mt-0.5 truncate text-[10px] text-purple-200/60">
+                  <p className="mt-0.5 truncate text-[10px] text-purple-700 dark:text-purple-200/60">
                     by {authorLabel}
                   </p>
                 ) : null}
                 <div className="mt-1.5 flex items-center justify-between gap-2">
-                  <span className="truncate text-[10px] text-purple-200/70">
+                  <span className="truncate text-[10px] text-purple-700 dark:text-purple-200/70">
                     {m.agent_id ? `agent · ${m.agent_id}` : " "}
                   </span>
                   <div className="flex shrink-0 items-center gap-1">
@@ -542,7 +551,7 @@ function LearningsSection({
                         disabled={deletingId !== null}
                         className={cn(
                           "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors",
-                          "border-red-500/40 bg-red-500/10 text-red-200 hover:bg-red-500/20",
+                          "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-200 hover:bg-red-500/20",
                           "disabled:cursor-not-allowed disabled:opacity-50",
                         )}
                         title="Delete this memory (only you can delete your own)"
@@ -560,11 +569,17 @@ function LearningsSection({
                       onClick={() => void handlePromote(m.id)}
                       disabled={promoteDisabled}
                       className={cn(
-                        // Match MemoryPromotionPanel's "Promote to Knowledge"
-                        // styling (purple-600 / purple-700) so the action
-                        // looks the same wherever it shows up.
-                        "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium text-white transition-colors",
-                        "bg-purple-600 hover:bg-purple-700",
+                        // "Subtle in light, saturated in dark" pattern:
+                        // light mode is a soft purple-tint pill with
+                        // dark purple text (reads as an accent chip
+                        // rather than a heavy CTA against the white
+                        // tile); dark mode is the original saturated
+                        // purple-500 + white text. Matches the rest of
+                        // the promote-action family (`<MemoryPromotionPanel>`,
+                        // `<FileUpload>`).
+                        "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors",
+                        "bg-purple-100 hover:bg-purple-200 text-purple-700",
+                        "dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white",
                         "disabled:cursor-not-allowed disabled:opacity-50",
                       )}
                       title={promoteTooltip}
@@ -591,11 +606,18 @@ function LearningsSection({
 // + emerald/knowledge so each section has its own accent). Pulls memories
 // that have already been promoted into the tenant knowledge base. ---
 
+// Theme-aware sky-tinted tile. Mirrors `MEMORY_TONE`'s structure (soft
+// card in light, brand-art gradient in dark). `via-[#0e1c2a]` is the
+// hand-tuned sky-tinted dark midpoint — kept as raw hex for the same
+// brand-art reason as the purple gradient above.
 const COLLECTIVE_TONE = {
-  border: "border-sky-500/40",
-  bg: "bg-gradient-to-br from-sky-950/65 via-[#0e1c2a] to-[#0b1220]",
-  text: "text-sky-200/95",
-  badge: "border border-sky-500/30 bg-sky-500/10 text-sky-200",
+  border: "border-sky-400 dark:border-sky-500/40",
+  bg:
+    "bg-gradient-to-br from-sky-50 via-card to-card " +
+    "dark:from-sky-950/65 dark:via-[#0e1c2a] dark:to-meko-navy-950",
+  text: "text-sky-700 dark:text-sky-200/95",
+  badge:
+    "border border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-200",
 };
 
 function CollectiveMemorySection({
@@ -656,12 +678,12 @@ function CollectiveMemorySection({
   return (
     <SectionShell
       title="Collective Memories"
-      icon={<Layers className="h-3.5 w-3.5 text-sky-300" aria-hidden />}
+      icon={<Layers className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />}
       toneText={COLLECTIVE_TONE.text}
       toneBadge={COLLECTIVE_TONE.badge}
       count={datapackId ? Math.min(items.length, total) : undefined}
       extracting={Boolean(datapackId) && extracting}
-      extractingChipTone="border-sky-500/40 bg-sky-500/10 text-sky-200"
+      extractingChipTone="border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-200"
       loading={loading}
       error={error}
       onRefresh={() => void fetchPromoted()}
@@ -675,7 +697,7 @@ function CollectiveMemorySection({
           // Collective memory needs upstream memories to exist first — so
           // right after a turn the more honest message is "wait for Mem0,
           // then promote." We surface the extraction-in-progress hint too.
-          <p className="inline-flex items-center gap-2 text-xs text-sky-200/80">
+          <p className="inline-flex items-center gap-2 text-xs text-sky-700 dark:text-sky-200/80">
             <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
             Extracting memories from your recent chat. Promote one above to seed collective memory.
           </p>
@@ -697,9 +719,9 @@ function CollectiveMemorySection({
               title={m.data}
               tabIndex={0}
             >
-              <p className="line-clamp-2 text-xs text-white/95">{m.data}</p>
+              <p className="line-clamp-2 text-xs text-foreground dark:text-white/95">{m.data}</p>
               {m.agent_id ? (
-                <p className="mt-1 truncate text-[10px] text-sky-200/70">
+                <p className="mt-1 truncate text-[10px] text-sky-700 dark:text-sky-200/70">
                   agent · {m.agent_id}
                 </p>
               ) : null}

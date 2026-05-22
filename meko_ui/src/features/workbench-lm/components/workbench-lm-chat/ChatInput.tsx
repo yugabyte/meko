@@ -74,7 +74,7 @@ export function ChatInput({
       className="border-t border-border bg-background px-6 py-3"
     >
       <div className="mx-auto w-full max-w-3xl">
-        <div className="flex items-end gap-2 rounded-xl border border-border bg-[#1C2333] p-2 transition-colors focus-within:border-blue-500/60">
+        <div className="flex items-end gap-2 rounded-xl border border-border bg-card p-2 transition-colors focus-within:border-blue-500/60">
           <Textarea
             ref={textareaRef}
             value={value}

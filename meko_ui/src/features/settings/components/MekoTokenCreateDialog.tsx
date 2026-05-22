@@ -119,11 +119,11 @@ export function MekoTokenCreateDialog({ open, onOpenChange, onCreated }: Props) 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-[#1C2333] border-border text-foreground">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-card border-border text-foreground">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <KeyRound className="h-5 w-5 shrink-0 text-blue-400" aria-hidden />
-            <DialogTitle className="text-white">
+            <DialogTitle className="text-foreground">
               {revealed ? "API key created" : "Generate API key"}
             </DialogTitle>
           </div>
@@ -210,7 +210,7 @@ function FormPhase({
       </div>
 
       {error ? (
-        <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+        <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-200">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>{error}</span>
         </div>
@@ -255,15 +255,15 @@ function RevealPhase({
   const saved = savedVia !== null;
   return (
     <div className="space-y-4">
-      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
         <p>
           <span className="font-semibold">{tokenName}</span> is shown exactly once. Save it now —
           you won't be able to recover it later.
         </p>
       </div>
 
-      <div className="rounded-md border border-border bg-[#0E1525] p-3">
-        <code className="block min-w-0 break-all font-mono text-xs text-white" aria-label="API token value">
+      <div className="rounded-md border border-border bg-card p-3">
+        <code className="block min-w-0 break-all font-mono text-xs text-foreground" aria-label="API token value">
           {token}
         </code>
       </div>

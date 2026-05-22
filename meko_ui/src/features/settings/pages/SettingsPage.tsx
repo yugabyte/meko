@@ -60,7 +60,7 @@ export default function SettingsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background text-foreground">
-      <AppWorkspaceHeader leading={<h1 className="text-base font-medium text-white">Settings</h1>} />
+      <AppWorkspaceHeader leading={<h1 className="text-base font-medium text-foreground">Settings</h1>} />
 
       <div className="flex-1 overflow-y-auto px-8 py-8">
         <div className="mx-auto w-full max-w-2xl space-y-6">
@@ -70,27 +70,27 @@ export default function SettingsPage() {
               Loading your account…
             </div>
           ) : error ? (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-300">
               {error}
             </div>
           ) : user ? (
             <>
               {/* Profile section — read-only for now; profile editing is
                   outside the scope of this first pass. */}
-              <section className="rounded-xl border border-border bg-[#0F1626] p-5">
+              <section className="rounded-xl border border-border bg-card p-5">
                 <header className="mb-4">
-                  <h2 className="text-sm font-semibold text-white">Profile</h2>
+                  <h2 className="text-sm font-semibold text-foreground">Profile</h2>
                 </header>
 
                 <dl className="space-y-3">
                   <Field
                     label="Name"
-                    icon={<UserIcon className="h-3.5 w-3.5 text-blue-300" aria-hidden />}
+                    icon={<UserIcon className="h-3.5 w-3.5 text-blue-700 dark:text-blue-300" aria-hidden />}
                     value={fullName || "—"}
                   />
                   <Field
                     label="Email"
-                    icon={<Mail className="h-3.5 w-3.5 text-emerald-300" aria-hidden />}
+                    icon={<Mail className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />}
                     value={user.email || "—"}
                   />
                   <Field
@@ -119,10 +119,10 @@ export default function SettingsPage() {
               {/* Security section — password + API keys. The tokens
                   subsection is its own component so the create/list
                   lifecycle and the plaintext-reveal state are isolated. */}
-              <section className="rounded-xl border border-border bg-[#0F1626] p-5">
+              <section className="rounded-xl border border-border bg-card p-5">
                 <header className="mb-4 flex items-start justify-between gap-3">
                   <div>
-                    <h2 className="text-sm font-semibold text-white">Password</h2>
+                    <h2 className="text-sm font-semibold text-foreground">Password</h2>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       Change the password for this account.
                     </p>

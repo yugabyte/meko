@@ -78,17 +78,17 @@ export function MarkdownMessage({ text }: { text: string }) {
             <h3 className="mb-1.5 text-sm font-semibold">{children}</h3>
           ),
           strong: ({ children }) => (
-            <strong className="font-semibold text-white">{children}</strong>
+            <strong className="font-semibold text-foreground">{children}</strong>
           ),
           em: ({ children }) => <em className="italic">{children}</em>,
           hr: () => <hr className="my-3 border-border/60" />,
           code: ({ children }) => (
-            <code className="rounded bg-black/25 px-1 py-0.5 font-mono text-[0.9em]">
+            <code className="rounded bg-foreground/10 px-1 py-0.5 font-mono text-[0.9em]">
               {children}
             </code>
           ),
           pre: ({ children }) => (
-            <pre className="mb-2 overflow-x-auto rounded-md bg-black/25 p-3 font-mono text-[12px] [&>code]:bg-transparent [&>code]:p-0">
+            <pre className="mb-2 overflow-x-auto rounded-md bg-foreground/10 p-3 font-mono text-[12px] [&>code]:bg-transparent [&>code]:p-0">
               {children}
             </pre>
           ),
@@ -102,7 +102,7 @@ export function MarkdownMessage({ text }: { text: string }) {
               href={href}
               target="_blank"
               rel="noreferrer noopener"
-              className="text-blue-300 underline decoration-blue-400/60 underline-offset-2 hover:text-blue-200"
+              className="text-blue-700 dark:text-blue-300 underline decoration-blue-400/60 underline-offset-2 hover:text-blue-700 dark:text-blue-200"
             >
               {children}
             </a>

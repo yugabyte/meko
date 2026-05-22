@@ -16,12 +16,12 @@ export function InlineErrorBanner({ children, action, className }: Props) {
     <div
       role="alert"
       className={cn(
-        "flex flex-col gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200 sm:flex-row sm:items-center sm:justify-between",
+        "flex flex-col gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-200 sm:flex-row sm:items-center sm:justify-between",
         className,
       )}
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" aria-hidden />
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-700 dark:text-red-300" aria-hidden />
         <div className="min-w-0 leading-snug">{children}</div>
       </div>
       {action ? <div className="flex shrink-0 justify-end sm:pl-2">{action}</div> : null}

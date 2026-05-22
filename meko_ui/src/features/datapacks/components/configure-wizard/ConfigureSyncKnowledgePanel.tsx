@@ -146,7 +146,7 @@ export function ConfigureSyncKnowledgePanel({
           )}
         >
           <Upload className="h-8 w-8 text-emerald-400" strokeWidth={1.5} aria-hidden />
-          <p className="text-sm font-medium text-emerald-200">Drop files or click to upload</p>
+          <p className="text-sm font-medium text-emerald-700 dark:text-emerald-200">Drop files or click to upload</p>
           <p className="text-[11px] text-muted-foreground">{extensionsHint}</p>
         </div>
       </div>
@@ -295,7 +295,7 @@ export function ConfigureSyncKnowledgePanel({
           {showUploadCta ? (
             <Button
               type="button"
-              className="w-full bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-60"
+              className="w-full bg-emerald-100 font-semibold text-emerald-700 shadow-sm hover:bg-emerald-200 dark:bg-emerald-600 dark:text-white dark:hover:bg-emerald-500 disabled:opacity-60"
               disabled={knowledgeUploading || pendingForUpload.length === 0}
               onClick={() => onUploadKnowledgeFiles(new Set(includedIds))}
             >

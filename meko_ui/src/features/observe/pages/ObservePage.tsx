@@ -211,7 +211,7 @@ export default function ObservePage() {
         showUserAvatar={false}
         leading={
           <div>
-            <h1 className="text-lg font-semibold text-white">Observe</h1>
+            <h1 className="text-lg font-semibold text-foreground">Observe</h1>
             <p className="text-xs text-muted-foreground">Langfuse traces embedded in Meko shell</p>
           </div>
         }
@@ -223,7 +223,9 @@ export default function ObservePage() {
             Preparing Observe...
           </div>
         ) : error ? (
-          <div className="w-full h-full flex items-center justify-center px-6 text-sm text-red-400">
+          // `text-red-400` was light-red on white in light mode — bumped
+          // to a saturated dark red there, original pastel in dark.
+          <div className="w-full h-full flex items-center justify-center px-6 text-sm text-red-700 dark:text-red-400">
             {error}
           </div>
         ) : (
@@ -231,7 +233,7 @@ export default function ObservePage() {
             key={`${effectiveRelPath}#${embedRetry}`}
             title="Langfuse Observe"
             src={observeIframeSrc(observeEmbedPath, effectiveRelPath, embedRetry)}
-            className="w-full h-full border-0 bg-[#0E1525]"
+            className="w-full h-full border-0 bg-input"
             onError={() => {
               if (embedRetry > 0) return;
               setError("Observe failed to load once, retrying...");

@@ -133,13 +133,18 @@ export function ConversationListRail({
   return (
     <aside
       className={cn(
-        "flex h-full min-h-0 flex-col border-r border-border bg-[#0E1525]",
+        // `bg-card` (not `bg-input`) so the rail reads as the same
+        // white panel surface as the `<ConversationThreadHeader>` on
+        // the right — visually they're one continuous "viewer" panel.
+        // The thread CONTENT below the header still sits on the page
+        // background, letting message bubbles float against it.
+        "flex h-full min-h-0 flex-col border-r border-border bg-card",
         className,
       )}
     >
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
-        <MessageSquare className="h-4 w-4 text-purple-300" aria-hidden />
-        <span className="text-sm font-medium text-white">Conversations</span>
+        <MessageSquare className="h-4 w-4 text-purple-700 dark:text-purple-300" aria-hidden />
+        <span className="text-sm font-medium text-foreground">Conversations</span>
         {firstLoadDone ? (
           <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
             {conversations.length}
@@ -148,9 +153,9 @@ export function ConversationListRail({
         ) : null}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-color:#2B3550_#0E1525] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-[#0E1525] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#2B3550] hover:[&::-webkit-scrollbar-thumb]:bg-[#3A4A70]">
+      <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-color:hsl(var(--meko-navy-700))_hsl(var(--meko-navy-900))] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-input [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-meko-navy-700 hover:[&::-webkit-scrollbar-thumb]:bg-meko-navy-600">
         {error ? (
-          <div className="m-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <div className="m-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
             <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
             <span>{error}</span>
           </div>
@@ -175,8 +180,8 @@ export function ConversationListRail({
                     "block w-full border-b border-border/60 px-4 py-3 text-left transition-colors",
                     "border-l-2",
                     active
-                      ? "bg-[#141C2E] border-l-purple-400"
-                      : "border-l-transparent hover:bg-[#11192A]",
+                      ? "bg-input border-l-purple-400"
+                      : "border-l-transparent hover:bg-input",
                   )}
                   // Announce the conversation by its headline so screen-reader
                   // users hear what the row is about, not just the visible
@@ -194,7 +199,7 @@ export function ConversationListRail({
                 >
                   <div className="flex items-center justify-between gap-2 mb-1">
                     {c.agent_id ? (
-                      <span className="inline-flex items-center gap-1 truncate text-[10px] text-blue-300">
+                      <span className="inline-flex items-center gap-1 truncate text-[10px] text-blue-700 dark:text-blue-300">
                         <span className="truncate">{c.agent_id}</span>
                       </span>
                     ) : (
@@ -214,7 +219,12 @@ export function ConversationListRail({
                   <p
                     className={cn(
                       "mb-2 line-clamp-2 break-words text-ellipsis text-[13px] leading-snug",
-                      active ? "text-white" : "text-foreground/85",
+                      // Both active + inactive go through `text-foreground`
+                      // so it themes — `text-white` for the active row
+                      // collapsed to invisible white-on-light-grey in
+                      // light mode. The active row already stands out via
+                      // its `bg-input` fill + `border-l-purple-400` rail.
+                      active ? "text-foreground" : "text-foreground/85",
                     )}
                     title={headline}
                   >
@@ -225,7 +235,7 @@ export function ConversationListRail({
                     {(c.memories_added ?? 0) > 0 ? (
                       <>
                         <span>·</span>
-                        <span className="inline-flex items-center gap-1 text-blue-300">
+                        <span className="inline-flex items-center gap-1 text-blue-700 dark:text-blue-300">
                           <MemoryIcon className="text-[10px]" />
                           {c.memories_added.toLocaleString()}
                         </span>

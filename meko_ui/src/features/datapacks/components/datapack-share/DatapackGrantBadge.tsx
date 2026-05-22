@@ -12,11 +12,11 @@ import {
 function grantBadgeAccent(grant: DatapackShareGrant): string {
   switch (grant) {
     case DATAPACK_SHARE_GRANT_OWNER:
-      return "border-blue-500/35 bg-blue-500/10 text-blue-200";
+      return "border-blue-500/35 bg-blue-500/10 text-blue-700 dark:text-blue-200";
     case DATAPACK_SHARE_GRANT_MAINTAINER:
-      return "border-violet-500/35 bg-violet-500/12 text-violet-200";
+      return "border-violet-500/35 bg-violet-500/12 text-violet-700 dark:text-violet-200";
     case DATAPACK_SHARE_GRANT_CONTRIBUTOR:
-      return "border-amber-500/30 bg-amber-500/10 text-amber-100";
+      return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-100";
     case DATAPACK_SHARE_GRANT_VIEWER:
       return "border-border bg-muted/50 text-muted-foreground";
   }

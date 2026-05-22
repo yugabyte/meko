@@ -50,9 +50,9 @@ import {
 import { MekoTokenCreateDialog } from "./MekoTokenCreateDialog";
 
 const STATUS_TONE: Record<MekoTokenStatus, string> = {
-  [MEKO_TOKEN_STATUS.active]: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
-  [MEKO_TOKEN_STATUS.expired]: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-  [MEKO_TOKEN_STATUS.revoked]: "border-red-500/30 bg-red-500/10 text-red-200",
+  [MEKO_TOKEN_STATUS.active]: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+  [MEKO_TOKEN_STATUS.expired]: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200",
+  [MEKO_TOKEN_STATUS.revoked]: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200",
 };
 
 const STATUS_LABEL: Record<MekoTokenStatus, string> = {
@@ -127,10 +127,10 @@ export function SecurityTokensSection() {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <section className="rounded-xl border border-border bg-[#0F1626] p-5">
+      <section className="rounded-xl border border-border bg-card p-5">
         <header className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-white">API Keys</h2>
+            <h2 className="text-sm font-semibold text-foreground">API Keys</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               Personal access tokens for connecting MCP clients (Claude, Cursor, …) to your datapacks.{" "}
               <span className="text-foreground/80">
@@ -175,7 +175,7 @@ export function SecurityTokensSection() {
         </header>
 
         {error ? (
-          <div className="mb-3 flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+          <div className="mb-3 flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-200">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
             <span>{error}</span>
           </div>
@@ -211,13 +211,13 @@ export function SecurityTokensSection() {
           if (!next) setPendingRevokeId(null);
         }}
       >
-        <AlertDialogContent className="bg-[#1C2333] border-border">
+        <AlertDialogContent className="bg-card border-border">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-white">Revoke this token?</AlertDialogTitle>
+            <AlertDialogTitle className="text-foreground">Revoke this token?</AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground">
               {pendingToken ? (
                 <>
-                  Any MCP client using <span className="text-white">{pendingToken.name}</span>{" "}
+                  Any MCP client using <span className="text-foreground">{pendingToken.name}</span>{" "}
                   (<span className="font-mono text-xs">{pendingToken.token_prefix}…</span>) will stop
                   working immediately. This cannot be undone.
                 </>
@@ -253,7 +253,7 @@ export function SecurityTokensSection() {
 
 function EmptyState({ onGenerate }: { onGenerate: () => void }) {
   return (
-    <div className="rounded-lg border border-dashed border-border bg-[#0E1525]/40 px-4 py-6 text-center">
+    <div className="rounded-lg border border-dashed border-border bg-input/40 px-4 py-6 text-center">
       <KeyRound className="mx-auto mb-2 h-5 w-5 text-muted-foreground" aria-hidden />
       <p className="text-xs text-muted-foreground">
         No API keys yet. Generate one to connect MCP clients to your datapacks.
@@ -294,10 +294,10 @@ const TokenRow = memo(function TokenRow({ token, onRevoke, isRevoking }: TokenRo
         ? `Expired ${formatDatapackCreatedAtUtc(token.expires_at)}`
         : `Expires ${formatDatapackCreatedAtUtc(token.expires_at)}`;
   return (
-    <li className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-[#0E1525] px-4 py-3">
+    <li className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate text-sm font-medium text-white">{token.name}</span>
+          <span className="truncate text-sm font-medium text-foreground">{token.name}</span>
           <span
             className={cn(
               "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
@@ -318,7 +318,7 @@ const TokenRow = memo(function TokenRow({ token, onRevoke, isRevoking }: TokenRo
         type="button"
         variant="ghost"
         size="sm"
-        className="h-8 gap-1.5 text-muted-foreground hover:text-red-300"
+        className="h-8 gap-1.5 text-muted-foreground hover:text-red-700 dark:text-red-300"
         onClick={() => onRevoke(token.id)}
         disabled={!canRevoke || isRevoking}
         aria-label={`Revoke ${token.name}`}

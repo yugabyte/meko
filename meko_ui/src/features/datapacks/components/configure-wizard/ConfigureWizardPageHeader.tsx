@@ -32,7 +32,7 @@ function ConnectionBadge({ status }: { status: WizardHeaderConnectionStatus }) {
   if (status === "loading") {
     return (
       <span
-        className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/45 bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-200"
+        className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/45 bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-200"
         aria-live="polite"
       >
         <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-400" aria-hidden />
@@ -42,7 +42,7 @@ function ConnectionBadge({ status }: { status: WizardHeaderConnectionStatus }) {
   }
   if (status === "connected") {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/45 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-200">
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/45 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-200">
         <CircleCheck className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
         Connected
       </span>
@@ -69,7 +69,7 @@ export function ConfigureWizardPageHeader({
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-5">
       <div
-        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-emerald-500/45 bg-[#0E1525]/90 shadow-sm"
+        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-emerald-500/45 bg-input/90 shadow-sm"
         aria-hidden
       >
         <Folder className="h-6 w-6 text-emerald-400" strokeWidth={1.5} />

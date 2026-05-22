@@ -31,7 +31,7 @@ function ConversationsComingSoonMock() {
         aria-hidden
       >
         <Upload className="h-7 w-7 text-blue-400" strokeWidth={1.5} />
-        <p className="text-sm font-medium text-blue-200">Drop transcripts or click to upload</p>
+        <p className="text-sm font-medium text-blue-700 dark:text-blue-200">Drop transcripts or click to upload</p>
         <p className="text-[11px] text-muted-foreground">json, jsonl, md</p>
       </div>
       <div>
@@ -59,7 +59,7 @@ function ConversationsComingSoonMock() {
           </div>
         </div>
       </div>
-      <label className="flex cursor-default items-center gap-2 text-xs text-blue-200/90">
+      <label className="flex cursor-default items-center gap-2 text-xs text-blue-700 dark:text-blue-200/90">
         <Checkbox checked disabled className="border-blue-500/50 data-[state=checked]:bg-blue-600" />
         <span className="h-3 flex-1 max-w-[14rem] rounded bg-muted/50" />
       </label>
@@ -75,7 +75,7 @@ function SkillsComingSoonMock() {
         aria-hidden
       >
         <Upload className="h-7 w-7 text-purple-400" strokeWidth={1.5} />
-        <p className="text-sm font-medium text-purple-200">Drop skill .md files or click to upload</p>
+        <p className="text-sm font-medium text-purple-700 dark:text-purple-200">Drop skill .md files or click to upload</p>
         <p className="text-[11px] text-muted-foreground">md only · e.g. CLAUDE.md</p>
       </div>
       <div>

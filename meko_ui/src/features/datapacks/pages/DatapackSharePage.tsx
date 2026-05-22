@@ -78,15 +78,15 @@ export default function DatapackSharePage({ datapackName, datapackId, currentUse
                 type="button"
                 size="sm"
                 variant="outline"
-                className="shrink-0 border-red-400/40 bg-red-950/20 text-red-100 hover:bg-red-950/40 hover:text-red-50"
+                className="shrink-0 border-red-400/40 bg-red-950/20 text-red-700 dark:text-red-100 hover:bg-red-950/40 hover:text-red-50"
                 onClick={() => void refetch()}
               >
                 Retry
               </Button>
             }
           >
-            <p className="font-medium text-red-100">Could not fetch member and invite details</p>
-            <p className="mt-1 text-xs font-normal text-red-200/85">{error}</p>
+            <p className="font-medium text-red-700 dark:text-red-100">Could not fetch member and invite details</p>
+            <p className="mt-1 text-xs font-normal text-red-700 dark:text-red-200/85">{error}</p>
           </InlineErrorBanner>
         ) : null}
 
@@ -100,7 +100,10 @@ export default function DatapackSharePage({ datapackName, datapackId, currentUse
                     className={cn(
                       inviteTabTriggerClass,
                       "group border-r border-border/70",
-                      "data-[state=active]:border-b-blue-500 data-[state=active]:bg-blue-950/25 data-[state=active]:text-foreground",
+                      // Soft blue tint in light mode, deep blue glow in
+                      // dark — `blue-950/25` on a white page rendered
+                      // as a washed-out dark-grey block.
+                      "data-[state=active]:border-b-blue-500 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-950/25 data-[state=active]:text-foreground",
                     )}
                   >
                     <span className="inline-flex max-w-full items-center justify-center gap-2.5">
@@ -124,12 +127,15 @@ export default function DatapackSharePage({ datapackName, datapackId, currentUse
                     className={cn(
                       inviteTabTriggerClass,
                       "group",
-                      "data-[state=active]:border-b-violet-500 data-[state=active]:bg-violet-950/20 data-[state=active]:text-foreground",
+                      // Soft violet tint in light mode, deep violet
+                      // glow in dark — same rationale as the human tab
+                      // above.
+                      "data-[state=active]:border-b-violet-500 data-[state=active]:bg-violet-100 dark:data-[state=active]:bg-violet-950/20 data-[state=active]:text-foreground",
                     )}
                   >
                     <span className="inline-flex max-w-full items-center justify-center gap-2 sm:gap-2.5">
                       <Bot
-                        className="block size-4 shrink-0 text-muted-foreground group-data-[state=active]:text-violet-300"
+                        className="block size-4 shrink-0 text-muted-foreground group-data-[state=active]:text-violet-700 dark:text-violet-300"
                         aria-hidden
                       />
                       <span className="inline-flex min-h-[1.25rem] max-w-full flex-wrap items-baseline justify-center gap-x-0 text-center whitespace-normal">

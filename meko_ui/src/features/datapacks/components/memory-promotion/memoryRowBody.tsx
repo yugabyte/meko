@@ -17,16 +17,16 @@ export function MemoryRowBody({ memory, textClassName }: Props) {
   const authorName = formatMemoryAuthor(memory);
   return (
     <div className="min-w-0 space-y-1">
-      <p className={cn("text-sm text-white break-words", textClassName)}>
+      <p className={cn("text-sm text-foreground break-words", textClassName)}>
         {data || <span className="italic text-muted-foreground">(empty)</span>}
       </p>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
         <span>
-          by: <span className="text-purple-200">{authorName}</span>
+          by: <span className="text-purple-700 dark:text-purple-200">{authorName}</span>
         </span>
         {agent ? (
           <span>
-            agent: <code className="text-blue-300">{agent}</code>
+            agent: <code className="text-blue-700 dark:text-blue-300">{agent}</code>
           </span>
         ) : null}
       </div>

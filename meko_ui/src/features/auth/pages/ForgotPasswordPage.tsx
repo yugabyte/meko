@@ -8,6 +8,8 @@ import {
   getApiErrorMessage,
 } from "@/lib/mekoApi";
 import { ROUTES } from "@/app/routes/paths";
+import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
+import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 
 /** Matches HTML5-style email; server still validates. */
 function isValidEmailFormat(value: string): boolean {
@@ -98,9 +100,12 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
-      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-[#1C2333] p-8 shadow-sm">
-        <h1 className="mb-2 text-center text-3xl font-semibold text-white">Forgot password</h1>
+    <AuthPageShell>
+      <div className="fixed top-4 right-4 z-10">
+        <ThemeToggleButton />
+      </div>
+      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-card p-8 shadow-sm">
+        <h1 className="mb-2 text-center text-3xl font-semibold text-foreground">Forgot password</h1>
         <p className="mb-6 text-center text-sm text-muted-foreground">
           We&apos;ll email you a code to reset your password.
         </p>
@@ -125,11 +130,11 @@ export default function ForgotPasswordPage() {
               }
             }}
             required
-            className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+            className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
           />
           <Button
             type="submit"
-            className="h-12 w-full bg-white text-black hover:bg-white/90"
+            className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
             disabled={sendLoading}
           >
             {sendLoading ? "Sending…" : "Send activation code"}
@@ -169,7 +174,7 @@ export default function ForgotPasswordPage() {
               onChange={(e) => setCode(e.target.value)}
               required
               autoComplete="one-time-code"
-              className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+              className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
             />
             <Input
               type="password"
@@ -178,7 +183,7 @@ export default function ForgotPasswordPage() {
               onChange={(e) => setNewPassword(e.target.value)}
               required
               autoComplete="new-password"
-              className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+              className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
             />
             <Input
               type="password"
@@ -187,7 +192,7 @@ export default function ForgotPasswordPage() {
               onChange={(e) => setConfirmPassword(e.target.value)}
               required
               autoComplete="new-password"
-              className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+              className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
             />
             <p className="text-xs text-muted-foreground">
               Password must be more than 6 characters. Both fields must match.
@@ -195,7 +200,7 @@ export default function ForgotPasswordPage() {
             {updateError ? <p className="text-sm text-red-600">{updateError}</p> : null}
             <Button
               type="submit"
-              className="h-12 w-full bg-white text-black hover:bg-white/90"
+              className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
               disabled={updateLoading}
             >
               {updateLoading ? "Updating…" : "Update password"}
@@ -209,6 +214,6 @@ export default function ForgotPasswordPage() {
           </Link>
         </p>
       </div>
-    </div>
+    </AuthPageShell>
   );
 }

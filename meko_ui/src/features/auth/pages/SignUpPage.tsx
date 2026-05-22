@@ -4,6 +4,8 @@ import { getApiErrorMessage, signup, confirmSignup } from "@/lib/mekoApi";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ROUTES } from "@/app/routes/paths";
+import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
+import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 
 function getPasswordPolicyError(password: string): string | null {
   if (password.length < 8) return "Password must be at least 8 characters long.";
@@ -82,9 +84,12 @@ export default function SignUpPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4 text-foreground">
-      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-[#1C2333] p-8 shadow-sm">
-        <h1 className="mb-6 text-center text-3xl font-semibold text-white">
+    <AuthPageShell>
+      <div className="fixed top-4 right-4 z-10">
+        <ThemeToggleButton />
+      </div>
+      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-card p-8 shadow-sm">
+        <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">
           {awaitingCode ? "Confirm your account" : "Sign up for Meko"}
         </h1>
         <form
@@ -99,14 +104,14 @@ export default function SignUpPage() {
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
                   required
-                  className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+                  className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
                 />
                 <Input
                   placeholder="Your last name"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
                   required
-                  className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+                  className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
                 />
               </div>
               <Input
@@ -122,7 +127,7 @@ export default function SignUpPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
               />
               <Input
                 type="password"
@@ -134,7 +139,7 @@ export default function SignUpPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
               />
               <p className="text-xs text-muted-foreground">
                 Use 8+ chars with uppercase, lowercase, number, and special
@@ -151,7 +156,7 @@ export default function SignUpPage() {
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 required
-                className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
               />
             </>
           )}
@@ -160,7 +165,7 @@ export default function SignUpPage() {
 
           <Button
             type="submit"
-            className="h-12 w-full bg-white text-black hover:bg-white/90"
+            className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
             disabled={loading}
           >
             {awaitingCode
@@ -184,6 +189,6 @@ export default function SignUpPage() {
           </>
         ) : null}
       </div>
-    </div>
+    </AuthPageShell>
   );
 }

@@ -2,6 +2,7 @@
 // chat (talks to the inference gateway) + right "live observation" rail.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import {
   WorkbenchLMChat,
@@ -25,12 +26,23 @@ import {
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
+import {
+  getPersistedItem,
+  removePersistedItem,
+  setPersistedItem,
+} from "@/lib/browserStorage";
 import { isDatapackGrantEligibleForWorkbenchLM } from "@/lib/datapackShareGrants";
 import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/workbench-lm/data/sampleKnowledge";
+import { DATAPACK_ID_QUERY_PARAM } from "@/app/routes/paths";
 
 // Optional dev override for the MCP bearer. When unset (the normal case), we
 // fetch the token from /provision-status per datapack instead.
 const DEV_MCP_TOKEN = (import.meta.env.VITE_MEKO_MCP_BEARER as string | undefined) ?? "";
+
+// The URL is the source of truth; storage is the fallback for when the user lands on
+// `/workbench-lm` with no query string (typical bookmark / nav-link case).
+
+const DATAPACK_ID_STORAGE_KEY = "workbench-lm:selected-datapack-id";
 
 type Props = {
   /**
@@ -44,10 +56,34 @@ type Props = {
 };
 
 export default function WorkbenchLMPage({ isRouteActive }: Props) {
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const [datapacks, setDatapacks] = useState<Datapack[]>([]);
   const [datapacksLoading, setDatapacksLoading] = useState(true);
   const [datapacksError, setDatapacksError] = useState<string | null>(null);
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+
+  // `selectedId` is DERIVED from the URL query param (single source of
+  // truth). Picking a datapack updates the URL via `setSearchParams`,
+  // which triggers a re-render with the new derived value. The previous
+  // two-state design (URL ⇄ useState mirror) caused an infinite render
+  // loop: the mirror effects raced because each saw the OTHER side
+  // stale and tried to "fix" it, ping-ponging the value forever.
+  //
+  // First-mount fallback: if the URL has no `datapack_id`, we read it
+  // from the hybrid storage layer ONCE (`useMemo` with no deps), then
+  // the auto-select effect below promotes that into the URL so future
+  // renders all derive cleanly from `searchParams` alone.
+  //
+  // Same-name disambiguation rationale is unchanged — IDs are unique,
+  // names are not.
+  const initialStorageId = useMemo<string | null>(
+    () => getPersistedItem(DATAPACK_ID_STORAGE_KEY),
+    [],
+  );
+  const selectedId: string | null = useMemo(() => {
+    const fromUrl = searchParams.get(DATAPACK_ID_QUERY_PARAM)?.trim();
+    return fromUrl || initialStorageId;
+  }, [searchParams, initialStorageId]);
   // Agents fetched for the selected datapack — kept in state for future use
   // (e.g. agent picker on the header).
   const [, setAgents] = useState<Agent[]>([]);
@@ -76,9 +112,11 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
     [datapacks],
   );
   const selectedDatapack = useMemo(
-    () => accessibleDatapacks.find((dp) => dp.datapack_name === selectedName) ?? null,
-    [accessibleDatapacks, selectedName],
+    () => accessibleDatapacks.find((dp) => dp.datapack_id === selectedId) ?? null,
+    [accessibleDatapacks, selectedId],
   );
+
+  const selectedName = selectedDatapack?.datapack_name ?? null;
 
   // Bumped after each successful chat turn so the right-rail panels (memories
   // / shared knowledge / conversations) refetch from the server.
@@ -117,30 +155,74 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
     [],
   );
 
+  // Single mutator for the selection — writes to the URL, the derived
+  // `selectedId` falls out of that on the next render. Centralised so
+  // every call site (dropdown change, switch confirm, auto-select) goes
+  // through one path, and there's only one place that ever calls
+  // `setSearchParams`.
+  //
+  // Uses the functional-updater form of `setSearchParams` (analogous to
+  // `setState((prev) => …)`) so the callback does NOT depend on the
+  // current `searchParams` snapshot — `setSearchParams` itself is
+  // stable per React Router, so `writeSelectedId` is now stable too.
+  // That keeps child components receiving this callback (e.g.
+  // `<WorkbenchLMHeader>`) from re-rendering whenever any other query
+  // param changes.
+  const writeSelectedId = useCallback(
+    (nextId: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (nextId) {
+            next.set(DATAPACK_ID_QUERY_PARAM, nextId);
+          } else {
+            next.delete(DATAPACK_ID_QUERY_PARAM);
+          }
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
   // Intercept the dropdown's onValueChange. Any real switch (i.e. user picks
   // a different datapack while one is already active) prompts for
   // confirmation — switching discards the in-process chat session, the
   // loaded provision-status / mcp_api_key, the KB doc list, and any draft.
   // The very first auto-selection on page load goes through the dedicated
   // default-select effect (bypasses this handler) so it stays silent.
+  //
+  // Takes a datapack ID (not name) because the dropdown is keyed by ID
+  // now — two same-named datapacks would otherwise collide here.
   const handleSelectDatapack = useCallback(
-    (newName: string) => {
-      if (!newName || newName === selectedName) return;
-      if (selectedName) {
-        setPendingSwitch(newName);
+    (newId: string) => {
+      if (!newId || newId === selectedId) return;
+      if (selectedId) {
+        setPendingSwitch(newId);
         return;
       }
-      setSelectedName(newName);
+      writeSelectedId(newId);
     },
-    [selectedName],
+    [selectedId, writeSelectedId],
   );
 
   const confirmSwitch = useCallback(() => {
     if (pendingSwitch) {
-      setSelectedName(pendingSwitch);
+      writeSelectedId(pendingSwitch);
     }
     setPendingSwitch(null);
-  }, [pendingSwitch]);
+  }, [pendingSwitch, writeSelectedId]);
+
+  // Name lookup for the confirm dialog — the dialog wants a user-friendly
+  // string, but `pendingSwitch` is an ID. Look up against the accessible
+  // list (already filtered to packs the user can chat with).
+  const pendingSwitchName = useMemo(
+    () =>
+      accessibleDatapacks.find((dp) => dp.datapack_id === pendingSwitch)?.datapack_name ??
+      "",
+    [accessibleDatapacks, pendingSwitch],
+  );
 
   // Translate the doc list into a coarse readiness state the chat can act on.
   const knowledgeReadiness: KnowledgeReadiness = !selectedDatapack
@@ -197,14 +279,43 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
     };
   }, [refreshDatapacks]);
 
-  // Default-select the first accessible datapack once they load. Owners
-  // come back first from the API today; if that changes we may want to
-  // sort here to keep the user's own packs at the top of the picker.
+
+  // Auto-select / validate the active datapack against the freshly
+  // loaded list. Three cases:
+  //   1. URL has no `datapack_id` and storage has no fallback (or it's
+  //      stale) → pick the first accessible datapack.
+  //   2. URL has a datapack_id that no longer matches any accessible
+  //      row (deleted / share revoked / typo in a shared URL) → fall
+  //      back to first accessible.
+  //   3. URL's id is valid → no-op.
+  //
+  // The only write here is `writeSelectedId`, which goes through the
+  // URL. There's no React state mirror, so no chance of the old
+  // URL ⇄ state ping-pong loop.
+  //
+  // Owners come back first from the API today; if that changes we may
+  // want to sort here to keep the user's own packs at the top.
   useEffect(() => {
-    if (selectedName) return;
-    const first = accessibleDatapacks[0];
-    if (first) setSelectedName(first.datapack_name);
-  }, [accessibleDatapacks, selectedName]);
+    if (accessibleDatapacks.length === 0) return;
+    if (
+      selectedId &&
+      accessibleDatapacks.some((dp) => dp.datapack_id === selectedId)
+    ) {
+      return;
+    }
+    writeSelectedId(accessibleDatapacks[0].datapack_id);
+  }, [accessibleDatapacks, selectedId, writeSelectedId]);
+
+  // One-way mirror to the hybrid storage so a fresh tab / reload
+  // without the URL param still lands on the user's last datapack.
+  // Pure side-effect — never feeds back into `selectedId`.
+  useEffect(() => {
+    if (selectedId) {
+      setPersistedItem(DATAPACK_ID_STORAGE_KEY, selectedId);
+    } else {
+      removePersistedItem(DATAPACK_ID_STORAGE_KEY);
+    }
+  }, [selectedId]);
 
   // Fetch agents for the selected datapack (held for future use).
   useEffect(() => {
@@ -241,14 +352,14 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
         leading={
           <WorkbenchLMHeader
             accessibleDatapacks={accessibleDatapacks}
-            selectedDatapackName={selectedName}
+            selectedDatapackId={selectedId}
             onSelectDatapack={handleSelectDatapack}
             loading={datapacksLoading}
           />
         }
       />
       {datapacksError ? (
-        <div className="border-b border-red-500/30 bg-red-500/10 px-6 py-2 text-xs text-red-300">
+        <div className="border-b border-red-500/30 bg-red-500/10 px-6 py-2 text-xs text-red-700 dark:text-red-300">
           {datapacksError}
         </div>
       ) : null}
@@ -291,7 +402,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           if (!open) setPendingSwitch(null);
         }}
         currentDatapackName={selectedName ?? ""}
-        targetDatapackName={pendingSwitch ?? ""}
+        targetDatapackName={pendingSwitchName}
         onConfirm={confirmSwitch}
       />
 

@@ -206,7 +206,7 @@ function CodeBlock({
   );
 
   return (
-    <div className="max-w-full overflow-hidden rounded-lg border border-border bg-[#0E1525]/80 shadow-sm">
+    <div className="max-w-full overflow-hidden rounded-lg border border-border bg-input/80 shadow-sm">
       <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {langLabel}

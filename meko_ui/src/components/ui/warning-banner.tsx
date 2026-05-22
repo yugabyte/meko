@@ -34,13 +34,13 @@ export function WarningBanner({
     <div
       role="alert"
       className={cn(
-        "flex items-start gap-2.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100",
+        "flex items-start gap-2.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-100",
         className,
       )}
       {...rest}
     >
       {!hideIcon ? (
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" aria-hidden />
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden />
       ) : null}
       <div className="min-w-0 flex-1 leading-relaxed">{children}</div>
     </div>

@@ -416,7 +416,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                       <Settings className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-[14rem] bg-[#1C2333] border-border text-foreground">
+                  <DropdownMenuContent align="end" className="min-w-[14rem] bg-card border-border text-foreground">
                     {isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) && (
                       <DropdownMenuItem
                         className="gap-2 cursor-pointer focus:bg-muted/20"
@@ -435,7 +435,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                       Edit {datapackName}
                     </DropdownMenuItem>}
                     {isDatapackGrantEligibleToDelete({ grant: datapackGrant }) && <DropdownMenuItem
-                      className="gap-2 cursor-pointer text-red-300 focus:bg-red-950/40 focus:text-red-200"
+                      className="gap-2 cursor-pointer text-red-700 dark:text-red-300 focus:bg-red-950/40 focus:text-red-700 dark:text-red-200"
                       // disabled={isDefaultDatapack}
                       // title={isDefaultDatapack ? "The default account datapack cannot be deleted." : undefined}
                       onSelect={() => {

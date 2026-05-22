@@ -87,7 +87,7 @@ export function MemoryHoverCard({
         tabIndex={0}
         className={cn(
           "inline-flex cursor-pointer select-none items-center gap-1 rounded px-1 py-0.5 transition-colors",
-          open ? "bg-blue-500/15 text-blue-300" : "hover:bg-blue-500/10 hover:text-blue-300",
+          open ? "bg-blue-500/15 text-blue-700 dark:text-blue-300" : "hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-300",
         )}
         onMouseEnter={openPopover}
         onMouseLeave={closePopover}
@@ -100,19 +100,19 @@ export function MemoryHoverCard({
 
       {open ? (
         <div
-          className="absolute bottom-full left-0 z-50 mb-2 w-72 overflow-hidden rounded-xl border border-blue-500/25 bg-[#0E1525] shadow-2xl"
+          className="absolute bottom-full left-0 z-50 mb-2 w-72 overflow-hidden rounded-xl border border-blue-500/25 bg-input shadow-2xl"
           onMouseEnter={openPopover}
           onMouseLeave={closePopover}
           onClick={onClickOpenTrace}
         >
           {/* Caret */}
-          <div className="absolute -bottom-1.5 left-4 h-3 w-3 rotate-45 border-b border-r border-blue-500/25 bg-[#0E1525]" />
+          <div className="absolute -bottom-1.5 left-4 h-3 w-3 rotate-45 border-b border-r border-blue-500/25 bg-input" />
 
           <div className="px-3.5 py-3">
-            <p className="mb-2.5 flex items-center gap-1.5 text-[11px] font-medium text-blue-300">
+            <p className="mb-2.5 flex items-center gap-1.5 text-[11px] font-medium text-blue-700 dark:text-blue-300">
               <MemoryIcon className="text-[13px]" />
               Extracted memories
-              <span className="ml-auto text-[10px] font-normal text-blue-300/50">
+              <span className="ml-auto text-[10px] font-normal text-blue-700 dark:text-blue-300/50">
                 Click to open trace
               </span>
             </p>

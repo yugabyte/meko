@@ -52,7 +52,7 @@ export function DatapackDetailConnectTile({
       <div className="flex flex-col gap-3 px-3 py-3">
         {ready ? (
           <>
-            <div className="relative flex min-h-[2.5rem] items-center rounded-md border border-border bg-[#0E1525] py-1.5 pl-3 pr-10">
+            <div className="relative flex min-h-[2.5rem] items-center rounded-md border border-border bg-card py-1.5 pl-3 pr-10">
               <p
                 className="min-w-0 flex-1 truncate font-mono text-[11px] leading-snug text-foreground/95"
                 title={command}
@@ -76,7 +76,7 @@ export function DatapackDetailConnectTile({
               with a Meko API key from{" "}
               <button
                 type="button"
-                className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-300"
+                className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-700 dark:text-blue-300"
                 onClick={onOpenConnect}
               >
                 Connect
@@ -89,7 +89,7 @@ export function DatapackDetailConnectTile({
             Open{" "}
             <button
               type="button"
-              className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-300"
+              className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-700 dark:text-blue-300"
               onClick={onOpenConnect}
             >
               Connect

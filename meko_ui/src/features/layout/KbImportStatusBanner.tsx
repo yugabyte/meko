@@ -13,14 +13,14 @@ export function KbImportStatusBanner() {
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-center gap-2 border-b border-blue-500/30 bg-blue-950/40 px-4 py-2 text-sm text-blue-100",
+        "flex shrink-0 items-center justify-center gap-2 border-b border-blue-500/30 bg-blue-950/40 px-4 py-2 text-sm text-blue-700 dark:text-blue-100",
       )}
       role="status"
       aria-live="polite"
     >
-      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-300" aria-hidden />
+      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-700 dark:text-blue-300" aria-hidden />
       <span>
-        Importing knowledge into <span className="font-semibold text-white">{datapackName}</span>…
+        Importing knowledge into <span className="font-semibold text-foreground">{datapackName}</span>…
       </span>
     </div>
   );

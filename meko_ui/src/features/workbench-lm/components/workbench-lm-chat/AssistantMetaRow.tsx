@@ -91,7 +91,7 @@ export function AssistantMetaRow({
           <button
             type="button"
             onClick={onOpenTrace}
-            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-purple-300 hover:bg-[#1C2333] hover:text-purple-200 transition-colors"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-purple-700 dark:text-purple-300 hover:bg-card hover:text-purple-700 dark:text-purple-200 transition-colors"
             aria-label="View trace"
             title="Open the Langfuse trace for this message"
           >

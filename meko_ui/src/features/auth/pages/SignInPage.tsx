@@ -15,7 +15,9 @@ import {
   resendSignupConfirmation,
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
+import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { ROUTES } from "@/app/routes/paths";
+import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 
 const MEKO_REQUEST_ACCESS_URL = "https://info.yugabyte.com/meko-request-access" as const;
 
@@ -126,14 +128,21 @@ export default function SignInPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4 text-foreground">
-      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-[#1C2333] p-8 shadow-sm">
-        <h1 className="mb-6 text-center text-3xl font-semibold text-white">
+    <AuthPageShell>
+      {/* Theme toggle pinned top-right so unauthenticated users (who don't
+          see the workspace header) can still flip between light and dark
+          modes before signing in. `fixed` is screen-relative, so it stays
+          put regardless of card height / scroll. */}
+      <div className="fixed top-4 right-4 z-10">
+        <ThemeToggleButton />
+      </div>
+      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-card p-8 shadow-sm">
+        <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">
           Sign in to Meko
         </h1>
 
         {showPasswordResetBanner ? (
-          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-950/25 px-4 py-3 text-sm text-emerald-100">
+          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-950/25 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-100">
             Your password was updated. Sign in with your new password.
           </div>
         ) : null}
@@ -158,7 +167,7 @@ export default function SignInPage() {
               }
             }}
             required
-            className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+            className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
           />
           <Input
             type="password"
@@ -170,11 +179,11 @@ export default function SignInPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+            className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
           />
           <Button
             type="submit"
-            className="h-12 w-full bg-white text-black hover:bg-white/90"
+            className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
             disabled={loading}
           >
             {loading ? "Please wait..." : "Continue"}
@@ -184,8 +193,8 @@ export default function SignInPage() {
 
         {showUnconfirmedRecovery ? (
           <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-950/20 px-4 py-3 text-sm text-amber-50/95">
-            <p className="font-medium text-amber-100">Finish verifying this email</p>
-            <p className="mt-1.5 text-xs leading-relaxed text-amber-100/80">
+            <p className="font-medium text-amber-700 dark:text-amber-100">Finish verifying this email</p>
+            <p className="mt-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-100/80">
               Your account exists but the email is not verified yet.
               Resend the code to verify your email.
             </p>
@@ -209,9 +218,9 @@ export default function SignInPage() {
               </Button>
             </div>
             {resendMessage ? (
-              <p className="mt-2 text-xs text-emerald-300/90">{resendMessage}</p>
+              <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-300/90">{resendMessage}</p>
             ) : null}
-            {resendError ? <p className="mt-2 text-xs text-red-300">{resendError}</p> : null}
+            {resendError ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{resendError}</p> : null}
           </div>
         ) : null}
 
@@ -225,13 +234,13 @@ export default function SignInPage() {
               Sign up
             </Link>
           </p> */}
-          <Button variant="outline" className="h-11 w-full border-border bg-[#0E1525] text-white hover:bg-white/10" asChild>
+          <Button variant="outline" className="h-11 w-full border-border bg-input text-foreground hover:bg-white/10" asChild>
             <a href={MEKO_REQUEST_ACCESS_URL} target="_blank" rel="noopener noreferrer">
               Request Access
             </a>
           </Button>
         </div>
       </div>
-    </div>
+    </AuthPageShell>
   );
 }

@@ -60,7 +60,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
 
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-3">
-            <Sparkles className="h-8 w-8 shrink-0 text-sky-300" aria-hidden />
+            <Sparkles className="h-8 w-8 shrink-0 text-sky-700 dark:text-sky-300" aria-hidden />
             <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
               Collective Memory Summary
             </h1>

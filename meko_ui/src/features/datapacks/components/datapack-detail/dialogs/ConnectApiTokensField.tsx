@@ -47,12 +47,12 @@ export function ConnectApiTokensField({
     <div className="space-y-2">
       <label className="text-sm font-medium text-muted-foreground">API key</label>
       {loading ? (
-        <div className="flex items-center gap-2 rounded-md border border-border bg-[#0E1525] px-3 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
           Loading tokens…
         </div>
       ) : error ? (
-        <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+        <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-200">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>{error}</span>
         </div>
@@ -67,11 +67,11 @@ export function ConnectApiTokensField({
             {tokens.map((t) => (
               <li
                 key={t.id}
-                className="flex items-center gap-3 rounded-md border border-border bg-[#0E1525] px-3 py-2"
+                className="flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2"
               >
-                <KeyRound className="h-3.5 w-3.5 shrink-0 text-blue-300" aria-hidden />
+                <KeyRound className="h-3.5 w-3.5 shrink-0 text-blue-700 dark:text-blue-300" aria-hidden />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm text-white">{t.name}</div>
+                  <div className="truncate text-sm text-foreground">{t.name}</div>
                   <code className="block min-w-0 truncate font-mono text-[11px] text-muted-foreground">
                     {t.token_prefix}…
                   </code>
@@ -99,7 +99,7 @@ export function ConnectApiTokensField({
             <Link
               to={ROUTES.settings}
               onClick={onOpenSettings}
-              className="font-medium text-blue-300 hover:text-blue-200"
+              className="font-medium text-blue-700 dark:text-blue-300 hover:text-blue-700 dark:text-blue-200"
             >
               Manage tokens in Settings →
             </Link>
@@ -118,10 +118,10 @@ function NoTokensEmptyState({
   onOpenSettings: () => void;
 }) {
   return (
-    <div className="flex items-start gap-3 rounded-md border border-dashed border-border bg-[#0E1525]/60 px-4 py-3">
+    <div className="flex items-start gap-3 rounded-md border border-dashed border-border bg-input/60 px-4 py-3">
       <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
-        <p className="text-sm text-white">No active API keys.</p>
+        <p className="text-sm text-foreground">No active API keys.</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {totalCount > 0
             ? "Your tokens are expired or revoked. Generate a new one in Settings."

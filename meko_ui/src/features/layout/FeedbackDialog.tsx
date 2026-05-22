@@ -114,9 +114,9 @@ export function FeedbackDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-xl bg-[#1C2333] border-border text-foreground p-0 gap-0">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-xl bg-card border-border text-foreground p-0 gap-0">
         <DialogHeader className="px-6 pt-6 pb-3 border-b border-border">
-          <DialogTitle className="flex items-center gap-2 text-xl text-white">
+          <DialogTitle className="flex items-center gap-2 text-xl text-foreground">
             <MessageSquare className="h-5 w-5 text-blue-400" aria-hidden />
             Send feedback
           </DialogTitle>
@@ -143,7 +143,7 @@ export function FeedbackDialog({
                     className={cn(
                       "rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
                       active
-                        ? "border-blue-500/60 bg-blue-500/15 text-blue-100"
+                        ? "border-blue-500/60 bg-blue-500/15 text-blue-700 dark:text-blue-100"
                         : "border-border bg-background/60 text-muted-foreground hover:border-border/80 hover:text-foreground",
                       submitting && "cursor-not-allowed opacity-50",
                     )}
@@ -197,14 +197,14 @@ export function FeedbackDialog({
           </label>
 
           {error ? (
-            <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+            <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
               <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
               <span>{error}</span>
             </div>
           ) : null}
 
           {!userId ? (
-            <p className="text-xs text-amber-300">
+            <p className="text-xs text-amber-700 dark:text-amber-300">
               You need to be signed in to send feedback.
             </p>
           ) : null}

@@ -36,10 +36,10 @@ export function ConversationThreadHeader({
   const startedDisplay = formatDatapackCreatedAtUtc(detail.started_at);
 
   return (
-    <header className="border-b border-border bg-[#11192A] px-6 py-4 shrink-0">
+    <header className="border-b border-border bg-card px-6 py-4 shrink-0">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-base font-medium text-white" title={headline}>
+          <h2 className="truncate text-base font-medium text-foreground" title={headline}>
             {headline}
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -47,7 +47,7 @@ export function ConversationThreadHeader({
               <>
                 <span className="inline-flex items-center gap-1">
                   <Bot className="h-3 w-3" aria-hidden />
-                  <code className="text-blue-300">{detail.agent_id}</code>
+                  <code className="text-blue-700 dark:text-blue-300">{detail.agent_id}</code>
                 </span>
                 <span>·</span>
               </>
@@ -84,7 +84,7 @@ export function ConversationThreadHeader({
           {langfuseProjectId ? (
             <a
               href={`${ROUTES.observeHub}?${new URLSearchParams({ project: langfuseProjectId, session: conversationId }).toString()}`}
-              className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/10 px-2 py-1 text-[11px] font-medium text-foreground/80 hover:bg-muted/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 transition-colors"
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/10 px-2 py-1 text-[11px] font-medium text-foreground/80 hover:bg-muted/20 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 transition-colors"
               title="Open this conversation in the Langfuse trace view"
             >
               <ExternalLink className="h-3 w-3" aria-hidden />

@@ -16,14 +16,14 @@ export function PromotedMemoryRowBody({ memory }: Props) {
 
   return (
     <div className="min-w-0 space-y-1">
-      <p className="text-sm text-white break-words">
+      <p className="text-sm text-foreground break-words">
         {data || <span className="italic text-muted-foreground">(empty)</span>}
       </p>
       {(agent || conversationId || promotedAt) ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
           {agent ? (
             <span>
-              agent: <code className="text-blue-300">{agent}</code>
+              agent: <code className="text-blue-700 dark:text-blue-300">{agent}</code>
             </span>
           ) : null}
           {conversationId ? (

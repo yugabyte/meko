@@ -147,7 +147,7 @@ function MemberRow({
             {isYou ? (
               <Badge
                 variant="outline"
-                className="shrink-0 border-blue-500/35 bg-blue-500/10 px-2 py-0 text-[10px] font-semibold uppercase tracking-wide text-blue-200"
+                className="shrink-0 border-blue-500/35 bg-blue-500/10 px-2 py-0 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-200"
               >
                 you
               </Badge>
@@ -239,7 +239,7 @@ export function MembersSection({ currentUser, datapackName, datapackId, members,
             <h2 className="text-base font-semibold tracking-tight text-foreground">Members</h2>
             <Badge
               variant="outline"
-              className="shrink-0 border-emerald-500/45 bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold tabular-nums text-emerald-200"
+              className="shrink-0 border-emerald-500/45 bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold tabular-nums text-emerald-700 dark:text-emerald-200"
             >
               {humanCount}
             </Badge>

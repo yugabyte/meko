@@ -4,6 +4,7 @@ import { Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { getSessionItem, setSessionItem } from "@/lib/browserStorage";
 import {
   getApiErrorMessage,
   listDatapackIncomingShares,
@@ -31,6 +32,13 @@ type Props = {
   recipientUserId: string;
 };
 
+// sessionStorage flag: "has this tab auto-opened the bell once already?"
+// We auto-pop the popover on first load when there are pending invites so
+// the user actually notices them, but we don't want it springing back open
+// on every re-render or after a dismiss. Per-tab (not per-origin) so a
+// fresh tab still gets the heads-up.
+const AUTO_OPENED_STORAGE_KEY = "meko:notifications-bell:auto-opened-this-session";
+
 export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
   const [open, setOpen] = useState(false);
   const [invites, setInvites] = useState<DatapackIncomingShare[]>([]);
@@ -52,6 +60,19 @@ export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
   useEffect(() => {
     void loadInvites();
   }, [loadInvites]);
+
+  // Auto-open the popover on first load when there's at least one pending
+  // invite — the bell badge alone is easy to miss. Gated by a sessionStorage
+  // flag so dismissing the popover (or any subsequent re-renders / refetches
+  // in the same tab) doesn't pop it back open. Cleared automatically when
+  // the tab closes, so a fresh tab gets the heads-up again.
+  useEffect(() => {
+    if (loading) return;
+    if (invites.length === 0) return;
+    if (getSessionItem(AUTO_OPENED_STORAGE_KEY) === "1") return;
+    setOpen(true);
+    setSessionItem(AUTO_OPENED_STORAGE_KEY, "1");
+  }, [loading, invites.length]);
 
   const runAction = async (invite: DatapackIncomingShare, user_action: "accept" | "decline") => {
     setBusy({ inviteId: invite.invite_id, action: user_action });

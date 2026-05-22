@@ -227,7 +227,7 @@ export function WorkbenchLMChat({
           <button
             type="button"
             onClick={handleDownload}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-[#1C2333] px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-border/80 hover:text-foreground"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-border/80 hover:text-foreground"
             aria-label="Download chat as text"
             title="Download this chat as a .txt file"
           >
@@ -266,7 +266,7 @@ export function WorkbenchLMChat({
 
       {error && (
         <div className="mx-auto w-full max-w-3xl px-6 pb-2">
-          <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <span className="break-words">{error}</span>
           </div>

@@ -159,7 +159,7 @@ export function InviteAgentByTokenSection() {
                 className={cn(
                   "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
                   expires === opt.id
-                    ? "border-violet-500/70 bg-violet-500/15 text-violet-100"
+                    ? "border-violet-500/70 bg-violet-500/15 text-violet-700 dark:text-violet-100"
                     : "border-border bg-muted/20 text-muted-foreground hover:border-muted-foreground/40 hover:bg-muted/30",
                 )}
               >

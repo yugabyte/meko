@@ -86,7 +86,7 @@ export default function OnboardingPage() {
           <>
             <div
               className={cn(
-                "mb-8 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-4 py-1.5 text-xs font-medium text-blue-300",
+                "mb-8 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-4 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-300",
               )}
             >
               <Sparkles className="h-3.5 w-3.5 shrink-0 text-blue-400" aria-hidden />

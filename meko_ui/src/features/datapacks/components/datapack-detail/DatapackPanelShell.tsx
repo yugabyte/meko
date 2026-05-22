@@ -1,6 +1,6 @@
 // Shared "section card" used by datapack-detail panels (Conversations,
 // Learnings/MemoryPromotion, etc.). Owns the consistent visual chrome:
-//   - Outer card (#1C2333 surface, rounded, bordered).
+//   - Outer card (raised surface via `bg-card`, rounded, bordered).
 //   - Header row with leading icon-square, title (+ optional count suffix),
 //     supporting description, and a Refresh button on the right.
 //   - Optional red error banner(s) below the header.
@@ -65,7 +65,7 @@ export default function DatapackPanelShell({
   );
 
   return (
-    <div className={cn("rounded-xl border border-border bg-[#1C2333] p-6 space-y-4", className)}>
+    <div className={cn("rounded-xl border border-border bg-card p-6 space-y-4", className)}>
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-4 min-w-0">
           <div
@@ -77,7 +77,7 @@ export default function DatapackPanelShell({
             {icon}
           </div>
           <div className="min-w-0">
-            <h3 className="text-base font-semibold tracking-tight text-white">{title}</h3>
+            <h3 className="text-base font-semibold tracking-tight text-foreground">{title}</h3>
             {description ? (
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
             ) : null}
@@ -103,7 +103,7 @@ export default function DatapackPanelShell({
       {visibleErrors.map((msg, i) => (
         <div
           key={i}
-          className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300"
+          className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-700 dark:text-red-300"
         >
           <AlertCircle className="w-4 h-4 shrink-0" />
           {msg}

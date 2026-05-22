@@ -35,7 +35,7 @@ export function ObserveButton({ projectId, sessionId, onClick }: Props) {
           type="button"
           variant="outline"
           size="sm"
-          className="gap-1.5 border-border bg-background/80 text-blue-300 hover:bg-blue-500/10 hover:text-blue-200 hover:border-blue-500/40"
+          className="gap-1.5 border-border bg-background/80 text-blue-700 dark:text-blue-300 hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-200 hover:border-blue-500/40"
           asChild
         >
           {/*

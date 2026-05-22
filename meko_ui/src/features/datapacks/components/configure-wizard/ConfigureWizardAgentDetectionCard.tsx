@@ -27,7 +27,7 @@ function FlowNode({
   return (
     <div
       className={cn(
-        "flex min-w-[4.5rem] flex-col items-center gap-1.5 rounded-lg border border-teal-500/35 bg-[#0E1525]/90 px-2.5 py-2.5 text-center shadow-sm",
+        "flex min-w-[4.5rem] flex-col items-center gap-1.5 rounded-lg border border-teal-500/35 bg-input/90 px-2.5 py-2.5 text-center shadow-sm",
         className,
       )}
     >
@@ -39,7 +39,7 @@ function FlowNode({
 
 function FlowPill({ children }: { children: ReactNode }) {
   return (
-    <div className="shrink-0 rounded-full border border-teal-500/40 bg-teal-500/5 px-3 py-1.5 text-center font-mono text-[11px] leading-snug text-emerald-200/95">
+    <div className="shrink-0 rounded-full border border-teal-500/40 bg-teal-500/5 px-3 py-1.5 text-center font-mono text-[11px] leading-snug text-emerald-700 dark:text-emerald-200/95">
       {children}
     </div>
   );
@@ -50,7 +50,7 @@ function AgentDetectionPreviewBody() {
     <div className="space-y-5">
       <div className="flex gap-3 sm:gap-4">
         <div
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-teal-500/45 bg-[#0E1525]/90"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-teal-500/45 bg-input/90"
           aria-hidden
         >
           <Shield className="h-5 w-5 text-teal-400" strokeWidth={1.75} />
@@ -60,7 +60,7 @@ function AgentDetectionPreviewBody() {
             <h2 className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
               Agent detected — round-trip verified
             </h2>
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/45 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-200">
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/45 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-200">
               <Check className="h-3 w-3 text-emerald-400" strokeWidth={2.5} aria-hidden />
               healthy
             </span>
@@ -82,7 +82,7 @@ function AgentDetectionPreviewBody() {
         <FlowConnector />
         <div className="flex min-w-[4.5rem] flex-col items-center gap-1.5 rounded-lg border border-emerald-500/35 bg-emerald-500/5 px-2.5 py-2.5 text-center shadow-sm">
           <Check className="h-4 w-4 text-emerald-400" strokeWidth={2.25} aria-hidden />
-          <span className="text-[11px] font-medium leading-tight text-emerald-100/95">verified</span>
+          <span className="text-[11px] font-medium leading-tight text-emerald-700 dark:text-emerald-100/95">verified</span>
         </div>
       </div>
     </div>

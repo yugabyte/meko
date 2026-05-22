@@ -131,8 +131,8 @@ function DatapackTile({
   return (
     <Card
       className={cn(
-        "group flex h-full min-h-0 flex-col overflow-hidden border-border bg-[#1C2333] p-0 shadow-sm transition-colors",
-        "hover:border-blue-500/40 hover:bg-[#1C2333]/90",
+        "group flex h-full min-h-0 flex-col overflow-hidden border-border bg-card p-0 shadow-sm transition-colors",
+        "hover:border-blue-500/40 hover:bg-card/90",
         variant === SHARED && "hover:border-violet-500/35",
       )}
     >
@@ -154,14 +154,20 @@ function DatapackTile({
           <div className="flex items-start gap-3">
             <div
               className={cn(
-                "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-[#252d3d]",
+                // `border-white/10` collapsed to white-on-white in light
+                // mode — using `border-foreground/10` themes the hairline
+                // (subtle dark line on light card, subtle light line on
+                // dark card). Same fix for the icon below: white-on-white
+                // was invisible; `text-foreground/80` carries through to
+                // a near-black icon in light mode and near-white in dark.
+                "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-foreground/10 bg-card",
               )}
             >
-              <Database className="h-5 w-5 text-white/90" />
+              <Database className="h-5 w-5 text-foreground/80" />
             </div>
             <div className="min-w-0 flex-1 space-y-1">
               <h3
-                className="truncate font-mono text-base font-semibold tracking-tight text-white"
+                className="truncate font-mono text-base font-semibold tracking-tight text-foreground"
                 title={dp.datapack_name}
               >
                 {dp.datapack_name}
@@ -176,13 +182,18 @@ function DatapackTile({
           </div>
 
           {variant === SHARED ? (
-            <div className="flex items-center justify-between gap-2 rounded-lg border border-violet-500/30 bg-violet-950/35 px-3 py-2">
-              <div className="flex min-w-0 items-center gap-2 text-xs text-violet-100/90">
-                <Share2 className="h-3.5 w-3.5 shrink-0 text-violet-300/90" aria-hidden />
+            // "Subtle in light, saturated in dark" — light mode gets a
+            // soft violet-tinted pill with darker text (matches the
+            // soft-pill family used elsewhere); dark mode keeps the
+            // original brand-art `violet-950/35` deep tint that reads
+            // well against the dark card background.
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-violet-500/30 bg-violet-100 dark:bg-violet-950/35 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2 text-xs text-violet-700 dark:text-violet-100/90">
+                <Share2 className="h-3.5 w-3.5 shrink-0 text-violet-700 dark:text-violet-300/90" aria-hidden />
                 <span className="min-w-0 leading-snug">
-                  <span className="text-violet-200/80">Shared by </span>
+                  <span className="text-violet-700 dark:text-violet-200/80">Shared by </span>
                   <span
-                    className="font-medium text-fuchsia-300/95 [overflow-wrap:anywhere]"
+                    className="font-medium text-fuchsia-700 dark:text-fuchsia-300/95 [overflow-wrap:anywhere]"
                     title={sharedByLabel !== "—" ? sharedByLabel : undefined}
                   >
                     {sharedByLabel}
@@ -192,7 +203,7 @@ function DatapackTile({
             </div>
           ) : null}
 
-          <div className="border-t border-white/10" />
+          <div className="border-t border-foreground/20" />
 
           <div className="flex items-start justify-between gap-3 text-xs text-muted-foreground">
             <div className="min-w-0 space-y-1">
@@ -218,12 +229,13 @@ function DatapackTile({
         </div>
       </div>
 
-      {/* Fixed-height strip; shrink-0 + flex-1 main above keeps row-equal-height grids from crowding metadata. */}
+      {/* Fixed-height strip; shrink-0 + flex-1 main above keeps row-equal-height grids from crowding metadata.
+          Every `bg-white/X` / `text-white/X` / `border-white/X` swapped to `foreground/X` so the strip auto-themes — in dark mode the foreground IS near-white so it reads identical to the original; in light mode the foreground is near-black, giving a legible "darker bar on hover" without the white-on-white invisibility. */}
       <div
         className={cn(
-          "relative z-10 flex h-11 w-full shrink-0 border-t border-transparent bg-[#1C2333]",
+          "relative z-10 flex h-11 w-full shrink-0 border-t border-transparent bg-card",
           "transition-[border-color,background-color] duration-150",
-          "group-hover:border-white/10 group-hover:bg-[#161d2e]/98",
+          "group-hover:border-foreground/10 group-hover:bg-input/98",
         )}
       >
         <div
@@ -235,22 +247,22 @@ function DatapackTile({
         >
           <button
             type="button"
-            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-semibold text-white transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-semibold text-foreground transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
             onClick={() => onOpenDatapack(dp)}
           >
             Open
             <ArrowRight className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
           </button>
-          <div className="w-px shrink-0 self-stretch bg-white/10" aria-hidden />
+          <div className="w-px shrink-0 self-stretch bg-foreground/10" aria-hidden />
           <button
             type="button"
-            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium text-white/95 transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium text-foreground/95 transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
             onClick={() => onConnectDatapack(dp)}
           >
             <Terminal className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
             Connect
           </button>
-          <div className="w-px shrink-0 self-stretch bg-white/10" aria-hidden />
+          <div className="w-px shrink-0 self-stretch bg-foreground/10" aria-hidden />
           <button
             type="button"
             disabled={!canShare}
@@ -258,8 +270,8 @@ function DatapackTile({
             className={cn(
               "flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500",
               canShare
-                ? "text-white/95 hover:bg-white/5"
-                : "cursor-not-allowed text-white/35 hover:bg-transparent",
+                ? "text-foreground/95 hover:bg-foreground/5"
+                : "cursor-not-allowed text-foreground/35 hover:bg-transparent",
             )}
             onClick={() => {
               if (!canShare) return;
@@ -283,7 +295,7 @@ function NewDatapackPlaceholderCard({ onClick }: { onClick: () => void }) {
       className={cn(
         "flex min-h-[12rem] flex-col items-center justify-center gap-3 border border-dashed border-border/70 bg-transparent p-6 shadow-none transition-colors",
         "cursor-pointer hover:border-muted-foreground/45 hover:bg-white/[0.03]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#1C2333]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
       )}
       onClick={onClick}
       onKeyDown={(e) => {
@@ -300,7 +312,7 @@ function NewDatapackPlaceholderCard({ onClick }: { onClick: () => void }) {
         <Plus className="h-5 w-5 text-muted-foreground" />
       </div>
       <div className="space-y-1 text-center">
-        <p className="text-base font-semibold text-white">New datapack</p>
+        <p className="text-base font-semibold text-foreground">New datapack</p>
         <p className="max-w-[14rem] text-xs leading-relaxed text-muted-foreground">
           Connect an existing project or start from scratch
         </p>
@@ -365,7 +377,7 @@ export default function DatapacksTilesSection({
 
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end lg:shrink-0">
           <Tabs value={scopeTab} onValueChange={(v) => setScopeTab(v as ScopeTab)} className="w-full sm:w-auto">
-            <TabsList className="flex min-h-9 w-full flex-wrap items-center justify-start gap-1 rounded-lg border border-border bg-[#0E1525]/90 p-1 sm:inline-flex sm:w-auto sm:flex-nowrap">
+            <TabsList className="flex min-h-9 w-full flex-wrap items-center justify-start gap-1 rounded-lg border border-border bg-input/90 p-1 sm:inline-flex sm:w-auto sm:flex-nowrap">
               <TabsTrigger value="all" className={scopeTabsTriggerClassName}>
                 All
               </TabsTrigger>
@@ -387,7 +399,7 @@ export default function DatapacksTilesSection({
               placeholder="Search by name..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-9 w-full border-border bg-[#0E1525] pl-9 text-foreground placeholder:text-muted-foreground"
+              className="h-9 w-full border-border bg-input pl-9 text-foreground placeholder:text-muted-foreground"
               aria-label="Search datapacks by name"
             />
           </div>

@@ -36,9 +36,9 @@ export function WorkbenchLMSwitchConfirmDialog({
 }: WorkbenchLMSwitchConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-[#1C2333] border-border text-foreground">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-card border-border text-foreground">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-xl text-white">
+          <DialogTitle className="flex items-center gap-2 text-xl text-foreground">
             <ArrowRightLeft className="h-5 w-5 text-blue-400" aria-hidden />
             Switch datapack?
           </DialogTitle>

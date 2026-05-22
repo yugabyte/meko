@@ -23,8 +23,15 @@ type Props = {
    *  with maintainer / contributor grant. Pre-filtered by the parent via
    *  `isDatapackGrantEligibleForWorkbenchLM`. */
   accessibleDatapacks: Datapack[];
-  selectedDatapackName: string | null;
-  onSelectDatapack: (name: string) => void;
+  /** ID of the currently-selected datapack. ID rather than name so two
+   *  same-named datapacks (e.g. an owned and a shared "hello") stay
+   *  distinguishable in the dropdown — Radix Select treats two items
+   *  with the same `value` as the same item, which would otherwise
+   *  always select the first one. */
+  selectedDatapackId: string | null;
+  /** Fired with the ID of the picked datapack. The parent maps ID back
+   *  to a name for downstream API calls. */
+  onSelectDatapack: (datapackId: string) => void;
   loading: boolean;
 };
 
@@ -33,30 +40,37 @@ type Props = {
  *  their own pack or one shared in. Colours match the canonical grant
  *  palette used elsewhere in the app. */
 const GRANT_CHIP_CLASSES: Record<DatapackShareGrant, string> = {
-  owner: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-  maintainer: "border-purple-500/30 bg-purple-500/10 text-purple-300",
-  contributor: "border-blue-500/30 bg-blue-500/10 text-blue-300",
+  owner: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  maintainer: "border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-300",
+  contributor: "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300",
   viewer: "border-border bg-muted/30 text-muted-foreground",
 };
 
 export function WorkbenchLMHeader({
   accessibleDatapacks,
-  selectedDatapackName,
+  selectedDatapackId,
   onSelectDatapack,
   loading,
 }: Props) {
+  // Look the name up from the active record so the trigger's tooltip
+  // still shows a friendly string. Drives the sublabel under the title
+  // too. Returns null when the ID is stale (parent's auto-select will
+  // fix it on the next render).
+  const selectedDatapackName =
+    accessibleDatapacks.find((dp) => dp.datapack_id === selectedDatapackId)?.datapack_name ??
+    null;
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 items-center gap-2.5">
         <PlayCircle className="h-4 w-4 shrink-0 text-purple-400" aria-hidden />
-        <h1 className="text-lg font-semibold text-white">WorkbenchLM</h1>
+        <h1 className="text-lg font-semibold text-foreground">WorkbenchLM</h1>
         <Select
-          value={selectedDatapackName ?? undefined}
+          value={selectedDatapackId ?? undefined}
           onValueChange={onSelectDatapack}
           disabled={loading || accessibleDatapacks.length === 0}
         >
           <SelectTrigger
-            className="h-8 w-[260px] border-border/70 bg-[#1C2333] text-sm [&>span]:block [&>span]:min-w-0 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left"
+            className="h-8 w-[260px] border-border/70 bg-card text-sm [&>span]:block [&>span]:min-w-0 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left"
             aria-label="Select datapack"
             title={selectedDatapackName ?? undefined}
           >
@@ -72,7 +86,7 @@ export function WorkbenchLMHeader({
           </SelectTrigger>
           <SelectContent className="max-w-[min(28rem,calc(100vw-2rem))]">
             {accessibleDatapacks.map((dp) => (
-              <SelectItem key={dp.datapack_id} value={dp.datapack_name}>
+              <SelectItem key={dp.datapack_id} value={dp.datapack_id}>
                 <span className="inline-flex min-w-0 max-w-full items-center gap-2">
                   <span className="min-w-0 flex-1 truncate" title={dp.datapack_name}>
                     {dp.datapack_name}
@@ -97,7 +111,7 @@ export function WorkbenchLMHeader({
         {selectedDatapackName ? (
           <>
             Datapack:{" "}
-            <span className="font-medium text-white">{selectedDatapackName}</span>
+            <span className="font-medium text-foreground">{selectedDatapackName}</span>
           </>
         ) : (
           "Pick a datapack to start exploring."

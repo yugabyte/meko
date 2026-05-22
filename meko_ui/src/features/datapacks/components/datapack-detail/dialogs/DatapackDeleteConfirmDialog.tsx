@@ -47,9 +47,9 @@ export function DatapackDeleteConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-[#1C2333] border-border text-foreground">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-card border-border text-foreground">
         <DialogHeader>
-          <DialogTitle className="text-xl text-white">Delete datapack</DialogTitle>
+          <DialogTitle className="text-xl text-foreground">Delete datapack</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             Are you sure you want to delete{" "}
             <span className="font-medium text-foreground">{datapackName}</span>? This cannot be undone and may remove
@@ -57,7 +57,7 @@ export function DatapackDeleteConfirmDialog({
           </DialogDescription>
         </DialogHeader>
         {error ? (
-          <p className="text-sm text-red-300" role="alert">
+          <p className="text-sm text-red-700 dark:text-red-300" role="alert">
             {error}
           </p>
         ) : null}

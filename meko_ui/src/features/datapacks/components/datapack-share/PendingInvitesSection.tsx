@@ -56,7 +56,7 @@ export function PendingInvitesSection({ datapackName, datapackId, invites, loadi
     <div className="rounded-xl border border-border bg-card/50 shadow-sm">
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
         <Clock className="h-4 w-4 shrink-0 text-amber-400" aria-hidden />
-        <span className="text-xs font-semibold uppercase tracking-wide text-amber-200/90">
+        <span className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-200/90">
           Pending · {loading ? "…" : count}
         </span>
       </div>

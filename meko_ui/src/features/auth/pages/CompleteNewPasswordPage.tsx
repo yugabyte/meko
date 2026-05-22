@@ -14,6 +14,8 @@ import {
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { ROUTES } from "@/app/routes/paths";
+import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
+import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 
 export type CompleteNewPasswordLocationState = {
   session: string;
@@ -109,9 +111,12 @@ export default function CompleteNewPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4 text-foreground">
-      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-[#1C2333] p-8 shadow-sm">
-        <h1 className="mb-2 text-center text-3xl font-semibold text-white">
+    <AuthPageShell>
+      <div className="fixed top-4 right-4 z-10">
+        <ThemeToggleButton />
+      </div>
+      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-card p-8 shadow-sm">
+        <h1 className="mb-2 text-center text-3xl font-semibold text-foreground">
           Complete account setup
         </h1>
         <p className="mb-6 text-center text-sm text-muted-foreground">
@@ -132,7 +137,7 @@ export default function CompleteNewPasswordPage() {
               autoComplete="new-password"
               required
               minLength={MIN_NEW_PASSWORD_LEN}
-              className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+              className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
             />
           </div>
           <div className="space-y-2">
@@ -148,7 +153,7 @@ export default function CompleteNewPasswordPage() {
               autoComplete="new-password"
               required
               minLength={MIN_NEW_PASSWORD_LEN}
-              className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+              className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -163,7 +168,7 @@ export default function CompleteNewPasswordPage() {
                 onChange={(e) => setFirstName(e.target.value)}
                 autoComplete="given-name"
                 required
-                className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
               />
             </div>
             <div className="space-y-2">
@@ -177,19 +182,19 @@ export default function CompleteNewPasswordPage() {
                 onChange={(e) => setLastName(e.target.value)}
                 autoComplete="family-name"
                 required
-                className="h-12 border-border bg-[#0E1525] text-white placeholder:text-muted-foreground"
+                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
               />
             </div>
           </div>
           <Button
             type="submit"
-            className="h-12 w-full bg-white text-black hover:bg-white/90"
+            className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
             disabled={loading}
           >
             {loading ? "Please wait..." : "Continue"}
           </Button>
 
-          <p className="text-center text-xs text-gray-300">
+          <p className="text-center text-xs text-muted-foreground">
             By clicking &ldquo;Continue&rdquo;, you are creating a Meko account, and you agree to
             Yugabyte&apos;s{" "}
             <a
@@ -212,6 +217,6 @@ export default function CompleteNewPasswordPage() {
           </Link>
         </p>
       </div>
-    </div>
+    </AuthPageShell>
   );
 }

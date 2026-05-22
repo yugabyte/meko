@@ -74,7 +74,7 @@ export function ThreadTurn({
             </div>
           </div>
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-emerald-500/40 bg-emerald-500/15">
-            <User className="h-3.5 w-3.5 text-emerald-300" aria-hidden />
+            <User className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />
           </div>
         </div>
       ) : null}
@@ -83,7 +83,7 @@ export function ThreadTurn({
           output is empty) so the per-turn stats stay attached to the
           turn the user is looking at. */}
       <div className="flex max-w-3xl gap-3">
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-[#1C2333]">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-card">
           <Bot className="h-3.5 w-3.5 text-foreground/80" aria-hidden />
         </div>
         <div className="min-w-0 flex-1">
@@ -97,8 +97,8 @@ export function ThreadTurn({
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-[11px] transition-colors",
                   reasoningExpanded
-                    ? "border-purple-500/30 bg-purple-500/10 text-purple-200"
-                    : "border-border bg-[#1C2333] text-muted-foreground hover:border-purple-500/30 hover:text-foreground",
+                    ? "border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-200"
+                    : "border-border bg-card text-muted-foreground hover:border-purple-500/30 hover:text-foreground",
                 )}
               >
                 <Brain className="h-3 w-3" aria-hidden />
@@ -110,7 +110,7 @@ export function ThreadTurn({
                 )}
               </button>
               {reasoningExpanded ? (
-                <div className="mt-1 rounded-md border border-purple-500/20 bg-purple-500/5 px-3 py-2.5 text-[12.5px] italic leading-relaxed text-purple-100/90 whitespace-pre-wrap">
+                <div className="mt-1 rounded-md border border-purple-500/20 bg-purple-500/5 px-3 py-2.5 text-[12.5px] italic leading-relaxed text-purple-700 dark:text-purple-100/90 whitespace-pre-wrap">
                   <MarkdownMessage text={normalizedReasoning} />
                 </div>
               ) : null}
@@ -121,12 +121,12 @@ export function ThreadTurn({
             {hasOutput ? (
               <div className={cn(
                 "rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-relaxed text-foreground/95 whitespace-pre-wrap transition-colors duration-300",
-                isShimmering ? "border-white/30 bg-[#252F45]" : "border-border bg-[#1C2333]",
+                isShimmering ? "border-white/30 bg-card" : "border-border bg-card",
               )}>
                 <MarkdownMessage text={normalizedOutput} />
               </div>
             ) : (
-              <div className="rounded-2xl rounded-tl-sm border border-dashed border-border bg-[#1C2333]/50 px-4 py-3 text-sm italic text-muted-foreground">
+              <div className="rounded-2xl rounded-tl-sm border border-dashed border-border bg-card/50 px-4 py-3 text-sm italic text-muted-foreground">
                 (no assistant response captured for this turn)
               </div>
             )}
@@ -171,7 +171,7 @@ export function ThreadTurn({
             <button
               type="button"
               onClick={onOpenTrace}
-              className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-purple-300 hover:bg-[#1C2333] hover:text-purple-200 transition-colors"
+              className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-purple-700 dark:text-purple-300 hover:bg-card hover:text-purple-700 dark:text-purple-200 transition-colors"
             >
               <Activity className="h-3 w-3" aria-hidden />
               View decision trace

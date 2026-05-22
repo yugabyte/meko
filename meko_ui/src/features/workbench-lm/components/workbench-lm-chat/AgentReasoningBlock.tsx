@@ -89,12 +89,12 @@ export function AgentReasoningBlock({
         aria-expanded={expanded}
       >
         {expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 text-purple-300" aria-hidden />
+          <ChevronDown className="h-3 w-3 shrink-0 text-purple-700 dark:text-purple-300" aria-hidden />
         ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 text-purple-300" aria-hidden />
+          <ChevronRight className="h-3 w-3 shrink-0 text-purple-700 dark:text-purple-300" aria-hidden />
         )}
-        <Brain className="h-3 w-3 shrink-0 text-purple-300" aria-hidden />
-        <span className="text-[11px] font-medium uppercase tracking-wide text-purple-200/90">
+        <Brain className="h-3 w-3 shrink-0 text-purple-700 dark:text-purple-300" aria-hidden />
+        <span className="text-[11px] font-medium uppercase tracking-wide text-purple-700 dark:text-purple-200/90">
           Decision Trace
         </span>
         {summary ? (
@@ -151,9 +151,9 @@ function StepRow({
     <>
       {isExpandable ? (
         expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 text-purple-300/80" aria-hidden />
+          <ChevronDown className="h-3 w-3 shrink-0 text-purple-700 dark:text-purple-300/80" aria-hidden />
         ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 text-purple-300/80" aria-hidden />
+          <ChevronRight className="h-3 w-3 shrink-0 text-purple-700 dark:text-purple-300/80" aria-hidden />
         )
       ) : (
         // Spacer so flat steps align under the chevroned ones — keeps
@@ -187,7 +187,7 @@ function StepRow({
   // Indented to line up under the chevron/name column.
   const queryLine = step.query ? (
     <div className="ml-5 mt-0.5 flex items-center gap-1.5 text-[11px]">
-      <Search className="h-2.5 w-2.5 shrink-0 text-purple-300/70" aria-hidden />
+      <Search className="h-2.5 w-2.5 shrink-0 text-purple-700 dark:text-purple-300/70" aria-hidden />
       <span className="text-muted-foreground/80">Query:</span>
       <span
         className="min-w-0 truncate font-mono text-foreground/80"
@@ -344,9 +344,9 @@ function KindBadge({ kind }: { kind: MemoryHit["kind"] }) {
   // Colours match the canonical Meko accents: mem/promoted purple-ish,
   // graph blue-ish so the three sources are visually distinct.
   const palette: Record<MemoryHit["kind"], { bg: string; text: string; label: string }> = {
-    mem: { bg: "bg-purple-500/15", text: "text-purple-200", label: "mem" },
-    graph: { bg: "bg-blue-500/15", text: "text-blue-200", label: "graph" },
-    promoted: { bg: "bg-amber-500/15", text: "text-amber-200", label: "promoted" },
+    mem: { bg: "bg-purple-500/15", text: "text-purple-700 dark:text-purple-200", label: "mem" },
+    graph: { bg: "bg-blue-500/15", text: "text-blue-700 dark:text-blue-200", label: "graph" },
+    promoted: { bg: "bg-amber-500/15", text: "text-amber-700 dark:text-amber-200", label: "promoted" },
   };
   const p = palette[kind];
   return (
@@ -420,12 +420,12 @@ function KbDocCard({ group }: { group: KbGroup }) {
         )}
         <FileText className="h-3 w-3 shrink-0 text-emerald-400" aria-hidden />
         <code
-          className="min-w-0 flex-1 truncate font-mono text-[10px] text-emerald-200/90"
+          className="min-w-0 flex-1 truncate font-mono text-[10px] text-emerald-700 dark:text-emerald-200/90"
           title={group.documentId}
         >
           {group.documentId}
         </code>
-        <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-emerald-200">
+        <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-emerald-700 dark:text-emerald-200">
           {group.chunks.length} {group.chunks.length === 1 ? "chunk" : "chunks"}
         </span>
       </button>
@@ -498,9 +498,9 @@ function truncateQuery(query: string, max: number): string {
 function MemoryScoreChip({ score }: { score: number }) {
   const tone =
     score >= 0.7
-      ? "bg-emerald-500/15 text-emerald-300"
+      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
       : score >= 0.4
-        ? "bg-amber-500/15 text-amber-300"
+        ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
         : "bg-muted/40 text-muted-foreground";
   return (
     <span
@@ -526,9 +526,9 @@ function MemoryScoreChip({ score }: { score: number }) {
 function KbDistanceChip({ distance }: { distance: number }) {
   const tone =
     distance < 0.7
-      ? "bg-emerald-500/15 text-emerald-300"
+      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
       : distance < 1.0
-        ? "bg-amber-500/15 text-amber-300"
+        ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
         : "bg-muted/40 text-muted-foreground";
   return (
     <span

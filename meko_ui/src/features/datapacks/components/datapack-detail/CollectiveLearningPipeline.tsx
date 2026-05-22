@@ -25,23 +25,41 @@ import {
 } from "@/lib/mekoApi";
 import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
+// Tile gradient tones — one per tab. Theme-aware: the default (light
+// mode) is a soft tinted card with the accent colour suggesting which
+// pipeline stage it represents; the `dark:` variant restores the
+// original brand-art dark gradient where the deep `from-X-950/Y`
+// corner glows against navy. Both modes keep the same colored border
+// so the section identity (purple = learnings, blue = memories, etc.)
+// reads at a glance in either theme.
 const toneStyles: Record<DatapackDetailTab, string> = {
   conversations:
-    "border-slate-500/35 bg-gradient-to-br from-slate-900/80 via-[#121a28] to-[#0b1220]",
-  memories: "border-blue-500/40 bg-gradient-to-br from-blue-950/70 via-[#0f1729] to-[#0b1220]",
+    "border-slate-300 bg-gradient-to-br from-slate-100 via-card to-card " +
+    "dark:border-slate-500/35 dark:from-slate-900/80 dark:via-meko-navy-900 dark:to-meko-navy-950",
+  memories:
+    "border-blue-300 bg-gradient-to-br from-blue-50 via-card to-card " +
+    "dark:border-blue-500/40 dark:from-blue-950/70 dark:via-meko-navy-900 dark:to-meko-navy-950",
   learnings:
-    "border-purple-500/50 bg-gradient-to-br from-purple-950/65 via-[#141228] to-[#0b1220] shadow-[0_0_24px_rgba(168,85,247,0.12)]",
-  knowledge: "border-emerald-900/50 bg-gradient-to-br from-emerald-950/55 via-[#0c1814] to-[#0b1220]",
+    "border-purple-400 bg-gradient-to-br from-purple-50 via-card to-card " +
+    "dark:border-purple-500/50 dark:from-purple-950/65 dark:via-[#141228] dark:to-meko-navy-950 dark:shadow-[0_0_24px_rgba(168,85,247,0.12)]",
+  knowledge:
+    "border-emerald-300 bg-gradient-to-br from-emerald-50 via-card to-card " +
+    "dark:border-emerald-900/50 dark:from-emerald-950/55 dark:via-meko-navy-900 dark:to-meko-navy-950",
   "collective-memory":
-    "border-sky-500/40 bg-gradient-to-br from-sky-950/65 via-[#0c1828] to-[#0b1220]",
+    "border-sky-300 bg-gradient-to-br from-sky-50 via-card to-card " +
+    "dark:border-sky-500/40 dark:from-sky-950/65 dark:via-meko-navy-900 dark:to-meko-navy-950",
 };
 
 const titleTone: Record<DatapackDetailTab, string> = {
-  conversations: "text-slate-200/95",
-  memories: "text-blue-200/95",
-  learnings: "text-purple-200/95",
-  knowledge: "text-emerald-200/95",
-  "collective-memory": "text-sky-200/95",
+  // Slate-700 reads as muted grey against the other accent-saturated
+  // titles (blue/purple/emerald-700). Using the semantic foreground
+  // token gives it the same visual weight in light mode while still
+  // pairing with the slate-200/95 pastel in dark mode.
+  conversations: "text-foreground dark:text-slate-200/95",
+  memories: "text-blue-700 dark:text-blue-200/95",
+  learnings: "text-purple-700 dark:text-purple-200/95",
+  knowledge: "text-emerald-700 dark:text-emerald-200/95",
+  "collective-memory": "text-sky-700 dark:text-sky-200/95",
 };
 
 type StageShellProps = {
@@ -108,8 +126,8 @@ function StageShell({
 
   const badgeClass =
     cornerBadgeTone === "green"
-      ? "border-emerald-400/45 bg-emerald-500/20 text-emerald-100"
-      : "border-purple-400/40 bg-purple-500/25 text-purple-100";
+      ? "border-emerald-400/45 bg-emerald-500/20 text-emerald-700 dark:text-emerald-100"
+      : "border-purple-400/40 bg-purple-500/25 text-purple-700 dark:text-purple-100";
 
   return (
     <div
@@ -156,10 +174,10 @@ function StageShell({
       <div className={cn("flex w-full min-w-0 flex-col items-center gap-2", eyebrow ? "mt-1" : "")}>
         {titleIcon ? <span className="inline-flex shrink-0">{titleIcon}</span> : null}
         <div className="flex w-full min-w-0 flex-wrap items-baseline justify-center gap-2">
-          <span className={cn("text-center text-base font-semibold tracking-tight text-white", titleClassName)}>
+          <span className={cn("text-center text-base font-semibold tracking-tight text-foreground", titleClassName)}>
             {title}
           </span>
-          {delta ? <span className="text-xs font-medium text-blue-300/90">{delta}</span> : null}
+          {delta ? <span className="text-xs font-medium text-blue-700 dark:text-blue-300/90">{delta}</span> : null}
         </div>
       </div>
       {loading ? (
@@ -169,7 +187,7 @@ function StageShell({
       ) : (
         <>
           {value != null ? (
-            <div className="mt-2 w-full text-center text-3xl font-bold tabular-nums tracking-tight text-white sm:text-[2rem] sm:leading-none">
+            <div className="mt-2 w-full text-center text-3xl font-bold tabular-nums tracking-tight text-foreground sm:text-[2rem] sm:leading-none">
               {value.toLocaleString()}
             </div>
           ) : null}
@@ -228,7 +246,7 @@ function PromoteFlowBracket() {
       {/* Upper tee toward Collective Memory */}
       <div className={`absolute left-2 top-4 h-px w-2 ${line}`} />
       {/* PROMOTE (covers middle of spine) */}
-      <div className="absolute left-1/2 top-[30px] z-[2] flex -translate-x-1/2 flex-col items-center rounded-md border border-border/70 bg-[#141b2c]/95 px-2 py-1 shadow-md backdrop-blur-sm">
+      <div className="absolute left-1/2 top-[30px] z-[2] flex -translate-x-1/2 flex-col items-center rounded-md border border-border/70 bg-input/95 px-2 py-1 shadow-md backdrop-blur-sm">
         <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Promote</span>
       </div>
       {/* Lower tee toward Shared Knowledge */}
@@ -334,10 +352,10 @@ export function CollectiveLearningPipeline({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <section className="overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-[#1c2438] via-[#171f2e] to-[#141a28]">
-        <div className="border-b border-border/60 bg-[#1C2333]/40 px-5 py-4 sm:px-6">
+      <section className="overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-card via-input to-input">
+        <div className="border-b border-border/60 bg-card/40 px-5 py-4 sm:px-6">
           <div className="min-w-0 space-y-1">
-            <h2 className="text-lg font-semibold tracking-tight text-white sm:text-xl">Collective learning</h2>
+            <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">Collective learning</h2>
             <p className="text-sm leading-normal text-muted-foreground text-pretty">
               How memory from individual agents flows into shared knowledge everyone can read. Each promotion
               populates <span className="font-semibold text-sky-400/95">both</span> destinations; Shared Knowledge can
@@ -355,8 +373,13 @@ export function CollectiveLearningPipeline({
               value={conversationsCount}
               delta=""
               subtitle=""
-              titleIcon={<MessageSquare className="h-4 w-4 text-white" strokeWidth={2} aria-hidden />}
-              titleClassName="text-slate-400"
+              titleIcon={<MessageSquare className="h-4 w-4 text-foreground" strokeWidth={2} aria-hidden />}
+              // No `titleClassName` override — let it inherit the
+              // default `text-foreground` so the Conversations title
+              // matches the visual weight of the other accent titles
+              // (Memories/blue, Learnings/purple, etc.). The previous
+              // `text-slate-400` override rendered as faded light-grey
+              // in light mode, throwing off the row balance.
               loading={statusLoading}
               loadingLabel="Loading conversations count"
               onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations) : undefined}
@@ -395,7 +418,20 @@ export function CollectiveLearningPipeline({
               <Button
                 type="button"
                 size="sm"
-                className="w-full border-0 bg-purple-600 text-xs font-semibold text-white shadow-md hover:bg-purple-500 disabled:opacity-60"
+                // `text-white` (not `text-foreground`) so the CTA stays
+                // light-text-on-purple in both modes — the standard
+                // colored-button convention. Stepped one stop darker
+                // (purple-700 → -800 hover) so it doesn't shout against
+                // the soft purple-50 tile in light mode while still
+                // reading as the section's accent in dark mode.
+                // "Subtle in light, saturated in dark" — light mode shows
+                // a soft purple-tint pill with dark purple text so the
+                // button doesn't shout against the soft purple-50 tile
+                // background; dark mode keeps the original saturated
+                // purple CTA on the dark gradient tile. Same pattern as
+                // the other "promote" CTAs (`Promote to Ko`,
+                // `Promote to Knowledge`).
+                className="w-full border-0 bg-purple-100 text-xs font-semibold text-purple-700 shadow-md hover:bg-purple-200 dark:bg-purple-500 dark:text-white dark:hover:bg-purple-600 disabled:opacity-60"
                 disabled={learningsCountLoading || !onSelectSection}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -421,12 +457,17 @@ export function CollectiveLearningPipeline({
             </div>
 
             <div
-              className="relative flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border-2 border-white/20 bg-[#0c1018]/40 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6 lg:min-w-[220px]"
+              // `border-foreground/20` instead of `border-white/20` so
+              // the "me → ko" wrapper outline is visible in both modes
+              // — `white/20` collapsed to invisible white-on-white on
+              // the light page bg, so the grouping read as a borderless
+              // floating pair of tiles.
+              className="relative flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border-2 border-foreground/20 bg-input/40 px-4 pb-4 pt-5 sm:px-5 sm:pb-5 sm:pt-6 lg:min-w-[220px]"
               aria-labelledby="collective-learning-me-ko-label"
             >
               <span
                 id="collective-learning-me-ko-label"
-                className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-border/60 bg-[#0d121c] px-3 py-1 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground shadow-md ring-2 ring-[#141a28]"
+                className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-border/60 bg-input px-3 py-1 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground shadow-md ring-2 ring-input"
               >
                 me → ko
               </span>
@@ -469,7 +510,7 @@ export function CollectiveLearningPipeline({
           </div>
         </div>
 
-        <div className="border-t border-border/55 bg-[#161d2e]/25 px-4 py-3 sm:px-6">
+        <div className="border-t border-border/55 bg-input/25 px-4 py-3 sm:px-6">
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"

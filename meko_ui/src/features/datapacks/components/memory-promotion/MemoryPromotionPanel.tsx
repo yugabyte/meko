@@ -97,14 +97,18 @@ export default function MemoryPromotionPanel({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="rounded-xl border border-border bg-[#1C2333] p-6 space-y-4">
+      <div className="rounded-xl border border-border bg-card p-6 space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-4 min-w-0">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-purple-500/15 ring-1 ring-purple-500/10">
-              <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={1.75} aria-hidden />
+              {/* Mirror the `text-blue-700 dark:text-blue-200` convention
+                  used by `<MemoryReadOnlySummaryPanel>`'s header icon —
+                  hard-coded `text-white` rendered as greyed-out white on
+                  the light purple tint in light mode. */}
+              <ArrowLeftRight className="h-5 w-5 text-purple-700 dark:text-purple-200" strokeWidth={1.75} aria-hidden />
             </div>
             <div className="min-w-0">
-              <h3 className="text-base font-semibold tracking-tight text-white">
+              <h3 className="text-base font-semibold tracking-tight text-foreground">
                 <span>Learnings Summary</span>
                 {sessionSummaryReady ? (
                   <span>
@@ -118,12 +122,12 @@ export default function MemoryPromotionPanel({
               {sessionSummaryReady && total === 0 ? (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   No session memories yet for{" "}
-                  <span className="font-medium text-white">{datapackName}</span>.
+                  <span className="font-medium text-foreground">{datapackName}</span>.
                 </p>
               ) : sessionSummaryReady ? (
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   Meko spotted{" "}
-                  <span className="font-semibold text-white">
+                  <span className="font-semibold text-foreground">
                     {"these"} {patternCount === 1 ? "pattern" : "patterns"}
                   </span>{" "}
                   that might be worth promoting to shared knowledge (Ko). Review each one — approved ones
@@ -154,21 +158,21 @@ export default function MemoryPromotionPanel({
         </div>
 
         {accountError && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300">
+          <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-700 dark:text-red-300">
             <AlertCircle className="w-4 h-4 shrink-0" />
             {accountError}
           </div>
         )}
 
         {error && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300">
+          <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-700 dark:text-red-300">
             <AlertCircle className="w-4 h-4 shrink-0" />
             {error}
           </div>
         )}
 
         {memories.length > 0 && (
-          <div className="flex items-center justify-between rounded-lg border border-border bg-[#0E1525] px-4 py-2.5">
+          <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2.5">
             <label className="flex items-center gap-2 cursor-pointer">
               <Checkbox
                 checked={allChecked ? true : someChecked ? "indeterminate" : false}
@@ -184,7 +188,7 @@ export default function MemoryPromotionPanel({
               </span>
             </label>
             {<Button
-              className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+              className="gap-2 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
               onClick={() => void promote()}
               disabled={promoting || selected.size < 2 || !isPromotionAllowed}
             >
@@ -203,7 +207,7 @@ export default function MemoryPromotionPanel({
         )}
 
         {promoteError && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300">
+          <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-700 dark:text-red-300">
             <AlertCircle className="w-4 h-4 shrink-0" />
             {promoteError}
           </div>
@@ -227,7 +231,7 @@ export default function MemoryPromotionPanel({
         )}
 
         {showPagination && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-[#0E1525] px-4 py-2.5 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
             <div>
               {total === 0 ? "0 memories" : `Showing ${rangeStart}–${rangeEnd} of ${total}`}
             </div>
@@ -260,7 +264,7 @@ export default function MemoryPromotionPanel({
                   Prev
                 </Button>
                 <span className="px-2 text-muted-foreground">
-                  Page <span className="text-white">{page}</span> of {totalPages}
+                  Page <span className="text-foreground">{page}</span> of {totalPages}
                 </span>
                 <Button
                   variant="outline"
@@ -293,8 +297,13 @@ export default function MemoryPromotionPanel({
                 return (
                   <li
                     key={m.id}
+                    // `bg-card` to match the row styling on
+                    // `<MemoryReadOnlySummaryPanel>` (Memories Summary)
+                    // — both pages should share the same row-tile surface
+                    // so navigating between them doesn't feel like
+                    // switching designs.
                     className={cn(
-                      "flex items-start gap-3 rounded-lg border bg-[#0E1525] px-4 py-3",
+                      "flex items-start gap-3 rounded-lg border bg-card px-4 py-3",
                       checked ? "border-purple-500/50 bg-purple-500/5" : "border-border",
                     )}
                   >
@@ -313,7 +322,7 @@ export default function MemoryPromotionPanel({
                             <Button
                               type="button"
                               size="sm"
-                              className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-white"
+                              className="gap-1.5 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
                               onClick={() => promoteOne(m.id)}
                               disabled={rowPromoteDisabled}
                             >

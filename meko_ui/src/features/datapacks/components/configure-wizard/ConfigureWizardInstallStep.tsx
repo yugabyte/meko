@@ -121,7 +121,7 @@ function ApiKeyStatusBanner() {
               type="button"
               size="sm"
               variant="outline"
-              className="h-8 shrink-0 gap-1.5 border-amber-500/40 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25 hover:text-amber-50"
+              className="h-8 shrink-0 gap-1.5 border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-100 hover:bg-amber-500/25 hover:text-amber-50"
               onClick={() => setCreateOpen(true)}
             >
               <Plus className="h-3.5 w-3.5" aria-hidden />
@@ -152,10 +152,10 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
       role="status"
       className="flex flex-wrap items-start gap-3 rounded-md border border-blue-500/30 bg-blue-500/[0.06] px-4 py-3 text-sm leading-relaxed text-foreground/90"
     >
-      <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-blue-300" aria-hidden />
+      <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-blue-700 dark:text-blue-300" aria-hidden />
       <div className="min-w-0 flex-1 space-y-2">
         <p>
-          You have <span className="font-medium text-white">{count}</span> active API key
+          You have <span className="font-medium text-foreground">{count}</span> active API key
           {count === 1 ? "" : "s"}. Paste the full key you saved at creation time into the install
           command below — {" "}
           <code className="rounded bg-background/60 px-1 py-0.5 text-[12px]">
@@ -167,12 +167,12 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
             <li key={k.id}>
               <Badge
                 variant="outline"
-                className="gap-1.5 border-blue-500/35 bg-blue-500/10 text-blue-100"
+                className="gap-1.5 border-blue-500/35 bg-blue-500/10 text-blue-700 dark:text-blue-100"
                 title={`API key: ${k.name} (prefix ${k.token_prefix}…)`}
               >
-                <KeyRound className="h-3 w-3 text-blue-300" aria-hidden />
+                <KeyRound className="h-3 w-3 text-blue-700 dark:text-blue-300" aria-hidden />
                 <span className="font-medium">{k.name}</span>
-                <code className="font-mono text-blue-200/85">{k.token_prefix}…</code>
+                <code className="font-mono text-blue-700 dark:text-blue-200/85">{k.token_prefix}…</code>
               </Badge>
             </li>
           ))}
@@ -181,7 +181,7 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
           Lost the plaintext?{" "}
           <Link
             to={ROUTES.settings}
-            className="inline-flex items-center gap-0.5 font-medium text-blue-300 hover:text-blue-200"
+            className="inline-flex items-center gap-0.5 font-medium text-blue-700 dark:text-blue-300 hover:text-blue-700 dark:text-blue-200"
           >
             Manage in Settings → Security
             <ExternalLink className="h-3 w-3" aria-hidden />

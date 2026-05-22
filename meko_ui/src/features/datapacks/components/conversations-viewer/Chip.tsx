@@ -10,11 +10,11 @@ import { cn } from "@/lib/utils";
 export type ChipAccent = "slate" | "blue" | "emerald" | "amber" | "purple";
 
 const PALETTE: Record<ChipAccent, string> = {
-  slate: "bg-[#1C2333] text-foreground/85 border-border",
-  blue: "bg-blue-500/10 text-blue-300 border-blue-500/30",
-  emerald: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
-  amber: "bg-amber-500/10 text-amber-300 border-amber-500/30",
-  purple: "bg-purple-500/10 text-purple-300 border-purple-500/30",
+  slate: "bg-card text-foreground/85 border-border",
+  blue: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30",
+  emerald: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
+  amber: "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30",
+  purple: "bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/30",
 };
 
 type Props = {

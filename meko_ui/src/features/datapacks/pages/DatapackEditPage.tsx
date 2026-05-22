@@ -138,7 +138,7 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
           </div>
 
           {isDefaultDatapack ? (
-            <div className="flex items-start gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-300">
+            <div className="flex items-start gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
               <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
               <span>The default datapack cannot be renamed. You can still update its description.</span>
             </div>
@@ -156,7 +156,7 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
           />
 
           {error ? (
-            <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">
               {error}
             </div>
           ) : null}
@@ -167,7 +167,7 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
             </Button>
             <Button
               type="button"
-              className="bg-white text-black hover:bg-gray-200"
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
               onClick={() => void handleUpdate()}
               disabled={submitting || loading}
             >

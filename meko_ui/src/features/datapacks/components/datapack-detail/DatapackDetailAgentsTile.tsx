@@ -100,7 +100,11 @@ export function DatapackDetailAgentsTile({ datapackName, datapackId, className }
             return (
               <li key={id} className="flex items-center gap-3 px-2 py-2.5">
                 <div
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-950/70 text-violet-200 ring-1 ring-violet-600/40"
+                  // Soft violet pill in light mode (`bg-violet-100`),
+                  // saturated dark-violet in dark mode. The original
+                  // `violet-950/70` on white rendered as a near-solid
+                  // dark circle — gaudy against the white card.
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-100 dark:bg-violet-950/70 text-violet-700 dark:text-violet-200 ring-1 ring-violet-600/40"
                   aria-hidden
                 >
                   <Bot className="h-4 w-4 opacity-90" />

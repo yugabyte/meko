@@ -8,6 +8,7 @@ import { Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
 import { IncomingShareNotificationsBell } from "@/features/layout/IncomingShareNotificationsBell";
+import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 import { ROUTES } from "@/app/routes/paths";
 
 export type AppWorkspaceHeaderProps = {
@@ -59,13 +60,24 @@ export function AppWorkspaceHeader({
         "flex items-center border-b border-border bg-background/95 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/60",
         padding === "page" ? "px-8" : "px-6",
         hasLeft && hasRight ? "justify-between" : hasLeft ? "justify-start" : "justify-end",
-        sticky && "sticky top-0 z-10",
+        // `z-20` (not `z-10`) so the sticky header always paints above
+        // page content. Several pages — notably the Datapacks overview's
+        // "What is a Datapack?" panel — use `relative z-10` to lift their
+        // own inner content above decorative blur blobs in the same
+        // card. With both at the same z, DOM order wins and content
+        // bleeds through the translucent header. A header layer above
+        // every page-content layer is the safer global default.
+        sticky && "sticky top-0 z-20",
         className,
       )}
     >
       {leading ? <div className="min-w-0 flex-1">{leading}</div> : null}
       {showUserAvatar ? (
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          {/* Theme toggle sits left of the bell — always available
+              regardless of auth/user state, so even the loading skeleton
+              frame still shows it. */}
+          <ThemeToggleButton />
           {userLoading ? (
             <div className="h-11 w-11 shrink-0 rounded-md bg-muted/40 animate-pulse" aria-hidden />
           ) : currentUser?.account_id ? (
@@ -99,9 +111,9 @@ export function AppWorkspaceHeader({
             <Link
               to={ROUTES.settings}
               aria-label="Settings"
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-[#1C2333] px-2.5 text-xs font-medium text-foreground transition-colors hover:border-blue-400/50 hover:bg-blue-500/10 hover:text-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-foreground transition-colors hover:border-blue-400/50 hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
             >
-              <Settings className="h-3.5 w-3.5 text-blue-300" aria-hidden />
+              <Settings className="h-3.5 w-3.5 text-blue-700 dark:text-blue-300" aria-hidden />
               <span>Settings</span>
             </Link>
           ) : null}

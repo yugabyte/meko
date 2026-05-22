@@ -284,14 +284,14 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
   return (
     <div className="space-y-6">
       {/* Upload section */}
-      <div className="rounded-xl border border-dashed border-border bg-[#1C2333] p-6 space-y-4">
+      <div className="rounded-xl border border-dashed border-border bg-card p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
               <Upload className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <h3 className="text-sm font-medium text-white">Upload files to Knowledge Base</h3>
+              <h3 className="text-sm font-medium text-foreground">Upload files to Knowledge Base</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
                 PDF, TXT, MD, JSON, CSV — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}MB each,{" "}
                 {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch.
@@ -388,12 +388,12 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
             {files.map((entry, i) => (
               <li
                 key={`${entry.file.name}-${i}`}
-                className="rounded-lg border border-border bg-[#0E1525] px-4 py-2.5 space-y-1.5"
+                className="rounded-lg border border-border bg-card px-4 py-2.5 space-y-1.5"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3 min-w-0">
                     <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
-                    <span className="text-sm text-white truncate">{entry.file.name}</span>
+                    <span className="text-sm text-foreground truncate">{entry.file.name}</span>
                     <span className="text-xs text-muted-foreground shrink-0">
                       {formatFileSize(entry.file.size)}
                     </span>
@@ -439,16 +439,16 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
 
       {/* Knowledge Base section */}
       {(totalUploaded > 0 || kbCreated) && (
-        <div className="rounded-xl border border-border bg-[#1C2333] p-6 space-y-4">
+        <div className="rounded-xl border border-border bg-card p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Database className="w-5 h-5 text-purple-400" />
-              <h3 className="text-sm font-medium text-white">Knowledge Base</h3>
+              <h3 className="text-sm font-medium text-foreground">Knowledge Base</h3>
             </div>
             <div className="flex items-center gap-2">
               {!kbCreated && totalUploaded > 0 && (
                 <Button
-                  className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+                  className="gap-2 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
                   onClick={handleCreateKB}
                   disabled={creatingKB}
                 >
@@ -458,7 +458,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
               )}
               {kbCreated && allDone && newUploadsAfterKB > 0 && (
                 <Button
-                  className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+                  className="gap-2 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
                   onClick={handleCreateKB}
                   disabled={creatingKB}
                 >
@@ -520,10 +520,10 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
             <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
               {pipelineDetails.length === 0 &&
                 queuedDocNames.map((name, i) => (
-                  <div key={`queued-${i}-${name}`} className="flex items-center justify-between rounded-lg border border-border bg-[#0E1525] px-4 py-2">
+                  <div key={`queued-${i}-${name}`} className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <Loader2 className="w-3.5 h-3.5 text-yellow-400 animate-spin shrink-0" />
-                      <span className="text-xs text-white truncate">{name}</span>
+                      <span className="text-xs text-foreground truncate">{name}</span>
                     </div>
                     <span className="text-xs font-medium shrink-0 ml-3 text-yellow-400">
                       Queued
@@ -534,7 +534,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
                 const filename = d.document_name.split("/").pop() ?? d.document_name;
                 const displayName = filename.replace(/^\d+_/, "");
                 return (
-                  <div key={i} className="flex items-center justify-between rounded-lg border border-border bg-[#0E1525] px-4 py-2">
+                  <div key={i} className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2">
                     <div className="flex items-center gap-2 min-w-0">
                       {d.document_status === "COMPLETED" ? (
                         <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0" />
@@ -543,7 +543,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
                       ) : (
                         <Loader2 className="w-3.5 h-3.5 text-yellow-400 animate-spin shrink-0" />
                       )}
-                      <span className="text-xs text-white truncate">{displayName}</span>
+                      <span className="text-xs text-foreground truncate">{displayName}</span>
                     </div>
                     <span className={cn(
                       "text-xs font-medium shrink-0 ml-3",

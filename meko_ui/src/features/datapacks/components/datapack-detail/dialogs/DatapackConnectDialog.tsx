@@ -60,13 +60,13 @@ function InstallerCommandRow({
   );
 
   return (
-    <div className="flex items-start gap-2 rounded-md border border-border bg-[#0E1525] p-3">
+    <div className="flex items-start gap-2 rounded-md border border-border bg-card p-3">
       <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <code className="min-w-0 break-all text-xs leading-relaxed text-blue-100">{displayText}</code>
+        <code className="min-w-0 break-all text-xs leading-relaxed text-blue-700 dark:text-blue-100">{displayText}</code>
         {needsToggle ? (
           <button
             type="button"
-            className="self-start text-sm font-medium text-blue-400 hover:text-blue-300"
+            className="self-start text-sm font-medium text-blue-400 hover:text-blue-700 dark:text-blue-300"
             onClick={toggleExpanded}
           >
             {expanded ? "Show less" : "Show more"}
@@ -160,11 +160,11 @@ export function DatapackConnectDialog({
         }
       }}
     >
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-xl max-h-[calc(100vh-4rem)] bg-[#1C2333] border-border text-foreground p-0 flex flex-col">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-xl max-h-[calc(100vh-4rem)] bg-card border-border text-foreground p-0 flex flex-col">
         <DialogHeader className="px-6 pt-6 pb-3 shrink-0">
           <div className="flex items-center gap-2">
             <LinkIcon className="h-5 w-5 shrink-0 text-blue-400" aria-hidden />
-            <DialogTitle className="text-xl text-white">Connect to Datapack</DialogTitle>
+            <DialogTitle className="text-xl text-foreground">Connect to Datapack</DialogTitle>
           </div>
           <DialogDescription className="text-muted-foreground">
             Use these credentials to connect your MCP server and database.
@@ -177,17 +177,17 @@ export function DatapackConnectDialog({
           </div>
         ) : error ? (
           <div className="px-6 pb-6 py-6 overflow-y-auto">
-            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">
               {error}
             </p>
           </div>
         ) : provisionStatus ? (
           <div className="space-y-4 px-6 pb-6 py-4 overflow-y-auto min-h-0">
-            <h3 className="text-lg font-semibold text-white">Datapack</h3>
+            <h3 className="text-lg font-semibold text-foreground">Datapack</h3>
             <div className="space-y-2">
               <label className="text-sm font-medium text-muted-foreground">Datapack</label>
-              <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
-                <code className="text-sm text-white break-all flex-1 pr-4">
+              <div className="flex items-center p-3 rounded-md bg-input border border-border">
+                <code className="text-sm text-foreground break-all flex-1 pr-4">
                   {provisionStatus.datapack_name}
                 </code>
                 <Button
@@ -205,11 +205,11 @@ export function DatapackConnectDialog({
               </div>
             </div>
 
-            <h3 className="pt-2 text-lg font-semibold text-white">MCP Server</h3>
+            <h3 className="pt-2 text-lg font-semibold text-foreground">MCP Server</h3>
             <div className="space-y-2">
               <label className="text-sm font-medium text-muted-foreground">URL</label>
-              <div className="flex items-center p-3 rounded-md bg-[#0E1525] border border-border">
-                <code className="text-xs text-white break-all flex-1 pr-4">
+              <div className="flex items-center p-3 rounded-md bg-input border border-border">
+                <code className="text-xs text-foreground break-all flex-1 pr-4">
                   {provisionStatus.mcp_server_url}
                 </code>
                 <Button
@@ -241,13 +241,13 @@ export function DatapackConnectDialog({
               <label className="text-sm font-medium text-muted-foreground">One-line installer</label>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Replace{" "}
-                <code className="rounded bg-[#0E1525] px-1 text-foreground/90">
+                <code className="rounded bg-input px-1 text-foreground/90">
                   {MEKO_TOKEN_INSTALLER_PLACEHOLDER}
                 </code>{" "}
                 in the command with the API key you saved when generating it.
               </p>
               <Tabs defaultValue="claude-code" className="w-full">
-                <TabsList className="h-9 w-full justify-start bg-[#0E1525] p-1 border border-border">
+                <TabsList className="h-9 w-full justify-start bg-input p-1 border border-border">
                   <TabsTrigger
                     value="claude-code"
                     className="flex-1 data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=inactive]:text-muted-foreground"
