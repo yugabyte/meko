@@ -778,6 +778,16 @@ impl Timeline {
         self.cancel.is_cancelled()
     }
 
+    /// True when this safekeeper is running with `--wal-yb-config`, i.e.
+    /// live-WAL writes go through `YbWalStorage` rather than only the
+    /// local-FS `PhysicalStorage`. Used by the WAL acceptor loop to pick a
+    /// flush cadence tuned for YB's per-statement cost model (where
+    /// batching pays off) instead of the local-FS model (where immediate
+    /// fsync minimizes commit latency).
+    pub fn is_yb_wal_mode(&self) -> bool {
+        self.conf.is_yb_wal_mode()
+    }
+
     /// Take a writing mutual exclusive lock on timeline shared_state.
     pub async fn write_shared_state(self: &Arc<Self>) -> WriteGuardSharedState<'_> {
         WriteGuardSharedState::new(self.clone(), self.mutex.write().await)

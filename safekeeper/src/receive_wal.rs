@@ -506,6 +506,18 @@ async fn network_write<IO: AsyncRead + AsyncWrite + Unpin>(
 /// walproposer, even when it's writing a steady stream of messages.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Flush cadence used in YB-WAL mode (`--wal-yb-config` is set). Each
+/// `flush_wal()` in YB-WAL mode drains the `YbWalStorage` batch buffer
+/// with a multi-row `INSERT VALUES`. The per-statement DocDB write +
+/// Raft append cost dominates over network RTT, so amortizing N writes
+/// into one statement is the throughput lever — but we only see that
+/// amortization if writes pile up between flushes. The default
+/// `FLUSH_INTERVAL` (1 s) would let writes coalesce nicely but add too
+/// much commit latency; 2 ms is the smallest value that meaningfully
+/// changes batch shape without dominating the existing ~30 ms commit
+/// latency on a same-region YB cluster.
+const FLUSH_INTERVAL_YB_WAL: Duration = Duration::from_millis(2);
+
 /// The metrics computation interval.
 ///
 /// The Prometheus poll interval is 60 seconds at the time of writing. We sample the queue depth
@@ -562,8 +574,18 @@ impl WalAcceptor {
     async fn run(&mut self) -> anyhow::Result<()> {
         let walreceiver_guard = self.tli.get_walreceivers().register(self.conn_id);
 
-        // Periodically flush the WAL and compute metrics.
-        let mut flush_ticker = tokio::time::interval(FLUSH_INTERVAL);
+        // YB-WAL mode (a single `write_wal` is a multi-row `INSERT VALUES`
+        // into YugabyteDB) benefits from accumulating writes between
+        // flushes. Local-FS mode (one fsync per flush, cost roughly
+        // constant in batch size) prefers immediate flushes for latency.
+        // Pick the cadence to match.
+        let is_yb_wal = self.tli.is_yb_wal_mode();
+        let flush_interval = if is_yb_wal {
+            FLUSH_INTERVAL_YB_WAL
+        } else {
+            FLUSH_INTERVAL
+        };
+        let mut flush_ticker = tokio::time::interval(flush_interval);
         flush_ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         flush_ticker.tick().await; // skip the initial, immediate tick
 
@@ -616,9 +638,19 @@ impl WalAcceptor {
 
                 // If there are no pending messages, flush the WAL immediately.
                 //
+                // This branch is the latency-optimal default for the local-FS
+                // backend (one fsync per gap; fsync overhead is mostly
+                // batch-size-independent). For the YB-WAL backend the
+                // opposite is true: every flush is a separate INSERT
+                // statement with a fixed per-statement DocDB + Raft cost, so
+                // we want writes to accumulate. In YB-WAL mode we therefore
+                // skip the immediate-empty-flush path and let
+                // `flush_ticker` (at the shorter `FLUSH_INTERVAL_YB_WAL`
+                // cadence) drive flushes.
+                //
                 // TODO: this should be done via flush_ticker.reset_immediately(), but that's always
                 // delayed by 1ms due to this bug: https://github.com/tokio-rs/tokio/issues/6866.
-                _ = future::ready(()), if dirty && self.msg_rx.is_empty() => {
+                _ = future::ready(()), if !is_yb_wal && dirty && self.msg_rx.is_empty() => {
                     dirty = false;
                     flush_ticker.reset();
                     self.tli
