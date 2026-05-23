@@ -78,7 +78,17 @@ pub(crate) async fn update_task(
     /* END_HADRON */
     let elected_me = Some(mgr.conf.my_id) == offloader;
 
-    let should_task_run = need_backup && elected_me;
+    // In YB-WAL mode (`--wal-yb-config` set) the live WAL is already
+    // mirrored row-by-row into `yb_storage.wals`, so durable long-term
+    // retention doesn't need the local-segment-to-blobs offload at all.
+    // Worse, this loop would try to open per-segment files under
+    // `<workdir>/<tenant>/<timeline>/00000001…` which YB-WAL mode never
+    // writes — every iteration would `open()` -> ENOENT, retry, and on
+    // sustained WAL pressure back-pressure SyncRep enough to stall
+    // compute commits. Don't spawn the task; the kill branch below
+    // takes care of any task running from before a config change.
+    let yb_wal_mode = mgr.conf.is_yb_wal_mode();
+    let should_task_run = need_backup && elected_me && !yb_wal_mode;
 
     // start or stop the task
     if should_task_run != (mgr.backup_task.is_some()) {
