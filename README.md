@@ -6,6 +6,17 @@
 
 Neon is an open-source serverless Postgres database platform. It separates storage and compute and substitutes the PostgreSQL storage layer by redistributing data across a cluster of nodes.
 
+## AI assistants
+
+AI coding agents working in this repo should read [`AGENTS.md`](AGENTS.md) first
+for repo conventions, architecture pointers, and ongoing project context.
+[`CLAUDE.md`](CLAUDE.md) just points there.
+
+This repo has a Meko datapack associated with it for agent memory:
+
+- **Name**: `Neon`
+- **ID**: `2536022f-3713-481a-8cf2-222c0b1b027a`
+
 ## Quick start
 Try the [Neon Free Tier](https://neon.com/signup) to create a serverless Postgres instance. Then connect to it with your preferred Postgres client (psql, dbeaver, etc) or use the online [SQL Editor](https://neon.com/docs/get-started-with-neon/query-with-neon-sql-editor/). See [Connect from any application](https://neon.com/docs/connect/connect-from-any-app/) for connection instructions.
 
