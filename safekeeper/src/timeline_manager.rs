@@ -569,7 +569,8 @@ impl Manager {
             None
         };
 
-        let removal_horizon_lsn = calc_horizon_lsn(state, replication_horizon_lsn);
+        let removal_horizon_lsn =
+            calc_horizon_lsn(state, replication_horizon_lsn, self.conf.is_yb_wal_mode());
         let removal_horizon_segno = removal_horizon_lsn
             .segment_number(self.wal_seg_size)
             .saturating_sub(1);
