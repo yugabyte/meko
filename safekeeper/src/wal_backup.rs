@@ -262,8 +262,12 @@ fn determine_offloader(
 pub struct WalBackup {
     storage: Option<Arc<GenericRemoteStorage>>,
     /// Optional dedicated YB connection for the live WAL mirror.
-    /// Populated when `--wal-yb-config` is set.
-    wal_yb_client: Option<Arc<tokio_postgres::Client>>,
+    /// Populated when `--wal-yb-config` is set. Wraps
+    /// `tokio_postgres::Client` so that a TCP-level disconnect (e.g. the
+    /// YB tserver crashing or being restarted) triggers a transparent
+    /// reconnect on the next operation — without this wrapper the
+    /// process held a corpse Arc<Client> until restart.
+    wal_yb_client: Option<Arc<crate::yb_wal_storage::YbWalClient>>,
     wal_yb_table: Option<String>,
 }
 
@@ -284,20 +288,12 @@ impl WalBackup {
                         .with_context(|| format!("wal_yb_config password env `{env_name}` unset"))?;
                     pg_config.password(pw);
                 }
-                let (client, connection) = pg_config
-                    .connect(tokio_postgres::NoTls)
+                let client = crate::yb_wal_storage::YbWalClient::connect(pg_config)
                     .await
                     .with_context(|| format!(
                         "connect WAL mirror YB at {}:{}",
                         yb.host, yb.port
                     ))?;
-                tokio::spawn(async move {
-                    if let Err(e) = connection.await {
-                        tracing::warn!("WAL mirror YB connection ended: {e}");
-                    }
-                });
-                // Enable upsert mode so re-flushes / chunk_seq retries are cheap.
-                let _ = client.execute("SET yb_enable_upsert_mode = true", &[]).await;
                 (Some(Arc::new(client)), Some(yb.table_name.clone()))
             }
             None => (None, None),
@@ -333,7 +329,9 @@ impl WalBackup {
     }
 
     /// Returns `(client, table_name)` for the live-WAL YB mirror, if configured.
-    pub fn get_wal_yb(&self) -> Option<(Arc<tokio_postgres::Client>, String)> {
+    pub fn get_wal_yb(
+        &self,
+    ) -> Option<(Arc<crate::yb_wal_storage::YbWalClient>, String)> {
         match (&self.wal_yb_client, &self.wal_yb_table) {
             (Some(c), Some(t)) => Some((c.clone(), t.clone())),
             _ => None,
