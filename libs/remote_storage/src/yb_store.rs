@@ -69,7 +69,9 @@ const YB_MAX_KEYS_PER_DELETE: usize = 1000;
 const YB_CHUNK_SIZE: usize = 100 * 1024 * 1024;
 
 pub struct YbStore {
-    client: Arc<tokio_postgres::Client>,
+    /// Auto-reconnecting wrapper around `tokio_postgres::Client`. See
+    /// [`crate::YsqlClient`] for the reconnect/retry semantics.
+    client: Arc<crate::YsqlClient>,
     table_name: String,
     /// Configured prefix, normalized to always end in `/` when non-empty.
     prefix: Option<String>,
@@ -104,58 +106,32 @@ impl YbStore {
             pg_config.password(password);
         }
 
+        // YsqlClient owns reconnect logic and runs `SET yb_enable_upsert_mode`
+        // on every reopen, so a dropped TCP socket (YB tserver crash /
+        // restart) doesn't leave the pageserver stuck on a dead client.
         let client = match config.sslmode.as_deref() {
-            None | Some("disable") => {
-                let (client, connection) = pg_config
-                    .connect(tokio_postgres::NoTls)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to connect to YugabyteDB at {}:{} as user `{}`",
-                            config.host, config.port, config.user
-                        )
-                    })?;
-                tokio::spawn(async move {
-                    if let Err(e) = connection.await {
-                        tracing::warn!("YbStore connection ended with error: {e}");
-                    }
-                });
-                client
-            }
+            None | Some("disable") => crate::YsqlClient::connect_no_tls(pg_config)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to connect to YugabyteDB at {}:{} as user `{}`",
+                        config.host, config.port, config.user
+                    )
+                })?,
             Some(mode) => {
                 let tls = build_yb_rustls_connector().with_context(|| {
                     format!("building rustls connector for YbStore sslmode={mode}")
                 })?;
-                let (client, connection) =
-                    pg_config.connect(tls).await.with_context(|| {
+                crate::YsqlClient::connect_rustls(pg_config, tls)
+                    .await
+                    .with_context(|| {
                         format!(
                             "failed to connect to YugabyteDB at {}:{} as user `{}` (TLS)",
                             config.host, config.port, config.user
                         )
-                    })?;
-                tokio::spawn(async move {
-                    if let Err(e) = connection.await {
-                        tracing::warn!("YbStore (TLS) connection ended with error: {e}");
-                    }
-                });
-                client
+                    })?
             }
         };
-
-        // Best-effort: enable YugabyteDB's per-session upsert mode so plain
-        // `INSERT` skips DocDB's read-before-write conflict check. With this
-        // set, a duplicate-PK insert silently overwrites instead of erroring,
-        // which lets us drop `ON CONFLICT` (and avoid the round-trip + storage
-        // engine read it forces). Vanilla Postgres doesn't have this GUC, so
-        // an "unrecognized parameter" error here is expected and ignored.
-        if let Err(e) = client
-            .execute("SET yb_enable_upsert_mode = true", &[])
-            .await
-        {
-            tracing::debug!(
-                "YbStore: SET yb_enable_upsert_mode failed (likely vanilla Postgres): {e}"
-            );
-        }
 
         let prefix = config.prefix.as_ref().map(|p| {
             if p.is_empty() || p.ends_with(REMOTE_STORAGE_PREFIX_SEPARATOR) {
@@ -350,24 +326,26 @@ impl YbStore {
         false
     }
 
-    async fn with_timeout<F, T>(&self, fut: F, cancel: &CancellationToken) -> anyhow::Result<T>
+    async fn with_timeout<F, T, E>(&self, fut: F, cancel: &CancellationToken) -> anyhow::Result<T>
     where
-        F: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
+        F: std::future::Future<Output = Result<T, E>>,
+        E: Into<anyhow::Error>,
     {
         tokio::select! {
-            res = fut => res.map_err(anyhow::Error::from),
+            res = fut => res.map_err(Into::into),
             _ = tokio::time::sleep(self.timeout) => Err(TimeoutOrCancel::Timeout.into()),
             _ = cancel.cancelled() => Err(TimeoutOrCancel::Cancel.into()),
         }
     }
 
-    async fn with_timeout_download<F, T>(
+    async fn with_timeout_download<F, T, E>(
         &self,
         fut: F,
         cancel: &CancellationToken,
     ) -> Result<T, DownloadError>
     where
-        F: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
+        F: std::future::Future<Output = Result<T, E>>,
+        E: Into<anyhow::Error>,
     {
         tokio::select! {
             res = fut => res.map_err(|e| DownloadError::Other(e.into())),
@@ -464,7 +442,8 @@ impl RemoteStorage for YbStore {
         }
 
         let rows = {
-            let fut = self.client.query_raw(&sql, bind_params);
+            let client = self.client.current().await.map_err(DownloadError::Other)?;
+            let fut = client.query_raw(&sql, bind_params);
             let row_stream = self
                 .with_timeout_download(fut, cancel)
                 .await?;
@@ -692,6 +671,7 @@ impl RemoteStorage for YbStore {
                 .collect()
         };
 
+        let client = self.client.current().await?;
         let pipeline_fut = async {
             let futures = row_chunks.into_iter().map(|(idx, chunk)| {
                 let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
@@ -706,7 +686,7 @@ impl RemoteStorage for YbStore {
                     Box::new(now_us),
                     Box::new(metadata_json.clone()),
                 ];
-                self.client.execute_raw(&insert_sql, params)
+                client.execute_raw(&insert_sql, params)
             });
             futures::future::try_join_all(futures).await?;
             Ok::<_, tokio_postgres::Error>(())
@@ -801,7 +781,14 @@ impl RemoteStorage for YbStore {
         let start_off_in_first = (start_byte % chunk_size) as usize;
         let end_off_in_last = ((last_byte_inclusive % chunk_size) + 1) as usize;
 
-        let client = self.client.clone();
+        // Streaming reads can't be auto-retried (the row stream isn't
+        // replayable), so we just grab the current live client; the next
+        // download() call will reconnect if this one's been dropped since.
+        let client = self
+            .client
+            .current()
+            .await
+            .map_err(DownloadError::Other)?;
         let table = self.table_name.clone();
         let stream_sql = format!(
             "SELECT chunk_idx, data FROM {} \
@@ -918,6 +905,7 @@ impl RemoteStorage for YbStore {
             .map(|p| self.parse_key(&self.full_key(p)))
             .collect();
 
+        let client = self.client.current().await?;
         let pipeline_fut = async {
             let futures = parsed.into_iter().map(|(ns, tenant, timeline, key_body)| {
                 let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
@@ -926,7 +914,7 @@ impl RemoteStorage for YbStore {
                     Box::new(ns),
                     Box::new(key_body),
                 ];
-                self.client.execute_raw(&sql, params)
+                client.execute_raw(&sql, params)
             });
             futures::future::try_join_all(futures).await?;
             Ok::<_, tokio_postgres::Error>(())

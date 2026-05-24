@@ -81,142 +81,11 @@ use crate::metrics::WalStorageMetrics;
 use crate::state::TimelinePersistentState;
 use crate::wal_storage::{PhysicalStorage, Storage};
 
-/// Thin wrapper around `tokio_postgres::Client` that owns its
-/// connection config and reconnects when the underlying TCP socket
-/// dies (e.g. YB tserver crash, network blip). Without this, the
-/// safekeeper holds an `Arc<tokio_postgres::Client>` for the lifetime
-/// of the process; if its background connection task ever ends, every
-/// subsequent `execute()` lands on a corpse and the retry loop never
-/// recovers — observed in production after a YB tserver crash on
-/// 2026-05-23.
-///
-/// `current()` returns the live client, opening a new one if the
-/// previous client is `is_closed()`. Each public method (`execute`,
-/// `query`, `query_opt`) also retries **once** on a connection-closed
-/// error: a single in-flight statement during a reconnect window is
-/// retried transparently. Anything beyond that propagates up.
-///
-/// Concurrency: `current` is a `tokio::sync::Mutex<Arc<Client>>`. The
-/// mutex is held only across the cheap `is_closed()` check and the
-/// reconnect itself; the returned `Arc<Client>` is cloned out so the
-/// real DB operation runs without the mutex held. Multiple writers can
-/// hammer the same `Client` concurrently — `tokio_postgres::Client`
-/// multiplexes statements internally.
-pub struct YbWalClient {
-    config: tokio_postgres::Config,
-    current: tokio::sync::Mutex<Arc<tokio_postgres::Client>>,
-}
-
-impl YbWalClient {
-    /// Build a YbWalClient. Opens the initial connection eagerly so
-    /// startup-time configuration errors surface immediately.
-    pub async fn connect(config: tokio_postgres::Config) -> Result<Self> {
-        let client = Self::open(&config).await?;
-        Ok(Self {
-            config,
-            current: tokio::sync::Mutex::new(Arc::new(client)),
-        })
-    }
-
-    async fn open(config: &tokio_postgres::Config) -> Result<tokio_postgres::Client> {
-        let (client, connection) = config
-            .connect(tokio_postgres::NoTls)
-            .await
-            .context("YbWalClient: connect")?;
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                tracing::warn!("YbWalClient connection ended: {e}");
-            }
-        });
-        // Enable upsert mode so re-flushes / chunk_seq retries are cheap.
-        // Ignored against non-YB Postgres.
-        let _ = client
-            .execute("SET yb_enable_upsert_mode = true", &[])
-            .await;
-        Ok(client)
-    }
-
-    /// Return the current `Client`, opening a new connection first if
-    /// the previous one is already known to be dead.
-    async fn current(&self) -> Result<Arc<tokio_postgres::Client>> {
-        let mut guard = self.current.lock().await;
-        if guard.is_closed() {
-            tracing::info!("YbWalClient: previous client closed, reconnecting");
-            *guard = Arc::new(Self::open(&self.config).await?);
-        }
-        Ok(guard.clone())
-    }
-
-    /// Force a reconnect — called after an operation fails on a now-dead
-    /// client. Returns the new live `Client`.
-    async fn force_reconnect(&self) -> Result<Arc<tokio_postgres::Client>> {
-        let mut guard = self.current.lock().await;
-        // Double-check: another task may have reconnected while we were
-        // waiting on the mutex.
-        if !guard.is_closed() {
-            return Ok(guard.clone());
-        }
-        tracing::info!("YbWalClient: forcing reconnect after failed op");
-        *guard = Arc::new(Self::open(&self.config).await?);
-        Ok(guard.clone())
-    }
-
-    pub async fn execute(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64> {
-        let client = self.current().await?;
-        match client.execute(sql, params).await {
-            Ok(n) => Ok(n),
-            Err(e) if client.is_closed() => {
-                drop(client);
-                let client = self.force_reconnect().await?;
-                client
-                    .execute(sql, params)
-                    .await
-                    .with_context(|| format!("YbWalClient: execute after reconnect ({e})"))
-            }
-            Err(e) => Err(anyhow::Error::from(e)),
-        }
-    }
-
-    pub async fn query(
-        &self,
-        sql: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Vec<tokio_postgres::Row>> {
-        let client = self.current().await?;
-        match client.query(sql, params).await {
-            Ok(rows) => Ok(rows),
-            Err(e) if client.is_closed() => {
-                drop(client);
-                let client = self.force_reconnect().await?;
-                client
-                    .query(sql, params)
-                    .await
-                    .with_context(|| format!("YbWalClient: query after reconnect ({e})"))
-            }
-            Err(e) => Err(anyhow::Error::from(e)),
-        }
-    }
-
-    pub async fn query_opt(
-        &self,
-        sql: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Option<tokio_postgres::Row>> {
-        let client = self.current().await?;
-        match client.query_opt(sql, params).await {
-            Ok(row) => Ok(row),
-            Err(e) if client.is_closed() => {
-                drop(client);
-                let client = self.force_reconnect().await?;
-                client
-                    .query_opt(sql, params)
-                    .await
-                    .with_context(|| format!("YbWalClient: query_opt after reconnect ({e})"))
-            }
-            Err(e) => Err(anyhow::Error::from(e)),
-        }
-    }
-}
+// Re-export the auto-reconnecting Postgres client wrapper from the
+// shared `remote_storage` crate (used by both the pageserver's
+// `YbStore` and our YB-WAL mirror here). See `remote_storage::YsqlClient`
+// for the reconnect / retry-once semantics.
+pub use remote_storage::YsqlClient;
 
 /// Flush the buffer when it accumulates this many chunks. Picked to amortize
 /// the per-statement DocDB cost (single-row ≈ 0.6 ms; 50-row batch ≈ 2.5 ms
@@ -242,8 +111,8 @@ struct PendingChunk {
 pub struct YbWalStorage {
     inner: PhysicalStorage,
     /// Auto-reconnecting wrapper around `tokio_postgres::Client`. See
-    /// `YbWalClient` for the reconnect/retry semantics.
-    client: Arc<YbWalClient>,
+    /// `YsqlClient` for the reconnect/retry semantics.
+    client: Arc<YsqlClient>,
     tenant_id: String,
     timeline_id: String,
     table_name: String,
@@ -265,7 +134,7 @@ impl YbWalStorage {
         timeline_dir: &Utf8Path,
         state: &TimelinePersistentState,
         _no_sync: bool,
-        client: Arc<YbWalClient>,
+        client: Arc<YsqlClient>,
         table_name: String,
     ) -> Result<Self> {
         let wal_seg_size = state.server.wal_seg_size as usize;
@@ -321,7 +190,7 @@ impl YbWalStorage {
     /// highest end-byte across all segnos for this timeline. Falls back to
     /// `commit_lsn` when the table is empty (fresh timeline).
     async fn load_write_lsn(
-        client: &YbWalClient,
+        client: &YsqlClient,
         table: &str,
         tenant_id: &str,
         timeline_id: &str,
@@ -351,7 +220,7 @@ impl YbWalStorage {
     }
 
     async fn load_next_chunk_seq(
-        client: &YbWalClient,
+        client: &YsqlClient,
         table: &str,
         tenant_id: &str,
         timeline_id: &str,
@@ -672,7 +541,7 @@ fn quote_ident(ident: &str) -> String {
 /// Returns `Ok(None)` when the segment has no rows in YB (caller should fall
 /// through to the next source). Returns `Ok(Some(reader))` on success.
 pub async fn read_segment_from_yb(
-    client: &YbWalClient,
+    client: &YsqlClient,
     table: &str,
     ttid: &TenantTimelineId,
     segno: XLogSegNo,

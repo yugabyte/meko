@@ -267,7 +267,7 @@ pub struct WalBackup {
     /// YB tserver crashing or being restarted) triggers a transparent
     /// reconnect on the next operation — without this wrapper the
     /// process held a corpse Arc<Client> until restart.
-    wal_yb_client: Option<Arc<crate::yb_wal_storage::YbWalClient>>,
+    wal_yb_client: Option<Arc<crate::yb_wal_storage::YsqlClient>>,
     wal_yb_table: Option<String>,
 }
 
@@ -288,7 +288,7 @@ impl WalBackup {
                         .with_context(|| format!("wal_yb_config password env `{env_name}` unset"))?;
                     pg_config.password(pw);
                 }
-                let client = crate::yb_wal_storage::YbWalClient::connect(pg_config)
+                let client = crate::yb_wal_storage::YsqlClient::connect_no_tls(pg_config)
                     .await
                     .with_context(|| format!(
                         "connect WAL mirror YB at {}:{}",
@@ -331,7 +331,7 @@ impl WalBackup {
     /// Returns `(client, table_name)` for the live-WAL YB mirror, if configured.
     pub fn get_wal_yb(
         &self,
-    ) -> Option<(Arc<crate::yb_wal_storage::YbWalClient>, String)> {
+    ) -> Option<(Arc<crate::yb_wal_storage::YsqlClient>, String)> {
         match (&self.wal_yb_client, &self.wal_yb_table) {
             (Some(c), Some(t)) => Some((c.clone(), t.clone())),
             _ => None,

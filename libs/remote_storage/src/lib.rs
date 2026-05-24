@@ -19,6 +19,9 @@ mod s3_bucket;
 mod simulate_failures;
 mod support;
 mod yb_store;
+mod ysql_client;
+
+pub use ysql_client::YsqlClient;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
