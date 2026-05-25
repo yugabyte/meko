@@ -37,29 +37,47 @@
 //!   the reader uses local FS, so a tiny over-keep in YB is harmless).
 //! - `remove_up_to(segno)` deletes all rows with `segno < segno_up_to`.
 //!
-//! ## Batching
+//! ## Batching (producer / consumer)
 //!
-//! `write_wal()` does **not** synchronously INSERT to YB. Each chunk is
-//! appended to an in-memory `pending` buffer; the buffer flushes as a single
-//! multi-row `INSERT ... VALUES (...), (...), ...` when it crosses
-//! `FLUSH_ROWS_THRESHOLD` rows or `FLUSH_BYTES_THRESHOLD` total payload
-//! bytes — or when `flush_wal()` is called.
+//! `write_wal()` is the producer: it parses the incoming WAL byte range
+//! into one `PendingChunk` per segment, stamps each with a monotonic
+//! `chunk_seq` and an `end_lsn`, then pushes them onto a bounded `mpsc`
+//! channel. It does **not** wait for YB.
 //!
-//! `flush_wal()` is the durability sync point: it drains the pending buffer
-//! before returning. This preserves the safekeeper's contract — the
-//! walproposer only treats data as durable after a successful
-//! `flush_wal()`, so any crash between `write_wal()` returning and the
-//! batch landing in YB is a no-op for the compute (it never got the
-//! commit ack). Without the batched-INSERT amortization, single-row
-//! INSERTs into YB top out at ~1.6 K rows/sec (per-row DocDB cost
-//! dominates); 50-row batches measure ~14 K rows/sec on the same
-//! single connection.
+//! A background consumer task (spawned in `YbWalStorage::new`) drains the
+//! channel greedily, builds one multi-row `INSERT ... VALUES (...), (...)`
+//! per batch — up to [`FLUSH_ROWS_THRESHOLD`] rows or
+//! [`FLUSH_BYTES_THRESHOLD`] bytes — runs it through [`YsqlClient`], and
+//! publishes the highest end_lsn of each successful batch onto a
+//! `tokio::sync::watch` watermark. This lets the producer keep pushing
+//! the *next* batch while the previous one is in flight, which the
+//! single-threaded design couldn't do (every `flush_pending` held
+//! `&mut self` across the YB round-trip).
 //!
-//! `truncate_wal` drains pending before issuing the DELETE to avoid a
-//! pending write of an obsolete chunk landing after the truncate.
-//! `remove_up_to` does **not** drain — by construction it only deletes
-//! segments well below the writer's current position, which the pending
-//! buffer never holds.
+//! `flush_wal()` is the durability sync point: it records the highest
+//! end_lsn the producer has pushed (`submitted_max_lsn`) and awaits the
+//! watermark catching up. The walproposer only treats data as durable
+//! after a successful `flush_wal()`, so any crash between `write_wal()`
+//! returning and the batch landing in YB is a no-op for the compute (no
+//! commit ack was sent).
+//!
+//! `truncate_wal` waits the same way before issuing the DELETE, so a
+//! pending chunk past `end_pos` cannot land after the truncate.
+//!
+//! ## Failure handling
+//!
+//! On a batch INSERT failure (after `YsqlClient`'s own auto-retry has
+//! given up — e.g. persistent auth / schema / connectivity failure),
+//! the consumer publishes [`DurableState::Failed`] onto the watermark
+//! and exits. The producer's next `tx.send()` then fails (rx dropped),
+//! `write_wal` returns the captured error, the walproposer reconnects,
+//! and the safekeeper handles the rest via the consensus state machine.
+//! `flush_wal` waiters see `Failed` via the watermark and propagate the
+//! same error.
+//!
+//! `remove_up_to` does **not** wait — by construction it only deletes
+//! segments well below the writer's current position, which the
+//! channel never holds.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -73,6 +91,7 @@ use camino::Utf8Path;
 use futures::future::{BoxFuture, FutureExt};
 use postgres_ffi::XLogSegNo;
 use tokio::io::{AsyncRead, ReadBuf};
+use tokio::sync::{mpsc, watch};
 use tokio_postgres::types::ToSql;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
@@ -99,33 +118,61 @@ const FLUSH_ROWS_THRESHOLD: usize = 50;
 /// headroom for the row metadata + protocol overhead.
 const FLUSH_BYTES_THRESHOLD: usize = 4 * 1024 * 1024;
 
-/// One row queued for the next batched INSERT.
+/// One row queued for the next batched INSERT. Carries `end_lsn` so the
+/// consumer can publish a durability watermark after each batch.
 struct PendingChunk {
     segno: u64,
     chunk_seq: i32,
     chunk_offset: i64,
     chunk_size: i32,
     data: Vec<u8>,
+    /// LSN immediately after this chunk's last byte. The consumer uses
+    /// the last chunk's `end_lsn` in a batch as the post-flush watermark.
+    end_lsn: Lsn,
+}
+
+/// Capacity of the producer→consumer `mpsc` channel. Bounded so that a
+/// stalled consumer back-pressures the producer (`write_wal` blocks on
+/// `tx.send().await`) rather than growing memory unboundedly.
+const CHUNK_CHANNEL_CAPACITY: usize = 1024;
+
+/// Durability state published by the consumer onto the watch channel.
+#[derive(Clone, Debug)]
+enum DurableState {
+    /// Every `PendingChunk` whose `end_lsn <= self.0` has been durably
+    /// INSERT'd into YugabyteDB.
+    Healthy(Lsn),
+    /// The consumer task hit a non-recoverable error and stopped
+    /// processing. The string is the rendered error chain for
+    /// propagation up through `flush_wal` / `write_wal`.
+    Failed(String),
 }
 
 pub struct YbWalStorage {
     inner: PhysicalStorage,
-    /// Auto-reconnecting wrapper around `tokio_postgres::Client`. See
-    /// `YsqlClient` for the reconnect/retry semantics.
+    /// Auto-reconnecting wrapper around `tokio_postgres::Client`. Used
+    /// directly for the synchronous DELETE paths (`truncate_wal`,
+    /// `remove_up_to`). The consumer task gets a clone of this `Arc` for
+    /// its batched INSERTs.
     client: Arc<YsqlClient>,
     tenant_id: String,
     timeline_id: String,
     table_name: String,
     wal_seg_size: usize,
-    /// Monotonic chunk counter per segno. Rehydrated from YB at construction.
+    /// Monotonic chunk counter per segno. Allocated by the producer
+    /// (`write_wal`) before pushing onto the channel; consumer reads but
+    /// doesn't mutate. Rehydrated from YB at construction.
     next_chunk_seq: HashMap<u64, i32>,
-    /// Chunks accumulated since the last flush. Flushed by
-    /// `flush_pending` when the size/byte threshold is reached, when
-    /// `flush_wal()` is called, or before any operation (truncate) that
-    /// depends on the pending writes already being durable.
-    pending: Vec<PendingChunk>,
-    /// Cached `sum(chunk_size)` over `pending` for the byte-threshold check.
-    pending_bytes: usize,
+    /// Producer side of the chunk channel.
+    tx: mpsc::Sender<PendingChunk>,
+    /// Receiver side of the durability watermark.
+    watermark_rx: watch::Receiver<DurableState>,
+    /// Highest `end_lsn` the producer has pushed onto `tx`. `flush_wal`
+    /// awaits the watermark catching up to this.
+    submitted_max_lsn: Lsn,
+    /// Kept so the consumer task isn't dropped immediately on
+    /// `YbWalStorage` drop; closing `tx` is what signals shutdown.
+    _consumer_handle: tokio::task::JoinHandle<()>,
 }
 
 impl YbWalStorage {
@@ -159,6 +206,22 @@ impl YbWalStorage {
         // LSN tracker + WAL decoder, which we want to reuse.
         let inner = PhysicalStorage::new_no_local_writes(ttid, timeline_dir, state, write_lsn)?;
 
+        // Producer/consumer plumbing. The watermark starts at
+        // `write_lsn` so an immediately-following `flush_wal()` with
+        // `submitted_max_lsn == write_lsn` returns at once (nothing to
+        // wait for).
+        let (tx, rx) = mpsc::channel::<PendingChunk>(CHUNK_CHANNEL_CAPACITY);
+        let (watermark_tx, watermark_rx) =
+            watch::channel(DurableState::Healthy(write_lsn));
+        let consumer_handle = tokio::spawn(consumer_main(
+            rx,
+            client.clone(),
+            table_name.clone(),
+            tenant_id_str.clone(),
+            timeline_id_str.clone(),
+            watermark_tx,
+        ));
+
         let mut me = YbWalStorage {
             inner,
             client,
@@ -167,14 +230,15 @@ impl YbWalStorage {
             table_name,
             wal_seg_size,
             next_chunk_seq: HashMap::new(),
-            pending: Vec::new(),
-            pending_bytes: 0,
+            tx,
+            watermark_rx,
+            submitted_max_lsn: write_lsn,
+            _consumer_handle: consumer_handle,
         };
 
         // Clean any rows past write_lsn left over from a crash where we
-        // INSERT'd but never returned to the caller (could happen if YB
-        // accepted the row but the safekeeper crashed before its in-memory
-        // bookkeeping advanced).
+        // INSERT'd but never returned to the caller. Goes direct via the
+        // sync client (consumer hasn't been handed anything yet anyway).
         me.delete_after(write_lsn).await?;
         me.next_chunk_seq = Self::load_next_chunk_seq(
             &me.client,
@@ -259,12 +323,10 @@ impl YbWalStorage {
         self.inner.system_id()
     }
 
-    /// Split a write at segment boundaries and **append** one `PendingChunk`
-    /// per segment-spanning piece. Each chunk records `chunk_offset` (byte
-    /// position within the segment) and a monotonic `chunk_seq` (allocated
-    /// at append time, so ordering is preserved when the batch later
-    /// flushes). After appending, flush opportunistically when the buffer
-    /// crosses a row or byte threshold.
+    /// Producer side: split the incoming WAL range at segment boundaries,
+    /// stamp each piece with `chunk_seq` + `end_lsn`, and push onto the
+    /// `mpsc` channel. The consumer task INSERTs them in batches; the
+    /// caller does **not** wait for durability (use `flush_wal`).
     async fn upsert_writes(&mut self, mut startpos: Lsn, buf: &[u8]) -> Result<()> {
         if buf.is_empty() {
             return Ok(());
@@ -275,6 +337,7 @@ impl YbWalStorage {
             let offset = startpos.segment_offset(self.wal_seg_size);
             let room_in_segment = self.wal_seg_size - offset;
             let take = remaining.len().min(room_in_segment);
+            let end_lsn = Lsn(startpos.0 + take as u64);
 
             let pc = PendingChunk {
                 segno,
@@ -282,103 +345,57 @@ impl YbWalStorage {
                 chunk_offset: offset as i64,
                 chunk_size: take as i32,
                 data: remaining[..take].to_vec(),
+                end_lsn,
             };
-            self.pending_bytes += take;
-            self.pending.push(pc);
+
+            // tx.send().await may block on backpressure (bounded channel).
+            // The walproposer side stalls here until the consumer drains —
+            // intended behaviour when YB can't keep up.
+            if self.tx.send(pc).await.is_err() {
+                // Consumer task exited. The watermark should carry the
+                // captured error string.
+                let state = self.watermark_rx.borrow().clone();
+                match state {
+                    DurableState::Failed(msg) => {
+                        anyhow::bail!("YB WAL consumer task failed: {msg}");
+                    }
+                    DurableState::Healthy(_) => {
+                        anyhow::bail!("YB WAL consumer task gone (channel closed)");
+                    }
+                }
+            }
+            // Advance the submitted watermark only after the chunk is
+            // actually queued — otherwise a `flush_wal()` racing with a
+            // failed `tx.send()` could wait on an LSN that no longer
+            // corresponds to anything in flight.
+            self.submitted_max_lsn = end_lsn;
 
             remaining = &remaining[take..];
-            startpos = Lsn(startpos.0 + take as u64);
-
-            // Opportunistic flush mid-write. If a single write_wal call is
-            // huge (rare), this keeps memory bounded and breaks it into
-            // multiple wire-sized batches.
-            if self.pending.len() >= FLUSH_ROWS_THRESHOLD
-                || self.pending_bytes >= FLUSH_BYTES_THRESHOLD
-            {
-                self.flush_pending().await?;
-            }
+            startpos = end_lsn;
         }
         Ok(())
     }
 
-    /// Flush all buffered chunks as a single multi-row INSERT. Idempotent —
-    /// no-op when the buffer is empty. After a successful execute, the
-    /// buffer is cleared; on error the buffer is also cleared (callers
-    /// won't retry with the same chunks; the walproposer will resend from
-    /// an earlier LSN after the connection drops).
-    async fn flush_pending(&mut self) -> Result<()> {
-        if self.pending.is_empty() {
-            return Ok(());
-        }
-        let n = self.pending.len();
-        let now_us: i64 = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_micros() as i64)
-            .unwrap_or(0);
-
-        // Build placeholders: VALUES ($1,$2,$3,$4,$5,$6,$7,$8), ($9,...,$16), ...
-        let mut sql = String::with_capacity(128 + n * 56);
-        sql.push_str("INSERT INTO ");
-        sql.push_str(&quote_ident(&self.table_name));
-        sql.push_str(
-            " (tenant_id, timeline_id, segno, chunk_seq, chunk_offset, \
-              chunk_size, data, last_modified_us) VALUES ",
-        );
-        for i in 0..n {
-            if i > 0 {
-                sql.push_str(", ");
-            }
-            let b = i * 8;
-            // Cheaper than format! per row.
-            use std::fmt::Write as _;
-            let _ = write!(
-                sql,
-                "(${},${},${},${},${},${},${},${})",
-                b + 1,
-                b + 2,
-                b + 3,
-                b + 4,
-                b + 5,
-                b + 6,
-                b + 7,
-                b + 8
-            );
-        }
-
-        // Pre-materialize the i64 / i32 fields so we can reference them in
-        // `params` without each one being a short-lived temporary.
-        let segno_is: Vec<i64> = self.pending.iter().map(|p| p.segno as i64).collect();
-        let seqs: Vec<i32> = self.pending.iter().map(|p| p.chunk_seq).collect();
-        let offset_is: Vec<i64> = self.pending.iter().map(|p| p.chunk_offset).collect();
-        let size_is: Vec<i32> = self.pending.iter().map(|p| p.chunk_size).collect();
-
-        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 8);
-        for i in 0..n {
-            params.push(&self.tenant_id);
-            params.push(&self.timeline_id);
-            params.push(&segno_is[i]);
-            params.push(&seqs[i]);
-            params.push(&offset_is[i]);
-            params.push(&size_is[i]);
-            params.push(&self.pending[i].data);
-            params.push(&now_us);
-        }
-
+    /// Wait for the consumer to publish durability up to `target` LSN,
+    /// or propagate a captured error if the consumer has failed.
+    async fn wait_for_durable(&mut self, target: Lsn) -> Result<()> {
         let res = self
-            .client
-            .execute(&sql, &params)
-            .await
-            .with_context(|| format!("YbWalStorage: flush batched INSERT ({n} rows)"));
-
-        // Clear the buffer whether the batch succeeded or failed. On
-        // failure the walproposer will reconnect and resend WAL from an
-        // earlier LSN; retrying with the same rows would create
-        // duplicate-key conflicts (defeated by yb_enable_upsert_mode in
-        // most cases but not worth relying on).
-        drop(params);
-        self.pending.clear();
-        self.pending_bytes = 0;
-        res.map(|_| ())
+            .watermark_rx
+            .wait_for(|state| match state {
+                DurableState::Healthy(d) => *d >= target,
+                DurableState::Failed(_) => true,
+            })
+            .await;
+        let state = match res {
+            Ok(guard) => guard.clone(),
+            Err(_) => {
+                anyhow::bail!("YB WAL consumer task gone (watermark channel closed)");
+            }
+        };
+        match state {
+            DurableState::Healthy(_) => Ok(()),
+            DurableState::Failed(msg) => Err(anyhow::anyhow!(msg)),
+        }
     }
 
     async fn delete_after(&mut self, end_pos: Lsn) -> Result<()> {
@@ -443,9 +460,10 @@ impl Storage for YbWalStorage {
 
     async fn initialize_first_segment(&mut self, init_lsn: Lsn) -> Result<()> {
         // Generate the standard PG segment header + zero padding, then push
-        // it through the same buffered path as a regular write so the
-        // 16 MiB header lands in YB by the time `flush_wal()` returns.
-        // Inner's initialize_first_segment is a no-op in no_local_writes mode.
+        // it through the consumer just like a regular write. Wait for the
+        // consumer to flush before returning so the 16 MiB header is
+        // durable by the time the caller sees success. One-shot
+        // (per-timeline init), not on the per-commit hot path.
         let segno = init_lsn.segment_number(self.wal_seg_size);
         let major_pg_version = postgres_ffi::PgMajorVersion::try_from(self.inner_pg_version_id())
             .map_err(|e| anyhow::anyhow!("invalid pg version: {e:?}"))?;
@@ -455,44 +473,48 @@ impl Storage for YbWalStorage {
             major_pg_version,
             init_lsn,
         )?;
+        let end_lsn = Lsn(init_lsn.0 + wal_seg.len() as u64);
         let pc = PendingChunk {
             segno,
             chunk_seq: self.allocate_seq(segno),
             chunk_offset: 0,
             chunk_size: wal_seg.len() as i32,
             data: wal_seg.to_vec(),
+            end_lsn,
         };
-        self.pending_bytes += pc.data.len();
-        self.pending.push(pc);
-        // Flush immediately — this path runs once at timeline init, not on
-        // the per-commit hot path.
-        self.flush_pending().await?;
+        self.tx
+            .send(pc)
+            .await
+            .map_err(|_| anyhow::anyhow!("YB WAL consumer task gone"))?;
+        self.submitted_max_lsn = end_lsn;
+        self.wait_for_durable(end_lsn).await?;
         self.inner.initialize_first_segment(init_lsn).await
     }
 
     async fn write_wal(&mut self, startpos: Lsn, buf: &[u8]) -> Result<()> {
-        // Buffer for YB (may flush opportunistically inside `upsert_writes`
-        // when the threshold is crossed). The caller doesn't see durability
-        // until `flush_wal()` drains the buffer.
+        // Push chunks onto the consumer's channel. Durability is not
+        // observed yet — the caller must call `flush_wal` to wait for it.
         self.upsert_writes(startpos, buf).await?;
         self.inner.write_wal(startpos, buf).await
     }
 
     async fn truncate_wal(&mut self, end_pos: Lsn) -> Result<()> {
-        // Drain any pending writes first. Otherwise a buffered chunk for an
-        // LSN past `end_pos` could be flushed after the DELETE and silently
-        // resurrect data the walproposer intended to discard.
-        self.flush_pending().await?;
+        // Drain everything the consumer has in flight first. Otherwise a
+        // buffered chunk for an LSN past `end_pos` could be flushed after
+        // the DELETE and silently resurrect data the walproposer intended
+        // to discard.
+        self.wait_for_durable(self.submitted_max_lsn).await?;
         self.delete_after(end_pos).await?;
         self.inner.truncate_wal(end_pos).await
     }
 
     async fn flush_wal(&mut self) -> Result<()> {
-        // Durability sync point — drain everything `write_wal()` buffered
-        // since the last flush, then advance the inner LSN watermark. The
-        // walproposer treats this as the durable-commit boundary, so the
-        // flush MUST complete (or return an error) before this returns.
-        self.flush_pending().await?;
+        // Durability sync point — wait for the consumer's watermark to
+        // catch up to the highest LSN write_wal has pushed, then advance
+        // the inner LSN watermark. The walproposer treats this as the
+        // durable-commit boundary, so the flush MUST complete (or return
+        // an error) before this returns.
+        self.wait_for_durable(self.submitted_max_lsn).await?;
         self.inner.flush_wal().await
     }
 
@@ -531,6 +553,143 @@ impl Storage for YbWalStorage {
 fn quote_ident(ident: &str) -> String {
     let escaped = ident.replace('"', "\"\"");
     format!("\"{escaped}\"")
+}
+
+/// Consumer task body. Drains `rx` greedily into batches (≤
+/// [`FLUSH_ROWS_THRESHOLD`] rows / ≤ [`FLUSH_BYTES_THRESHOLD`] bytes),
+/// INSERTs each batch via `YsqlClient`, and publishes the highest
+/// `end_lsn` of the batch onto `watermark_tx` as `DurableState::Healthy`.
+///
+/// On a batch failure, publishes `DurableState::Failed` and exits. The
+/// producer (`upsert_writes`) detects the closed `rx` on its next
+/// `tx.send().await` and propagates the captured error string upward.
+///
+/// Exits cleanly when `tx` is dropped (channel closes from the
+/// producer side, `rx.recv()` returns `None`).
+async fn consumer_main(
+    mut rx: mpsc::Receiver<PendingChunk>,
+    client: Arc<YsqlClient>,
+    table_name: String,
+    tenant_id: String,
+    timeline_id: String,
+    watermark_tx: watch::Sender<DurableState>,
+) {
+    loop {
+        // Block until at least one chunk arrives.
+        let first = match rx.recv().await {
+            Some(c) => c,
+            None => return,
+        };
+        let mut batch: Vec<PendingChunk> = Vec::with_capacity(FLUSH_ROWS_THRESHOLD);
+        let mut batch_bytes = first.chunk_size as usize;
+        batch.push(first);
+
+        // Greedily drain more without yielding, until threshold or empty.
+        while batch.len() < FLUSH_ROWS_THRESHOLD && batch_bytes < FLUSH_BYTES_THRESHOLD {
+            match rx.try_recv() {
+                Ok(c) => {
+                    batch_bytes += c.chunk_size as usize;
+                    batch.push(c);
+                }
+                Err(_) => break,
+            }
+        }
+
+        let highest_lsn = batch
+            .last()
+            .map(|c| c.end_lsn)
+            .expect("batch is non-empty");
+
+        match flush_batch(&client, &table_name, &tenant_id, &timeline_id, &batch).await {
+            Ok(()) => {
+                // Publish watermark. Failure here means all receivers have
+                // dropped — only happens during shutdown — so ignore.
+                let _ = watermark_tx.send(DurableState::Healthy(highest_lsn));
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                tracing::error!(
+                    rows = batch.len(),
+                    bytes = batch_bytes,
+                    "YB WAL consumer batch failed: {msg}"
+                );
+                let _ = watermark_tx.send(DurableState::Failed(msg));
+                // Exit. The producer's next tx.send() will fail and
+                // propagate the error up to the walproposer-facing path.
+                return;
+            }
+        }
+    }
+}
+
+/// Build and execute one multi-row `INSERT ... VALUES (...), (...)`
+/// for the entire batch. Returns the error chain on failure (the
+/// statement is atomic — all rows commit or none).
+async fn flush_batch(
+    client: &YsqlClient,
+    table_name: &str,
+    tenant_id: &str,
+    timeline_id: &str,
+    batch: &[PendingChunk],
+) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    let n = batch.len();
+    let now_us: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0);
+
+    let mut sql = String::with_capacity(128 + n * 56);
+    sql.push_str("INSERT INTO ");
+    sql.push_str(&quote_ident(table_name));
+    sql.push_str(
+        " (tenant_id, timeline_id, segno, chunk_seq, chunk_offset, \
+          chunk_size, data, last_modified_us) VALUES ",
+    );
+    for i in 0..n {
+        if i > 0 {
+            sql.push_str(", ");
+        }
+        let b = i * 8;
+        use std::fmt::Write as _;
+        let _ = write!(
+            sql,
+            "(${},${},${},${},${},${},${},${})",
+            b + 1,
+            b + 2,
+            b + 3,
+            b + 4,
+            b + 5,
+            b + 6,
+            b + 7,
+            b + 8
+        );
+    }
+
+    let segno_is: Vec<i64> = batch.iter().map(|p| p.segno as i64).collect();
+    let seqs: Vec<i32> = batch.iter().map(|p| p.chunk_seq).collect();
+    let offset_is: Vec<i64> = batch.iter().map(|p| p.chunk_offset).collect();
+    let size_is: Vec<i32> = batch.iter().map(|p| p.chunk_size).collect();
+
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 8);
+    for i in 0..n {
+        params.push(&tenant_id);
+        params.push(&timeline_id);
+        params.push(&segno_is[i]);
+        params.push(&seqs[i]);
+        params.push(&offset_is[i]);
+        params.push(&size_is[i]);
+        params.push(&batch[i].data);
+        params.push(&now_us);
+    }
+
+    client
+        .execute(&sql, &params)
+        .await
+        .with_context(|| format!("YB WAL batched INSERT ({n} rows)"))?;
+    Ok(())
 }
 
 /// Fetch a WAL segment from `yb_storage.wals`, reassemble all chunks in
