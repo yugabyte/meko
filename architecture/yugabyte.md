@@ -184,16 +184,21 @@ than this. We work around it by:
 
 - **Blobs**: chunking objects into ≤ 100 MiB rows. The single-row
   approach failed the first time we shipped a 290 MiB pageserver layer.
-- **WALs**: each row is one `write_wal()` call, which is bounded by the
-  WAL framing the compute sends (typically a few KiB to a few MiB). Far
-  below the limit.
+- **WALs**: each row is one chunk of one `write_wal()` call, which is
+  bounded by the WAL framing the compute sends (typically a few KiB to
+  a few MiB). The safekeeper's consumer task batches up to 50 chunks
+  or 4 MiB into one `INSERT VALUES` statement — well below the limit.
 
 ### `yb_enable_upsert_mode`
 
-A per-session GUC we `SET` on every yb-neon connection (in `YbStore::new`
-and in `WalBackup::new` for the live-WAL client). When `true`, plain
-`INSERT` skips DocDB's read-before-write conflict check — a meaningful
-speedup for the upsert-heavy workload our blob store creates.
+A per-session GUC we `SET` on every yb-neon connection (centrally in
+`YsqlClient::open_*` — used by both `YbStore::new` and
+`WalBackup::new`). When `true`, plain `INSERT` skips DocDB's
+read-before-write conflict check — a meaningful speedup for the
+upsert-heavy workload our blob store creates.
+
+It's also `SET` on every reconnect, so transient connection drops
+don't leave subsequent inserts paying the read-before-write cost.
 
 It's harmless against vanilla Postgres (unknown GUC → SET fails → we log
 and continue), so the same code path works in mixed environments.

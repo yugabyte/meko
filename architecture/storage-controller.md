@@ -127,10 +127,33 @@ Set it via the init TOML (`neon_local init --config <file>`):
 database_url = "postgresql://yugabyte@127.0.0.1:5433/storage_controller"
 # or against a remote YB cluster:
 # database_url = "postgresql://yugabyte@yb-host.example.com:5433/storage_controller"
+# TLS against a YBA-managed universe:
+# database_url = "postgresql://yugabyte:PW@yb-host.example.com:5433/storage_controller?sslmode=require"
 ```
 
 The controller itself still links against `libpq`, so the Postgres v17
 libs must exist locally — but no Postgres *server* runs.
+
+### TLS-aware admin connections
+
+The neon_local wrapper's auto-provisioning connections (`create_database`
+on the `yugabyte` admin DB, `ensure_yb_storage_schema` on `yb_storage`)
+are routed through a small `connect_external` helper in
+`control_plane/src/storage_controller.rs` that inspects the parsed
+`tokio_postgres::Config::get_ssl_mode()`:
+
+- `Disable` → `tokio_postgres::NoTls` (local-PG style).
+- Anything else → the shared `remote_storage::build_yb_rustls_connector(None)`
+  with the AcceptAll verifier. Same TLS posture the SC binary itself
+  uses for its main `--database-url` connection.
+
+So a `database_url` like
+`postgresql://yugabyte:PW@yb-host:5433/storage_controller?sslmode=require`
+brings up cleanly against a TLS-only YB universe with no proxy. The
+SC binary's own connection (via `establish_connection_rustls` in
+`storage_controller/src/persistence.rs`) was always TLS-capable; this
+fix removes the corresponding `NoTls` hardcode in the *provisioning*
+path that runs once at first start.
 
 ## Run / configure
 

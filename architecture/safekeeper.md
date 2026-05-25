@@ -116,17 +116,82 @@ CREATE TABLE wals (
 );
 ```
 
-- One row per `write_wal()` call. If a single call spans a segment boundary,
-  the write is split into one row per segment.
-- `chunk_seq` is an in-memory monotonic counter per segno; on restart
-  rehydrates via `SELECT max(chunk_seq) ... GROUP BY segno`.
-- `flush_wal()` is a no-op for durability in YB-only mode (rows are durable
-  by the time `write_wal()` returns); it just advances the in-memory
-  `flush_lsn` watermark.
-- `truncate_wal(end_pos)` deletes rows whose `chunk_offset + chunk_size`
-  lies past `end_pos`. After truncate it reloads `chunk_seq` state from YB
-  to stay monotonic.
-- `remove_up_to(segno)` deletes all rows with smaller `segno`.
+The write path is **producer / consumer** (commits
+`485a76ece`, `fba8410e7`):
+
+```
+write_wal()                     consumer task                YB
+─────────                       ─────────────                ──
+parse byte range into
+PendingChunks at segment
+boundaries; stamp each
+with monotonic chunk_seq
+and end_lsn
+
+push onto mpsc::Sender ─────►   rx.recv() (block)
+  (bounded, cap 1024)               │
+                                    │
+update submitted_max_lsn            │
+return                              │
+                                    │
+                                ┌── batch drain loop:
+                                │    try_recv ×N until
+                                │    FLUSH_ROWS_THRESHOLD (50)
+                                │    or FLUSH_BYTES_THRESHOLD (4 MiB)
+                                │    or channel empty
+                                │
+                                │   if under threshold:
+                                │    select! on rx.recv,
+                                │    flush_notify, sleep(2 ms)
+                                │    — see "force drain" below
+                                │
+                                │    build one
+                                │    INSERT INTO wals
+                                │      VALUES (...), (...), ...   ───►
+                                │                                       │
+                                │    watch_tx.send(DurableState::         │ atomic
+                                │      Healthy(highest_end_lsn))        │ batch
+                                └── back to drain loop                   │
+```
+
+- **`write_wal()` does not wait for YB** — it pushes onto the producer
+  channel and returns. The walproposer-facing latency is just an enqueue
+  + LSN bump; durability isn't observed yet.
+- **`flush_wal()` is the durability sync point.** It pings
+  `flush_notify` (cuts the consumer's accumulation wait short), then
+  awaits the `watch<DurableState>` watermark catching up to the highest
+  LSN `write_wal` has pushed (`submitted_max_lsn`). Returns only after
+  every chunk submitted before this point is durable in YB. The
+  walproposer treats the post-`flush_wal` LSN as the durable-commit
+  boundary, so any crash between `write_wal` returning and the
+  consumer's INSERT landing in YB is a no-op for the compute (no
+  commit ack was sent).
+- **`chunk_seq`** is allocated by the producer at push time, so the
+  consumer's batch INSERTs preserve write order. On restart, rehydrated
+  via `SELECT max(chunk_seq) … GROUP BY segno`.
+- **Force drain on flush.** Between the greedy `try_recv` drain and the
+  INSERT, the consumer waits up to `ACCUMULATION_MAX` (2 ms) for more
+  chunks via `tokio::select!`. The wait is short-circuited by
+  `flush_notify` (pinged by `flush_wal` / `truncate_wal` /
+  `initialize_first_segment`). Net effect: bursty arrivals accumulate
+  into larger batches; commit-driven workloads (pgbench / TPC-C) skip
+  the wait and INSERT immediately.
+- **Backpressure.** Bounded mpsc (capacity 1024). If the consumer
+  stalls, `write_wal`'s `tx.send().await` blocks → walproposer stalls
+  rather than safekeeper memory growing unboundedly.
+- **`truncate_wal(end_pos)`** waits on the watermark before issuing
+  the DELETE; otherwise a buffered chunk past `end_pos` could land
+  after the truncate. The DELETE itself drops rows whose
+  `chunk_offset + chunk_size` lies past `end_pos`. After a
+  partial-segment truncate, `chunk_seq` state is reloaded from YB.
+- **`remove_up_to(segno)`** deletes all rows with smaller `segno`. Does
+  *not* wait on the watermark — by construction the producer's current
+  segno is well above any segno targeted by `remove_up_to`.
+- **Failure handling.** On a batch INSERT error (after `YsqlClient`'s
+  own auto-retry has given up), the consumer publishes
+  `DurableState::Failed(msg)` onto the watch and exits. The producer's
+  next `tx.send` then fails, `write_wal` propagates the captured error,
+  the walproposer reconnects.
 
 CLI: `--wal-yb-config <YbStoreConfig TOML>` (optional). When absent, the
 safekeeper uses `WalStore::Physical(...)` and the wals table is untouched.
@@ -215,6 +280,109 @@ This was the last *durable* byte the safekeeper wrote to local FS in
 YB-backed mode. After this commit, a freshly-wiped workdir works fine on
 restart as long as `--id` is passed.
 
+### 7. WAL acceptor batching ticker (commit `95088ba54`)
+
+`WalAcceptor::run` in `receive_wal.rs` decides *when* `FlushWAL` fires.
+Upstream Neon's policy was: rewrite each incoming `AppendRequest` to
+`NoFlushAppendRequest`, then fire `FlushWAL` either on the periodic
+`flush_ticker` (1 s) or whenever the message channel empties out
+(immediate flush on lull). That's right for the local-FS backend where
+`fsync` overhead is roughly batch-size-independent and latency wins.
+
+For YB-WAL mode every flush is a separate `INSERT` statement with a
+fixed per-statement DocDB + Raft cost, so we want writes to coalesce.
+In YB-WAL mode (`Timeline::is_yb_wal_mode()`):
+
+- `flush_ticker` runs at `FLUSH_INTERVAL_YB_WAL` = 2 ms instead of 1 s.
+- The "queue empty → flush immediately" branch is **disabled**.
+
+Result: flushes are driven by the 2 ms ticker, so multiple
+`AppendRequest`s collected within one window all roll into the same
+`YbWalStorage` producer push pattern. Commit latency rises by at most
+~2 ms; throughput stops being capped by single-AppendRequest INSERTs.
+
+### 8. `wal_backup` task disabled in YB-WAL mode (commit `9bca7c2ef`)
+
+The `wal_backup` task offloads sealed local-FS WAL segments into the
+`blobs` table for long-term retention. In YB-WAL mode the live WAL is
+already mirrored row-by-row into `yb_storage.wals` and the per-segment
+local files never exist (`no_local_writes`), so the offload loop has
+no source — every iteration would `open()` a non-existent file, fail,
+retry. Under sustained WAL pressure the retry loop back-pressured
+SyncRep enough to stall compute commits (observed with HikariCP 180 s
+timeouts, 0 successful TPC-C transactions).
+
+`wal_backup::update_task` now short-circuits `should_task_run = false`
+when `mgr.conf.is_yb_wal_mode()` is true. The existing kill-if-running
+branch handles teardown of any task left over from before a config
+change.
+
+### 9. `calc_horizon_lsn` skips `backup_lsn` in YB-WAL mode (commit `e7eb6acf4`)
+
+`remove_wal::calc_horizon_lsn` returns the oldest LSN the safekeeper
+must keep on durable storage; segments below it are eligible for
+`remove_up_to` (which in YB-WAL mode is a DELETE against
+`yb_storage.wals`). It takes the min of:
+
+- `cfile_remote_consistent_lsn` — pageserver-consumed.
+- `cfile_backup_lsn` — sealed-segment offloader caught up.
+- `cfile_commit_lsn`.
+- `flush_lsn`.
+
+In YB-WAL mode the `wal_backup` task is disabled (see §8), so
+`backup_lsn` never advances past the initial `commit_lsn` at boot.
+Keeping `backup_lsn` in the min would pin the WAL removal horizon and
+the `wals` table would grow forever. The function takes a
+`yb_wal_mode: bool` parameter that skips the `backup_lsn` clamp when
+true. The other horizon contributors (`remote_consistent_lsn`,
+`commit_lsn`, `flush_lsn`) still apply.
+
+### 10. Auto-reconnecting YB clients via `YsqlClient` (commits `8b5e2b2b4`, `27f1e354c`, `7a424639e`)
+
+Both the control-file connection (via `GenericRemoteStorage` → `YbStore`)
+and the live-WAL mirror connection used to hold an
+`Arc<tokio_postgres::Client>` for the lifetime of the process. When the
+underlying TCP socket dies — YB tserver crash, network blip, YBA rolling
+restart — `tokio_postgres`'s background connection task ends but the
+`Arc<Client>` stays, and every subsequent `execute()` lands on a corpse.
+
+`remote_storage::YsqlClient` (in `libs/remote_storage/src/ysql_client.rs`)
+wraps `tokio_postgres::Client` with a stored connection config + reconnect
+closure. On every `execute` / `query` / `query_opt` it:
+
+1. Checks `is_closed()` and lazily reconnects if the client died.
+2. Runs the op.
+3. On a connection-closed error, forces a reconnect and retries **once**
+   (covers in-flight statements during a reconnect window).
+
+Plus `current()` exposes the live `Arc<Client>` for streaming reads /
+`execute_raw` / `query_raw` paths that don't auto-retry cleanly; the
+next `current()` call after a failed stream picks up a fresh connection.
+
+`YsqlClient::from_yb_config(&YbStoreConfig, application_name)` is the
+shared factory used by `YbStore::new`, `WalBackup::new` (the live-WAL
+mirror), and any other YB-Postgres connection in yb-neon. It handles
+`password_env` lookup and the sslmode / sslrootcert dispatch.
+
+### 11. TLS support (commit `7a424639e`)
+
+`YbStoreConfig` carries an optional `sslmode` field (`"disable"` /
+`"require"` / `"verify-ca"` / etc.) and `sslrootcert` (path to a PEM-
+encoded CA bundle). The safekeeper's WAL-mirror connection honours
+both via the shared `YsqlClient::from_yb_config` factory:
+
+- `sslmode = "disable"` (or unset) → plain TCP, `tokio_postgres::NoTls`.
+- `sslmode = "require"` (or any non-`disable`) with no `sslrootcert`
+  → rustls + the AcceptAll verifier (logs but ignores cert validation
+  errors). Suitable for YBA universes with self-signed per-universe CAs.
+- `sslmode = "verify-ca"` with `sslrootcert = "/path/to/ca.pem"` →
+  rustls verifying against the supplied CA bundle.
+
+YBA-managed universes default to TLS-mandatory `hostssl` rules in
+`pg_hba.conf`. Before this commit the safekeeper's WAL-mirror
+hard-coded NoTls regardless of `sslmode` and could only reach such
+universes through a TLS-bridging proxy.
+
 ## What's on local FS after all changes (YB-backed mode)
 
 ```
@@ -239,27 +407,46 @@ safekeeper \
     --broker-endpoint http://127.0.0.1:50061/ \
     --availability-zone sk-1 \
     --control-file-backend remote-storage \
-    --remote-storage   "{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'blobs', prefix = 'safekeeper-yb/'}" \
-    --wal-yb-config    "{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'wals'}"
+    --remote-storage   "{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'blobs', prefix = 'safekeeper-yb/', sslmode = 'require'}" \
+    --wal-yb-config    "{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'wals', sslmode = 'require'}"
 ```
 
 The two YB configs intentionally point at the *same* DB but *different*
 tables: `blobs` is the chunked blob store (shared with the pageserver and
 control file), `wals` is the per-write append log.
 
+`sslmode = "require"` is needed against YBA-managed universes (they
+default to TLS-mandatory `hostssl` rules). Add
+`sslrootcert = '/path/to/ca.pem'` for stricter (verify-ca) checks
+instead of the AcceptAll default.
+
 ## Performance characteristics
 
-- `write_wal()`: synchronous YB INSERT per call. Roughly one network
-  round-trip + DocDB Raft write. With YB local on the same host, ~ms.
-  With YB across a real network, milliseconds-to-tens-of-ms. Compute
-  commit latency rises proportionally — this is the main trade-off of
-  the YB-backed safekeeper.
-- `flush_wal()`: in YB mode, no I/O — just advances an in-memory LSN.
-- `truncate_wal()`: one DELETE; effectively constant time aside from how
-  many rows YB has to delete.
-- `WalReader::open_segment()` from YB: one SELECT pulling all chunks of a
-  segment + reassembly in Rust. ~16 MiB per segment, batched as N rows
-  (typically 1–N where N is `wal_seg_size / 100 MiB ≤ 1`, but for typical
-  per-write rows, N can be hundreds).
-- Restart: rehydrates `write_lsn` with one indexed SQL query against YB.
-  No `find_end_of_wal` scan, no segment opens.
+- **`write_wal()`** is non-blocking — it parses chunks, stamps them, and
+  pushes onto the producer channel. No YB round-trip on the hot path
+  (unless backpressure: bounded mpsc, capacity 1024). Walproposer-facing
+  latency is microseconds.
+- **`flush_wal()`** awaits the consumer's watermark catching up to the
+  highest LSN `write_wal` pushed. The wait is exactly one consumer
+  batch's worth of work: at most `ACCUMULATION_MAX` (2 ms) wait time +
+  one INSERT round-trip (~0.6 ms single-row, ~2.5 ms 50-row batch against
+  a local YB; tens of ms across a real network). `flush_wal` pings
+  `flush_notify` so the accumulation wait is normally short-circuited on
+  the commit path.
+- **Steady-state throughput** under TPC-C / pgbench is bounded by the
+  single-connection batch INSERT round-trip on the consumer. With the
+  producer keeping the next batch filling while the previous one's
+  INSERT is in flight, single-connection YB write capacity approaches
+  full saturation (~14K rows/sec at 50-row batches against local YB).
+- **`truncate_wal()`** waits the same way + one DELETE; effectively
+  constant time aside from row count.
+- **`WalReader::open_segment()` from YB**: one SELECT pulling all chunks
+  of a segment + reassembly in Rust. ~16 MiB per segment, batched as N
+  rows (typically 1–N where N is `wal_seg_size / 100 MiB ≤ 1`, but for
+  typical per-write rows, N can be hundreds).
+- **Restart**: rehydrates `write_lsn` with one indexed SQL query against
+  YB. No `find_end_of_wal` scan, no segment opens.
+- **Connection failures** are absorbed by `YsqlClient` — one in-flight
+  statement may be retried automatically; a sustained YB outage produces
+  a `DurableState::Failed` watermark that propagates as a `flush_wal`
+  error, the walproposer reconnects, and the consumer task exits cleanly.

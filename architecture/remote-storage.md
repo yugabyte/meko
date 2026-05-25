@@ -200,12 +200,52 @@ pub struct YbStoreConfig {
     pub table_name: String,
     pub prefix: Option<String>,          // namespacing prefix
     pub concurrency_limit: NonZeroUsize, // default 100
+    pub sslmode: Option<String>,         // "disable" (default) | "require" | "verify-ca" | ...
+    pub sslrootcert: Option<String>,     // path to PEM CA bundle (sslmode = verify-ca)
 }
 ```
 
 Selected via the existing `RemoteStorageKind` enum (untagged TOML), which
 picks `YbStore` automatically when the TOML has `host`/`user`/`dbname`/
 `table_name` keys (they don't clash with the other variants' field sets).
+
+### Connection handling — `YsqlClient`
+
+`libs/remote_storage/src/ysql_client.rs` defines `YsqlClient`, the
+auto-reconnecting wrapper around `tokio_postgres::Client` used by every
+yb-neon component that talks to YB over the Postgres wire (this crate's
+`YbStore`, the safekeeper's `YbWalStorage`, neon_local's
+`ensure_external_database`).
+
+- Owns the `tokio_postgres::Config` plus a reconnect closure baked at
+  construction time (`connect_no_tls` or `connect_rustls`).
+- Every `execute` / `query` / `query_opt` checks `is_closed()` and
+  reconnects lazily; on a connection-closed error during the op,
+  forces a reconnect and retries **once**.
+- `current()` exposes the raw `Arc<Client>` for streaming reads
+  (`query_raw` / `execute_raw`) that don't compose with retry-once
+  semantics; the next `current()` call after a failed stream
+  reconnects.
+- The high-level factory `YsqlClient::from_yb_config(&YbStoreConfig,
+  application_name)` does password_env lookup + sslmode/sslrootcert
+  dispatch in one place. `YbStore::new` uses it; safekeeper's
+  `WalBackup::new` uses the same.
+
+### TLS
+
+- `sslmode = "disable"` (or unset) → plain TCP, `tokio_postgres::NoTls`.
+- `sslmode = "require"` (or any non-`disable`) with no `sslrootcert`
+  → rustls + AcceptAll verifier. Cert chain validation errors are
+  logged at `info` level but ignored; suitable for YBA universes with
+  per-universe self-signed CAs not in the host's trust store.
+- `sslmode = "verify-ca"` with `sslrootcert = "/path/to/ca.pem"` →
+  rustls verifying against the supplied PEM-encoded CA bundle.
+
+`build_yb_rustls_connector(sslrootcert: Option<&str>)` (in
+`ysql_client.rs`, re-exported from `lib.rs`) is the shared
+constructor; the storage_controller wrapper in `control_plane` reuses
+it for its own one-shot `CREATE DATABASE` / DDL connections (see
+[`storage-controller.md`](storage-controller.md)).
 
 ### Sample TOML
 
@@ -234,6 +274,12 @@ different schema; see [`safekeeper.md`](safekeeper.md)):
 
 ```toml
 {host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'wals'}
+```
+
+With TLS against a YBA-managed universe:
+
+```toml
+{host = 'yb-host', port = 5433, user = 'yugabyte', password_env = 'NEON_YB_PASSWORD', dbname = 'yb_storage', table_name = 'blobs', prefix = 'pageserver-yb/', sslmode = 'require'}
 ```
 
 ## Smoke test
