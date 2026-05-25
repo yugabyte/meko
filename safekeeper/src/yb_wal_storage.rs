@@ -84,7 +84,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use camino::Utf8Path;
@@ -136,6 +136,18 @@ struct PendingChunk {
 /// `tx.send().await`) rather than growing memory unboundedly.
 const CHUNK_CHANNEL_CAPACITY: usize = 1024;
 
+/// Maximum time the consumer waits for more chunks to accumulate into the
+/// current batch once it already has at least one. Acts like a TCP
+/// `Nagle` window: when chunks arrive faster than 1/`ACCUMULATION_MAX`,
+/// batches grow to amortize the per-statement DocDB cost; when chunks
+/// arrive slowly, the consumer flushes after a short wait rather than
+/// sitting on the held-up batch.
+///
+/// `flush_wal()` cuts the wait short by signalling the
+/// `flush_notify` — see `consumer_main` — so commit latency does not pay
+/// for this accumulation.
+const ACCUMULATION_MAX: Duration = Duration::from_millis(2);
+
 /// Durability state published by the consumer onto the watch channel.
 #[derive(Clone, Debug)]
 enum DurableState {
@@ -167,6 +179,9 @@ pub struct YbWalStorage {
     tx: mpsc::Sender<PendingChunk>,
     /// Receiver side of the durability watermark.
     watermark_rx: watch::Receiver<DurableState>,
+    /// Pinged by `flush_wal` / `truncate_wal` to short-circuit the
+    /// consumer's accumulation wait. See `ACCUMULATION_MAX`.
+    flush_notify: Arc<tokio::sync::Notify>,
     /// Highest `end_lsn` the producer has pushed onto `tx`. `flush_wal`
     /// awaits the watermark catching up to this.
     submitted_max_lsn: Lsn,
@@ -213,6 +228,7 @@ impl YbWalStorage {
         let (tx, rx) = mpsc::channel::<PendingChunk>(CHUNK_CHANNEL_CAPACITY);
         let (watermark_tx, watermark_rx) =
             watch::channel(DurableState::Healthy(write_lsn));
+        let flush_notify = Arc::new(tokio::sync::Notify::new());
         let consumer_handle = tokio::spawn(consumer_main(
             rx,
             client.clone(),
@@ -220,6 +236,7 @@ impl YbWalStorage {
             tenant_id_str.clone(),
             timeline_id_str.clone(),
             watermark_tx,
+            flush_notify.clone(),
         ));
 
         let mut me = YbWalStorage {
@@ -232,6 +249,7 @@ impl YbWalStorage {
             next_chunk_seq: HashMap::new(),
             tx,
             watermark_rx,
+            flush_notify,
             submitted_max_lsn: write_lsn,
             _consumer_handle: consumer_handle,
         };
@@ -487,6 +505,7 @@ impl Storage for YbWalStorage {
             .await
             .map_err(|_| anyhow::anyhow!("YB WAL consumer task gone"))?;
         self.submitted_max_lsn = end_lsn;
+        self.flush_notify.notify_one();
         self.wait_for_durable(end_lsn).await?;
         self.inner.initialize_first_segment(init_lsn).await
     }
@@ -502,18 +521,21 @@ impl Storage for YbWalStorage {
         // Drain everything the consumer has in flight first. Otherwise a
         // buffered chunk for an LSN past `end_pos` could be flushed after
         // the DELETE and silently resurrect data the walproposer intended
-        // to discard.
+        // to discard. Wake the consumer in case it's accumulating.
+        self.flush_notify.notify_one();
         self.wait_for_durable(self.submitted_max_lsn).await?;
         self.delete_after(end_pos).await?;
         self.inner.truncate_wal(end_pos).await
     }
 
     async fn flush_wal(&mut self) -> Result<()> {
-        // Durability sync point — wait for the consumer's watermark to
+        // Durability sync point — wake the consumer (cut its
+        // accumulation wait short if any), wait for the watermark to
         // catch up to the highest LSN write_wal has pushed, then advance
         // the inner LSN watermark. The walproposer treats this as the
         // durable-commit boundary, so the flush MUST complete (or return
         // an error) before this returns.
+        self.flush_notify.notify_one();
         self.wait_for_durable(self.submitted_max_lsn).await?;
         self.inner.flush_wal().await
     }
@@ -555,10 +577,22 @@ fn quote_ident(ident: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Consumer task body. Drains `rx` greedily into batches (≤
-/// [`FLUSH_ROWS_THRESHOLD`] rows / ≤ [`FLUSH_BYTES_THRESHOLD`] bytes),
-/// INSERTs each batch via `YsqlClient`, and publishes the highest
-/// `end_lsn` of the batch onto `watermark_tx` as `DurableState::Healthy`.
+/// Consumer task body. Builds batches by:
+///
+///   1. Blocking on the channel for the first chunk.
+///   2. Greedily draining more chunks (non-blocking `try_recv`) until
+///      `FLUSH_ROWS_THRESHOLD` / `FLUSH_BYTES_THRESHOLD` is hit, or the
+///      channel is momentarily empty.
+///   3. If still under threshold, waiting up to `ACCUMULATION_MAX` for
+///      additional chunks — or until `flush_notify` is pinged.
+///   4. INSERTing the whole batch via `YsqlClient`.
+///   5. Publishing the highest `end_lsn` of the batch onto `watermark_tx`
+///      as `DurableState::Healthy`.
+///
+/// `flush_wal` / `truncate_wal` ping `flush_notify` before they await
+/// the watermark; that cuts the step-3 wait short so commit latency
+/// doesn't pay for accumulation while still letting throughput-oriented
+/// background streaming accumulate naturally.
 ///
 /// On a batch failure, publishes `DurableState::Failed` and exits. The
 /// producer (`upsert_writes`) detects the closed `rx` on its next
@@ -573,6 +607,7 @@ async fn consumer_main(
     tenant_id: String,
     timeline_id: String,
     watermark_tx: watch::Sender<DurableState>,
+    flush_notify: Arc<tokio::sync::Notify>,
 ) {
     loop {
         // Block until at least one chunk arrives.
@@ -584,7 +619,7 @@ async fn consumer_main(
         let mut batch_bytes = first.chunk_size as usize;
         batch.push(first);
 
-        // Greedily drain more without yielding, until threshold or empty.
+        // Greedy drain (no async yield).
         while batch.len() < FLUSH_ROWS_THRESHOLD && batch_bytes < FLUSH_BYTES_THRESHOLD {
             match rx.try_recv() {
                 Ok(c) => {
@@ -592,6 +627,28 @@ async fn consumer_main(
                     batch.push(c);
                 }
                 Err(_) => break,
+            }
+        }
+
+        // Accumulation wait. Under-threshold batches block up to
+        // `ACCUMULATION_MAX` for more chunks to arrive, unless
+        // `flush_notify` fires first — that's the "force drain on flush"
+        // path. Skip the wait entirely if the batch is already at
+        // threshold or if a notify is pending (from a flush_wal that
+        // fired during the previous INSERT).
+        let deadline = tokio::time::Instant::now() + ACCUMULATION_MAX;
+        while batch.len() < FLUSH_ROWS_THRESHOLD && batch_bytes < FLUSH_BYTES_THRESHOLD {
+            tokio::select! {
+                biased;
+                _ = flush_notify.notified() => break,
+                _ = tokio::time::sleep_until(deadline) => break,
+                next = rx.recv() => match next {
+                    Some(c) => {
+                        batch_bytes += c.chunk_size as usize;
+                        batch.push(c);
+                    }
+                    None => break, // producer dropped; flush what we have then exit
+                }
             }
         }
 
@@ -614,8 +671,6 @@ async fn consumer_main(
                     "YB WAL consumer batch failed: {msg}"
                 );
                 let _ = watermark_tx.send(DurableState::Failed(msg));
-                // Exit. The producer's next tx.send() will fail and
-                // propagate the error up to the walproposer-facing path.
                 return;
             }
         }
