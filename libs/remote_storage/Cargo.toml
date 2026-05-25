@@ -48,6 +48,7 @@ tokio-postgres.workspace = true
 tokio-postgres-rustls.workspace = true
 rustls = { workspace = true, default-features = false, features = ["ring"] }
 rustls-native-certs.workspace = true
+rustls-pemfile.workspace = true
 url.workspace = true
 http.workspace = true
 uuid.workspace = true

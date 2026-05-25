@@ -21,7 +21,7 @@ mod support;
 mod yb_store;
 mod ysql_client;
 
-pub use ysql_client::YsqlClient;
+pub use ysql_client::{YsqlClient, build_yb_rustls_connector};
 
 use std::collections::HashMap;
 use std::fmt::Debug;

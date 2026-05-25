@@ -240,12 +240,18 @@ pub struct YbStoreConfig {
     #[serde(default = "default_yb_concurrency_limit")]
     pub concurrency_limit: NonZeroUsize,
     /// `"disable"` (default) → plain TCP, no TLS. Anything else (`"require"`,
-    /// `"prefer"`, ...) → rustls with an AcceptAll verifier — server cert
-    /// validation is skipped, mirroring what the storage_controller's
-    /// existing TLS connector does. Set this when YB's `pg_hba.conf` only
-    /// allows `hostssl ...` rules.
+    /// `"prefer"`, `"verify-ca"`, `"verify-full"`) → rustls. With
+    /// `sslrootcert` unset the verifier is AcceptAll (suitable for YBA
+    /// universes with self-signed CAs not in the system trust store).
+    /// With `sslrootcert` set the cert chain is verified against the
+    /// supplied CA bundle (sslmode = verify-ca semantics).
     #[serde(default)]
     pub sslmode: Option<String>,
+    /// Optional path to a PEM-encoded CA bundle for sslmode = "verify-ca"
+    /// / "verify-full". When `Some`, the server cert is verified against
+    /// this CA; otherwise the AcceptAll verifier is used.
+    #[serde(default)]
+    pub sslrootcert: Option<String>,
 }
 
 fn default_yb_port() -> u16 {
@@ -267,6 +273,7 @@ impl Debug for YbStoreConfig {
             .field("prefix", &self.prefix)
             .field("concurrency_limit", &self.concurrency_limit)
             .field("sslmode", &self.sslmode)
+            .field("sslrootcert", &self.sslrootcert)
             .finish()
     }
 }

@@ -276,24 +276,19 @@ impl WalBackup {
     pub async fn new(conf: &SafeKeeperConf) -> Result<Self> {
         let (wal_yb_client, wal_yb_table) = match &conf.wal_yb_config {
             Some(yb) => {
-                let mut pg_config = tokio_postgres::Config::new();
-                pg_config
-                    .host(&yb.host)
-                    .port(yb.port)
-                    .user(&yb.user)
-                    .dbname(&yb.dbname)
-                    .application_name("safekeeper:yb_wal_mirror");
-                if let Some(env_name) = &yb.password_env {
-                    let pw = std::env::var(env_name)
-                        .with_context(|| format!("wal_yb_config password env `{env_name}` unset"))?;
-                    pg_config.password(pw);
-                }
-                let client = crate::yb_wal_storage::YsqlClient::connect_no_tls(pg_config)
-                    .await
-                    .with_context(|| format!(
-                        "connect WAL mirror YB at {}:{}",
-                        yb.host, yb.port
-                    ))?;
+                // Same factory the pageserver's YbStore uses — honors
+                // sslmode + sslrootcert + password_env consistently.
+                let client = crate::yb_wal_storage::YsqlClient::from_yb_config(
+                    yb,
+                    "safekeeper:yb_wal_mirror",
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "connect WAL mirror YB at {}:{} (sslmode={:?})",
+                        yb.host, yb.port, yb.sslmode
+                    )
+                })?;
                 (Some(Arc::new(client)), Some(yb.table_name.clone()))
             }
             None => (None, None),

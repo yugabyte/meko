@@ -325,16 +325,50 @@ impl StorageController {
         Ok(())
     }
 
+    /// Open a one-shot connection to an external (YugabyteDB) cluster,
+    /// honouring the parsed `Config`'s SSL mode. Used by the YB
+    /// provisioning helpers (`create_database`, `ensure_yb_storage_schema`).
+    /// Returns the `Client` plus the spawned connection-task handle.
+    ///
+    /// When the URL has `sslmode=disable` (or no sslmode) we use `NoTls`;
+    /// any non-`Disable` mode uses the rustls connector from
+    /// `remote_storage` with the AcceptAll verifier — same TLS posture
+    /// the storage_controller binary itself uses.
+    async fn connect_external(
+        config: &tokio_postgres::Config,
+        what: &str,
+    ) -> anyhow::Result<(
+        tokio_postgres::Client,
+        tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+    )> {
+        use tokio_postgres::config::SslMode;
+        let use_tls = !matches!(config.get_ssl_mode(), SslMode::Disable);
+        if use_tls {
+            // No sslrootcert is exposed via the URL parse, so use AcceptAll.
+            let tls = remote_storage::build_yb_rustls_connector(None)
+                .context("building rustls connector for storage controller DB URL")?;
+            let (client, conn) = config
+                .connect(tls)
+                .await
+                .with_context(|| format!("connecting to {what} (TLS)"))?;
+            let handle = tokio::spawn(conn);
+            Ok((client, handle))
+        } else {
+            let (client, conn) = config
+                .connect(tokio_postgres::NoTls)
+                .await
+                .with_context(|| format!("connecting to {what}"))?;
+            let handle = tokio::spawn(conn);
+            Ok((client, handle))
+        }
+    }
+
     /// `CREATE DATABASE <name>` against the `yugabyte` admin DB on the
     /// cluster described by `base`. Treats "already exists" as success.
     async fn create_database(base: &tokio_postgres::Config, name: &str) -> anyhow::Result<()> {
         let mut admin = base.clone();
         admin.dbname("yugabyte");
-        let (client, conn) = admin
-            .connect(tokio_postgres::NoTls)
-            .await
-            .context("connecting to YB admin database 'yugabyte'")?;
-        let conn_task = tokio::spawn(conn);
+        let (client, conn_task) = Self::connect_external(&admin, "YB admin database 'yugabyte'").await?;
 
         let create_sql = format!("CREATE DATABASE \"{}\"", name.replace('"', "\"\""));
         match client.batch_execute(&create_sql).await {
@@ -364,11 +398,8 @@ impl StorageController {
     async fn ensure_yb_storage_schema(base: &tokio_postgres::Config) -> anyhow::Result<()> {
         let mut cfg = base.clone();
         cfg.dbname("yb_storage");
-        let (client, conn) = cfg
-            .connect(tokio_postgres::NoTls)
-            .await
-            .context("connecting to yb_storage to provision schema")?;
-        let conn_task = tokio::spawn(conn);
+        let (client, conn_task) =
+            Self::connect_external(&cfg, "yb_storage to provision schema").await?;
 
         // CREATE TYPE has no IF NOT EXISTS — swallow the duplicate-object
         // error on retries.
