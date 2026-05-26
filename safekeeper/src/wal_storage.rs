@@ -915,23 +915,27 @@ impl WalReader {
         // Phase 2: try the live-WAL YB mirror (`yb_storage.wals`). When the
         // safekeeper writes WAL with `--wal-yb-config`, every byte is
         // synchronously INSERT'd into that table — so an absent local file is
-        // not a data-loss event, it's just a cache miss.
-        if let Some((client, table)) = self.wal_backup.get_wal_yb() {
-            if let Some(reader) = crate::yb_wal_storage::read_segment_from_yb(
-                &client,
-                &table,
+        // not a data-loss event.
+        //
+        // The reader is *lazy*: it fetches chunks as the WAL sender walks
+        // forward, hitting the shared in-memory `WalCache` first and
+        // falling through to YB only on miss. This replaces the old
+        // snapshot-at-open `VecAsyncRead` which silently lost data added
+        // to `wals` after the segment was opened — see `wal_cache.rs`.
+        if let Some((client, table, cache)) = self.wal_backup.get_wal_yb() {
+            tracing::info!(
+                "WalReader: serving segment {segno} (offset {xlogoff}) from YB table `{table}` (cache {})",
+                if cache.is_some() { "enabled" } else { "disabled" }
+            );
+            return Ok(Box::pin(crate::yb_wal_storage::YbSegmentReader::new(
+                client,
+                table,
+                cache,
                 &self.ttid,
                 segno,
                 self.wal_seg_size,
                 xlogoff,
-            )
-            .await?
-            {
-                tracing::info!(
-                    "WalReader: served segment {segno} (offset {xlogoff}) from YB table `{table}`"
-                );
-                return Ok(reader);
-            }
+            )));
         }
 
         // Try to open remote file, if remote reads are enabled

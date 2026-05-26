@@ -176,6 +176,9 @@ return                              │
   `initialize_first_segment`). Net effect: bursty arrivals accumulate
   into larger batches; commit-driven workloads (pgbench / TPC-C) skip
   the wait and INSERT immediately.
+- **`PendingChunk.data` is `Arc<Vec<u8>>`.** The same allocation is
+  shared with the read-side `WalCache` entry inserted alongside the
+  producer's `tx.send` — no double-allocation per write.
 - **Backpressure.** Bounded mpsc (capacity 1024). If the consumer
   stalls, `write_wal`'s `tx.send().await` blocks → walproposer stalls
   rather than safekeeper memory growing unboundedly.
@@ -196,19 +199,80 @@ return                              │
 CLI: `--wal-yb-config <YbStoreConfig TOML>` (optional). When absent, the
 safekeeper uses `WalStore::Physical(...)` and the wals table is untouched.
 
-### 3. WalReader falls back to YB (Phase 2, commit `77553419b`)
+### 3. WalReader falls back to YB (Phase 2, commit `77553419b`, lazy/cached in `d7eef8275`+)
 
-`WalReader::open_segment` now tries three sources, in order:
+`WalReader::open_segment` tries two sources, in order:
 
-1. Local FS (`<workdir>/<tenant>/<timeline>/<XLogFileName>`).
-2. **YB `wals` table** — re-assembles the segment by SELECTing all chunks
-   for `(tenant, timeline, segno)` ordered by `chunk_seq`, applying last-
-   write-wins on overlapping byte ranges, returning a `VecAsyncRead` cursored
-   at the requested `xlogoff`.
-3. The existing sealed-segment `wal_backup` path through `GenericRemoteStorage`.
+1. Local FS (`<workdir>/<tenant>/<timeline>/<XLogFileName>`). With YB-WAL
+   mode + `no_local_writes` this always misses, so we fall through.
+2. **YB `wals` table** — via `YbSegmentReader`, a lazy chunk-streaming
+   `AsyncRead` that consults the in-memory [`WalCache`](#wal-cache--lazy-yb-reader)
+   first and falls through to a single-chunk YB `SELECT` only on miss.
 
 A safekeeper with `--wal-yb-config` set can lose its entire local WAL
 directory and still serve every past-LSN streaming request from YB.
+
+#### WAL cache & lazy YB reader
+
+The first implementation of (2) above eagerly reassembled the full 16 MiB
+segment into a `VecAsyncRead` buffer at `open_segment` time. That buffer
+became *stale* as the WAL sender advanced: chunks INSERT'd into `wals`
+after the snapshot were invisible, so the leading zeros from
+`vec![0u8; 16 MiB]` were served instead. On the pageserver side this
+decoded as `xlp_magic=0` / `xl_tot_len=0`, hundreds of KB into each
+session. (Found by query (C) of `cell_db<table>` during the TPC-C run:
+the bytes were correct *in* `yb_storage.wals` but stale *in the
+in-memory segment buffer*.)
+
+Replaced with two pieces, both in `safekeeper/src/yb_wal_storage.rs` +
+`safekeeper/src/wal_cache.rs`:
+
+1. **`WalCache`** (`safekeeper/src/wal_cache.rs`) — bounded in-memory
+   FIFO cache of recently-written WAL chunks, keyed by `(segno,
+   chunk_offset)`. Populated by `YbWalStorage::upsert_writes` *before*
+   the chunk is pushed onto the consumer channel, so a read-after-write
+   from the WAL sender hits memory without waiting for the YB INSERT.
+   Capacity controlled by `--wal-cache-size-mib` (default 256, set to 0
+   to disable). FIFO eviction once the cache outgrows its byte budget.
+   The init-first-segment 16 MiB blob is intentionally **not** cached
+   (it would chew the entire capacity for a one-time read at boot).
+
+   The cache is invalidated alongside YB DELETEs by `truncate_after` /
+   `remove_segnos_below`, mirroring `YbWalStorage::delete_after` and
+   `YbWalStorage::remove_up_to`. A single `std::sync::Mutex` is fine:
+   writes target high offsets, reads target low offsets, so the BTreeMap
+   entries they touch never overlap, and the lock is held only for
+   metadata ops (no I/O).
+
+2. **`YbSegmentReader`** (`safekeeper/src/yb_wal_storage.rs`) replaces
+   `VecAsyncRead`. Its `poll_read` walks forward through the segment
+   one chunk at a time:
+
+   1. Serve from `current` if its `[chunk_offset, end_offset)` covers
+      `self.pos`.
+   2. Otherwise `cache.lookup(segno, pos)`; on hit, set `current`,
+      retry.
+   3. Otherwise spawn a YB fetch task and `tokio::sync::oneshot`-await
+      it. The fetch issues:
+      ```sql
+      SELECT chunk_offset, chunk_size, data FROM wals
+      WHERE tenant_id=$1 AND timeline_id=$2 AND segno=$3
+        AND chunk_offset <= $4 AND chunk_offset + chunk_size > $4
+      ORDER BY chunk_seq DESC LIMIT 1
+      ```
+      `ORDER BY chunk_seq DESC LIMIT 1` gives last-write-wins overlay
+      semantics (segno-0 init blob vs. later `write_wal` chunks at the
+      same offset).
+   4. If neither cache nor YB has a covering chunk, return
+      `io::ErrorKind::UnexpectedEof` — failing loudly is much better
+      than serving zeros and letting the pageserver hit `xlp_magic=0`
+      three layers downstream.
+
+   The fetch is dispatched via `tokio::spawn` + oneshot because
+   `open_segment` returns `Pin<Box<dyn AsyncRead + Send + Sync>>` and
+   `tokio_postgres` query futures aren't `Sync` — the oneshot
+   `Receiver` is, so we can hold it inside the reader without losing
+   `Sync`.
 
 ### 4. No local-FS writes when YB is on (commit `8ea570aeb`)
 

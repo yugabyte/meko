@@ -158,6 +158,11 @@ struct Args {
     /// being written to local FS. Reads still use local FS (Phase 1).
     #[arg(long, value_parser = parse_yb_store_config, verbatim_doc_comment)]
     wal_yb_config: Option<remote_storage::YbStoreConfig>,
+    /// Capacity (MiB) of the in-memory cache of recent WAL chunks used
+    /// in YB-WAL mode. Ignored when `--wal-yb-config` is not set.
+    /// Set to 0 to disable the cache.
+    #[arg(long, default_value_t = safekeeper::defaults::DEFAULT_WAL_CACHE_SIZE_MIB)]
+    wal_cache_size_mib: usize,
     /// Safekeeper won't be elected for WAL offloading if it is lagging for more than this value in bytes
     #[arg(long, default_value_t = DEFAULT_MAX_OFFLOADER_LAG_BYTES)]
     max_offloader_lag: u64,
@@ -445,6 +450,7 @@ async fn main() -> anyhow::Result<()> {
         remote_storage: args.remote_storage,
         control_file_backend: args.control_file_backend,
         wal_yb_config: args.wal_yb_config,
+        wal_cache_size_mib: args.wal_cache_size_mib,
         max_offloader_lag_bytes: args.max_offloader_lag,
         /* BEGIN_HADRON */
         max_reelect_offloader_lag_bytes: args.max_reelect_offloader_lag_bytes,

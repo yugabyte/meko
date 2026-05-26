@@ -80,7 +80,6 @@
 //! channel never holds.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
@@ -98,6 +97,7 @@ use utils::lsn::Lsn;
 
 use crate::metrics::WalStorageMetrics;
 use crate::state::TimelinePersistentState;
+use crate::wal_cache::WalCache;
 use crate::wal_storage::{PhysicalStorage, Storage};
 
 // Re-export the auto-reconnecting Postgres client wrapper from the
@@ -120,12 +120,15 @@ const FLUSH_BYTES_THRESHOLD: usize = 4 * 1024 * 1024;
 
 /// One row queued for the next batched INSERT. Carries `end_lsn` so the
 /// consumer can publish a durability watermark after each batch.
+///
+/// `data` is held as `Arc<Vec<u8>>` so the same allocation is shared with
+/// the in-memory [`WalCache`] entry — the read path doesn't need a copy.
 struct PendingChunk {
     segno: u64,
     chunk_seq: i32,
     chunk_offset: i64,
     chunk_size: i32,
-    data: Vec<u8>,
+    data: Arc<Vec<u8>>,
     /// LSN immediately after this chunk's last byte. The consumer uses
     /// the last chunk's `end_lsn` in a batch as the post-flush watermark.
     end_lsn: Lsn,
@@ -185,6 +188,15 @@ pub struct YbWalStorage {
     /// Highest `end_lsn` the producer has pushed onto `tx`. `flush_wal`
     /// awaits the watermark catching up to this.
     submitted_max_lsn: Lsn,
+    /// In-memory cache of recent WAL chunks, shared with
+    /// [`YbSegmentReader`] (the reader side). Populated by
+    /// [`Self::upsert_writes`] immediately, in addition to the
+    /// producer/consumer path that INSERTs into YB. Read access goes
+    /// through [`WalBackup::get_wal_yb`] so the WAL sender doesn't
+    /// need a separate plumbing path.
+    ///
+    /// `None` when the operator has set `--wal-cache-size-mib 0`.
+    cache: Option<Arc<std::sync::Mutex<WalCache>>>,
     /// Kept so the consumer task isn't dropped immediately on
     /// `YbWalStorage` drop; closing `tx` is what signals shutdown.
     _consumer_handle: tokio::task::JoinHandle<()>,
@@ -198,6 +210,7 @@ impl YbWalStorage {
         _no_sync: bool,
         client: Arc<YsqlClient>,
         table_name: String,
+        cache: Option<Arc<std::sync::Mutex<WalCache>>>,
     ) -> Result<Self> {
         let wal_seg_size = state.server.wal_seg_size as usize;
         let tenant_id_str = ttid.tenant_id.to_string();
@@ -251,6 +264,7 @@ impl YbWalStorage {
             watermark_rx,
             flush_notify,
             submitted_max_lsn: write_lsn,
+            cache,
             _consumer_handle: consumer_handle,
         };
 
@@ -345,6 +359,10 @@ impl YbWalStorage {
     /// stamp each piece with `chunk_seq` + `end_lsn`, and push onto the
     /// `mpsc` channel. The consumer task INSERTs them in batches; the
     /// caller does **not** wait for durability (use `flush_wal`).
+    ///
+    /// Each chunk is also inserted into [`WalCache`] *immediately* (before
+    /// it lands in YB) so a read-after-write from the WAL sender hits
+    /// memory, not YB.
     async fn upsert_writes(&mut self, mut startpos: Lsn, buf: &[u8]) -> Result<()> {
         if buf.is_empty() {
             return Ok(());
@@ -356,13 +374,26 @@ impl YbWalStorage {
             let room_in_segment = self.wal_seg_size - offset;
             let take = remaining.len().min(room_in_segment);
             let end_lsn = Lsn(startpos.0 + take as u64);
+            let chunk_seq = self.allocate_seq(segno);
+            let data: Arc<Vec<u8>> = Arc::new(remaining[..take].to_vec());
+
+            // Populate the read-side cache before queueing for YB. The
+            // WAL sender can hit this without waiting for the consumer
+            // batch to land. Same Arc shared with the PendingChunk so no
+            // double allocation.
+            if let Some(cache) = &self.cache {
+                cache
+                    .lock()
+                    .unwrap()
+                    .insert(segno, offset as u64, chunk_seq, data.clone());
+            }
 
             let pc = PendingChunk {
                 segno,
-                chunk_seq: self.allocate_seq(segno),
+                chunk_seq,
                 chunk_offset: offset as i64,
                 chunk_size: take as i32,
-                data: remaining[..take].to_vec(),
+                data,
                 end_lsn,
             };
 
@@ -434,6 +465,13 @@ impl YbWalStorage {
             .execute(&sql, &params)
             .await
             .context("YbWalStorage: truncate delete")?;
+        // Mirror in cache so reads can't serve stale-and-now-deleted bytes.
+        if let Some(cache) = &self.cache {
+            cache
+                .lock()
+                .unwrap()
+                .truncate_after(segno_end as u64, offset_end as u64);
+        }
         // Reset in-memory chunk_seq state for affected segnos.
         self.next_chunk_seq.retain(|seg, _| (*seg as i64) < segno_end);
         if self.next_chunk_seq.contains_key(&(segno_end as u64)) {
@@ -492,12 +530,16 @@ impl Storage for YbWalStorage {
             init_lsn,
         )?;
         let end_lsn = Lsn(init_lsn.0 + wal_seg.len() as u64);
+        // Init blob is a 16 MiB zero-padded segment. Intentionally not
+        // cached — see WalCache module docs. It still goes through the
+        // consumer (so YB has a row), but the read path will fetch it
+        // lazily from YB if needed.
         let pc = PendingChunk {
             segno,
             chunk_seq: self.allocate_seq(segno),
             chunk_offset: 0,
             chunk_size: wal_seg.len() as i32,
-            data: wal_seg.to_vec(),
+            data: Arc::new(wal_seg.to_vec()),
             end_lsn,
         };
         self.tx
@@ -546,7 +588,16 @@ impl Storage for YbWalStorage {
         let table = self.table_name.clone();
         let tenant_id = self.tenant_id.clone();
         let timeline_id = self.timeline_id.clone();
+        let cache = self.cache.clone();
         async move {
+            // Drop cached chunks for segnos that are about to be DELETE'd
+            // out of `yb_storage.wals`. Done before the DB delete so a
+            // concurrent reader can't pick up a cached chunk that is no
+            // longer durable. Reads that beat us here race against the
+            // existing chunks just as they always would.
+            if let Some(c) = &cache {
+                c.lock().unwrap().remove_segnos_below(segno_up_to);
+            }
             inner_fut.await?;
             let sql = format!(
                 "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 AND segno < $3",
@@ -727,6 +778,10 @@ async fn flush_batch(
     let seqs: Vec<i32> = batch.iter().map(|p| p.chunk_seq).collect();
     let offset_is: Vec<i64> = batch.iter().map(|p| p.chunk_offset).collect();
     let size_is: Vec<i32> = batch.iter().map(|p| p.chunk_size).collect();
+    // `PendingChunk::data` is `Arc<Vec<u8>>` (shared with WalCache).
+    // tokio_postgres' ToSql doesn't see through Arc, so deref each entry
+    // to a `&[u8]` for the param vector.
+    let datas: Vec<&[u8]> = batch.iter().map(|p| p.data.as_slice()).collect();
 
     let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 8);
     for i in 0..n {
@@ -736,7 +791,7 @@ async fn flush_batch(
         params.push(&seqs[i]);
         params.push(&offset_is[i]);
         params.push(&size_is[i]);
-        params.push(&batch[i].data);
+        params.push(&datas[i]);
         params.push(&now_us);
     }
 
@@ -747,82 +802,222 @@ async fn flush_batch(
     Ok(())
 }
 
-/// Fetch a WAL segment from `yb_storage.wals`, reassemble all chunks in
-/// `chunk_seq` order (so later writes at the same offset overwrite earlier
-/// ones, matching local-FS semantics), and return an `AsyncRead` positioned at
-/// `start_xlogoff`.
+/// Lazy chunk-streaming reader over `yb_storage.wals`, replacing the old
+/// snapshot-at-open `VecAsyncRead`.
 ///
-/// Returns `Ok(None)` when the segment has no rows in YB (caller should fall
-/// through to the next source). Returns `Ok(Some(reader))` on success.
-pub async fn read_segment_from_yb(
+/// The previous design reassembled the entire 16 MiB segment from a single
+/// SELECT *at open time* and served the WAL sender from that frozen
+/// buffer. Chunks INSERTed into `wals` *after* the SELECT (but while the
+/// WAL sender was still streaming forward through the buffer) were
+/// invisible, and the buffer's leading zeros at those positions decoded
+/// as `xlp_magic=0` / `xl_tot_len=0` on the pageserver side. See
+/// `wal_cache.rs` module docs for the full incident.
+///
+/// New design: each `poll_read` finds the chunk covering the current
+/// byte offset (cache → YB), then serves bytes from that chunk's data.
+/// When the reader advances past the chunk's `end_offset`, it
+/// transparently picks up the next chunk.
+///
+/// `current` caches the chunk currently being emitted so we don't
+/// re-query per byte. `fetch` holds an in-flight YB query future when
+/// we have to round-trip; subsequent `poll_read` calls poll the same
+/// future until it resolves.
+pub struct YbSegmentReader {
+    segno: u64,
+    /// Kept for symmetry with the local-FS reader and for future
+    /// segment-boundary assertions; not currently read.
+    #[allow(dead_code)]
+    wal_seg_size: u64,
+    pos: u64,
+
+    cache: Option<Arc<std::sync::Mutex<WalCache>>>,
+    client: Arc<YsqlClient>,
+    table: String,
+    tenant_id: String,
+    timeline_id: String,
+
+    current: Option<CurrentChunk>,
+    /// In-flight YB fetch. A `oneshot::Receiver` (not a raw `BoxFuture`)
+    /// because `WalReader::open_segment` is typed to return
+    /// `Pin<Box<dyn AsyncRead + Send + Sync>>` — and `tokio_postgres`
+    /// query futures aren't `Sync`. The fetch runs on a spawned task and
+    /// hands the result back through this channel.
+    fetch: Option<tokio::sync::oneshot::Receiver<anyhow::Result<Option<CurrentChunk>>>>,
+}
+
+#[derive(Clone)]
+struct CurrentChunk {
+    chunk_offset: u64,
+    end_offset: u64,
+    data: Arc<Vec<u8>>,
+}
+
+impl YbSegmentReader {
+    /// Build a reader for `segno` starting at byte offset `start_xlogoff`.
+    /// The reader holds clones of the YB client + cache handle, so it's
+    /// `Send + Sync` and can be passed up the WAL sender stack like the
+    /// `tokio::fs::File` it replaces.
+    pub fn new(
+        client: Arc<YsqlClient>,
+        table: String,
+        cache: Option<Arc<std::sync::Mutex<WalCache>>>,
+        ttid: &TenantTimelineId,
+        segno: XLogSegNo,
+        wal_seg_size: usize,
+        start_xlogoff: usize,
+    ) -> Self {
+        Self {
+            segno,
+            wal_seg_size: wal_seg_size as u64,
+            pos: start_xlogoff as u64,
+            cache,
+            client,
+            table,
+            tenant_id: ttid.tenant_id.to_string(),
+            timeline_id: ttid.timeline_id.to_string(),
+            current: None,
+            fetch: None,
+        }
+    }
+
+    fn start_fetch(&mut self) {
+        let client = self.client.clone();
+        let table = self.table.clone();
+        let tenant_id = self.tenant_id.clone();
+        let timeline_id = self.timeline_id.clone();
+        let segno = self.segno;
+        let pos = self.pos;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let res =
+                fetch_chunk_from_yb(&client, &table, &tenant_id, &timeline_id, segno, pos).await;
+            let _ = tx.send(res);
+        });
+        self.fetch = Some(rx);
+    }
+}
+
+impl AsyncRead for YbSegmentReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        dst: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        loop {
+            // 1. Serve from the current chunk if it covers self.pos.
+            let me = self.as_mut().get_mut();
+            if let Some(c) = &me.current {
+                if me.pos >= c.chunk_offset && me.pos < c.end_offset {
+                    let chunk_idx = (me.pos - c.chunk_offset) as usize;
+                    let chunk_remaining = c.data.len().saturating_sub(chunk_idx);
+                    let want = dst.remaining().min(chunk_remaining);
+                    if want == 0 {
+                        return Poll::Ready(Ok(()));
+                    }
+                    dst.put_slice(&c.data[chunk_idx..chunk_idx + want]);
+                    me.pos += want as u64;
+                    return Poll::Ready(Ok(()));
+                }
+                // Walked past the current chunk's range — drop it.
+                me.current = None;
+            }
+
+            // 2. Try the in-memory cache. Fast O(log n), no I/O.
+            if let Some(cache) = me.cache.clone() {
+                let hit = cache.lock().unwrap().lookup(me.segno, me.pos);
+                if let Some((chunk_offset, end_offset, data)) = hit {
+                    me.current = Some(CurrentChunk {
+                        chunk_offset,
+                        end_offset,
+                        data,
+                    });
+                    continue;
+                }
+            }
+
+            // 3. Fall through to YB. Drive the fetch via a spawned task.
+            if me.fetch.is_none() {
+                me.start_fetch();
+            }
+            let rx = me.fetch.as_mut().unwrap();
+            match Pin::new(rx).poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(Ok(Some(c)))) => {
+                    me.fetch = None;
+                    me.current = Some(c);
+                    continue;
+                }
+                Poll::Ready(Ok(Ok(None))) => {
+                    // Neither cache nor YB has a chunk covering self.pos.
+                    // This is a *real* hole — far better to fail loudly
+                    // here than serve zeros and let the pageserver hit
+                    // `xlp_magic=0` three layers down.
+                    me.fetch = None;
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        format!(
+                            "YB WAL hole at segno {} offset {} (neither cache nor `wals` has a covering chunk)",
+                            me.segno, me.pos
+                        ),
+                    )));
+                }
+                Poll::Ready(Ok(Err(e))) => {
+                    me.fetch = None;
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("YB WAL fetch failed for segno {} offset {}: {e}", me.segno, me.pos),
+                    )));
+                }
+                Poll::Ready(Err(_recv_err)) => {
+                    // Spawned fetch task dropped its sender without
+                    // sending — shouldn't happen, but treat as IO error.
+                    me.fetch = None;
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "YB WAL fetch task dropped without result",
+                    )));
+                }
+            }
+        }
+    }
+}
+
+/// Fetch the chunk covering `(segno, byte_offset)` from
+/// `yb_storage.wals`. Uses `ORDER BY chunk_seq DESC LIMIT 1` so that the
+/// highest-seq chunk wins in the overlap case (segno-0 init blob vs.
+/// later write_wal chunks at the same offset).
+async fn fetch_chunk_from_yb(
     client: &YsqlClient,
     table: &str,
-    ttid: &TenantTimelineId,
-    segno: XLogSegNo,
-    wal_seg_size: usize,
-    start_xlogoff: usize,
-) -> Result<Option<Pin<Box<dyn AsyncRead + Send + Sync>>>> {
+    tenant_id: &str,
+    timeline_id: &str,
+    segno: u64,
+    byte_offset: u64,
+) -> anyhow::Result<Option<CurrentChunk>> {
     let sql = format!(
         "SELECT chunk_offset, chunk_size, data FROM {} \
          WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-         ORDER BY chunk_seq",
+           AND chunk_offset <= $4 AND chunk_offset + chunk_size > $4 \
+         ORDER BY chunk_seq DESC LIMIT 1",
         quote_ident(table)
     );
-    let tenant_id_str = ttid.tenant_id.to_string();
-    let timeline_id_str = ttid.timeline_id.to_string();
     let segno_i: i64 = segno as i64;
-    let params: [&(dyn ToSql + Sync); 3] = [&tenant_id_str, &timeline_id_str, &segno_i];
-    let rows = client
-        .query(&sql, &params)
+    let pos_i: i64 = byte_offset as i64;
+    let params: [&(dyn ToSql + Sync); 4] = [&tenant_id, &timeline_id, &segno_i, &pos_i];
+    let row_opt = client
+        .query_opt(&sql, &params)
         .await
-        .context("YB WAL read: query chunks")?;
-    if rows.is_empty() {
-        return Ok(None);
-    }
-
-    // Reassemble into a flat segment buffer. Later chunk_seqs over the same
-    // byte range win (last-write semantics).
-    let mut segment = vec![0u8; wal_seg_size];
-    for row in &rows {
-        let off: i64 = row.get("chunk_offset");
-        let size: i32 = row.get("chunk_size");
+        .context("YB WAL fetch_chunk_from_yb")?;
+    Ok(row_opt.map(|row| {
+        let chunk_offset: i64 = row.get("chunk_offset");
+        let chunk_size: i32 = row.get("chunk_size");
         let data: Vec<u8> = row.get("data");
-        let off = off as usize;
-        let size = size as usize;
-        if off + size > wal_seg_size {
-            anyhow::bail!(
-                "YB WAL chunk extends past segment: off={off} size={size} > seg_size={wal_seg_size}"
-            );
+        CurrentChunk {
+            chunk_offset: chunk_offset as u64,
+            end_offset: (chunk_offset as u64) + (chunk_size as u64),
+            data: Arc::new(data),
         }
-        segment[off..off + size].copy_from_slice(&data);
-    }
-    Ok(Some(Box::pin(VecAsyncRead {
-        buf: segment,
-        pos: start_xlogoff,
-    })))
-}
-
-/// Minimal `AsyncRead` over an owned `Vec<u8>` cursor. Used to return a
-/// segment reassembled from YB.
-pub struct VecAsyncRead {
-    buf: Vec<u8>,
-    pos: usize,
-}
-
-impl AsyncRead for VecAsyncRead {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        _cx: &mut TaskContext<'_>,
-        dst: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let remaining = self.buf.len().saturating_sub(self.pos);
-        let n = remaining.min(dst.remaining());
-        if n > 0 {
-            dst.put_slice(&self.buf[self.pos..self.pos + n]);
-            self.pos += n;
-        }
-        Poll::Ready(Ok(()))
-    }
+    }))
 }
 
 /// Dispatcher across WAL-storage backends. Mirrors `ControlFileStorage`.

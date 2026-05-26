@@ -166,6 +166,7 @@ pub fn run_server(os: NodeOs, disk: Arc<SafekeeperDisk>) -> Result<()> {
         remote_storage: None,
         control_file_backend: safekeeper::control_file::ControlFileBackend::File,
         wal_yb_config: None,
+        wal_cache_size_mib: 0,
         max_offloader_lag_bytes: 0,
         /* BEGIN_HADRON */
         max_reelect_offloader_lag_bytes: 0,

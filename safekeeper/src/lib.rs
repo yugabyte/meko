@@ -42,6 +42,7 @@ pub mod timeline_manager;
 pub mod timelines_set;
 pub mod wal_backup;
 pub mod wal_backup_partial;
+pub mod wal_cache;
 pub mod wal_reader_stream;
 pub mod wal_service;
 pub mod wal_storage;
@@ -65,6 +66,11 @@ pub mod defaults {
 
     pub const DEFAULT_HEARTBEAT_TIMEOUT: &str = "5000ms";
     pub const DEFAULT_MAX_OFFLOADER_LAG_BYTES: u64 = 128 * (1 << 20);
+
+    /// Capacity (in MiB) of the in-memory cache of recently-written WAL
+    /// chunks in YB-WAL mode. See [`crate::wal_cache`]. Set to 0 to
+    /// disable the cache entirely (every WAL read hits YB).
+    pub const DEFAULT_WAL_CACHE_SIZE_MIB: usize = 256;
     /* BEGIN_HADRON */
     // Default leader re-elect is 0(disabled). SK will re-elect leader if the current leader is lagging this many bytes.
     pub const DEFAULT_MAX_REELECT_OFFLOADER_LAG_BYTES: u64 = 0;
@@ -126,6 +132,10 @@ pub struct SafeKeeperConf {
     /// addition to being written to the local-FS shadow. When `None`,
     /// WAL only lives on local FS (default).
     pub wal_yb_config: Option<remote_storage::YbStoreConfig>,
+    /// In-memory cache capacity (MiB) for recent WAL chunks in YB-WAL
+    /// mode. See [`crate::wal_cache`]. Ignored when
+    /// [`Self::wal_yb_config`] is `None`. Set to 0 to disable the cache.
+    pub wal_cache_size_mib: usize,
     pub max_offloader_lag_bytes: u64,
     /* BEGIN_HADRON */
     pub max_reelect_offloader_lag_bytes: u64,
@@ -291,6 +301,7 @@ impl SafeKeeperConf {
             remote_storage: None,
             control_file_backend: control_file::ControlFileBackend::File,
             wal_yb_config: None,
+            wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
             my_id: NodeId(0),
             broker_endpoint: storage_broker::DEFAULT_ENDPOINT
                 .parse()

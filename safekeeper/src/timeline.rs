@@ -353,7 +353,7 @@ impl SharedState {
         let sk = match control_store.eviction_state {
             EvictionState::Present => {
                 let wal_store = match wal_backup.get_wal_yb() {
-                    Some((client, table)) => yb_wal_storage::WalStore::Yb(
+                    Some((client, table, cache)) => yb_wal_storage::WalStore::Yb(
                         YbWalStorage::new(
                             ttid,
                             &timeline_dir,
@@ -361,6 +361,7 @@ impl SharedState {
                             conf.no_sync,
                             client,
                             table,
+                            cache,
                         )
                         .await?,
                     ),
@@ -1300,7 +1301,7 @@ impl ManagerTimeline {
 
         // trying to restore WAL storage
         let wal_store = match self.wal_backup.get_wal_yb() {
-            Some((client, table)) => yb_wal_storage::WalStore::Yb(
+            Some((client, table, cache)) => yb_wal_storage::WalStore::Yb(
                 YbWalStorage::new(
                     &self.ttid,
                     &self.timeline_dir,
@@ -1308,6 +1309,7 @@ impl ManagerTimeline {
                     self.conf.no_sync,
                     client,
                     table,
+                    cache,
                 )
                 .await?,
             ),

@@ -269,12 +269,17 @@ pub struct WalBackup {
     /// process held a corpse Arc<Client> until restart.
     wal_yb_client: Option<Arc<crate::yb_wal_storage::YsqlClient>>,
     wal_yb_table: Option<String>,
+    /// In-memory cache of recent WAL chunks. Shared between
+    /// [`crate::yb_wal_storage::YbWalStorage`] (the writer) and
+    /// [`crate::yb_wal_storage::YbSegmentReader`] (the reader).
+    /// Populated only when `wal_yb_config` is set.
+    wal_cache: Option<Arc<std::sync::Mutex<crate::wal_cache::WalCache>>>,
 }
 
 impl WalBackup {
     /// Create a new WalBackup instance.
     pub async fn new(conf: &SafeKeeperConf) -> Result<Self> {
-        let (wal_yb_client, wal_yb_table) = match &conf.wal_yb_config {
+        let (wal_yb_client, wal_yb_table, wal_cache) = match &conf.wal_yb_config {
             Some(yb) => {
                 // Same factory the pageserver's YbStore uses — honors
                 // sslmode + sslrootcert + password_env consistently.
@@ -289,9 +294,18 @@ impl WalBackup {
                         yb.host, yb.port, yb.sslmode
                     )
                 })?;
-                (Some(Arc::new(client)), Some(yb.table_name.clone()))
+                let cache = if conf.wal_cache_size_mib > 0 {
+                    Some(Arc::new(std::sync::Mutex::new(
+                        crate::wal_cache::WalCache::new(
+                            conf.wal_cache_size_mib * 1024 * 1024,
+                        ),
+                    )))
+                } else {
+                    None
+                };
+                (Some(Arc::new(client)), Some(yb.table_name.clone()), cache)
             }
-            None => (None, None),
+            None => (None, None, None),
         };
 
         if !conf.wal_backup_enabled {
@@ -299,6 +313,7 @@ impl WalBackup {
                 storage: None,
                 wal_yb_client,
                 wal_yb_table,
+                wal_cache,
             });
         }
 
@@ -309,12 +324,14 @@ impl WalBackup {
                     storage: Some(Arc::new(storage)),
                     wal_yb_client,
                     wal_yb_table,
+                    wal_cache,
                 })
             }
             None => Ok(Self {
                 storage: None,
                 wal_yb_client,
                 wal_yb_table,
+                wal_cache,
             }),
         }
     }
@@ -323,12 +340,18 @@ impl WalBackup {
         self.storage.clone()
     }
 
-    /// Returns `(client, table_name)` for the live-WAL YB mirror, if configured.
+    /// Returns `(client, table_name, cache)` for the live-WAL YB mirror,
+    /// if configured. The `cache` is `None` when the operator has set
+    /// `wal_cache_size_mib = 0` to disable the cache.
     pub fn get_wal_yb(
         &self,
-    ) -> Option<(Arc<crate::yb_wal_storage::YsqlClient>, String)> {
+    ) -> Option<(
+        Arc<crate::yb_wal_storage::YsqlClient>,
+        String,
+        Option<Arc<std::sync::Mutex<crate::wal_cache::WalCache>>>,
+    )> {
         match (&self.wal_yb_client, &self.wal_yb_table) {
-            (Some(c), Some(t)) => Some((c.clone(), t.clone())),
+            (Some(c), Some(t)) => Some((c.clone(), t.clone(), self.wal_cache.clone())),
             _ => None,
         }
     }
