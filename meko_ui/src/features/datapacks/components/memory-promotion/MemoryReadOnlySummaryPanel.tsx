@@ -273,7 +273,8 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                           className="flex shrink-0 items-center gap-1.5"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {isMine ? (
+                          {/* // TODO: Add back delete button once delete privare and promoted memories are fixed */}
+                          {/* {isMine ? (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <span className="inline-flex">
@@ -302,7 +303,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                               </TooltipTrigger>
                               <TooltipContent side="top">Delete this memory</TooltipContent>
                             </Tooltip>
-                          ) : null}
+                          ) : null} */}
                           {canLink ? (
                             <ObserveButton
                               projectId={langfuseProjectId}
