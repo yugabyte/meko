@@ -629,6 +629,16 @@ impl Manager {
 
     /// Spawns partial WAL backup task if needed.
     async fn update_partial_backup(&mut self, state: &StateSnapshot) {
+        // In YB-WAL mode the live WAL is already mirrored to `yb_storage.wals`
+        // on every `flush_wal()`, and `no_local_writes` means there's nothing
+        // on local FS for partial_backup to read. Spawning the task here
+        // produces an endless retry loop (28+ result=error uploads, stuck
+        // InProgress status) that's invisible from the consensus side but
+        // floods metrics and `hadron_critical_storage_event_count`.
+        if self.conf.is_yb_wal_mode() {
+            return;
+        }
+
         // check if WAL backup is enabled and should be started
         let Some(storage) = self.wal_backup.get_storage() else {
             return;
