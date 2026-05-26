@@ -402,6 +402,11 @@ pub struct SafekeeperConf {
     /// that the safekeeper accepts as `--wal-yb-config`. Single-safekeeper
     /// constraint applies (see architecture/safekeeper.md §5).
     pub wal_yb_config: Option<String>,
+    /// Capacity (MiB) of the in-memory cache of recent WAL chunks used in
+    /// YB-WAL mode. Maps to `--wal-cache-size-mib`. Ignored without
+    /// `wal_yb_config`. `Some(0)` disables the cache; `None` lets the
+    /// safekeeper apply its built-in default.
+    pub wal_cache_size_mib: Option<u32>,
 }
 
 impl Default for SafekeeperConf {
@@ -419,6 +424,7 @@ impl Default for SafekeeperConf {
             listen_addr: None,
             control_file_backend: None,
             wal_yb_config: None,
+            wal_cache_size_mib: None,
         }
     }
 }

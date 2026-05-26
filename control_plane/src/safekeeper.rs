@@ -193,6 +193,10 @@ impl SafekeeperNode {
             args.extend(["--wal-yb-config".to_owned(), wal_yb.clone()]);
         }
 
+        if let Some(size) = self.conf.wal_cache_size_mib {
+            args.extend(["--wal-cache-size-mib".to_owned(), size.to_string()]);
+        }
+
         let key_path = self.env.base_data_dir.join("auth_public_key.pem");
         if self.conf.auth_enabled {
             let key_path_string = key_path
