@@ -337,6 +337,14 @@ pub struct NeonLocalInitPageserverConf {
     pub grpc_auth_type: AuthType,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_sync: bool,
+    /// If `Some`, written verbatim into `pageserver.toml` as
+    /// `remote_storage = <value>`. Value must be a TOML inline table
+    /// (e.g. `{ host = "172.151.17.132", port = 5433, ... }` for `YbStore`,
+    /// or `{ local_path = '...' }` for `LocalFs`). Mirrors
+    /// [`SafekeeperConf::remote_storage`]; bypasses the `#[serde(flatten)]
+    /// other` round-trip that mangles inline tables.
+    #[serde(default)]
+    pub remote_storage: Option<String>,
     #[serde(flatten)]
     pub other: HashMap<String, toml::Value>,
 }
@@ -353,6 +361,7 @@ impl From<&NeonLocalInitPageserverConf> for PageServerConf {
             http_auth_type,
             grpc_auth_type,
             no_sync,
+            remote_storage: _,
             other: _,
         } = conf;
         Self {

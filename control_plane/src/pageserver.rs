@@ -125,7 +125,14 @@ impl PageServerNode {
             overrides.push(format!("control_plane_api_token='{jwt_token}'"));
         }
 
-        if !conf.other.contains_key("remote_storage") {
+        // `conf.remote_storage` is the supported way to set this — written
+        // verbatim to avoid the `#[serde(flatten)] other` mangling that
+        // turns inline tables into nested `other = { remote_storage = "..." }`
+        // blocks pageserver ignores. Legacy callers that stuff it into
+        // `other` still work. If neither is set, fall back to local_fs.
+        if let Some(rs) = &conf.remote_storage {
+            overrides.push(format!("remote_storage={rs}"));
+        } else if !conf.other.contains_key("remote_storage") {
             overrides.push(format!(
                 "remote_storage={{local_path='../{PAGESERVER_REMOTE_STORAGE_DIR}'}}"
             ));
@@ -149,6 +156,10 @@ impl PageServerNode {
                 toml_edit::ser::to_document(&conf).expect("we deserialized this from toml earlier");
             // `id` is written out to `identity.toml` instead of `pageserver.toml`
             doc.remove("id").expect("it's part of the struct");
+            // Already emitted verbatim above; serializing the Option<String>
+            // here would write `remote_storage = "{ host = ... }"` (a string,
+            // not a table), which pageserver rejects.
+            doc.remove("remote_storage");
             doc.to_string()
         });
 
