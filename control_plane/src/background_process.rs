@@ -267,6 +267,10 @@ fn fill_rust_env_vars(cmd: &mut Command) -> &mut Command {
         "RUST_LOG",
         "ASAN_OPTIONS",
         "UBSAN_OPTIONS",
+        // Needed so children (initdb, postgres, pg_ctl, ...) can find
+        // libs shipped alongside a relocatable bundle.
+        "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
     ] {
         if let Some(val) = std::env::var_os(var) {
             filled_cmd = filled_cmd.env(var, val);
