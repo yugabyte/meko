@@ -182,6 +182,34 @@ pub static PG_QUERIES_GAUGE: Lazy<IntCounterPairVec> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_pg_queries_finished_total counter")
 });
+pub static WAL_CACHE_HITS: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_wal_cache_hits_total",
+        "WalCache lookups that returned a chunk covering the requested byte"
+    )
+    .expect("Failed to register safekeeper_wal_cache_hits_total counter")
+});
+pub static WAL_CACHE_MISSES: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_wal_cache_misses_total",
+        "WalCache lookups that fell through to YB"
+    )
+    .expect("Failed to register safekeeper_wal_cache_misses_total counter")
+});
+pub static WAL_CACHE_EVICTIONS: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_wal_cache_evictions_total",
+        "WalCache chunks evicted by the FIFO over-capacity policy"
+    )
+    .expect("Failed to register safekeeper_wal_cache_evictions_total counter")
+});
+pub static WAL_CACHE_BYTES: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "safekeeper_wal_cache_bytes",
+        "Current WalCache occupancy in bytes (sum across cache instances)"
+    )
+    .expect("Failed to register safekeeper_wal_cache_bytes gauge")
+});
 pub static REMOVED_WAL_SEGMENTS: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_removed_wal_segments_total",

@@ -49,6 +49,10 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
+use crate::metrics::{
+    WAL_CACHE_BYTES, WAL_CACHE_EVICTIONS, WAL_CACHE_HITS, WAL_CACHE_MISSES,
+};
+
 /// One cached chunk, mirroring a row in `yb_storage.wals` but without
 /// the (tenant_id, timeline_id) prefix (those are captured at the
 /// containing `WalCache`'s scope — one cache per `YbWalStorage`).
@@ -120,12 +124,14 @@ impl WalCache {
                 v.insert(new_chunk);
                 self.fifo.push_back(key);
                 self.total_bytes += chunk_size;
+                WAL_CACHE_BYTES.add(chunk_size as i64);
             }
             Occupied(mut o) => {
                 if chunk_seq > o.get().chunk_seq {
                     let old_size = o.get().chunk_size;
                     self.total_bytes = self.total_bytes - old_size + chunk_size;
                     o.insert(new_chunk);
+                    WAL_CACHE_BYTES.add(chunk_size as i64 - old_size as i64);
                     // fifo entry already present; leave it.
                 }
             }
@@ -153,8 +159,10 @@ impl WalCache {
         });
         if result.is_some() {
             self.hits += 1;
+            WAL_CACHE_HITS.inc();
         } else {
             self.misses += 1;
+            WAL_CACHE_MISSES.inc();
         }
         result
     }
@@ -174,6 +182,7 @@ impl WalCache {
             if let Some(seg) = self.by_segno.remove(&s) {
                 for (_, c) in seg {
                     self.total_bytes -= c.chunk_size;
+                    WAL_CACHE_BYTES.sub(c.chunk_size as i64);
                 }
             }
         }
@@ -186,6 +195,7 @@ impl WalCache {
             for off in drops {
                 if let Some(c) = seg.remove(&off) {
                     self.total_bytes -= c.chunk_size;
+                    WAL_CACHE_BYTES.sub(c.chunk_size as i64);
                 }
             }
             if seg.is_empty() {
@@ -209,6 +219,7 @@ impl WalCache {
             if let Some(seg) = self.by_segno.remove(&s) {
                 for (_, c) in seg {
                     self.total_bytes -= c.chunk_size;
+                    WAL_CACHE_BYTES.sub(c.chunk_size as i64);
                 }
             }
         }
@@ -241,6 +252,8 @@ impl WalCache {
             if let Some(size) = removed_size {
                 self.total_bytes -= size;
                 self.evictions += 1;
+                WAL_CACHE_BYTES.sub(size as i64);
+                WAL_CACHE_EVICTIONS.inc();
                 if let Some(seg) = self.by_segno.get_mut(&k.segno) {
                     if seg.is_empty() {
                         self.by_segno.remove(&k.segno);
