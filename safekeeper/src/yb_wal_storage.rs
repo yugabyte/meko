@@ -82,6 +82,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -197,6 +198,15 @@ pub struct YbWalStorage {
     ///
     /// `None` when the operator has set `--wal-cache-size-mib 0`.
     cache: Option<Arc<std::sync::Mutex<WalCache>>>,
+    /// Lower bound for the next `remove_up_to` DELETE. Rows with
+    /// `segno < delete_lower_bound` are known to no longer exist (already
+    /// deleted, or never inserted on this timeline). Seeded at
+    /// construction from `min(segno)` in the table so the first DELETE
+    /// after a safekeeper restart doesn't run unbounded-low; advanced
+    /// after each successful `remove_up_to(N)` to `N`. Pinned in an
+    /// `Arc<AtomicU64>` because `remove_up_to` returns a `'static`
+    /// future.
+    delete_lower_bound: Arc<AtomicU64>,
     /// Kept so the consumer task isn't dropped immediately on
     /// `YbWalStorage` drop; closing `tx` is what signals shutdown.
     _consumer_handle: tokio::task::JoinHandle<()>,
@@ -252,6 +262,17 @@ impl YbWalStorage {
             flush_notify.clone(),
         ));
 
+        // Seed the DELETE lower bound from YB so post-restart removals
+        // don't scan/tombstone the empty range below the first surviving
+        // segno. Cheap: one tablet lookup keyed on (tenant, timeline).
+        let min_segno = Self::load_min_segno(
+            &client,
+            &table_name,
+            &tenant_id_str,
+            &timeline_id_str,
+        )
+        .await?;
+
         let mut me = YbWalStorage {
             inner,
             client,
@@ -265,6 +286,7 @@ impl YbWalStorage {
             flush_notify,
             submitted_max_lsn: write_lsn,
             cache,
+            delete_lower_bound: Arc::new(AtomicU64::new(min_segno)),
             _consumer_handle: consumer_handle,
         };
 
@@ -313,6 +335,32 @@ impl YbWalStorage {
             None => commit_lsn,
         };
         Ok(lsn)
+    }
+
+    /// Lowest segno still present in `wals` for this timeline. Used to
+    /// seed [`Self::delete_lower_bound`] at construction so the first
+    /// `remove_up_to(N)` DELETE after a safekeeper restart is bounded
+    /// from below rather than scanning from 0.
+    async fn load_min_segno(
+        client: &YsqlClient,
+        table: &str,
+        tenant_id: &str,
+        timeline_id: &str,
+    ) -> Result<u64> {
+        let sql = format!(
+            "SELECT min(segno) AS m FROM {} \
+             WHERE tenant_id = $1 AND timeline_id = $2",
+            quote_ident(table)
+        );
+        let params: [&(dyn ToSql + Sync); 2] = [&tenant_id, &timeline_id];
+        // Aggregate over an empty set still returns one row (NULL); a
+        // missing row would mean the query itself didn't run.
+        let row = client
+            .query_opt(&sql, &params)
+            .await
+            .context("YbWalStorage: rehydrate min(segno) from YB")?;
+        let m: Option<i64> = row.and_then(|r| r.get("m"));
+        Ok(m.map(|v| v as u64).unwrap_or(0))
     }
 
     async fn load_next_chunk_seq(
@@ -589,6 +637,7 @@ impl Storage for YbWalStorage {
         let tenant_id = self.tenant_id.clone();
         let timeline_id = self.timeline_id.clone();
         let cache = self.cache.clone();
+        let delete_lower_bound = self.delete_lower_bound.clone();
         async move {
             // Drop cached chunks for segnos that are about to be DELETE'd
             // out of `yb_storage.wals`. Done before the DB delete so a
@@ -599,16 +648,28 @@ impl Storage for YbWalStorage {
                 c.lock().unwrap().remove_segnos_below(segno_up_to);
             }
             inner_fut.await?;
+            // Bound the DELETE on both sides. The lower bound is the
+            // segno boundary advanced by the previous successful call
+            // (or `min(segno)` at startup) — rows below it are known to
+            // be gone, so naming them in the WHERE clause turns what was
+            // an unbounded-low range scan into a tight one. Idempotent if
+            // `segno_up_to <= lower`: the predicate is unsatisfiable and
+            // the DELETE is a no-op.
+            let lower = delete_lower_bound.load(Ordering::Relaxed);
             let sql = format!(
-                "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 AND segno < $3",
+                "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
+                 AND segno >= $3 AND segno < $4",
                 quote_ident(&table)
             );
-            let segno_i: i64 = segno_up_to as i64;
-            let params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &segno_i];
+            let lower_i: i64 = lower as i64;
+            let upper_i: i64 = segno_up_to as i64;
+            let params: [&(dyn ToSql + Sync); 4] =
+                [&tenant_id, &timeline_id, &lower_i, &upper_i];
             client
                 .execute(&sql, &params)
                 .await
                 .context("YbWalStorage: remove_up_to delete")?;
+            delete_lower_bound.fetch_max(segno_up_to, Ordering::Relaxed);
             Ok(())
         }
         .boxed()
