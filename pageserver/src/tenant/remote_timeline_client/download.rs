@@ -312,6 +312,24 @@ pub async fn list_remote_timelines(
         anyhow::bail!("storage-sync-list-remote-timelines");
     });
 
+    // YbStore short-circuit: the storage_controller's `timelines` table
+    // is colocated in `yb_storage` with the blobs table, so we can ask
+    // it directly instead of LIST'ing `tenants/<T>/timelines/` and
+    // parsing the response. The S3 listing exists because S3 has no
+    // other way to enumerate; YB does.
+    if let GenericRemoteStorage::YbStore(yb) = storage {
+        let tenant_id_str = tenant_shard_id.tenant_id.to_string();
+        let ids = tokio::select! {
+            r = yb.list_timelines_for_tenant_via_controller(&tenant_id_str) => r?,
+            _ = cancel.cancelled() => anyhow::bail!("cancelled"),
+        };
+        let parsed = ids
+            .into_iter()
+            .filter_map(|s| TimelineId::from_str(&s).ok())
+            .collect();
+        return Ok((parsed, HashSet::new()));
+    }
+
     let remote_path = remote_timelines_path(&tenant_shard_id).add_trailing_slash();
     list_identifiers::<TimelineId>(storage, remote_path, cancel).await
 }

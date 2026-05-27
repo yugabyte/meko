@@ -125,6 +125,31 @@ impl YbStore {
         &self.table_name
     }
 
+    /// Fast path for "what timelines does this tenant own?" — straight
+    /// `SELECT timeline_id FROM storage_controller.timelines WHERE
+    /// tenant_id = $1`. The pageserver previously implemented this by
+    /// `LIST`ing the `tenants/<T>/timelines/` prefix in `blobs` and
+    /// parsing the result, which on YB fanned out across every
+    /// (tenant, timeline) hash tablet and returned every layer row.
+    ///
+    /// The `timelines` table is owned by storage_controller's schema in
+    /// the same DB, so we can hit it with the YbStore connection — a
+    /// single PK-hash tablet lookup.
+    ///
+    /// Returns the bare timeline IDs as strings; the caller parses them
+    /// (we keep this side decoupled from `utils::id::TimelineId` to
+    /// avoid a new dep).
+    pub async fn list_timelines_for_tenant_via_controller(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        let sql = "SELECT timeline_id FROM storage_controller.timelines \
+                   WHERE tenant_id = $1 AND deleted_at IS NULL";
+        let client = self.client.current().await?;
+        let rows = client.query(sql, &[&tenant_id]).await?;
+        Ok(rows.into_iter().map(|r| r.get::<_, String>("timeline_id")).collect())
+    }
+
     fn full_key(&self, p: &RemotePath) -> String {
         match &self.prefix {
             Some(prefix) => format!("{prefix}{}", p.get_path().as_str()),

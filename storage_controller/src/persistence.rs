@@ -2330,6 +2330,50 @@ fn establish_connection_rustls(config: &str) -> BoxFuture<ConnectionResult<Async
     fut.boxed()
 }
 
+#[cfg(test)]
+mod search_path_tests {
+    use super::*;
+
+    #[test]
+    fn appends_options_when_url_has_no_query() {
+        let url = "postgresql://u@h:5433/yb_storage";
+        let out = add_search_path_to_url(url);
+        assert!(
+            out.ends_with("?options=-c%20search_path%3Dstorage_controller%2Cpublic"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn appends_with_ampersand_when_query_exists() {
+        let url = "postgresql://u@h:5433/yb_storage?sslmode=require";
+        let out = add_search_path_to_url(url);
+        assert!(
+            out.contains("?sslmode=require&options=-c%20search_path%3Dstorage_controller%2Cpublic"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn preserves_operator_supplied_options() {
+        let url = "postgresql://u@h:5433/yb_storage?options=-cstatement_timeout%3D5000";
+        let out = add_search_path_to_url(url);
+        // Operator-supplied options=... takes precedence — we do not
+        // append a competing options= segment.
+        assert_eq!(out, url);
+    }
+
+    #[test]
+    fn appended_url_parses_as_tokio_postgres_config() {
+        // Sanity: the URL we produce is something tokio_postgres can
+        // actually consume.
+        let url = "postgresql://u@h:5433/yb_storage";
+        let out = add_search_path_to_url(url);
+        out.parse::<tokio_postgres::Config>()
+            .expect("amended URL must parse as a tokio_postgres Config");
+    }
+}
+
 #[cfg_attr(test, test)]
 fn test_config_debug_censors_password() {
     let has_pw =
