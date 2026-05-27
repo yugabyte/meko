@@ -23,7 +23,13 @@ import (
 )
 
 type LangfuseConfig struct {
-	DB *sql.DB
+	// SystemDB is the meko_system schema connection (org/project
+	// mapping rows, datapack lookups, invite backfills).
+	SystemDB *sql.DB
+	// DataDB is the connection holding datapacks.meko_mem0_collection,
+	// queried for trace-memory enrichment. May equal SystemDB when the
+	// api_server runs against a single physical database.
+	DataDB *sql.DB
 	// Optional Langfuse Postgres pool. Nil when unconfigured.
 	LangfuseDB  *sql.DB
 	Host        string
@@ -85,7 +91,7 @@ var errObserveInvalidCredentials error = errors.New("observe credentials invalid
 
 func NewLangfuseService(cfg LangfuseConfig) *LangfuseService {
 	return &LangfuseService{
-		repo:        repository.NewLangfuseRepo(cfg.DB, cfg.LangfuseDB),
+		repo:        repository.NewLangfuseRepo(cfg.SystemDB, cfg.DataDB, cfg.LangfuseDB),
 		host:        strings.TrimSpace(strings.TrimSuffix(cfg.Host, "/")),
 		adminAPIKey: strings.TrimSpace(cfg.AdminAPIKey),
 		httpClient: &http.Client{

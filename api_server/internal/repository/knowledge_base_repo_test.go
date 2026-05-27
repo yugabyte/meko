@@ -22,7 +22,7 @@ func TestKnowledgeBaseRepo_Insert_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"rag_source_id"}).
 			AddRow("rag-uuid-1"))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	id, err := repo.Insert(
 		"dp-1", "s3://bucket/u/dp-1/", json.RawMessage(`{"k":"v"}`),
 	)
@@ -49,7 +49,7 @@ func TestKnowledgeBaseRepo_Insert_DefaultDetails(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"rag_source_id"}).
 			AddRow("rag-uuid-2"))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	if _, err := repo.Insert("dp-1", "s3://bucket/", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestKnowledgeBaseRepo_Insert_ConflictReturnsErrExists(t *testing.T) {
 		WithArgs("dp-1", "s3://bucket/", sqlmock.AnyArg()).
 		WillReturnError(&pq.Error{Code: "23505"})
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	_, err = repo.Insert("dp-1", "s3://bucket/", nil)
 	if err == nil {
 		t.Fatal("expected ErrKnowledgeBaseExists, got nil")
@@ -93,7 +93,7 @@ func TestKnowledgeBaseRepo_InsertWithID_Success(t *testing.T) {
 		WithArgs("dp-1", "rag-1", "s3://bucket/", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	if err := repo.InsertWithID(
 		"dp-1", "rag-1", "s3://bucket/", json.RawMessage(`{}`),
 	); err != nil {
@@ -115,7 +115,7 @@ func TestKnowledgeBaseRepo_InsertWithID_Conflict(t *testing.T) {
 		WithArgs("dp-1", "rag-1", "s3://bucket/", sqlmock.AnyArg()).
 		WillReturnError(&pq.Error{Code: "23505"})
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	err = repo.InsertWithID("dp-1", "rag-1", "s3://bucket/", nil)
 	if !errors.Is(err, ErrKnowledgeBaseExists) {
 		t.Errorf("expected ErrKnowledgeBaseExists, got %v", err)
@@ -143,7 +143,7 @@ func TestKnowledgeBaseRepo_Get_Found(t *testing.T) {
 			`{"k":"v"}`, now, now,
 		))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	kb, err := repo.Get("dp-1", "rag-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -173,7 +173,7 @@ func TestKnowledgeBaseRepo_Get_NotFound(t *testing.T) {
 			"knowledge_base_details", "created_at", "updated_at",
 		}))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	_, err = repo.Get("dp-1", "missing")
 	if !errors.Is(err, ErrKnowledgeBaseNotFound) {
 		t.Errorf("expected ErrKnowledgeBaseNotFound, got %v", err)
@@ -200,7 +200,7 @@ func TestKnowledgeBaseRepo_ListByDatapack(t *testing.T) {
 			AddRow("dp-1", "rag-1", "s3://b/u/dp-1/", `{}`, now, now).
 			AddRow("dp-1", "rag-2", "s3://b/u/dp-1/", `{}`, now, now))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	kbs, err := repo.ListByDatapack("dp-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -231,7 +231,7 @@ func TestKnowledgeBaseRepo_LookupByURL_Found(t *testing.T) {
 			`{}`, now, now,
 		))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	kb, err := repo.LookupByURL("dp-1", "s3://b/u/dp-1/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -261,7 +261,7 @@ func TestKnowledgeBaseRepo_LookupByURL_NotFound(t *testing.T) {
 			"knowledge_base_details", "created_at", "updated_at",
 		}))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	kb, err := repo.LookupByURL("dp-1", "s3://missing/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -285,7 +285,7 @@ func TestKnowledgeBaseRepo_Delete_Success(t *testing.T) {
 		WithArgs("dp-1", "rag-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	if err := repo.Delete("dp-1", "rag-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestKnowledgeBaseRepo_Delete_NotFound(t *testing.T) {
 		WithArgs("dp-1", "ghost").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	err = repo.Delete("dp-1", "ghost")
 	if !errors.Is(err, ErrKnowledgeBaseNotFound) {
 		t.Errorf("expected ErrKnowledgeBaseNotFound, got %v", err)
@@ -326,7 +326,7 @@ func TestKnowledgeBaseRepo_DeleteByDatapack(t *testing.T) {
 		WithArgs("dp-1").
 		WillReturnResult(sqlmock.NewResult(0, 3))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	if err := repo.DeleteByDatapack("dp-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestKnowledgeBaseRepo_GetSourceIDs(t *testing.T) {
 			AddRow("rag-1").
 			AddRow("rag-2"))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	ids, err := repo.GetSourceIDs("dp-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -374,7 +374,7 @@ func TestKnowledgeBaseRepo_GetSourceURIs(t *testing.T) {
 			AddRow("s3://b/u/dp-1/").
 			AddRow("s3://b/u/dp-1/v2/"))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	uris, err := repo.GetSourceURIs("dp-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -398,7 +398,7 @@ func TestKnowledgeBaseRepo_Upsert(t *testing.T) {
 		WithArgs("dp-1", "rag-1", "s3://b/u/dp-1/", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	repo := NewKnowledgeBaseRepo(db)
+	repo := NewKnowledgeBaseRepo(db, db)
 	if err := repo.Upsert(
 		"dp-1", "rag-1", "s3://b/u/dp-1/", json.RawMessage(`{"v":1}`),
 	); err != nil {

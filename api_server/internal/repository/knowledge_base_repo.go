@@ -21,21 +21,30 @@ var ErrKnowledgeBaseExists = fmt.Errorf("knowledge base already exists")
 // to 404 Not Found.
 var ErrKnowledgeBaseNotFound = fmt.Errorf("knowledge base not found")
 
-// KnowledgeBaseRepo encapsulates database operations against
-// meko_system.knowledge_bases.
+// KnowledgeBaseRepo encapsulates database operations against the
+// meko_system.knowledge_bases registry as well as per-datapack chunk
+// counts in datapacks.* and document listings in dist_rag.*.
 //
-// The table has primary key (datapack_id HASH, rag_source_id ASC) so
-// rows are conceptually datapack-scoped: ownership is enforced at the
-// API boundary via the datapacks.user_id FK and RequireDatapackOwnership
-// middleware. The repo deliberately takes a *models.Datapack reference
-// at the handler layer rather than re-resolving the datapack by name.
+// The meko_system.knowledge_bases table has primary key (datapack_id
+// HASH, rag_source_id ASC) so rows are conceptually datapack-scoped:
+// ownership is enforced at the API boundary via the datapacks.user_id
+// FK and RequireDatapackOwnership middleware. The repo deliberately
+// takes a *models.Datapack reference at the handler layer rather than
+// re-resolving the datapack by name.
+//
+// systemDB serves meko_system.knowledge_bases. dataDB serves
+// datapacks.* and dist_rag.*. When the api_server is run against a
+// single physical database, the two handles are the same.
 type KnowledgeBaseRepo struct {
-	db *sql.DB
+	systemDB *sql.DB
+	dataDB   *sql.DB
 }
 
-// NewKnowledgeBaseRepo creates a new KnowledgeBaseRepo.
-func NewKnowledgeBaseRepo(db *sql.DB) *KnowledgeBaseRepo {
-	return &KnowledgeBaseRepo{db: db}
+// NewKnowledgeBaseRepo creates a new KnowledgeBaseRepo. systemDB is
+// used for meko_system.knowledge_bases CRUD; dataDB is used for the
+// datapacks.* / dist_rag.* read-only counters and document listings.
+func NewKnowledgeBaseRepo(systemDB, dataDB *sql.DB) *KnowledgeBaseRepo {
+	return &KnowledgeBaseRepo{systemDB: systemDB, dataDB: dataDB}
 }
 
 // Insert inserts a new knowledge_base row with a server-generated
@@ -56,7 +65,7 @@ func (r *KnowledgeBaseRepo) Insert(
 	}
 
 	var ragSourceID string
-	err := r.db.QueryRow(
+	err := r.systemDB.QueryRow(
 		`INSERT INTO meko_system.knowledge_bases
 			(datapack_id, rag_source_id, knowledge_base_url, knowledge_base_details)
 		 VALUES ($1::uuid, gen_random_uuid(), $2, $3::jsonb)
@@ -86,7 +95,7 @@ func (r *KnowledgeBaseRepo) InsertWithID(
 		details = json.RawMessage(`{}`)
 	}
 
-	_, err := r.db.Exec(
+	_, err := r.systemDB.Exec(
 		`INSERT INTO meko_system.knowledge_bases
 			(datapack_id, rag_source_id, knowledge_base_url, knowledge_base_details)
 		 VALUES ($1::uuid, $2::uuid, $3, $4::jsonb)`,
@@ -114,7 +123,7 @@ func (r *KnowledgeBaseRepo) Upsert(
 		details = json.RawMessage(`{}`)
 	}
 
-	_, err := r.db.Exec(
+	_, err := r.systemDB.Exec(
 		`INSERT INTO meko_system.knowledge_bases
 			(datapack_id, rag_source_id, knowledge_base_url, knowledge_base_details)
 		 VALUES ($1::uuid, $2::uuid, $3, $4::jsonb)
@@ -137,7 +146,7 @@ func (r *KnowledgeBaseRepo) Get(
 ) (*models.KnowledgeBase, error) {
 	var kb models.KnowledgeBase
 	var details sql.NullString
-	err := r.db.QueryRow(
+	err := r.systemDB.QueryRow(
 		`SELECT datapack_id, rag_source_id, knowledge_base_url,
 		        COALESCE(knowledge_base_details::text, '{}'),
 		        created_at, updated_at
@@ -166,7 +175,7 @@ func (r *KnowledgeBaseRepo) Get(
 func (r *KnowledgeBaseRepo) ListByDatapack(
 	datapackID string,
 ) ([]models.KnowledgeBase, error) {
-	rows, err := r.db.Query(
+	rows, err := r.systemDB.Query(
 		`SELECT datapack_id, rag_source_id, knowledge_base_url,
 		        COALESCE(knowledge_base_details::text, '{}'),
 		        created_at, updated_at
@@ -210,7 +219,7 @@ func (r *KnowledgeBaseRepo) LookupByURL(
 ) (*models.KnowledgeBase, error) {
 	var kb models.KnowledgeBase
 	var details sql.NullString
-	err := r.db.QueryRow(
+	err := r.systemDB.QueryRow(
 		`SELECT datapack_id, rag_source_id, knowledge_base_url,
 		        COALESCE(knowledge_base_details::text, '{}'),
 		        created_at, updated_at
@@ -240,7 +249,7 @@ func (r *KnowledgeBaseRepo) LookupByURL(
 func (r *KnowledgeBaseRepo) Delete(
 	datapackID, ragSourceID string,
 ) error {
-	res, err := r.db.Exec(
+	res, err := r.systemDB.Exec(
 		`DELETE FROM meko_system.knowledge_bases
 		 WHERE datapack_id = $1::uuid AND rag_source_id = $2::uuid`,
 		datapackID, ragSourceID,
@@ -263,7 +272,7 @@ func (r *KnowledgeBaseRepo) Delete(
 // datapack_id. Used to clear stale RAG cache when a datapack's source
 // no longer exists in dist_rag.
 func (r *KnowledgeBaseRepo) DeleteByDatapack(datapackID string) error {
-	_, err := r.db.Exec(
+	_, err := r.systemDB.Exec(
 		`DELETE FROM meko_system.knowledge_bases
 		 WHERE datapack_id = $1::uuid`,
 		datapackID,
@@ -280,7 +289,7 @@ func (r *KnowledgeBaseRepo) DeleteByDatapack(datapackID string) error {
 func (r *KnowledgeBaseRepo) GetSourceIDs(
 	datapackID string,
 ) ([]string, error) {
-	rows, err := r.db.Query(
+	rows, err := r.systemDB.Query(
 		`SELECT rag_source_id
 		 FROM meko_system.knowledge_bases
 		 WHERE datapack_id = $1::uuid
@@ -308,7 +317,7 @@ func (r *KnowledgeBaseRepo) GetSourceIDs(
 func (r *KnowledgeBaseRepo) GetSourceURIs(
 	datapackID string,
 ) ([]string, error) {
-	rows, err := r.db.Query(
+	rows, err := r.systemDB.Query(
 		`SELECT knowledge_base_url
 		 FROM meko_system.knowledge_bases
 		 WHERE datapack_id = $1::uuid
@@ -352,7 +361,7 @@ func (r *KnowledgeBaseRepo) Counts(
 ) (KnowledgeBaseCounts, error) {
 	var c KnowledgeBaseCounts
 
-	if err := r.db.QueryRow(
+	if err := r.dataDB.QueryRow(
 		`select count(distinct(document_id)) as doc_count
 		 from datapacks.knowledge_bases
 		 where tenant_id = $1::uuid
@@ -362,7 +371,7 @@ func (r *KnowledgeBaseRepo) Counts(
 		return c, fmt.Errorf("count total_docs: %w", err)
 	}
 
-	if err := r.db.QueryRow(
+	if err := r.dataDB.QueryRow(
 		`select count(*) as chunk_count
 		 from datapacks.knowledge_bases
 		 where tenant_id = $1::uuid`,
@@ -371,7 +380,7 @@ func (r *KnowledgeBaseRepo) Counts(
 		return c, fmt.Errorf("count total_chunks: %w", err)
 	}
 
-	if err := r.db.QueryRow(
+	if err := r.dataDB.QueryRow(
 		`select count(*)
 		 from datapacks.promoted_collection
 		 where meko_datapack_id = $1::uuid`,
@@ -393,7 +402,7 @@ func (r *KnowledgeBaseRepo) Counts(
 func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 	datapackID string,
 ) ([]KnowledgeBaseDocument, error) {
-	rows, err := r.db.Query(
+	rows, err := r.dataDB.Query(
 		`SELECT DISTINCT ON (d.document_uri)
 		        d.document_name, d.status::text
 		 FROM   dist_rag.documents d

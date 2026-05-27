@@ -20,6 +20,10 @@ Thumbs.db
 # Build output
 build/
 
+# Integration-test fixtures: cached YugabyteDB installs + per-test data dirs.
+# Managed by api_server/testlib/ybdb (downloads tarball on first run).
+tests/
+
 # Linter caches
 .mypy_cache/
 .tox/

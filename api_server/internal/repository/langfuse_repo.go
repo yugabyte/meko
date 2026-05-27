@@ -168,19 +168,25 @@ type TraceMemoryItem struct {
 // and direct reads against the Langfuse DB.
 //
 // Backing tables:
-//   - meta DB:     meko_system.langfuse_org_mapping,
-//     meko_system.langfuse_project_mapping
+//   - system DB:   meko_system.langfuse_org_mapping,
+//     meko_system.langfuse_project_mapping, meko_system.users,
+//     meko_system.datapacks, meko_system.datapack_invites
+//   - data DB:     datapacks.meko_mem0_collection (trace-enrichment lookups)
 //   - langfuse DB: public.api_keys, clickhouse.traces, clickhouse.observations
 type LangfuseRepo struct {
-	metaDB     *sql.DB
+	systemDB   *sql.DB
+	dataDB     *sql.DB
 	langfuseDB *sql.DB
 }
 
-// NewLangfuseRepo creates a new LangfuseRepo. metaDB is required;
-// langfuseDB is optional and may be nil — methods that need it return
-// ErrLangfuseDBNotConfigured.
-func NewLangfuseRepo(metaDB, langfuseDB *sql.DB) *LangfuseRepo {
-	return &LangfuseRepo{metaDB: metaDB, langfuseDB: langfuseDB}
+// NewLangfuseRepo creates a new LangfuseRepo. systemDB is required and
+// serves the meko_system.* registries. dataDB is required and serves
+// datapacks.meko_mem0_collection for trace-memory enrichment; when the
+// api_server runs against a single physical database the two handles
+// are the same. langfuseDB is optional and may be nil — methods that
+// need it return ErrLangfuseDBNotConfigured.
+func NewLangfuseRepo(systemDB, dataDB, langfuseDB *sql.DB) *LangfuseRepo {
+	return &LangfuseRepo{systemDB: systemDB, dataDB: dataDB, langfuseDB: langfuseDB}
 }
 
 // LangfuseDBConfigured reports whether the Langfuse DB pool is wired.
@@ -193,7 +199,7 @@ func (r *LangfuseRepo) LangfuseDBConfigured() bool {
 // column was renamed; the Go param name is kept for backward compat).
 func (r *LangfuseRepo) GetOrgMapping(accountID string) (*LangfuseOrgMapping, error) {
 	var m LangfuseOrgMapping
-	err := r.metaDB.QueryRow(
+	err := r.systemDB.QueryRow(
 		`SELECT langfuse_org_id, langfuse_org_name, langfuse_org_public_key, langfuse_org_secret_key
 		 FROM meko_system.langfuse_org_mapping
 		 WHERE user_id = $1`,
@@ -211,7 +217,7 @@ func (r *LangfuseRepo) GetOrgMapping(accountID string) (*LangfuseOrgMapping, err
 // GetUserEmailByID returns users.user_email for the given user_id.
 func (r *LangfuseRepo) GetUserEmailByID(userID string) (string, error) {
 	var email string
-	err := r.metaDB.QueryRow(
+	err := r.systemDB.QueryRow(
 		`SELECT user_email FROM meko_system.users WHERE user_id = $1`,
 		userID,
 	).Scan(&email)
@@ -227,7 +233,7 @@ func (r *LangfuseRepo) GetUserEmailByID(userID string) (string, error) {
 // UpsertOrgMapping inserts or updates the org mapping for the user.
 // The accountID parameter is the user_id (see GetOrgMapping for context).
 func (r *LangfuseRepo) UpsertOrgMapping(accountID, orgID, orgName, publicKey, secretKey string) error {
-	_, err := r.metaDB.Exec(
+	_, err := r.systemDB.Exec(
 		`INSERT INTO meko_system.langfuse_org_mapping
 		 (user_id, langfuse_org_id, langfuse_org_name, langfuse_org_public_key, langfuse_org_secret_key)
 		 VALUES ($1, $2, $3, $4, $5)
@@ -252,7 +258,7 @@ func (r *LangfuseRepo) GetProjectMapping(datapackID string) (*LangfuseProjectKey
 		return nil, fmt.Errorf("datapack_id is required")
 	}
 	var p LangfuseProjectKeys
-	err := r.metaDB.QueryRow(
+	err := r.systemDB.QueryRow(
 		`SELECT langfuse_project_id, langfuse_project_name, langfuse_public_key, langfuse_secret_key
 		 FROM meko_system.langfuse_project_mapping
 		 WHERE datapack_id = $1`,
@@ -270,7 +276,7 @@ func (r *LangfuseRepo) GetProjectMapping(datapackID string) (*LangfuseProjectKey
 // GetDatapackNameByID returns datapacks.datapack_name for the given datapack_id.
 func (r *LangfuseRepo) GetDatapackNameByID(datapackID string) (string, error) {
 	var name string
-	err := r.metaDB.QueryRow(
+	err := r.systemDB.QueryRow(
 		`SELECT datapack_name FROM meko_system.datapacks WHERE datapack_id = $1`,
 		datapackID,
 	).Scan(&name)
@@ -304,7 +310,7 @@ func (r *LangfuseRepo) ListAcceptedShareMembershipsForRecipient(recipientUserID 
 		   AND di.status::text = 'accepted'
 		 ORDER BY di.datapack_id, di.updated_at DESC, di.created_at DESC`
 
-	rows, err := r.metaDB.Query(q, recipientUserID)
+	rows, err := r.systemDB.Query(q, recipientUserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list accepted share memberships: %w", err)
 	}
@@ -332,7 +338,7 @@ func (r *LangfuseRepo) UpsertProjectMapping(datapackID, projectID, projectName, 
 	if strings.TrimSpace(datapackID) == "" {
 		return fmt.Errorf("failed to persist langfuse project mapping: datapack_id is required")
 	}
-	_, err := r.metaDB.Exec(
+	_, err := r.systemDB.Exec(
 		`INSERT INTO meko_system.langfuse_project_mapping
 		 (datapack_id, langfuse_project_id, langfuse_project_name, langfuse_public_key, langfuse_secret_key)
 		 VALUES ($1, $2, $3, $4, $5)
@@ -356,7 +362,7 @@ func (r *LangfuseRepo) DeleteProjectMapping(datapackID string) error {
 	if strings.TrimSpace(datapackID) == "" {
 		return fmt.Errorf("failed to delete langfuse project mapping: datapack_id is required")
 	}
-	if _, err := r.metaDB.Exec(
+	if _, err := r.systemDB.Exec(
 		`DELETE FROM meko_system.langfuse_project_mapping
 		 WHERE datapack_id = $1`,
 		datapackID,
@@ -1215,7 +1221,7 @@ func (r *LangfuseRepo) EnrichTraceMemoryItems(
 	datapackID, conversationID string,
 	spans []TraceSpan,
 ) ([]TraceSpan, error) {
-	if r == nil || r.metaDB == nil || len(spans) == 0 {
+	if r == nil || r.dataDB == nil || len(spans) == 0 {
 		return spans, nil
 	}
 	convID := strings.ReplaceAll(strings.TrimSpace(conversationID), "-", "")
@@ -1489,7 +1495,7 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByIDs(
 	datapackPattern := fmt.Sprintf("%%\"meko_datapack_id\": \"%s\"%%", datapackID)
 	conversationPattern := fmt.Sprintf("%%\"meko_conversation_id\": \"%s\"%%", conversationID)
 
-	rows, err := r.metaDB.Query(q, datapackID, conversationID, pq.Array(ids), datapackPattern, conversationPattern)
+	rows, err := r.dataDB.Query(q, datapackID, conversationID, pq.Array(ids), datapackPattern, conversationPattern)
 	if err != nil {
 		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by id: %w", err)
 	}
@@ -1577,7 +1583,7 @@ matched AS (
 	datapackPattern := fmt.Sprintf("%%\"meko_datapack_id\": \"%s\"%%", datapackID)
 	conversationPattern := fmt.Sprintf("%%\"meko_conversation_id\": \"%s\"%%", conversationID)
 
-	rows, err := r.metaDB.Query(q, datapackID, conversationID, pq.Array(keys), pq.Array(offsets), datapackPattern, conversationPattern)
+	rows, err := r.dataDB.Query(q, datapackID, conversationID, pq.Array(keys), pq.Array(offsets), datapackPattern, conversationPattern)
 	if err != nil {
 		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by text: %w", err)
 	}

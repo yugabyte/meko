@@ -15,8 +15,11 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
+//go:embed migrations/system/*.sql
+var systemMigrationsFS embed.FS
+
+//go:embed migrations/data/*.sql
+var dataMigrationsFS embed.FS
 
 // ConnectWithRetry opens a database connection, retrying on failure.
 func ConnectWithRetry(
@@ -76,61 +79,95 @@ func ConnectWithRetry(
 	)
 }
 
-// RunMigrations applies all pending SQL migrations from the embedded FS.
-func RunMigrations(conn *sql.DB) ([]string, error) {
-	slog.Info("running database migrations")
+type DBPurpose string
 
-	source, err := iofs.New(migrationsFS, "migrations")
+const (
+	DBPurposeSystem DBPurpose = "system"
+	DBPurposeData   DBPurpose = "data"
+)
+
+func RunMigrations(systemDB, dataDB *sql.DB) ([]string, error) {
+	dataM, err := getMigrator(dataDB, DBPurposeData, dataMigrationsFS, "migrations/data")
 	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to read embedded migrations: %w", err,
-		)
+		slog.Error("failed to get migrator", "purpose", DBPurposeData, "error", err)
+		return nil, err
 	}
-
-	driver, err := postgres.WithInstance(conn, &postgres.Config{})
+	defer dataM.Close()
+	systemM, err := getMigrator(systemDB, DBPurposeSystem, systemMigrationsFS, "migrations/system")
 	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to create migration driver: %w", err,
-		)
+		slog.Error("failed to get migrator", "purpose", DBPurposeSystem, "error", err)
+		return nil, err
 	}
+	defer systemM.Close()
 
-	m, err := migrate.NewWithInstance(
-		"iofs", source, "yugabyte", driver,
-	)
+	var details []string
+	d, err := applyMigrator(dataM, DBPurposeData)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to initialize migrator: %w", err,
-		)
+		return nil, err
 	}
+	details = append(details, d)
+	d, err = applyMigrator(systemM, DBPurposeSystem)
+	if err != nil {
+		return nil, err
+	}
+	details = append(details, d)
+	return details, nil
+}
 
-	err = m.Up()
+func getMigrator(conn *sql.DB, purpose DBPurpose, fs embed.FS, rootFs string) (*migrate.Migrate, error) {
+	src, err := iofs.New(fs, rootFs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load embedded %s data: %w", purpose, err)
+	}
+	driver, err := postgres.WithInstance(conn, getPostgresConfig(purpose))
+	if err != nil {
+		return nil, fmt.Errorf("failed to %s migration driver: %w", purpose, err)
+	}
+	m, err := migrate.NewWithInstance("iofs", src, "yugabyte", driver)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize %s migrator: %w", purpose, err)
+	}
+	return m, nil
+}
+
+func getPostgresConfig(purpose DBPurpose) *postgres.Config {
+	switch purpose {
+	case DBPurposeSystem:
+		return &postgres.Config{
+			MigrationsTable: fmt.Sprintf("%s_%s", postgres.DefaultMigrationsTable, "system"),
+		}
+	default:
+		return &postgres.Config{}
+	}
+}
+
+func applyMigrator(m *migrate.Migrate, purpose DBPurpose) (string, error) {
+	slog.Info("running database migrations", "purpose", purpose)
+	err := m.Up()
 	if err != nil && err != migrate.ErrNoChange {
-		slog.Error("migration failed", "error", err)
-		return nil, fmt.Errorf("migration failed: %w", err)
+		slog.Error("migration failed", "purpose", purpose, "error", err)
+		return "", fmt.Errorf("%s migration failed: %w", purpose, err)
 	}
 
 	version, dirty, vErr := m.Version()
 	if vErr != nil {
-		return nil, fmt.Errorf("failed to get migration version: %w", vErr)
+		return "", fmt.Errorf("failed to get %s migration version: %w", purpose, vErr)
 	}
 	if dirty {
-		slog.Error("migration dirty state", "version", version)
-		return nil, fmt.Errorf(
-			"migration is in a dirty state at version %d", version,
+		slog.Error("migration dirty state", "purpose", purpose, "version", version)
+		return "", fmt.Errorf(
+			"%s migration is in a dirty state at version %d", purpose, version,
 		)
 	}
 
-	var details []string
+	var details string
 	if err == migrate.ErrNoChange {
-		slog.Info("schema already up to date", "version", version)
-		details = append(details,
-			fmt.Sprintf("Schema up to date (version %d)", version))
+		slog.Info("schema already up to date", "purpose", purpose, "version", version)
+		details = fmt.Sprintf("%s schema up to date (version %d)", purpose, version)
 	} else {
-		slog.Info("schema migrated", "version", version)
-		details = append(details,
-			fmt.Sprintf("Migrated schema to version %d", version))
+		slog.Info("schema migrated", "purpose", purpose, "version", version)
+		details = fmt.Sprintf("Migrated %s schema to version %d", purpose, version)
 	}
-
 	return details, nil
 }
 

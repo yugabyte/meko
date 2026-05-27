@@ -14,7 +14,21 @@ import (
 )
 
 // ServerConfig holds the configuration for the API server.
+//
+// The api_server runs against two logical database connections so the
+// meko_system control-plane schema can be hosted on a different
+// physical database than the per-datapack data plane (datapacks.*,
+// dist_rag.*). When both fields point at the same *sql.DB the layout
+// collapses to the original single-database deployment.
 type ServerConfig struct {
+	// SystemDB serves the meko_system.* control-plane schema:
+	// users, agents, datapack registry, knowledge_bases registry,
+	// MCP PATs, feedback, sharing/invites, langfuse mappings,
+	// yb_universes, tier_config.
+	SystemDB *sql.DB
+	// DB serves the per-datapack data plane: datapacks.* (mem0,
+	// promoted_collection, knowledge_bases chunk tables) and
+	// dist_rag.* (sources, documents, vector_indexes).
 	DB                  *sql.DB
 	CognitoRegion       string
 	CognitoPoolID       string

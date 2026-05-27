@@ -43,16 +43,16 @@ type serviceRegistry struct {
 func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	slog.Info("initializing service registry")
 
-	accountRepo := repository.NewAccountRepo(cfg.DB)
-	ybaRepo := repository.NewYBARepo(cfg.DB)
-	dpRepo := repository.NewDatapackRepo(cfg.DB, cfg.MCPServerURL, cfg.DeployEnv)
+	accountRepo := repository.NewAccountRepo(cfg.SystemDB)
+	ybaRepo := repository.NewYBARepo(cfg.SystemDB)
+	dpRepo := repository.NewDatapackRepo(cfg.SystemDB, cfg.MCPServerURL, cfg.DeployEnv)
 
 	ybaSvc := service.NewYBAService(ybaRepo)
 
-	agentRepo := repository.NewAgentRepo(cfg.DB)
+	agentRepo := repository.NewAgentRepo(cfg.SystemDB)
 	agentSvc := service.NewAgentService(agentRepo)
 
-	kbRepo := repository.NewKnowledgeBaseRepo(cfg.DB)
+	kbRepo := repository.NewKnowledgeBaseRepo(cfg.SystemDB, cfg.DB)
 	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
 	ragSvc := service.NewRagService(cfg.DB, service.DatapackIndexSchema, service.DatapackIndexName)
 
@@ -62,9 +62,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	promoteMemoriesRepo := repository.NewPromoteMemoriesRepo(cfg.DB)
 	promoteMemoriesSvc := service.NewPromoteMemoriesService(promoteMemoriesRepo)
 
-	sharingRepo := repository.NewSharingRepo(cfg.DB)
+	sharingRepo := repository.NewSharingRepo(cfg.SystemDB)
 	sharingSvc := service.NewSharingService(sharingRepo, nil)
-	feedbackRepo := repository.NewFeedbackRepo(cfg.DB)
+	feedbackRepo := repository.NewFeedbackRepo(cfg.SystemDB)
 	var s3Svc *service.S3Service
 	if cfg.S3Bucket != "" {
 		var err error
@@ -82,7 +82,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	}
 
 	langfuseSvc := service.NewLangfuseService(service.LangfuseConfig{
-		DB:          cfg.DB,
+		SystemDB:    cfg.SystemDB,
+		DataDB:      cfg.DB,
 		LangfuseDB:  cfg.LangfuseDB,
 		Host:        cfg.LangfuseHost,
 		AdminAPIKey: cfg.LangfuseAdminAPIKey,
@@ -94,8 +95,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc)
 
-	mcpPATRepo := repository.NewMCPPATRepo(cfg.DB)
-	mcpPATAuditRepo := repository.NewMCPPATAuditRepo(cfg.DB)
+	mcpPATRepo := repository.NewMCPPATRepo(cfg.SystemDB)
+	mcpPATAuditRepo := repository.NewMCPPATAuditRepo(cfg.SystemDB)
 	mcpPATSvc := service.NewMCPPATService(mcpPATRepo, mcpPATAuditRepo)
 
 	slog.Info("service registry initialized")
@@ -144,7 +145,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 
 	v1 := e.Group("/api/v1", ManagementRateLimiter())
 
-	v1.GET("/health", handlers.HealthHandler(cfg.DB))
+	v1.GET("/health", handlers.HealthHandler(cfg.SystemDB, cfg.DB))
 
 	// Internal machine-to-machine routes. Protected by a static
 	// shared secret rather than the user-facing JWT path, so they

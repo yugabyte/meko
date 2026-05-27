@@ -1,7 +1,14 @@
 # Local Dev Setup (MinIO)
 
-Prereqs: YugabyteDB on `127.0.0.1:5433`, Docker, Go 1.25, Python 3.11
+## Prereqs
+YugabyteDB on `127.0.0.1:5433`, Docker, Go 1.25, Python 3.11
 `rag_agent` venv, `~/code/meko/.env` populated.
+
+### YugabyteDB:
+1. (OPTIONAL, langfuse only): Create the langfuse database
+1. Ensure ybdb has the gflag ysql_yb_enable_mage=true for master and tserver
+1. enable the extensions: `create extension mage cascade; create extension pg_dist_rag cascade;`
+
 
 ## 1. MinIO
 
@@ -63,7 +70,7 @@ PGDATABASE=yugabyte
 
 # Langfuse Postgres (separate YB universe)
 LANGFUSE_DB_HOST=127.0.0.1
-LANGFUSE_DB_PORT=54433
+LANGFUSE_DB_PORT=5433
 LANGFUSE_DB_NAME=langfuse
 LANGFUSE_DB_USER=yugabyte
 LANGFUSE_DB_PASSWORD=yugabyte

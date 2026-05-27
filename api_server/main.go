@@ -40,13 +40,26 @@ func run() error {
 		envOrDefault("LOG_LEVEL", "info"),
 		"slog level: debug, info, warn, error")
 
-	// database configuration
-	dbHost := flag.String("db-host", "127.0.0.1", "database host")
-	dbUserName := flag.String("db-user-name", "yugabyte", "database user name")
-	dbPassword := flag.String("db-password", "", "database password")
-	dbPort := flag.Int("db-port", 5433, "database port")
-	dbName := flag.String("db-name", "yugabyte", "database name")
-	dbSSLMode := flag.String("db-sslmode", "disable", "database sslmode (disable, require, verify-ca, verify-full)")
+	// Data-plane database configuration. This pool serves the per-datapack
+	// schemas (datapacks.* — mem0, promoted collections, KB chunk tables —
+	// and dist_rag.* — sources, documents, vector indexes).
+	dbHost := flag.String("db-host", "127.0.0.1", "data-plane database host")
+	dbUserName := flag.String("db-user-name", "yugabyte", "data-plane database user name")
+	dbPassword := flag.String("db-password", "", "data-plane database password")
+	dbPort := flag.Int("db-port", 5433, "data-plane database port")
+	dbName := flag.String("db-name", "yugabyte", "data-plane database name")
+	dbSSLMode := flag.String("db-sslmode", "disable", "data-plane database sslmode (disable, require, verify-ca, verify-full)")
+
+	// Control-plane (meko_system) database configuration. Empty sentinels
+	// mean "inherit the data-plane value", so single-database deployments
+	// keep working without any extra flags. Set these to point the
+	// meko_system.* schema at a separate physical database.
+	systemDBHost := flag.String("system-db-host", envOrDefault("SYSTEM_DB_HOST", ""), "meko_system database host (default: same as --db-host)")
+	systemDBUserName := flag.String("system-db-user-name", envOrDefault("SYSTEM_DB_USER_NAME", ""), "meko_system database user name (default: same as --db-user-name)")
+	systemDBPassword := flag.String("system-db-password", envOrDefault("SYSTEM_DB_PASSWORD", ""), "meko_system database password (default: same as --db-password)")
+	systemDBPort := flag.Int("system-db-port", envIntOrDefault("SYSTEM_DB_PORT", 0), "meko_system database port (default: same as --db-port)")
+	systemDBName := flag.String("system-db-name", envOrDefault("SYSTEM_DB_NAME", ""), "meko_system database name (default: same as --db-name)")
+	systemDBSSLMode := flag.String("system-db-sslmode", envOrDefault("SYSTEM_DB_SSLMODE", ""), "meko_system database sslmode (default: same as --db-sslmode)")
 
 	// migrate only flag
 	migrateOnly := flag.Bool("migrate-only", false, "run migrations and exit without starting the server")
@@ -127,20 +140,58 @@ func run() error {
 	slog.Info("logger configured",
 		"requested", *logLevel, "effective", resolvedLogLevel)
 
-	connStr := fmt.Sprintf(
+	// Resolve system-db settings: empty / zero sentinels inherit from
+	// the data-db settings so a single-database deployment "just works".
+	resolvedSystemDBHost := stringOrDefault(*systemDBHost, *dbHost)
+	resolvedSystemDBPort := intOrDefault(*systemDBPort, *dbPort)
+	resolvedSystemDBName := stringOrDefault(*systemDBName, *dbName)
+	resolvedSystemDBUserName := stringOrDefault(*systemDBUserName, *dbUserName)
+	resolvedSystemDBPassword := stringOrDefault(*systemDBPassword, *dbPassword)
+	resolvedSystemDBSSLMode := stringOrDefault(*systemDBSSLMode, *dbSSLMode)
+
+	dataConnStr := fmt.Sprintf(
 		"postgresql://%s:%d/%s?user=%s&password=%s&sslmode=%s",
 		*dbHost, *dbPort, *dbName, *dbUserName, *dbPassword, *dbSSLMode,
 	)
+	systemConnStr := fmt.Sprintf(
+		"postgresql://%s:%d/%s?user=%s&password=%s&sslmode=%s",
+		resolvedSystemDBHost, resolvedSystemDBPort, resolvedSystemDBName,
+		resolvedSystemDBUserName, resolvedSystemDBPassword, resolvedSystemDBSSLMode,
+	)
 
-	conn, err := db.ConnectWithRetry(connStr, 5, 3*time.Second)
+	dataConn, err := db.ConnectWithRetry(dataConnStr, 5, 3*time.Second)
 	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("failed to connect to data-plane database: %w", err)
 	}
 	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			slog.Error("failed to close database", "error", closeErr)
+		if closeErr := dataConn.Close(); closeErr != nil {
+			slog.Error("failed to close data-plane database", "error", closeErr)
 		}
 	}()
+
+	// Reuse the data-plane pool when both halves point at the same
+	// physical database to avoid double the connections in the
+	// colocated default. Comparing the resolved DSN means any one
+	// of host/port/name/user/sslmode being different forks a second
+	// pool.
+	var systemConn *sql.DB
+	if systemConnStr == dataConnStr {
+		systemConn = dataConn
+		slog.Info("meko_system schema colocated with data-plane database",
+			"host", *dbHost, "port", *dbPort, "db", *dbName)
+	} else {
+		systemConn, err = db.ConnectWithRetry(systemConnStr, 5, 3*time.Second)
+		if err != nil {
+			return fmt.Errorf("failed to connect to meko_system database: %w", err)
+		}
+		defer func() {
+			if closeErr := systemConn.Close(); closeErr != nil {
+				slog.Error("failed to close meko_system database", "error", closeErr)
+			}
+		}()
+		slog.Info("meko_system schema on dedicated database",
+			"host", resolvedSystemDBHost, "port", resolvedSystemDBPort, "db", resolvedSystemDBName)
+	}
 
 	// Optional Langfuse Postgres connection — only attempted when --langfuse-db-host
 	// (or LANGFUSE_DB_HOST) is set. Disabled cleanly otherwise; observability
@@ -167,11 +218,11 @@ func run() error {
 	}
 
 	if *migrateOnly {
-		details, err := db.RunMigrations(conn)
+		systemDetails, err := db.RunMigrations(systemConn, dataConn)
 		if err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}
-		for _, d := range details {
+		for _, d := range systemDetails {
 			slog.Info("migration", "detail", d)
 		}
 		slog.Info("migrations complete, exiting")
@@ -187,7 +238,8 @@ func run() error {
 	}
 
 	return api.Run(api.ServerConfig{
-		DB:                       conn,
+		DB:                       dataConn,
+		SystemDB:                 systemConn,
 		Port:                     *port,
 		CognitoRegion:            *cognitoRegion,
 		CognitoPoolID:            *cognitoPoolID,
@@ -238,6 +290,25 @@ func envIntOrDefault(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// stringOrDefault returns v if non-empty, otherwise fallback. Used to
+// inherit --system-db-* settings from --db-* when the operator doesn't
+// override them.
+func stringOrDefault(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+// intOrDefault returns v if non-zero, otherwise fallback. Mirrors
+// stringOrDefault for the --system-db-port flag, where 0 means "unset".
+func intOrDefault(v, fallback int) int {
+	if v == 0 {
+		return fallback
+	}
+	return v
 }
 
 func envBoolOrDefault(key string, fallback bool) bool {
