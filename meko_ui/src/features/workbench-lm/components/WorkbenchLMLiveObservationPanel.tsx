@@ -544,7 +544,7 @@ function LearningsSection({
                     {m.agent_id ? `agent · ${m.agent_id}` : " "}
                   </span>
                   <div className="flex shrink-0 items-center gap-1">
-                    {isMine ? (
+                   {/* {isMine ? (
                       <button
                         type="button"
                         onClick={() => void handleDelete(m.id)}
@@ -563,7 +563,7 @@ function LearningsSection({
                           <Trash2 className="h-3 w-3" aria-hidden />
                         )}
                       </button>
-                    ) : null}
+                    ) : null} */}
                     <button
                       type="button"
                       onClick={() => void handlePromote(m.id)}
