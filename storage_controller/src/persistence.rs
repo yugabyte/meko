@@ -75,7 +75,18 @@ const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 /// we can UPDATE a node's scheduling mode reasonably quickly to mark a bad node offline.
 pub struct Persistence {
     connection_pool: Pool<AsyncPgConnection>,
+    /// Kept for one-shot bootstrap operations (e.g. `CREATE SCHEMA` before
+    /// migrations) that need a connection outside the pool's
+    /// search-path-overridden URL.
+    raw_database_url: String,
 }
+
+/// Schema all of the storage controller's tables (including Diesel's
+/// `__diesel_schema_migrations` bookkeeping) live in. Created at
+/// `migration_run` time and added to every pooled connection's
+/// `search_path`. Hardcoded — overriding doesn't buy us anything; the
+/// tables travel with the binary.
+pub(crate) const SC_SCHEMA: &str = "storage_controller";
 
 /// Legacy format, for use in JSON compat objects in test environment
 #[derive(Serialize, Deserialize)]
@@ -187,8 +198,12 @@ impl Persistence {
         let mut mgr_config = ManagerConfig::default();
         mgr_config.custom_setup = Box::new(establish_connection_rustls);
 
+        // Pool's connections use the schema-routed URL so every query
+        // resolves to `storage_controller.*` by default. The raw URL is
+        // preserved for bootstrap operations that must run *before* the
+        // schema exists.
         let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new_with_config(
-            database_url,
+            add_search_path_to_url(&database_url),
             mgr_config,
         );
 
@@ -205,7 +220,10 @@ impl Persistence {
             .await
             .expect("Could not build connection pool");
 
-        Self { connection_pool }
+        Self {
+            connection_pool,
+            raw_database_url: database_url,
+        }
     }
 
     /// A helper for use during startup, where we would like to tolerate concurrent restarts of the
@@ -238,6 +256,14 @@ impl Persistence {
     /// Execute the diesel migrations that are built into this binary
     pub(crate) async fn migration_run(&self) -> DatabaseResult<()> {
         use diesel_migrations::{HarnessWithOutput, MigrationHarness};
+
+        // Bootstrap: create the `storage_controller` schema if it doesn't
+        // already exist. Has to happen on a *raw* connection (no
+        // search_path override) — pooled connections set
+        // `search_path = storage_controller, public`, and PG silently
+        // drops nonexistent schemas from search_path, so the very first
+        // migration would otherwise land in `public`. Idempotent.
+        ensure_schema_exists(&self.raw_database_url).await?;
 
         // Can't use self.with_conn here as we do spawn_blocking which requires static.
         let conn = self
@@ -2227,6 +2253,66 @@ fn client_config_with_root_certs() -> anyhow::Result<rustls::ClientConfig> {
             .with_custom_certificate_verifier(Arc::new(verifier))
             .with_no_client_auth()
     })
+}
+
+/// Append a libpq `options=-csearch_path=...` query param to `url` so every
+/// connection opened with the resulting URL has `search_path` set on the
+/// session at connection time. PG honors `-c<param>=<val>` in
+/// `options` as `SET <param>=<val>`. If the URL already contains an
+/// `options=` segment we leave it alone — operator-supplied options
+/// override the default.
+fn add_search_path_to_url(url: &str) -> String {
+    if url.contains("options=") {
+        return url.to_string();
+    }
+    // URL-encoded: `-c search_path=storage_controller,public`.
+    // `%3D` = `=`, `%2C` = `,`. The leading `-c` is part of the libpq
+    // options grammar; the equals there is literal.
+    let opt = format!(
+        "options=-c%20search_path%3D{SC_SCHEMA}%2Cpublic"
+    );
+    if url.contains('?') {
+        format!("{url}&{opt}")
+    } else {
+        format!("{url}?{opt}")
+    }
+}
+
+/// Connect with the URL as supplied (no search_path override) and run
+/// `CREATE SCHEMA IF NOT EXISTS storage_controller`. Used as a one-shot
+/// bootstrap step before migrations.
+async fn ensure_schema_exists(database_url: &str) -> DatabaseResult<()> {
+    use tokio_postgres::config::SslMode;
+
+    let config: tokio_postgres::Config = database_url
+        .parse()
+        .map_err(|e: tokio_postgres::Error| DatabaseError::Migration(e.to_string()))?;
+    let use_tls = !matches!(config.get_ssl_mode(), SslMode::Disable);
+
+    let (client, conn_task) = if use_tls {
+        let rustls_config = client_config_with_root_certs()
+            .map_err(|e| DatabaseError::Migration(format!("rustls: {e:?}")))?;
+        let tls = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config);
+        let (client, conn) = config
+            .connect(tls)
+            .await
+            .map_err(|e| DatabaseError::Migration(format!("connect bootstrap: {e}")))?;
+        (client, tokio::spawn(conn))
+    } else {
+        let (client, conn) = config
+            .connect(tokio_postgres::NoTls)
+            .await
+            .map_err(|e| DatabaseError::Migration(format!("connect bootstrap: {e}")))?;
+        (client, tokio::spawn(conn))
+    };
+
+    client
+        .batch_execute(&format!("CREATE SCHEMA IF NOT EXISTS {SC_SCHEMA}"))
+        .await
+        .map_err(|e| DatabaseError::Migration(format!("create schema: {e}")))?;
+    drop(client);
+    let _ = conn_task.await;
+    Ok(())
 }
 
 fn establish_connection_rustls(config: &str) -> BoxFuture<ConnectionResult<AsyncPgConnection>> {
