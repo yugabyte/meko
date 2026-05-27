@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AlertCircle, Loader2, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   getApiErrorMessage,
   getDatapackConversation,
@@ -143,34 +144,63 @@ export function ConversationThreadPane({
   }, [detail, olderMessages]);
 
   // Deep-link: when arriving with ?memoryId=<id>, find the message that
-  // extracted that memory, scroll to it, and shimmer the bubble.
+  // extracted that memory, scroll to it, shimmer the turn, and open the
+  // trace drawer on the extracted-memories panel.
   const [searchParams] = useSearchParams();
   const targetMemoryId = searchParams.get("memoryId") ?? "";
   const msgElRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const didAutoSelectRef = useRef(false);
+  const didDeepLinkRef = useRef(false);
   const [shimmeringMessageId, setShimmeringMessageId] = useState("");
+  const [deepLinkPending, setDeepLinkPending] = useState(false);
 
   useEffect(() => {
-    if (!targetMemoryId || !messages.length || didAutoSelectRef.current) return;
+    didDeepLinkRef.current = false;
+    setDeepLinkPending(!!targetMemoryId);
+    setShimmeringMessageId("");
+  }, [conversationId, targetMemoryId]);
+
+  const revealDeepLinkTarget = useCallback(
+    (messageId: string) => {
+      if (didDeepLinkRef.current) return;
+      didDeepLinkRef.current = true;
+      setDeepLinkPending(false);
+      window.setTimeout(() => {
+        msgElRefs.current[messageId]?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+        setShimmeringMessageId(messageId);
+        onOpenTraceWithMemoryShimmer?.(messageId);
+        window.setTimeout(() => setShimmeringMessageId(""), 2800);
+      }, 150);
+    },
+    [onOpenTraceWithMemoryShimmer],
+  );
+
+  useEffect(() => {
+    if (!deepLinkPending || !targetMemoryId || loading) return;
     const target = messages.find((m) => m.memory_ids?.includes(targetMemoryId));
-    if (!target) return;
-    didAutoSelectRef.current = true;
-    // Slight delay so the DOM has settled after the thread renders.
-    setTimeout(() => {
-      msgElRefs.current[target.message_id]?.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-      setShimmeringMessageId(target.message_id);
-      setTimeout(() => setShimmeringMessageId(""), 1800);
-    }, 150);
-  }, [messages, targetMemoryId]);
-
-  // Reset auto-select flag when conversation changes — otherwise switching
-  // conversations would skip the deep-link scroll on the new thread.
-  useEffect(() => {
-    didAutoSelectRef.current = false;
-  }, [conversationId]);
+    if (target) {
+      revealDeepLinkTarget(target.message_id);
+      return;
+    }
+    if (olderHasMore && !loadingOlder) {
+      void loadOlder();
+      return;
+    }
+    if (!olderHasMore) {
+      setDeepLinkPending(false);
+    }
+  }, [
+    deepLinkPending,
+    targetMemoryId,
+    messages,
+    loading,
+    olderHasMore,
+    loadingOlder,
+    loadOlder,
+    revealDeepLinkTarget,
+  ]);
 
   if (loading) {
     return (
@@ -208,6 +238,12 @@ export function ConversationThreadPane({
         now={now}
       />
 
+      <style>{`
+        @keyframes meko-deeplink-pulse {
+          0%, 100% { box-shadow: 0 0 0 2px rgb(251 191 36 / 0.55), 0 0 16px 0 rgb(251 191 36 / 0.25); }
+          50%      { box-shadow: 0 0 0 2px rgb(251 191 36 / 0.85), 0 0 24px 4px rgb(251 191 36 / 0.35); }
+        }
+      `}</style>
       <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-6">
         {olderHasMore ? (
           <div className="flex justify-center">
@@ -232,12 +268,29 @@ export function ConversationThreadPane({
           </p>
         ) : null}
 
-        {messages.map((m) => (
+        {messages.map((m) => {
+          const isTarget = shimmeringMessageId === m.message_id;
+          return (
           <div
             key={m.message_id}
             ref={(el) => {
               msgElRefs.current[m.message_id] = el;
             }}
+            data-deeplink-target={isTarget ? "true" : undefined}
+            // Pulsing amber halo signals "this is the turn that produced
+            // the memory you clicked on". Scroll margin keeps it clear of
+            // the sticky thread header when `scrollIntoView` centers it.
+            // Background + padding are baked in so the entrance is purely
+            // additive (no layout shift on highlight start/end).
+            className={cn(
+              "scroll-mt-24 rounded-xl px-3 py-2 -mx-3 transition-colors duration-300",
+              isTarget && "bg-amber-500/[0.04] dark:bg-amber-400/[0.06]",
+            )}
+            style={
+              isTarget
+                ? { animation: "meko-deeplink-pulse 1.4s ease-in-out 2" }
+                : undefined
+            }
           >
             <ThreadTurn
               message={m}
@@ -256,7 +309,8 @@ export function ConversationThreadPane({
               conversationId={conversationId}
             />
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

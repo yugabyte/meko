@@ -851,9 +851,10 @@ LIMIT  $3 OFFSET $4`
 	// Populate per-message persisted-memory counts and IDs from mem0 so
 	// the thread chips reflect actual extracted rows (aligning with the
 	// conversation-level MemoriesAdded metric), and the UI can deep-link
-	// to the specific message that extracted a given memory.
+	// to the specific message that extracted a given memory by matching
+	// the mem0 row's `id` against the per-message `MemoryIDs` slice.
 	if len(header.Thread) > 0 {
-		memRes, err := r.memoriesPerMessageWindow(projectID, sessionID, windows)
+		memRes, err := r.mem0PerMessageWindow(datapackID, sessionID, windows)
 		if err != nil {
 			return nil, err
 		}
@@ -869,61 +870,78 @@ LIMIT  $3 OFFSET $4`
 
 type memoryWindowResult struct {
 	counts    map[string]int64
-	memoryIDs map[string][]string // messageID → []memoryID
+	memoryIDs map[string][]string // messageID → []memoryID (real mem0 UUIDs)
 }
 
-func (r *LangfuseRepo) memoriesPerMessageWindow(
-	projectID, sessionID string,
+// attributeTimeToMessageWindow walks the ordered bookmark windows in
+// lockstep with chronologically-sorted events and returns the message
+// turn whose window contains `at`. `winIdx` is advanced in place so
+// successive calls amortise to O(N+M) instead of O(N*M).
+//
+// Mirrors the windowing logic from the Langfuse-span attribution path:
+// events firing before the first bookmark land on the first turn, and
+// events firing after the last bookmark land on the last turn.
+func attributeTimeToMessageWindow(windows []messageWindow, winIdx *int, at time.Time) string {
+	for *winIdx < len(windows) {
+		w := windows[*winIdx]
+		if at.Before(w.Start) {
+			if *winIdx == 0 {
+				return w.MessageID
+			}
+			return ""
+		}
+		if w.NextStart != nil && !at.Before(*w.NextStart) {
+			*winIdx++
+			continue
+		}
+		return w.MessageID
+	}
+	if len(windows) > 0 {
+		return windows[len(windows)-1].MessageID
+	}
+	return ""
+}
+
+// mem0PerMessageWindow attributes persisted mem0 rows to the message
+// turn whose bookmark window they fall inside, using
+// `meko_created_at` for chronological ordering. The returned
+// `memoryIDs` are real mem0 UUIDs, so the UI can deep-link from the
+// Memories tab via `?memoryId=<id>` and reverse-lookup the matching
+// turn via `thread.message.memory_ids`.
+//
+// Counts only mem0 rows surfaced in the Memories tab — rows whose
+// `meko_promotion_user_action` is not `keep_as_memory` (matches the
+// filter in MemoriesRepo.ListByFilter, so the deep-link from a row
+// the user can actually see always resolves).
+func (r *LangfuseRepo) mem0PerMessageWindow(
+	datapackID, sessionID string,
 	windows []messageWindow,
 ) (memoryWindowResult, error) {
 	empty := memoryWindowResult{
 		counts:    map[string]int64{},
 		memoryIDs: map[string][]string{},
 	}
-	if !r.LangfuseDBConfigured() {
-		return empty, ErrLangfuseDBNotConfigured
-	}
 	if len(windows) == 0 {
 		return empty, nil
 	}
+	datapackID = strings.TrimSpace(datapackID)
+	sessionID = strings.ReplaceAll(strings.TrimSpace(sessionID), "-", "")
+	if datapackID == "" || sessionID == "" {
+		return empty, nil
+	}
 
-	// One row per 'Memory Add' tool call, with `memory_count` set to the
-	// number of memories that call actually extracted. mem0 returns
-	// `{"results": [{...}, {...}, ...]}` and a single tool invocation can
-	// extract multiple memories at once — counting tool calls (the old
-	// COUNT(*)) under-reports those, which is exactly what made the
-	// thread badge disagree with the trace drawer.
-	//
-	// The JSON cast is guarded so we never attempt jsonb on a malformed
-	// payload (output starts with `{` and mentions `"results"`); plain-
-	// text legacy output falls through to count = 1.
 	const q = `
-SELECT id,
-       start_time,
-       GREATEST(
-         COALESCE(
-           CASE WHEN btrim(output::text) LIKE '{%}'
-                 AND output::text LIKE '%"results"%'
-                THEN jsonb_array_length((output::text)::jsonb -> 'results')
-                ELSE NULL
-           END,
-           1
-         ),
-         1
-       )::bigint AS memory_count
-FROM   clickhouse.observations
-WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
-  AND  type = 'TOOL'
-  AND  name ILIKE '%memory add%'
-  AND  output::text IS NOT NULL
-  AND  output::text <> ''
-  AND  output::text NOT LIKE '%"results": []%'
-  AND  output::text NOT LIKE '%"added_entities": []%'
-ORDER  BY start_time ASC`
+SELECT id::text AS memory_id, meko_created_at
+FROM   datapacks.meko_mem0_collection
+WHERE  meko_datapack_id = $1::uuid
+  AND  meko_conversation_id IS NOT NULL
+  AND  REPLACE(meko_conversation_id::text, '-', '') = $2
+  AND  meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action
+ORDER  BY meko_created_at ASC, id ASC`
 
-	rows, err := r.langfuseDB.Query(q, projectID, sessionID)
+	rows, err := r.metaDB.Query(q, datapackID, sessionID)
 	if err != nil {
-		return empty, fmt.Errorf("langfuse db: count meaningful memory spans: %w", err)
+		return empty, fmt.Errorf("meta db: list mem0 rows for message windows: %w", err)
 	}
 	defer rows.Close()
 
@@ -936,48 +954,22 @@ ORDER  BY start_time ASC`
 		res.memoryIDs[w.MessageID] = nil
 	}
 
-	assign := func(messageID, spanID string, memoryCount int64) {
-		if memoryCount <= 0 {
-			memoryCount = 1
-		}
-		res.counts[messageID] += memoryCount
-		// We don't have per-extracted-memory IDs here (would require
-		// parsing each output payload), so we record the span ID as a
-		// stand-in. The UI uses memoryIDs to highlight the badge, not
-		// to deep-link, so this is fine.
-		res.memoryIDs[messageID] = append(res.memoryIDs[messageID], spanID)
-	}
-
 	winIdx := 0
 	for rows.Next() {
-		var spanID string
-		var startTime time.Time
-		var memoryCount int64
-		if err := rows.Scan(&spanID, &startTime, &memoryCount); err != nil {
-			return empty, fmt.Errorf("langfuse db: scan memory span: %w", err)
+		var memID string
+		var createdAt time.Time
+		if err := rows.Scan(&memID, &createdAt); err != nil {
+			return empty, fmt.Errorf("meta db: scan mem0 row: %w", err)
 		}
-
-		// Attribute to the correct message window.
-		for winIdx < len(windows) {
-			w := windows[winIdx]
-			if startTime.Before(w.Start) {
-				// This span is before the current window.
-				// If it's the first window, attribute it there.
-				if winIdx == 0 {
-					assign(w.MessageID, spanID, memoryCount)
-				}
-				break
-			}
-			if w.NextStart != nil && !startTime.Before(*w.NextStart) {
-				winIdx++
-				continue
-			}
-			assign(w.MessageID, spanID, memoryCount)
-			break
+		messageID := attributeTimeToMessageWindow(windows, &winIdx, createdAt)
+		if messageID == "" {
+			continue
 		}
+		res.counts[messageID]++
+		res.memoryIDs[messageID] = append(res.memoryIDs[messageID], memID)
 	}
 	if err := rows.Err(); err != nil {
-		return empty, fmt.Errorf("langfuse db: iterate memory spans: %w", err)
+		return empty, fmt.Errorf("meta db: iterate mem0 rows: %w", err)
 	}
 	return res, nil
 }

@@ -68,6 +68,7 @@ export default function DatapackConversationsViewerPage({
 }: Props) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const targetMemoryId = searchParams.get("memoryId") ?? "";
   const sourceCrumb = useMemo(() => {
     const from = searchParams.get(CONVERSATION_SOURCE_QUERY_PARAM) ?? "";
     if (!isConversationSource(from)) return null;
@@ -183,6 +184,7 @@ export default function DatapackConversationsViewerPage({
         onClose={() => setTraceMessageId(null)}
         shimmerMemories={shimmerMemories}
         onShimmerMemoriesDone={() => setShimmerMemories(false)}
+        highlightMemoryId={targetMemoryId || undefined}
       />
     </div>
   );

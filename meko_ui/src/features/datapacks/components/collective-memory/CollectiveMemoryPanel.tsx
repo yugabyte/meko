@@ -147,15 +147,16 @@ export function CollectiveMemoryPanel({ datapackName, datapackId }: Props) {
           <ul className="space-y-2">
             {memories.map((m) => {
               const conversationId = m.conversation_id ?? "";
+              const traceConversationId = conversationId.replace(/-/g, "");
               return (
                 <li key={m.id}>
                   {conversationId ? (
                     <Link
                       to={datapackConversationsPathWithSource(
                         datapackName,
-                        conversationId,
+                        traceConversationId,
                         CONVERSATION_SOURCE.collectiveMemorySummary,
-                        undefined,
+                        { memoryId: m.id },
                         // Carry datapack_id through (name collisions
                         // across share boundaries) — see paths.ts.
                         datapackId,

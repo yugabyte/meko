@@ -60,6 +60,8 @@ type Props = {
    *  the user's attention after opening via the memory badge. */
   shimmerMemories?: boolean;
   onShimmerMemoriesDone?: () => void;
+  /** mem0 row id from ?memoryId= deep-link — highlights the matching card. */
+  highlightMemoryId?: string;
 };
 
 /** Which side of the drawer triggered the current hover.
@@ -79,6 +81,7 @@ export function TraceDrawer({
   onClose,
   shimmerMemories,
   onShimmerMemoriesDone,
+  highlightMemoryId,
 }: Props) {
   const [spans, setSpans] = useState<DatapackTraceSpan[]>([]);
   // `langfuse_project_id` rides along on the same trace response — the
@@ -267,6 +270,18 @@ export function TraceDrawer({
           0%   { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
         }
+        @keyframes meko-memory-flash {
+          0%, 100% {
+            border-color: rgb(251 191 36 / 0.75);
+            background-color: rgb(245 158 11 / 0.18);
+            box-shadow: 0 0 0 2px rgb(251 191 36 / 0.55), 0 0 18px 0 rgb(251 191 36 / 0.25);
+          }
+          50% {
+            border-color: rgb(251 191 36 / 0.95);
+            background-color: rgb(245 158 11 / 0.3);
+            box-shadow: 0 0 0 3px rgb(251 191 36 / 0.85), 0 0 28px 6px rgb(251 191 36 / 0.4);
+          }
+        }
       `}</style>
 
       {/* Backdrop. Click-through dismissal. */}
@@ -407,6 +422,7 @@ export function TraceDrawer({
                       signals={item.signals}
                       ordinal={idx + 1}
                       highlighted={hoveredSpanId === item.span.id}
+                      targeted={!!highlightMemoryId && item.memoryId === highlightMemoryId}
                       hoverSource={hoverSource}
                       onHoverSpan={handleHoverSpan}
                     />
@@ -462,6 +478,8 @@ type MemoryCardProps = {
   signals: MemorySignals;
   ordinal: number;
   highlighted: boolean;
+  /** Deep-link target from ?memoryId= — stronger highlight + auto-scroll. */
+  targeted?: boolean;
   /** Side of the drawer that originated the current hover. We only scroll
    *  this card into view when the hover came from the *tree*, never when the
    *  user's cursor is already inside the memory list. */
@@ -478,6 +496,7 @@ function MemoryCard({
   signals,
   ordinal,
   highlighted,
+  targeted = false,
   hoverSource,
   onHoverSpan,
 }: MemoryCardProps) {
@@ -499,15 +518,44 @@ function MemoryCard({
     }
   }, [highlighted, hoverSource]);
 
+  // Deep-link target: scroll the card into view, then flash it amber for
+  // a few seconds before fading back to the resting card style. The
+  // animation runs ~2.8s (4 pulses × 700ms); after that we clear the
+  // flag so the highlight goes away on its own without the URL needing
+  // to change.
+  const [flashing, setFlashing] = useState(false);
+  useEffect(() => {
+    if (!targeted) {
+      setFlashing(false);
+      return;
+    }
+    if (cardRef.current) {
+      cardRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+    setFlashing(true);
+    const t = window.setTimeout(() => setFlashing(false), 2800);
+    return () => window.clearTimeout(t);
+  }, [targeted]);
+
   return (
     <li
       ref={cardRef}
       className={cn(
-        "rounded-lg border px-3 py-2.5 transition-colors duration-100 cursor-default",
-        highlighted
+        "rounded-lg border px-3 py-2.5 transition-colors duration-300 cursor-default",
+        !flashing && highlighted
           ? "border-blue-400/60 bg-blue-500/15 ring-1 ring-blue-400/30"
-          : "border-blue-500/20 bg-blue-500/5 hover:border-blue-400/40 hover:bg-blue-500/10",
+          : !flashing
+            ? "border-blue-500/20 bg-blue-500/5 hover:border-blue-400/40 hover:bg-blue-500/10"
+            : "border-amber-400/80 bg-amber-500/15",
       )}
+      style={
+        flashing
+          ? { animation: "meko-memory-flash 0.7s ease-in-out 4" }
+          : undefined
+      }
       onMouseEnter={() => onHoverSpan(span.id, "memory")}
       onMouseLeave={() => onHoverSpan(null, "memory")}
     >
