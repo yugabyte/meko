@@ -64,6 +64,11 @@ func run() error {
 	// migrate only flag
 	migrateOnly := flag.Bool("migrate-only", false, "run migrations and exit without starting the server")
 
+	// Scope the migration run to a single set. Both default to false,
+	// which runs all migrations. The two flags are mutually exclusive.
+	onlySystemMigrate := flag.Bool("only-system-migrate", false, "run only meko_system migrations (implies -migrate-only)")
+	onlyDataMigrate := flag.Bool("only-data-migrate", false, "run only data-plane migrations (implies -migrate-only)")
+
 	// Cognito configuration
 	cognitoRegion := flag.String("cognito-region", "", "AWS region for Cognito User Pool")
 	cognitoPoolID := flag.String("cognito-pool-id", "", "Cognito User Pool ID")
@@ -217,12 +222,25 @@ func run() error {
 		}
 	}
 
-	if *migrateOnly {
-		systemDetails, err := db.RunMigrations(systemConn, dataConn)
+	if *onlySystemMigrate && *onlyDataMigrate {
+		return fmt.Errorf("-only-system-migrate and -only-data-migrate are mutually exclusive")
+	}
+
+	if *migrateOnly || *onlySystemMigrate || *onlyDataMigrate {
+		// Either scoping flag selects a single migration set and implies a
+		// migrate-and-exit run. With neither set we run all migrations.
+		migrationScope := db.AllMigrations
+		switch {
+		case *onlySystemMigrate:
+			migrationScope.Data = false
+		case *onlyDataMigrate:
+			migrationScope.System = false
+		}
+		details, err := db.RunMigrations(systemConn, dataConn, migrationScope)
 		if err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}
-		for _, d := range systemDetails {
+		for _, d := range details {
 			slog.Info("migration", "detail", d)
 		}
 		slog.Info("migrations complete, exiting")

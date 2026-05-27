@@ -86,31 +86,46 @@ const (
 	DBPurposeData   DBPurpose = "data"
 )
 
-func RunMigrations(systemDB, dataDB *sql.DB) ([]string, error) {
-	dataM, err := getMigrator(dataDB, DBPurposeData, dataMigrationsFS, "migrations/data")
-	if err != nil {
-		slog.Error("failed to get migrator", "purpose", DBPurposeData, "error", err)
-		return nil, err
-	}
-	defer dataM.Close()
-	systemM, err := getMigrator(systemDB, DBPurposeSystem, systemMigrationsFS, "migrations/system")
-	if err != nil {
-		slog.Error("failed to get migrator", "purpose", DBPurposeSystem, "error", err)
-		return nil, err
-	}
-	defer systemM.Close()
+// MigrationScope selects which migration sets RunMigrations applies.
+type MigrationScope struct {
+	System bool
+	Data   bool
+}
 
+// AllMigrations runs both the data-plane and meko_system migration sets.
+var AllMigrations = MigrationScope{System: true, Data: true}
+
+func RunMigrations(systemDB, dataDB *sql.DB, scope MigrationScope) ([]string, error) {
 	var details []string
-	d, err := applyMigrator(dataM, DBPurposeData)
-	if err != nil {
-		return nil, err
+
+	if scope.Data {
+		dataM, err := getMigrator(dataDB, DBPurposeData, dataMigrationsFS, "migrations/data")
+		if err != nil {
+			slog.Error("failed to get migrator", "purpose", DBPurposeData, "error", err)
+			return nil, err
+		}
+		defer dataM.Close()
+		d, err := applyMigrator(dataM, DBPurposeData)
+		if err != nil {
+			return nil, err
+		}
+		details = append(details, d)
 	}
-	details = append(details, d)
-	d, err = applyMigrator(systemM, DBPurposeSystem)
-	if err != nil {
-		return nil, err
+
+	if scope.System {
+		systemM, err := getMigrator(systemDB, DBPurposeSystem, systemMigrationsFS, "migrations/system")
+		if err != nil {
+			slog.Error("failed to get migrator", "purpose", DBPurposeSystem, "error", err)
+			return nil, err
+		}
+		defer systemM.Close()
+		d, err := applyMigrator(systemM, DBPurposeSystem)
+		if err != nil {
+			return nil, err
+		}
+		details = append(details, d)
 	}
-	details = append(details, d)
+
 	return details, nil
 }
 
