@@ -229,7 +229,11 @@ pub struct YbStoreConfig {
     /// Name of an environment variable holding the password. If unset, no
     /// password is sent (suitable for trust-auth dev clusters).
     pub password_env: Option<String>,
-    /// Database name to connect to.
+    /// Database name to connect to. Defaults to `yb_storage` — the shared
+    /// DB that neon_local provisions for pageserver/safekeeper/storage_controller
+    /// to colocate `blobs`, `wals`, and the `storage_controller` schema.
+    /// Override per-component if you need a different layout.
+    #[serde(default = "default_yb_dbname")]
     pub dbname: String,
     /// Name of the table that holds the objects.
     pub table_name: String,
@@ -256,6 +260,10 @@ pub struct YbStoreConfig {
 
 fn default_yb_port() -> u16 {
     5433
+}
+
+fn default_yb_dbname() -> String {
+    "yb_storage".to_string()
 }
 
 fn default_yb_concurrency_limit() -> NonZeroUsize {

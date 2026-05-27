@@ -51,7 +51,12 @@ const COMMAND: &str = "storage_controller";
 
 const STORAGE_CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG16;
 
-const DB_NAME: &str = "storage_controller";
+// All three subsystems (storage_controller, pageserver YbStore for blobs,
+// safekeeper for wals) share `yb_storage` on the YB cluster by default.
+// The controller's tables live in a dedicated `storage_controller` schema
+// inside this DB (see `storage_controller::persistence::SC_SCHEMA`); blobs
+// and wals are top-level tables in the same DB.
+const DB_NAME: &str = "yb_storage";
 
 pub struct NeonStorageControllerStartArgs {
     pub instance_id: u8,
@@ -314,12 +319,23 @@ impl StorageController {
             .context("storage_controller.database_url must include a database name")?
             .to_string();
 
-        // Step 1: connect to the YB admin DB ('yugabyte') and CREATE the
-        // controller DB + the yb_storage DB.
+        // The controller's tables live in the `storage_controller` schema
+        // inside `yb_storage` (created by the controller's `migration_run`
+        // bootstrap). `blobs` and `wals` are top-level tables in the same
+        // DB. So we only need one DB: yb_storage. We log if the operator
+        // pointed the URL elsewhere — that still works, but they lose the
+        // colocation invariant.
+        if controller_db != "yb_storage" {
+            tracing::warn!(
+                "storage_controller.database_url names db {controller_db:?} \
+                 (not the default `yb_storage`); blobs/wals colocation \
+                 assumes yb_storage — override deliberately or update the URL"
+            );
+        }
         Self::create_database(&target, &controller_db).await?;
-        Self::create_database(&target, "yb_storage").await?;
-
-        // Step 2: connect to yb_storage and run its DDL.
+        if controller_db != "yb_storage" {
+            Self::create_database(&target, "yb_storage").await?;
+        }
         Self::ensure_yb_storage_schema(&target).await?;
 
         Ok(())
