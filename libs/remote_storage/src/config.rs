@@ -518,6 +518,8 @@ timeout = '5s'";
                     table_name: "pageserver_objects".into(),
                     prefix: Some("tenant-a/".into()),
                     concurrency_limit: default_yb_concurrency_limit(),
+                    sslmode: None,
+                    sslrootcert: None,
                 }),
                 timeout: RemoteStorageConfig::DEFAULT_TIMEOUT,
                 small_timeout: RemoteStorageConfig::DEFAULT_SMALL_TIMEOUT,
