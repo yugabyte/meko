@@ -945,7 +945,7 @@ WHERE  meko_datapack_id = $1::uuid
   AND  meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action
 ORDER  BY meko_created_at ASC, id ASC`
 
-	rows, err := r.metaDB.Query(q, datapackID, sessionID)
+	rows, err := r.dataDB.Query(q, datapackID, sessionID)
 	if err != nil {
 		return empty, fmt.Errorf("meta db: list mem0 rows for message windows: %w", err)
 	}
