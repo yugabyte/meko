@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { THEME_MESSAGE_TYPE, useTheme, type Theme } from "@/lib/theme";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   bootstrapObserveSession,
@@ -46,22 +45,15 @@ function normalizeObserveEmbedPath(rawPath: string): string {
  * Iframe lives under Langfuse basePath (/observe/...) on meko-proxy :5000 so Next.js router matches.
  * Keep a trailing slash on the base when there is no extra path (nginx / location matching).
  */
-function observeIframeSrc(
-  embedBase: string,
-  langfusePath: string,
-  retry: number,
-  theme: Theme,
-): string {
+function observeIframeSrc(embedBase: string, langfusePath: string, retry: number): string {
   const base = embedBase.replace(/\/+$/, "");
   const path = langfusePath.replace(/^\/+/, "");
   const beforeQuery = path ? `${base}/${path}` : `${base}/`;
   const sep = beforeQuery.includes("?") ? "&" : "?";
-  return `${beforeQuery}${sep}r=${retry}&mekoTheme=${theme}`;
+  return `${beforeQuery}${sep}r=${retry}`;
 }
 
 export default function ObservePage() {
-  const [theme] = useTheme();
-  const observeIframeRef = useRef<HTMLIFrameElement>(null);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
   /**
@@ -211,22 +203,6 @@ export default function ObservePage() {
     };
   }, []);
 
-  const iframeSrc = useMemo(
-    () => observeIframeSrc(observeEmbedPath, effectiveRelPath, embedRetry, theme),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- live theme toggles use postMessage
-    [observeEmbedPath, effectiveRelPath, embedRetry],
-  );
-
-  /** Push theme changes into the Langfuse iframe without a full reload. */
-  useEffect(() => {
-    const iframe = observeIframeRef.current;
-    if (!iframe?.contentWindow) return;
-    iframe.contentWindow.postMessage(
-      { type: THEME_MESSAGE_TYPE, theme },
-      window.location.origin,
-    );
-  }, [theme]);
-
   return (
     <div className="flex-1 h-screen bg-background text-foreground flex flex-col">
       <AppWorkspaceHeader
@@ -254,10 +230,9 @@ export default function ObservePage() {
           </div>
         ) : (
           <iframe
-            ref={observeIframeRef}
             key={`${effectiveRelPath}#${embedRetry}`}
             title="Langfuse Observe"
-            src={iframeSrc}
+            src={observeIframeSrc(observeEmbedPath, effectiveRelPath, embedRetry)}
             className="w-full h-full border-0 bg-input"
             onError={() => {
               if (embedRetry > 0) return;

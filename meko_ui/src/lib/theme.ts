@@ -27,12 +27,8 @@ export type Theme = "light" | "dark";
 
 /** localStorage key. `meko:` prefix matches the other persisted-pref
  *  keys in the codebase (`meko:observe-bootstrap-cache`,
- *  `meko:observe-iframe-version`). Langfuse Observe embed reads the
- *  same key when served from the same origin via meko-proxy. */
-export const THEME_STORAGE_KEY = "meko:theme";
-
-/** postMessage `type` for parent → Langfuse iframe theme sync. */
-export const THEME_MESSAGE_TYPE = "meko:theme";
+ *  `meko:observe-iframe-version`). */
+const THEME_STORAGE_KEY = "meko:theme";
 
 /** CSS class toggled on `<html>` to activate the dark-mode variables.
  *  Tailwind's `dark:` variant + our `.dark { … }` block in
@@ -57,19 +53,6 @@ function getInitialTheme(): Theme {
   return "dark";
 }
 
-/** Notify embedded Langfuse iframes on the same origin (Observe hub). */
-function broadcastThemeToEmbeds(theme: Theme): void {
-  if (typeof document === "undefined") return;
-  const payload = { type: THEME_MESSAGE_TYPE, theme };
-  for (const iframe of document.querySelectorAll("iframe")) {
-    try {
-      iframe.contentWindow?.postMessage(payload, window.location.origin);
-    } catch {
-      // iframe not ready or cross-origin
-    }
-  }
-}
-
 /** Apply the theme to `<html>` and persist the choice. Idempotent —
  *  safe to call from an effect on every render. */
 function applyTheme(theme: Theme): void {
@@ -83,7 +66,6 @@ function applyTheme(theme: Theme): void {
     // Storage unavailable — the in-memory state still works; just
     // won't survive a reload. Silent by design.
   }
-  broadcastThemeToEmbeds(theme);
 }
 
 /** Sync the `<html>` class to the initial preference BEFORE React
