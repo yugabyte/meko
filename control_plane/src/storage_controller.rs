@@ -483,6 +483,51 @@ impl StorageController {
             .context("creating yb_storage.public.wals")?;
         println!("Ensured table yb_storage.public.wals");
 
+        // yb-pageserver schema: row-per-(key, lsn) page store plus a
+        // per-timeline state row that replaces local `metadata`, the
+        // `index_part.json` layer list, and `tenant-manifest.json`.
+        client
+            .batch_execute("CREATE SCHEMA IF NOT EXISTS pageserver")
+            .await
+            .context("creating schema yb_storage.pageserver")?;
+        println!("Ensured schema yb_storage.pageserver");
+
+        client
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS pageserver.pages (
+                    tenant_id    TEXT    NOT NULL,
+                    timeline_id  TEXT    NOT NULL,
+                    key          BYTEA   NOT NULL,
+                    lsn          BIGINT  NOT NULL,
+                    is_image     BOOLEAN NOT NULL,
+                    will_init    BOOLEAN NOT NULL,
+                    payload      BYTEA   NOT NULL,
+                    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+                )",
+            )
+            .await
+            .context("creating yb_storage.pageserver.pages")?;
+        println!("Ensured table yb_storage.pageserver.pages");
+
+        client
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS pageserver.timelines (
+                    tenant_id              TEXT    NOT NULL,
+                    timeline_id            TEXT    NOT NULL,
+                    last_record_lsn        BIGINT  NOT NULL,
+                    disk_consistent_lsn    BIGINT  NOT NULL,
+                    applied_gc_cutoff_lsn  BIGINT  NOT NULL,
+                    ancestor_timeline_id   TEXT,
+                    ancestor_lsn           BIGINT,
+                    current_generation     INT     NOT NULL,
+                    pg_version             INT     NOT NULL,
+                    PRIMARY KEY ((tenant_id) HASH, timeline_id)
+                )",
+            )
+            .await
+            .context("creating yb_storage.pageserver.timelines")?;
+        println!("Ensured table yb_storage.pageserver.timelines");
+
         drop(client);
         conn_task.await??;
         Ok(())
