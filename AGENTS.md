@@ -10,8 +10,8 @@ subsystem doc that matches whatever you're touching.
 
 This repo has a Meko datapack for agent memory:
 
-- **Name**: `Neon`
-- **ID**: `2536022f-3713-481a-8cf2-222c0b1b027a`
+- **Name**: `yb-light`
+- **ID**: `fd3b43a0-ebd6-4732-958b-fae9a50a0505`
 
 Use it when storing repo-scoped memories.
 
