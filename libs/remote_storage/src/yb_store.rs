@@ -179,6 +179,100 @@ impl YbStore {
         format!("{:x}", md5::compute(data))
     }
 
+    /// Strip a `-<8 hex>` generation marker from a blob key body and
+    /// return the key without it plus the parsed generation. Two layouts
+    /// the pageserver emits today:
+    ///
+    /// - **Trailing** (`<name>-<gen>`): `index_part.json-00000005`,
+    ///   `<layer-name>-v1-00000005`. Suffix sits at the very end.
+    /// - **Pre-extension** (`<name>-<gen>.<ext>`): `tenant-manifest-00000001.json`.
+    ///   Suffix sits just before the last `.<ext>`.
+    ///
+    /// Genless files (heatmap, initdb archives, key bodies without any
+    /// `-<8hex>` segment in either position) pass through unchanged with
+    /// `Generation = None`.
+    ///
+    /// The check is conservative: we require an explicit `-` preceding
+    /// the 8-hex token. False positives on file names that happen to
+    /// contain `-<8hex>` somewhere else aren't possible by construction
+    /// (layer names use `__` as their internal separator, not `-` before
+    /// 8-hex tokens).
+    fn split_key_generation(key_body: &str) -> (String, Option<i32>) {
+        // Helper: try to parse the 8-char window ending at `end_exclusive`
+        // as `-<8hex>`. Returns the parsed generation if it does.
+        fn check(buf: &[u8], end_exclusive: usize) -> Option<i32> {
+            if end_exclusive < 9 || buf[end_exclusive - 9] != b'-' {
+                return None;
+            }
+            let suffix = std::str::from_utf8(&buf[end_exclusive - 8..end_exclusive]).ok()?;
+            if !suffix.chars().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            i32::from_str_radix(suffix, 16).ok()
+        }
+
+        let bytes = key_body.as_bytes();
+        // Pattern 1: trailing `-<8hex>` (index_part.json, layer files).
+        if let Some(g) = check(bytes, bytes.len()) {
+            return (key_body[..bytes.len() - 9].to_string(), Some(g));
+        }
+        // Pattern 2: `-<8hex>` immediately before the final extension dot
+        // (tenant-manifest-<gen>.json). Use `rfind` to pick the LAST dot
+        // so multi-dot names still work.
+        if let Some(dot_idx) = key_body.rfind('.') {
+            if let Some(g) = check(bytes, dot_idx) {
+                let mut body = String::with_capacity(key_body.len() - 9);
+                body.push_str(&key_body[..dot_idx - 9]);
+                body.push_str(&key_body[dot_idx..]);
+                return (body, Some(g));
+            }
+        }
+        (key_body.to_string(), None)
+    }
+
+    /// Inverse of [`split_key_generation`]: re-insert the generation
+    /// marker into `key_body` so a stored `(key, generation)` pair can
+    /// be surfaced back to the caller in the original path format.
+    ///
+    /// Two emit shapes the pageserver uses today:
+    /// - `tenant-manifest` is the one path-builder that puts the
+    ///   generation BEFORE the extension (`tenant-manifest-<gen>.json`).
+    /// - Everything else (`index_part.json`, layer files) puts it at
+    ///   the very end of the key.
+    ///
+    /// Split-rejoin can't perfectly invert from the body alone — both
+    /// `index_part.json-<gen>` and `tenant-manifest-<gen>.json` produce
+    /// `<x>.json` bodies — so we special-case the tenant-manifest name
+    /// here. New file types with pre-extension generations need to be
+    /// added to this list.
+    fn rejoin_key_generation(key_body: &str, generation: Option<i32>) -> String {
+        let Some(g) = generation else {
+            return key_body.to_string();
+        };
+        let suffix = format!("-{:08x}", g as u32);
+        if Self::uses_pre_extension_generation(key_body) {
+            if let Some(dot_idx) = key_body.rfind('.') {
+                let mut out = String::with_capacity(key_body.len() + suffix.len());
+                out.push_str(&key_body[..dot_idx]);
+                out.push_str(&suffix);
+                out.push_str(&key_body[dot_idx..]);
+                return out;
+            }
+        }
+        format!("{key_body}{suffix}")
+    }
+
+    /// Whether `key_body` (already gen-stripped) corresponds to a file
+    /// shape that emits its generation BEFORE the extension. Today only
+    /// the tenant-manifest fits.
+    fn uses_pre_extension_generation(key_body: &str) -> bool {
+        // The key body can be just `tenant-manifest.json` (when the
+        // caller's prefix already had `tenants/<T>/` stripped) or include
+        // a relative path. Match on the file-name portion only.
+        let basename = key_body.rsplit('/').next().unwrap_or(key_body);
+        basename == "tenant-manifest.json"
+    }
+
     /// Extract `(tenant_id, timeline_id)` from a `blobs` key by scanning
     /// the path for Neon-id-shaped tokens. Returns empty strings when the
     /// path doesn't carry the ids (e.g. tenant-scope-only blobs have an
@@ -403,11 +497,42 @@ impl RemoteStorage for YbStore {
         // contains tenant/timeline ids (the common case — pageserver
         // lists by `tenants/<X>/timelines/<Y>/…`), we filter on those
         // columns directly so the query hits a single hash tablet.
-        // The LIKE pattern is the **placeholder form** of the prefix
-        // since stored keys carry `{T}` / `{TL}` placeholders.
-        let (namespace, tenant_id, timeline_id, key_body_prefix) =
+        let (namespace, tenant_id, timeline_id, raw_key_body_prefix) =
             self.parse_key(&full_prefix);
-        let like_pattern = format!("{}%", escape_like(&key_body_prefix));
+        let (mut key_body_prefix, requested_gen) =
+            Self::split_key_generation(&raw_key_body_prefix);
+
+        // Pageserver's `remote_tenant_manifest_prefix` returns
+        // `…/tenant-manifest` (no extension) because S3/Azure LIST is
+        // literal-prefix and the stored keys are
+        // `tenant-manifest-<gen>.json`. For YB the storage-layer split
+        // gives us `tenant-manifest.json` as the canonical body, so
+        // rewrite the prefix here to match — turns the LIKE branch
+        // below into an equality lookup on a known filename.
+        if key_body_prefix
+            .rsplit('/')
+            .next()
+            .map(|seg| seg == "tenant-manifest")
+            .unwrap_or(false)
+        {
+            key_body_prefix.push_str(".json");
+        }
+
+        // Decide equality vs LIKE based on whether the prefix looks like
+        // a full filename (has a `.<ext>` in its terminal segment) or a
+        // directory/partial prefix. PK is
+        // `((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)`,
+        // so equality on `key` resolves to a single tablet; LIKE forces
+        // a full-cluster scan. Filename-shaped callers
+        // (`index_part.json`, `tenant-manifest.json` after the prefix
+        // rewrite above) take the fast path; directory-shaped callers
+        // (`tenants/X/timelines/`, anything ending in `/`) fall back
+        // to LIKE.
+        let key_body_is_filename = !key_body_prefix.is_empty()
+            && key_body_prefix
+                .rsplit('/')
+                .next()
+                .is_some_and(|seg| seg.contains('.'));
 
         let mut where_clauses: Vec<String> =
             vec!["namespace = $1::text::blob_namespace".to_string()];
@@ -421,33 +546,38 @@ impl RemoteStorage for YbStore {
             where_clauses.push(format!("timeline_id = ${}", bind_params.len() + 1));
             bind_params.push(Box::new(timeline_id.clone()));
         } else if !key_body_prefix.is_empty() && !key_body_prefix.starts_with("timelines/") {
-            // Tenant-scoped objects (e.g. `tenant-manifest`, `heatmap`)
-            // are stored under `(tenant_id, timeline_id='')` — a single
-            // YB hash tablet. Without an explicit `timeline_id = ''`
-            // predicate the planner can't lock onto that tablet and
-            // ends up scanning every (tenant, timeline_id) tablet
-            // (one per timeline) for the LIKE prefix; on tenants with
-            // many timelines this fans out into a minutes-long
-            // operation and the pageserver's `download_tenant_manifest`
-            // fallback times out.
-            //
-            // The branch is skipped when `key_body_prefix` is empty
-            // (full tenant scan) or starts with `timelines/` (caller is
-            // enumerating timelines — already short-circuited by
-            // `list_remote_timelines`'s controller-DB path, defended
-            // here for any future caller).
+            // Tenant-scoped objects (`tenant-manifest`, `heatmap`) are
+            // stored under `(tenant_id, timeline_id='')`. Explicit
+            // `timeline_id = ''` keeps the planner on those rows only
+            // (matters for the LIKE branch — equality already lands on
+            // one tablet by hash).
             where_clauses.push(format!("timeline_id = ${}", bind_params.len() + 1));
             bind_params.push(Box::new(String::new()));
         }
-        let like_idx = bind_params.len() + 1;
-        where_clauses.push(format!("key LIKE ${like_idx} ESCAPE '\\'"));
-        bind_params.push(Box::new(like_pattern));
+        if key_body_is_filename {
+            // Hash-tablet localised lookup. If the caller named a
+            // specific generation, match it; otherwise return whatever
+            // generation is stored for that key.
+            where_clauses.push(format!("key = ${}", bind_params.len() + 1));
+            bind_params.push(Box::new(key_body_prefix.clone()));
+            if requested_gen.is_some() {
+                where_clauses.push(format!(
+                    "generation IS NOT DISTINCT FROM ${}",
+                    bind_params.len() + 1
+                ));
+                bind_params.push(Box::new(requested_gen));
+            }
+        } else {
+            let like_pattern = format!("{}%", escape_like(&key_body_prefix));
+            where_clauses.push(format!("key LIKE ${} ESCAPE '\\'", bind_params.len() + 1));
+            bind_params.push(Box::new(like_pattern));
+        }
         where_clauses.push("chunk_idx = 0".to_string());
 
         let mut sql = format!(
-            "SELECT tenant_id, timeline_id, key, size_bytes, last_modified_us \
+            "SELECT tenant_id, timeline_id, key, generation, size_bytes, last_modified_us \
              FROM {} WHERE {} \
-             ORDER BY tenant_id, timeline_id, key",
+             ORDER BY tenant_id, timeline_id, key, generation",
             quote_ident(&self.table_name),
             where_clauses.join(" AND "),
         );
@@ -480,9 +610,15 @@ impl RemoteStorage for YbStore {
                     let row_tenant: String = row.get("tenant_id");
                     let row_timeline: String = row.get("timeline_id");
                     let row_key_body: String = row.get("key");
+                    let row_generation: Option<i32> = row.get("generation");
                     let size_bytes: i64 = row.get("size_bytes");
                     let last_modified_us: i64 = row.get("last_modified_us");
-                    let full_key = self.reconstruct_key(namespace, &row_tenant, &row_timeline, &row_key_body);
+                    // Re-attach the generation marker so callers see the
+                    // full original path (`index_part.json-00000005`,
+                    // `tenant-manifest-00000005.json`, etc.).
+                    let key_with_gen =
+                        Self::rejoin_key_generation(&row_key_body, row_generation);
+                    let full_key = self.reconstruct_key(namespace, &row_tenant, &row_timeline, &key_with_gen);
                     let remote_path = self
                         .db_key_to_remote_path(&full_key)
                         .map_err(DownloadError::Other)?;
@@ -518,10 +654,13 @@ impl RemoteStorage for YbStore {
                     let row_tenant: String = row.get("tenant_id");
                     let row_timeline: String = row.get("timeline_id");
                     let row_key_body: String = row.get("key");
+                    let row_generation: Option<i32> = row.get("generation");
                     let size_bytes: i64 = row.get("size_bytes");
                     let last_modified_us: i64 = row.get("last_modified_us");
 
-                    let full_key = self.reconstruct_key(namespace, &row_tenant, &row_timeline, &row_key_body);
+                    let key_with_gen =
+                        Self::rejoin_key_generation(&row_key_body, row_generation);
+                    let full_key = self.reconstruct_key(namespace, &row_tenant, &row_timeline, &key_with_gen);
                     let relative = match full_key.strip_prefix(listing_prefix.as_str()) {
                         Some(r) => r.to_string(),
                         None => continue,
@@ -573,17 +712,22 @@ impl RemoteStorage for YbStore {
             .map_err(|_| DownloadError::Cancelled)?;
 
         let db_key = self.full_key(key);
-        let (namespace, tenant_id, timeline_id, key_body) = self.parse_key(&db_key);
+        let (namespace, tenant_id, timeline_id, raw_key_body) = self.parse_key(&db_key);
+        let (key_body, requested_gen) = Self::split_key_generation(&raw_key_body);
         // chunk_idx=0 always exists for any object (including zero-byte ones),
         // and carries the denormalized size/etag/timestamp — one-row lookup.
+        // Generation is now a separate column, so we match it explicitly
+        // (`NULL` for genless files, exact value otherwise) to preserve
+        // the caller's gen-specific semantics.
         let sql = format!(
             "SELECT size_bytes, last_modified_us FROM {} \
              WHERE tenant_id = $1 AND timeline_id = $2 \
-               AND namespace = $3::text::blob_namespace AND key = $4 AND chunk_idx = 0",
+               AND namespace = $3::text::blob_namespace AND key = $4 \
+               AND generation IS NOT DISTINCT FROM $5 AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 4] =
-            [&tenant_id, &timeline_id, &namespace, &key_body];
+        let params: [&(dyn ToSql + Sync); 5] =
+            [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
         let row_opt = self
             .with_timeout_download(self.client.query_opt(&sql, &params), cancel)
             .await?;
@@ -641,7 +785,12 @@ impl RemoteStorage for YbStore {
         // chunk-count shrinking (the upsert GUC handles same-PK conflict but
         // wouldn't remove rows for keys that no longer exist in the new write).
         let table = quote_ident(&self.table_name);
-        let (namespace, tenant_id, timeline_id, key_body) = self.parse_key(&db_key);
+        let (namespace, tenant_id, timeline_id, raw_key_body) = self.parse_key(&db_key);
+        // Strip the `-<8hex>` generation suffix from the key body — it's
+        // stored as a dedicated column on the row, not as part of the
+        // key. Genless files (heatmap, initdb) keep their full key and
+        // get `generation = NULL`.
+        let (key_body, generation) = Self::split_key_generation(&raw_key_body);
         let delete_sql = format!(
             "DELETE FROM {table} \
              WHERE tenant_id = $1 AND timeline_id = $2 \
@@ -670,9 +819,9 @@ impl RemoteStorage for YbStore {
         // of latency.
         let insert_sql = format!(
             "INSERT INTO {table} \
-             (tenant_id, timeline_id, namespace, key, chunk_idx, data, size_bytes, \
-              etag, last_modified_us, metadata_json) \
-             VALUES ($1, $2, $3::text::blob_namespace, $4, $5, $6, $7, $8, $9, $10)"
+             (tenant_id, timeline_id, namespace, key, generation, chunk_idx, data, \
+              size_bytes, etag, last_modified_us, metadata_json) \
+             VALUES ($1, $2, $3::text::blob_namespace, $4, $5, $6, $7, $8, $9, $10, $11)"
         );
 
         // Materialize all chunk rows up front so each pipelined future can own
@@ -695,6 +844,7 @@ impl RemoteStorage for YbStore {
                     Box::new(timeline_id.clone()),
                     Box::new(namespace),
                     Box::new(key_body.clone()),
+                    Box::new(generation),
                     Box::new(idx),
                     Box::new(chunk),
                     Box::new(size),
@@ -727,21 +877,24 @@ impl RemoteStorage for YbStore {
 
         let db_key = self.full_key(from);
 
-        let (namespace, tenant_id, timeline_id, key_body) = self.parse_key(&db_key);
+        let (namespace, tenant_id, timeline_id, raw_key_body) = self.parse_key(&db_key);
+        let (key_body, requested_gen) = Self::split_key_generation(&raw_key_body);
 
         // Phase 1: cheap single-row lookup to get the denormalized metadata
         // (size_bytes / etag / last_modified_us / metadata_json) sitting on
         // chunk_idx = 0. Lets us honor If-None-Match and compute the byte
         // range without ever loading bulk data into memory.
+        // `generation IS NOT DISTINCT FROM $5` makes the match strict even
+        // when the requested gen is NULL (genless file).
         let head_sql = format!(
             "SELECT size_bytes, etag, last_modified_us, metadata_json \
              FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
                AND namespace = $3::text::blob_namespace AND key = $4 \
-               AND chunk_idx = 0",
+               AND generation IS NOT DISTINCT FROM $5 AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let head_params: [&(dyn ToSql + Sync); 4] =
-            [&tenant_id, &timeline_id, &namespace, &key_body];
+        let head_params: [&(dyn ToSql + Sync); 5] =
+            [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
         let head_opt = self
             .with_timeout_download(self.client.query_opt(&head_sql, &head_params), cancel)
             .await?;
@@ -810,7 +963,8 @@ impl RemoteStorage for YbStore {
             "SELECT chunk_idx, data FROM {} \
              WHERE tenant_id = $1 AND timeline_id = $2 \
                AND namespace = $3::text::blob_namespace AND key = $4 \
-               AND chunk_idx >= $5 AND chunk_idx <= $6 \
+               AND generation IS NOT DISTINCT FROM $5 \
+               AND chunk_idx >= $6 AND chunk_idx <= $7 \
              ORDER BY chunk_idx",
             quote_ident(&table)
         );
@@ -819,6 +973,7 @@ impl RemoteStorage for YbStore {
         let stream_timeline = timeline_id.clone();
         let stream_namespace = namespace;
         let stream_key = key_body.clone();
+        let stream_gen = requested_gen;
 
         // Open the row stream first (so any query error fails the
         // `download()` call cleanly with `DownloadError::Other` rather than
@@ -829,6 +984,7 @@ impl RemoteStorage for YbStore {
             Box::new(stream_timeline),
             Box::new(stream_namespace),
             Box::new(stream_key),
+            Box::new(stream_gen),
             Box::new(start_chunk),
             Box::new(end_chunk),
         ];
@@ -881,15 +1037,17 @@ impl RemoteStorage for YbStore {
     async fn delete(&self, path: &RemotePath, cancel: &CancellationToken) -> anyhow::Result<()> {
         let _permit = self.permit(RequestKind::Delete, cancel).await?;
         let db_key = self.full_key(path);
-        let (namespace, tenant_id, timeline_id, key_body) = self.parse_key(&db_key);
+        let (namespace, tenant_id, timeline_id, raw_key_body) = self.parse_key(&db_key);
+        let (key_body, requested_gen) = Self::split_key_generation(&raw_key_body);
         let sql = format!(
             "DELETE FROM {} \
              WHERE tenant_id = $1 AND timeline_id = $2 \
-               AND namespace = $3::text::blob_namespace AND key = $4",
+               AND namespace = $3::text::blob_namespace AND key = $4 \
+               AND generation IS NOT DISTINCT FROM $5",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 4] =
-            [&tenant_id, &timeline_id, &namespace, &key_body];
+        let params: [&(dyn ToSql + Sync); 5] =
+            [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
         self.with_timeout(self.client.execute(&sql, &params), cancel)
             .await
             .with_context(|| format!("YbStore delete of `{db_key}`"))?;
@@ -908,7 +1066,8 @@ impl RemoteStorage for YbStore {
         let sql = format!(
             "DELETE FROM {} \
              WHERE tenant_id = $1 AND timeline_id = $2 \
-               AND namespace = $3::text::blob_namespace AND key = $4",
+               AND namespace = $3::text::blob_namespace AND key = $4 \
+               AND generation IS NOT DISTINCT FROM $5",
             quote_ident(&self.table_name)
         );
 
@@ -916,22 +1075,29 @@ impl RemoteStorage for YbStore {
         // tuple, so we fan out one DELETE per object pipelined via
         // `execute_raw` + `try_join_all`. Same wire-level batching trick
         // as `upload`; each DELETE hits one hash tablet directly.
-        let parsed: Vec<(&'static str, String, String, String)> = paths
+        let parsed: Vec<(&'static str, String, String, String, Option<i32>)> = paths
             .iter()
-            .map(|p| self.parse_key(&self.full_key(p)))
+            .map(|p| {
+                let (ns, tenant, timeline, raw_body) = self.parse_key(&self.full_key(p));
+                let (body, generation) = Self::split_key_generation(&raw_body);
+                (ns, tenant, timeline, body, generation)
+            })
             .collect();
 
         let client = self.client.current().await?;
         let pipeline_fut = async {
-            let futures = parsed.into_iter().map(|(ns, tenant, timeline, key_body)| {
-                let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
-                    Box::new(tenant),
-                    Box::new(timeline),
-                    Box::new(ns),
-                    Box::new(key_body),
-                ];
-                client.execute_raw(&sql, params)
-            });
+            let futures = parsed
+                .into_iter()
+                .map(|(ns, tenant, timeline, key_body, generation)| {
+                    let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+                        Box::new(tenant),
+                        Box::new(timeline),
+                        Box::new(ns),
+                        Box::new(key_body),
+                        Box::new(generation),
+                    ];
+                    client.execute_raw(&sql, params)
+                });
             futures::future::try_join_all(futures).await?;
             Ok::<_, tokio_postgres::Error>(())
         };
@@ -954,43 +1120,54 @@ impl RemoteStorage for YbStore {
         let _permit = self.permit(RequestKind::Copy, cancel).await?;
         let from_key = self.full_key(from);
         let to_key = self.full_key(to);
-        let (from_ns, from_tenant, from_timeline, from_body) = self.parse_key(&from_key);
-        let (to_ns, to_tenant, to_timeline, to_body) = self.parse_key(&to_key);
+        let (from_ns, from_tenant, from_timeline, from_raw_body) = self.parse_key(&from_key);
+        let (to_ns, to_tenant, to_timeline, to_raw_body) = self.parse_key(&to_key);
+        let (from_body, from_gen) = Self::split_key_generation(&from_raw_body);
+        let (to_body, to_gen) = Self::split_key_generation(&to_raw_body);
         let table = quote_ident(&self.table_name);
         // Wipe the destination first so a copy that shrinks chunk count is
-        // clean, then copy all source chunk rows over.
+        // clean, then copy all source chunk rows over. Generation matches
+        // are explicit; a copy at a different gen leaves the existing
+        // gen's row in place.
         let delete_dst = format!(
             "DELETE FROM {table} \
              WHERE tenant_id = $1 AND timeline_id = $2 \
-               AND namespace = $3::text::blob_namespace AND key = $4"
+               AND namespace = $3::text::blob_namespace AND key = $4 \
+               AND generation IS NOT DISTINCT FROM $5"
         );
         {
-            let params: [&(dyn ToSql + Sync); 4] =
-                [&to_tenant, &to_timeline, &to_ns, &to_body];
+            let params: [&(dyn ToSql + Sync); 5] =
+                [&to_tenant, &to_timeline, &to_ns, &to_body, &to_gen];
             self.with_timeout(self.client.execute(&delete_dst, &params), cancel)
                 .await
                 .with_context(|| format!("YbStore copy: pre-delete `{to_key}`"))?;
         }
+        // Re-stamp the destination's generation from `to_gen` rather than
+        // copying the source's generation — the caller's `to` path is
+        // the truth.
         let insert_sql = format!(
             "INSERT INTO {table} \
-             (tenant_id, timeline_id, namespace, key, chunk_idx, data, \
+             (tenant_id, timeline_id, namespace, key, generation, chunk_idx, data, \
               size_bytes, etag, last_modified_us, metadata_json) \
-             SELECT $5, $6, $7::text::blob_namespace, $8, chunk_idx, data, \
+             SELECT $6, $7, $8::text::blob_namespace, $9, $10, chunk_idx, data, \
                     size_bytes, etag, \
                     (extract(epoch from now()) * 1000000)::bigint, metadata_json \
              FROM {table} \
              WHERE tenant_id = $1 AND timeline_id = $2 \
-               AND namespace = $3::text::blob_namespace AND key = $4"
+               AND namespace = $3::text::blob_namespace AND key = $4 \
+               AND generation IS NOT DISTINCT FROM $5"
         );
-        let params: [&(dyn ToSql + Sync); 8] = [
+        let params: [&(dyn ToSql + Sync); 10] = [
             &from_tenant,
             &from_timeline,
             &from_ns,
             &from_body,
+            &from_gen,
             &to_tenant,
             &to_timeline,
             &to_ns,
             &to_body,
+            &to_gen,
         ];
         let affected = self
             .with_timeout(self.client.execute(&insert_sql, &params), cancel)
@@ -1109,6 +1286,83 @@ mod tests {
         );
         assert_eq!(t, T_LEGACY);
         assert_eq!(tl, TL);
+    }
+
+    // ---- split_key_generation / rejoin_key_generation -------------
+
+    #[test]
+    fn split_trailing_index_part() {
+        let (body, g) = YbStore::split_key_generation("index_part.json-00000005");
+        assert_eq!(body, "index_part.json");
+        assert_eq!(g, Some(5));
+    }
+
+    #[test]
+    fn split_pre_extension_tenant_manifest() {
+        // The shape that triggered the user's question: gen sits before
+        // the `.json` extension, not at the end of the key.
+        let (body, g) = YbStore::split_key_generation("tenant-manifest-00000001.json");
+        assert_eq!(body, "tenant-manifest.json");
+        assert_eq!(g, Some(1));
+    }
+
+    #[test]
+    fn split_layer_v1_suffix() {
+        // Layer files end in `-v1-<gen>` — trailing-suffix shape.
+        let layer =
+            "000000000000000000000000-FFFFFFFFFFFFFFFFFFFFFFFF__0000000001620E40-0000000001621E40-v1-00000005";
+        let (body, g) = YbStore::split_key_generation(layer);
+        assert_eq!(g, Some(5));
+        assert!(body.ends_with("-v1"));
+        assert!(!body.ends_with("-00000005"));
+    }
+
+    #[test]
+    fn split_heatmap_no_gen() {
+        let (body, g) = YbStore::split_key_generation("heatmap-v1.json");
+        assert_eq!(body, "heatmap-v1.json");
+        assert_eq!(g, None);
+    }
+
+    #[test]
+    fn split_initdb_no_gen() {
+        let (body, g) = YbStore::split_key_generation("initdb.tar.zst");
+        assert_eq!(body, "initdb.tar.zst");
+        assert_eq!(g, None);
+    }
+
+    #[test]
+    fn split_non_hex_tail_not_a_generation() {
+        // `-zzzzzzzz` is 8 chars but non-hex — must NOT be parsed as gen.
+        let (body, g) = YbStore::split_key_generation("something-zzzzzzzz");
+        assert_eq!(body, "something-zzzzzzzz");
+        assert_eq!(g, None);
+    }
+
+    #[test]
+    fn rejoin_round_trip_trailing() {
+        let (body, g) = YbStore::split_key_generation("index_part.json-00000005");
+        assert_eq!(
+            YbStore::rejoin_key_generation(&body, g),
+            "index_part.json-00000005"
+        );
+    }
+
+    #[test]
+    fn rejoin_round_trip_pre_extension() {
+        let (body, g) = YbStore::split_key_generation("tenant-manifest-00000001.json");
+        assert_eq!(
+            YbStore::rejoin_key_generation(&body, g),
+            "tenant-manifest-00000001.json"
+        );
+    }
+
+    #[test]
+    fn rejoin_no_gen_passthrough() {
+        assert_eq!(
+            YbStore::rejoin_key_generation("heatmap-v1.json", None),
+            "heatmap-v1.json"
+        );
     }
 }
 

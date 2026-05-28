@@ -451,13 +451,14 @@ impl StorageController {
                     timeline_id      TEXT                  NOT NULL,
                     namespace        public.blob_namespace NOT NULL,
                     key              TEXT                  NOT NULL,
+                    generation       INT,
                     chunk_idx        INT                   NOT NULL,
                     data             BYTEA                 NOT NULL,
                     size_bytes       BIGINT                NOT NULL,
                     etag             TEXT                  NOT NULL,
                     last_modified_us BIGINT                NOT NULL,
                     metadata_json    TEXT,
-                    PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
+                    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
                 )",
             )
             .await
