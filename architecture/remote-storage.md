@@ -53,20 +53,32 @@ method against a YugabyteDB table reached via `tokio_postgres`.
 ```sql
 CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
-CREATE TABLE <table_name> (
-    tenant_id        TEXT             NOT NULL,    -- Neon tenant UUID, "" if not extractable
-    timeline_id      TEXT             NOT NULL,    -- Neon timeline UUID, "" for tenant-scope-only blobs
-    namespace        blob_namespace   NOT NULL,    -- 'pageserver' or 'safekeeper'
-    key              TEXT             NOT NULL,    -- path body with {T}/{TL} placeholders
-    chunk_idx        INT              NOT NULL,
-    data             BYTEA            NOT NULL,
-    size_bytes       BIGINT           NOT NULL,
-    etag             TEXT             NOT NULL,
-    last_modified_us BIGINT           NOT NULL,
+CREATE TABLE public.blobs (
+    tenant_id        TEXT                  NOT NULL,    -- Neon tenant UUID, "" if not extractable
+    timeline_id      TEXT                  NOT NULL,    -- Neon timeline UUID, "" for tenant-scope-only blobs
+    namespace        public.blob_namespace NOT NULL,    -- 'pageserver' or 'safekeeper'
+    key              TEXT                  NOT NULL,    -- discriminating filename, generation suffix stripped
+    generation       INT,                               -- pageserver attach gen; NULL for genless files
+    chunk_idx        INT                   NOT NULL,
+    data             BYTEA                 NOT NULL,
+    size_bytes       BIGINT                NOT NULL,
+    etag             TEXT                  NOT NULL,
+    last_modified_us BIGINT                NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
 );
 ```
+
+Key in the HASH part distributes load across tablets at a per-key
+granularity (avoiding a single hot tablet on big tenants) and turns
+`key = $x` lookups into one-tablet hash lookups. Generation lives in
+its own column rather than appended to `key` so that:
+
+- one row per logical file (old gens overwritten by new ones — ACID
+  isolation prevents split-brain, no need to keep multiple versions),
+- `WHERE key = '<full filename>'` is the dominant query shape (no LIKE),
+- genless files (heatmap, initdb archives) sit naturally with
+  `generation IS NULL`.
 
 `YbStore::parse_key` splits each incoming `RemotePath` into the four
 storage columns + the chunk index:
@@ -84,15 +96,25 @@ storage columns + the chunk index:
   pageserver and safekeeper write. Empty strings when a level is absent
   (tenant manifests have no `timeline_id`; future generic blobs may
   have neither).
-- **`key`**: the **discriminating suffix only**. `parse_key` strips
+- **`key`**: the **discriminating filename only**. `parse_key` strips
   the configured prefix *plus* the literal segments `tenants` and
-  `timelines`, *plus* the tenant_id and timeline_id values
-  themselves. What's left is the filename / identifier that
-  distinguishes one object from another within its
-  `(namespace, tenant_id, timeline_id)` bucket. The per-namespace
-  layout convention (where to put `tenants/`, where to put `timelines/`,
-  what the safekeeper-control case looks like) lives in
-  `reconstruct_key` — see below.
+  `timelines`, *plus* the tenant_id and timeline_id values themselves.
+  Then `split_key_generation` strips the trailing or pre-extension
+  `-<8hex>` generation marker into the separate `generation` column —
+  so a key like `index_part.json-00000005` lands as
+  `key = 'index_part.json'` + `generation = 5`, and
+  `tenant-manifest-00000001.json` as
+  `key = 'tenant-manifest.json'` + `generation = 1`. Heatmap and initdb
+  archives have no marker; they land with `generation = NULL`.
+  `rejoin_key_generation` puts the marker back in the right
+  position (trailing for most, pre-extension for `tenant-manifest`)
+  when reconstructing paths for callers. The per-namespace layout
+  convention lives in `reconstruct_key` — see below.
+- **`generation`**: parsed off the path on insert; matched explicitly
+  on read (`generation IS NOT DISTINCT FROM $N` so `NULL` participates
+  in equality the way callers expect). Indexable but not part of
+  the hash partition — different gens of the same logical file live
+  on the same tablet (one row per key).
 - **`chunk_idx`** + **`data`**: object split into ≤ 100 MiB chunks.
 
 `reconstruct_key(namespace, tenant_id, timeline_id, key_body)` rebuilds

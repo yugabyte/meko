@@ -696,9 +696,14 @@ new layer files and deletes old ones. From `YbStore`'s perspective:
 
 The throughput cost of compaction on the YB side is mostly DELETE
 load: each compaction pass drops the layers it just superseded.
-Because every blob row is keyed by `(key HASH, chunk_idx)`, a
-`DELETE FROM blobs WHERE key = $1` is a hash-shard lookup + tablet
-write — fast in YB terms but real load if compaction is busy.
+With the PK `((tenant_id, timeline_id, key) HASH, namespace,
+chunk_idx)`, a `DELETE FROM blobs WHERE tenant_id=? AND
+timeline_id=? AND namespace=? AND key=? AND generation IS NOT
+DISTINCT FROM ?` is a hash lookup on the (tenant, timeline, key)
+hash + a small range scan within the tablet — fast in YB terms but
+real load if compaction is busy. The generation column is matched
+explicitly so a delete at gen=N never accidentally clears a row
+written at a newer gen.
 
 ### Cache miss → download: it's the whole file, by design
 

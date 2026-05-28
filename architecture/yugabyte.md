@@ -6,17 +6,22 @@ expected to provision before pointing yb-light at YB.
 
 ## Databases
 
-| Database | Owner | Purpose | Provisioned by |
+All three subsystems share **one** database, `yb_storage`. Within it:
+
+| Schema | Tables | Owner | Provisioned by |
 |---|---|---|---|
-| `yb_storage` | yugabyte | All blob storage for the pageserver and safekeeper. Holds `blobs` (chunked binary objects) and `wals` (per-write WAL chunks). | `neon_local` (auto) |
-| `storage_controller` | yugabyte | The storage controller's 11 relational tables (Diesel-managed). | `neon_local` creates the DB; the controller binary runs migrations on first start |
+| `public` | `blobs`, `wals`, `blob_namespace` ENUM | yugabyte | `neon_local` (auto) |
+| `storage_controller` | 11 Diesel-managed tables (`tenant_shards`, `nodes`, `timelines`, …) | yugabyte | `neon_local` creates the schema; the controller binary runs migrations on first start |
 
 `neon_local` auto-provisions everything on first start: it connects to
 YB's `yugabyte` admin DB with the same credentials as the controller's
-`database_url`, then `CREATE DATABASE storage_controller`,
-`CREATE DATABASE yb_storage`, and inside `yb_storage` the
-`blob_namespace` ENUM type plus the `blobs` and `wals` tables.
-All idempotent — re-runs are no-ops. No operator DDL is required on a
+`database_url`, `CREATE DATABASE yb_storage`, then inside that DB
+creates the `public.blob_namespace` ENUM + `public.blobs` /
+`public.wals` tables (schema-qualified DDL so they can't drift into
+`storage_controller` via search_path). The controller's URL is
+amended on its side with `options=-c search_path=storage_controller,public`
+so its migrations land in the `storage_controller` schema. All
+idempotent — re-runs are no-ops. No operator DDL is required on a
 fresh YB cluster.
 
 ## `yb_storage.blobs`
@@ -30,20 +35,21 @@ Generic chunked blob store used by:
 Subsystems are segregated by **key prefix**, not by separate tables.
 
 ```sql
-CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper');
+CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
-CREATE TABLE blobs (
-    tenant_id        TEXT             NOT NULL,    -- Neon tenant UUID, or "" if not extractable
-    timeline_id      TEXT             NOT NULL,    -- Neon timeline UUID, or "" for tenant-scoped blobs
-    namespace        blob_namespace   NOT NULL,    -- 'pageserver' or 'safekeeper'
-    key              TEXT             NOT NULL,    -- path body with {T}/{TL} placeholders in place of the UUIDs
-    chunk_idx        INT              NOT NULL,
-    data             BYTEA            NOT NULL,
-    size_bytes       BIGINT           NOT NULL,    -- total object size, denormalized
-    etag             TEXT             NOT NULL,    -- total-object etag, denormalized
-    last_modified_us BIGINT           NOT NULL,
+CREATE TABLE public.blobs (
+    tenant_id        TEXT                  NOT NULL,    -- Neon tenant UUID, or "" if not extractable
+    timeline_id      TEXT                  NOT NULL,    -- Neon timeline UUID, or "" for tenant-scoped blobs
+    namespace        public.blob_namespace NOT NULL,    -- 'pageserver' or 'safekeeper'
+    key              TEXT                  NOT NULL,    -- discriminating filename, generation suffix stripped
+    generation       INT,                               -- pageserver attach gen; NULL for genless files
+    chunk_idx        INT                   NOT NULL,
+    data             BYTEA                 NOT NULL,
+    size_bytes       BIGINT                NOT NULL,    -- total object size, denormalized
+    etag             TEXT                  NOT NULL,    -- total-object etag, denormalized
+    last_modified_us BIGINT                NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
 );
 ```
 
@@ -56,28 +62,36 @@ populated at write time by `YbStore::parse_key`:
 - **`tenant_id`** and **`timeline_id`** are the first two Neon-id-shaped
   tokens in the path (32 hex chars, optionally with a `-<count>-<num>`
   shard suffix). Empty strings when absent.
-- **`key`** is the **discriminating suffix only** — the path with the
-  configured prefix stripped *and* with the segments `tenants`,
-  `timelines`, the tenant_id value, and the timeline_id value all
-  removed. What's left is just the trailing filename / identifier
-  that distinguishes one object from another within its
-  `(namespace, tenant_id, timeline_id)` bucket. `YbStore::reconstruct_key`
-  knows the per-namespace layout convention and rebuilds the original
-  `RemotePath` for `list` outputs.
+- **`key`** is the **discriminating filename only** — the path with
+  the configured prefix stripped *and* with `tenants`, `timelines`,
+  the tenant_id, and the timeline_id removed. `split_key_generation`
+  then peels the trailing or pre-extension `-<8hex>` generation marker
+  into the separate `generation` column. `YbStore::reconstruct_key` +
+  `rejoin_key_generation` rebuild the original `RemotePath` for
+  `list` outputs.
+- **`generation`** is the pageserver attach generation, parsed off the
+  path. `NULL` for genless files (heatmap, initdb archives). Matched
+  explicitly on read (`generation IS NOT DISTINCT FROM $N`) so callers
+  get gen-specific lookups.
 
 A row in this schema looks like:
 
-| namespace | tenant_id | timeline_id | key |
-|---|---|---|---|
-| `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `000000-FFF__layer-1` |
-| `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `index_part.json-00000001` |
-| `pageserver` | `c8178f5e…1f966a` | *(empty)* | `tenant-manifest-00000001.json` |
-| `safekeeper` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `safekeeper-control` |
-| `safekeeper` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `000000010000000000000005` |
+| namespace | tenant_id | timeline_id | key | generation |
+|---|---|---|---|---|
+| `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `000000-FFF__layer-1` | `1` |
+| `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `index_part.json` | `1` |
+| `pageserver` | `c8178f5e…1f966a` | *(empty)* | `tenant-manifest.json` | `1` |
+| `pageserver` | `c8178f5e…1f966a` | *(empty)* | `heatmap-v1.json` | *(NULL)* |
+| `safekeeper` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `safekeeper-control` | *(NULL)* |
+| `safekeeper` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `000000010000000000000005` | *(NULL)* |
 
-The PK puts `(tenant_id, timeline_id)` in the hash partition so every
-point-lookup hits a single tablet. Within a bucket rows are sorted by
-`(namespace, key, chunk_idx)`.
+The PK puts `(tenant_id, timeline_id, key)` in the hash partition so
+every key has its own hash tablet (no hot tablet on big tenants).
+`key = $x` lookups resolve to one tablet via hash; within a bucket
+rows are sorted by `(namespace, chunk_idx)`. Generation lives in a
+plain column — multiple gens of the same logical file collapse into
+one row by design (newer gens overwrite older; ACID isolation
+prevents split-brain).
 
 Schema documented in detail in [`remote-storage.md`](remote-storage.md).
 
@@ -133,7 +147,7 @@ Per-write log used by the safekeeper's live-WAL mirror (when
 last-write-wins reassembly.
 
 ```sql
-CREATE TABLE wals (
+CREATE TABLE public.wals (
     tenant_id        TEXT    NOT NULL,
     timeline_id      TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
@@ -162,14 +176,22 @@ GROUP BY segno
 ORDER BY segno;
 ```
 
-## `storage_controller`
+## `storage_controller` schema
 
-Diesel-managed schema; do **not** edit by hand. Live migrations are at
-`storage_controller/migrations/`. The controller will run any pending
-migration on startup. Inspect with:
+Diesel-managed schema living inside `yb_storage`; do **not** edit by
+hand. Live migrations are at `storage_controller/migrations/`. The
+controller binary amends its connection URL with
+`options=-c search_path=storage_controller,public` so unqualified DDL
+in the migrations lands in this schema rather than `public`. A
+bootstrap step (`Persistence::migration_run`) issues
+`CREATE SCHEMA IF NOT EXISTS storage_controller` on a raw connection
+before applying migrations, so the very first migration has a target.
+
+Inspect with:
 
 ```sql
-\c storage_controller
+\c yb_storage
+SET search_path = storage_controller, public;
 \dt
 ```
 
@@ -218,27 +240,31 @@ run any of it by hand.
 ```sql
 -- on a fresh YB cluster (auto-run by neon_local)
 CREATE DATABASE yb_storage;
--- storage_controller DB is also auto-created by neon_local.
-
 \c yb_storage
 
-CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper');
+-- The controller's tables live in a dedicated schema inside the
+-- same DB; the bootstrap step in `Persistence::migration_run` issues
+-- the CREATE SCHEMA before Diesel migrations run.
+CREATE SCHEMA IF NOT EXISTS storage_controller;
 
-CREATE TABLE blobs (
-    tenant_id        TEXT             NOT NULL,
-    timeline_id      TEXT             NOT NULL,
-    namespace        blob_namespace   NOT NULL,
-    key              TEXT             NOT NULL,
-    chunk_idx        INT              NOT NULL,
-    data             BYTEA            NOT NULL,
-    size_bytes       BIGINT           NOT NULL,
-    etag             TEXT             NOT NULL,
-    last_modified_us BIGINT           NOT NULL,
+CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
+
+CREATE TABLE public.blobs (
+    tenant_id        TEXT                  NOT NULL,
+    timeline_id      TEXT                  NOT NULL,
+    namespace        public.blob_namespace NOT NULL,
+    key              TEXT                  NOT NULL,
+    generation       INT,
+    chunk_idx        INT                   NOT NULL,
+    data             BYTEA                 NOT NULL,
+    size_bytes       BIGINT                NOT NULL,
+    etag             TEXT                  NOT NULL,
+    last_modified_us BIGINT                NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
+    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
 );
 
-CREATE TABLE wals (
+CREATE TABLE public.wals (
     tenant_id        TEXT    NOT NULL,
     timeline_id      TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
