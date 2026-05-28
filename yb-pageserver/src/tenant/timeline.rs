@@ -1678,10 +1678,32 @@ impl Timeline {
         // PageStore query is small; iterating the keyspace by Key::next
         // is cheap enough for typical request sizes (compute requests
         // ~16 pages).
+        //
+        // TODO(yb-pageserver): wide-range scans (initial_size_calc /
+        // image-layer creation / gc-compaction) blow up here because
+        // `Key::next` enumerates billions of keys. The proper fix is a
+        // `PageStore::scan_range(start, end, lsn, per_key_limit)` that
+        // issues a single SQL
+        //   SELECT … WHERE key >= $start AND key < $end AND lsn <= $L
+        //   ORDER BY key, lsn DESC
+        // and a `get_vectored_via_page_writer` rewrite that dispatches
+        // per-`Range<Key>` instead of per-`Key`. Until that lands we
+        // bail with a clear error so the box doesn't OOM.
+        const MAX_KEYS_PER_VECTORED_READ: usize = 1024;
         let mut keys: Vec<Key> = Vec::new();
         for range in &total_keyspace.ranges {
             let mut k = range.start;
             while k < range.end {
+                if keys.len() >= MAX_KEYS_PER_VECTORED_READ {
+                    return Err(GetVectoredError::Other(anyhow!(
+                        "PageStore read path: keyspace range too wide \
+                         (> {} keys); narrow callers (compute getpage) \
+                         work, wide callers (initial_size_calc, image-layer \
+                         creation, gc-compaction) need a real range-scan \
+                         API. See TODO in get_vectored_via_page_writer.",
+                        MAX_KEYS_PER_VECTORED_READ
+                    )));
+                }
                 keys.push(k);
                 k = k.next();
             }
