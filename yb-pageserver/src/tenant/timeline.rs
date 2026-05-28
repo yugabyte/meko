@@ -266,6 +266,11 @@ pub struct Timeline {
     /// rule. `None` is upstream layer-file-only behaviour.
     pub(crate) page_writer: Option<Arc<crate::page_writer::PageWriter>>,
 
+    /// Handle for the page_writer periodic flusher. Taken and
+    /// `shutdown()`-ed during `Timeline::shutdown` so buffered rows are
+    /// drained to PageStore before the pageserver exits.
+    page_writer_flush_task: std::sync::Mutex<Option<crate::page_writer::FlushTask>>,
+
     // What page versions do we hold in the repository? If we get a
     // request > last_record_lsn, we need to wait until we receive all
     // the WAL up to the request. The SeqWait provides functions for
@@ -2391,6 +2396,21 @@ impl Timeline {
         // ... and inform any waiters for newer LSNs that there won't be any.
         self.last_record_lsn.shutdown();
 
+        // Stop the page_writer's periodic flusher and drain any
+        // remaining buffered rows. After walreceiver has cancelled, no
+        // new put_batch calls will arrive, so the buffer can be flushed
+        // to completion. We do this before the layer-stack flush below
+        // so a failure here doesn't deadlock the rest of shutdown.
+        let flush_task = self.page_writer_flush_task.lock().unwrap().take();
+        if let Some(task) = flush_task {
+            task.shutdown().await;
+        }
+        if let Some(pw) = self.page_writer.as_ref()
+            && let Err(e) = pw.flush().await
+        {
+            tracing::warn!("page_writer final flush failed during shutdown: {e:?}");
+        }
+
         if let ShutdownMode::FreezeAndFlush = mode {
             let do_flush = if let Some((open, frozen)) = self
                 .layers
@@ -3222,7 +3242,7 @@ impl Timeline {
         // manager to drive the 10-delta rule's force-image path). Both
         // signals come from yb-pageserver's startup-time YB config; the
         // upstream pageserver builds a Timeline with `page_store=None`.
-        let page_writer: Option<Arc<crate::page_writer::PageWriter>> =
+        let (page_writer, page_writer_flush_task) =
             match (resources.page_store.as_ref(), walredo_mgr.as_ref()) {
                 (Some(ps), Some(wm)) => {
                     let materializer = Arc::new(
@@ -3238,14 +3258,10 @@ impl Timeline {
                         materializer as Arc<dyn crate::page_writer::Materializer>,
                         crate::page_writer::FlushPolicy::default(),
                     ));
-                    // Spawn the periodic flusher. The returned FlushTask
-                    // is leaked here; Phase 3b's cleanup work tracks the
-                    // task via Timeline::shutdown later.
-                    let _flush_task = writer.spawn_flusher(std::time::Duration::from_millis(500));
-                    std::mem::forget(_flush_task);
-                    Some(writer)
+                    let task = writer.spawn_flusher(std::time::Duration::from_millis(500));
+                    (Some(writer), Some(task))
                 }
-                _ => None,
+                _ => (None, None),
             };
 
         Arc::new_cyclic(|myself| {
@@ -3277,6 +3293,7 @@ impl Timeline {
                 remote_client: Arc::new(resources.remote_client),
 
                 page_writer: page_writer.clone(),
+                page_writer_flush_task: std::sync::Mutex::new(page_writer_flush_task),
 
                 // initialize in-memory 'last_record_lsn' from 'disk_consistent_lsn'.
                 last_record_lsn: SeqWait::new(RecordLsn {
