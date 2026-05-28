@@ -259,7 +259,8 @@ Tracked phases:
 | 1 | ✅ done | `pageserver.pages` + `pageserver.timelines` schema, `PageStore` Rust module (`yb-pageserver/src/page_store.rs`) with full CRUD + generation helpers and 15 integration tests against a real YB. |
 | 2a | ✅ done | `ImageRule` 10-delta enforcement logic (`yb-pageserver/src/image_rule.rs`) with 12 unit tests. Pure logic, no walredo or DB dep. |
 | 2b | ✅ done | `PageWriter` (`yb-pageserver/src/page_writer.rs`): buffered write path that applies `ImageRule`, calls a `Materializer` trait on `ForceImage`, blends buffered + persisted rows on read (`read_chain`), and flushes on a size/age trigger (defaults 100 MiB / 5 s). 12 integration tests including a long-workload property test that scans every LSN to confirm the LIMIT-10 invariant holds. |
-| 3 | ⏳ pending | Wire `PageWriter` into `TimelineWriter::put_batch` and rewrite `Timeline::get_vectored_reconstruct_data*` to use `PageWriter::read_chain`. Production `Materializer` wraps walredo + `PageWriter::read_chain` (the buffered-aware variant). |
+| 3a | ✅ done | `Materializer` trait refactored: now takes `(key, target_lsn, prior_chain, current)` so production wrappers don't need a back-reference to `PageWriter`. `WalRedoMaterializer` (`yb-pageserver/src/page_materializer.rs`) is the production impl — converts chain rows back into `(base_img, records)` and calls `walredo::PostgresRedoManager::request_redo`. 5 tests cover the pure decode helper. Walredo-driven end-to-end test deferred to Phase 3 wiring (needs a real PG subprocess). |
+| 3b | ⏳ pending | Wire `PageWriter` (+ `WalRedoMaterializer`) into `Timeline`: initialise from pageserver.toml's YB config, hook `TimelineWriter::put_batch` to dual-write alongside `InMemoryLayer`, rewrite `Timeline::get_vectored_reconstruct_data*` to use `PageWriter::read_chain`. |
 | 4 | ⏳ pending | Delete the layer stack: `storage_layer/`, `layer_map/`, `disk_btree`, `compaction.rs`, `inmemory_layer`, `secondary*`, `heatmap*`, `eviction_task*`, `init.rs`, most of `remote_timeline_client/`. ~25 K LOC removal. |
 | 5 | ⏳ pending | Replace `metadata` / `index_part.json` / `tenant-manifest.json` with reads/writes against `pageserver.timelines`. Rewrite attach. |
 | 6 | ⏳ deferred | GC: cron that prunes old `pages` rows. User said "figure out separately later". |
@@ -271,6 +272,9 @@ Tracked phases:
 - `yb-pageserver/src/page_writer.rs` — `PageWriter` buffered write path;
   `Materializer` trait + `FlushPolicy`; `read_chain` blends buffer +
   PageStore for the eventual read path.
+- `yb-pageserver/src/page_materializer.rs` — `WalRedoMaterializer`
+  production impl that converts chain rows into walredo inputs and calls
+  `PostgresRedoManager::request_redo`.
 - `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
   — DDL bootstrap for `pageserver` schema.
 - `architecture/yugabyte.md` — full DDL reference for `pageserver.pages`

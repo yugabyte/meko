@@ -50,14 +50,26 @@ impl Default for FlushPolicy {
 
 /// Build a single 8 KiB page snapshot for `key` at `target_lsn`.
 ///
-/// Production walks the prior chain (buffer + `PageStore::read_chain`)
-/// and calls `walredo::PostgresRedoManager::request_redo`. Tests inject
-/// a deterministic mock.
+/// Production wraps walredo: the chain of prior versions (an image at
+/// the bottom, deltas above, descending LSN) plus the current entry
+/// being replaced is enough to reconstruct the page.
+///
+/// `prior_chain` contains rows at LSN strictly less than `target_lsn`,
+/// sorted LSN-descending, truncated at the first `will_init=true` row
+/// (the anchor — guaranteed to be present by the 10-delta invariant).
+/// `current` is the `Value` whose row is being replaced with an image
+/// at `target_lsn`; it must be applied on top of the chain by the
+/// materializer.
+///
+/// Tests inject a deterministic mock that ignores the chain and
+/// returns a synthetic payload.
 pub trait Materializer: Send + Sync {
     fn materialize<'a>(
         &'a self,
         key: Key,
         target_lsn: Lsn,
+        prior_chain: Vec<PageRow>,
+        current: &'a Value,
     ) -> BoxFuture<'a, Result<Bytes>>;
 }
 
@@ -149,7 +161,18 @@ impl PageWriter {
             let row = match action {
                 WriteAction::Passthrough => build_passthrough_row(*key, *lsn, value)?,
                 WriteAction::ForceImage => {
-                    let bytes = self.materializer.materialize(*key, *lsn).await?;
+                    // Gather the prior chain (rows at LSN < target_lsn).
+                    // The new entry hasn't been buffered yet, so
+                    // read_chain at lsn returns rows strictly < lsn
+                    // (the unique-(key,lsn) WAL invariant prevents an
+                    // exact match from existing already).
+                    let prior_chain = self
+                        .read_chain(*key, *lsn, IMAGE_CHAIN_LIMIT)
+                        .await?;
+                    let bytes = self
+                        .materializer
+                        .materialize(*key, *lsn, prior_chain, value)
+                        .await?;
                     build_image_row(*key, *lsn, bytes)
                 }
             };
@@ -329,6 +352,8 @@ mod tests {
             &'a self,
             _key: Key,
             target_lsn: Lsn,
+            _prior_chain: Vec<PageRow>,
+            _current: &'a Value,
         ) -> BoxFuture<'a, Result<Bytes>> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             async move { Ok(Bytes::from(format!("image@{}", target_lsn.0))) }.boxed()
@@ -630,6 +655,92 @@ mod tests {
         // k(1) still has counter=0; one delta passes through.
         w.put(&[(k(1), Lsn(20), delta())]).await.unwrap();
         assert_eq!(m.calls(), 1);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Recording mock: captures every (target_lsn, chain LSNs, current
+    /// kind) the writer hands it. Used to prove the materializer contract.
+    struct RecordingMaterializer {
+        calls: tokio::sync::Mutex<Vec<RecordedCall>>,
+    }
+    #[derive(Debug, Clone)]
+    struct RecordedCall {
+        target_lsn: Lsn,
+        chain_lsns: Vec<Lsn>,
+        chain_has_anchor: bool,
+        current_is_image: bool,
+        current_will_init: bool,
+    }
+    impl RecordingMaterializer {
+        fn new() -> Self {
+            Self {
+                calls: tokio::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+    impl Materializer for RecordingMaterializer {
+        fn materialize<'a>(
+            &'a self,
+            _key: Key,
+            target_lsn: Lsn,
+            prior_chain: Vec<PageRow>,
+            current: &'a Value,
+        ) -> BoxFuture<'a, Result<Bytes>> {
+            let recorded = RecordedCall {
+                target_lsn,
+                chain_lsns: prior_chain.iter().map(|r| r.lsn).collect(),
+                chain_has_anchor: prior_chain.iter().any(|r| r.will_init),
+                current_is_image: current.is_image(),
+                current_will_init: current.will_init(),
+            };
+            async move {
+                self.calls.lock().await.push(recorded);
+                Ok(Bytes::from(format!("img@{}", target_lsn.0)))
+            }
+            .boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn materializer_receives_prior_chain_and_current() {
+        let (store, schema) = make_store("mat_contract").await;
+        let m = Arc::new(RecordingMaterializer::new());
+        let t = TenantId::generate();
+        let tl = TimelineId::generate();
+        let w = PageWriter::with_threshold(
+            t,
+            tl,
+            store.clone(),
+            m.clone() as Arc<dyn Materializer>,
+            FlushPolicy::default(),
+            10,
+        );
+
+        // Build a 10-row chain: image then 9 deltas; the 10th delta
+        // should ForceImage and the mock should receive the 9-delta+image
+        // chain plus the current delta value.
+        let mut entries: Vec<(Key, Lsn, Value)> = vec![(k(1), Lsn(10), image())];
+        for i in 1..=9 {
+            entries.push((k(1), Lsn(10 + 10 * i), delta()));
+        }
+        w.put(&entries).await.unwrap();
+        // No materialise yet — image + 9 deltas all pass through.
+        assert_eq!(m.calls.lock().await.len(), 0);
+
+        // 10th delta forces materialisation at LSN 110.
+        w.put(&[(k(1), Lsn(110), delta())]).await.unwrap();
+        let calls = m.calls.lock().await.clone();
+        assert_eq!(calls.len(), 1);
+        let c = &calls[0];
+        assert_eq!(c.target_lsn, Lsn(110));
+        // prior_chain is rows < 110: lsns 10, 20, ..., 100 (descending).
+        // Truncated at the first will_init=true row (the image at LSN 10).
+        // Should be 10 rows, ending at LSN 10.
+        assert_eq!(c.chain_lsns.first(), Some(&Lsn(100)));
+        assert_eq!(c.chain_lsns.last(), Some(&Lsn(10)));
+        assert!(c.chain_has_anchor, "prior chain must include anchor");
+        assert!(!c.current_is_image);
+        assert!(!c.current_will_init);
         drop_schema(&store, &schema).await;
     }
 
