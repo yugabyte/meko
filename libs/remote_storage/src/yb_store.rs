@@ -307,17 +307,19 @@ impl YbStore {
         if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
             return true;
         }
-        // sharded tenant id: 32-hex + "-XXXX-XXXX" (count + shard number, each 4 hex)
-        if s.len() == 32 + 1 + 4 + 1 + 4 && s.as_bytes()[32] == b'-' && s.as_bytes()[37] == b'-' {
+        // sharded TenantShardId: `<32hex>-<4hex>` = 37 chars, one dash.
+        // Emitted by `TenantShardId::Display` (libs/utils/src/shard.rs)
+        // for any tenant with `shard_count != 0`. The previous form
+        // accepted here (32+1+4+1+4 = 42 chars, two dashes) doesn't
+        // exist in the codebase — leaving sharded tenants
+        // unrecognised by `extract_neon_ids`, which then mistook the
+        // following timeline_id for the tenant_id and produced a
+        // tenant-wide LIKE scan in `YbStore::list`.
+        if s.len() == 32 + 1 + 4 && s.as_bytes()[32] == b'-' {
             let core = &s[..32];
-            let count = &s[33..37];
-            let num = &s[38..];
-            if core.chars().all(|c| c.is_ascii_hexdigit())
-                && count.chars().all(|c| c.is_ascii_hexdigit())
-                && num.chars().all(|c| c.is_ascii_hexdigit())
-            {
-                return true;
-            }
+            let slug = &s[33..];
+            return core.chars().all(|c| c.is_ascii_hexdigit())
+                && slug.chars().all(|c| c.is_ascii_hexdigit());
         }
         false
     }
@@ -1016,5 +1018,79 @@ fn escape_like(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Real-shape unsharded TenantShardId: bare 32-hex.
+    const T_LEGACY: &str = "5b36a8400fc88e7eeec19878ef7fbe30";
+
+    /// Real-shape sharded TenantShardId: `<32hex>-<4hex>` (37 chars,
+    /// one dash). Format emitted by `TenantShardId::Display` whenever
+    /// `shard_count != 0` — i.e., for every non-legacy tenant.
+    const T_SHARDED: &str = "5b36a8400fc88e7eeec19878ef7fbe30-0001";
+
+    /// Real-shape TimelineId.
+    const TL: &str = "364e1d848370d9609ba474ebd8612b90";
+
+    #[test]
+    fn extract_neon_ids_legacy_tenant_with_timeline() {
+        let (t, tl) = YbStore::extract_neon_ids(
+            &format!("tenants/{T_LEGACY}/timelines/{TL}/index_part.json-00000005"),
+        );
+        assert_eq!(t, T_LEGACY, "tenant_id for legacy unsharded tenant");
+        assert_eq!(tl, TL, "timeline_id alongside legacy tenant");
+    }
+
+    #[test]
+    fn extract_neon_ids_legacy_tenant_only() {
+        let (t, tl) =
+            YbStore::extract_neon_ids(&format!("tenants/{T_LEGACY}/tenant-manifest-1.json"));
+        assert_eq!(t, T_LEGACY);
+        assert_eq!(tl, "");
+    }
+
+    /// Regression: sharded TSID (`<32hex>-<4hex>`) was rejected by the
+    /// old `looks_like_neon_id` (which expected a *two*-dash 42-char
+    /// shape that no codepath actually emits). Result: the parser
+    /// skipped the TSID, landed on the timeline_id by mistake, and
+    /// left timeline_id empty — producing a tenant-wide LIKE scan
+    /// instead of a single-tablet hash lookup.
+    #[test]
+    fn extract_neon_ids_sharded_tenant_with_timeline() {
+        let (t, tl) = YbStore::extract_neon_ids(
+            &format!("tenants/{T_SHARDED}/timelines/{TL}/index_part.json-00000005"),
+        );
+        assert_eq!(t, T_SHARDED, "tenant_id for sharded tenant (37-char form)");
+        assert_eq!(tl, TL, "timeline_id alongside sharded tenant");
+    }
+
+    #[test]
+    fn extract_neon_ids_sharded_tenant_only() {
+        let (t, tl) =
+            YbStore::extract_neon_ids(&format!("tenants/{T_SHARDED}/tenant-manifest-1.json"));
+        assert_eq!(t, T_SHARDED);
+        assert_eq!(tl, "");
+    }
+
+    #[test]
+    fn extract_neon_ids_no_ids_present() {
+        let (t, tl) = YbStore::extract_neon_ids("random/path/no-ids-here");
+        assert_eq!(t, "");
+        assert_eq!(tl, "");
+    }
+
+    #[test]
+    fn extract_neon_ids_safekeeper_wal_path() {
+        // WAL-backup layout: `<tenant>/<timeline>/<segno>` — no
+        // `tenants/timelines` markers, just the ids in path order.
+        let (t, tl) = YbStore::extract_neon_ids(
+            &format!("{T_LEGACY}/{TL}/000000010000000000000005"),
+        );
+        assert_eq!(t, T_LEGACY);
+        assert_eq!(tl, TL);
+    }
 }
 
