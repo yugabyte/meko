@@ -23,6 +23,7 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use pageserver_api::key::{KEY_SIZE, Key};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use utils::bin_ser::BeSer;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
@@ -271,6 +272,54 @@ impl PageWriter {
 
     pub fn threshold(&self) -> usize {
         self.threshold
+    }
+}
+
+/// Handle for a periodic-flush background task. Cancel the token to
+/// stop; the task does one final `flush()` before returning.
+pub struct FlushTask {
+    pub handle: tokio::task::JoinHandle<()>,
+    pub cancel: CancellationToken,
+}
+
+impl FlushTask {
+    /// Cancel the periodic flusher and wait for the final flush to land.
+    pub async fn shutdown(self) {
+        self.cancel.cancel();
+        let _ = self.handle.await;
+    }
+}
+
+impl PageWriter {
+    /// Spawn a background task that polls `should_flush()` every `tick`
+    /// and drains the buffer when it returns true. The task holds a
+    /// `Weak` to the writer so dropping the last `Arc` lets it exit
+    /// cleanly. On cancellation the task does one final `flush()`.
+    pub fn spawn_flusher(self: &Arc<Self>, tick: Duration) -> FlushTask {
+        let cancel = CancellationToken::new();
+        let cancel_for_task = cancel.clone();
+        let weak = Arc::downgrade(self);
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = cancel_for_task.cancelled() => break,
+                    _ = tokio::time::sleep(tick) => {}
+                }
+                let Some(w) = weak.upgrade() else { break };
+                if w.should_flush().await
+                    && let Err(e) = w.flush().await
+                {
+                    tracing::warn!("PageWriter periodic flush failed: {e:?}");
+                }
+            }
+            // Final flush on shutdown — best-effort.
+            if let Some(w) = weak.upgrade()
+                && let Err(e) = w.flush().await
+            {
+                tracing::warn!("PageWriter final flush failed: {e:?}");
+            }
+        });
+        FlushTask { handle, cancel }
     }
 }
 
@@ -802,6 +851,77 @@ mod tests {
         assert_eq!(chain.last().unwrap().lsn, Lsn(50));
         assert!(chain.last().unwrap().will_init);
         assert!(chain.iter().all(|r| r.lsn >= Lsn(50)));
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn periodic_flusher_drains_on_age_trigger() {
+        let (store, schema) = make_store("flusher_age").await;
+        let m = Arc::new(MockMaterializer::new());
+        let t = TenantId::generate();
+        let tl = TimelineId::generate();
+        let policy = FlushPolicy {
+            max_age: Duration::from_millis(40),
+            max_bytes: 1 << 30,
+        };
+        let w = Arc::new(PageWriter::with_threshold(
+            t,
+            tl,
+            store.clone(),
+            m.clone() as Arc<dyn Materializer>,
+            policy,
+            10,
+        ));
+        let task = w.spawn_flusher(Duration::from_millis(15));
+        w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
+        // Wait for several ticks past max_age — flusher should drain.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let stats = w.stats().await;
+        assert_eq!(
+            stats.buffered_rows, 0,
+            "periodic flusher should have drained the buffer; stats: {stats:?}"
+        );
+        let chain = store
+            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100), 10)
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 1);
+        task.shutdown().await;
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn periodic_flusher_does_final_flush_on_shutdown() {
+        let (store, schema) = make_store("flusher_final").await;
+        let m = Arc::new(MockMaterializer::new());
+        let t = TenantId::generate();
+        let tl = TimelineId::generate();
+        // Both triggers are far in the future — only shutdown should flush.
+        let policy = FlushPolicy {
+            max_age: Duration::from_secs(3600),
+            max_bytes: 1 << 30,
+        };
+        let w = Arc::new(PageWriter::with_threshold(
+            t,
+            tl,
+            store.clone(),
+            m.clone() as Arc<dyn Materializer>,
+            policy,
+            10,
+        ));
+        let task = w.spawn_flusher(Duration::from_millis(15));
+        w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
+        // Confirm no flush happened yet.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(w.stats().await.buffered_rows > 0);
+        // Shutdown -> final flush.
+        task.shutdown().await;
+        assert_eq!(w.stats().await.buffered_rows, 0);
+        let chain = store
+            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100), 10)
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 1);
         drop_schema(&store, &schema).await;
     }
 
