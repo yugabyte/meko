@@ -5,7 +5,7 @@ tenants live on which pageservers, which safekeepers hold which timelines,
 generation numbers, scheduling policies, and so on. It is *not* on the
 data path — neither WAL nor pages flow through it.
 
-In yb-neon, the storage controller's relational state has been moved into
+In yb-light, the storage controller's relational state has been moved into
 YugabyteDB. **Zero lines of storage-controller code were changed** for
 this — the controller speaks Postgres wire protocol to its DB via Diesel,
 and YugabyteDB is wire-compatible with Postgres. The migration was a
@@ -59,13 +59,13 @@ The controller exposes an HTTP API on `--listen` for:
   that starts the controller and (in upstream Neon) initdb's a local PG
   for it.
 
-## Changes in yb-neon
+## Changes in yb-light
 
 ### 1. Use YugabyteDB instead of a local Postgres v16
 
 Upstream Neon (and `neon_local` in particular) launches a local Postgres
 v16 server alongside the controller and uses it as the controller's DB.
-yb-neon replaces this with the same YB cluster that holds everything else.
+yb-light replaces this with the same YB cluster that holds everything else.
 
 **There is no Rust code change for this.** The controller's
 `--database-url` flag accepts any Postgres-compatible URI; pointing it at
@@ -108,7 +108,7 @@ the controller as `--database-url`. `neon_local stop` likewise skips
 
 Before pointing the controller at the URL, neon_local **connects to
 YB's `yugabyte` admin database** on the same host with the same
-credentials and provisions everything yb-neon needs:
+credentials and provisions everything yb-light needs:
 
 - `CREATE DATABASE storage_controller` — the controller's Diesel
   migrations then create the 11 tables inside it on first start.

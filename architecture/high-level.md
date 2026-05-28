@@ -36,7 +36,7 @@ walproposer  ────────────►  Safekeeper (Raft acceptor)
 ```
 
 The compute's commit latency is bounded by the safekeeper's `flush_wal()`,
-which on yb-neon's YB-backed safekeeper is a YB INSERT round-trip (~ms over
+which on yb-light's YB-backed safekeeper is a YB INSERT round-trip (~ms over
 local YB; more on the network). This is the headline performance cost of
 moving WAL into YB.
 
@@ -78,7 +78,7 @@ key the pageserver/safekeeper use. In YB the path is split across the
 `namespace` / `tenant_id` / `timeline_id` / `key` columns — see
 [`yugabyte.md`](yugabyte.md). The mapping is round-trip lossless.)
 
-| Subsystem state | yb-neon backend | Path / key |
+| Subsystem state | yb-light backend | Path / key |
 |---|---|---|
 | Pageserver layer files | YB `yb_storage.blobs` | `pageserver-yb/tenants/<id>/timelines/<id>/<layer>` (one BYTEA chunk per row, ≤ 100 MiB each) |
 | Pageserver `index_part.json` | YB `yb_storage.blobs` | `pageserver-yb/tenants/<id>/timelines/<id>/index_part.json-<gen>` |
@@ -94,7 +94,7 @@ key the pageserver/safekeeper use. In YB the path is split across the
 
 ## What did *not* change from upstream Neon
 
-These subsystems run unmodified upstream Neon code in yb-neon:
+These subsystems run unmodified upstream Neon code in yb-light:
 
 - The Postgres compute itself (`pg_install/v17/bin/postgres` with Neon smgr
   patches from `vendor/postgres-v17`).
@@ -127,7 +127,7 @@ yugabyted                       :7100 (master), :5433 (ysql)
   |                              PK ((tenant_id, timeline_id) HASH, segno, chunk_seq)
   +-- db `storage_controller`    Diesel-managed; 11 tables
 
-yb-neon binaries (target/debug/)
+yb-light binaries (target/debug/)
   storage_broker   :50061
   storage_controller --database-url postgresql://yugabyte@127.0.0.1:5433/storage_controller   :1244
   pageserver --remote-storage <YbStore TOML>   :64100 pg, :9988 http, :51151 grpc

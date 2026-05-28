@@ -2,7 +2,7 @@
 
 The compute is a vanilla Postgres 17.5 backend (built from `vendor/postgres-v17`)
 with Neon's smgr / extension patches applied. **This component is unchanged in
-yb-neon** — we did not modify Postgres or `compute_ctl`. It's here for
+yb-light** — we did not modify Postgres or `compute_ctl`. It's here for
 completeness so a reader has the full picture.
 
 ## Inherited from Neon
@@ -29,7 +29,7 @@ reconstructs them on demand.
 
 Neon's WAL push side. Replaces `pg_basebackup`/`walsender` for getting WAL out
 of the compute: pushes each WAL batch to the configured safekeepers, waits for
-a quorum ACK before unblocking the commit. The yb-neon dev cluster runs one
+a quorum ACK before unblocking the commit. The yb-light dev cluster runs one
 safekeeper so "quorum" is just that single ACK.
 
 ### LFC (Local File Cache)
@@ -46,7 +46,7 @@ compute's buffer pool and the pageserver. Knobs:
 
 `compute_ctl` reads `endpoints/<id>/config.json`, generates `postgresql.conf`,
 starts Postgres, runs the post-start catalog migrations, and supervises it.
-None of this changes between upstream Neon and yb-neon.
+None of this changes between upstream Neon and yb-light.
 
 ### Endpoint lifecycle
 
@@ -63,11 +63,11 @@ The endpoint's `pgdata` directory holds:
 - User-table heap and index files — mostly *not present*. Reads go through
   `NEON_SMGR` → pageserver.
 
-## Changes in yb-neon
+## Changes in yb-light
 
 **None.** This component is unchanged.
 
-## Implications of yb-neon for the compute
+## Implications of yb-light for the compute
 
 The compute doesn't know YugabyteDB exists. The pageserver and safekeeper it
 talks to happen to be YB-backed underneath; the wire protocols

@@ -4,7 +4,7 @@ The pageserver is the only component that holds the durable copy of user
 table & index data. Computes don't have relfiles; they ask the pageserver
 for pages on demand via `getpage` RPC.
 
-In yb-neon, the pageserver's "remote storage" (where it durably stashes
+In yb-light, the pageserver's "remote storage" (where it durably stashes
 layer files, the index, the initdb tarball, and tenant manifests) is YB
 instead of S3/Azure/GCS. The pageserver itself was barely modified —
 all the YB stuff is plumbed via the existing `RemoteStorage` trait.
@@ -29,7 +29,7 @@ pageserver_*/tenants/<tenant_id>-<shard_count>-<shard_number>/
                      timelines/<timeline_id>/<layer-files…>
 ```
 
-In the running yb-neon dev cluster we use `ShardCount = 0` (unsharded;
+In the running yb-light dev cluster we use `ShardCount = 0` (unsharded;
 the tenant is a single shard hosted on a single pageserver), but the
 machinery is there for production deployments to scale a single tenant
 across multiple pageservers. From the layer-file machinery's
@@ -102,7 +102,7 @@ six fields into a single 128-bit integer without loss (`field5` is only
 
 #### Concrete example: page 7 of `bench_t`'s main fork
 
-From the live yb-neon cluster:
+From the live yb-light cluster:
 
 | Source | Value |
 |---|---|
@@ -545,7 +545,7 @@ gets there in ~20 minutes if image-layer creation is starved.
   before an image layer materializes is almost certainly contention
   on a hot row that ought to be partitioned.
 
-### Practical sizes in the running yb-neon cluster
+### Practical sizes in the running yb-light cluster
 
 Snapshot from the YB table after the cold-cache stress test
 (`benchmarks/yb-store/`):
@@ -831,7 +831,7 @@ The contract is the `RemoteStorage` trait (see
   match arms.
 - `libs/remote_storage/` — the trait + all backends, including `YbStore`.
 
-## Changes in yb-neon
+## Changes in yb-light
 
 ### 1. `YbStore` added to `GenericRemoteStorage` (commit `cb49a6557`)
 

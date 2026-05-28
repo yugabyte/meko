@@ -1,6 +1,6 @@
-# yb-neon architecture
+# yb-light architecture
 
-`yb-neon` is a fork of [Neon](https://github.com/neondatabase/neon) that pushes
+`yb-light` is a fork of [Neon](https://github.com/neondatabase/neon) that pushes
 every Neon-internal durable byte into [YugabyteDB](https://github.com/yugabyte/yugabyte-db)
 instead of an external object store and a local filesystem. The Postgres
 compute layer is untouched; the storage layer underneath it is the one that
@@ -8,7 +8,7 @@ changed.
 
 These docs describe what the system looks like end-to-end. Each subsystem has
 its own page with two sections: **inherited from Neon** (so a reader who knows
-upstream Neon can skim) and **changes in yb-neon**.
+upstream Neon can skim) and **changes in yb-light**.
 
 ## Contents
 
@@ -27,7 +27,7 @@ upstream Neon can skim) and **changes in yb-neon**.
 ```
                      +---------------------------+
                      |  Compute (Postgres 17.5)  |   user-facing PG;
-                     |     NEON_SMGR + LFC       |   unchanged in yb-neon
+                     |     NEON_SMGR + LFC       |   unchanged in yb-light
                      +---------------------------+
                         |               |
                    WAL  |               |  getpage RPC
@@ -49,6 +49,6 @@ upstream Neon can skim) and **changes in yb-neon**.
               +-----------------------------------------+
 ```
 
-What's on local FS in yb-neon (when YB-backed): the pageserver's layer-file
+What's on local FS in yb-light (when YB-backed): the pageserver's layer-file
 cache, the compute's `pgdata`, and operational files (logs, pidfiles).
 Everything that has to *survive a wipe of that disk* is in YB.

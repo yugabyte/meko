@@ -5,7 +5,7 @@ WAL. It's a Raft acceptor — N safekeepers form a quorum-replicated WAL log
 that the compute writes to synchronously and the pageserver reads from
 asynchronously.
 
-In yb-neon, **all of the safekeeper's durable state lives in YugabyteDB**.
+In yb-light, **all of the safekeeper's durable state lives in YugabyteDB**.
 The local filesystem holds only a log file and a pidfile.
 
 ## Inherited from Neon
@@ -59,7 +59,7 @@ acceptor:
 - `safekeeper/src/safekeeper.rs` — the consensus state machine.
 - `safekeeper/src/bin/safekeeper.rs` — entry point + CLI parsing.
 
-## Changes in yb-neon
+## Changes in yb-light
 
 ### 1. Control file → YB-backed (commit `c4c7c1350`)
 
@@ -313,7 +313,7 @@ lives in YB, layering Paxos on top of YB would be double consensus — two
 protocols racing on different LSN views, harder semantics, no extra
 safety.
 
-The yb-neon build therefore **requires exactly one safekeeper** when
+The yb-light build therefore **requires exactly one safekeeper** when
 `--wal-yb-config` is set. The enforcement is in two places:
 
 - **Boot**: `SharedState::restore` loads the control file, and if YB WAL
@@ -425,7 +425,7 @@ next `current()` call after a failed stream picks up a fresh connection.
 
 `YsqlClient::from_yb_config(&YbStoreConfig, application_name)` is the
 shared factory used by `YbStore::new`, `WalBackup::new` (the live-WAL
-mirror), and any other YB-Postgres connection in yb-neon. It handles
+mirror), and any other YB-Postgres connection in yb-light. It handles
 `password_env` lookup and the sslmode / sslrootcert dispatch.
 
 ### 11. TLS support (commit `7a424639e`)

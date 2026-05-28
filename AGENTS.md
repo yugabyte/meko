@@ -1,6 +1,6 @@
-# Agent guide — yb-neon
+# Agent guide — yb-light
 
-This is **yb-neon**: a fork of [Neon](https://github.com/neondatabase/neon)
+This is **yb-light**: a fork of [Neon](https://github.com/neondatabase/neon)
 that points every durable byte at **YugabyteDB** instead of S3/Azure/GCS
 and instead of the storage controller's local Postgres. If you're new to
 the codebase, read `architecture/high-level.md` first, then the
@@ -84,7 +84,7 @@ Code anchors:
 ## Live dev cluster cheat-sheet
 
 (For when you're running locally on `dev-server-hsunder`. The
-`/home/yugabyte/yb-neon-bundle/` instance on the AWS box has a separate
+`/home/yugabyte/yb-light-bundle/` instance on the AWS box has a separate
 handoff doc.)
 
 - The dev YB lives at `127.0.0.1:5433` (`yugabyted` under

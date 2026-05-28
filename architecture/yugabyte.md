@@ -1,8 +1,8 @@
 # YugabyteDB as the durable layer
 
-This page describes what the YB cluster looks like from yb-neon's
+This page describes what the YB cluster looks like from yb-light's
 perspective: databases, tables, prefixes, and the DDL the operator is
-expected to provision before pointing yb-neon at YB.
+expected to provision before pointing yb-light at YB.
 
 ## Databases
 
@@ -81,7 +81,7 @@ point-lookup hits a single tablet. Within a bucket rows are sorted by
 
 Schema documented in detail in [`remote-storage.md`](remote-storage.md).
 
-### Typical content (yb-neon dev cluster after light usage)
+### Typical content (yb-light dev cluster after light usage)
 
 ```
 key prefix          | distinct objects | typical row count | bytes
@@ -191,7 +191,7 @@ than this. We work around it by:
 
 ### `yb_enable_upsert_mode`
 
-A per-session GUC we `SET` on every yb-neon connection (centrally in
+A per-session GUC we `SET` on every yb-light connection (centrally in
 `YsqlClient::open_*` — used by both `YbStore::new` and
 `WalBackup::new`). When `true`, plain `INSERT` skips DocDB's
 read-before-write conflict check — a meaningful speedup for the
@@ -263,14 +263,14 @@ CREATE TABLE wals (
   returns 5xx; pageserver / safekeeper / compute keep operating until they
   need a fresh cluster decision.
 - **YB unavailable for WalReader read**: only matters when the local WAL
-  cache is also missing for the requested segment. In normal yb-neon
+  cache is also missing for the requested segment. In normal yb-light
   operation the local cache exists; in the YB-only safekeeper mode this
   *is* fatal until YB recovers.
 
 ## Hosts / ports in the dev cluster
 
 - YB master RPC: `127.0.0.1:7100`
-- YB tserver YSQL: `127.0.0.1:5433` (the only port yb-neon talks to)
+- YB tserver YSQL: `127.0.0.1:5433` (the only port yb-light talks to)
 - YB tserver web UI: `127.0.0.1:9000`
 - `yugabyted-ui`: `127.0.0.1:15433`
 

@@ -2,7 +2,7 @@
 
 `RemoteStorage` is Neon's abstraction over object stores. It's the single
 seam through which the pageserver (and now the safekeeper) writes durable
-bytes to "somewhere not the local disk". yb-neon adds one new backend
+bytes to "somewhere not the local disk". yb-light adds one new backend
 (`YbStore`) to the existing four.
 
 ## The trait (inherited from Neon)
@@ -36,14 +36,14 @@ pub enum GenericRemoteStorage<Other: Clone = Arc<UnreliableWrapper>> {
     AzureBlob(Arc<AzureBlobStorage>),
     Unreliable(Other),
     GCS(Arc<GCSBucket>),
-    YbStore(Arc<YbStore>),  // <-- new in yb-neon
+    YbStore(Arc<YbStore>),  // <-- new in yb-light
 }
 ```
 
 Construction goes through `GenericRemoteStorage::from_config(&RemoteStorageConfig)`
 which deserializes a TOML and picks the variant.
 
-## YbStore: design (new in yb-neon)
+## YbStore: design (new in yb-light)
 
 Source: `libs/remote_storage/src/yb_store.rs`. Implements every `RemoteStorage`
 method against a YugabyteDB table reached via `tokio_postgres`.
@@ -213,7 +213,7 @@ picks `YbStore` automatically when the TOML has `host`/`user`/`dbname`/
 
 `libs/remote_storage/src/ysql_client.rs` defines `YsqlClient`, the
 auto-reconnecting wrapper around `tokio_postgres::Client` used by every
-yb-neon component that talks to YB over the Postgres wire (this crate's
+yb-light component that talks to YB over the Postgres wire (this crate's
 `YbStore`, the safekeeper's `YbWalStorage`, neon_local's
 `ensure_external_database`).
 
