@@ -31,17 +31,23 @@ use wal_decoder::models::value::Value;
 
 use crate::page_store::PageRow;
 use crate::page_writer::Materializer;
-use crate::walredo::{PostgresRedoManager, RedoAttemptType};
+use crate::tenant::WalRedoManager;
+use crate::walredo::RedoAttemptType;
 
 /// [`Materializer`] backed by the existing walredo subprocess. Production
 /// wiring uses this; tests use the mocks under `page_writer::tests`.
+///
+/// Wraps the enum [`WalRedoManager`] (not the raw
+/// `PostgresRedoManager`) so the Timeline's existing
+/// `Arc<WalRedoManager>` can be reused directly, and so unit tests can
+/// inject the `Test` variant when needed.
 pub struct WalRedoMaterializer {
-    walredo: Arc<PostgresRedoManager>,
+    walredo: Arc<WalRedoManager>,
     pg_version: PgMajorVersion,
 }
 
 impl WalRedoMaterializer {
-    pub fn new(walredo: Arc<PostgresRedoManager>, pg_version: PgMajorVersion) -> Self {
+    pub(crate) fn new(walredo: Arc<WalRedoManager>, pg_version: PgMajorVersion) -> Self {
         Self {
             walredo,
             pg_version,

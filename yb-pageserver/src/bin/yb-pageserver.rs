@@ -526,6 +526,7 @@ fn start_pageserver(
 
     // Set up remote storage client
     let remote_storage = BACKGROUND_RUNTIME.block_on(create_remote_storage_client(conf))?;
+    let page_store = BACKGROUND_RUNTIME.block_on(create_page_store(conf))?;
 
     let feature_resolver = create_feature_resolver(
         conf,
@@ -590,6 +591,7 @@ fn start_pageserver(
             l0_flush_global_state,
             basebackup_cache: Arc::clone(&basebackup_cache),
             feature_resolver: feature_resolver.clone(),
+            page_store: page_store.clone(),
         },
         shutdown_pageserver.clone(),
     );
@@ -903,6 +905,29 @@ fn create_feature_resolver(
     handle: &tokio::runtime::Handle,
 ) -> anyhow::Result<FeatureResolver> {
     FeatureResolver::spawn(conf, shutdown_pageserver, handle)
+}
+
+/// If `remote_storage_config` is a `YbStore`, open a `PageStore` over the
+/// same connection details. Used by yb-pageserver to dual-write into
+/// `pageserver.pages` alongside the existing layer-file path. Returns
+/// `None` for other backends (LocalFs/S3/Azure/GCS) — those run upstream
+/// behaviour only.
+async fn create_page_store(
+    conf: &'static PageServerConf,
+) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
+    use remote_storage::RemoteStorageKind;
+    let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
+        return Ok(None);
+    };
+    let yb_cfg = match &rs_cfg.storage {
+        RemoteStorageKind::YbStore(cfg) => cfg.clone(),
+        _ => return Ok(None),
+    };
+    let ps_cfg = yb_pageserver::page_store::PageStoreConfig::new(yb_cfg);
+    let store = yb_pageserver::page_store::PageStore::connect(ps_cfg, "yb-pageserver").await?;
+    store.ensure_schema().await?;
+    info!("PageStore connected; dual-write enabled");
+    Ok(Some(Arc::new(store)))
 }
 
 async fn create_remote_storage_client(

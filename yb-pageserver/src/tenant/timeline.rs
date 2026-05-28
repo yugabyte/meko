@@ -201,6 +201,9 @@ pub struct TimelineResources {
     pub l0_flush_global_state: l0_flush::L0FlushGlobalState,
     pub basebackup_cache: Arc<BasebackupCache>,
     pub feature_resolver: Arc<TenantFeatureResolver>,
+    /// yb-pageserver row-per-page store. `Some` enables dual-write at
+    /// `TimelineWriter::put_batch`.
+    pub page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 
 pub struct Timeline {
@@ -256,6 +259,12 @@ pub struct Timeline {
     /// Remote storage client.
     /// See [`remote_timeline_client`](super::remote_timeline_client) module comment for details.
     pub(crate) remote_client: Arc<RemoteTimelineClient>,
+
+    /// yb-pageserver row-per-page writer. `Some` enables dual-write at
+    /// `TimelineWriter::put_batch`: every `(Key, LSN, Value)` digested
+    /// by walingest is also forwarded to `PageStore` via the 10-delta
+    /// rule. `None` is upstream layer-file-only behaviour.
+    pub(crate) page_writer: Option<Arc<crate::page_writer::PageWriter>>,
 
     // What page versions do we hold in the repository? If we get a
     // request > last_record_lsn, we need to wait until we receive all
@@ -3208,6 +3217,37 @@ impl Timeline {
                 .unwrap_or(conf.default_tenant_conf.relsize_snapshot_cache_capacity)
         };
 
+        // Build the row-per-page writer if dual-write is enabled
+        // (i.e. resources.page_store is Some and we have a walredo
+        // manager to drive the 10-delta rule's force-image path). Both
+        // signals come from yb-pageserver's startup-time YB config; the
+        // upstream pageserver builds a Timeline with `page_store=None`.
+        let page_writer: Option<Arc<crate::page_writer::PageWriter>> =
+            match (resources.page_store.as_ref(), walredo_mgr.as_ref()) {
+                (Some(ps), Some(wm)) => {
+                    let materializer = Arc::new(
+                        crate::page_materializer::WalRedoMaterializer::new(
+                            wm.clone(),
+                            pg_version,
+                        ),
+                    );
+                    let writer = Arc::new(crate::page_writer::PageWriter::new(
+                        tenant_shard_id.tenant_id,
+                        timeline_id,
+                        ps.clone(),
+                        materializer as Arc<dyn crate::page_writer::Materializer>,
+                        crate::page_writer::FlushPolicy::default(),
+                    ));
+                    // Spawn the periodic flusher. The returned FlushTask
+                    // is leaked here; Phase 3b's cleanup work tracks the
+                    // task via Timeline::shutdown later.
+                    let _flush_task = writer.spawn_flusher(std::time::Duration::from_millis(500));
+                    std::mem::forget(_flush_task);
+                    Some(writer)
+                }
+                _ => None,
+            };
+
         Arc::new_cyclic(|myself| {
             let metrics = Arc::new(TimelineMetrics::new(
                 &tenant_shard_id,
@@ -3235,6 +3275,8 @@ impl Timeline {
                 walreceiver: Mutex::new(None),
 
                 remote_client: Arc::new(resources.remote_client),
+
+                page_writer: page_writer.clone(),
 
                 // initialize in-memory 'last_record_lsn' from 'disk_consistent_lsn'.
                 last_record_lsn: SeqWait::new(RecordLsn {
@@ -7905,6 +7947,18 @@ impl TimelineWriter<'_> {
 
         let batch_max_lsn = batch.max_lsn;
         let buf_size: u64 = batch.buffer_size() as u64;
+
+        // yb-pageserver dual-write: forward the batch's (Key, LSN, Value)
+        // triples to the row-per-page store. Done before the layer-file
+        // write so a PageStore failure aborts the whole put_batch and
+        // walingest retries — keeps the two destinations in lockstep at
+        // the WAL-record granularity.
+        if let Some(page_writer) = self.tl.page_writer.as_ref() {
+            let triples = crate::page_writer::extract_triples(&batch)?;
+            if !triples.is_empty() {
+                page_writer.put(&triples).await?;
+            }
+        }
 
         let action = self.get_open_layer_action(batch_max_lsn, buf_size);
         let layer = self

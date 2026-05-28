@@ -167,6 +167,11 @@ pub struct TenantSharedResources {
     pub l0_flush_global_state: L0FlushGlobalState,
     pub basebackup_cache: Arc<BasebackupCache>,
     pub feature_resolver: FeatureResolver,
+    /// Row-per-page YugabyteDB store. `Some` enables dual-write at the
+    /// `TimelineWriter::put_batch` boundary: every (Key, LSN, Value)
+    /// also lands in `pageserver.pages`. `None` is upstream behaviour
+    /// (layer-file path only).
+    pub page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 
 /// A [`TenantShard`] is really an _attached_ tenant.  The configuration
@@ -392,6 +397,11 @@ pub struct TenantShard {
     l0_flush_global_state: L0FlushGlobalState,
 
     pub(crate) feature_resolver: Arc<TenantFeatureResolver>,
+
+    /// yb-pageserver row-per-page store. `Some` enables dual-write at
+    /// the `TimelineWriter::put_batch` boundary; `None` is upstream
+    /// layer-file-only behaviour.
+    pub(crate) page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 impl std::fmt::Debug for TenantShard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1371,6 +1381,7 @@ impl TenantShard {
             l0_flush_global_state,
             basebackup_cache,
             feature_resolver,
+            page_store,
         } = resources;
 
         let attach_mode = attached_conf.location.attach_mode;
@@ -1388,6 +1399,7 @@ impl TenantShard {
             l0_flush_global_state,
             basebackup_cache,
             feature_resolver,
+            page_store,
         ));
 
         // The attach task will carry a GateGuard, so that shutdown() reliably waits for it to drop out if
@@ -4409,6 +4421,7 @@ impl TenantShard {
         l0_flush_global_state: L0FlushGlobalState,
         basebackup_cache: Arc<BasebackupCache>,
         feature_resolver: FeatureResolver,
+        page_store: Option<Arc<crate::page_store::PageStore>>,
     ) -> TenantShard {
         assert!(!attached_conf.location.generation.is_none());
 
@@ -4517,6 +4530,7 @@ impl TenantShard {
                 feature_resolver,
                 tenant_shard_id.tenant_id,
             )),
+            page_store,
         }
     }
 
@@ -5453,6 +5467,7 @@ impl TenantShard {
             l0_flush_global_state: self.l0_flush_global_state.clone(),
             basebackup_cache: self.basebackup_cache.clone(),
             feature_resolver: self.feature_resolver.clone(),
+            page_store: self.page_store.clone(),
         }
     }
 
@@ -6073,6 +6088,7 @@ pub(crate) mod harness {
                 L0FlushGlobalState::new(L0FlushConfig::default()),
                 basebackup_cache,
                 FeatureResolver::new_disabled(),
+                None, // page_store: tests don't dual-write to YB
             ));
 
             let preload = tenant
