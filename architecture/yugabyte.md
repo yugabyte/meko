@@ -11,6 +11,7 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | Schema | Tables | Owner | Provisioned by |
 |---|---|---|---|
 | `public` | `blobs`, `wals`, `blob_namespace` ENUM | yugabyte | `neon_local` (auto) |
+| `pageserver` | `pages`, `timelines` (used by `yb-pageserver`) | yugabyte | `neon_local` (auto) |
 | `storage_controller` | 11 Diesel-managed tables (`tenant_shards`, `nodes`, `timelines`, …) | yugabyte | `neon_local` creates the schema; the controller binary runs migrations on first start |
 
 `neon_local` auto-provisions everything on first start: it connects to
@@ -176,6 +177,70 @@ GROUP BY segno
 ORDER BY segno;
 ```
 
+## `pageserver` schema
+
+Used by `yb-pageserver` (a fork of the upstream `pageserver` that
+replaces the layer-file machinery with row-per-version storage). The
+upstream `pageserver` does NOT touch this schema — it uses `blobs`
+only. Provisioned alongside `public.blobs` / `public.wals` by
+`neon_local` on first start.
+
+### `pageserver.pages`
+
+One row per `(Key, LSN)`. The 10-delta image rule (enforced at write
+time by `yb-pageserver`'s `ImageRule`) guarantees that any chain of
+≤ 10 rows for a given key contains at least one `will_init=true` entry,
+so the read query plans as a single bounded range scan.
+
+```sql
+CREATE TABLE pageserver.pages (
+    tenant_id    TEXT    NOT NULL,
+    timeline_id  TEXT    NOT NULL,
+    key          BYTEA   NOT NULL,      -- 18-byte pageserver_api::key::Key
+    lsn          BIGINT  NOT NULL,      -- u64 stored as i64 (real LSNs << 2^63)
+    is_image     BOOLEAN NOT NULL,
+    will_init    BOOLEAN NOT NULL,
+    payload      BYTEA   NOT NULL,
+    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+);
+```
+
+Read query (one round trip, hash to one tablet, scan ≤ 10 rows):
+
+```sql
+SELECT lsn, is_image, will_init, payload
+FROM pageserver.pages
+WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3 AND lsn <= $4
+ORDER BY lsn DESC
+LIMIT 10;
+```
+
+### `pageserver.timelines`
+
+One row per timeline. Replaces the upstream split of `metadata`,
+`index_part.json`, and `tenant-manifest.json` with a single
+transactionally-updatable record. `current_generation` is the gate that
+fences a stale pageserver — every flush is wrapped in a transaction
+that conditionally updates this row.
+
+```sql
+CREATE TABLE pageserver.timelines (
+    tenant_id              TEXT    NOT NULL,
+    timeline_id            TEXT    NOT NULL,
+    last_record_lsn        BIGINT  NOT NULL,
+    disk_consistent_lsn    BIGINT  NOT NULL,
+    applied_gc_cutoff_lsn  BIGINT  NOT NULL,
+    ancestor_timeline_id   TEXT,
+    ancestor_lsn           BIGINT,
+    current_generation     INT     NOT NULL,
+    pg_version             INT     NOT NULL,
+    PRIMARY KEY ((tenant_id) HASH, timeline_id)
+);
+```
+
+See [`yb-pageserver.md`](yb-pageserver.md) for the design, the 10-delta
+rule, and the implementation roadmap.
+
 ## `storage_controller` schema
 
 Diesel-managed schema living inside `yb_storage`; do **not** edit by
@@ -274,6 +339,32 @@ CREATE TABLE public.wals (
     data             BYTEA   NOT NULL,
     last_modified_us BIGINT  NOT NULL,
     PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)
+);
+
+CREATE SCHEMA IF NOT EXISTS pageserver;
+
+CREATE TABLE pageserver.pages (
+    tenant_id    TEXT    NOT NULL,
+    timeline_id  TEXT    NOT NULL,
+    key          BYTEA   NOT NULL,
+    lsn          BIGINT  NOT NULL,
+    is_image     BOOLEAN NOT NULL,
+    will_init    BOOLEAN NOT NULL,
+    payload      BYTEA   NOT NULL,
+    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+);
+
+CREATE TABLE pageserver.timelines (
+    tenant_id              TEXT    NOT NULL,
+    timeline_id            TEXT    NOT NULL,
+    last_record_lsn        BIGINT  NOT NULL,
+    disk_consistent_lsn    BIGINT  NOT NULL,
+    applied_gc_cutoff_lsn  BIGINT  NOT NULL,
+    ancestor_timeline_id   TEXT,
+    ancestor_lsn           BIGINT,
+    current_generation     INT     NOT NULL,
+    pg_version             INT     NOT NULL,
+    PRIMARY KEY ((tenant_id) HASH, timeline_id)
 );
 ```
 

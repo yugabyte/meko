@@ -27,11 +27,16 @@ Read in this order:
 3. `architecture/remote-storage.md` — `YbStore` design, `parse_key` /
    `reconstruct_key`, the round-trip-lossless path mapping.
 4. `architecture/pageserver.md` — layer-file lifecycle, LSN MVCC, image vs
-   delta, compaction, the page-7 worked example.
-5. `architecture/safekeeper.md` — `ControlFileStorage::Yb`,
+   delta, compaction, the page-7 worked example. **Upstream
+   `pageserver/`** — kept around for head-to-head perf comparisons.
+   Active refactor work is on the fork:
+5. `architecture/yb-pageserver.md` — `yb-pageserver/` fork: row-per-page
+   YugabyteDB storage, the 10-delta image rule, what's gone vs upstream,
+   implementation phases.
+6. `architecture/safekeeper.md` — `ControlFileStorage::Yb`,
    `YbWalStorage`, the `WalReader` fallback chain, the single-safekeeper
    constraint in YB-WAL mode.
-6. `architecture/storage-controller.md` — `database_url` → external
+7. `architecture/storage-controller.md` — `database_url` → external
    Postgres (YB) flow, the auto-provisioning of `storage_controller` +
    `yb_storage` DBs on first start.
 
@@ -55,6 +60,11 @@ Code anchors:
   `SafekeeperConf::control_file_backend` / `wal_yb_config`).
 - `control_plane/src/safekeeper.rs` / `pageserver.rs` / `endpoint.rs` —
   per-service CLI assembly + per-component config.
+- `yb-pageserver/src/page_store.rs` — `PageStore` row store for the
+  fork's row-per-page YB layout (`pageserver.pages` +
+  `pageserver.timelines`).
+- `yb-pageserver/src/image_rule.rs` — 10-delta image rule that bounds
+  the read-chain length.
 
 ## Project conventions
 
