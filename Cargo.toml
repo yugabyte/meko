@@ -11,6 +11,7 @@ members = [
     "pageserver/client_grpc",
     "pageserver/pagebench",
     "pageserver/page_api",
+    "yb-pageserver",
     "proxy",
     "safekeeper",
     "safekeeper/client",
@@ -263,6 +264,7 @@ http-utils = { version = "0.1", path = "./libs/http-utils/" }
 metrics = { version = "0.1", path = "./libs/metrics/" }
 neon-shmem = { version = "0.1", path = "./libs/neon-shmem/" }
 pageserver = { path = "./pageserver" }
+yb_pageserver = { path = "./yb-pageserver" }
 pageserver_api = { version = "0.1", path = "./libs/pageserver_api/" }
 pageserver_client = { path = "./pageserver/client" }
 pageserver_client_grpc = { path = "./pageserver/client_grpc" }
