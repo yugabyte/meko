@@ -261,10 +261,104 @@ Tracked phases:
 | 2b | ✅ done | `PageWriter` (`yb-pageserver/src/page_writer.rs`): buffered write path that applies `ImageRule`, calls a `Materializer` trait on `ForceImage`, blends buffered + persisted rows on read (`read_chain`), and flushes on a size/age trigger (defaults 100 MiB / 5 s). 12 integration tests including a long-workload property test that scans every LSN to confirm the LIMIT-10 invariant holds. |
 | 3a | ✅ done | `Materializer` trait refactored: now takes `(key, target_lsn, prior_chain, current)` so production wrappers don't need a back-reference to `PageWriter`. `WalRedoMaterializer` (`yb-pageserver/src/page_materializer.rs`) is the production impl — converts chain rows back into `(base_img, records)` and calls `walredo::PostgresRedoManager::request_redo`. 5 tests cover the pure decode helper. Walredo-driven end-to-end test deferred to Phase 3b wiring (needs a real PG subprocess). |
 | 3a+ | ✅ done | Two more primitives that Phase 3b will reach for: `PageWriter::spawn_flusher(tick)` returns a `FlushTask` (JoinHandle + CancellationToken) for the per-timeline background flusher, doing a final `flush()` on cancel; `extract_triples(SerializedValueBatch)` decodes a walingest batch into the `(Key, Lsn, Value)` triples `PageWriter::put` consumes. Both with tests. |
-| 3b | ⏳ pending | Tenant/Timeline plumbing: `Tenant` gains `Arc<PageStore>`; `Timeline` gains `Arc<PageWriter>` + a `FlushTask` handle. `TimelineWriter::put_batch` runs `extract_triples` and forwards to `page_writer.put`. The existing `InMemoryLayer` path stays in place initially (dual-write) so read paths still work; we then flip reads. |
+| 3b | ✅ done | Tenant/Timeline plumbing: `TenantSharedResources` carries `Option<Arc<PageStore>>`, `Tenant` stashes it, `TimelineResources` passes through, `Timeline` builds `PageWriter` + spawns `FlushTask` when both `page_store` and `walredo_mgr` are present. `TimelineWriter::put_batch` runs `extract_triples` and forwards to `page_writer.put` before the layer-file write (so a YB failure aborts the whole batch and walingest retries). `Timeline::shutdown` drains the FlushTask + does a final `page_writer.flush()`. **Reads still go through the layer stack** — Phase 3c is the read-flip. |
+| 3c | ⏳ pending | Rewrite `Timeline::get_vectored_reconstruct_data*` to call `PageWriter::read_chain` per key, decode the chain into `(base_img, records)`, and drive walredo. Until this lands, yb-pageserver dual-writes but serves reads exactly like upstream pageserver, so any divergence between layer files and `pageserver.pages` would be silent — verify via the SQL queries in "Testing dual-write" below. |
 | 4 | ⏳ pending | Delete the layer stack: `storage_layer/`, `layer_map/`, `disk_btree`, `compaction.rs`, `inmemory_layer`, `secondary*`, `heatmap*`, `eviction_task*`, `init.rs`, most of `remote_timeline_client/`. ~25 K LOC removal. |
 | 5 | ⏳ pending | Replace `metadata` / `index_part.json` / `tenant-manifest.json` with reads/writes against `pageserver.timelines`. Rewrite attach. |
 | 6 | ⏳ deferred | GC: cron that prunes old `pages` rows. User said "figure out separately later". |
+
+## Testing dual-write (Phase 3b verification)
+
+Phase 3c isn't done yet — reads still go through the layer stack. The
+goal of testing now is to confirm `pageserver.pages` is being populated
+correctly, so when Phase 3c flips reads they Just Work.
+
+### Run it
+
+`yb-pageserver` is a drop-in replacement for `pageserver` as far as
+config goes — point a `neon_local` config at the
+`target/release/yb-pageserver` binary instead of
+`target/release/pageserver`, with `remote_storage.kind = "YbStore"`
+pointing at the same YB cluster the rest of yb-light uses.
+
+On startup you should see:
+
+```
+PageStore connected; dual-write enabled
+```
+
+If you don't, the binary fell back to upstream behaviour — check that
+`remote_storage` is `YbStore` (LocalFs / S3 / etc. won't trigger
+dual-write).
+
+### Per-tenant verification queries
+
+After a few minutes of WAL ingest:
+
+```sql
+\c yb_storage
+
+-- Row count by tenant/timeline.
+SELECT tenant_id, timeline_id,
+       count(*) AS rows,
+       count(*) FILTER (WHERE is_image)   AS images,
+       count(*) FILTER (WHERE will_init)  AS anchors,
+       pg_size_pretty(sum(length(payload))::bigint) AS bytes
+FROM pageserver.pages
+GROUP BY tenant_id, timeline_id
+ORDER BY rows DESC;
+
+-- Top 10 hottest keys (chain length).
+SELECT tenant_id, timeline_id,
+       encode(key, 'hex') AS key_hex,
+       count(*) AS chain_len,
+       max(lsn) - min(lsn) AS lsn_span
+FROM pageserver.pages
+GROUP BY tenant_id, timeline_id, key
+ORDER BY chain_len DESC
+LIMIT 10;
+
+-- Verify the 10-delta invariant: no key should have > 10 rows
+-- between consecutive anchors. This counts rows per "block" (where
+-- a block starts at each anchor row) and warns about any > 10.
+WITH ranked AS (
+    SELECT tenant_id, timeline_id, key, lsn, will_init,
+           count(*) FILTER (WHERE will_init)
+               OVER (PARTITION BY tenant_id, timeline_id, key
+                     ORDER BY lsn DESC
+                     ROWS UNBOUNDED PRECEDING) AS anchor_block
+    FROM pageserver.pages
+)
+SELECT tenant_id, timeline_id, encode(key, 'hex') AS key_hex,
+       anchor_block, count(*) AS rows_in_block
+FROM ranked
+GROUP BY tenant_id, timeline_id, key, anchor_block
+HAVING count(*) > 10
+ORDER BY rows_in_block DESC
+LIMIT 10;
+```
+
+If the third query returns rows, the 10-delta rule has been violated
+— typically a sign that `ImageRule`'s counter got out of sync (e.g.,
+the pageserver restarted mid-stream and the "first delta forces
+image" guard didn't kick in for some reason). Worth a bug report
+before going to Phase 3c.
+
+### Compare layer files vs. PageStore
+
+Quick spot-check: pick a key from a delta layer in
+`<workdir>/pageserver_*/tenants/<tenant>-…/timelines/<timeline>/…` and
+look up the same `(tenant, timeline, key)` in `pageserver.pages`. The
+delta layer's `(Key, LSN) → Value` entries should appear as
+`pageserver.pages` rows with matching LSN and `is_image=false`. Image
+layers correspond to rows with `is_image=true`.
+
+### Smoke-test outside neon_local
+
+To validate end-to-end without a full dev cluster: write a small
+script that uses `tokio-postgres` to scan `pageserver.pages` while
+pgbench runs against the compute endpoint. Row count + max LSN should
+both climb steadily.
 
 ## Code anchors
 
