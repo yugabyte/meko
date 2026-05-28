@@ -28,6 +28,7 @@ use utils::bin_ser::BeSer;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use wal_decoder::models::value::Value;
+use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
 use crate::image_rule::{IMAGE_CHAIN_LIMIT, ImageRule, WriteAction};
 use crate::page_store::{PageRow, PageStore};
@@ -323,6 +324,40 @@ impl PageWriter {
     }
 }
 
+/// Convert the upstream-shaped `SerializedValueBatch` (one batch per
+/// digested WAL record) into the `(Key, LSN, Value)` triples
+/// [`PageWriter::put`] consumes. Skips `ValueMeta::Observed` entries —
+/// those carry no payload (cross-shard observation metadata only).
+///
+/// This is the bridge between yb-pageserver's row store and the
+/// existing walingest pipeline. Phase 3b's `TimelineWriter::put_batch`
+/// will call this on each batch and forward the triples to PageWriter
+/// alongside the layer-stack `put_batch` it does today.
+pub fn extract_triples(batch: &SerializedValueBatch) -> Result<Vec<(Key, Lsn, Value)>> {
+    let mut out = Vec::with_capacity(batch.len);
+    for meta in &batch.metadata {
+        let ValueMeta::Serialized(ser) = meta else {
+            // Observed metadata is shard 0 cross-shard tracking; nothing
+            // to write.
+            continue;
+        };
+        let start = ser.batch_offset as usize;
+        let end = start
+            .checked_add(ser.len)
+            .ok_or_else(|| anyhow::anyhow!("ValueMeta offset overflow"))?;
+        if end > batch.raw.len() {
+            anyhow::bail!(
+                "ValueMeta range {start}..{end} exceeds raw buffer length {}",
+                batch.raw.len()
+            );
+        }
+        let value = Value::des(&batch.raw[start..end])?;
+        let key = Key::from_compact(ser.key);
+        out.push((key, ser.lsn, value));
+    }
+    Ok(out)
+}
+
 fn key_to_bytes(key: Key) -> Bytes {
     let mut buf = vec![0u8; KEY_SIZE];
     key.write_to_byte_slice(&mut buf);
@@ -500,6 +535,47 @@ mod tests {
     }
 
     // --- tests ---------------------------------------------------------------
+
+    #[test]
+    fn extract_triples_round_trips_through_serialized_batch() {
+        // Build a SerializedValueBatch the same way walingest builds one
+        // and verify extract_triples returns the exact triples. The
+        // "size" element of each tuple must be the actual serialized
+        // size — from_values uses it to pre-allocate the raw buffer.
+        let values_in: Vec<(Key, Lsn, Value)> = vec![
+            (k(1), Lsn(100), image()),
+            (
+                k(2),
+                Lsn(200),
+                Value::WalRecord(NeonWalRecord::Postgres {
+                    will_init: true,
+                    rec: Bytes::from_static(b"abc"),
+                }),
+            ),
+            (k(1), Lsn(300), delta()),
+        ];
+        let triples_in: Vec<(pageserver_api::key::CompactKey, Lsn, usize, Value)> = values_in
+            .iter()
+            .map(|(k, l, v)| {
+                (
+                    k.to_compact(),
+                    *l,
+                    v.serialized_size().expect("serialized_size") as usize,
+                    v.clone(),
+                )
+            })
+            .collect();
+        let batch = SerializedValueBatch::from_values(triples_in);
+        let extracted = extract_triples(&batch).expect("extract_triples");
+        assert_eq!(extracted.len(), values_in.len());
+        for ((k_in, lsn_in, val_in), (k_out, lsn_out, val_out)) in
+            values_in.iter().zip(extracted.iter())
+        {
+            assert_eq!(k_out, k_in);
+            assert_eq!(lsn_out, lsn_in);
+            assert_eq!(val_out, val_in);
+        }
+    }
 
     #[tokio::test]
     async fn empty_flush_is_noop() {
