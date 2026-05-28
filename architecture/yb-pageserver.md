@@ -258,8 +258,8 @@ Tracked phases:
 | 0 | ✅ done | Fork `pageserver/` → `yb-pageserver/`, rename crate + binary. |
 | 1 | ✅ done | `pageserver.pages` + `pageserver.timelines` schema, `PageStore` Rust module (`yb-pageserver/src/page_store.rs`) with full CRUD + generation helpers and 15 integration tests against a real YB. |
 | 2a | ✅ done | `ImageRule` 10-delta enforcement logic (`yb-pageserver/src/image_rule.rs`) with 12 unit tests. Pure logic, no walredo or DB dep. |
-| 2b | ⏳ pending | Wire `ImageRule` + `PageStore` into `TimelineWriter::put_batch`. Dual-write alongside the existing `InMemoryLayer` path so reads can still be served from layers while writes start landing in YB. |
-| 3 | ⏳ pending | Rewrite `Timeline::get_vectored_reconstruct_data*` to use `PageStore::read_chains`. Validate by running the test suite with both backends. |
+| 2b | ✅ done | `PageWriter` (`yb-pageserver/src/page_writer.rs`): buffered write path that applies `ImageRule`, calls a `Materializer` trait on `ForceImage`, blends buffered + persisted rows on read (`read_chain`), and flushes on a size/age trigger (defaults 100 MiB / 5 s). 12 integration tests including a long-workload property test that scans every LSN to confirm the LIMIT-10 invariant holds. |
+| 3 | ⏳ pending | Wire `PageWriter` into `TimelineWriter::put_batch` and rewrite `Timeline::get_vectored_reconstruct_data*` to use `PageWriter::read_chain`. Production `Materializer` wraps walredo + `PageWriter::read_chain` (the buffered-aware variant). |
 | 4 | ⏳ pending | Delete the layer stack: `storage_layer/`, `layer_map/`, `disk_btree`, `compaction.rs`, `inmemory_layer`, `secondary*`, `heatmap*`, `eviction_task*`, `init.rs`, most of `remote_timeline_client/`. ~25 K LOC removal. |
 | 5 | ⏳ pending | Replace `metadata` / `index_part.json` / `tenant-manifest.json` with reads/writes against `pageserver.timelines`. Rewrite attach. |
 | 6 | ⏳ deferred | GC: cron that prunes old `pages` rows. User said "figure out separately later". |
@@ -267,7 +267,10 @@ Tracked phases:
 ## Code anchors
 
 - `yb-pageserver/src/page_store.rs` — `PageStore` row store.
-- `yb-pageserver/src/image_rule.rs` — 10-delta rule.
+- `yb-pageserver/src/image_rule.rs` — 10-delta rule (pure logic).
+- `yb-pageserver/src/page_writer.rs` — `PageWriter` buffered write path;
+  `Materializer` trait + `FlushPolicy`; `read_chain` blends buffer +
+  PageStore for the eventual read path.
 - `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
   — DDL bootstrap for `pageserver` schema.
 - `architecture/yugabyte.md` — full DDL reference for `pageserver.pages`

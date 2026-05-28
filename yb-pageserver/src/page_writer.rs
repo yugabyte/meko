@@ -165,6 +165,46 @@ impl PageWriter {
         Ok(())
     }
 
+    /// Read the chain for `key` at `target_lsn`, blending in-RAM
+    /// buffered rows on top of PageStore's persisted chain.
+    ///
+    /// Phase 3 read path uses this so the getpage handler sees writes
+    /// that haven't yet been flushed to YB. The result is sorted
+    /// strictly LSN descending and contains at most `limit` rows.
+    pub async fn read_chain(
+        &self,
+        key: Key,
+        target_lsn: Lsn,
+        limit: usize,
+    ) -> Result<Vec<PageRow>> {
+        let key_bytes = key_to_bytes(key);
+        let mut buffered: Vec<PageRow> = {
+            let s = self.state.lock().await;
+            s.buffer
+                .iter()
+                .filter(|r| r.key == key_bytes && r.lsn <= target_lsn)
+                .cloned()
+                .collect()
+        };
+        let persisted = self
+            .page_store
+            .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn, limit)
+            .await?;
+        buffered.extend(persisted);
+        buffered.sort_by(|a, b| b.lsn.cmp(&a.lsn));
+        // Stop at the first will_init row to honour the 10-delta read
+        // contract — anything older is shadowed by the anchor.
+        let mut cap = buffered.len();
+        for (i, row) in buffered.iter().enumerate() {
+            if row.will_init {
+                cap = i + 1;
+                break;
+            }
+        }
+        buffered.truncate(cap.min(limit));
+        Ok(buffered)
+    }
+
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
     /// the buffer is empty. Resets the policy timer.
     pub async fn flush(&self) -> Result<()> {
@@ -590,6 +630,67 @@ mod tests {
         // k(1) still has counter=0; one delta passes through.
         w.put(&[(k(1), Lsn(20), delta())]).await.unwrap();
         assert_eq!(m.calls(), 1);
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn read_chain_blends_buffered_and_persisted() {
+        // Write 5 entries, flush, write 3 more (still buffered), then
+        // read — should see 8 rows in the correct LSN-desc order.
+        let (store, schema) = make_store("blend").await;
+        let (w, _m, _t, _tl) = writer(store.clone(), 10, FlushPolicy::default());
+        let first_batch: Vec<(Key, Lsn, Value)> = (0..5)
+            .map(|i| (k(1), Lsn(10 + 10 * i), if i == 0 { image() } else { delta() }))
+            .collect();
+        w.put(&first_batch).await.unwrap();
+        w.flush().await.unwrap();
+        let second_batch: Vec<(Key, Lsn, Value)> = (5..8)
+            .map(|i| (k(1), Lsn(10 + 10 * i), delta()))
+            .collect();
+        w.put(&second_batch).await.unwrap();
+        assert!(w.stats().await.buffered_rows > 0);
+        let chain = w.read_chain(k(1), Lsn(1000), 10).await.unwrap();
+        // 1 image at LSN 10 + 7 deltas at LSNs 20, 30, ..., 80.
+        assert_eq!(chain.len(), 8);
+        let mut prev = u64::MAX;
+        for row in &chain {
+            assert!(row.lsn.0 < prev, "LSNs must descend; got {row:?}");
+            prev = row.lsn.0;
+        }
+        // The anchor is at the bottom (LSN 10).
+        assert_eq!(chain.last().unwrap().lsn, Lsn(10));
+        assert!(chain.last().unwrap().will_init);
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn read_chain_truncates_at_will_init_anchor() {
+        // After a will_init delta resets the chain, older rows must NOT
+        // appear in the read result — the read path stops at the anchor.
+        let (store, schema) = make_store("trunc_at_anchor").await;
+        let (w, _m, _t, _tl) = writer(store.clone(), 10, FlushPolicy::default());
+        w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
+        for i in 1..=3 {
+            w.put(&[(k(1), Lsn(10 + 10 * i), delta())]).await.unwrap();
+        }
+        // A will_init delta at LSN 50 acts as a new anchor.
+        let init = Value::WalRecord(NeonWalRecord::Postgres {
+            will_init: true,
+            rec: Bytes::from_static(b"init"),
+        });
+        w.put(&[(k(1), Lsn(50), init)]).await.unwrap();
+        for i in 6..=8 {
+            w.put(&[(k(1), Lsn(10 + 10 * i), delta())]).await.unwrap();
+        }
+        w.flush().await.unwrap();
+        let chain = w.read_chain(k(1), Lsn(1000), 10).await.unwrap();
+        // 4 rows: deltas at 90/80/70, anchor at 50. Older rows (40/30/20/10)
+        // are shadowed by the anchor.
+        assert_eq!(chain.len(), 4);
+        assert_eq!(chain.first().unwrap().lsn, Lsn(90));
+        assert_eq!(chain.last().unwrap().lsn, Lsn(50));
+        assert!(chain.last().unwrap().will_init);
+        assert!(chain.iter().all(|r| r.lsn >= Lsn(50)));
         drop_schema(&store, &schema).await;
     }
 
