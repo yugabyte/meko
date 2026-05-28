@@ -420,6 +420,24 @@ impl RemoteStorage for YbStore {
         if !timeline_id.is_empty() {
             where_clauses.push(format!("timeline_id = ${}", bind_params.len() + 1));
             bind_params.push(Box::new(timeline_id.clone()));
+        } else if !key_body_prefix.is_empty() && !key_body_prefix.starts_with("timelines/") {
+            // Tenant-scoped objects (e.g. `tenant-manifest`, `heatmap`)
+            // are stored under `(tenant_id, timeline_id='')` — a single
+            // YB hash tablet. Without an explicit `timeline_id = ''`
+            // predicate the planner can't lock onto that tablet and
+            // ends up scanning every (tenant, timeline_id) tablet
+            // (one per timeline) for the LIKE prefix; on tenants with
+            // many timelines this fans out into a minutes-long
+            // operation and the pageserver's `download_tenant_manifest`
+            // fallback times out.
+            //
+            // The branch is skipped when `key_body_prefix` is empty
+            // (full tenant scan) or starts with `timelines/` (caller is
+            // enumerating timelines — already short-circuited by
+            // `list_remote_timelines`'s controller-DB path, defended
+            // here for any future caller).
+            where_clauses.push(format!("timeline_id = ${}", bind_params.len() + 1));
+            bind_params.push(Box::new(String::new()));
         }
         let like_idx = bind_params.len() + 1;
         where_clauses.push(format!("key LIKE ${like_idx} ESCAPE '\\'"));
