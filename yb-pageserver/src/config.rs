@@ -260,6 +260,9 @@ pub struct PageServerConf {
     /// Controls whether to collect all metrics on each scrape or to return potentially stale
     /// results.
     pub force_metric_collection_on_scrape: bool,
+
+    /// yb-pageserver row-per-page writer tunables.
+    pub yb_page_writer: pageserver_api::config::YbPageWriterConfig,
 }
 
 /// Token for authentication to safekeepers
@@ -442,6 +445,7 @@ impl PageServerConf {
             basebackup_cache_config,
             image_layer_generation_large_timeline_threshold,
             force_metric_collection_on_scrape,
+            yb_page_writer,
         } = config_toml;
 
         let mut conf = PageServerConf {
@@ -502,6 +506,7 @@ impl PageServerConf {
             basebackup_cache_config,
             image_layer_generation_large_timeline_threshold,
             force_metric_collection_on_scrape,
+            yb_page_writer,
 
             // ------------------------------------------------------------
             // fields that require additional validation or custom handling

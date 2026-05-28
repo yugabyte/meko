@@ -83,6 +83,10 @@ pub struct PageWriter {
     materializer: Arc<dyn Materializer>,
     policy: FlushPolicy,
     threshold: usize,
+    /// Max concurrent materialisations within a single `put()` call.
+    /// Each Key is processed sequentially (later entries depend on
+    /// earlier ones), but distinct keys can materialise in parallel.
+    materialise_concurrency: usize,
     state: Mutex<WriterState>,
 }
 
@@ -129,6 +133,29 @@ impl PageWriter {
         policy: FlushPolicy,
         image_threshold: usize,
     ) -> Self {
+        Self::with_options(
+            tenant_id,
+            timeline_id,
+            page_store,
+            materializer,
+            policy,
+            image_threshold,
+            8,
+        )
+    }
+
+    /// Most-explicit constructor — also takes `materialise_concurrency`
+    /// (max parallel walredo materialisations per `put()` call, across
+    /// distinct keys).
+    pub fn with_options(
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        page_store: Arc<PageStore>,
+        materializer: Arc<dyn Materializer>,
+        policy: FlushPolicy,
+        image_threshold: usize,
+        materialise_concurrency: usize,
+    ) -> Self {
         Self {
             tenant_id,
             timeline_id,
@@ -136,6 +163,7 @@ impl PageWriter {
             materializer,
             policy,
             threshold: image_threshold,
+            materialise_concurrency: materialise_concurrency.max(1),
             state: Mutex::new(WriterState {
                 rule: ImageRule::new(image_threshold),
                 buffer: Vec::new(),
@@ -149,45 +177,102 @@ impl PageWriter {
 
     /// Apply the 10-delta rule to a batch of entries and append them to
     /// the in-RAM buffer. Does not flush.
+    ///
+    /// Distinct keys within `entries` are processed in parallel (up to
+    /// `materialise_concurrency`) — a hot WAL batch that touches many
+    /// keys, some hitting the 10-delta limit, fans out the walredo
+    /// calls across walredo subprocesses instead of serialising them.
+    /// Entries for the same key stay sequential because later entries
+    /// depend on earlier ones for chain reconstruction.
     pub async fn put(&self, entries: &[(Key, Lsn, Value)]) -> Result<()> {
+        use std::collections::HashMap;
+
+        use futures::StreamExt;
+        use futures::stream::FuturesUnordered;
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+        // Open the buffer timer eagerly so an all-Passthrough batch
+        // still arms the age trigger.
+        {
+            let mut s = self.state.lock().await;
+            if s.opened_at.is_none() {
+                s.opened_at = Some(Instant::now());
+            }
+        }
+
+        // Group by key, preserving input order per key (WAL ordering).
+        let mut by_key: HashMap<Key, Vec<(Lsn, &Value)>> = HashMap::new();
         for (key, lsn, value) in entries {
-            // Lock-decide-unlock-await-relock so the materializer can be
-            // slow without holding the writer mutex.
+            by_key.entry(*key).or_default().push((*lsn, value));
+        }
+
+        // Process each key's entries sequentially; distinct keys run in
+        // parallel, capped at `materialise_concurrency`.
+        let mut iter = by_key.into_iter();
+        let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+        for _ in 0..self.materialise_concurrency {
+            if let Some((key, entries)) = iter.next() {
+                in_flight.push(self.process_key(key, entries));
+            }
+        }
+        while let Some(produced) = in_flight.next().await {
+            let (rows, materialised, passed_through) = produced?;
+            let mut s = self.state.lock().await;
+            for row in rows {
+                s.bytes_in_buffer += row_size(&row);
+                s.buffer.push(row);
+            }
+            s.materialised += materialised;
+            s.passed_through += passed_through;
+            drop(s);
+            if let Some((key, entries)) = iter.next() {
+                in_flight.push(self.process_key(key, entries));
+            }
+        }
+        Ok(())
+    }
+
+    /// Inner worker for one key's entries (sequential within the key).
+    async fn process_key(
+        &self,
+        key: Key,
+        entries: Vec<(Lsn, &Value)>,
+    ) -> Result<(Vec<PageRow>, u64, u64)> {
+        let mut produced = Vec::with_capacity(entries.len());
+        let mut materialised = 0u64;
+        let mut passed_through = 0u64;
+        for (lsn, value) in entries {
             let action = {
                 let mut s = self.state.lock().await;
-                if s.opened_at.is_none() {
-                    s.opened_at = Some(Instant::now());
-                }
-                s.rule.decide(*key, value)
+                s.rule.decide(key, value)
             };
             let row = match action {
-                WriteAction::Passthrough => build_passthrough_row(*key, *lsn, value)?,
+                WriteAction::Passthrough => {
+                    passed_through += 1;
+                    build_passthrough_row(key, lsn, value)?
+                }
                 WriteAction::ForceImage => {
+                    materialised += 1;
                     // Gather the prior chain (rows at LSN < target_lsn).
-                    // The new entry hasn't been buffered yet, so
-                    // read_chain at lsn returns rows strictly < lsn
+                    // The current entry hasn't been buffered yet, so
+                    // `read_chain` at `lsn` returns rows strictly < lsn
                     // (the unique-(key,lsn) WAL invariant prevents an
                     // exact match from existing already).
                     let prior_chain = self
-                        .read_chain(*key, *lsn, IMAGE_CHAIN_LIMIT)
+                        .read_chain(key, lsn, IMAGE_CHAIN_LIMIT)
                         .await?;
                     let bytes = self
                         .materializer
-                        .materialize(*key, *lsn, prior_chain, value)
+                        .materialize(key, lsn, prior_chain, value)
                         .await?;
-                    build_image_row(*key, *lsn, bytes)
+                    build_image_row(key, lsn, bytes)
                 }
             };
-            let row_size = row_size(&row);
-            let mut s = self.state.lock().await;
-            s.bytes_in_buffer += row_size;
-            match action {
-                WriteAction::Passthrough => s.passed_through += 1,
-                WriteAction::ForceImage => s.materialised += 1,
-            }
-            s.buffer.push(row);
+            produced.push(row);
         }
-        Ok(())
+        Ok((produced, materialised, passed_through))
     }
 
     /// Read the chain for `key` at `target_lsn`, blending in-RAM

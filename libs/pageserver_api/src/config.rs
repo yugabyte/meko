@@ -275,6 +275,53 @@ pub struct ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_layer_generation_large_timeline_threshold: Option<u64>,
     pub force_metric_collection_on_scrape: bool,
+
+    /// yb-pageserver row-per-page writer tunables. The upstream
+    /// `pageserver` binary ignores these — they only take effect when
+    /// `remote_storage.kind = "YbStore"` and the binary is
+    /// `yb-pageserver`.
+    #[serde(default)]
+    pub yb_page_writer: YbPageWriterConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct YbPageWriterConfig {
+    /// Flush the in-RAM buffer to `pageserver.pages` after this much
+    /// wall-clock time since the buffer opened, even if it hasn't hit
+    /// the size threshold. Default 5 seconds.
+    #[serde(with = "humantime_serde")]
+    pub flush_interval: Duration,
+
+    /// Flush the in-RAM buffer when its estimated size crosses this.
+    /// Default 100 MiB.
+    pub flush_size_bytes: usize,
+
+    /// Threshold for the 10-delta image rule: every Nth row per key
+    /// must be `will_init=true`. Default 10.
+    pub image_chain_limit: usize,
+
+    /// Period at which the background flusher polls `should_flush()`.
+    /// Default 500 ms.
+    #[serde(with = "humantime_serde")]
+    pub flush_poll_interval: Duration,
+
+    /// Max concurrent walredo materialisations per `put_batch` call.
+    /// Higher = more parallel walredo subprocess invocations on
+    /// batches that touch many distinct hot keys. Default 8.
+    pub materialise_concurrency: usize,
+}
+
+impl Default for YbPageWriterConfig {
+    fn default() -> Self {
+        Self {
+            flush_interval: Duration::from_secs(5),
+            flush_size_bytes: 100 * 1024 * 1024,
+            image_chain_limit: 10,
+            flush_poll_interval: Duration::from_millis(500),
+            materialise_concurrency: 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -838,6 +885,7 @@ impl Default for ConfigToml {
             posthog_config: None,
             image_layer_generation_large_timeline_threshold: Some(2 * 1024 * 1024 * 1024),
             force_metric_collection_on_scrape: true,
+            yb_page_writer: YbPageWriterConfig::default(),
         }
     }
 }

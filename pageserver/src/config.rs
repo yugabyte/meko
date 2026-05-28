@@ -442,6 +442,9 @@ impl PageServerConf {
             basebackup_cache_config,
             image_layer_generation_large_timeline_threshold,
             force_metric_collection_on_scrape,
+            // yb_page_writer lives in the shared ConfigToml so yb-pageserver
+            // can pick it up; the upstream `pageserver` binary ignores it.
+            yb_page_writer: _,
         } = config_toml;
 
         let mut conf = PageServerConf {

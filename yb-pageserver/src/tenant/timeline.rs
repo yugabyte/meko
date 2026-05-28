@@ -3245,20 +3245,26 @@ impl Timeline {
         let (page_writer, page_writer_flush_task) =
             match (resources.page_store.as_ref(), walredo_mgr.as_ref()) {
                 (Some(ps), Some(wm)) => {
+                    let pw_cfg = &conf.yb_page_writer;
                     let materializer = Arc::new(
                         crate::page_materializer::WalRedoMaterializer::new(
                             wm.clone(),
                             pg_version,
                         ),
                     );
-                    let writer = Arc::new(crate::page_writer::PageWriter::new(
+                    let writer = Arc::new(crate::page_writer::PageWriter::with_options(
                         tenant_shard_id.tenant_id,
                         timeline_id,
                         ps.clone(),
                         materializer as Arc<dyn crate::page_writer::Materializer>,
-                        crate::page_writer::FlushPolicy::default(),
+                        crate::page_writer::FlushPolicy {
+                            max_age: pw_cfg.flush_interval,
+                            max_bytes: pw_cfg.flush_size_bytes,
+                        },
+                        pw_cfg.image_chain_limit,
+                        pw_cfg.materialise_concurrency,
                     ));
-                    let task = writer.spawn_flusher(std::time::Duration::from_millis(500));
+                    let task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
                     (Some(writer), Some(task))
                 }
                 _ => (None, None),
