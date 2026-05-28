@@ -205,13 +205,16 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
 5. Reads between flushes can see in-buffer rows: the read path checks
    the buffer first, then queries PageStore.
 
-Default knobs (configurable via `pageserver.toml`):
+Default knobs (configurable via `pageserver.toml` under the
+`yb_page_writer` block):
 
 | Knob | Default | Meaning |
 |---|---:|---|
-| `yb_flush_interval` | 5 s | Time-based flush trigger |
-| `yb_flush_size` | 100 MB | Size-based flush trigger |
-| `yb_image_chain_limit` | 10 | Threshold for the 10-delta rule |
+| `flush_interval` | 5 s | Time-based flush trigger |
+| `flush_size_bytes` | 100 MiB | Size-based flush trigger |
+| `image_chain_limit` | 10 | Threshold for the 10-delta rule |
+| `flush_poll_interval` | 500 ms | How often the background flusher checks the triggers |
+| `materialise_concurrency` | 8 | Max parallel walredo materialisations per `put_batch` (distinct keys can fan out; same-key entries stay sequential) |
 
 ## Generation fencing
 
@@ -262,8 +265,9 @@ Tracked phases:
 | 3a | ✅ done | `Materializer` trait refactored: now takes `(key, target_lsn, prior_chain, current)` so production wrappers don't need a back-reference to `PageWriter`. `WalRedoMaterializer` (`yb-pageserver/src/page_materializer.rs`) is the production impl — converts chain rows back into `(base_img, records)` and calls `walredo::PostgresRedoManager::request_redo`. 5 tests cover the pure decode helper. Walredo-driven end-to-end test deferred to Phase 3b wiring (needs a real PG subprocess). |
 | 3a+ | ✅ done | Two more primitives that Phase 3b will reach for: `PageWriter::spawn_flusher(tick)` returns a `FlushTask` (JoinHandle + CancellationToken) for the per-timeline background flusher, doing a final `flush()` on cancel; `extract_triples(SerializedValueBatch)` decodes a walingest batch into the `(Key, Lsn, Value)` triples `PageWriter::put` consumes. Both with tests. |
 | 3b | ✅ done | Tenant/Timeline plumbing: `TenantSharedResources` carries `Option<Arc<PageStore>>`, `Tenant` stashes it, `TimelineResources` passes through, `Timeline` builds `PageWriter` + spawns `FlushTask` when both `page_store` and `walredo_mgr` are present. `TimelineWriter::put_batch` runs `extract_triples` and forwards to `page_writer.put` before the layer-file write (so a YB failure aborts the whole batch and walingest retries). `Timeline::shutdown` drains the FlushTask + does a final `page_writer.flush()`. **Reads still go through the layer stack** — Phase 3c is the read-flip. |
-| 3c | ⏳ pending | Rewrite `Timeline::get_vectored_reconstruct_data*` to call `PageWriter::read_chain` per key, decode the chain into `(base_img, records)`, and drive walredo. Until this lands, yb-pageserver dual-writes but serves reads exactly like upstream pageserver, so any divergence between layer files and `pageserver.pages` would be silent — verify via the SQL queries in "Testing dual-write" below. |
-| 4 | ⏳ pending | Delete the layer stack: `storage_layer/`, `layer_map/`, `disk_btree`, `compaction.rs`, `inmemory_layer`, `secondary*`, `heatmap*`, `eviction_task*`, `init.rs`, most of `remote_timeline_client/`. ~25 K LOC removal. |
+| 3c | ✅ done | `Timeline::get_vectored_impl` branches on `self.page_writer`: when yb-pageserver mode is active, reads go through `get_vectored_via_page_writer` — per-key parallel `PageWriter::read_chain` → `chain_to_value_reconstruct_state` (image-anchor → img, deltas → records) → `Timeline::reconstruct_value` (walredo). The LayerMap walk is bypassed entirely. Upstream pageserver behaviour preserved when `page_writer` is None. Layer-file path is now dead code from the read perspective; still populated by 3b dual-write, both removed by Phase 4. |
+| 3c+ | ✅ done | `yb_page_writer` config block in `ConfigToml` (5 knobs: flush_interval, flush_size_bytes, image_chain_limit, flush_poll_interval, materialise_concurrency). Defaults match the original hard-coded constants. `PageWriter::put` parallelises walredo across distinct keys within a batch (FuturesUnordered, bounded by materialise_concurrency). |
+| 4 | ⏳ pending (user said "test before deleting") | Delete the layer stack: `storage_layer/`, `layer_map/`, `disk_btree`, `compaction.rs`, `inmemory_layer`, `secondary*`, `heatmap*`, `eviction_task*`, `init.rs`, most of `remote_timeline_client/`. ~25 K LOC removal. After 3c, the layer-file path is dead code from the read perspective; 3b's dual-write to layer files keeps it populated until this phase removes it. |
 | 5 | ⏳ pending | Replace `metadata` / `index_part.json` / `tenant-manifest.json` with reads/writes against `pageserver.timelines`. Rewrite attach. |
 | 6 | ⏳ deferred | GC: cron that prunes old `pages` rows. User said "figure out separately later". |
 
