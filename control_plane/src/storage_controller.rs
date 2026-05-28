@@ -417,19 +417,27 @@ impl StorageController {
         let (client, conn_task) =
             Self::connect_external(&cfg, "yb_storage to provision schema").await?;
 
+        // Schema-qualify everything so these objects never drift into
+        // `storage_controller` (or any other schema named first in
+        // search_path) when the controller URL carries
+        // `options=-csearch_path=…`. blobs/wals are the operator-facing
+        // tables; they belong in `public`.
+        //
         // CREATE TYPE has no IF NOT EXISTS — swallow the duplicate-object
         // error on retries.
         match client
-            .batch_execute("CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper')")
+            .batch_execute(
+                "CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper')",
+            )
             .await
         {
-            Ok(()) => println!("Created type yb_storage.blob_namespace"),
+            Ok(()) => println!("Created type yb_storage.public.blob_namespace"),
             Err(e) => {
                 let is_dup = e
                     .as_db_error()
                     .is_some_and(|d| d.code() == &tokio_postgres::error::SqlState::DUPLICATE_OBJECT);
                 if is_dup {
-                    println!("Type yb_storage.blob_namespace already exists");
+                    println!("Type yb_storage.public.blob_namespace already exists");
                 } else {
                     return Err(anyhow::Error::from(e).context("creating blob_namespace type"));
                 }
@@ -438,27 +446,27 @@ impl StorageController {
 
         client
             .batch_execute(
-                "CREATE TABLE IF NOT EXISTS blobs (
-                    tenant_id        TEXT             NOT NULL,
-                    timeline_id      TEXT             NOT NULL,
-                    namespace        blob_namespace   NOT NULL,
-                    key              TEXT             NOT NULL,
-                    chunk_idx        INT              NOT NULL,
-                    data             BYTEA            NOT NULL,
-                    size_bytes       BIGINT           NOT NULL,
-                    etag             TEXT             NOT NULL,
-                    last_modified_us BIGINT           NOT NULL,
+                "CREATE TABLE IF NOT EXISTS public.blobs (
+                    tenant_id        TEXT                  NOT NULL,
+                    timeline_id      TEXT                  NOT NULL,
+                    namespace        public.blob_namespace NOT NULL,
+                    key              TEXT                  NOT NULL,
+                    chunk_idx        INT                   NOT NULL,
+                    data             BYTEA                 NOT NULL,
+                    size_bytes       BIGINT                NOT NULL,
+                    etag             TEXT                  NOT NULL,
+                    last_modified_us BIGINT                NOT NULL,
                     metadata_json    TEXT,
                     PRIMARY KEY ((tenant_id, timeline_id) HASH, namespace, key, chunk_idx)
                 )",
             )
             .await
-            .context("creating yb_storage.blobs")?;
-        println!("Ensured table yb_storage.blobs");
+            .context("creating yb_storage.public.blobs")?;
+        println!("Ensured table yb_storage.public.blobs");
 
         client
             .batch_execute(
-                "CREATE TABLE IF NOT EXISTS wals (
+                "CREATE TABLE IF NOT EXISTS public.wals (
                     tenant_id        TEXT    NOT NULL,
                     timeline_id      TEXT    NOT NULL,
                     segno            BIGINT  NOT NULL,
@@ -471,8 +479,8 @@ impl StorageController {
                 )",
             )
             .await
-            .context("creating yb_storage.wals")?;
-        println!("Ensured table yb_storage.wals");
+            .context("creating yb_storage.public.wals")?;
+        println!("Ensured table yb_storage.public.wals");
 
         drop(client);
         conn_task.await??;
