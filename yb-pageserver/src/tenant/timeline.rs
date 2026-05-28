@@ -1459,6 +1459,22 @@ impl Timeline {
             return Ok(BTreeMap::default());
         }
 
+        // yb-pageserver read path: when a PageWriter is wired up,
+        // serve reads directly from `pageserver.pages` (plus the
+        // in-RAM buffer) instead of walking LayerMap. Phase 3c —
+        // upstream pageserver behaviour is preserved by the
+        // `_ = None` arm.
+        if let Some(page_writer) = self.page_writer.clone() {
+            let redo_attempt_type = if ctx.task_kind() == TaskKind::Compaction {
+                RedoAttemptType::LegacyCompaction
+            } else {
+                RedoAttemptType::ReadPage
+            };
+            return self
+                .get_vectored_via_page_writer(page_writer, query, redo_attempt_type, ctx)
+                .await;
+        }
+
         let read_path = if self.conf.enable_read_path_debugging || ctx.read_path_debug() {
             Some(ReadPath::new(
                 query.total_keyspace(),
@@ -1635,6 +1651,80 @@ impl Timeline {
             }
         }
 
+        Ok(results)
+    }
+
+    /// yb-pageserver row-per-page read path. Replaces the LayerMap
+    /// traversal: per requested key at its target LSN, read the chain
+    /// from `PageWriter::read_chain` (which blends in-RAM buffered
+    /// rows with `pageserver.pages`), decode into walredo's
+    /// `ValueReconstructState` shape, drive `reconstruct_value` to
+    /// produce the final 8 KiB page.
+    ///
+    /// The 10-delta image rule enforced at write time means each
+    /// chain is bounded at `IMAGE_CHAIN_LIMIT` (10) rows and is
+    /// guaranteed to contain a `will_init=true` anchor.
+    async fn get_vectored_via_page_writer(
+        &self,
+        page_writer: Arc<crate::page_writer::PageWriter>,
+        query: VersionedKeySpaceQuery,
+        redo_attempt_type: RedoAttemptType,
+        _ctx: &RequestContext,
+    ) -> Result<BTreeMap<Key, Result<Bytes, PageReconstructError>>, GetVectoredError> {
+        use crate::image_rule::IMAGE_CHAIN_LIMIT;
+
+        let total_keyspace = query.total_keyspace();
+        // Materialise the set of keys. With `LIMIT 10` per key the
+        // PageStore query is small; iterating the keyspace by Key::next
+        // is cheap enough for typical request sizes (compute requests
+        // ~16 pages).
+        let mut keys: Vec<Key> = Vec::new();
+        for range in &total_keyspace.ranges {
+            let mut k = range.start;
+            while k < range.end {
+                keys.push(k);
+                k = k.next();
+            }
+        }
+
+        let futs = futures::stream::FuturesUnordered::new();
+        for key in keys {
+            let target_lsn = query.map_key_to_lsn(&key);
+            let page_writer = page_writer.clone();
+            let walredo_self = self.myself.upgrade().expect("&self method holds the arc");
+            futs.push(async move {
+                let chain_res = page_writer
+                    .read_chain(key, target_lsn, IMAGE_CHAIN_LIMIT)
+                    .await;
+                let chain = match chain_res {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return (
+                            key,
+                            Err(PageReconstructError::from(anyhow!(
+                                "PageStore read_chain failed: {e:#}"
+                            ))),
+                        );
+                    }
+                };
+                let data = match chain_to_value_reconstruct_state(&chain) {
+                    Ok(d) => d,
+                    Err(e) => return (key, Err(PageReconstructError::from(e))),
+                };
+                DELTAS_PER_READ_GLOBAL.observe(data.num_deltas() as f64);
+                let res = walredo_self
+                    .reconstruct_value(key, target_lsn, data, redo_attempt_type)
+                    .await;
+                (key, res)
+            });
+        }
+
+        use futures::StreamExt;
+        let mut results: BTreeMap<Key, Result<Bytes, PageReconstructError>> = BTreeMap::new();
+        futures::pin_mut!(futs);
+        while let Some((key, res)) = futs.next().await {
+            results.insert(key, res);
+        }
         Ok(results)
     }
 
@@ -8399,5 +8489,149 @@ mod tests {
             .expect("must find one layer to evict");
 
         layers.get_from_desc(&desc)
+    }
+}
+
+/// Decode a `PageWriter::read_chain` result into walredo's expected
+/// `ValueReconstructState` shape.
+///
+/// `chain` is sorted **LSN descending** (newest first) and truncated at
+/// the first `will_init=true` row (the chain anchor). For walredo we
+/// produce:
+/// - `img`: the anchor row's payload if `is_image=true`. Otherwise the
+///   anchor is a `will_init` delta and goes into `records` like the
+///   rest — walredo handles "first record initialises the page".
+/// - `records`: every other row in the chain, decoded as
+///   `NeonWalRecord`. Kept in descending-LSN order; `reconstruct_value`
+///   reverses to ascending internally before applying.
+fn chain_to_value_reconstruct_state(
+    chain: &[crate::page_store::PageRow],
+) -> anyhow::Result<crate::tenant::storage_layer::ValueReconstructState> {
+    use crate::tenant::storage_layer::ValueReconstructState;
+    use utils::bin_ser::BeSer;
+    use wal_decoder::models::record::NeonWalRecord;
+
+    let mut state = ValueReconstructState::default();
+    if chain.is_empty() {
+        return Ok(state);
+    }
+    // The anchor (oldest row) is at chain.last() because `chain` is
+    // LSN-descending.
+    let anchor_idx = chain.len() - 1;
+    let anchor = &chain[anchor_idx];
+
+    let records_slice: &[crate::page_store::PageRow] = if anchor.is_image {
+        // Image anchor: hand it to walredo as base_img, deltas above
+        // become records.
+        state.img = Some((anchor.lsn, anchor.payload.clone()));
+        &chain[..anchor_idx]
+    } else {
+        // will_init delta anchor: include it as the first (oldest)
+        // record. No base_img.
+        &chain[..]
+    };
+
+    state.records.reserve(records_slice.len());
+    for row in records_slice {
+        // Already in descending order.
+        let rec = NeonWalRecord::des(&row.payload).map_err(|e| {
+            anyhow::anyhow!("failed to decode NeonWalRecord at lsn={}: {e:#}", row.lsn)
+        })?;
+        state.records.push((row.lsn, rec));
+    }
+    Ok(state)
+}
+
+#[cfg(test)]
+mod page_writer_read_tests {
+    use super::*;
+    use bytes::Bytes;
+    use utils::bin_ser::BeSer;
+    use wal_decoder::models::record::NeonWalRecord;
+
+    fn img_row(lsn: u64) -> crate::page_store::PageRow {
+        crate::page_store::PageRow {
+            key: Bytes::from_static(b"k"),
+            lsn: Lsn(lsn),
+            is_image: true,
+            will_init: true,
+            payload: Bytes::from(vec![0x42u8; 8192]),
+        }
+    }
+
+    fn delta_row(lsn: u64, will_init: bool) -> crate::page_store::PageRow {
+        let rec = NeonWalRecord::Postgres {
+            will_init,
+            rec: Bytes::from_static(b"r"),
+        };
+        crate::page_store::PageRow {
+            key: Bytes::from_static(b"k"),
+            lsn: Lsn(lsn),
+            is_image: false,
+            will_init,
+            payload: Bytes::from(rec.ser().unwrap()),
+        }
+    }
+
+    #[test]
+    fn empty_chain_yields_empty_state() {
+        let s = chain_to_value_reconstruct_state(&[]).unwrap();
+        assert!(s.img.is_none());
+        assert!(s.records.is_empty());
+    }
+
+    #[test]
+    fn image_anchor_becomes_base_img() {
+        // Descending: delta(20), delta(15), image(10).
+        let chain = vec![delta_row(20, false), delta_row(15, false), img_row(10)];
+        let s = chain_to_value_reconstruct_state(&chain).unwrap();
+        let (img_lsn, _) = s.img.expect("base img");
+        assert_eq!(img_lsn, Lsn(10));
+        assert_eq!(s.records.len(), 2);
+        // Descending order preserved.
+        assert_eq!(s.records[0].0, Lsn(20));
+        assert_eq!(s.records[1].0, Lsn(15));
+    }
+
+    #[test]
+    fn will_init_delta_anchor_keeps_no_base() {
+        // Descending: delta(20), delta(15), will_init_delta(10).
+        let chain = vec![delta_row(20, false), delta_row(15, false), delta_row(10, true)];
+        let s = chain_to_value_reconstruct_state(&chain).unwrap();
+        assert!(s.img.is_none(), "anchor is not an image");
+        // All three rows become records.
+        assert_eq!(s.records.len(), 3);
+        assert_eq!(s.records[0].0, Lsn(20));
+        assert_eq!(s.records[2].0, Lsn(10));
+        match &s.records[2].1 {
+            NeonWalRecord::Postgres { will_init, .. } => assert!(*will_init),
+            other => panic!("expected will_init=true, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_image_chain() {
+        let chain = vec![img_row(42)];
+        let s = chain_to_value_reconstruct_state(&chain).unwrap();
+        assert_eq!(s.img.unwrap().0, Lsn(42));
+        assert!(s.records.is_empty());
+    }
+
+    #[test]
+    fn malformed_delta_payload_errors() {
+        let bad = crate::page_store::PageRow {
+            key: Bytes::from_static(b"k"),
+            lsn: Lsn(20),
+            is_image: false,
+            will_init: false,
+            payload: Bytes::from_static(b"not-a-NeonWalRecord"),
+        };
+        let chain = vec![bad, img_row(10)];
+        let err = chain_to_value_reconstruct_state(&chain).unwrap_err();
+        let msg = format!("{err}").to_lowercase();
+        assert!(
+            msg.contains("decode") || msg.contains("deserialize"),
+            "expected a decode error, got: {err:?}"
+        );
     }
 }
