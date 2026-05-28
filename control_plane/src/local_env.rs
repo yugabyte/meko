@@ -490,6 +490,13 @@ impl LocalEnv {
     }
 
     pub fn pageserver_bin(&self) -> PathBuf {
+        // For validation / A-B testing, allow swapping in a different
+        // pageserver binary (e.g. yb-pageserver) without disturbing the
+        // distrib_dir layout. Used by the yb-pageserver refactor's
+        // validation harness.
+        if let Ok(custom) = std::env::var("NEON_PAGESERVER_BIN") {
+            return PathBuf::from(custom);
+        }
         self.neon_distrib_dir.join("pageserver")
     }
 

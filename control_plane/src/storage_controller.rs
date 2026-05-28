@@ -492,17 +492,30 @@ impl StorageController {
             .context("creating schema yb_storage.pageserver")?;
         println!("Ensured schema yb_storage.pageserver");
 
+        // Relation pages only — anything where Key::is_rel_block_key()
+        // holds (field1 == 0x00, field4 != 0, field6 != 0xffffffff).
+        // The hash partition is (tenant, timeline, spcnode, dbnode,
+        // relnode, forknum) so a fork's whole block-set lives on one
+        // tablet; range scans within a fork are tablet-local.
+        // Non-page keys (SLRUs, metadata, dir listings, aux, repl
+        // origins, rel-size sentinels) keep going through the layer-
+        // file path in `public.blobs`.
         client
             .batch_execute(
                 "CREATE TABLE IF NOT EXISTS pageserver.pages (
-                    tenant_id    TEXT    NOT NULL,
-                    timeline_id  TEXT    NOT NULL,
-                    key          BYTEA   NOT NULL,
-                    lsn          BIGINT  NOT NULL,
-                    is_image     BOOLEAN NOT NULL,
-                    will_init    BOOLEAN NOT NULL,
-                    payload      BYTEA   NOT NULL,
-                    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+                    tenant_id    TEXT     NOT NULL,
+                    timeline_id  TEXT     NOT NULL,
+                    spcnode      BIGINT   NOT NULL,
+                    dbnode       BIGINT   NOT NULL,
+                    relnode      BIGINT   NOT NULL,
+                    forknum      SMALLINT NOT NULL,
+                    blknum       BIGINT   NOT NULL,
+                    lsn          BIGINT   NOT NULL,
+                    is_image     BOOLEAN  NOT NULL,
+                    will_init    BOOLEAN  NOT NULL,
+                    payload      BYTEA    NOT NULL,
+                    PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
+                                 blknum, lsn DESC)
                 )",
             )
             .await

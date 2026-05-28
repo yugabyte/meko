@@ -1387,33 +1387,6 @@ impl Timeline {
 
         fail::fail_point!("skip-logical-size-calculation", |_| { Ok(0) });
 
-        // TODO(yb-pageserver): stubbed to 1 GiB when running with the
-        // row-per-page store. The real implementation walks the
-        // metadata keyspace via `list_rels` -> `Timeline::scan` ->
-        // `get_vectored_impl` -> `get_vectored_via_page_writer`. The
-        // Phase 3c read path enumerates every Key in the requested
-        // range via `Key::next`, which is bounded for compute getpage
-        // requests (~16 keys) but explodes for metadata range scans —
-        // observed allocating ~5 GiB/min of pending `Vec<Key>` + task
-        // captures during tenant attach, wedging the box.
-        //
-        // The fix is to add a `PageStore::scan_range(...)` method that
-        // issues a single
-        //   SELECT … FROM pageserver.pages
-        //   WHERE key >= $start AND key < $end AND lsn <= $L
-        //   ORDER BY key, lsn DESC
-        // and to teach `get_vectored_via_page_writer` to dispatch
-        // per-`Range<Key>` instead of per-`Key`. Bounded by the
-        // 10-delta rule at ≤ 10 rows per distinct stored key.
-        //
-        // Until that lands, return a fixed 1 GiB so consumption
-        // metrics / tenant-size endpoints don't observe 0 (which
-        // upstream's eviction-task-imitation path may treat as a
-        // signal). Sufficient for dev / validation; NOT for production.
-        if self.page_writer.is_some() {
-            return Ok(1024 * 1024 * 1024);
-        }
-
         // Fetch list of database dirs and iterate them
         let buf = self.get(DBDIR_KEY, lsn, ctx).await?;
         let dbdir = DbDirectory::des(&buf)?;

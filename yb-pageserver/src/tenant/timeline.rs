@@ -1459,12 +1459,18 @@ impl Timeline {
             return Ok(BTreeMap::default());
         }
 
-        // yb-pageserver read path: when a PageWriter is wired up,
-        // serve reads directly from `pageserver.pages` (plus the
-        // in-RAM buffer) instead of walking LayerMap. Phase 3c —
-        // upstream pageserver behaviour is preserved by the
-        // `_ = None` arm.
-        if let Some(page_writer) = self.page_writer.clone() {
+        // yb-pageserver read path: relation-page-only queries go
+        // through `pageserver.pages` (PageStore) for tablet-local
+        // range scans. Any query that touches non-page keys (SLRUs,
+        // metadata, dir listings, aux, repl origins, rel-size
+        // sentinels) falls through to the layer-stack path; layer
+        // files are still populated by dual-write so reads are
+        // correct.
+        let all_page_keys = self.page_writer.is_some()
+            && query.total_keyspace().ranges.iter().all(|r| {
+                r.start.field1 == 0 && r.end.field1 <= 1
+            });
+        if all_page_keys && let Some(page_writer) = self.page_writer.clone() {
             let redo_attempt_type = if ctx.task_kind() == TaskKind::Compaction {
                 RedoAttemptType::LegacyCompaction
             } else {
@@ -1674,61 +1680,43 @@ impl Timeline {
         use crate::image_rule::IMAGE_CHAIN_LIMIT;
 
         let total_keyspace = query.total_keyspace();
-        // Materialise the set of keys. With `LIMIT 10` per key the
-        // PageStore query is small; iterating the keyspace by Key::next
-        // is cheap enough for typical request sizes (compute requests
-        // ~16 pages).
+
+        // Per range: one PageStore::scan_range call. With the typed-
+        // columns hash partition, an "all blocks of one fork" range is
+        // a single-tablet hash-pinned range scan. Bounded by the
+        // 10-delta invariant at `≤ stored_keys_in_range × 10` rows —
+        // memory cost matches what the upstream layer-file path would
+        // pay for the same data.
         //
-        // TODO(yb-pageserver): wide-range scans (initial_size_calc /
-        // image-layer creation / gc-compaction) blow up here because
-        // `Key::next` enumerates billions of keys. The proper fix is a
-        // `PageStore::scan_range(start, end, lsn, per_key_limit)` that
-        // issues a single SQL
-        //   SELECT … WHERE key >= $start AND key < $end AND lsn <= $L
-        //   ORDER BY key, lsn DESC
-        // and a `get_vectored_via_page_writer` rewrite that dispatches
-        // per-`Range<Key>` instead of per-`Key`. Until that lands we
-        // bail with a clear error so the box doesn't OOM.
-        const MAX_KEYS_PER_VECTORED_READ: usize = 1024;
-        let mut keys: Vec<Key> = Vec::new();
+        // Non-page-key ranges aren't expected here: the caller (the
+        // `all_page_keys` check in `get_vectored_impl`) only dispatches
+        // when every range stays in the relation-page namespace.
+        let mut chains_by_key: std::collections::HashMap<Key, Vec<crate::page_store::PageRow>> =
+            std::collections::HashMap::new();
         for range in &total_keyspace.ranges {
-            let mut k = range.start;
-            while k < range.end {
-                if keys.len() >= MAX_KEYS_PER_VECTORED_READ {
-                    return Err(GetVectoredError::Other(anyhow!(
-                        "PageStore read path: keyspace range too wide \
-                         (> {} keys); narrow callers (compute getpage) \
-                         work, wide callers (initial_size_calc, image-layer \
-                         creation, gc-compaction) need a real range-scan \
-                         API. See TODO in get_vectored_via_page_writer.",
-                        MAX_KEYS_PER_VECTORED_READ
-                    )));
-                }
-                keys.push(k);
-                k = k.next();
+            let scan = page_writer
+                .scan_range(range.clone(), query.high_watermark_lsn()?, IMAGE_CHAIN_LIMIT)
+                .await
+                .map_err(|e| {
+                    GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
+                })?;
+            for (key, chain) in scan {
+                chains_by_key.entry(key).or_default().extend(chain);
             }
         }
 
+        // For each key, drive walredo in parallel.
         let futs = futures::stream::FuturesUnordered::new();
-        for key in keys {
+        for (key, chain) in chains_by_key {
             let target_lsn = query.map_key_to_lsn(&key);
-            let page_writer = page_writer.clone();
+            // Filter chain rows to those at lsn ≤ target_lsn (in case
+            // the caller-asked LSN differs across keys); the chain is
+            // already LSN-descending so we just truncate.
+            let chain: Vec<_> = chain.into_iter().filter(|r| r.lsn <= target_lsn).collect();
+            // Truncate at the first will_init=true row.
+            let chain = truncate_chain_at_anchor(chain);
             let walredo_self = self.myself.upgrade().expect("&self method holds the arc");
             futs.push(async move {
-                let chain_res = page_writer
-                    .read_chain(key, target_lsn, IMAGE_CHAIN_LIMIT)
-                    .await;
-                let chain = match chain_res {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return (
-                            key,
-                            Err(PageReconstructError::from(anyhow!(
-                                "PageStore read_chain failed: {e:#}"
-                            ))),
-                        );
-                    }
-                };
                 let data = match chain_to_value_reconstruct_state(&chain) {
                     Ok(d) => d,
                     Err(e) => return (key, Err(PageReconstructError::from(e))),
@@ -8512,6 +8500,19 @@ mod tests {
 
         layers.get_from_desc(&desc)
     }
+}
+
+/// Drop chain rows older than the first `will_init=true` row. Input
+/// is sorted LSN-descending. Used by the row-store read path before
+/// handing the chain to walredo so old deltas below an anchor don't
+/// confuse reconstruction.
+fn truncate_chain_at_anchor(
+    mut chain: Vec<crate::page_store::PageRow>,
+) -> Vec<crate::page_store::PageRow> {
+    if let Some(idx) = chain.iter().position(|r| r.will_init) {
+        chain.truncate(idx + 1);
+    }
+    chain
 }
 
 /// Decode a `PageWriter::read_chain` result into walredo's expected

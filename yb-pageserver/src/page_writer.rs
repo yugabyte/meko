@@ -203,9 +203,20 @@ impl PageWriter {
         }
 
         // Group by key, preserving input order per key (WAL ordering).
+        // PageStore only holds relation pages — non-page keys (SLRUs,
+        // metadata, dir listings, aux files, repl origins, rel-size
+        // sentinels) continue through the layer-file path in
+        // public.blobs, written by TimelineWriter::put_batch's
+        // `layer.put_batch` call. We skip them silently here.
         let mut by_key: HashMap<Key, Vec<(Lsn, &Value)>> = HashMap::new();
         for (key, lsn, value) in entries {
+            if !key.is_rel_block_key() {
+                continue;
+            }
             by_key.entry(*key).or_default().push((*lsn, value));
+        }
+        if by_key.is_empty() {
+            return Ok(());
         }
 
         // Process each key's entries sequentially; distinct keys run in
@@ -273,6 +284,58 @@ impl PageWriter {
             produced.push(row);
         }
         Ok((produced, materialised, passed_through))
+    }
+
+    /// Range scan: return all page rows in `range` at LSN ≤
+    /// `target_lsn`, blending in-RAM buffered rows with PageStore's
+    /// persisted rows. Used by `Timeline::get_vectored_via_page_writer`
+    /// to serve wide-range reads (basebackup, compaction's image-layer
+    /// creation, initial-size-calc, etc.).
+    pub async fn scan_range(
+        &self,
+        range: std::ops::Range<Key>,
+        target_lsn: Lsn,
+        per_key_limit: usize,
+    ) -> Result<std::collections::HashMap<Key, Vec<PageRow>>> {
+        // Persisted rows.
+        let persisted = self
+            .page_store
+            .scan_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn, per_key_limit)
+            .await?;
+        // Buffered rows that fall in the range.
+        let buffered: Vec<PageRow> = {
+            let s = self.state.lock().await;
+            s.buffer
+                .iter()
+                .filter(|r| {
+                    if r.key.len() != KEY_SIZE {
+                        return false;
+                    }
+                    let k = Key::from_slice(&r.key);
+                    k >= range.start && k < range.end && r.lsn <= target_lsn
+                })
+                .cloned()
+                .collect()
+        };
+        // Merge by Key.
+        let mut out: std::collections::HashMap<Key, Vec<PageRow>> =
+            std::collections::HashMap::with_capacity(persisted.len() + buffered.len());
+        for (key_bytes, chain) in persisted {
+            let k = Key::from_slice(&key_bytes);
+            out.insert(k, chain);
+        }
+        for row in buffered {
+            let k = Key::from_slice(&row.key);
+            out.entry(k).or_default().push(row);
+        }
+        // Sort each key's chain LSN descending; cap to per_key_limit.
+        for chain in out.values_mut() {
+            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn));
+            if chain.len() > per_key_limit {
+                chain.truncate(per_key_limit);
+            }
+        }
+        Ok(out)
     }
 
     /// Read the chain for `key` at `target_lsn`, blending in-RAM
@@ -581,13 +644,16 @@ mod tests {
     }
 
     fn k(n: u32) -> Key {
+        // A valid relation-page Key: field1=0 (page namespace),
+        // field4 != 0 (relnode), field6 != 0xffffffff (not the
+        // size sentinel). The block-number is varied per `n`.
         Key {
             field1: 0,
-            field2: 0,
-            field3: 0,
-            field4: 0,
-            field5: 0,
-            field6: n,
+            field2: 1663,    // spcnode = pg_default
+            field3: 5,       // dbnode  = postgres
+            field4: 16384,   // relnode (must be non-zero)
+            field5: 0,       // forknum = MAIN
+            field6: n,       // blknum
         }
     }
 
