@@ -431,6 +431,14 @@ impl PageStore {
             .context("read_generation")?;
         Ok(row.map(|r| r.get::<_, i32>(0)))
     }
+
+    /// Test-only escape hatch — runs raw SQL on the underlying client.
+    /// Used by integration tests to create / drop per-test schemas. Not
+    /// for production callers.
+    #[doc(hidden)]
+    pub async fn test_only_execute(&self, sql: &str) -> Result<u64> {
+        self.client.execute(sql, &[]).await
+    }
 }
 
 fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {

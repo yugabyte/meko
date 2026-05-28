@@ -28,6 +28,7 @@ pub mod metrics;
 pub mod page_cache;
 pub mod page_service;
 pub mod page_store;
+pub mod page_writer;
 pub mod pgdatadir_mapping;
 pub mod span;
 pub(crate) mod statvfs;
