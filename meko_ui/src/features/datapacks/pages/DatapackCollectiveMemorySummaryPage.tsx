@@ -7,7 +7,13 @@ import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-de
 import { CollectiveMemoryPanel } from "@/features/datapacks/components/collective-memory/CollectiveMemoryPanel";
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
-import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/mekoApi";
+import {
+  getApiErrorMessage,
+  getDatapack,
+  getKnowledgeBaseSummary,
+  type Datapack,
+  type KnowledgeBaseSummary,
+} from "@/lib/mekoApi";
 
 type Props = {
   datapackName: string;
@@ -21,6 +27,11 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
+  // /summary feeds the per-card index-level chips (embedding model /
+  // dimensions / ai provider) in the panel footer. We don't show its
+  // description / files-summary on this standalone page, but the
+  // chips need the data so we fetch it lazily alongside the datapack.
+  const [summary, setSummary] = useState<KnowledgeBaseSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,6 +55,18 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
       cancelled = true;
     };
   }, [datapackName, datapackId]);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void getKnowledgeBaseSummary(datapackName, { signal: ac.signal })
+      .then((s) => {
+        if (!ac.signal.aborted) setSummary(s);
+      })
+      .catch(() => {
+        // Silent — the panel degrades to no chips if /summary 404s.
+      });
+    return () => ac.abort();
+  }, [datapackName]);
 
   return (
     <div className="flex h-screen flex-1 flex-col overflow-y-auto bg-background text-foreground">
@@ -77,6 +100,10 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
           <CollectiveMemoryPanel
             datapackName={datapackName}
             datapackId={datapack.datapack_id}
+            pendingCount={datapack.memory_count ?? 0}
+            embeddingModel={summary?.embedding_model ?? null}
+            embeddingDimensions={summary?.embedding_dimensions ?? null}
+            aiProvider={summary?.ai_provider ?? null}
           />
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">

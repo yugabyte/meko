@@ -9,6 +9,7 @@ import DatapackLearningsPage from "@/features/datapacks/pages/DatapackLearningsP
 import DatapackMemorySummaryPage from "@/features/datapacks/pages/DatapackMemorySummaryPage";
 import DatapackCollectiveMemorySummaryPage from "@/features/datapacks/pages/DatapackCollectiveMemorySummaryPage";
 import DatapackKnowledgeSummaryPage from "@/features/datapacks/pages/DatapackKnowledgeSummaryPage";
+import DatapackMembersListPage from "@/features/datapacks/pages/DatapackMembersListPage";
 import DatapackSharePage from "@/features/datapacks/pages/DatapackSharePage";
 import DatapacksOverviewPage from "@/features/datapacks/pages/DatapacksOverviewPage";
 import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
@@ -19,6 +20,7 @@ import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
  * memory-summary at `/datapacks/:name/memory-summary`,
  * collective-memory-summary at `/datapacks/:name/collective-memory-summary`,
  * knowledge at `/datapacks/:name/knowledge`,
+ * members at `/datapacks/:name/members`,
  * conversations viewer at `/datapacks/:name/conversations[/:conversationId]`,
  * detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
  */
@@ -75,6 +77,9 @@ export default function DatapacksPage() {
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.knowledge && segments.length === 2) {
         return <DatapackKnowledgeSummaryPage datapackName={datapackName} datapackId={routeDatapackId} />;
+      }
+      if (segments[1] === DATAPACK_SUB_ROUTE.members && segments.length === 2) {
+        return <DatapackMembersListPage datapackName={datapackName} datapackId={routeDatapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.learnings && segments.length === 2) {
         return <DatapackLearningsPage datapackName={datapackName} datapackId={routeDatapackId} />;

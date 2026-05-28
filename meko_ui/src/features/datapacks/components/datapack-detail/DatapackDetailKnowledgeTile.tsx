@@ -1,32 +1,48 @@
 import { FileText, Link2 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import type { KnowledgeBaseDocument } from "@/lib/mekoApi";
+import { datapackKnowledgePath } from "@/app/routes/paths";
 import { documentNameLastSegment } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentName";
 import { kbDocumentStatusLabel } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentStatus";
 
-const PREVIEW_LIMIT = 3;
+export const KNOWLEDGE_PREVIEW_LIMIT = 3;
 
 type Props = {
-  /** From parent’s single GET …/knowledge-bases/documents fetch. */
+  /** Datapack name — used to build the "View all" link to the KB page. */
+  datapackName: string;
+  datapackId?: string;
+  /** From parent’s single GET …/knowledge-bases/documents fetch. Capped
+   *  at `KNOWLEDGE_PREVIEW_LIMIT` rows on the page side to keep the
+   *  request light — we only need the preview rows here. */
   documents: KnowledgeBaseDocument[];
   documentsLoading: boolean;
   documentsError: string | null;
+  totalFileCount?: number | null;
   onAddSource: () => void;
   canAddSource: boolean;
   className?: string;
 };
 
 export function DatapackDetailKnowledgeTile({
+  datapackName,
+  datapackId,
   documents,
   documentsLoading,
   documentsError,
+  totalFileCount,
   onAddSource,
   canAddSource,
   className,
 }: Props) {
-  const total = documents.length;
-  const preview = documents.slice(0, PREVIEW_LIMIT);
-  const countLabel = documentsLoading && total === 0 ? "…" : String(total);
+  const previewLen = documents.length;
+  const preview = documents.slice(0, KNOWLEDGE_PREVIEW_LIMIT);
+
+  const chipTotal = totalFileCount ?? previewLen;
+  const countLabel =
+    documentsLoading && totalFileCount == null && previewLen === 0
+      ? "…"
+      : String(chipTotal);
 
   return (
     <aside
@@ -41,11 +57,17 @@ export function DatapackDetailKnowledgeTile({
         <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
           {countLabel}
         </span>
+        <Link
+          to={datapackKnowledgePath(datapackName, datapackId)}
+          className="ml-auto shrink-0 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+        >
+          View all →
+        </Link>
       </div>
       <ul className="flex flex-col divide-y divide-border px-2 py-1">
         {documentsError ? (
           <li className="px-2 py-4 text-center text-xs leading-relaxed text-muted-foreground">{documentsError}</li>
-        ) : documentsLoading && total === 0 ? (
+        ) : documentsLoading && previewLen === 0 ? (
           <li className="px-2 py-4 text-center text-xs text-muted-foreground">Loading sources…</li>
         ) : preview.length === 0 ? (
           <li className="px-2 py-4 text-center text-xs text-muted-foreground">No knowledge documents yet.</li>

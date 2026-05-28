@@ -1,16 +1,34 @@
 /**
- * Tiny hook that re-renders every minute and returns a "5m ago" /
- * "2h ago" / "3d ago" string for an ISO timestamp. Used in the
- * conversation viewer to keep the list rail and per-message
- * timestamps current without each component owning its own timer.
+ * Tiny helpers for "X ago" relative timestamps. Used across the
+ * conversations viewer, the SharedKnowledge activity log, and any
+ * other surface that wants its timestamps to stay current without
+ * each component owning its own timer.
+ *
+ * Usage:
+ *   const now = useNowMs();
+ *   const label = formatRelativeTime(iso, now);
+ *
+ * `useNowMs` ticks once a minute (cheap, single re-render across all
+ * consumers in the same tree). `formatRelativeTime` is a pure function
+ * so callers can also feed it a fixed `nowMs` in tests.
  */
 import { useEffect, useState } from "react";
 
 const MINUTE_MS = 60_000;
 
-export function formatRelativeTime(iso: string | undefined, nowMs: number): string {
+/**
+ * @param localTime - When true, strips the UTC offset/Z suffix before parsing
+ *   so the browser interprets the value in its local timezone. Use this when
+ *   the backend returns a local-time value that is incorrectly labelled as UTC.
+ */
+export function formatRelativeTime(
+  iso: string | undefined | null,
+  nowMs: number,
+  localTime = false,
+): string {
   if (!iso) return "—";
-  const t = Date.parse(iso);
+  const toParse = localTime ? iso.replace(/Z$|[+-]\d{2}:\d{2}$/, "") : iso;
+  const t = Date.parse(toParse);
   if (!Number.isFinite(t)) return "—";
   const diffSec = Math.max(0, Math.floor((nowMs - t) / 1000));
   if (diffSec < 60) return "just now";

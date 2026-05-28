@@ -15,7 +15,7 @@ import { MarkdownMessage } from "@/components/markdown-message";
 import { formatLatencyLabel } from "@/components/conversation-telemetry";
 import type { DatapackThreadMessage } from "@/lib/mekoApi";
 import { MemoryHoverCard } from "./MemoryHoverCard";
-import { formatRelativeTime } from "./useRelativeTime";
+import { formatRelativeTime } from "@/lib/relativeTime";
 import { normalizeMarkdownText } from "./markdownNormalize";
 
 export type ThreadTurnProps = {

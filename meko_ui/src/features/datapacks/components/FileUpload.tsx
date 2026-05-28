@@ -33,9 +33,11 @@ type Props = {
   datapackId?: string;
   /** Optional pre-staged files (e.g. a sample seed). Captured on first mount only. */
   initialFiles?: File[];
+  /** Called after createKnowledgeBase succeeds so the parent can refresh its lists. */
+  onKnowledgeBaseCreated?: () => void;
 };
 
-export default function FileUpload({ datapackName, datapackId, initialFiles }: Props) {
+export default function FileUpload({ datapackName, datapackId, initialFiles, onKnowledgeBaseCreated }: Props) {
   const [files, setFiles] = useState<FileEntry[]>(() =>
     (initialFiles ?? []).map((file) => ({
       file,
@@ -56,6 +58,16 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
   const [pipelineDetails, setPipelineDetails] = useState<PipelineDetail[]>([]);
   const [queuedDocNames, setQueuedDocNames] = useState<string[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval>>(undefined);
+  // Armed (true) when the user just triggered `createKnowledgeBase` so
+  // we can fire `onKnowledgeBaseCreated` ONCE — and only after polling
+  // confirms the new docs are actually indexed (all `pipeline_details`
+  // entries reach COMPLETED/FAILED). Without this guard the callback
+  // would fire when the POST returned, before the BE finished
+  // processing, so a downstream `/summary` refetch would still see the
+  // old counts. Also keeps the callback from re-firing when the dialog
+  // is reopened against an already-done KB (fetchStatus runs on mount,
+  // but the ref is false until a fresh Create-KB action arms it).
+  const pendingKBReadyNotificationRef = useRef(false);
   const [newUploadsAfterKB, setNewUploadsAfterKB] = useState(0);
   const pollGraceRef = useRef(0);
 
@@ -204,6 +216,12 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
     setCreatingKB(true);
     try {
       await createKnowledgeBase(datapackName, { datapackId });
+      // Arm the post-poll notification. The actual callback fires later
+      // inside fetchStatus, once all docs reach a terminal status —
+      // firing here would be too early (the BE has only accepted the
+      // create, indexing is still in flight, so a /summary refetch
+      // would still see the old counts).
+      pendingKBReadyNotificationRef.current = true;
       // Prime status once immediately instead of waiting for the next poll tick.
       await fetchStatus();
     } catch (err) {
@@ -240,11 +258,21 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
         pollGraceRef.current--;
       } else if (sourcesReady && allDocsDone) {
         setPollingActive(false);
+        // Now (not at create-KB return time) is the real moment to tell
+        // the parent that derived data — counts on /summary, the KB doc
+        // list, etc. — is worth re-fetching: the BE has finished
+        // indexing this batch. The ref guard ensures we fire exactly
+        // once per Create-KB action (subsequent fetchStatus calls and
+        // dialog reopens that find an already-done KB don't re-fire).
+        if (pendingKBReadyNotificationRef.current) {
+          pendingKBReadyNotificationRef.current = false;
+          onKnowledgeBaseCreated?.();
+        }
       }
     } catch {
       // silently retry on next interval
     }
-  }, [datapackName, kbCreated]);
+  }, [datapackName, datapackId, kbCreated, onKnowledgeBaseCreated]);
 
   useEffect(() => {
     fetchStatus();
@@ -362,14 +390,19 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
         </div>
 
         {warning && (
-          <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-2 text-xs text-yellow-300">
+          // Pair a darker shade for light mode with the original `-300`
+          // under `dark:`. The `-300` shades are tuned for the
+          // saturated-tint backgrounds these banners use in dark mode;
+          // on the same tint over a light card the text washed out
+          // almost to invisible.
+          <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-2 text-xs text-yellow-700 dark:text-yellow-300">
             <AlertCircle className="w-4 h-4 shrink-0" />
             {warning}
           </div>
         )}
 
         {doneCount > 0 && !isUploading && (
-          <div className="flex items-center gap-2 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2 text-xs text-green-300">
+          <div className="flex items-center gap-2 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2 text-xs text-green-700 dark:text-green-300">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             {doneCount} file{doneCount > 1 ? "s" : ""} uploaded successfully.
             {errorCount > 0 && ` ${errorCount} failed.`}
@@ -378,11 +411,11 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
         )}
 
         {/* File list — auto-fill grid so multiple files render side-by-side
-            on wider viewports; capped height with vertical scroll once it
-            overflows so the dialog itself doesn't stretch. */}
+            on wider viewports; capped at ~3 rows so a large batch scrolls
+            rather than pushing the card taller. */}
         {files.length > 0 && (
           <ul
-            className="grid max-h-72 gap-2 overflow-y-auto pr-1"
+            className="grid max-h-48 gap-2 overflow-y-auto pr-1"
             style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))" }}
           >
             {files.map((entry, i) => (
@@ -390,7 +423,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
                 key={`${entry.file.name}-${i}`}
                 className="rounded-lg border border-border bg-card px-4 py-2.5 space-y-1.5"
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
                     <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
                     <span className="text-sm text-foreground truncate">{entry.file.name}</span>
@@ -400,22 +433,23 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
-                      <span className="text-xs text-blue-400 tabular-nums">{entry.progress}%</span>
+                      <span className="text-xs text-blue-700 dark:text-blue-400 tabular-nums">{entry.progress}%</span>
                     )}
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE && (
-                      <CheckCircle2 className="w-4 h-4 text-green-400" />
+                      <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
                     )}
+                    {/* Status-only indicator on the right side — the
+                        actual error message moves to a new line below
+                        so a long string can't fight the filename for
+                        horizontal space and visually overlap it. */}
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && (
-                      <span className="flex items-center gap-1 text-xs text-red-400">
-                        <AlertCircle className="w-4 h-4" />
-                        {entry.error}
-                      </span>
+                      <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400" aria-label="Upload failed" />
                     )}
                     {(entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
                       entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR) && (
                         <button
                           type="button"
-                          className="text-muted-foreground hover:text-white transition-colors"
+                          className="text-muted-foreground hover:text-foreground transition-colors"
                           onClick={() => removeFile(i)}
                         >
                           <X className="w-4 h-4" />
@@ -423,6 +457,11 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
                       )}
                   </div>
                 </div>
+                {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && entry.error ? (
+                  <p className="mt-1.5 break-words text-xs text-red-700 dark:text-red-400">
+                    {entry.error}
+                  </p>
+                ) : null}
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
                   <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
                     <div
@@ -514,10 +553,10 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
             </p>
           )}
 
-          {/* Per-document details — capped + scrollable so a large batch
-              doesn't push the dialog (or page) into a long stack. */}
+          {/* Per-document details — capped at ~3 rows so a large batch
+              scrolls rather than pushing the card taller. */}
           {(pipelineDetails.length > 0 || (queuedDocNames.length > 0 && kbCreated && !allDone)) && (
-            <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+            <div className="max-h-36 space-y-1.5 overflow-y-auto pr-1">
               {pipelineDetails.length === 0 &&
                 queuedDocNames.map((name, i) => (
                   <div key={`queued-${i}-${name}`} className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2">
@@ -536,20 +575,28 @@ export default function FileUpload({ datapackName, datapackId, initialFiles }: P
                 return (
                   <div key={i} className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2">
                     <div className="flex items-center gap-2 min-w-0">
+                      {/*
+                        Tailwind `-400` shades are tuned for dark
+                        backgrounds; on the light-mode card they wash
+                        out almost to invisible. Pair a darker shade
+                        for light mode (`text-{color}-600`) with the
+                        original `-400` under `dark:` so each surface
+                        gets a readable contrast.
+                      */}
                       {d.document_status === "COMPLETED" ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0" />
+                        <CheckCircle2 className="w-3.5 h-3.5 text-green-600 dark:text-green-400 shrink-0" />
                       ) : d.document_status === "FAILED" ? (
-                        <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                        <AlertCircle className="w-3.5 h-3.5 text-red-600 dark:text-red-400 shrink-0" />
                       ) : (
-                        <Loader2 className="w-3.5 h-3.5 text-yellow-400 animate-spin shrink-0" />
+                        <Loader2 className="w-3.5 h-3.5 text-yellow-600 dark:text-yellow-400 animate-spin shrink-0" />
                       )}
                       <span className="text-xs text-foreground truncate">{displayName}</span>
                     </div>
                     <span className={cn(
                       "text-xs font-medium shrink-0 ml-3",
-                      d.document_status === "COMPLETED" ? "text-green-400" :
-                        d.document_status === "FAILED" ? "text-red-400" :
-                          "text-yellow-400",
+                      d.document_status === "COMPLETED" ? "text-green-600 dark:text-green-400" :
+                        d.document_status === "FAILED" ? "text-red-600 dark:text-red-400" :
+                          "text-yellow-600 dark:text-yellow-400",
                     )}>
                       {d.document_status === "COMPLETED"
                         ? `Ready${d.chunks_processed ? ` · ${d.chunks_processed} ${d.chunks_processed === 1 ? "chunk" : "chunks"}` : ""}`

@@ -29,7 +29,7 @@ import {
 } from "@/lib/mekoApi";
 import { ConversationThreadHeader } from "./ConversationThreadHeader";
 import { ThreadTurn } from "./ThreadTurn";
-import { useNowMs } from "./useRelativeTime";
+import { useNowMs } from "@/lib/relativeTime";
 
 /** Initial per-page thread size. Most production conversations sit
  *  well under 100 turns; older history is loaded on demand. */

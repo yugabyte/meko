@@ -483,6 +483,36 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	g.GET("/datapacks/:name/knowledge-bases/documents", kbH.Documents,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
+	// SharedKnowledge page: header tile aggregates + auto-generated
+	// description/files-summary strings. Same grant gate as /documents
+	// — read-only, anyone with access to the datapack can see it.
+	g.GET("/datapacks/:name/knowledge-bases/summary", kbH.Summary,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	// SharedKnowledge page: merged file-upload + memory-promotion feed.
+	g.GET("/datapacks/:name/knowledge-bases/activity-log", kbH.ActivityLog,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	// SharedKnowledge page: presigned S3 GET URL for a single
+	// document. Read-only (downloads are available to anyone with
+	// datapack access, not just owner/maintainer), so we hang it off
+	// `RequireDatapackAccess` rather than the owner-or-maintainer
+	// chain used by uploads.
+	g.POST("/datapacks/:name/knowledge-bases/download-url", kbH.RequestDownloadURL,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+
+	// Per-file DELETE: any datapack member can hit this, but the
+	// handler enforces a tighter rule: owner / maintainer / uploader
+	// of THIS file are allowed; everyone else gets 403 from inside
+	// the handler. That's why we deliberately use
+	// RequireDatapackAccess (not the owner-or-maintainer middleware)
+	// — viewers and contributors who uploaded a file must be able
+	// to delete their own contribution.
+	g.DELETE("/datapacks/:name/knowledge-bases/documents/:document_id",
+		kbH.DeleteDocument,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
 
 	// Knowledge base CRUD / upload: datapack owner or maintainer only (not viewer/contributor).
 	// TODO(external-kb): POST /knowledge-bases is reserved for a future

@@ -1243,46 +1243,243 @@ export async function getKBStatus(datapackName: string, options: DatapackRouteOp
   );
 }
 
-/** One row from GET /datapacks/:name/knowledge-bases/documents (`data` array). */
+/** One row from GET /datapacks/:name/knowledge-bases/documents.
+ *
+ *  The repo's SQL deduplicates per `document_uri` and joins
+ *  `dist_rag.vector_index_pipeline_details` for `chunks_processed` +
+ *  the most recent `document_status`. `completed_at` is shown as
+ *  "Uploaded" in the SharedKnowledge files table.
+ *
+ *  Embedding model + dimensions are deliberately NOT on this row —
+ *  they're properties of the vector index, and Meko has one global
+ *  index today so the value is the same across every file. The UI
+ *  reads them from {@link KnowledgeBaseSummary} once and passes
+ *  them down to per-row detail views as a prop.
+ *
+ *  All enrichment fields are nullable: a doc that hasn't finished
+ *  embedding may have no pipeline row yet (chunks/status nil), and
+ *  legacy rows pre-dating the schema may lack a checksum or type. */
 export type KnowledgeBaseDocument = {
+  id: string;
   document_name: string;
+  document_uri: string;
+  document_type?: string | null;
+  document_checksum?: string | null;
+  chunks_processed?: number | null;
+  completed_at?: string | null;
   status: string;
+  /** Per-file provenance from `dist_rag.documents.document_details->meko`.
+   *  - `uploaded_by_user_id`: authenticated uploader at CreateKB time.
+   *  - `uploaded_by_email`:   resolved server-side via JOIN on
+   *                            meko_system.users; null when the user
+   *                            row has been deleted or the file is legacy.
+   *  - `size_bytes`:          raw byte size from S3 Contents.Size. */
+  uploaded_by_user_id?: string | null;
+  uploaded_by_email?: string | null;
+  size_bytes?: number | null;
 };
 
-const KB_DOCS_MOCK_ON =
-  import.meta.env.VITE_MOCK_KB_DOCUMENTS === "true" ||
-  import.meta.env.VITE_MOCK_KB_DOCUMENTS === "1";
-const KB_DOCS_MOCK_OFF = import.meta.env.VITE_MOCK_KB_DOCUMENTS === "false";
 
-const MOCK_KB_DOCUMENTS_SAMPLE: KnowledgeBaseDocument[] = [
-  { document_name: "policies/refunds.pdf", status: "QUEUED" },
-  { document_name: "policies/shipping.pdf", status: "PROCESSING" },
-  { document_name: "faq.md", status: "COMPLETED" },
-  { document_name: "legacy-notes.txt", status: "FAILED" },
-];
-
-function useMockKnowledgeBaseDocuments(): boolean {
-  if (KB_DOCS_MOCK_OFF) return false;
-  if (KB_DOCS_MOCK_ON) return true;
-  // Local UI work without the GET handler yet; set VITE_MOCK_KB_DOCUMENTS=false to hit the real API in dev.
-  return import.meta.env.DEV;
-}
+/** Paginated envelope returned by GET .../knowledge-bases/documents. */
+export type KnowledgeBaseDocumentsPage = {
+  items: KnowledgeBaseDocument[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+};
 
 /**
- * GET /datapacks/:name/knowledge-bases/documents — `data`: `{ document_name, status }[]`.
- * - Dev: returns {@link MOCK_KB_DOCUMENTS_SAMPLE} unless `VITE_MOCK_KB_DOCUMENTS=false`.
- * - Prod: calls the API unless `VITE_MOCK_KB_DOCUMENTS=true`.
+ * GET /datapacks/:name/knowledge-bases/documents — paginated.
+ *
+ * @param page       1-based page number (default 1)
+ * @param page_size  items per page (default 50, max 200)
+ * @param q          filename substring search
+ * @param type_filter file-extension suffix, e.g. ".md"
+ * @param indexed_only restrict to fully-indexed (COMPLETED) documents
  */
 export async function getKnowledgeBaseDocuments(
   datapackName: string,
-  options: DatapackRouteOptions = {},
-): Promise<KnowledgeBaseDocument[]> {
-  // if (useMockKnowledgeBaseDocuments()) {
-  //   return Promise.resolve([...MOCK_KB_DOCUMENTS_SAMPLE]);
-  // }
-  return request<KnowledgeBaseDocument[]>(
+  options: DatapackRouteOptions & {
+    page?: number;
+    page_size?: number;
+    q?: string;
+    type_filter?: string;
+    indexed_only?: boolean;
+  } = {},
+): Promise<KnowledgeBaseDocumentsPage> {
+  const { page, page_size, q, type_filter, indexed_only, ...rest } = options;
+  const qs = new URLSearchParams();
+  if (page != null) qs.set("page", String(page));
+  if (page_size != null) qs.set("page_size", String(page_size));
+  if (q) qs.set("q", q);
+  if (type_filter) qs.set("type_filter", type_filter);
+  if (indexed_only) qs.set("indexed_only", "true");
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  return request<KnowledgeBaseDocumentsPage>(
     withDatapackID(
-      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/documents`,
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/documents${suffix}`,
+      rest.datapackId,
+    ),
+    "GET",
+    undefined,
+    rest,
+  );
+}
+
+/** Aggregate stats + auto-generated text for the SharedKnowledge header
+ *  tiles. One round trip — the BE pre-computes `description` and
+ *  `files_summary` from the same numbers it exposes here so the UI never
+ *  has to compose copy itself.
+ *
+ *  All embedding-model fields are nullable: the vector index may not
+ *  exist yet for a fresh datapack (KB not created). Heaviest-source
+ *  fields are nullable when no document has a known chunk count. */
+export type KnowledgeBaseSummary = {
+  total_files: number;
+  total_chunks: number;
+  last_file_uploaded_at?: string | null;
+  heaviest_source_name?: string | null;
+  heaviest_source_chunks?: number | null;
+  embedding_model?: string | null;
+  embedding_dimensions?: number | null;
+  /** Upstream provider for the global vector index
+   *  (`dist_rag.vector_indexes.ai_provider`, e.g. "OPENAI"). Nullable
+   *  when no vector index row exists. Single source of truth for the
+   *  provider — /promoted-memories etc. do NOT carry duplicates. */
+  ai_provider?: string | null;
+  /** Chunking strategy size — UI renders as "semantic·{chunk_size}" in
+   *  the file-row expand panel. Nullable when no vector index exists. */
+  chunk_size?: number | null;
+  promoted_memories_count: number;
+  description: string;
+  files_summary: string;
+};
+
+
+export async function getKnowledgeBaseSummary(
+  datapackName: string,
+  options: DatapackRouteOptions = {},
+) {
+  return request<KnowledgeBaseSummary>(
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/summary`,
+      options.datapackId,
+    ),
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+/** Discriminated row for the SharedKnowledge "Activity log" feed.
+ *  `type` selects which side of the BE's UNION populated this row — the
+ *  fields keyed off the other side stay null/undefined. */
+export type KBActivityLogItem = {
+  type: "file_upload" | "memory_promotion";
+  timestamp: string;
+  // file_upload
+  document_name?: string | null;
+  document_type?: string | null;
+  chunks_processed?: number | null;
+  size_bytes?: number | null;
+  uploaded_by_email?: string | null;
+  // memory_promotion
+  memory_id?: string | null;
+  content?: string | null;
+  agent_id?: string | null;
+  conversation_id?: string | null;
+};
+
+/** Activity-log page envelope.
+ *
+ *  Keyset pagination: `next_cursor` is an opaque, server-generated
+ *  string the client passes back verbatim on the next request to
+ *  fetch the page after the last one returned. Empty string means
+ *  the feed is exhausted (matches `has_more === false`). The client
+ *  must never parse the cursor — its shape is owned by the server. */
+export type KBActivityLogResponse = {
+  items: KBActivityLogItem[];
+  has_more: boolean;
+  next_cursor: string;
+  limit: number;
+};
+
+/** Short-lived presigned S3 GET URL response from
+ *  POST /knowledge-bases/download-url. UI redirects to `url` (or opens
+ *  in a new tab) right after receiving it; the link expires after
+ *  `expires_in` seconds. */
+export type KnowledgeBaseDownloadURL = {
+  url: string;
+  key: string;
+  expires_in: number;
+};
+
+/** POST /knowledge-bases/download-url — exchange a `document_uri`
+ *  (full `s3://...` URI from the documents list) for a presigned GET
+ *  URL the browser can navigate to. Server verifies the document
+ *  belongs to this datapack before signing. */
+export async function requestKnowledgeBaseDownloadURL(
+  datapackName: string,
+  documentURI: string,
+  options: DatapackRouteOptions = {},
+) {
+  return request<KnowledgeBaseDownloadURL>(
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/download-url`,
+      options.datapackId,
+    ),
+    "POST",
+    { document_uri: documentURI },
+    options,
+  );
+}
+
+/** Wire shape of the per-file DELETE response. `chunks_deleted` is the
+ *  embedding row count actually removed; `s3_deleted` is true iff the
+ *  S3 object was also removed (best-effort — an orphan S3 object is
+ *  tolerated when the DB delete succeeded but S3 failed). */
+export type KnowledgeBaseDocumentDeleteResult = {
+  document_id: string;
+  chunks_deleted: number;
+  s3_deleted: boolean;
+};
+
+/** DELETE /datapacks/:name/knowledge-bases/documents/:document_id —
+ *  removes a single KB file end-to-end: chunks + dist_rag rows + S3
+ *  object. BE enforces permission (owner | maintainer | file uploader);
+ *  callers that don't satisfy the policy get 403. */
+export async function deleteKnowledgeBaseDocument(
+  datapackName: string,
+  documentID: string,
+  options: DatapackRouteOptions = {},
+) {
+  return request<KnowledgeBaseDocumentDeleteResult>(
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/documents/${encodeURIComponent(documentID)}`,
+      options.datapackId,
+    ),
+    "DELETE",
+    undefined,
+    options,
+  );
+}
+
+export async function getKnowledgeBaseActivityLog(
+  datapackName: string,
+  params: { limit?: number; cursor?: string } = {},
+  options: DatapackRouteOptions = {},
+) {
+  const limit = params.limit ?? 10;
+  const cursor = params.cursor ?? "";
+  const q = new URLSearchParams();
+  q.set("limit", String(limit));
+  // Only attach `cursor` when non-empty so the URL stays clean on the
+  // first-page request (BE treats empty + missing identically).
+  if (cursor) q.set("cursor", cursor);
+  return request<KBActivityLogResponse>(
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/activity-log?${q.toString()}`,
       options.datapackId,
     ),
     "GET",
@@ -1505,13 +1702,20 @@ export async function submitFeedback(payload: CreateFeedbackRequest) {
 }
 // --- Promoted memories list (Collective Memory tab + summary route) ---
 
-/** One row from GET /promoted-memories. Mirrors `models.PromotedMemory`. */
+/** One row from GET /promoted-memories. Mirrors `models.PromotedMemory`.
+ *
+ *  Per-row enrichment (kept server-side; we never look these up from the UI):
+ *   - `promoted_by_email`: who clicked "Promote" — sourced via JOIN on
+ *     meko_system.users.user_email. Nullable when the user has been
+ *     deleted, or when the row was promoted without a tracked user_id.
+ */
 export type PromotedMemory = {
   id: string;
   conversation_id?: string | null;
   agent_id?: string;
   data: string;
   promoted_to_kb_at?: string | null;
+  promoted_by_email?: string | null;
 };
 
 /** Query params for GET /promoted-memories. Mirrors `models.PromotedMemoryListFilter`. */
@@ -1521,7 +1725,13 @@ export type PromotedMemoryListFilter = {
   page_size: number;
 };
 
-/** Response body for GET /promoted-memories. Mirrors `models.PromotedMemoryListResponse`. */
+/** Response body for GET /promoted-memories. Mirrors `models.PromotedMemoryListResponse`.
+ *
+ *  Index-level constants (embedding_model / embedding_dimensions /
+ *  ai_provider) deliberately do NOT live on this response — they're
+ *  carried by GET /knowledge-bases/summary as the single source of
+ *  truth for properties of the global vector index. Pages that need
+ *  both fetch /summary explicitly. */
 export type PromotedMemoryListResponse = {
   criteria: PromotedMemoryListFilter;
   promoted_memories: PromotedMemory[];

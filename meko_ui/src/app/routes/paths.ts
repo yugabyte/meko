@@ -31,6 +31,7 @@ export const DATAPACK_SUB_ROUTE = {
   memorySummary: "memory-summary",
   collectiveMemorySummary: "collective-memory-summary",
   knowledge: "knowledge",
+  members: "members",
   conversations: "conversations",
 } as const;
 
@@ -157,6 +158,35 @@ export function datapackLearningsPath(datapackName: string, datapackId?: string)
   return appendDatapackId(datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.learnings), datapackId);
 }
 
+/**
+ * Sources for the `?from=` query param on the Learnings page. When set,
+ * the Learnings breadcrumb trail grows an extra hop back to the page
+ * the user actually came from (e.g. SharedKnowledge → Promoted
+ * memories tab fired "Review N pending").
+ *
+ * Reuses the same pattern as CONVERSATION_SOURCE so all "I came from X"
+ * routing flows through a single closed enum.
+ */
+export const LEARNINGS_SOURCE_QUERY_PARAM = "from" as const;
+export const LEARNINGS_SOURCE = {
+  sharedKnowledge: "shared-knowledge",
+} as const;
+export type LearningsSource =
+  (typeof LEARNINGS_SOURCE)[keyof typeof LEARNINGS_SOURCE];
+
+/** Build a Learnings URL with a `from` source attached (used by
+ *  "Review N pending" on the SharedKnowledge "Promoted memories" tab
+ *  to deep-link into review while preserving the breadcrumb trail). */
+export function datapackLearningsPathFrom(
+  datapackName: string,
+  source: LearningsSource,
+): string {
+  const base = datapackLearningsPath(datapackName);
+  const q = new URLSearchParams();
+  q.set(LEARNINGS_SOURCE_QUERY_PARAM, source);
+  return `${base}?${q.toString()}`;
+}
+
 export function datapackMemorySummaryPath(datapackName: string, datapackId?: string): string {
   return appendDatapackId(datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.memorySummary), datapackId);
 }
@@ -173,6 +203,12 @@ export function datapackCollectiveMemorySummaryPath(
 
 export function datapackKnowledgePath(datapackName: string, datapackId?: string): string {
   return appendDatapackId(datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.knowledge), datapackId);
+}
+
+/** Full members roster page — linked from the "View all" footer on
+ *  the Members tile on the datapack detail page. */
+export function datapackMembersPath(datapackName: string, datapackId?: string): string {
+  return appendDatapackId(datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.members), datapackId);
 }
 
 /** Full conversation viewer route. When `conversationId` is provided

@@ -13,7 +13,7 @@ import { MemoryIcon } from "@/components/conversation-telemetry";
 import type { DatapackConversationDetail } from "@/lib/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import { ROUTES } from "@/app/routes/paths";
-import { formatRelativeTime } from "./useRelativeTime";
+import { formatRelativeTime } from "@/lib/relativeTime";
 import { Chip } from "./Chip";
 
 type Props = {

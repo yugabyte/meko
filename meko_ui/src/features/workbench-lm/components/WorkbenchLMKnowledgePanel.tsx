@@ -62,8 +62,8 @@ export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange, pau
       setDocsLoading(true);
       setDocsError(null);
       try {
-        const list = await getKnowledgeBaseDocuments(datapackName, { signal });
-        setDocs(list ?? []);
+        const page = await getKnowledgeBaseDocuments(datapackName, { signal, page_size: 200 });
+        setDocs(page.items ?? []);
       } catch (err) {
         if ((err as { name?: string })?.name === "CanceledError") return;
         setDocsError(getApiErrorMessage(err, "Failed to load knowledge sources."));

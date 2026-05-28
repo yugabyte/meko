@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { Crown, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { datapackSharePath } from "@/app/routes/paths";
+import { datapackMembersPath, datapackSharePath } from "@/app/routes/paths";
 import type { CurrentUser, DatapackOutgoingMember } from "@/lib/mekoApi";
 import { shareInviteRoleRowPresentation } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import {
@@ -13,6 +13,11 @@ import {
 } from "@/lib/datapackShareGrants";
 
 export type DatapackMembersListStatus = "loading" | "ready" | "error";
+
+/** Max rows shown in the tile preview. Anything past this is reached
+ *  via the "View all" footer link. Matches the KnowledgeTile's preview
+ *  cap so the two side-by-side tiles read consistently. */
+const PREVIEW_LIMIT = 3;
 
 function sortMembersForDisplay(members: DatapackOutgoingMember[]): DatapackOutgoingMember[] {
   const owners = members.filter((m) => m.is_owner);
@@ -69,7 +74,12 @@ export function DatapackDetailMembersTile({
   className,
 }: Props) {
   const ordered = sortMembersForDisplay(members);
+  const preview = ordered.slice(0, PREVIEW_LIMIT);
   const count = membersListStatus === "loading" ? "…" : String(ordered.length);
+  // Disabled when the roster fits within the preview (nothing more to
+  // show on a dedicated page), or while we're still loading / errored
+  // — mirrors the "+ Add Knowledge" disabled affordance on the sibling tile.
+  const viewAllEnabled = membersListStatus === "ready" && ordered.length > PREVIEW_LIMIT;
 
   return (
     <aside
@@ -103,7 +113,7 @@ export function DatapackDetailMembersTile({
         ) : ordered.length === 0 ? (
           <li className="px-2 py-4 text-center text-xs text-muted-foreground">No members to display.</li>
         ) : (
-          ordered.map((m) => {
+          preview.map((m) => {
             const primaryName = outgoingMemberDisplayName(m);
             const email = m.user_email_id?.trim() ?? "";
             const showEmailBelow = email && primaryName.toLowerCase() !== email.toLowerCase();
@@ -202,6 +212,24 @@ export function DatapackDetailMembersTile({
           })
         )}
       </ul>
+      <div className="mt-auto border-t border-border">
+        {viewAllEnabled ? (
+          <Link
+            to={datapackMembersPath(datapackName)}
+            className="block w-full py-3 text-center text-sm font-normal text-foreground/90 transition-colors hover:text-foreground"
+          >
+            View all →
+          </Link>
+        ) : (
+          <button
+            type="button"
+            disabled
+            className="w-full cursor-not-allowed py-3 text-center text-sm font-normal text-muted-foreground/55 opacity-60"
+          >
+            View all →
+          </button>
+        )}
+      </div>
     </aside>
   );
 }

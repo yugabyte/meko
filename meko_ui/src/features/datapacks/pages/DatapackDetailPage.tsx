@@ -39,6 +39,7 @@ import {
   getDatapackConversationCount,
   getDatapackProvisionStatus,
   getKnowledgeBaseDocuments,
+  getKnowledgeBaseSummary,
   isMekoApiRequestError,
   listDatapackMembers,
   PROVISION_STATUS_CACHE_KEY,
@@ -54,7 +55,10 @@ import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfu
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
-import { DatapackDetailKnowledgeTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailKnowledgeTile";
+import {
+  DatapackDetailKnowledgeTile,
+  KNOWLEDGE_PREVIEW_LIMIT,
+} from "@/features/datapacks/components/datapack-detail/DatapackDetailKnowledgeTile";
 import {
   DatapackDetailMembersTile,
   type DatapackMembersListStatus,
@@ -141,6 +145,16 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeBaseDocument[]>([]);
   const [knowledgeDocumentsLoading, setKnowledgeDocumentsLoading] = useState(true);
   const [knowledgeDocumentsError, setKnowledgeDocumentsError] = useState<string | null>(null);
+  const [knowledgeTotalCount, setKnowledgeTotalCount] = useState<number | null>(null);
+  // True file count from the same summary fetch, surfaced separately
+  // because the right-rail `<DatapackDetailKnowledgeTile>` chip is
+  // file-only ("Knowledge · N files"), not files + promoted memories.
+  // Splitting the two avoids overloading the meaning of either.
+  const [knowledgeFileCount, setKnowledgeFileCount] = useState<number | null>(null);
+  // Bumped after a successful upload (createKnowledgeBase) so the summary
+  // effect re-fires and the file/promoted counts refresh without the
+  // user having to navigate away and back.
+  const [knowledgeSummaryRefreshTick, setKnowledgeSummaryRefreshTick] = useState(0);
   const [memoriesCount, setMemoriesCount] = useState(0);
   const [learningsCount, setLearningsCount] = useState(0);
   const [conversationsCount, setConversationsCount] = useState(0);
@@ -262,10 +276,16 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     const ac = new AbortController();
     setKnowledgeDocumentsLoading(true);
     setKnowledgeDocumentsError(null);
-    void getKnowledgeBaseDocuments(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
-      .then((list) => {
+    // Fetch only what the right-rail preview tile actually renders
+    // (top `KNOWLEDGE_PREVIEW_LIMIT` rows). Constant is exported from
+    // the tile so the page-side fetch size and the tile-side slice
+    // stay locked together. The Shared Knowledge tile's count no
+    // longer depends on this fetch (it reads `getKnowledgeBaseSummary`
+    // separately), so over-fetching here would be pure waste.
+    void getKnowledgeBaseDocuments(datapackName, { signal: ac.signal, datapackId: routeDatapackId, page_size: KNOWLEDGE_PREVIEW_LIMIT })
+      .then((page) => {
         if (ac.signal.aborted) return;
-        setKnowledgeDocuments(list ?? []);
+        setKnowledgeDocuments(page.items ?? []);
       })
       .catch((e) => {
         if (ac.signal.aborted) return;
@@ -279,6 +299,28 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       });
     return () => ac.abort();
   }, [datapackName, routeDatapackId]);
+
+  // Knowledge base SUMMARY — count of promoted memories + successfukl file uploaded
+  useEffect(() => {
+    const ac = new AbortController();
+    void getKnowledgeBaseSummary(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
+      .then((s) => {
+        if (ac.signal.aborted) return;
+        const files = s.total_files ?? 0;
+        const promoted = s.promoted_memories_count ?? 0;
+        setKnowledgeFileCount(files);
+        setKnowledgeTotalCount(files + promoted);
+      })
+      .catch(() => {
+        if (ac.signal.aborted) return;
+        setKnowledgeFileCount(null);
+        setKnowledgeTotalCount(null);
+      });
+    return () => ac.abort();
+    // `knowledgeSummaryRefreshTick` is here so the upload dialog's
+    // `onKnowledgeBaseCreated` callback re-runs this effect and the
+    // counts update without a page reload.
+  }, [datapackName, routeDatapackId, knowledgeSummaryRefreshTick]);
 
   useEffect(() => {
     if (!isConnectOpen) return;
@@ -383,6 +425,9 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                 datapackId={routeDatapackId}
                 open={isUploadOpen}
                 onOpenChange={setIsUploadOpen}
+                onKnowledgeBaseCreated={() =>
+                  setKnowledgeSummaryRefreshTick((t) => t + 1)
+                }
               />
               <DatapackConnectDialog
                 open={isConnectOpen}
@@ -460,7 +505,8 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           memoryCount={memoriesCount}
           learningsCount={learningsCount}
           datapackId={datapack?.datapack_id ?? null}
-          knowledgeCount={knowledgeDocuments?.length}
+          knowledgeFileCount={knowledgeFileCount ?? undefined}
+          knowledgeFileAndPromotedCount={knowledgeTotalCount ?? undefined}
           onSelectSection={handlePipelineSelect}
           onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
           statusLoading={statusLoading}
@@ -478,9 +524,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             membersListStatus={membersListStatus}
           />
           <DatapackDetailKnowledgeTile
+            datapackName={datapackName}
+            datapackId={routeDatapackId}
             documents={knowledgeDocuments}
             documentsLoading={knowledgeDocumentsLoading}
             documentsError={knowledgeDocumentsError}
+            totalFileCount={knowledgeFileCount}
             canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
             onAddSource={() => setIsUploadOpen(true)}
           />

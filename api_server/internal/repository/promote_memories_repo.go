@@ -573,6 +573,13 @@ func insertPromotedGraphVertex(
 }
 
 // ListPromoted returns a page of rows from datapacks.promoted_collection for a datapack.
+//
+// Per-row enrichment:
+//   - promoted_by_email comes from a LEFT JOIN on meko_system.users via the
+//     stored meko_user_id. LEFT (not INNER) because meko_user_id is nullable
+//     on the row and because the user may have been deleted since the
+//     promotion happened — in either case the row still represents real
+//     knowledge that should appear in the listing.
 func (r *PromoteMemoriesRepo) ListPromoted(
 	ctx context.Context,
 	datapackID string,
@@ -597,15 +604,18 @@ func (r *PromoteMemoriesRepo) ListPromoted(
 	}
 
 	listQuery := fmt.Sprintf(`
-		SELECT id::text,
-		       meko_conversation_id::text,
-		       meko_agent_id,
-		       COALESCE(payload->>'data', '') AS data,
-		       meko_promoted_to_kb_at
-		  FROM %s
-		 WHERE meko_datapack_id = $1::uuid
-		 ORDER BY meko_promoted_to_kb_at DESC
-		 LIMIT $2 OFFSET $3`, promotedCollectionTable)
+		SELECT pc.id::text,
+		       pc.meko_conversation_id::text,
+		       pc.meko_agent_id,
+		       COALESCE(pc.payload->>'data', '') AS data,
+		       pc.meko_promoted_to_kb_at,
+		       u.user_email AS promoted_by_email
+		  FROM %s pc
+		  LEFT JOIN meko_system.users u ON u.user_id = pc.meko_user_id
+		 WHERE pc.meko_datapack_id = $1::uuid
+		 ORDER BY pc.meko_promoted_to_kb_at DESC
+		 LIMIT $2 OFFSET $3`,
+		promotedCollectionTable)
 
 	offset := (page - 1) * pageSize
 	listArgs := []any{datapackID, pageSize, offset}
@@ -626,12 +636,16 @@ func (r *PromoteMemoriesRepo) ListPromoted(
 	var out []models.PromotedMemory
 	for rows.Next() {
 		var (
-			row        models.PromotedMemory
-			convoID    sql.NullString
-			agentID    sql.NullString
-			promotedAt sql.NullTime
+			row             models.PromotedMemory
+			convoID         sql.NullString
+			agentID         sql.NullString
+			promotedAt      sql.NullTime
+			promotedByEmail sql.NullString
 		)
-		if err := rows.Scan(&row.ID, &convoID, &agentID, &row.Data, &promotedAt); err != nil {
+		if err := rows.Scan(
+			&row.ID, &convoID, &agentID, &row.Data, &promotedAt,
+			&promotedByEmail,
+		); err != nil {
 			return nil, 0, fmt.Errorf("promoted memories scan: %w", err)
 		}
 		if convoID.Valid && strings.TrimSpace(convoID.String) != "" {
@@ -645,6 +659,10 @@ func (r *PromoteMemoriesRepo) ListPromoted(
 			t := promotedAt.Time
 			row.PromotedToKBAt = &t
 		}
+		if promotedByEmail.Valid && strings.TrimSpace(promotedByEmail.String) != "" {
+			e := promotedByEmail.String
+			row.PromotedByEmail = &e
+		}
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -653,3 +671,4 @@ func (r *PromoteMemoriesRepo) ListPromoted(
 
 	return out, total, nil
 }
+

@@ -16,6 +16,7 @@ DEFAULT_BEDROCK_MODEL = "us.amazon.nova-2-lite-v1:0"
 # MCP / network defaults.
 DEFAULT_MCP_ENDPOINT = "https://mcp.mekodata.ai/mcp"
 # DEFAULT_MCP_ENDPOINT = "https://mcp.mekodev.com/mcp"
+# DEFAULT_MCP_ENDPOINT = "http://localhost:8000/mcp"
 DEFAULT_PORT = 8088
 DEFAULT_AWS_REGION = "us-east-1"
 

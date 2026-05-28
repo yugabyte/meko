@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -15,6 +17,40 @@ import (
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
+
+// buildMekoDocDetails returns the JSON written to dist_rag.documents.document_details.
+//
+// Shape:
+//
+//	{"meko": {"user_id": "<uploader>", "size": <bytes>}}
+//
+//   - user_id      authenticated uploader (NOT the datapack owner — multiple
+//     collaborators can upload to the same shared datapack, and we
+//     want per-file uploader provenance).
+//   - size         bytes from S3 Contents.Size; 0 means "unknown" rather
+//     than "empty file" (S3 occasionally omits Size on certain
+//     listing edge cases).
+//
+// Output is wire-ready JSONB. Returns nil only on json.Marshal failure
+// — caller logs + falls back to "{}" so the upsert never fails because
+// of details encoding.
+func buildMekoDocDetails(uploaderUserID string, size int64) []byte {
+	payload := map[string]any{
+		"meko": map[string]any{
+			"user_id": uploaderUserID,
+			"size":    size,
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		// Shouldn't happen for this fixed shape; log + fall through so
+		// the document is still inserted with empty details rather
+		// than the whole upload failing.
+		slog.Warn("buildMekoDocDetails: marshal failed", "error", err)
+		return nil
+	}
+	return b
+}
 
 // KnowledgeBaseHandler holds Echo handlers for knowledge-base endpoints.
 //
@@ -253,6 +289,233 @@ type uploadCompleteRequest struct {
 	Size     int64  `json:"size"`
 }
 
+// downloadURLRequest is the body for POST /knowledge-bases/download-url.
+//
+// The caller passes the `document_uri` they got from
+// GET /knowledge-bases/documents (full `s3://...` URI). We strip the
+// bucket prefix to get the S3 key and verify it belongs to this
+// datapack before signing — without that check, a caller could ask
+// for a presigned URL on any key in the bucket they happen to know.
+type downloadURLRequest struct {
+	DocumentURI string `json:"document_uri"`
+}
+
+// RequestDownloadURL handles POST /api/v1/datapacks/:name/knowledge-bases/download-url.
+//
+// Returns a short-lived presigned S3 GET URL for the given document.
+// The UI fetches this on click and opens it directly — no api_server
+// in the file path. Mirrors the upload-URL flow.
+//
+//	@Summary	Presigned S3 GET URL for a knowledge-base document
+//	@Tags		knowledge-bases
+//	@Accept		json
+//	@Produce	json
+//	@Param		name	path		string				true	"Datapack name"
+//	@Param		body	body		downloadURLRequest	true	"Document download request"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	403		{object}	APIResponse
+//	@Failure	500		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{name}/knowledge-bases/download-url [post]
+func (h *KnowledgeBaseHandler) RequestDownloadURL(c echo.Context) error {
+	if h.s3Svc == nil || !h.s3Svc.Enabled() {
+		return apiError(c, http.StatusServiceUnavailable,
+			"S3_DISABLED", "file downloads are not configured")
+	}
+
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+
+	var req downloadURLRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+	uri := strings.TrimSpace(req.DocumentURI)
+	if uri == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "document_uri is required")
+	}
+
+	// Convert `s3://<bucket>/<key>` → `<key>`. Anything that isn't a
+	// well-formed S3 URI for our bucket is rejected outright — better
+	// than silently signing an arbitrary key.
+	bucketPrefix := "s3://" + h.s3Svc.Bucket() + "/"
+	if !strings.HasPrefix(uri, bucketPrefix) {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "document_uri must be an s3:// URI in this bucket")
+	}
+	key := strings.TrimPrefix(uri, bucketPrefix)
+
+	// Ownership check. Files are stored under
+	// `<owner_user_id>/<datapack_id>/<filename>` (see
+	// S3Service.GenerateUploadURL). The datapack here is the resolved
+	// row from RequireDatapackAccess middleware, so dp.UserID is the
+	// owner regardless of who's calling — viewers/maintainers all
+	// flow through the same path and the prefix matches. Anything
+	// else means the caller is trying to fetch a file outside this
+	// datapack's namespace.
+	expectedPrefix := dp.UserID + "/" + dp.ID + "/"
+	if !strings.HasPrefix(key, expectedPrefix) {
+		return apiError(c, http.StatusForbidden,
+			"FORBIDDEN", "document does not belong to this datapack")
+	}
+
+	result, err := h.s3Svc.GenerateDownloadURL(c.Request().Context(), key)
+	if err != nil {
+		slog.Error("failed to generate presigned download URL",
+			"datapack_id", dp.ID, "key", key, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to generate download URL")
+	}
+	return ok(c, http.StatusOK, result)
+}
+
+// canDeleteKBDocument is the permission policy for the per-file DELETE
+// endpoint. A caller can delete a KB document iff ANY of:
+//
+//   - they own the datapack (dp.Grant == "owner")
+//   - they are a maintainer of the datapack (dp.Grant == "maintainer")
+//   - they are the recorded uploader of THIS specific file (the
+//     uploader_user_id stored in document_details->meko->user_id at
+//     CreateKB time)
+//
+// Viewers and contributors fall through to 403 unless they uploaded
+// the file themselves. Legacy files (NULL document_details, e.g.
+// pre-dating the dual-write) have no recorded uploader; only
+// owner/maintainer can delete those.
+func canDeleteKBDocument(
+	dpGrant string,
+	callerUserID string,
+	fileUploaderUserID *string,
+) bool {
+	g := strings.ToLower(strings.TrimSpace(dpGrant))
+	if g == "owner" || g == string(models.GrantMaintainer) {
+		return true
+	}
+	if fileUploaderUserID != nil &&
+		strings.TrimSpace(*fileUploaderUserID) != "" &&
+		strings.EqualFold(*fileUploaderUserID, callerUserID) {
+		return true
+	}
+	return false
+}
+
+// DeleteDocument handles DELETE /api/v1/datapacks/:name/knowledge-bases/documents/:document_id.
+//
+// Removes a single knowledge-base file end-to-end:
+//
+//  1. Lookup the document (validates it belongs to this datapack and
+//     returns its uploader_user_id + s3 URI in one query).
+//  2. Permission check (see canDeleteKBDocument).
+//  3. Delete chunks + dist_rag rows in a single transaction (repo).
+//  4. Best-effort S3 delete — failures are logged but do not unwind
+//     the DB delete (the orphan storage cost is small, a sweeper can
+//     reconcile later).
+//
+//	@Summary	Delete one knowledge-base file
+//	@Tags		knowledge-bases
+//	@Produce	json
+//	@Param		name		path	string	true	"Datapack name"
+//	@Param		document_id	path	string	true	"dist_rag document UUID"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	403		{object}	APIResponse
+//	@Failure	404		{object}	APIResponse
+//	@Failure	500		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{name}/knowledge-bases/documents/{document_id} [delete]
+func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+	acct, err := auth.GetAccount(c)
+	if err != nil || acct == nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "authentication required")
+	}
+	documentID := strings.TrimSpace(c.Param("document_id"))
+	if documentID == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "document_id is required")
+	}
+
+	// Step 1: lookup. Single query returns uploader + s3 URI; also
+	// validates the document actually belongs to this datapack (the
+	// repo joins on the datapack's rag_source_ids).
+	ref, err := h.knowledgeBaseSvc.GetDocumentRef(dp, documentID)
+	if err != nil {
+		if errors.Is(err, repository.ErrDocumentNotFound) {
+			return apiError(c, http.StatusNotFound,
+				"NOT_FOUND", "document not found in this datapack")
+		}
+		slog.Error("failed to load document ref",
+			"datapack_id", dp.ID, "document_id", documentID, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to load document")
+	}
+
+	// Step 2: permission.
+	if !canDeleteKBDocument(dp.Grant, acct.ID, ref.UploadedByUserID) {
+		return apiError(c, http.StatusForbidden,
+			"FORBIDDEN", "only datapack owners, maintainers, or the file's uploader can delete this file")
+	}
+
+	// Step 3: DB cleanup (chunks + dist_rag) in a single transaction.
+	chunksDeleted, err := h.knowledgeBaseSvc.DeleteDocument(dp, documentID)
+	if err != nil {
+		if errors.Is(err, repository.ErrDocumentNotFound) {
+			// Lost the race with a concurrent delete — treat as 404.
+			return apiError(c, http.StatusNotFound,
+				"NOT_FOUND", "document not found in this datapack")
+		}
+		slog.Error("failed to delete document",
+			"datapack_id", dp.ID, "document_id", documentID, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to delete document")
+	}
+
+	// Step 4: best-effort S3 delete. We've already removed the DB
+	// pointers, so the user-visible state is consistent even if S3
+	// errors out (orphan object that a sweeper can collect).
+	s3Deleted := false
+	if h.s3Svc != nil && h.s3Svc.Enabled() && ref.DocumentURI != nil {
+		bucketPrefix := "s3://" + h.s3Svc.Bucket() + "/"
+		if strings.HasPrefix(*ref.DocumentURI, bucketPrefix) {
+			key := strings.TrimPrefix(*ref.DocumentURI, bucketPrefix)
+			if delErr := h.s3Svc.DeleteObject(c.Request().Context(), key); delErr != nil {
+				slog.Warn("S3 delete failed; DB rows already removed (orphan tolerated)",
+					"datapack_id", dp.ID, "document_id", documentID,
+					"key", key, "error", delErr)
+			} else {
+				s3Deleted = true
+			}
+		}
+	}
+
+	slog.Info("knowledge base document deleted",
+		"datapack_id", dp.ID,
+		"document_id", documentID,
+		"chunks_deleted", chunksDeleted,
+		"s3_deleted", s3Deleted,
+		"by_user_id", acct.ID,
+	)
+
+	return ok(c, http.StatusOK, map[string]any{
+		"document_id":    documentID,
+		"chunks_deleted": chunksDeleted,
+		"s3_deleted":     s3Deleted,
+	})
+}
+
 // ConfirmUpload handles POST /api/v1/datapacks/:name/knowledge-bases/upload-complete.
 //
 // This endpoint is currently advisory: the actual KB row is created by
@@ -481,14 +744,34 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 				"RAG_ERROR", "failed to check existing documents")
 		}
 
+		// Caller of CreateKB is recorded as the uploader for every
+		// newly-inserted document. This is the best approximation we
+		// have at sync time: ListObjects doesn't return per-object
+		// uploader identity, and ConfirmUpload (which DOES know the
+		// per-file uploader) is currently advisory.
+		// TODO(uploader-precision): persist (s3_key -> uploader_user_id)
+		// from ConfirmUpload into a small meko_system table so this
+		// loop can attribute each file to its actual uploader instead
+		// of the CreateKB caller.
+		var uploaderUserID string
+		if acct, acctErr := auth.GetAccount(c); acctErr == nil && acct != nil {
+			uploaderUserID = acct.ID
+		} else {
+			uploaderUserID = dp.UserID // last-resort fallback
+		}
 		for _, obj := range objects {
 			docURI := fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), obj.Key)
 			if existingURIs[docURI] {
 				skippedDocs++
 				continue
 			}
+			// document_details carries per-file provenance: who
+			// uploaded it (resolved above) + the byte size observed
+			// in S3. The downstream documents-list endpoint resolves
+			// user_id -> email at read time via meko_system.users.
+			details := buildMekoDocDetails(uploaderUserID, obj.Size)
 			if err := h.ragSvc.InsertDocument(
-				sourceID, obj.Key, docURI, obj.ETag, obj.ContentType,
+				sourceID, obj.Key, docURI, obj.ETag, obj.ContentType, details,
 			); err != nil {
 				slog.Warn("failed to insert document",
 					"document", obj.Key, "document_uri", docURI,
@@ -659,16 +942,28 @@ func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 
 // Documents handles GET /api/v1/datapacks/:name/knowledge-bases/documents.
 //
-// Returns (document_name, status) for every dist_rag.documents row
-// whose source belongs to the datapack.
+// Returns a paginated envelope { items, total, page, page_size, has_more }
+// of dist_rag documents for the datapack.
 //
-//	@Summary	List uploaded documents for a datapack
+// Query params:
+//   - page        int    (default 1)
+//   - page_size   int    (default 50, max 200)
+//   - q           string filename substring search (ILIKE)
+//   - type_filter string file-extension suffix filter, e.g. ".md"
+//   - indexed_only "true" restrict to COMPLETED documents
+//
+//	@Summary	List uploaded documents for a datapack (paginated)
 //	@Tags		knowledge-bases
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
-//	@Success	200		{object}	APIResponse
-//	@Failure	401		{object}	APIResponse
-//	@Failure	500		{object}	APIResponse
+//	@Param		name		path	string	true	"Datapack name"
+//	@Param		page		query	int		false	"Page number (default 1)"
+//	@Param		page_size	query	int		false	"Page size (default 50, max 200)"
+//	@Param		q			query	string	false	"Filename substring search"
+//	@Param		type_filter	query	string	false	"File extension suffix, e.g. .md"
+//	@Param		indexed_only query	bool	false	"Restrict to fully indexed documents"
+//	@Success	200			{object}	APIResponse
+//	@Failure	401			{object}	APIResponse
+//	@Failure	500			{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/datapacks/{name}/knowledge-bases/documents [get]
 func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
@@ -678,14 +973,123 @@ func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
 			"INTERNAL_ERROR", "datapack context missing")
 	}
 
-	docs, err := h.knowledgeBaseSvc.ListDistRagDocuments(dp)
+	const defaultPageSize = 50
+	const maxPageSize = 200
+
+	page := 1
+	if v := strings.TrimSpace(c.QueryParam("page")); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			page = n
+		}
+	}
+	pageSize := defaultPageSize
+	if v := strings.TrimSpace(c.QueryParam("page_size")); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			if n > maxPageSize {
+				n = maxPageSize
+			}
+			pageSize = n
+		}
+	}
+
+	indexedOnly := strings.EqualFold(strings.TrimSpace(c.QueryParam("indexed_only")), "true")
+
+	opts := repository.DocumentListOpts{
+		Limit:       pageSize,
+		Offset:      (page - 1) * pageSize,
+		SearchQuery: strings.TrimSpace(c.QueryParam("q")),
+		TypeFilter:  strings.TrimSpace(c.QueryParam("type_filter")),
+		IndexedOnly: indexedOnly,
+	}
+
+	result, err := h.knowledgeBaseSvc.ListDistRagDocuments(dp, opts)
 	if err != nil {
 		slog.Error("failed to list knowledge base documents",
 			"datapack_id", dp.ID, "error", err)
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", "failed to list knowledge base documents")
 	}
-	return ok(c, http.StatusOK, docs)
+	return ok(c, http.StatusOK, result)
+}
+
+// Summary handles GET /api/v1/datapacks/:name/knowledge-bases/summary.
+//
+// Returns the header tile aggregates + the two deterministic description
+// strings consumed by the SharedKnowledge page. One round trip from the
+// UI's perspective; internally backed by three cheap repo queries.
+//
+//	@Summary	Header aggregates for the SharedKnowledge page
+//	@Tags		knowledge-bases
+//	@Produce	json
+//	@Param		name	path		string	true	"Datapack name"
+//	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	500		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{name}/knowledge-bases/summary [get]
+func (h *KnowledgeBaseHandler) Summary(c echo.Context) error {
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+	summary, err := h.knowledgeBaseSvc.GetKnowledgeBaseSummary(dp)
+	if err != nil {
+		slog.Error("failed to load knowledge base summary",
+			"datapack_id", dp.ID, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to load knowledge base summary")
+	}
+	return ok(c, http.StatusOK, summary)
+}
+
+// ActivityLog handles GET /api/v1/datapacks/:name/knowledge-bases/activity-log.
+//
+// Merged feed of file uploads + memory promotions for this datapack,
+// ordered by timestamp DESC. **Keyset pagination**: first call omits
+// `cursor`; subsequent calls pass the `next_cursor` from the previous
+// response verbatim. Cost is constant per page regardless of depth.
+//
+//	@Summary	Merged activity feed (file uploads + memory promotions)
+//	@Tags		knowledge-bases
+//	@Produce	json
+//	@Param		name		path	string	true	"Datapack name"
+//	@Param		limit		query	int		false	"Page size (default 10, max 50)"
+//	@Param		cursor		query	string	false	"Opaque next-page cursor from a previous call; omit for first page"
+//	@Success	200			{object}	APIResponse
+//	@Failure	401			{object}	APIResponse
+//	@Failure	500			{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{name}/knowledge-bases/activity-log [get]
+func (h *KnowledgeBaseHandler) ActivityLog(c echo.Context) error {
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+
+	// Cap limit defensively so a malicious / misconfigured caller
+	// can't ask for the entire feed in one shot. 50 is comfortably
+	// above the UI's "Show more loads 10" cadence.
+	limit := 10
+	if v := strings.TrimSpace(c.QueryParam("limit")); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			if n > 50 {
+				n = 50
+			}
+			limit = n
+		}
+	}
+	cursor := strings.TrimSpace(c.QueryParam("cursor"))
+
+	resp, err := h.knowledgeBaseSvc.ListActivityLog(dp, limit, cursor)
+	if err != nil {
+		slog.Error("failed to list activity log",
+			"datapack_id", dp.ID, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to list activity log")
+	}
+	return ok(c, http.StatusOK, resp)
 }
 
 // mapKBError converts a KB-related error into the matching HTTP

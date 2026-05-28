@@ -152,8 +152,65 @@ func (s *S3Service) GenerateUploadURL(
 	}, nil
 }
 
+// PresignedDownload is the response shape for short-lived presigned
+// GET URLs used by the SharedKnowledge "Download" action.
+type PresignedDownload struct {
+	URL       string `json:"url"`
+	Key       string `json:"key"`
+	ExpiresIn int    `json:"expires_in"` // seconds
+}
+
+// GenerateDownloadURL builds a presigned GET URL for the given S3 key.
+// Caller is responsible for verifying that the key belongs to the
+// caller's datapack (a presigned URL on an arbitrary key would be a
+// confused-deputy hole). See KnowledgeBaseHandler.RequestDownloadURL
+// for the ownership check.
+//
+// 5-minute expiry matches the upload-URL expiry — long enough for the
+// browser to follow the redirect immediately, short enough that the
+// URL can't be passed around indefinitely.
+func (s *S3Service) GenerateDownloadURL(
+	ctx context.Context,
+	key string,
+) (*PresignedDownload, error) {
+	const expiry = 5 * time.Minute
+	// Extract the basename from the key for the Content-Disposition filename.
+	filename := path.Base(key)
+	input := &s3.GetObjectInput{
+		Bucket:                     aws.String(s.bucket),
+		Key:                        aws.String(key),
+		ResponseContentDisposition: aws.String(`attachment; filename="` + filename + `"`),
+	}
+	presigned, err := s.presignClient.PresignGetObject(ctx, input,
+		s3.WithPresignExpires(expiry),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("presign get %s: %w", key, err)
+	}
+	return &PresignedDownload{
+		URL:       presigned.URL,
+		Key:       key,
+		ExpiresIn: int(expiry.Seconds()),
+	}, nil
+}
+
 // ErrDuplicateFile is returned when a file with the same name already exists.
 var ErrDuplicateFile = fmt.Errorf("file with the same name already exists")
+
+// DeleteObject removes a single object from the bucket. Used by the
+// per-file DELETE handler after the database-side cleanup succeeds.
+// S3 DeleteObject is idempotent: deleting a missing key returns
+// success, so the handler doesn't need to special-case "already gone".
+func (s *S3Service) DeleteObject(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("delete object %s: %w", key, err)
+	}
+	return nil
+}
 
 // ObjectExists checks whether an object with the given key exists in the bucket.
 func (s *S3Service) ObjectExists(ctx context.Context, key string) (bool, error) {
@@ -176,6 +233,10 @@ type S3Object struct {
 	Key         string // full S3 key e.g. "<user_id>/<datapack_id>/report.pdf"
 	ETag        string // S3 ETag (MD5 for non-multipart uploads)
 	ContentType string // MIME type derived from file extension
+	// Size is the object size in bytes (S3 ListObjectsV2 Contents.Size).
+	// Zero on the rare paths where S3 doesn't return a size; callers
+	// should treat 0 as "unknown" rather than "empty file".
+	Size int64
 }
 
 // mimeTypeByExtension maps common file extensions to MIME types supported by
@@ -223,10 +284,15 @@ func (s *S3Service) ListObjects(ctx context.Context, prefix string) ([]S3Object,
 				etag = strings.Trim(*obj.ETag, "\"")
 			}
 			key := aws.ToString(obj.Key)
+			var size int64
+			if obj.Size != nil {
+				size = *obj.Size
+			}
 			objects = append(objects, S3Object{
 				Key:         key,
 				ETag:        etag,
 				ContentType: mimeTypeFromKey(key),
+				Size:        size,
 			})
 		}
 	}

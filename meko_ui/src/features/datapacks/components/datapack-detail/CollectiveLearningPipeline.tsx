@@ -263,7 +263,8 @@ type Props = {
   conversationsCount?: number;
   memoryCount?: number;
   learningsCount?: number;
-  knowledgeCount?: number;
+  knowledgeFileCount?: number;
+  knowledgeFileAndPromotedCount?: number;
   knowledgeChunks?: number;
   datapackId?: string | null;
   onSelectSection?: (tab: DatapackDetailTab) => void;
@@ -276,7 +277,8 @@ export function CollectiveLearningPipeline({
   conversationsCount = 0,
   memoryCount = 0,
   learningsCount = 0,
-  knowledgeCount = 0,
+  knowledgeFileCount = 0,
+  knowledgeFileAndPromotedCount = 0,
   knowledgeChunks: _knowledgeChunks = 0,
   datapackId = null,
   onSelectSection,
@@ -337,10 +339,10 @@ export function CollectiveLearningPipeline({
     `${learningsDisplay} ready`;
 
   const knowledgeFileBadge =
-    !statusLoading && knowledgeCount >= 1 ? (
+    !statusLoading && knowledgeFileCount >= 1 ? (
       <span className="inline-flex items-center gap-0.5">
         <Upload className="size-3 shrink-0 opacity-90" aria-hidden />
-        +{knowledgeCount} file{knowledgeCount === 1 ? "" : "s"}
+        +{knowledgeFileCount} file{knowledgeFileCount === 1 ? "" : "s"}
       </span>
     ) : undefined;
 
@@ -431,7 +433,13 @@ export function CollectiveLearningPipeline({
                 // purple CTA on the dark gradient tile. Same pattern as
                 // the other "promote" CTAs (`Promote to Ko`,
                 // `Promote to Knowledge`).
-                className="w-full border-0 bg-purple-100 text-xs font-semibold text-purple-700 shadow-md hover:bg-purple-200 dark:bg-purple-500 dark:text-white dark:hover:bg-purple-600 disabled:opacity-60"
+                // `min-w-0 whitespace-normal h-auto py-2 leading-tight`
+                // lets "Review N promotions →" wrap onto two lines inside
+                // the tile when the viewport is narrow, instead of
+                // overflowing the tile's border (shadcn Button defaults
+                // to `whitespace-nowrap` + fixed height, which is what
+                // pushed the text out the sides at narrow widths).
+                className="w-full min-w-0 whitespace-normal h-auto py-2 leading-tight border-0 bg-purple-100 text-xs font-semibold text-purple-700 shadow-md hover:bg-purple-200 dark:bg-purple-500 dark:text-white dark:hover:bg-purple-600 disabled:opacity-60"
                 disabled={learningsCountLoading || !onSelectSection}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -496,7 +504,7 @@ export function CollectiveLearningPipeline({
                 tone={DATAPACK_DETAIL_TAB.knowledge}
                 eyebrow=""
                 title="Shared Knowledge"
-                value={knowledgeCount}
+                value={knowledgeFileAndPromotedCount}
                 delta=""
                 subtitle=""
                 cornerBadge={knowledgeFileBadge}

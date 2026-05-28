@@ -224,12 +224,26 @@ type PromoteMemoriesResult struct {
 }
 
 // PromotedMemory is one row from datapacks.promoted_collection for list APIs.
+//
+// Per-row enrichment for the SharedKnowledge "Promoted memories" tab:
+//   - PromotedByEmail: email of the user who promoted this memory.
+//     Sourced via LEFT JOIN meko_system.users on meko_user_id; nullable
+//     because (a) meko_user_id is nullable on the row, and (b) the user
+//     may have been deleted since the promotion happened.
+//
+// Index-level constants (embedding_model / dimensions / ai_provider)
+// are NOT on this struct OR on PromotedMemoryListResponse — they live
+// on GET /knowledge-bases/summary as the single source of truth for
+// properties of the global vector index. Callers that need both the
+// list and the index config issue both requests; callers that only
+// need the list pay nothing extra.
 type PromotedMemory struct {
-	ID             string     `json:"id"`
-	ConversationID *string    `json:"conversation_id,omitempty"`
-	AgentID        string     `json:"agent_id,omitempty"`
-	Data           string     `json:"data"`
-	PromotedToKBAt *time.Time `json:"promoted_to_kb_at,omitempty"`
+	ID              string     `json:"id"`
+	ConversationID  *string    `json:"conversation_id,omitempty"`
+	AgentID         string     `json:"agent_id,omitempty"`
+	Data            string     `json:"data"`
+	PromotedToKBAt  *time.Time `json:"promoted_to_kb_at,omitempty"`
+	PromotedByEmail *string    `json:"promoted_by_email,omitempty"`
 }
 
 // PromotedMemoryListFilter is the query input for GET /promoted-memories.
@@ -240,6 +254,15 @@ type PromotedMemoryListFilter struct {
 }
 
 // PromotedMemoryListResponse is the response body for GET /promoted-memories.
+//
+// Index-level constants (embedding_model / embedding_dimensions /
+// ai_provider) are deliberately NOT on this response. They live on
+// GET /knowledge-bases/summary, which is the single source of truth
+// for properties of the global vector index. Pages that need both
+// (e.g. SharedKnowledge) already fetch /summary; pages that only show
+// the promoted list (e.g. the Collective Memory route) do not need
+// these constants and would otherwise pay for an extra dist_rag
+// roundtrip per page view.
 type PromotedMemoryListResponse struct {
 	Criteria         PromotedMemoryListFilter `json:"criteria"`
 	PromotedMemories []PromotedMemory         `json:"promoted_memories"`

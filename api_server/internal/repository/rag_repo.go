@@ -124,15 +124,32 @@ func (r *RagRepo) GetExistingDocURIs(sourceID string) (map[string]bool, error) {
 	return uris, rows.Err()
 }
 
-func (r *RagRepo) InsertDocument(sourceID, documentName, documentURI, checksum, documentType string) error {
+// InsertDocument upserts a row into dist_rag.documents.
+//
+// `documentDetails` is a JSONB blob carried under the conventional
+// `meko` sub-key — see the dist_rag schema for the column definition.
+// Pass a JSON of shape `{"meko": {"trace_id": ..., "user_id": ...,
+// "size": ...}}` to populate. Use nil/empty to fall back to the
+// dist_rag default. The api_server-side `meko.user_id` is the
+// authenticated uploader (not the datapack owner), so per-file
+// uploader provenance survives shared-datapack collaboration; the
+// downstream listing endpoint resolves it to an email at read time.
+func (r *RagRepo) InsertDocument(
+	sourceID, documentName, documentURI, checksum, documentType string,
+	documentDetails []byte,
+) error {
+	if len(documentDetails) == 0 {
+		documentDetails = []byte(`{}`)
+	}
 	_, err := r.db.Exec(
 		`INSERT INTO dist_rag.documents
-			(source_id, document_name, document_uri, document_checksum, document_type)
-		 VALUES ($1::UUID, $2, $3, $4, $5)
+			(source_id, document_name, document_uri, document_checksum, document_type, document_details)
+		 VALUES ($1::UUID, $2, $3, $4, $5, $6::jsonb)
 		 ON CONFLICT (source_id, document_uri)
-		   DO UPDATE SET document_type = EXCLUDED.document_type
-		   WHERE dist_rag.documents.document_type IS NULL`,
-		sourceID, documentName, documentURI, checksum, documentType,
+		   DO UPDATE SET
+		     document_type    = EXCLUDED.document_type,
+		     document_details = EXCLUDED.document_details`,
+		sourceID, documentName, documentURI, checksum, documentType, documentDetails,
 	)
 	if err == nil {
 		return nil
@@ -143,8 +160,7 @@ func (r *RagRepo) InsertDocument(sourceID, documentName, documentURI, checksum, 
 		"error", err,
 	)
 
-	// Fallback path: the table has no unique constraint on (source_id, document_uri).
-	// Check existence and insert/update manually.
+	// Fallback path: no unique constraint — check existence and upsert manually.
 	var exists bool
 	if scanErr := r.db.QueryRow(
 		`SELECT EXISTS(SELECT 1 FROM dist_rag.documents WHERE source_id = $1::UUID AND document_uri = $2)`,
@@ -154,15 +170,26 @@ func (r *RagRepo) InsertDocument(sourceID, documentName, documentURI, checksum, 
 	}
 
 	if exists {
+		// Update details on the existing row so provenance is never stale.
+		_, err = r.db.Exec(
+			`UPDATE dist_rag.documents
+			    SET document_type    = $3,
+			        document_details = $4::jsonb
+			  WHERE source_id = $1::UUID AND document_uri = $2`,
+			sourceID, documentURI, documentType, documentDetails,
+		)
+		if err != nil {
+			return fmt.Errorf("update document %s: %w", documentName, err)
+		}
 		return nil
 	}
 
 	// Document is genuinely new — plain insert without conflict target.
 	_, err = r.db.Exec(
 		`INSERT INTO dist_rag.documents
-			(source_id, document_name, document_uri, document_checksum, document_type)
-		 VALUES ($1::UUID, $2, $3, $4, $5)`,
-		sourceID, documentName, documentURI, checksum, documentType,
+			(source_id, document_name, document_uri, document_checksum, document_type, document_details)
+		 VALUES ($1::UUID, $2, $3, $4, $5, $6::jsonb)`,
+		sourceID, documentName, documentURI, checksum, documentType, documentDetails,
 	)
 	if err != nil {
 		return fmt.Errorf("insert document %s: %w", documentName, err)

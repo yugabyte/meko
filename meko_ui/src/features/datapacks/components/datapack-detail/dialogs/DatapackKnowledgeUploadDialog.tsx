@@ -14,6 +14,11 @@ export type DatapackKnowledgeUploadDialogProps = {
   onOpenChange: (open: boolean) => void;
   /** Optional pre-staged files (e.g. a sample). Re-captured each time the dialog opens. */
   initialFiles?: File[];
+  /** Fired after `createKnowledgeBase` succeeds inside the embedded
+   *  FileUpload so the parent page can refetch derived data (summary
+   *  counts, KB document list, …). Optional — pages that don't need
+   *  to refresh anything can omit it. */
+  onKnowledgeBaseCreated?: () => void;
 };
 
 export function DatapackKnowledgeUploadDialog({
@@ -22,6 +27,7 @@ export function DatapackKnowledgeUploadDialog({
   open,
   onOpenChange,
   initialFiles,
+  onKnowledgeBaseCreated,
 }: DatapackKnowledgeUploadDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -34,7 +40,12 @@ export function DatapackKnowledgeUploadDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="px-4 py-4 sm:px-6 sm:pb-6">
-          <FileUpload datapackName={datapackName} datapackId={datapackId} initialFiles={initialFiles} />
+          <FileUpload
+            datapackName={datapackName}
+            datapackId={datapackId}
+            initialFiles={initialFiles}
+            onKnowledgeBaseCreated={onKnowledgeBaseCreated}
+          />
         </div>
       </DialogContent>
     </Dialog>
