@@ -50,7 +50,7 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 
 	// Invite rows use the datapack row owner as OwnerUserID so resend/revoke
 	// checks match; maintainers act on behalf of the same datapack.
-	resp, err := h.svc.InviteToDatapack(c.Request().Context(), dp.ID, dp.UserID, req)
+	resp, err := h.svc.InviteToDatapack(c.Request().Context(), dp.ID, dp.UserID, dp.Name, dp.Description, dp.OwnerName, dp.OwnerEmail, req)
 	if err != nil {
 		if isValidationErr(err) {
 			return apiError(c, http.StatusBadRequest,
@@ -212,7 +212,7 @@ func (h *SharingHandler) ResendInvite(c echo.Context) error {
 			"VALIDATION_ERROR", "invite_id is required")
 	}
 
-	id, err := h.svc.ResendInvite(c.Request().Context(), dp.ID, dp.UserID, inviteID)
+	id, err := h.svc.ResendInvite(c.Request().Context(), dp.ID, dp.UserID, dp.Name, dp.Description, dp.OwnerName, dp.OwnerEmail, inviteID)
 	if err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,

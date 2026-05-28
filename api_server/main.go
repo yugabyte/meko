@@ -134,6 +134,14 @@ func run() error {
 	s3SecretKey := flag.String("s3-secret-key", envOrDefault("S3_SECRET_KEY", "mekosecret"), "S3 secret key (minio/iam-user modes)")
 	s3Bucket := flag.String("s3-bucket", envOrDefault("S3_BUCKET", "meko-kb-uploads"), "S3 bucket for KB file uploads")
 	s3Region := flag.String("s3-region", envOrDefault("S3_REGION", "us-east-2"), "S3 region")
+
+	// SES configuration for invite / share notification emails.
+	sesFromAddress := flag.String("ses-from-address",
+		envOrDefault("SES_FROM_ADDRESS", ""),
+		"Verified SES sender address (e.g. no-reply@example.com). Empty disables invite emails.")
+	sesRegion := flag.String("ses-region",
+		envOrDefault("SES_REGION", ""),
+		"AWS region for SES (e.g. us-east-2). Defaults to cognito-region when empty.")
 	flag.Parse()
 
 	resolvedLogLevel := parseLogLevel(*logLevel)
@@ -255,6 +263,18 @@ func run() error {
 		slog.Info("mcp internal validate endpoint enabled")
 	}
 
+	// Default SES region to Cognito region when not explicitly set.
+	resolvedSESRegion := *sesRegion
+	if resolvedSESRegion == "" {
+		resolvedSESRegion = *cognitoRegion
+	}
+	appURL := appURLForEnv(repository.ParseDeployEnv(*deployEnv))
+	if *sesFromAddress == "" {
+		slog.Warn("ses invite emails disabled (no --ses-from-address / SES_FROM_ADDRESS configured)")
+	} else {
+		slog.Info("ses invite emails enabled", "from", *sesFromAddress, "region", resolvedSESRegion, "app_url", appURL)
+	}
+
 	return api.Run(api.ServerConfig{
 		DB:                       dataConn,
 		SystemDB:                 systemConn,
@@ -284,6 +304,9 @@ func run() error {
 		MCPPATFlushInterval:      *mcpPATFlushInterval,
 		PATRateLimitPerMin:       *patRateLimitPerMin,
 		PATRateLimitBurst:        *patRateLimitBurst,
+		SESRegion:                resolvedSESRegion,
+		SESFromAddress:           *sesFromAddress,
+		AppURL:                   appURL,
 	})
 }
 
@@ -341,6 +364,9 @@ func envBoolOrDefault(key string, fallback bool) bool {
 const (
 	mcpServerURLProd = "https://mcp.mekodata.ai/mcp"
 	mcpServerURLDev  = "https://mcp.mekodev.com/mcp"
+
+	appURLProd = "https://cloud.mekodata.ai"
+	appURLDev  = "https://app.mekodev.com"
 )
 
 func mcpServerURLForEnv(env repository.DeployEnv) string {
@@ -348,6 +374,13 @@ func mcpServerURLForEnv(env repository.DeployEnv) string {
 		return mcpServerURLDev
 	}
 	return mcpServerURLProd
+}
+
+func appURLForEnv(env repository.DeployEnv) string {
+	if env == repository.DeployEnvDev {
+		return appURLDev
+	}
+	return appURLProd
 }
 
 // parseLogLevel maps a CLI/env string to a slog.Level. Unknown

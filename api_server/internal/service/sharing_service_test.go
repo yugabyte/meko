@@ -12,7 +12,7 @@ import (
 
 func TestSharingService_InviteToDatapack_RequiresEmail(t *testing.T) {
 	svc := service.NewSharingService(nil, nil)
-	_, err := svc.InviteToDatapack(context.Background(), "dp-1", "owner-1", service.InviteRequest{
+	_, err := svc.InviteToDatapack(context.Background(), "dp-1", "owner-1", "test-datapack", "Test Owner", service.InviteRequest{
 		RecipientEmail: "",
 		GrantRole:      "viewer",
 	})
@@ -33,7 +33,7 @@ func TestSharingService_InviteToDatapack_RequiresValidGrant(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := svc.InviteToDatapack(context.Background(), "dp-1", "owner-1", service.InviteRequest{
+			_, err := svc.InviteToDatapack(context.Background(), "dp-1", "owner-1", "test-datapack", "Test Owner", service.InviteRequest{
 				RecipientEmail: "test@example.com",
 				GrantRole:      c.grant,
 			})

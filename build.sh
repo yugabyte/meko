@@ -20,7 +20,7 @@ die()   { printf "${RED}✗${NC} %s\n" "$*" >&2; exit 1; }
 # ── Pre-flight checks ───────────────────────────────────────────────────────
 command -v go >/dev/null 2>&1 || die "Go is not installed. Please install Go >= ${GO_MIN_VERSION}."
 
-GO_VERSION="$(go version | grep -oP 'go\K[0-9]+\.[0-9]+')"
+GO_VERSION="$(go version | sed -E 's/.*go([0-9]+\.[0-9]+).*/\1/')"
 if [ "$(printf '%s\n' "${GO_MIN_VERSION}" "${GO_VERSION}" | sort -V | head -n1)" != "${GO_MIN_VERSION}" ]; then
     die "Go ${GO_MIN_VERSION}+ required (found ${GO_VERSION})"
 fi

@@ -1,0 +1,19 @@
+{{if .OwnerName}}{{.OwnerName}}{{else}}A Meko user{{end}} shared a datapack with you
+
+You now have access to a Meko datapack — a collaborative workspace with shared knowledge and per-agent memory.
+
+  Datapack: {{.DatapackName}}
+  Shared by: {{if .OwnerName}}{{.OwnerName}}{{else}}A Meko user{{end}}
+  Your role: {{.GrantRole}}
+
+────────────────────────────────────────
+
+Open datapack: {{.AppURL}}
+
+────────────────────────────────────────
+
+New to Meko? Datapack provides a self-contained persistent store for conversations, memory, and knowledge for your agents.
+Read the docs: https://docs.mekodata.ai
+
+— The Meko Team
+mekodata.ai · docs.mekodata.ai · mekofeedback@yugabyte.com

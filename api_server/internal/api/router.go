@@ -10,6 +10,7 @@ import (
 
 	_ "meko/api_server/docs" // registers swagger spec with swag
 	"meko/api_server/internal/auth"
+	"meko/api_server/internal/email"
 	"meko/api_server/internal/handlers"
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
@@ -92,6 +93,22 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Warn("langfuse integration disabled; set host + admin api key to enable")
 	}
 	sharingSvc.SetLangfuse(langfuseSvc)
+
+	if cfg.SESFromAddress != "" {
+		sesEmailer, sesErr := email.NewSESEmailer(context.Background(), email.SESConfig{
+			Region:      cfg.SESRegion,
+			FromAddress: cfg.SESFromAddress,
+			AppURL:      cfg.AppURL,
+		})
+		if sesErr != nil {
+			slog.Error("ses emailer init failed; invite emails disabled", "error", sesErr)
+		} else {
+			sharingSvc.SetEmailer(sesEmailer)
+			slog.Info("ses emailer initialized", "from", cfg.SESFromAddress)
+		}
+	} else {
+		slog.Warn("ses invite emails disabled (set SES_FROM_ADDRESS to enable)")
+	}
 
 	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc)
 

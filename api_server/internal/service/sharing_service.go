@@ -2,18 +2,90 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"strings"
 
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
 )
 
-// CognitoInviter abstracts the Cognito AdminCreateUser call used to
-// send signup invitation emails to non-existing users.
+// CognitoInviter abstracts Cognito account provisioning for sharing invites.
 type CognitoInviter interface {
-	InviteUser(ctx context.Context, email string, resend bool) error
+	// CreateUser provisions a new Cognito account with the given temporary
+	// password, suppressing Cognito's own email. Returns ("", nil) if the
+	// user already exists so callers can treat it as a no-op.
+	CreateUser(ctx context.Context, email, temporaryPassword string) (cognitoSub string, err error)
+	// ResetTempPassword sets a new temporary password for an existing
+	// unconfirmed Cognito user. Used when resending an invite.
+	ResetTempPassword(ctx context.Context, email, temporaryPassword string) error
+}
+
+// InviteEmailParams carries the context needed to render an invitation email.
+type InviteEmailParams struct {
+	RecipientEmail  string
+	DatapackName    string
+	DatapackDesc    string
+	OwnerName       string
+	OwnerEmail      string
+	GrantRole       string
+	AppURL          string
+	TempPassword    string // non-empty only for new (non-existing) users
+	IsExistingUser  bool
+}
+
+// EmailSender abstracts SES email dispatch. The service package defines the
+// interface; only router.go imports both service and email to wire them.
+type EmailSender interface {
+	SendInviteEmail(ctx context.Context, p InviteEmailParams) error
+}
+
+// genTempPassword generates a cryptographically random 16-character password
+// that satisfies Cognito's default complexity policy: at least one uppercase,
+// one lowercase, one digit, and one symbol character.
+func genTempPassword() (string, error) {
+	const (
+		upper   = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		lower   = "abcdefghijklmnopqrstuvwxyz"
+		digits  = "0123456789"
+		symbols = "!@#$%^&*"
+		all     = upper + lower + digits + symbols
+		length  = 16
+	)
+
+	pickFrom := func(charset string) (byte, error) {
+		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return 0, err
+		}
+		return charset[idx.Int64()], nil
+	}
+
+	buf := make([]byte, length)
+	var err error
+	// Guarantee at least one character from each required class.
+	for i, cs := range []string{upper, lower, digits, symbols} {
+		if buf[i], err = pickFrom(cs); err != nil {
+			return "", fmt.Errorf("genTempPassword: %w", err)
+		}
+	}
+	for i := 4; i < length; i++ {
+		if buf[i], err = pickFrom(all); err != nil {
+			return "", fmt.Errorf("genTempPassword: %w", err)
+		}
+	}
+	// Fisher-Yates shuffle so mandatory chars don't always appear at 0-3.
+	for i := length - 1; i > 0; i-- {
+		jBig, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return "", fmt.Errorf("genTempPassword shuffle: %w", err)
+		}
+		j := int(jBig.Int64())
+		buf[i], buf[j] = buf[j], buf[i]
+	}
+	return string(buf), nil
 }
 
 // SharingService orchestrates datapack sharing operations: invites,
@@ -22,6 +94,7 @@ type SharingService struct {
 	repo      *repository.SharingRepo
 	cognito   CognitoInviter
 	langfuseS *LangfuseService
+	emailer   EmailSender
 }
 
 // NewSharingService creates a new SharingService. The cognito parameter
@@ -43,6 +116,11 @@ func (s *SharingService) SetLangfuse(l *LangfuseService) {
 	s.langfuseS = l
 }
 
+// SetEmailer late-binds the EmailSender used to dispatch SES invite emails.
+func (s *SharingService) SetEmailer(e EmailSender) {
+	s.emailer = e
+}
+
 // InviteRequest is the body for POST /datapacks/:name/share.
 type InviteRequest struct {
 	RecipientEmail string `json:"recipient_email"`
@@ -58,11 +136,12 @@ type InviteResponse struct {
 }
 
 // InviteToDatapack creates a pending invite for the given datapack.
-// If the invitee is not an existing meko user and a CognitoInviter is
-// configured, a Cognito signup invitation email is sent.
+// For new users, a Cognito account is provisioned (email suppressed) and an
+// SES invite email with a temporary password is sent. For existing users, an
+// SES notification email is sent. Both email sends are non-fatal.
 func (s *SharingService) InviteToDatapack(
 	ctx context.Context,
-	datapackID, ownerUserID string,
+	datapackID, ownerUserID, datapackName, datapackDesc, ownerName, ownerEmail string,
 	req InviteRequest,
 ) (*InviteResponse, error) {
 	email := strings.TrimSpace(req.RecipientEmail)
@@ -90,20 +169,48 @@ func (s *SharingService) InviteToDatapack(
 		return nil, err
 	}
 
-	if recipientUserID == nil && s.cognito != nil {
-		if cogErr := s.cognito.InviteUser(ctx, email, false); cogErr != nil {
-			slog.Warn("failed to send cognito signup invite (non-fatal)",
-				"email", email, "error", cogErr,
-			)
-		}
-	}
-
 	slog.Info("invite created",
 		"invite_id", inv.InviteID,
 		"datapack_id", datapackID,
 		"recipient", email,
 		"user_exists", recipientUserID != nil,
 	)
+
+	emailParams := InviteEmailParams{
+		RecipientEmail: email,
+		DatapackName:   datapackName,
+		DatapackDesc:   datapackDesc,
+		OwnerName:      ownerName,
+		OwnerEmail:     ownerEmail,
+		GrantRole:      req.GrantRole,
+		IsExistingUser: recipientUserID != nil,
+	}
+
+	if recipientUserID == nil {
+		// New user: provision Cognito account (suppress Cognito's own email),
+		// then send an SES welcome email with the temporary password.
+		if s.cognito == nil {
+			return nil, fmt.Errorf("invite: cognito not configured — cannot provision account for new user")
+		}
+		tempPwd, pwdErr := genTempPassword()
+		if pwdErr != nil {
+			return nil, fmt.Errorf("invite: failed to generate temp password: %w", pwdErr)
+		}
+		if _, cogErr := s.cognito.CreateUser(ctx, email, tempPwd); cogErr != nil {
+			return nil, fmt.Errorf("invite: cognito create user failed: %w", cogErr)
+		}
+		emailParams.TempPassword = tempPwd
+	}
+
+	if s.emailer != nil {
+		if mailErr := s.emailer.SendInviteEmail(ctx, emailParams); mailErr != nil {
+			slog.Warn("invite: ses email failed (non-fatal)",
+				"invite_id", inv.InviteID, "email", email, "error", mailErr)
+		}
+	} else {
+		slog.Debug("invite: email sender not configured, skipping invite email",
+			"invite_id", inv.InviteID, "email", email)
+	}
 
 	return &InviteResponse{
 		Status:         inv.Status,
@@ -241,12 +348,12 @@ func (s *SharingService) ListDatapackMembers(
 	return &models.DatapackMembersResponse{Members: members}, nil
 }
 
-// ResendInvite re-sends a pending invite. For non-existing users the
-// Cognito signup email is resent; for existing users this is a no-op
-// (they discover invites via GET /incoming-shares).
+// ResendInvite re-sends a pending invite. For new users a fresh temporary
+// password is set in Cognito and an SES email is sent with the new password.
+// For existing users an SES reminder notification is sent.
 func (s *SharingService) ResendInvite(
 	ctx context.Context,
-	datapackID, ownerUserID, inviteID string,
+	datapackID, ownerUserID, datapackName, datapackDesc, ownerName, ownerEmail, inviteID string,
 ) (string, error) {
 	inv, err := s.repo.GetInviteByID(inviteID)
 	if err != nil {
@@ -256,12 +363,47 @@ func (s *SharingService) ResendInvite(
 		return "", fmt.Errorf("invite not found, not pending, or not owned by caller")
 	}
 
-	if inv.RecipientUserID == nil && s.cognito != nil {
-		if cogErr := s.cognito.InviteUser(ctx, inv.RecipientEmail, true); cogErr != nil {
-			slog.Warn("failed to resend cognito invite (non-fatal)",
-				"email", inv.RecipientEmail, "error", cogErr,
-			)
+	slog.Info("resend invite",
+		"invite_id", inviteID,
+		"datapack_id", datapackID,
+		"recipient", inv.RecipientEmail,
+		"user_exists", inv.RecipientUserID != nil,
+	)
+
+	emailParams := InviteEmailParams{
+		RecipientEmail: inv.RecipientEmail,
+		DatapackName:   datapackName,
+		DatapackDesc:   datapackDesc,
+		OwnerName:      ownerName,
+		OwnerEmail:     ownerEmail,
+		GrantRole:      inv.GrantRole,
+		IsExistingUser: inv.RecipientUserID != nil,
+	}
+
+	if inv.RecipientUserID == nil {
+		// New user: reset the Cognito temp password so the fresh SES email
+		// contains a valid credential.
+		if s.cognito == nil {
+			return "", fmt.Errorf("resend: cognito not configured — cannot reset temp password for new user")
 		}
+		tempPwd, pwdErr := genTempPassword()
+		if pwdErr != nil {
+			return "", fmt.Errorf("resend: failed to generate temp password: %w", pwdErr)
+		}
+		if cogErr := s.cognito.ResetTempPassword(ctx, inv.RecipientEmail, tempPwd); cogErr != nil {
+			return "", fmt.Errorf("resend: cognito reset temp password failed: %w", cogErr)
+		}
+		emailParams.TempPassword = tempPwd
+	}
+
+	if s.emailer != nil {
+		if mailErr := s.emailer.SendInviteEmail(ctx, emailParams); mailErr != nil {
+			slog.Warn("resend: ses email failed (non-fatal)",
+				"invite_id", inviteID, "email", inv.RecipientEmail, "error", mailErr)
+		}
+	} else {
+		slog.Debug("resend: email sender not configured, skipping invite email",
+			"invite_id", inviteID, "email", inv.RecipientEmail)
 	}
 
 	return inv.InviteID, nil

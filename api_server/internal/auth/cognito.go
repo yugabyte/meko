@@ -93,6 +93,15 @@ type CognitoAPI interface {
 		params *cip.ChangePasswordInput,
 		optFns ...func(*cip.Options),
 	) (*cip.ChangePasswordOutput, error)
+
+	// AdminSetUserPassword sets a permanent or temporary password for a user
+	// without requiring them to be signed in. Used to refresh temp passwords
+	// when resending invite emails.
+	AdminSetUserPassword(
+		ctx context.Context,
+		params *cip.AdminSetUserPasswordInput,
+		optFns ...func(*cip.Options),
+	) (*cip.AdminSetUserPasswordOutput, error)
 }
 
 // Result holds the tokens returned by a successful login. When
@@ -582,46 +591,69 @@ func (c *CognitoClient) ExchangeCode(
 	}, nil
 }
 
-// InviteUser creates (or re-invites) a user in the Cognito User Pool
-// via AdminCreateUser. Cognito sends them a signup invitation email
-// with a temporary password. Set resend=true to re-deliver the invite
-// for an already-created user.
-func (c *CognitoClient) InviteUser(
+// CreateUser provisions a new Cognito account for the given email using the
+// supplied temporaryPassword. Cognito's own email delivery is suppressed so
+// the caller can send a custom SES email instead. If the user already exists
+// (UsernameExistsException) the call is treated as a no-op and ("", nil) is
+// returned. On success the Cognito sub is returned.
+func (c *CognitoClient) CreateUser(
 	ctx context.Context,
-	email string,
-	resend bool,
-) error {
+	email, temporaryPassword string,
+) (string, error) {
 	input := &cip.AdminCreateUserInput{
-		UserPoolId:             &c.poolID,
-		Username:               &email,
-		DesiredDeliveryMediums: []types.DeliveryMediumType{types.DeliveryMediumTypeEmail},
+		UserPoolId:        &c.poolID,
+		Username:          &email,
+		TemporaryPassword: &temporaryPassword,
+		MessageAction:     types.MessageActionTypeSuppress,
 		UserAttributes: []types.AttributeType{
 			{Name: strPtr("email"), Value: &email},
 			{Name: strPtr("email_verified"), Value: strPtr("true")},
 		},
 	}
-	if resend {
-		input.MessageAction = types.MessageActionTypeResend
-	}
 
-	_, err := c.api.AdminCreateUser(ctx, input)
+	out, err := c.api.AdminCreateUser(ctx, input)
 	if err != nil {
 		var usernameExistsErr *types.UsernameExistsException
 		if errors.As(err, &usernameExistsErr) {
-			slog.Info("cognito invite: user already exists, skipping",
+			slog.Info("cognito create user: user already exists, skipping",
 				"email", email,
 			)
-			return nil
+			return "", nil
 		}
-		slog.Error("cognito invite user failed",
-			"email", email, "resend", resend, "error", err,
-		)
-		return fmt.Errorf("cognito admin create user: %w", err)
+		slog.Error("cognito create user failed", "email", email, "error", err)
+		return "", fmt.Errorf("cognito admin create user: %w", err)
 	}
 
-	slog.Info("cognito invite user succeeded",
-		"email", email, "resend", resend,
-	)
+	var sub string
+	if out.User != nil {
+		for _, attr := range out.User.Attributes {
+			if attr.Name != nil && *attr.Name == "sub" && attr.Value != nil {
+				sub = *attr.Value
+			}
+		}
+	}
+	slog.Info("cognito create user succeeded", "email", email, "sub", sub)
+	return sub, nil
+}
+
+// ResetTempPassword sets a new temporary password for an existing unconfirmed
+// Cognito user. Used when resending an invite so the fresh SES email contains
+// a valid credential.
+func (c *CognitoClient) ResetTempPassword(
+	ctx context.Context,
+	email, temporaryPassword string,
+) error {
+	_, err := c.api.AdminSetUserPassword(ctx, &cip.AdminSetUserPasswordInput{
+		UserPoolId: &c.poolID,
+		Username:   &email,
+		Password:   &temporaryPassword,
+		Permanent:  false,
+	})
+	if err != nil {
+		slog.Error("cognito reset temp password failed", "email", email, "error", err)
+		return fmt.Errorf("cognito admin set user password: %w", err)
+	}
+	slog.Info("cognito reset temp password succeeded", "email", email)
 	return nil
 }
 

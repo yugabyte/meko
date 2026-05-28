@@ -61,6 +61,14 @@ type ServerConfig struct {
 	// endpoint (POST /api/v1/internal/meko-tokens/validate). When
 	// empty, the endpoint returns 503.
 	MCPInternalSecret string
+
+	// SES configuration for invite / share notification emails.
+	// When SESFromAddress is empty, email sending is disabled.
+	SESRegion      string
+	SESFromAddress string
+	// AppURL is the base URL of the Meko web app included in invite emails.
+	// Derived from DeployEnv: prod → https://cloud.mekodata.ai, dev → https://app.mekodev.com.
+	AppURL string
 	// MCPPATFlushInterval controls how often the background
 	// goroutine drains the in-memory last_used_at touch map onto the
 	// database. Zero (the default) falls back to
