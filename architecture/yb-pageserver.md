@@ -177,15 +177,28 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
    with `will_init` taken from the record), and appends to the in-RAM
    buffer. **No walredo, no `ImageRule`** — writes are a straight
    serialise-and-buffer.
-4. Buffered rows live in an in-RAM `Vec<PageRow>` (per timeline) until
-   a flush threshold (default 5 s / 100 MiB) fires.
-5. Flush issues one `INSERT INTO pageserver.pages VALUES (…),(…),…`
-   per batch, gen-checked via a conditional UPDATE on
-   `pageserver.timelines` in the same transaction (see "Generation
-   fencing"). On success, `disk_consistent_lsn` advances on the
-   timeline row.
-6. Reads between flushes can see in-buffer rows: the read path checks
-   the buffer first, then queries PageStore.
+4. Buffered rows live in an in-RAM `Vec<PageRow>` (per timeline) under
+   an `RwLock`. `put` and the flush drain take `.write()`; the
+   snapshot-clone in flush and every reader (`read_chain`,
+   `scan_range`, `read_meta`, `scan_*_range`, `stats`, `should_flush`)
+   takes `.read()`, so concurrent get_page handlers filter the buffer
+   in parallel. The buffer is flushed when either trigger fires
+   (default 5 s / 25 MiB).
+5. Flush snapshots each of the three buffers (`rel`, `slru`, `meta`)
+   under a brief read lock, drops the lock, then issues chunked
+   multi-row INSERTs against `pageserver.pages`, `pageserver.slru_pages`,
+   `pageserver.meta`. Chunks within each table are dispatched in
+   parallel via `stream::iter(...).buffer_unordered(N)` with N=4 for
+   pages, 2 for SLRU pages, 3 for meta. `yb_enable_upsert_mode = true`
+   is `SET` once per connection in `YsqlClient::open_*`, so a chunk
+   retry after a partial flush failure cannot PK-conflict. On success,
+   the snapshot length of each buffer is `drain(0..N)`-ed under a
+   write lock; rows appended during the YB round-trip stay for the
+   next flush.
+6. Reads between flushes (and DURING a flush) see in-buffer rows: the
+   read path checks the buffer first, then queries PageStore — and
+   because the flush only holds the write lock during the brief drain
+   phase, in-flight INSERTed rows remain visible to reads.
 
 Default knobs (configurable via `pageserver.toml` under the
 `yb_page_writer` block):
@@ -193,7 +206,7 @@ Default knobs (configurable via `pageserver.toml` under the
 | Knob | Default | Meaning |
 |---|---:|---|
 | `flush_interval` | 5 s | Time-based flush trigger |
-| `flush_size_bytes` | 100 MiB | Size-based flush trigger |
+| `flush_size_bytes` | 25 MiB | Size-based flush trigger |
 | `flush_poll_interval` | 500 ms | How often the background flusher checks the triggers |
 
 ## Background image materialiser (planned)
@@ -273,6 +286,7 @@ Tracked phases:
 | 4b | ✅ done | **SLRU pages → `pageserver.slru_pages`.** Same image-anchored design as `pages` (hash partition on `(tenant, timeline, kind, segno)`, cluster on `(blknum, is_image, lsn DESC)`); same LATERAL LIMIT 1 reads; same future bg materialiser. `kind` matches `Key::field2`: 0=Clog, 1=MultiXactMembers, 2=MultiXactOffsets. |
 | 4c | ✅ done | **Full-overwrite blobs → `pageserver.meta`.** Rel-size sentinels, dir listings (TenantDir/DbDir/RelDir/SlruDir), aux files, repl origins, two-phase, SLRU dir + segment-size sentinels — everything that isn't a rel-page or SLRU block. Single row per `(tenant, timeline, key, lsn)`; reads = LIMIT 1 at lsn DESC; no walredo. `TimelineWriter::put_batch` now sends the entire batch to PageWriter — the layer-file write is skipped unconditionally. End-state: a fresh tenant with INSERT 500 + UPDATE×2 + multixact + CREATE INDEX produces pages=2889, slru_pages=3, meta=968, blobs=2 (just initdb.tar.zst + tenant-manifest.json — bootstrap artifacts handled outside put_batch). |
 | 4d | 🟡 runtime done; code deletion in progress | **Runtime disable** of every layer-stack-touching path is done as a side-effect of 4a/4b/4c: compaction loop never spawns, `layer.put_batch` is never called, `InMemoryLayer` is never created, layer reads are never dispatched, disk-usage eviction returns `None` (disabled by config), secondary downloader/uploader sit idle (no secondary tenants), heatmaps are empty, GC is a no-op. **Code deletion** is incremental, compile-driven, one module per commit. Done so far: `disk_usage_eviction_task.rs` (−1515 LOC), per-timeline `eviction_task.rs` (−579), `heatmap_layers_downloader.rs` (−264), `timeline/analysis.rs` (−123), `timeline/compaction.rs` (−5154 including cascades). Cumulative ~7.6K LOC removed. **Remaining (each its own session)**: `secondary/` (~3K, ~70 callers in mgr.rs around `TenantSlot::Secondary`), `storage_layer/` + `layer_map.rs` + `disk_btree.rs` (~15K, the `Timeline.layers` field is the gate — ~70 internal methods read it), `timeline/offload.rs` (~160 LOC but 145 mentions in tenant.rs), `init.rs` (load_layer_map), most of `remote_timeline_client/`. Each unwinds carefully. |
+| 4e | ✅ done | **Write-path hardening + perf tuning.** Chunked INSERTs in `put_pages` / `put_slru_pages` / `put_meta` to stay under tokio-postgres's 65535-parameter / "value too large to transmit" caps (500 / 500 / 2000 rows per chunk). `PageWriter::flush()` no longer `mem::take`s the buffer — clones a snapshot under the lock, drops the lock, INSERTs, then `drain(0..N)` under the lock on success. Fixes a race where a concurrent walreceiver `read_chain` on a rel-size sentinel saw `MissingKey` while the buffer was "in transit" to YB, corrupting walingest. Parallel chunk dispatch via `buffer_unordered(4/2/3)`. `yb_enable_upsert_mode = true` set per-connection so chunk retries can't PK-conflict. `state: Mutex` → `RwLock` so concurrent reads parallelise. Default `flush_size_bytes` lowered from 100 MiB → 25 MiB to bound `wait_lsn` tail latency after bulk inserts. End-to-end perf workload (200k rows, 50 MB shared_buffers): UPDATE 19k rows 20.4s → 2.6s; CREATE TABLE AS update_ids 9.0s → 0.55s; zero "slow wait_lsn" warnings. |
 | 5 | ⏳ pending | Replace `metadata` / `index_part.json` / `tenant-manifest.json` with reads/writes against `pageserver.timelines`. Rewrite attach. |
 | 6 | ⏳ deferred | GC: cron that prunes old `pages` rows. User said "figure out separately later". |
 
