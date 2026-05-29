@@ -297,19 +297,10 @@ pub struct YbPageWriterConfig {
     /// Default 100 MiB.
     pub flush_size_bytes: usize,
 
-    /// Threshold for the 10-delta image rule: every Nth row per key
-    /// must be `will_init=true`. Default 10.
-    pub image_chain_limit: usize,
-
     /// Period at which the background flusher polls `should_flush()`.
     /// Default 500 ms.
     #[serde(with = "humantime_serde")]
     pub flush_poll_interval: Duration,
-
-    /// Max concurrent walredo materialisations per `put_batch` call.
-    /// Higher = more parallel walredo subprocess invocations on
-    /// batches that touch many distinct hot keys. Default 8.
-    pub materialise_concurrency: usize,
 }
 
 impl Default for YbPageWriterConfig {
@@ -317,9 +308,7 @@ impl Default for YbPageWriterConfig {
         Self {
             flush_interval: Duration::from_secs(5),
             flush_size_bytes: 100 * 1024 * 1024,
-            image_chain_limit: 10,
             flush_poll_interval: Duration::from_millis(500),
-            materialise_concurrency: 8,
         }
     }
 }

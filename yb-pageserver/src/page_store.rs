@@ -18,12 +18,12 @@
 //!     relnode     BIGINT   NOT NULL,
 //!     forknum     SMALLINT NOT NULL,
 //!     blknum      BIGINT   NOT NULL,
-//!     lsn         BIGINT   NOT NULL,
 //!     is_image    BOOLEAN  NOT NULL,
+//!     lsn         BIGINT   NOT NULL,
 //!     will_init   BOOLEAN  NOT NULL,
 //!     payload     BYTEA    NOT NULL,
 //!     PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-//!                  blknum, lsn DESC)
+//!                  blknum, is_image, lsn DESC)
 //! );
 //! ```
 //!
@@ -32,9 +32,13 @@
 //! reads are one tablet hash lookup; per-fork range scans (basebackup,
 //! image-layer materialisation) are one tablet's range scan.
 //!
-//! The 10-delta image rule still holds: every chain returned by
-//! `read_chain` / `scan_range` with `limit = 10` is guaranteed to
-//! contain at least one `will_init=true` row.
+//! `is_image` sits in the clustering key between `blknum` and `lsn` so
+//! the "most recent image at or before target_lsn" lookup is a single
+//! seek (`AND is_image=TRUE ORDER BY lsn DESC LIMIT 1`). Reads anchor
+//! the chain on that image and return the deltas above it. Chain length
+//! is no longer a write-time invariant — a background image materialiser
+//! creates fresh images for hot keys to keep chains short. Reads remain
+//! correct without it, just potentially slower.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -164,12 +168,12 @@ impl PageStore {
                 relnode      BIGINT   NOT NULL,
                 forknum      SMALLINT NOT NULL,
                 blknum       BIGINT   NOT NULL,
-                lsn          BIGINT   NOT NULL,
                 is_image     BOOLEAN  NOT NULL,
+                lsn          BIGINT   NOT NULL,
                 will_init    BOOLEAN  NOT NULL,
                 payload      BYTEA    NOT NULL,
                 PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                             blknum, lsn DESC)
+                             blknum, is_image, lsn DESC)
             )",
             self.schema
         );
@@ -270,16 +274,73 @@ impl PageStore {
     }
 
     /// Per-key chain read. `key` must be a valid relation-page Key.
+    ///
+    /// Fast path: a CTE seeks the latest `is_image=TRUE` row at LSN ≤
+    /// `target_lsn` and returns it plus all delta rows above it (up to
+    /// `target_lsn`). With `is_image` in the clustering key, this is a
+    /// single tablet seek for the anchor and a small range scan for the
+    /// deltas.
+    ///
+    /// Slow path: if no image exists at or before `target_lsn`, fall
+    /// back to scanning the per-key chain LSN-descending and walking
+    /// rows until a `will_init=true` row is found. This is what gets
+    /// hit for blocks the background image materialiser hasn't reached
+    /// yet, or freshly-written blocks whose first record was a
+    /// will_init delta (page creation). Correct in all cases; only
+    /// slower because the will_init scan isn't index-seek-friendly.
     pub async fn read_chain(
         &self,
         tenant: TenantId,
         timeline: TimelineId,
         key: &[u8],
         target_lsn: Lsn,
-        limit: usize,
     ) -> Result<Vec<PageRow>> {
         let (sp, db, rel, fork, blk) = key_columns(key)?;
-        let sql = format!(
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+        let target = target_lsn.0 as i64;
+
+        // Fast path: anchor on latest image ≤ target_lsn.
+        let fast_sql = format!(
+            "WITH anchor AS ( \
+                 SELECT lsn AS anchor_lsn \
+                 FROM \"{schema}\".pages \
+                 WHERE tenant_id=$1 AND timeline_id=$2 \
+                   AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
+                   AND forknum=$6 AND blknum=$7 \
+                   AND is_image=TRUE AND lsn <= $8 \
+                 ORDER BY lsn DESC LIMIT 1 \
+             ) \
+             SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                    p.lsn, p.is_image, p.will_init, p.payload \
+             FROM \"{schema}\".pages p, anchor \
+             WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+               AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
+               AND p.forknum=$6 AND p.blknum=$7 \
+               AND p.lsn >= anchor.anchor_lsn AND p.lsn <= $8 \
+             ORDER BY p.lsn DESC",
+            schema = self.schema
+        );
+        let fast_rows = self
+            .client
+            .query(
+                &fast_sql,
+                &[
+                    &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk, &target,
+                ],
+            )
+            .await
+            .context("read_chain fast")?;
+        if !fast_rows.is_empty() {
+            return fast_rows.into_iter().map(row_to_page).collect();
+        }
+
+        // Slow path: no image. Walk the chain LSN-desc until a will_init
+        // row is found (image OR will_init delta). The is_image clustering
+        // column means a single block's rows are split into two clusters
+        // (true, false); the chain seen here lives entirely in the
+        // is_image=false cluster.
+        let slow_sql = format!(
             "SELECT spcnode, dbnode, relnode, forknum, blknum, \
                     lsn, is_image, will_init, payload \
              FROM \"{}\".pages \
@@ -287,54 +348,37 @@ impl PageStore {
                AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
                AND forknum=$6 AND blknum=$7 \
                AND lsn <= $8 \
-             ORDER BY lsn DESC LIMIT $9",
+             ORDER BY lsn DESC",
             self.schema
         );
-        let rows = self
+        let slow_rows = self
             .client
             .query(
-                &sql,
+                &slow_sql,
                 &[
-                    &tenant.to_string(),
-                    &timeline.to_string(),
-                    &sp,
-                    &db,
-                    &rel,
-                    &fork,
-                    &blk,
-                    &(target_lsn.0 as i64),
-                    &(limit as i64),
+                    &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk, &target,
                 ],
             )
             .await
-            .context("read_chain")?;
-        rows.into_iter().map(row_to_page).collect()
-    }
-
-    pub async fn read_chains(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-        keys: &[Bytes],
-        target_lsn: Lsn,
-        limit: usize,
-    ) -> Result<HashMap<Bytes, Vec<PageRow>>> {
-        let mut out = HashMap::with_capacity(keys.len());
-        for key in keys {
-            let chain = self
-                .read_chain(tenant, timeline, key, target_lsn, limit)
-                .await?;
-            out.insert(key.clone(), chain);
+            .context("read_chain slow")?;
+        let mut chain = Vec::with_capacity(slow_rows.len());
+        for r in slow_rows {
+            let row = row_to_page(r)?;
+            let anchor = row.will_init;
+            chain.push(row);
+            if anchor {
+                break;
+            }
         }
-        Ok(out)
+        Ok(chain)
     }
 
     /// Range scan: return all chains for relation-page keys in `range`
-    /// at LSN ≤ `target_lsn`, with at most `per_key_limit` rows per key.
+    /// at LSN ≤ `target_lsn`.
     ///
-    /// Returns a `HashMap` keyed by the 18-byte Key bytes. With the
-    /// 10-delta invariant and `per_key_limit = 10`, every chain
-    /// contains an anchor.
+    /// Returns a `HashMap` keyed by the 18-byte Key bytes. Each chain is
+    /// LSN-descending and truncated at the first `will_init=true` row
+    /// (image OR init-delta) — older rows are shadowed by that anchor.
     ///
     /// Implementation: detects the range shape and picks the most
     /// tablet-local SQL.
@@ -356,7 +400,6 @@ impl PageStore {
         timeline: TimelineId,
         range: Range<Key>,
         target_lsn: Lsn,
-        per_key_limit: usize,
     ) -> Result<HashMap<Bytes, Vec<PageRow>>> {
         if range.start.field1 != 0 || range.end.field1 > 1 {
             bail!(
@@ -442,15 +485,20 @@ impl PageStore {
                 .context("scan_range cross-fork")?
         };
 
-        // Bucket rows by key, capping each chain at `per_key_limit`.
+        // Bucket rows by key. Each chain comes back LSN-descending (per
+        // the SQL ORDER BY); truncate at the first will_init=true row
+        // since older rows are shadowed by that anchor.
         let mut by_key: HashMap<Bytes, Vec<PageRow>> = HashMap::new();
         for r in rows {
             let row = row_to_page(r)?;
             let key = row.key.clone();
             let chain = by_key.entry(key).or_default();
-            if chain.len() < per_key_limit {
-                chain.push(row);
+            // If this key's chain already includes an anchor, skip
+            // older rows.
+            if chain.last().is_some_and(|last| last.will_init) {
+                continue;
             }
+            chain.push(row);
         }
         Ok(by_key)
     }
@@ -762,7 +810,7 @@ mod tests {
             .unwrap();
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(100), 10)
+            .read_chain(tenant, timeline, &k, Lsn(100))
             .await
             .unwrap();
         assert_eq!(got.len(), 3);
@@ -797,8 +845,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_chain_respects_target_lsn_and_limit() {
-        let (store, schema) = make_store("limit").await;
+    async fn read_chain_returns_image_anchor_and_deltas_above() {
+        // 1 image at LSN 10, then 12 deltas at LSNs 20..130.
+        // read_chain at high target → image at 10 + all 12 deltas = 13 rows.
+        // read_chain at LSN 50 → image at 10 + 4 deltas (20, 30, 40, 50) = 5 rows.
+        // read_chain at LSN 5 → empty (no anchor at or below 5).
+        let (store, schema) = make_store("anchor").await;
         let tenant = rand_tenant();
         let timeline = rand_timeline();
         let k = page_key(1663, 5, 16384, 0, 1);
@@ -810,23 +862,55 @@ mod tests {
         store.put_pages(tenant, timeline, &rows).await.unwrap();
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(10_000), 10)
+            .read_chain(tenant, timeline, &k, Lsn(10_000))
             .await
             .unwrap();
-        assert_eq!(got.len(), 10);
+        assert_eq!(got.len(), 13);
         assert_eq!(got.first().unwrap().lsn, Lsn(130));
+        assert_eq!(got.last().unwrap().lsn, Lsn(10));
+        assert!(got.last().unwrap().is_image);
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(50), 10)
+            .read_chain(tenant, timeline, &k, Lsn(50))
             .await
             .unwrap();
         assert_eq!(got.len(), 5);
+        assert_eq!(got.first().unwrap().lsn, Lsn(50));
+        assert_eq!(got.last().unwrap().lsn, Lsn(10));
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(5), 10)
+            .read_chain(tenant, timeline, &k, Lsn(5))
             .await
             .unwrap();
         assert!(got.is_empty());
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn read_chain_slow_path_walks_to_will_init_delta() {
+        // No image. A will_init delta at LSN 10, then plain deltas at
+        // 20, 30, 40. Older plain deltas at LSNs 1, 5 below the anchor.
+        // Read at LSN 100 should return rows 40, 30, 20, 10 (anchor)
+        // — older rows are shadowed.
+        let (store, schema) = make_store("slow_will_init").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let k = page_key(1663, 5, 16384, 0, 2);
+
+        let rows = vec![
+            page_row(k.clone(), 1, false, false, b"d-old1"),
+            page_row(k.clone(), 5, false, false, b"d-old2"),
+            page_row(k.clone(), 10, false, true, b"init-delta"),
+            page_row(k.clone(), 20, false, false, b"d20"),
+            page_row(k.clone(), 30, false, false, b"d30"),
+            page_row(k.clone(), 40, false, false, b"d40"),
+        ];
+        store.put_pages(tenant, timeline, &rows).await.unwrap();
+        let got = store.read_chain(tenant, timeline, &k, Lsn(100)).await.unwrap();
+        assert_eq!(got.len(), 4);
+        let lsns: Vec<u64> = got.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns, vec![40, 30, 20, 10]);
+        assert!(got.last().unwrap().will_init);
         drop_schema(&store, &schema).await;
     }
 
@@ -851,7 +935,7 @@ mod tests {
         let range = Key::from_slice(&page_key(1663, 5, 16384, 0, 1))
             ..Key::from_slice(&page_key(1663, 5, 16384, 0, 4));
         let got = store
-            .scan_range(tenant, timeline, range, Lsn(100), 10)
+            .scan_range(tenant, timeline, range, Lsn(100))
             .await
             .unwrap();
         // 3 keys (blknum 1, 2, 3); each with 2 rows.
@@ -883,7 +967,7 @@ mod tests {
         let range = Key::from_slice(&page_key(1663, 5, 16384, 0, 0))
             ..Key::from_slice(&page_key(1663, 5, 16386, 0, 0));
         let got = store
-            .scan_range(tenant, timeline, range, Lsn(100), 10)
+            .scan_range(tenant, timeline, range, Lsn(100))
             .await
             .unwrap();
         // 6 distinct keys (3 blocks × 2 rels).
@@ -903,7 +987,7 @@ mod tests {
         e[0] = 0x61;
         let range = Key::from_slice(&s)..Key::from_slice(&e);
         let err = store
-            .scan_range(tenant, timeline, range, Lsn(100), 10)
+            .scan_range(tenant, timeline, range, Lsn(100))
             .await
             .unwrap_err();
         let msg = format!("{err:#}");
@@ -935,15 +1019,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            store.read_chain(t1, tl1, &k, Lsn(100), 5).await.unwrap()[0].payload.as_ref(),
+            store.read_chain(t1, tl1, &k, Lsn(100)).await.unwrap()[0].payload.as_ref(),
             b"t1tl1"
         );
         assert_eq!(
-            store.read_chain(t2, tl1, &k, Lsn(100), 5).await.unwrap()[0].payload.as_ref(),
+            store.read_chain(t2, tl1, &k, Lsn(100)).await.unwrap()[0].payload.as_ref(),
             b"t2tl1"
         );
         assert_eq!(
-            store.read_chain(t1, tl2, &k, Lsn(100), 5).await.unwrap()[0].payload.as_ref(),
+            store.read_chain(t1, tl2, &k, Lsn(100)).await.unwrap()[0].payload.as_ref(),
             b"t1tl2"
         );
         drop_schema(&store, &schema).await;
@@ -970,7 +1054,7 @@ mod tests {
             .await
             .unwrap();
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(u64::MAX >> 1), 5)
+            .read_chain(tenant, timeline, &k, Lsn(u64::MAX >> 1))
             .await
             .unwrap();
         assert_eq!(got.len(), 1);

@@ -1466,10 +1466,15 @@ impl Timeline {
         // sentinels) falls through to the layer-stack path; layer
         // files are still populated by dual-write so reads are
         // correct.
+        //
+        // The check is stricter than just `field1 == 0`: SLRU-style
+        // ranges like `[(0,0,0,0,0,0)..(0,0,0,0,0,1))` have field1=0
+        // but field4=0, so they're not relation blocks. We require
+        // the range's `start` to be a valid relation block (field4
+        // != 0 and field6 != u32::MAX), which is the contract
+        // PageStore's typed-column schema enforces.
         let all_page_keys = self.page_writer.is_some()
-            && query.total_keyspace().ranges.iter().all(|r| {
-                r.start.field1 == 0 && r.end.field1 <= 1
-            });
+            && query.total_keyspace().ranges.iter().all(|r| r.start.is_rel_block_key());
         if all_page_keys && let Some(page_writer) = self.page_writer.clone() {
             let redo_attempt_type = if ctx.task_kind() == TaskKind::Compaction {
                 RedoAttemptType::LegacyCompaction
@@ -1662,14 +1667,17 @@ impl Timeline {
 
     /// yb-pageserver row-per-page read path. Replaces the LayerMap
     /// traversal: per requested key at its target LSN, read the chain
-    /// from `PageWriter::read_chain` (which blends in-RAM buffered
+    /// from `PageWriter::scan_range` (which blends in-RAM buffered
     /// rows with `pageserver.pages`), decode into walredo's
     /// `ValueReconstructState` shape, drive `reconstruct_value` to
     /// produce the final 8 KiB page.
     ///
-    /// The 10-delta image rule enforced at write time means each
-    /// chain is bounded at `IMAGE_CHAIN_LIMIT` (10) rows and is
-    /// guaranteed to contain a `will_init=true` anchor.
+    /// Each chain is LSN-descending and pre-truncated at the latest
+    /// `will_init=true` anchor (image or init-delta). Chain length is
+    /// bounded by the background image materialiser, not at write time,
+    /// so a cold key may produce a long chain — correctness is
+    /// guaranteed; performance scales with how recently the bg task
+    /// last touched the key.
     async fn get_vectored_via_page_writer(
         &self,
         page_writer: Arc<crate::page_writer::PageWriter>,
@@ -1677,25 +1685,13 @@ impl Timeline {
         redo_attempt_type: RedoAttemptType,
         _ctx: &RequestContext,
     ) -> Result<BTreeMap<Key, Result<Bytes, PageReconstructError>>, GetVectoredError> {
-        use crate::image_rule::IMAGE_CHAIN_LIMIT;
-
         let total_keyspace = query.total_keyspace();
 
-        // Per range: one PageStore::scan_range call. With the typed-
-        // columns hash partition, an "all blocks of one fork" range is
-        // a single-tablet hash-pinned range scan. Bounded by the
-        // 10-delta invariant at `≤ stored_keys_in_range × 10` rows —
-        // memory cost matches what the upstream layer-file path would
-        // pay for the same data.
-        //
-        // Non-page-key ranges aren't expected here: the caller (the
-        // `all_page_keys` check in `get_vectored_impl`) only dispatches
-        // when every range stays in the relation-page namespace.
         let mut chains_by_key: std::collections::HashMap<Key, Vec<crate::page_store::PageRow>> =
             std::collections::HashMap::new();
         for range in &total_keyspace.ranges {
             let scan = page_writer
-                .scan_range(range.clone(), query.high_watermark_lsn()?, IMAGE_CHAIN_LIMIT)
+                .scan_range(range.clone(), query.high_watermark_lsn()?)
                 .await
                 .map_err(|e| {
                     GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
@@ -1712,9 +1708,13 @@ impl Timeline {
             // Filter chain rows to those at lsn ≤ target_lsn (in case
             // the caller-asked LSN differs across keys); the chain is
             // already LSN-descending so we just truncate.
-            let chain: Vec<_> = chain.into_iter().filter(|r| r.lsn <= target_lsn).collect();
-            // Truncate at the first will_init=true row.
-            let chain = truncate_chain_at_anchor(chain);
+            let mut chain: Vec<_> =
+                chain.into_iter().filter(|r| r.lsn <= target_lsn).collect();
+            // Truncate at the first will_init=true row — older rows are
+            // shadowed by that anchor.
+            if let Some(idx) = chain.iter().position(|r| r.will_init) {
+                chain.truncate(idx + 1);
+            }
             let walredo_self = self.myself.upgrade().expect("&self method holds the arc");
             futs.push(async move {
                 let data = match chain_to_value_reconstruct_state(&chain) {
@@ -3337,38 +3337,30 @@ impl Timeline {
                 .unwrap_or(conf.default_tenant_conf.relsize_snapshot_cache_capacity)
         };
 
-        // Build the row-per-page writer if dual-write is enabled
-        // (i.e. resources.page_store is Some and we have a walredo
-        // manager to drive the 10-delta rule's force-image path). Both
-        // signals come from yb-pageserver's startup-time YB config; the
-        // upstream pageserver builds a Timeline with `page_store=None`.
-        let (page_writer, page_writer_flush_task) =
-            match (resources.page_store.as_ref(), walredo_mgr.as_ref()) {
-                (Some(ps), Some(wm)) => {
-                    let pw_cfg = &conf.yb_page_writer;
-                    let materializer = Arc::new(
-                        crate::page_materializer::WalRedoMaterializer::new(
-                            wm.clone(),
-                            pg_version,
-                        ),
-                    );
-                    let writer = Arc::new(crate::page_writer::PageWriter::with_options(
-                        tenant_shard_id.tenant_id,
-                        timeline_id,
-                        ps.clone(),
-                        materializer as Arc<dyn crate::page_writer::Materializer>,
-                        crate::page_writer::FlushPolicy {
-                            max_age: pw_cfg.flush_interval,
-                            max_bytes: pw_cfg.flush_size_bytes,
-                        },
-                        pw_cfg.image_chain_limit,
-                        pw_cfg.materialise_concurrency,
-                    ));
-                    let task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
-                    (Some(writer), Some(task))
-                }
-                _ => (None, None),
-            };
+        // Build the row-per-page writer if a PageStore is configured
+        // (resources.page_store comes from yb-pageserver's startup-time
+        // YB config; the upstream pageserver builds a Timeline with
+        // `page_store=None`). PageWriter is now pure passthrough — no
+        // walredo at write time — so the walredo manager isn't needed
+        // here. A future background image-materialiser task will use
+        // the walredo manager directly to compact long chains.
+        let (page_writer, page_writer_flush_task) = match resources.page_store.as_ref() {
+            Some(ps) => {
+                let pw_cfg = &conf.yb_page_writer;
+                let writer = Arc::new(crate::page_writer::PageWriter::new(
+                    tenant_shard_id.tenant_id,
+                    timeline_id,
+                    ps.clone(),
+                    crate::page_writer::FlushPolicy {
+                        max_age: pw_cfg.flush_interval,
+                        max_bytes: pw_cfg.flush_size_bytes,
+                    },
+                ));
+                let task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
+                (Some(writer), Some(task))
+            }
+            None => (None, None),
+        };
 
         Arc::new_cyclic(|myself| {
             let metrics = Arc::new(TimelineMetrics::new(
@@ -8500,19 +8492,6 @@ mod tests {
 
         layers.get_from_desc(&desc)
     }
-}
-
-/// Drop chain rows older than the first `will_init=true` row. Input
-/// is sorted LSN-descending. Used by the row-store read path before
-/// handing the chain to walredo so old deltas below an anchor don't
-/// confuse reconstruction.
-fn truncate_chain_at_anchor(
-    mut chain: Vec<crate::page_store::PageRow>,
-) -> Vec<crate::page_store::PageRow> {
-    if let Some(idx) = chain.iter().position(|r| r.will_init) {
-        chain.truncate(idx + 1);
-    }
-    chain
 }
 
 /// Decode a `PageWriter::read_chain` result into walredo's expected

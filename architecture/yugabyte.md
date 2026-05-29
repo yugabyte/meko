@@ -187,33 +187,59 @@ only. Provisioned alongside `public.blobs` / `public.wals` by
 
 ### `pageserver.pages`
 
-One row per `(Key, LSN)`. The 10-delta image rule (enforced at write
-time by `yb-pageserver`'s `ImageRule`) guarantees that any chain of
-≤ 10 rows for a given key contains at least one `will_init=true` entry,
-so the read query plans as a single bounded range scan.
+One row per `(block, LSN)`. Holds **relation pages only** —
+`Key::is_rel_block_key()` (`field1 == 0x00`, `field4 != 0`,
+`field6 != 0xffffffff`). Non-page keys (SLRUs, metadata, dir listings,
+aux files, repl origins, rel-size sentinels) continue through
+`public.blobs`. Hash partition by `(tenant, timeline, spcnode, dbnode,
+relnode, forknum)` so each fork's whole block-set lives on one tablet.
+Clustering by `(blknum, is_image, lsn DESC)` means a per-block image
+lookup is a single seek, not a scan.
 
 ```sql
 CREATE TABLE pageserver.pages (
-    tenant_id    TEXT    NOT NULL,
-    timeline_id  TEXT    NOT NULL,
-    key          BYTEA   NOT NULL,      -- 18-byte pageserver_api::key::Key
-    lsn          BIGINT  NOT NULL,      -- u64 stored as i64 (real LSNs << 2^63)
-    is_image     BOOLEAN NOT NULL,
-    will_init    BOOLEAN NOT NULL,
-    payload      BYTEA   NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+    tenant_id    TEXT     NOT NULL,
+    timeline_id  TEXT     NOT NULL,
+    spcnode      BIGINT   NOT NULL,
+    dbnode       BIGINT   NOT NULL,
+    relnode      BIGINT   NOT NULL,
+    forknum      SMALLINT NOT NULL,
+    blknum       BIGINT   NOT NULL,
+    is_image     BOOLEAN  NOT NULL,
+    lsn          BIGINT   NOT NULL,    -- u64 stored as i64 (real LSNs << 2^63)
+    will_init    BOOLEAN  NOT NULL,
+    payload      BYTEA    NOT NULL,
+    PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
+                 blknum, is_image, lsn DESC)
 );
 ```
 
-Read query (one round trip, hash to one tablet, scan ≤ 10 rows):
+Read query — image-anchored CTE (fast path: anchor seek + small range scan
+above the anchor):
 
 ```sql
+WITH anchor AS (
+    SELECT lsn AS anchor_lsn FROM pageserver.pages
+    WHERE tenant_id=$1 AND timeline_id=$2
+      AND spcnode=$3 AND dbnode=$4 AND relnode=$5
+      AND forknum=$6 AND blknum=$7
+      AND is_image=TRUE AND lsn <= $8
+    ORDER BY lsn DESC LIMIT 1
+)
 SELECT lsn, is_image, will_init, payload
-FROM pageserver.pages
-WHERE tenant_id = $1 AND timeline_id = $2 AND key = $3 AND lsn <= $4
-ORDER BY lsn DESC
-LIMIT 10;
+FROM pageserver.pages p, anchor
+WHERE p.tenant_id=$1 AND p.timeline_id=$2
+  AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5
+  AND p.forknum=$6 AND p.blknum=$7
+  AND p.lsn >= anchor.anchor_lsn AND p.lsn <= $8
+ORDER BY p.lsn DESC;
 ```
+
+If no image exists for the block (`anchor` CTE empty), `read_chain`
+falls back to a plain LSN-descending scan and walks rows until it hits
+a `will_init=true` delta. This is the cold path; a background image
+materialiser ([Phase 3e](yb-pageserver.md#background-image-materialiser-planned))
+keeps it rare.
 
 ### `pageserver.timelines`
 
@@ -238,8 +264,8 @@ CREATE TABLE pageserver.timelines (
 );
 ```
 
-See [`yb-pageserver.md`](yb-pageserver.md) for the design, the 10-delta
-rule, and the implementation roadmap.
+See [`yb-pageserver.md`](yb-pageserver.md) for the design, the
+image-anchored read path, and the implementation roadmap.
 
 ## `storage_controller` schema
 
@@ -344,14 +370,19 @@ CREATE TABLE public.wals (
 CREATE SCHEMA IF NOT EXISTS pageserver;
 
 CREATE TABLE pageserver.pages (
-    tenant_id    TEXT    NOT NULL,
-    timeline_id  TEXT    NOT NULL,
-    key          BYTEA   NOT NULL,
-    lsn          BIGINT  NOT NULL,
-    is_image     BOOLEAN NOT NULL,
-    will_init    BOOLEAN NOT NULL,
-    payload      BYTEA   NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+    tenant_id    TEXT     NOT NULL,
+    timeline_id  TEXT     NOT NULL,
+    spcnode      BIGINT   NOT NULL,
+    dbnode       BIGINT   NOT NULL,
+    relnode      BIGINT   NOT NULL,
+    forknum      SMALLINT NOT NULL,
+    blknum       BIGINT   NOT NULL,
+    is_image     BOOLEAN  NOT NULL,
+    lsn          BIGINT   NOT NULL,
+    will_init    BOOLEAN  NOT NULL,
+    payload      BYTEA    NOT NULL,
+    PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
+                 blknum, is_image, lsn DESC)
 );
 
 CREATE TABLE pageserver.timelines (

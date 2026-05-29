@@ -500,6 +500,13 @@ impl StorageController {
         // Non-page keys (SLRUs, metadata, dir listings, aux, repl
         // origins, rel-size sentinels) keep going through the layer-
         // file path in `public.blobs`.
+        //
+        // `is_image` sits between `blknum` and `lsn` in the clustering
+        // key so a per-block image lookup (`AND is_image=TRUE ORDER BY
+        // lsn DESC LIMIT 1`) is a single seek, not a scan. Reads use a
+        // CTE anchored on the most recent image; the chain bound is now
+        // a pure storage optimisation handled by a background image
+        // materialiser, not a write-time invariant.
         client
             .batch_execute(
                 "CREATE TABLE IF NOT EXISTS pageserver.pages (
@@ -510,12 +517,12 @@ impl StorageController {
                     relnode      BIGINT   NOT NULL,
                     forknum      SMALLINT NOT NULL,
                     blknum       BIGINT   NOT NULL,
-                    lsn          BIGINT   NOT NULL,
                     is_image     BOOLEAN  NOT NULL,
+                    lsn          BIGINT   NOT NULL,
                     will_init    BOOLEAN  NOT NULL,
                     payload      BYTEA    NOT NULL,
                     PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                                 blknum, lsn DESC)
+                                 blknum, is_image, lsn DESC)
                 )",
             )
             .await
