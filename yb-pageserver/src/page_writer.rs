@@ -31,7 +31,9 @@ use utils::lsn::Lsn;
 use wal_decoder::models::value::Value;
 use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
-use crate::page_store::{PageRow, PageStore};
+use pageserver_api::reltag::SlruKind;
+
+use crate::page_store::{PageRow, PageStore, SlruPageRow};
 
 /// Defaults from the project plan: flush every 5 seconds or every 100 MiB,
 /// whichever comes first.
@@ -61,6 +63,7 @@ pub struct PageWriter {
 
 struct WriterState {
     buffer: Vec<PageRow>,
+    slru_buffer: Vec<SlruPageRow>,
     bytes_in_buffer: usize,
     opened_at: Option<Instant>,
     rows_written: u64,
@@ -71,6 +74,7 @@ pub struct WriterStats {
     pub rows_written: u64,
     pub bytes_in_buffer: usize,
     pub buffered_rows: usize,
+    pub buffered_slru_rows: usize,
 }
 
 impl PageWriter {
@@ -87,6 +91,7 @@ impl PageWriter {
             policy,
             state: Mutex::new(WriterState {
                 buffer: Vec::new(),
+                slru_buffer: Vec::new(),
                 bytes_in_buffer: 0,
                 opened_at: None,
                 rows_written: 0,
@@ -95,30 +100,41 @@ impl PageWriter {
     }
 
     /// Append a batch of entries to the in-RAM buffer. Does not flush.
-    /// Non-relation-page entries are silently skipped — those flow
-    /// through the layer-file path in `public.blobs`, written by
-    /// `TimelineWriter::put_batch`'s `layer.put_batch` call.
+    /// Routes:
+    /// - relation-page keys → `pageserver.pages` (rel buffer)
+    /// - SLRU block keys → `pageserver.slru_pages` (slru buffer)
+    /// - everything else (metadata, dir listings, aux, repl origins,
+    ///   rel-size sentinels, SLRU dir/segment-size sentinels) silently
+    ///   skipped — those still flow through the layer-file path in
+    ///   `public.blobs` until Phase 4c migrates them.
     pub async fn put(&self, entries: &[(Key, Lsn, Value)]) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
-        let mut rows = Vec::with_capacity(entries.len());
+        let mut rel_rows = Vec::with_capacity(entries.len());
+        let mut slru_rows = Vec::new();
         for (key, lsn, value) in entries {
-            if !key.is_rel_block_key() {
-                continue;
+            if key.is_rel_block_key() {
+                rel_rows.push(build_page_row(*key, *lsn, value)?);
+            } else if key.is_slru_block_key() {
+                slru_rows.push(build_slru_page_row(*key, *lsn, value)?);
             }
-            rows.push(build_page_row(*key, *lsn, value)?);
         }
-        if rows.is_empty() {
+        if rel_rows.is_empty() && slru_rows.is_empty() {
             return Ok(());
         }
         let mut s = self.state.lock().await;
         if s.opened_at.is_none() {
             s.opened_at = Some(Instant::now());
         }
-        for row in rows {
+        for row in rel_rows {
             s.bytes_in_buffer += row_size(&row);
             s.buffer.push(row);
+            s.rows_written += 1;
+        }
+        for row in slru_rows {
+            s.bytes_in_buffer += slru_row_size(&row);
+            s.slru_buffer.push(row);
             s.rows_written += 1;
         }
         Ok(())
@@ -199,18 +215,26 @@ impl PageWriter {
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
     /// the buffer is empty. Resets the policy timer.
     pub async fn flush(&self) -> Result<()> {
-        let rows = {
+        let (rel_rows, slru_rows) = {
             let mut s = self.state.lock().await;
             s.bytes_in_buffer = 0;
             s.opened_at = None;
-            std::mem::take(&mut s.buffer)
+            (
+                std::mem::take(&mut s.buffer),
+                std::mem::take(&mut s.slru_buffer),
+            )
         };
-        if rows.is_empty() {
-            return Ok(());
+        if !rel_rows.is_empty() {
+            self.page_store
+                .put_pages(self.tenant_id, self.timeline_id, &rel_rows)
+                .await?;
         }
-        self.page_store
-            .put_pages(self.tenant_id, self.timeline_id, &rows)
-            .await
+        if !slru_rows.is_empty() {
+            self.page_store
+                .put_slru_pages(self.tenant_id, self.timeline_id, &slru_rows)
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn should_flush(&self) -> bool {
@@ -232,7 +256,78 @@ impl PageWriter {
             rows_written: s.rows_written,
             bytes_in_buffer: s.bytes_in_buffer,
             buffered_rows: s.buffer.len(),
+            buffered_slru_rows: s.slru_buffer.len(),
         }
+    }
+
+    /// Per-block SLRU chain read, blending the in-RAM SLRU buffer with
+    /// PageStore. Used by the timeline's vectored read for SLRU keys.
+    pub async fn read_slru_chain(
+        &self,
+        kind: SlruKind,
+        segno: u32,
+        blknum: u32,
+        target_lsn: Lsn,
+    ) -> Result<Vec<SlruPageRow>> {
+        let mut buffered: Vec<SlruPageRow> = {
+            let s = self.state.lock().await;
+            s.slru_buffer
+                .iter()
+                .filter(|r| {
+                    r.kind == kind && r.segno == segno && r.blknum == blknum
+                        && r.lsn <= target_lsn
+                })
+                .cloned()
+                .collect()
+        };
+        let persisted = self
+            .page_store
+            .read_slru_chain(self.tenant_id, self.timeline_id, kind, segno, blknum, target_lsn)
+            .await?;
+        buffered.extend(persisted);
+        buffered.sort_by(|a, b| b.lsn.cmp(&a.lsn));
+        if let Some(idx) = buffered.iter().position(|r| r.will_init) {
+            buffered.truncate(idx + 1);
+        }
+        Ok(buffered)
+    }
+
+    /// Range scan over an SLRU segment, blending buffered + persisted.
+    /// `blknum_range` lives within one `(kind, segno)`.
+    pub async fn scan_slru_range(
+        &self,
+        kind: SlruKind,
+        segno: u32,
+        blknum_range: std::ops::Range<u32>,
+        target_lsn: Lsn,
+    ) -> Result<std::collections::HashMap<u32, Vec<SlruPageRow>>> {
+        let persisted = self
+            .page_store
+            .scan_slru_range(self.tenant_id, self.timeline_id, kind, segno, blknum_range.clone(), target_lsn)
+            .await?;
+        let buffered: Vec<SlruPageRow> = {
+            let s = self.state.lock().await;
+            s.slru_buffer
+                .iter()
+                .filter(|r| {
+                    r.kind == kind && r.segno == segno
+                        && r.blknum >= blknum_range.start && r.blknum < blknum_range.end
+                        && r.lsn <= target_lsn
+                })
+                .cloned()
+                .collect()
+        };
+        let mut out: std::collections::HashMap<u32, Vec<SlruPageRow>> = persisted;
+        for row in buffered {
+            out.entry(row.blknum).or_default().push(row);
+        }
+        for chain in out.values_mut() {
+            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn));
+            if let Some(idx) = chain.iter().position(|r| r.will_init) {
+                chain.truncate(idx + 1);
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -304,15 +399,15 @@ pub fn extract_triples(batch: &SerializedValueBatch) -> Result<Vec<(Key, Lsn, Va
     Ok(out)
 }
 
-/// Build a copy of `batch` containing only entries whose key is NOT a
-/// relation-page key. Used by `TimelineWriter::put_batch` to remove
-/// rel-page entries from the layer-file write — they live in
-/// `pageserver.pages` via `PageWriter` instead.
+/// Build a copy of `batch` containing only entries whose key is neither
+/// a relation-page key nor an SLRU block key. Used by
+/// `TimelineWriter::put_batch` to keep rel-page + SLRU writes out of
+/// the layer-file path — those live in `pageserver.pages` /
+/// `pageserver.slru_pages` via `PageWriter` instead.
 ///
-/// Returns `None` when the filtered batch would be empty, so the caller
-/// can skip `layer.put_batch` entirely. (Empty batches still cost a
-/// layer flush handshake on the layer-stack side.)
-pub fn extract_non_rel_page_batch(batch: &SerializedValueBatch) -> Option<SerializedValueBatch> {
+/// Returns `None` when the filtered batch would be empty so the caller
+/// can skip `layer.put_batch` entirely.
+pub fn extract_non_row_store_batch(batch: &SerializedValueBatch) -> Option<SerializedValueBatch> {
     use wal_decoder::serialized_batch::{ObservedValueMeta, SerializedValueMeta};
 
     let mut new_raw: Vec<u8> = Vec::with_capacity(batch.raw.len());
@@ -324,7 +419,7 @@ pub fn extract_non_rel_page_batch(batch: &SerializedValueBatch) -> Option<Serial
         match meta {
             ValueMeta::Serialized(ser) => {
                 let key = Key::from_compact(ser.key);
-                if key.is_rel_block_key() {
+                if key.is_rel_block_key() || key.is_slru_block_key() {
                     continue;
                 }
                 let start = ser.batch_offset as usize;
@@ -345,7 +440,7 @@ pub fn extract_non_rel_page_batch(batch: &SerializedValueBatch) -> Option<Serial
             }
             ValueMeta::Observed(obs) => {
                 let key = Key::from_compact(obs.key);
-                if key.is_rel_block_key() {
+                if key.is_rel_block_key() || key.is_slru_block_key() {
                     continue;
                 }
                 new_metadata.push(ValueMeta::Observed(ObservedValueMeta {
@@ -400,6 +495,34 @@ fn build_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<PageRow> {
 
 fn row_size(r: &PageRow) -> usize {
     r.payload.len() + r.key.len() + 16
+}
+
+/// SLRU equivalent of `build_page_row`. `key` must be an SLRU block key
+/// (`Key::is_slru_block_key`); the caller is expected to have already
+/// filtered.
+fn build_slru_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<SlruPageRow> {
+    let (kind, segno, blknum) = key.to_slru_block()?;
+    let (is_image, will_init, payload) = match value {
+        Value::Image(b) => (true, true, b.clone()),
+        Value::WalRecord(rec) => {
+            let will_init = rec.will_init();
+            let bytes = Bytes::from(rec.ser()?);
+            (false, will_init, bytes)
+        }
+    };
+    Ok(SlruPageRow {
+        kind,
+        segno,
+        blknum,
+        lsn,
+        is_image,
+        will_init,
+        payload,
+    })
+}
+
+fn slru_row_size(r: &SlruPageRow) -> usize {
+    r.payload.len() + 32
 }
 
 #[cfg(test)]

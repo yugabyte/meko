@@ -529,6 +529,31 @@ impl StorageController {
             .context("creating yb_storage.pageserver.pages")?;
         println!("Ensured table yb_storage.pageserver.pages");
 
+        // SLRU pages — pg_xact, pg_multixact_offsets, pg_multixact_members.
+        // Same image-anchored design as pages. Hash partition on
+        // (tenant, timeline, kind, segno) so all blocks of one SLRU
+        // segment live on one tablet. `kind` matches the byte order in
+        // `Key::field2`: 0=Clog, 1=MultiXactMembers, 2=MultiXactOffsets.
+        client
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS pageserver.slru_pages (
+                    tenant_id    TEXT     NOT NULL,
+                    timeline_id  TEXT     NOT NULL,
+                    kind         SMALLINT NOT NULL,
+                    segno        BIGINT   NOT NULL,
+                    blknum       BIGINT   NOT NULL,
+                    is_image     BOOLEAN  NOT NULL,
+                    lsn          BIGINT   NOT NULL,
+                    will_init    BOOLEAN  NOT NULL,
+                    payload      BYTEA    NOT NULL,
+                    PRIMARY KEY ((tenant_id, timeline_id, kind, segno) HASH,
+                                 blknum, is_image, lsn DESC)
+                )",
+            )
+            .await
+            .context("creating yb_storage.pageserver.slru_pages")?;
+        println!("Ensured table yb_storage.pageserver.slru_pages");
+
         client
             .batch_execute(
                 "CREATE TABLE IF NOT EXISTS pageserver.timelines (

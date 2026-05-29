@@ -47,6 +47,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use pageserver_api::key::{KEY_SIZE, Key};
+use pageserver_api::reltag::SlruKind;
 use remote_storage::{YbStoreConfig, YsqlClient};
 use tokio_postgres::types::ToSql;
 use utils::id::{TenantId, TimelineId};
@@ -62,6 +63,47 @@ pub struct PageRow {
     pub is_image: bool,
     pub will_init: bool,
     pub payload: Bytes,
+}
+
+/// One row in `pageserver.slru_pages`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlruPageRow {
+    pub kind: SlruKind,
+    pub segno: u32,
+    pub blknum: u32,
+    pub lsn: Lsn,
+    pub is_image: bool,
+    pub will_init: bool,
+    pub payload: Bytes,
+}
+
+fn slru_kind_to_i16(kind: SlruKind) -> i16 {
+    match kind {
+        SlruKind::Clog => 0,
+        SlruKind::MultiXactMembers => 1,
+        SlruKind::MultiXactOffsets => 2,
+    }
+}
+
+fn slru_kind_from_i16(v: i16) -> Result<SlruKind> {
+    Ok(match v {
+        0 => SlruKind::Clog,
+        1 => SlruKind::MultiXactMembers,
+        2 => SlruKind::MultiXactOffsets,
+        _ => bail!("unrecognized SLRU kind {v}"),
+    })
+}
+
+/// Decompose an SLRU-block Key into typed columns. `Err` for non-SLRU keys.
+fn slru_key_columns(key: Key) -> Result<(i16, i64, i64)> {
+    if !key.is_slru_block_key() {
+        bail!(
+            "PageStore: key {key} is not an SLRU block (field1=0x{:02x}, field3={}, field6=0x{:x})",
+            key.field1, key.field3, key.field6
+        );
+    }
+    let kind = slru_kind_from_i16(key.field2 as i16)?;
+    Ok((slru_kind_to_i16(kind), key.field4 as i64, key.field6 as i64))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +223,27 @@ impl PageStore {
             .execute(&create_pages, &[])
             .await
             .context("creating pages table")?;
+
+        let create_slru = format!(
+            "CREATE TABLE IF NOT EXISTS \"{}\".slru_pages (
+                tenant_id    TEXT     NOT NULL,
+                timeline_id  TEXT     NOT NULL,
+                kind         SMALLINT NOT NULL,
+                segno        BIGINT   NOT NULL,
+                blknum       BIGINT   NOT NULL,
+                is_image     BOOLEAN  NOT NULL,
+                lsn          BIGINT   NOT NULL,
+                will_init    BOOLEAN  NOT NULL,
+                payload      BYTEA    NOT NULL,
+                PRIMARY KEY ((tenant_id, timeline_id, kind, segno) HASH,
+                             blknum, is_image, lsn DESC)
+            )",
+            self.schema
+        );
+        self.client
+            .execute(&create_slru, &[])
+            .await
+            .context("creating slru_pages table")?;
 
         let create_timelines = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".timelines (
@@ -599,6 +662,218 @@ impl PageStore {
         Ok(())
     }
 
+    // ------------------- slru_pages ---------------------------------------
+
+    pub async fn put_slru_pages(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+        rows: &[SlruPageRow],
+    ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+
+        let mut sql = format!(
+            "INSERT INTO \"{}\".slru_pages \
+             (tenant_id, timeline_id, kind, segno, blknum, \
+              is_image, lsn, will_init, payload) VALUES ",
+            self.schema
+        );
+        const COLS: usize = 9;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
+            Vec::with_capacity(rows.len() * COLS);
+        for (i, row) in rows.iter().enumerate() {
+            if i > 0 {
+                sql.push(',');
+            }
+            let base = i * COLS + 1;
+            sql.push_str(&format!(
+                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                base, base + 1, base + 2, base + 3, base + 4,
+                base + 5, base + 6, base + 7, base + 8,
+            ));
+            params.push(Box::new(tenant_s.clone()));
+            params.push(Box::new(timeline_s.clone()));
+            params.push(Box::new(slru_kind_to_i16(row.kind)));
+            params.push(Box::new(row.segno as i64));
+            params.push(Box::new(row.blknum as i64));
+            params.push(Box::new(row.is_image));
+            params.push(Box::new(row.lsn.0 as i64));
+            params.push(Box::new(row.will_init));
+            params.push(Box::new(row.payload.to_vec()));
+        }
+        let params_ref: Vec<&(dyn ToSql + Sync)> =
+            params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+        self.client
+            .execute(&sql, &params_ref)
+            .await
+            .with_context(|| {
+                format!(
+                    "put_slru_pages tenant={tenant} timeline={timeline} batch_rows={}",
+                    rows.len()
+                )
+            })?;
+        Ok(())
+    }
+
+    /// Per-block SLRU chain read — same image-anchored CTE shape as
+    /// `read_chain`, just keyed by `(kind, segno, blknum)`.
+    pub async fn read_slru_chain(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+        kind: SlruKind,
+        segno: u32,
+        blknum: u32,
+        target_lsn: Lsn,
+    ) -> Result<Vec<SlruPageRow>> {
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+        let kind_i = slru_kind_to_i16(kind);
+        let segno_i = segno as i64;
+        let blk_i = blknum as i64;
+        let target = target_lsn.0 as i64;
+
+        let fast_sql = format!(
+            "WITH anchor AS ( \
+                 SELECT lsn AS anchor_lsn FROM \"{schema}\".slru_pages \
+                 WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 \
+                   AND segno=$4 AND blknum=$5 \
+                   AND is_image=TRUE AND lsn <= $6 \
+                 ORDER BY lsn DESC LIMIT 1 \
+             ) \
+             SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
+             FROM \"{schema}\".slru_pages p, anchor \
+             WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 \
+               AND p.segno=$4 AND p.blknum=$5 \
+               AND p.lsn >= anchor.anchor_lsn AND p.lsn <= $6 \
+             ORDER BY p.lsn DESC",
+            schema = self.schema
+        );
+        let fast_rows = self
+            .client
+            .query(
+                &fast_sql,
+                &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_i, &target],
+            )
+            .await
+            .context("read_slru_chain fast")?;
+        if !fast_rows.is_empty() {
+            return fast_rows.into_iter().map(row_to_slru_page).collect();
+        }
+
+        let slow_sql = format!(
+            "SELECT kind, segno, blknum, lsn, is_image, will_init, payload \
+             FROM \"{}\".slru_pages \
+             WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 \
+               AND segno=$4 AND blknum=$5 \
+               AND lsn <= $6 \
+             ORDER BY lsn DESC",
+            self.schema
+        );
+        let slow_rows = self
+            .client
+            .query(
+                &slow_sql,
+                &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_i, &target],
+            )
+            .await
+            .context("read_slru_chain slow")?;
+        let mut chain = Vec::with_capacity(slow_rows.len());
+        for r in slow_rows {
+            let row = row_to_slru_page(r)?;
+            let anchor = row.will_init;
+            chain.push(row);
+            if anchor {
+                break;
+            }
+        }
+        Ok(chain)
+    }
+
+    /// Range scan over SLRU blocks in `range`. `range` must stay inside
+    /// one `(kind, segno)` segment — that's how SLRU vectored reads are
+    /// shaped today. Returns one entry per blknum, each chain
+    /// LSN-descending and truncated at the latest will_init row.
+    pub async fn scan_slru_range(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+        kind: SlruKind,
+        segno: u32,
+        blknum_range: Range<u32>,
+        target_lsn: Lsn,
+    ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
+        // Single-block fast path: delegate to read_slru_chain to skip
+        // the multi-block JOIN.
+        if blknum_range.end == blknum_range.start.saturating_add(1) {
+            let chain = self
+                .read_slru_chain(tenant, timeline, kind, segno, blknum_range.start, target_lsn)
+                .await?;
+            let mut out = HashMap::with_capacity(1);
+            if !chain.is_empty() {
+                out.insert(blknum_range.start, chain);
+            }
+            return Ok(out);
+        }
+
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+        let kind_i = slru_kind_to_i16(kind);
+        let segno_i = segno as i64;
+        let blk_lo = blknum_range.start as i64;
+        let blk_hi = blknum_range.end as i64;
+        let target = target_lsn.0 as i64;
+
+        let sql = format!(
+            "WITH blocks AS ( \
+                 SELECT DISTINCT blknum FROM \"{schema}\".slru_pages \
+                 WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 AND segno=$4 \
+                   AND blknum >= $5 AND blknum < $6 AND lsn <= $7 \
+             ), \
+             per_block_image AS ( \
+                 SELECT b.blknum, i.image_lsn FROM blocks b \
+                 LEFT JOIN LATERAL ( \
+                     SELECT lsn AS image_lsn FROM \"{schema}\".slru_pages \
+                     WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 \
+                       AND segno=$4 AND blknum = b.blknum \
+                       AND is_image=TRUE AND lsn <= $7 \
+                     ORDER BY lsn DESC LIMIT 1 \
+                 ) i ON TRUE \
+             ) \
+             SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
+             FROM \"{schema}\".slru_pages p \
+             LEFT JOIN per_block_image bi ON p.blknum = bi.blknum \
+             WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 AND p.segno=$4 \
+               AND p.blknum >= $5 AND p.blknum < $6 AND p.lsn <= $7 \
+               AND (bi.image_lsn IS NULL OR p.lsn >= bi.image_lsn) \
+             ORDER BY p.blknum, p.lsn DESC",
+            schema = self.schema
+        );
+        let rows = self
+            .client
+            .query(
+                &sql,
+                &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_lo, &blk_hi, &target],
+            )
+            .await
+            .context("scan_slru_range")?;
+
+        let mut by_block: HashMap<u32, Vec<SlruPageRow>> = HashMap::new();
+        for r in rows {
+            let row = row_to_slru_page(r)?;
+            let entry = by_block.entry(row.blknum).or_default();
+            if entry.last().is_some_and(|last| last.will_init) {
+                continue;
+            }
+            entry.push(row);
+        }
+        Ok(by_block)
+    }
+
     // ------------------- timelines ----------------------------------------
 
     pub async fn upsert_timeline(&self, row: &TimelineRow) -> Result<()> {
@@ -752,6 +1027,25 @@ fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {
     let payload: Vec<u8> = r.try_get(8)?;
     Ok(PageRow {
         key: columns_to_key_bytes(sp, db, rel, fork, blk),
+        lsn: Lsn(lsn as u64),
+        is_image,
+        will_init,
+        payload: Bytes::from(payload),
+    })
+}
+
+fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
+    let kind_i: i16 = r.try_get(0)?;
+    let segno: i64 = r.try_get(1)?;
+    let blknum: i64 = r.try_get(2)?;
+    let lsn: i64 = r.try_get(3)?;
+    let is_image: bool = r.try_get(4)?;
+    let will_init: bool = r.try_get(5)?;
+    let payload: Vec<u8> = r.try_get(6)?;
+    Ok(SlruPageRow {
+        kind: slru_kind_from_i16(kind_i)?,
+        segno: segno as u32,
+        blknum: blknum as u32,
         lsn: Lsn(lsn as u64),
         is_image,
         will_init,

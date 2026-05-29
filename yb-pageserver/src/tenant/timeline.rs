@@ -1459,23 +1459,20 @@ impl Timeline {
             return Ok(BTreeMap::default());
         }
 
-        // yb-pageserver read path: relation-page-only queries go
-        // through `pageserver.pages` (PageStore) for tablet-local
-        // range scans. Any query that touches non-page keys (SLRUs,
-        // metadata, dir listings, aux, repl origins, rel-size
-        // sentinels) falls through to the layer-stack path; layer
-        // files are still populated by dual-write so reads are
-        // correct.
-        //
-        // The check is stricter than just `field1 == 0`: SLRU-style
-        // ranges like `[(0,0,0,0,0,0)..(0,0,0,0,0,1))` have field1=0
-        // but field4=0, so they're not relation blocks. We require
-        // the range's `start` to be a valid relation block (field4
-        // != 0 and field6 != u32::MAX), which is the contract
-        // PageStore's typed-column schema enforces.
-        let all_page_keys = self.page_writer.is_some()
-            && query.total_keyspace().ranges.iter().all(|r| r.start.is_rel_block_key());
-        if all_page_keys && let Some(page_writer) = self.page_writer.clone() {
+        // yb-pageserver read path: every range we can route to
+        // `pageserver.pages` (rel pages) or `pageserver.slru_pages`
+        // (SLRU blocks) does so for tablet-local range scans. Any query
+        // that mixes in keys we haven't migrated yet (metadata, dir
+        // listings, aux, repl origins, rel-size sentinels, SLRU dir /
+        // segment-size sentinels) falls through to the layer-stack path;
+        // those keys are still populated there until Phase 4c.
+        let ranges = &query.total_keyspace().ranges;
+        let all_row_store = self.page_writer.is_some()
+            && !ranges.is_empty()
+            && ranges
+                .iter()
+                .all(|r| r.start.is_rel_block_key() || r.start.is_slru_block_key());
+        if all_row_store && let Some(page_writer) = self.page_writer.clone() {
             let redo_attempt_type = if ctx.task_kind() == TaskKind::Compaction {
                 RedoAttemptType::LegacyCompaction
             } else {
@@ -1686,18 +1683,48 @@ impl Timeline {
         _ctx: &RequestContext,
     ) -> Result<BTreeMap<Key, Result<Bytes, PageReconstructError>>, GetVectoredError> {
         let total_keyspace = query.total_keyspace();
+        let target_lsn = query.high_watermark_lsn()?;
 
         let mut chains_by_key: std::collections::HashMap<Key, Vec<crate::page_store::PageRow>> =
             std::collections::HashMap::new();
         for range in &total_keyspace.ranges {
-            let scan = page_writer
-                .scan_range(range.clone(), query.high_watermark_lsn()?)
-                .await
-                .map_err(|e| {
-                    GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
+            if range.start.is_slru_block_key() {
+                // SLRU range — `range` always stays within one
+                // (kind, segno) segment for vectored SLRU reads.
+                let (kind, segno, blk_lo) = range.start.to_slru_block().map_err(|e| {
+                    GetVectoredError::Other(anyhow!("SLRU range start decode: {e:#}"))
                 })?;
-            for (key, chain) in scan {
-                chains_by_key.entry(key).or_default().extend(chain);
+                let blk_hi = range.end.field6;
+                let scan = page_writer
+                    .scan_slru_range(kind, segno, blk_lo..blk_hi, target_lsn)
+                    .await
+                    .map_err(|e| {
+                        GetVectoredError::Other(anyhow!("SLRU scan_range failed: {e:#}"))
+                    })?;
+                for (blknum, chain) in scan {
+                    let key = pageserver_api::key::slru_block_to_key(kind, segno, blknum);
+                    let converted: Vec<crate::page_store::PageRow> = chain
+                        .into_iter()
+                        .map(|sr| crate::page_store::PageRow {
+                            key: slru_key_bytes(&sr),
+                            lsn: sr.lsn,
+                            is_image: sr.is_image,
+                            will_init: sr.will_init,
+                            payload: sr.payload,
+                        })
+                        .collect();
+                    chains_by_key.entry(key).or_default().extend(converted);
+                }
+            } else {
+                let scan = page_writer
+                    .scan_range(range.clone(), target_lsn)
+                    .await
+                    .map_err(|e| {
+                        GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
+                    })?;
+                for (key, chain) in scan {
+                    chains_by_key.entry(key).or_default().extend(chain);
+                }
             }
         }
 
@@ -8074,7 +8101,7 @@ impl TimelineWriter<'_> {
             if !triples.is_empty() {
                 page_writer.put(&triples).await?;
             }
-            crate::page_writer::extract_non_rel_page_batch(&batch)
+            crate::page_writer::extract_non_row_store_batch(&batch)
         } else {
             Some(batch)
         };
@@ -8502,6 +8529,18 @@ mod tests {
 
         layers.get_from_desc(&desc)
     }
+}
+
+/// Encode an SLRU block row's identity as the 18-byte BYTEA key the
+/// `PageRow.key` field expects. Used by the SLRU branch of
+/// `get_vectored_via_page_writer` to convert an `SlruPageRow` into the
+/// uniform `PageRow` shape that walredo + ValueReconstructState expect.
+fn slru_key_bytes(row: &crate::page_store::SlruPageRow) -> bytes::Bytes {
+    use pageserver_api::key::{KEY_SIZE, slru_block_to_key};
+    let key = slru_block_to_key(row.kind, row.segno, row.blknum);
+    let mut buf = vec![0u8; KEY_SIZE];
+    key.write_to_byte_slice(&mut buf);
+    bytes::Bytes::from(buf)
 }
 
 /// Decode a `PageWriter::read_chain` result into walredo's expected
