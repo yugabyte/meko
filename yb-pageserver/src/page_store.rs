@@ -46,6 +46,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
+use futures::stream::{StreamExt, TryStreamExt};
 use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::reltag::SlruKind;
 use remote_storage::{YbStoreConfig, YsqlClient};
@@ -304,11 +305,15 @@ impl PageStore {
     ) -> Result<()> {
         // PostgreSQL caps a query at 65535 parameters; chunk to stay
         // well below it. 11 columns/row × 4000 rows = 44k params.
+        // Chunks dispatch in parallel — tokio-postgres pipelines them
+        // on the shared connection so YB can absorb them concurrently.
         const COLS: usize = 11;
         const ROWS_PER_INSERT: usize = 500;
+        const PARALLELISM: usize = 4;
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
+        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
             if chunk.is_empty() {
                 continue;
@@ -319,7 +324,7 @@ impl PageStore {
                   lsn, is_image, will_init, payload) VALUES ",
                 self.schema
             );
-            let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
+            let mut params: Vec<Box<dyn ToSql + Sync + Send + 'static>> =
                 Vec::with_capacity(chunk.len() * COLS);
             for (i, row) in chunk.iter().enumerate() {
                 if i > 0 {
@@ -345,18 +350,27 @@ impl PageStore {
                 params.push(Box::new(row.will_init));
                 params.push(Box::new(row.payload.to_vec()));
             }
-            let params_ref: Vec<&(dyn ToSql + Sync)> =
-                params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-            self.client
-                .execute(&sql, &params_ref)
-                .await
-                .with_context(|| {
-                    format!(
-                        "put_pages tenant={tenant} timeline={timeline} chunk_rows={}",
-                        chunk.len()
-                    )
-                })?;
+            let chunk_rows = chunk.len();
+            let client = Arc::clone(&self.client);
+            futs.push(Box::pin(async move {
+                let params_ref: Vec<&(dyn ToSql + Sync)> =
+                    params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+                client
+                    .execute(&sql, &params_ref)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "put_pages tenant={tenant} timeline={timeline} chunk_rows={chunk_rows}"
+                        )
+                    })?;
+                Ok(())
+            }));
         }
+
+        futures::stream::iter(futs)
+            .buffer_unordered(PARALLELISM)
+            .try_collect::<Vec<_>>()
+            .await?;
         Ok(())
     }
 
@@ -696,9 +710,11 @@ impl PageStore {
     ) -> Result<()> {
         const COLS: usize = 9;
         const ROWS_PER_INSERT: usize = 500;
+        const PARALLELISM: usize = 2;
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
+        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
             if chunk.is_empty() {
                 continue;
@@ -709,7 +725,7 @@ impl PageStore {
                   is_image, lsn, will_init, payload) VALUES ",
                 self.schema
             );
-            let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
+            let mut params: Vec<Box<dyn ToSql + Sync + Send + 'static>> =
                 Vec::with_capacity(chunk.len() * COLS);
             for (i, row) in chunk.iter().enumerate() {
                 if i > 0 {
@@ -731,18 +747,27 @@ impl PageStore {
                 params.push(Box::new(row.will_init));
                 params.push(Box::new(row.payload.to_vec()));
             }
-            let params_ref: Vec<&(dyn ToSql + Sync)> =
-                params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-            self.client
-                .execute(&sql, &params_ref)
-                .await
-                .with_context(|| {
-                    format!(
-                        "put_slru_pages tenant={tenant} timeline={timeline} chunk_rows={}",
-                        chunk.len()
-                    )
-                })?;
+            let chunk_rows = chunk.len();
+            let client = Arc::clone(&self.client);
+            futs.push(Box::pin(async move {
+                let params_ref: Vec<&(dyn ToSql + Sync)> =
+                    params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+                client
+                    .execute(&sql, &params_ref)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "put_slru_pages tenant={tenant} timeline={timeline} chunk_rows={chunk_rows}"
+                        )
+                    })?;
+                Ok(())
+            }));
         }
+
+        futures::stream::iter(futs)
+            .buffer_unordered(PARALLELISM)
+            .try_collect::<Vec<_>>()
+            .await?;
         Ok(())
     }
 
@@ -911,9 +936,11 @@ impl PageStore {
     ) -> Result<()> {
         const COLS: usize = 5;
         const ROWS_PER_INSERT: usize = 2000;
+        const PARALLELISM: usize = 3;
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
+        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
             if chunk.is_empty() {
                 continue;
@@ -922,7 +949,7 @@ impl PageStore {
                 "INSERT INTO \"{}\".meta (tenant_id, timeline_id, key, lsn, payload) VALUES ",
                 self.schema
             );
-            let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
+            let mut params: Vec<Box<dyn ToSql + Sync + Send + 'static>> =
                 Vec::with_capacity(chunk.len() * COLS);
             for (i, row) in chunk.iter().enumerate() {
                 if i > 0 {
@@ -942,18 +969,27 @@ impl PageStore {
                 params.push(Box::new(row.lsn.0 as i64));
                 params.push(Box::new(row.payload.to_vec()));
             }
-            let params_ref: Vec<&(dyn ToSql + Sync)> =
-                params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-            self.client
-                .execute(&sql, &params_ref)
-                .await
-                .with_context(|| {
-                    format!(
-                        "put_meta tenant={tenant} timeline={timeline} chunk_rows={}",
-                        chunk.len()
-                    )
-                })?;
+            let chunk_rows = chunk.len();
+            let client = Arc::clone(&self.client);
+            futs.push(Box::pin(async move {
+                let params_ref: Vec<&(dyn ToSql + Sync)> =
+                    params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+                client
+                    .execute(&sql, &params_ref)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "put_meta tenant={tenant} timeline={timeline} chunk_rows={chunk_rows}"
+                        )
+                    })?;
+                Ok(())
+            }));
         }
+
+        futures::stream::iter(futs)
+            .buffer_unordered(PARALLELISM)
+            .try_collect::<Vec<_>>()
+            .await?;
         Ok(())
     }
 
