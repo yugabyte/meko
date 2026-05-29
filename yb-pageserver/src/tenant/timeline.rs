@@ -1,4 +1,3 @@
-pub(crate) mod compaction;
 pub mod delete;
 pub(crate) mod detach_ancestor;
 pub(crate) mod handle;
@@ -26,7 +25,6 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use bytes::Bytes;
 use camino::Utf8Path;
 use chrono::{DateTime, Utc};
-use compaction::{CompactionOutcome, GcCompactionCombinedSettings};
 use enumset::EnumSet;
 use fail::fail_point;
 use futures::stream::FuturesUnordered;
@@ -2334,105 +2332,29 @@ impl Timeline {
         (true, "ok")
     }
 
-    /// Outermost timeline compaction operation; downloads needed layers. Returns whether we have pending
-    /// compaction tasks.
+    /// Test-only no-op stub left after Phase 4d.2 deleted compaction.rs.
+    /// Tests under tenant.rs still call `.compact()` to drive
+    /// freeze+flush+compact sequences; with no layer files there's
+    /// nothing to compact, so this just returns Done.
+    #[cfg(test)]
     pub(crate) async fn compact(
-        self: &Arc<Self>,
-        cancel: &CancellationToken,
-        flags: EnumSet<CompactFlags>,
-        ctx: &RequestContext,
-    ) -> Result<CompactionOutcome, CompactionError> {
-        let res = self
-            .compact_with_options(
-                cancel,
-                CompactOptions {
-                    flags,
-                    compact_key_range: None,
-                    compact_lsn_range: None,
-                    sub_compaction: false,
-                    sub_compaction_max_job_size_mb: None,
-                    gc_compaction_do_metadata_compaction: false,
-                },
-                ctx,
-            )
-            .await;
-        if let Err(err) = &res {
-            log_compaction_error(err, None, cancel.is_cancelled(), false);
-        }
-        res
+        self: &std::sync::Arc<Self>,
+        _cancel: &CancellationToken,
+        _flags: EnumSet<CompactFlags>,
+        _ctx: &RequestContext,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
 
-    /// Outermost timeline compaction operation; downloads needed layers.
-    ///
-    /// NB: the cancellation token is usually from a background task, but can also come from a
-    /// request task.
-    pub(crate) async fn compact_with_options(
-        self: &Arc<Self>,
-        cancel: &CancellationToken,
-        options: CompactOptions,
-        ctx: &RequestContext,
-    ) -> Result<CompactionOutcome, CompactionError> {
-        // Acquire the compaction lock and task semaphore.
-        //
-        // L0-only compaction uses a separate semaphore (if enabled) to make sure it isn't starved
-        // out by other background tasks (including image compaction). We request this via
-        // `BackgroundLoopKind::L0Compaction`.
-        //
-        // Yield for pending L0 compaction while waiting for the semaphore.
-        let is_l0_only = options.flags.contains(CompactFlags::OnlyL0Compaction);
-        let semaphore_kind = match is_l0_only && self.get_compaction_l0_semaphore() {
-            true => BackgroundLoopKind::L0Compaction,
-            false => BackgroundLoopKind::Compaction,
-        };
-        let yield_for_l0 = options.flags.contains(CompactFlags::YieldForL0);
-        if yield_for_l0 {
-            // If this is an L0 pass, it doesn't make sense to yield for L0.
-            debug_assert!(!is_l0_only, "YieldForL0 during L0 pass");
-            // If `compaction_l0_first` is disabled, there's no point yielding.
-            debug_assert!(self.get_compaction_l0_first(), "YieldForL0 without L0 pass");
-        }
-
-        let acquire = async move {
-            let guard = self.compaction_lock.lock().await;
-            let permit = super::tasks::acquire_concurrency_permit(semaphore_kind, ctx).await;
-            (guard, permit)
-        };
-
-        let (_guard, _permit) = tokio::select! {
-            (guard, permit) = acquire => (guard, permit),
-            _ = self.l0_compaction_trigger.notified(), if yield_for_l0 => {
-                return Ok(CompactionOutcome::YieldForL0);
-            }
-            _ = self.cancel.cancelled() => return Ok(CompactionOutcome::Skipped),
-            _ = cancel.cancelled() => return Ok(CompactionOutcome::Skipped),
-        };
-
-        let last_record_lsn = self.get_last_record_lsn();
-
-        // Last record Lsn could be zero in case the timeline was just created
-        if !last_record_lsn.is_valid() {
-            warn!(
-                "Skipping compaction for potentially just initialized timeline, it has invalid last record lsn: {last_record_lsn}"
-            );
-            return Ok(CompactionOutcome::Skipped);
-        }
-
-        let result = match self.get_compaction_algorithm_settings().kind {
-            CompactionAlgorithm::Tiered => {
-                self.compact_tiered(cancel, ctx).await?;
-                Ok(CompactionOutcome::Done)
-            }
-            CompactionAlgorithm::Legacy => self.compact_legacy(cancel, options, ctx).await,
-        };
-
-        // Signal compaction failure to avoid L0 flush stalls when it's broken.
-        match &result {
-            Ok(_) => self.compaction_failed.store(false, AtomicOrdering::Relaxed),
-            Err(e) if e.is_cancel() => {}
-            Err(_) => self.compaction_failed.store(true, AtomicOrdering::Relaxed),
-        };
-
-        result
+    /// Test-only no-op stub (see `compact`).
+    #[cfg(test)]
+    pub(crate) async fn compact_with_gc(
+        self: &std::sync::Arc<Self>,
+        _cancel: &CancellationToken,
+        _options: CompactOptions,
+        _ctx: &RequestContext,
+    ) -> Result<(), anyhow::Error> {
+        Ok(())
     }
 
     /// Mutate the timeline with a [`TimelineWriter`].
@@ -3226,35 +3148,6 @@ impl Timeline {
             )
     }
 
-    fn get_gc_compaction_settings(&self) -> GcCompactionCombinedSettings {
-        let tenant_conf = &self.tenant_conf.load();
-        let gc_compaction_enabled = tenant_conf
-            .tenant_conf
-            .gc_compaction_enabled
-            .unwrap_or(self.conf.default_tenant_conf.gc_compaction_enabled);
-        let gc_compaction_verification = tenant_conf
-            .tenant_conf
-            .gc_compaction_verification
-            .unwrap_or(self.conf.default_tenant_conf.gc_compaction_verification);
-        let gc_compaction_initial_threshold_kb = tenant_conf
-            .tenant_conf
-            .gc_compaction_initial_threshold_kb
-            .unwrap_or(
-                self.conf
-                    .default_tenant_conf
-                    .gc_compaction_initial_threshold_kb,
-            );
-        let gc_compaction_ratio_percent = tenant_conf
-            .tenant_conf
-            .gc_compaction_ratio_percent
-            .unwrap_or(self.conf.default_tenant_conf.gc_compaction_ratio_percent);
-        GcCompactionCombinedSettings {
-            gc_compaction_enabled,
-            gc_compaction_verification,
-            gc_compaction_initial_threshold_kb,
-            gc_compaction_ratio_percent,
-        }
-    }
 
     fn get_image_creation_preempt_threshold(&self) -> usize {
         let tenant_conf = self.tenant_conf.load();
@@ -6300,10 +6193,8 @@ impl Timeline {
         drop_layer_manager_wlock(guard);
         let duration = timer.stop_and_record();
 
-        // Creating image layers may have caused some previously visible layers to be covered
-        if !image_layers.is_empty() {
-            self.update_layer_visibility().await?;
-        }
+        // Creating image layers may have caused some previously visible layers to be covered;
+        // update_layer_visibility was deleted with compaction.rs in phase 4d.2.
 
         let total_layer_size = image_layers
             .iter()
@@ -8262,8 +8153,7 @@ mod tests {
             .unwrap();
         let ctx = &ctx.with_scope_timeline(&timeline);
 
-        // Layer visibility is an input to heatmap generation, so refresh it first
-        timeline.update_layer_visibility().await.unwrap();
+        // update_layer_visibility removed in phase 4d.2 (compaction.rs).
 
         let heatmap = timeline
             .generate_heatmap()
@@ -8397,8 +8287,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Layer visibility is an input to heatmap generation, so refresh it first
-        timeline.update_layer_visibility().await.unwrap();
+        // update_layer_visibility removed in phase 4d.2.
 
         let heatmap = timeline
             .generate_heatmap()

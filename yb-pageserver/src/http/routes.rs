@@ -2215,141 +2215,6 @@ async fn timeline_gc_handler(
 
     json_response(StatusCode::OK, gc_result)
 }
-
-// Cancel scheduled compaction tasks
-async fn timeline_cancel_compact_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-    let state = get_state(&request);
-    async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_shard_id)?;
-        tenant.cancel_scheduled_compaction(timeline_id);
-        json_response(StatusCode::OK, ())
-    }
-    .instrument(info_span!("timeline_cancel_compact", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
-    .await
-}
-
-// Get compact info of a timeline
-async fn timeline_compact_info_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-    let state = get_state(&request);
-    async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_shard_id)?;
-        let resp = tenant.get_scheduled_compaction_tasks(timeline_id);
-        json_response(StatusCode::OK, resp)
-    }
-    .instrument(info_span!("timeline_compact_info", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
-    .await
-}
-
-// Run compaction immediately on given timeline.
-async fn timeline_compact_handler(
-    mut request: Request<Body>,
-    cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-
-    let compact_request = json_request_maybe::<Option<CompactRequest>>(&mut request).await?;
-
-    let state = get_state(&request);
-
-    let mut flags = EnumSet::empty();
-
-    if Some(true) == parse_query_param::<_, bool>(&request, "force_l0_compaction")? {
-        flags |= CompactFlags::ForceL0Compaction;
-    }
-    if Some(true) == parse_query_param::<_, bool>(&request, "force_repartition")? {
-        flags |= CompactFlags::ForceRepartition;
-    }
-    if Some(true) == parse_query_param::<_, bool>(&request, "force_image_layer_creation")? {
-        flags |= CompactFlags::ForceImageLayerCreation;
-    }
-    if Some(true) == parse_query_param::<_, bool>(&request, "enhanced_gc_bottom_most_compaction")? {
-        flags |= CompactFlags::EnhancedGcBottomMostCompaction;
-    }
-    if Some(true) == parse_query_param::<_, bool>(&request, "dry_run")? {
-        flags |= CompactFlags::DryRun;
-    }
-    // Manual compaction does not yield for L0.
-
-    let wait_until_uploaded =
-        parse_query_param::<_, bool>(&request, "wait_until_uploaded")?.unwrap_or(false);
-
-    let wait_until_scheduled_compaction_done =
-        parse_query_param::<_, bool>(&request, "wait_until_scheduled_compaction_done")?
-            .unwrap_or(false);
-
-    let sub_compaction = compact_request
-        .as_ref()
-        .map(|r| r.sub_compaction)
-        .unwrap_or(false);
-    let sub_compaction_max_job_size_mb = compact_request
-        .as_ref()
-        .and_then(|r| r.sub_compaction_max_job_size_mb);
-
-    let options = CompactOptions {
-        compact_key_range: compact_request
-            .as_ref()
-            .and_then(|r| r.compact_key_range.clone()),
-        compact_lsn_range: compact_request
-            .as_ref()
-            .and_then(|r| r.compact_lsn_range.clone()),
-        flags,
-        sub_compaction,
-        sub_compaction_max_job_size_mb,
-        gc_compaction_do_metadata_compaction: false,
-    };
-
-    let scheduled = compact_request
-        .as_ref()
-        .map(|r| r.scheduled)
-        .unwrap_or(false);
-
-    async {
-        let timeline = active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id).await?;
-        let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download).with_scope_timeline(&timeline);
-        if scheduled {
-            let tenant = state
-                .tenant_manager
-                .get_attached_tenant_shard(tenant_shard_id)?;
-            let rx = tenant.schedule_compaction(timeline_id, options).await.map_err(ApiError::InternalServerError)?;
-            if wait_until_scheduled_compaction_done {
-                // It is possible that this will take a long time, dropping the HTTP request will not cancel the compaction.
-                rx.await.ok();
-            }
-        } else {
-            timeline
-                .compact_with_options(&cancel, options, &ctx)
-                .await
-                .map_err(|e| ApiError::InternalServerError(e.into()))?;
-            if wait_until_uploaded {
-                timeline.remote_client.wait_completion().await
-                // XXX map to correct ApiError for the cases where it's due to shutdown
-                .context("wait completion").map_err(ApiError::InternalServerError)?;
-            }
-        }
-        json_response(StatusCode::OK, ())
-    }
-    .instrument(info_span!("manual_compaction", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
-    .await
-}
-
 async fn timeline_mark_invisible_handler(
     mut request: Request<Body>,
     _cancel: CancellationToken,
@@ -2476,18 +2341,8 @@ async fn timeline_checkpoint_handler(
 
                 }
             })?;
-        if compact {
-            timeline
-                .compact(&cancel, flags, &ctx)
-                .await
-                .map_err(|e|
-                    if e.is_cancel() {
-                        ApiError::ShuttingDown
-                    } else {
-                        ApiError::InternalServerError(e.into_anyhow())
-                    }
-                )?;
-        }
+        // Compaction removed in phase 4d.2 (compaction.rs deletion).
+        let _ = (compact, flags, ctx, &cancel);
 
         if wait_until_uploaded {
             tracing::info!("Waiting for uploads to complete...");
@@ -3972,18 +3827,6 @@ pub fn make_router(
         .put(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/do_gc",
             |r| api_handler(r, timeline_gc_handler),
-        )
-        .get(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/compact",
-            |r| api_handler(r, timeline_compact_info_handler),
-        )
-        .put(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/compact",
-            |r| api_handler(r, timeline_compact_handler),
-        )
-        .delete(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/compact",
-            |r| api_handler(r, timeline_cancel_compact_handler),
         )
         .put(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/offload",

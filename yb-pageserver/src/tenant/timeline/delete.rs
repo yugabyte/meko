@@ -139,11 +139,7 @@ async fn remove_maybe_offloaded_timeline_from_tenant(
             timelines.remove(&timeline.timeline_id).expect(
                 "timeline that we were deleting was concurrently removed from 'timelines' map",
             );
-            tenant
-                .scheduled_compaction_tasks
-                .lock()
-                .unwrap()
-                .remove(&timeline.timeline_id);
+            let _ = tenant; // scheduled_compaction_tasks removed in phase 4d.2
         }
         TimelineOrOffloaded::Offloaded(timeline) => {
             let offloaded_timeline = timelines_offloaded

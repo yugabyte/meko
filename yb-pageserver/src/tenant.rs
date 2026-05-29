@@ -50,7 +50,6 @@ use remote_timeline_client::{
 };
 use secondary::heatmap::{HeatMapTenant, HeatMapTimeline};
 use storage_broker::BrokerClientChannel;
-use timeline::compaction::{CompactionOutcome, GcCompactionQueue};
 use timeline::import_pgdata::ImportingTimeline;
 use timeline::layer_manager::LayerManagerLockHolder;
 use timeline::offload::{OffloadError, offload_timeline};
@@ -353,9 +352,6 @@ pub struct TenantShard {
 
     /// Signals the tenant compaction loop that there is L0 compaction work to be done.
     pub(crate) l0_compaction_trigger: Arc<Notify>,
-
-    /// Scheduled gc-compaction tasks.
-    scheduled_compaction_tasks: std::sync::Mutex<HashMap<TimelineId, Arc<GcCompactionQueue>>>,
 
     /// If the tenant is in Activating state, notify this to encourage it
     /// to proceed to Active as soon as possible, rather than waiting for lazy
@@ -1268,11 +1264,7 @@ impl TenantShard {
 
                 match tline.ancestor_timeline() {
                     Some(ancestor) => {
-                        if ancestor.update_layer_visibility().await.is_err() {
-                            // Ancestor timeline is shutting down.
-                            break;
-                        }
-
+                        // update_layer_visibility removed in phase 4d.2.
                         tline_ending_at = Some((ancestor, tline.get_ancestor_lsn()));
                     }
                     None => {
@@ -1890,14 +1882,8 @@ impl TenantShard {
             timelines_accessor.values().cloned().collect::<Vec<_>>()
         };
 
-        for tl in compute_visiblity_for {
-            tl.update_layer_visibility().await.with_context(|| {
-                format!(
-                    "failed initial timeline visibility computation {} for tenant {}",
-                    tl.timeline_id, self.tenant_shard_id
-                )
-            })?;
-        }
+        // update_layer_visibility removed in phase 4d.2.
+        let _ = compute_visiblity_for;
 
         // Walk through deleted timelines, resume deletion
         for (timeline_id, index_part, remote_timeline_client) in timelines_to_resume_deletions {
@@ -3137,256 +3123,6 @@ impl TenantShard {
             .await
     }
 
-    /// Performs one compaction iteration. Called periodically from the compaction loop. Returns
-    /// whether another compaction is needed, if we still have pending work or if we yield for
-    /// immediate L0 compaction.
-    ///
-    /// Compaction can also be explicitly requested for a timeline via the HTTP API.
-    async fn compaction_iteration(
-        self: &Arc<Self>,
-        cancel: &CancellationToken,
-        ctx: &RequestContext,
-    ) -> Result<CompactionOutcome, CompactionError> {
-        // Don't compact inactive tenants.
-        if !self.is_active() {
-            return Ok(CompactionOutcome::Skipped);
-        }
-
-        // Don't compact tenants that can't upload layers. We don't check `may_delete_layers_hint`,
-        // since we need to compact L0 even in AttachedMulti to bound read amplification.
-        let location = self.tenant_conf.load().location;
-        if !location.may_upload_layers_hint() {
-            info!("skipping compaction in location state {location:?}");
-            return Ok(CompactionOutcome::Skipped);
-        }
-
-        // Don't compact if the circuit breaker is tripped.
-        if self.compaction_circuit_breaker.lock().unwrap().is_broken() {
-            info!("skipping compaction due to previous failures");
-            return Ok(CompactionOutcome::Skipped);
-        }
-
-        // Collect all timelines to compact, along with offload instructions and L0 counts.
-        let mut compact: Vec<Arc<Timeline>> = Vec::new();
-        let mut offload: HashSet<TimelineId> = HashSet::new();
-        let mut l0_counts: HashMap<TimelineId, usize> = HashMap::new();
-
-        {
-            let offload_enabled = self.get_timeline_offloading_enabled();
-            let timelines = self.timelines.lock().unwrap();
-            for (&timeline_id, timeline) in timelines.iter() {
-                // Skip inactive timelines.
-                if !timeline.is_active() {
-                    continue;
-                }
-
-                // Schedule the timeline for compaction.
-                compact.push(timeline.clone());
-
-                // Schedule the timeline for offloading if eligible.
-                let can_offload = offload_enabled
-                    && timeline.can_offload().0
-                    && !timelines
-                        .iter()
-                        .any(|(_, tli)| tli.get_ancestor_timeline_id() == Some(timeline_id));
-                if can_offload {
-                    offload.insert(timeline_id);
-                }
-            }
-        } // release timelines lock
-
-        for timeline in &compact {
-            // Collect L0 counts. Can't await while holding lock above.
-            if let Ok(lm) = timeline
-                .layers
-                .read(LayerManagerLockHolder::Compaction)
-                .await
-                .layer_map()
-            {
-                l0_counts.insert(timeline.timeline_id, lm.level0_deltas().len());
-            }
-        }
-
-        // Pass 1: L0 compaction across all timelines, in order of L0 count. We prioritize this to
-        // bound read amplification.
-        //
-        // TODO: this may spin on one or more ingest-heavy timelines, starving out image/GC
-        // compaction and offloading. We leave that as a potential problem to solve later. Consider
-        // splitting L0 and image/GC compaction to separate background jobs.
-        if self.get_compaction_l0_first() {
-            let compaction_threshold = self.get_compaction_threshold();
-            let compact_l0 = compact
-                .iter()
-                .map(|tli| (tli, l0_counts.get(&tli.timeline_id).copied().unwrap_or(0)))
-                .filter(|&(_, l0)| l0 >= compaction_threshold)
-                .sorted_by_key(|&(_, l0)| l0)
-                .rev()
-                .map(|(tli, _)| tli.clone())
-                .collect_vec();
-
-            let mut has_pending_l0 = false;
-            for timeline in compact_l0 {
-                let ctx = &ctx.with_scope_timeline(&timeline);
-                // NB: don't set CompactFlags::YieldForL0, since this is an L0-only compaction pass.
-                let outcome = timeline
-                    .compact(cancel, CompactFlags::OnlyL0Compaction.into(), ctx)
-                    .instrument(info_span!("compact_timeline", timeline_id = %timeline.timeline_id))
-                    .await
-                    .inspect_err(|err| self.maybe_trip_compaction_breaker(err))?;
-                match outcome {
-                    CompactionOutcome::Done => {}
-                    CompactionOutcome::Skipped => {}
-                    CompactionOutcome::Pending => has_pending_l0 = true,
-                    CompactionOutcome::YieldForL0 => has_pending_l0 = true,
-                }
-            }
-            if has_pending_l0 {
-                return Ok(CompactionOutcome::YieldForL0); // do another pass
-            }
-        }
-
-        // Pass 2: image compaction and timeline offloading. If any timelines have accumulated more
-        // L0 layers, they may also be compacted here. Image compaction will yield if there is
-        // pending L0 compaction on any tenant timeline.
-        //
-        // TODO: consider ordering timelines by some priority, e.g. time since last full compaction,
-        // amount of L1 delta debt or garbage, offload-eligible timelines first, etc.
-        let mut has_pending = false;
-        for timeline in compact {
-            if !timeline.is_active() {
-                continue;
-            }
-            let ctx = &ctx.with_scope_timeline(&timeline);
-
-            // Yield for L0 if the separate L0 pass is enabled (otherwise there's no point).
-            let mut flags = EnumSet::default();
-            if self.get_compaction_l0_first() {
-                flags |= CompactFlags::YieldForL0;
-            }
-
-            let mut outcome = timeline
-                .compact(cancel, flags, ctx)
-                .instrument(info_span!("compact_timeline", timeline_id = %timeline.timeline_id))
-                .await
-                .inspect_err(|err| self.maybe_trip_compaction_breaker(err))?;
-
-            // If we're done compacting, check the scheduled GC compaction queue for more work.
-            if outcome == CompactionOutcome::Done {
-                let queue = {
-                    let mut guard = self.scheduled_compaction_tasks.lock().unwrap();
-                    guard
-                        .entry(timeline.timeline_id)
-                        .or_insert_with(|| Arc::new(GcCompactionQueue::new()))
-                        .clone()
-                };
-                let gc_compaction_strategy = self
-                    .feature_resolver
-                    .evaluate_multivariate("gc-comapction-strategy")
-                    .ok();
-                let span = if let Some(gc_compaction_strategy) = gc_compaction_strategy {
-                    info_span!("gc_compact_timeline", timeline_id = %timeline.timeline_id, strategy = %gc_compaction_strategy)
-                } else {
-                    info_span!("gc_compact_timeline", timeline_id = %timeline.timeline_id)
-                };
-                outcome = queue
-                    .iteration(cancel, ctx, &self.gc_block, &timeline)
-                    .instrument(span)
-                    .await?;
-            }
-
-            // If we're done compacting, offload the timeline if requested.
-            if outcome == CompactionOutcome::Done && offload.contains(&timeline.timeline_id) {
-                pausable_failpoint!("before-timeline-auto-offload");
-                offload_timeline(self, &timeline)
-                    .instrument(info_span!("offload_timeline", timeline_id = %timeline.timeline_id))
-                    .await
-                    .or_else(|err| match err {
-                        // Ignore this, we likely raced with unarchival.
-                        OffloadError::NotArchived => Ok(()),
-                        OffloadError::AlreadyInProgress => Ok(()),
-                        OffloadError::Cancelled => Err(CompactionError::new_cancelled()),
-                        // don't break the anyhow chain
-                        OffloadError::Other(err) => Err(CompactionError::Other(err)),
-                    })?;
-            }
-
-            match outcome {
-                CompactionOutcome::Done => {}
-                CompactionOutcome::Skipped => {}
-                CompactionOutcome::Pending => has_pending = true,
-                // This mostly makes sense when the L0-only pass above is enabled, since there's
-                // otherwise no guarantee that we'll start with the timeline that has high L0.
-                CompactionOutcome::YieldForL0 => return Ok(CompactionOutcome::YieldForL0),
-            }
-        }
-
-        // Success! Untrip the breaker if necessary.
-        self.compaction_circuit_breaker
-            .lock()
-            .unwrap()
-            .success(&CIRCUIT_BREAKERS_UNBROKEN);
-
-        match has_pending {
-            true => Ok(CompactionOutcome::Pending),
-            false => Ok(CompactionOutcome::Done),
-        }
-    }
-
-    /// Trips the compaction circuit breaker if appropriate.
-    pub(crate) fn maybe_trip_compaction_breaker(&self, err: &CompactionError) {
-        if err.is_cancel() {
-            return;
-        }
-        self.compaction_circuit_breaker
-            .lock()
-            .unwrap()
-            .fail(&CIRCUIT_BREAKERS_BROKEN, err);
-    }
-
-    /// Cancel scheduled compaction tasks
-    pub(crate) fn cancel_scheduled_compaction(&self, timeline_id: TimelineId) {
-        let mut guard = self.scheduled_compaction_tasks.lock().unwrap();
-        if let Some(q) = guard.get_mut(&timeline_id) {
-            q.cancel_scheduled();
-        }
-    }
-
-    pub(crate) fn get_scheduled_compaction_tasks(
-        &self,
-        timeline_id: TimelineId,
-    ) -> Vec<CompactInfoResponse> {
-        let res = {
-            let guard = self.scheduled_compaction_tasks.lock().unwrap();
-            guard.get(&timeline_id).map(|q| q.remaining_jobs())
-        };
-        let Some((running, remaining)) = res else {
-            return Vec::new();
-        };
-        let mut result = Vec::new();
-        if let Some((id, running)) = running {
-            result.extend(running.into_compact_info_resp(id, true));
-        }
-        for (id, job) in remaining {
-            result.extend(job.into_compact_info_resp(id, false));
-        }
-        result
-    }
-
-    /// Schedule a compaction task for a timeline.
-    pub(crate) async fn schedule_compaction(
-        &self,
-        timeline_id: TimelineId,
-        options: CompactOptions,
-    ) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let mut guard = self.scheduled_compaction_tasks.lock().unwrap();
-        let q = guard
-            .entry(timeline_id)
-            .or_insert_with(|| Arc::new(GcCompactionQueue::new()));
-        q.schedule_manual_compaction(options, Some(tx));
-        Ok(rx)
-    }
-
     /// Performs periodic housekeeping, via the tenant housekeeping background task.
     async fn housekeeping(&self) {
         // Call through to all timelines to freeze ephemeral layers as needed. This usually happens
@@ -4507,7 +4243,6 @@ impl TenantShard {
                 Some(Duration::from_secs(3600 * 24)),
             )),
             l0_compaction_trigger: Arc::new(Notify::new()),
-            scheduled_compaction_tasks: Mutex::new(Default::default()),
             activate_now_sem: tokio::sync::Semaphore::new(0),
             attach_wal_lag_cooldown: Arc::new(std::sync::OnceLock::new()),
             cancel: CancellationToken::default(),
@@ -12904,36 +12639,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_get_force_image_creation_lsn() -> anyhow::Result<()> {
-        let tenant_conf = pageserver_api::models::TenantConfig {
-            pitr_interval: Some(Duration::from_secs(7 * 3600)),
-            image_layer_force_creation_period: Some(Duration::from_secs(3600)),
-            ..Default::default()
-        };
-
-        let tenant_id = TenantId::generate();
-
-        let harness = TenantHarness::create_custom(
-            "test_get_force_image_creation_lsn",
-            tenant_conf,
-            tenant_id,
-            ShardIdentity::unsharded(),
-            Generation::new(1),
-        )
-        .await?;
-        let (tenant, ctx) = harness.load().await;
-        let timeline = tenant
-            .create_test_timeline(TIMELINE_ID, Lsn(0x10), DEFAULT_PG_VERSION, &ctx)
-            .await?;
-        timeline.gc_info.write().unwrap().cutoffs.time = Some(Lsn(100));
-        {
-            let writer = timeline.writer().await;
-            writer.finish_write(Lsn(5000));
-        }
-
-        let image_creation_lsn = timeline.get_force_image_creation_lsn().unwrap();
-        assert_eq!(image_creation_lsn, Lsn(4300));
-        Ok(())
-    }
+    // test_get_force_image_creation_lsn deleted in Phase 4d.2 — the
+    // method it tested (Timeline::get_force_image_creation_lsn) was a
+    // helper for compact_with_gc deciding when to force image-layer
+    // creation; both went away with compaction.rs.
 }
