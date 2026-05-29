@@ -207,6 +207,14 @@ pub struct YbWalStorage {
     /// `Arc<AtomicU64>` because `remove_up_to` returns a `'static`
     /// future.
     delete_lower_bound: Arc<AtomicU64>,
+    /// Highest LSN whose chunks are confirmed in `wals`. Advanced by
+    /// the consumer after each successful batch INSERT. Read by
+    /// `flush_lsn()` to cap the externally-reported flush watermark at
+    /// true YB durability — the in-memory `inner.flush_record_lsn` can
+    /// otherwise be moved ahead of YB by `truncate_wal(end_pos)` when
+    /// `end_pos > submitted_max_lsn`, opening a permanent gap. Initialised
+    /// from `load_write_lsn` at construction (YB's current max chunk end).
+    durable_lsn: Arc<AtomicU64>,
     /// Kept so the consumer task isn't dropped immediately on
     /// `YbWalStorage` drop; closing `tx` is what signals shutdown.
     _consumer_handle: tokio::task::JoinHandle<()>,
@@ -252,6 +260,7 @@ impl YbWalStorage {
         let (watermark_tx, watermark_rx) =
             watch::channel(DurableState::Healthy(write_lsn));
         let flush_notify = Arc::new(tokio::sync::Notify::new());
+        let durable_lsn = Arc::new(AtomicU64::new(write_lsn.0));
         let consumer_handle = tokio::spawn(consumer_main(
             rx,
             client.clone(),
@@ -260,6 +269,7 @@ impl YbWalStorage {
             timeline_id_str.clone(),
             watermark_tx,
             flush_notify.clone(),
+            durable_lsn.clone(),
         ));
 
         // Seed the DELETE lower bound from YB so post-restart removals
@@ -287,6 +297,7 @@ impl YbWalStorage {
             submitted_max_lsn: write_lsn,
             cache,
             delete_lower_bound: Arc::new(AtomicU64::new(min_segno)),
+            durable_lsn,
             _consumer_handle: consumer_handle,
         };
 
@@ -559,7 +570,14 @@ impl Storage for YbWalStorage {
     }
 
     fn flush_lsn(&self) -> Lsn {
-        self.inner.flush_lsn()
+        // Cap at YB-confirmed durability. `inner.flush_lsn()` can be ahead
+        // when `truncate_wal(end_pos)` ran with `end_pos > durable_lsn`
+        // (election with `start_streaming_at` past the persisted tail);
+        // returning the uncapped value to walproposer or to a Raft vote
+        // is what creates the WAL gap forensic / 2026-05-29.
+        let inner_lsn = self.inner.flush_lsn();
+        let durable = Lsn(self.durable_lsn.load(Ordering::Acquire));
+        std::cmp::min(inner_lsn, durable)
     }
 
     async fn initialize_first_segment(&mut self, init_lsn: Lsn) -> Result<()> {
@@ -614,6 +632,23 @@ impl Storage for YbWalStorage {
         // to discard. Wake the consumer in case it's accumulating.
         self.flush_notify.notify_one();
         self.wait_for_durable(self.submitted_max_lsn).await?;
+
+        // Refuse to advance the truncation point past confirmed YB
+        // durability. `inner.truncate_wal(end_pos)` sets `flush_record_lsn
+        // = end_pos` unconditionally, so accepting an `end_pos` past
+        // `durable_lsn` would advertise WAL the row store can't return —
+        // exactly the forensic gap (2026-05-29). The walproposer should
+        // reissue ProposerElected with a corrected `start_streaming_at`
+        // after seeing our capped `flush_lsn()` on the next VoteResponse.
+        let durable = Lsn(self.durable_lsn.load(Ordering::Acquire));
+        if end_pos > durable {
+            anyhow::bail!(
+                "YbWalStorage::truncate_wal: refusing end_pos {end_pos} \
+                 past confirmed durable LSN {durable} \
+                 (submitted_max_lsn={})",
+                self.submitted_max_lsn,
+            );
+        }
         self.delete_after(end_pos).await?;
         self.inner.truncate_wal(end_pos).await
     }
@@ -720,6 +755,7 @@ async fn consumer_main(
     timeline_id: String,
     watermark_tx: watch::Sender<DurableState>,
     flush_notify: Arc<tokio::sync::Notify>,
+    durable_lsn: Arc<AtomicU64>,
 ) {
     loop {
         // Block until at least one chunk arrives.
@@ -771,8 +807,14 @@ async fn consumer_main(
 
         match flush_batch(&client, &table_name, &tenant_id, &timeline_id, &batch).await {
             Ok(()) => {
-                // Publish watermark. Failure here means all receivers have
-                // dropped — only happens during shutdown — so ignore.
+                // Publish durability advance. The atomic is the
+                // authoritative source for `YbWalStorage::flush_lsn()`'s
+                // cap and `truncate_wal`'s precondition — must be set
+                // BEFORE the watch send so a `wait_for_durable` waiter
+                // can't observe the watch advance and then read a stale
+                // `durable_lsn`. Failure on the watch send means all
+                // receivers have dropped — only during shutdown — ignore.
+                durable_lsn.store(highest_lsn.0, Ordering::Release);
                 let _ = watermark_tx.send(DurableState::Healthy(highest_lsn));
             }
             Err(e) => {
@@ -1162,5 +1204,190 @@ impl Storage for WalStore {
             WalStore::Physical(s) => s.get_metrics(),
             WalStore::Yb(s) => s.get_metrics(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::TimelinePersistentState;
+    use crate::wal_storage::Storage;
+    use camino_tempfile::Utf8TempDir;
+    use utils::id::{TenantId, TenantTimelineId, TimelineId};
+
+    fn pgcfg() -> tokio_postgres::Config {
+        let mut cfg = tokio_postgres::Config::new();
+        cfg.host(&std::env::var("YB_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".into()));
+        cfg.port(
+            std::env::var("YB_TEST_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5433),
+        );
+        cfg.user(&std::env::var("YB_TEST_USER").unwrap_or_else(|_| "yugabyte".into()));
+        cfg.dbname(&std::env::var("YB_TEST_DB").unwrap_or_else(|_| "yb_storage".into()));
+        cfg.application_name("yb_wal_storage_test");
+        cfg
+    }
+
+    /// One-off `wals`-shaped table per test so concurrent runs and dirty
+    /// state from prior failures can't interfere.
+    async fn make_wals_table(client: &YsqlClient, table: &str) {
+        let q = quote_ident(table);
+        client
+            .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
+            .await
+            .expect("drop scratch wals table");
+        client
+            .execute(
+                &format!(
+                    "CREATE TABLE {q} (\
+                       tenant_id        TEXT    NOT NULL,\
+                       timeline_id      TEXT    NOT NULL,\
+                       segno            BIGINT  NOT NULL,\
+                       chunk_seq        INT     NOT NULL,\
+                       chunk_offset     BIGINT  NOT NULL,\
+                       chunk_size       INT     NOT NULL,\
+                       data             BYTEA   NOT NULL,\
+                       last_modified_us BIGINT  NOT NULL,\
+                       PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)\
+                     )"
+                ),
+                &[],
+            )
+            .await
+            .expect("create scratch wals table");
+    }
+
+    async fn drop_wals_table(client: &YsqlClient, table: &str) {
+        let q = quote_ident(table);
+        let _ = client.execute(&format!("DROP TABLE IF EXISTS {q}"), &[]).await;
+    }
+
+    /// Build a fresh `YbWalStorage` with its own per-test scratch table
+    /// and tempdir. `start_lsn` becomes the rehydrated `write_lsn` (the
+    /// table is empty, so `load_write_lsn` falls back to `commit_lsn`).
+    async fn make_storage(table: &str, start_lsn: Lsn) -> (YbWalStorage, Utf8TempDir) {
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg())
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        );
+        make_wals_table(&client, table).await;
+
+        let tenant = TenantId::generate();
+        let timeline = TimelineId::generate();
+        let ttid = TenantTimelineId::new(tenant, timeline);
+        let mut state = TimelinePersistentState::empty();
+        state.tenant_id = ttid.tenant_id;
+        state.timeline_id = ttid.timeline_id;
+        state.commit_lsn = start_lsn;
+        state.timeline_start_lsn = start_lsn;
+        state.local_start_lsn = start_lsn;
+
+        let tmp = camino_tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().to_path_buf();
+        let storage =
+            YbWalStorage::new(&ttid, &dir, &state, true, client, table.to_string(), None)
+                .await
+                .expect("YbWalStorage::new");
+        (storage, tmp)
+    }
+
+    const SEG_SIZE: u64 = 16 * 1024 * 1024;
+
+    /// Regression: when the consumer's confirmed `durable_lsn` is at X
+    /// and a caller asks to truncate to Y > X, `truncate_wal` must bail
+    /// rather than silently advance `inner.flush_record_lsn` past YB
+    /// (which is what created the 2026-05-29 forensic gap — see the
+    /// `truncate_wal` comment).
+    ///
+    /// Construction gives us a valid bug-exhibiting state without
+    /// needing to push real WAL bytes: an empty `wals` falls back to
+    /// `state.commit_lsn` for `write_lsn`, the watermark starts at
+    /// `Healthy(write_lsn)`, and `durable_lsn` is initialised from the
+    /// same value. So `submitted_max_lsn == durable_lsn == write_lsn ==
+    /// start_lsn` at t=0. We then ask to truncate to `start_lsn + 4 KiB`
+    /// — exactly the "election with start_streaming_at past the
+    /// persisted tail" pattern. With Fix 2 we bail; without it,
+    /// `inner.truncate_wal(end_pos)` advances `flush_record_lsn` past
+    /// `durable_lsn` and opens the gap.
+    #[tokio::test]
+    async fn truncate_wal_refuses_end_pos_past_durable() {
+        let table = format!("wals_test_truncate_{}", rand_suffix());
+        // Start past the first-segment quick-exit edge case in
+        // `inner.truncate_wal` (it special-cases `write_record_lsn == 0`).
+        let start = Lsn(SEG_SIZE);
+        let (mut storage, _tmp) = make_storage(&table, start).await;
+
+        assert_eq!(
+            Lsn(storage.durable_lsn.load(Ordering::Acquire)),
+            start,
+            "durable_lsn seeded from load_write_lsn at construction"
+        );
+        assert_eq!(storage.flush_lsn(), start);
+
+        let bogus_end = Lsn(start.0 + 4096);
+        let err = storage
+            .truncate_wal(bogus_end)
+            .await
+            .expect_err("truncate_wal past durable should bail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("past confirmed durable LSN"),
+            "expected bail message, got: {msg}"
+        );
+
+        assert_eq!(
+            storage.flush_lsn(),
+            start,
+            "flush_lsn must not have advanced after the refused truncate"
+        );
+
+        // `truncate_wal` at exactly `durable_lsn` is a permitted no-op
+        // (matches the boundary case where the proposer truncates back
+        // to the durable tail).
+        storage
+            .truncate_wal(start)
+            .await
+            .expect("truncate_wal at durable should succeed");
+
+        drop_wals_table(&storage.client, &table).await;
+    }
+
+    /// `flush_lsn()` returns `min(inner, durable)` — defence-in-depth
+    /// in case some future path moves `inner.flush_record_lsn` ahead of
+    /// YB independent of `truncate_wal`. Poke `durable_lsn` directly to
+    /// simulate "consumer is lagging" without needing to keep real
+    /// chunks in flight.
+    #[tokio::test]
+    async fn flush_lsn_caps_at_durable() {
+        let table = format!("wals_test_cap_{}", rand_suffix());
+        let start = Lsn(SEG_SIZE);
+        let (storage, _tmp) = make_storage(&table, start).await;
+
+        assert_eq!(storage.flush_lsn(), start);
+
+        let phony_durable = Lsn(start.0 - 1024);
+        storage
+            .durable_lsn
+            .store(phony_durable.0, Ordering::Release);
+        assert_eq!(
+            storage.flush_lsn(),
+            phony_durable,
+            "flush_lsn must cap at durable_lsn when inner is ahead"
+        );
+
+        // Restore so the consumer's shutdown path doesn't observe a
+        // permanently-regressed watermark.
+        storage.durable_lsn.store(start.0, Ordering::Release);
+
+        drop_wals_table(&storage.client, &table).await;
+    }
+
+    fn rand_suffix() -> String {
+        let pid = std::process::id();
+        let nanos = std::time::UNIX_EPOCH.elapsed().map(|d| d.as_nanos()).unwrap_or(0);
+        format!("{pid}_{nanos}")
     }
 }
