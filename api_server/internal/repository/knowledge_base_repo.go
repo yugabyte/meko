@@ -766,7 +766,7 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 		return nil, 0, fmt.Errorf("list dist_rag documents: source ids: %w", err)
 	}
 	if len(sourceIDs) == 0 {
-		return nil, 0, nil
+		return []KnowledgeBaseDocument{}, 0, nil
 	}
 
 	// Step 2 (dataDB): documents page.

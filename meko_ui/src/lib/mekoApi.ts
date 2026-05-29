@@ -1316,7 +1316,7 @@ export async function getKnowledgeBaseDocuments(
   if (type_filter) qs.set("type_filter", type_filter);
   if (indexed_only) qs.set("indexed_only", "true");
   const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
-  return request<KnowledgeBaseDocumentsPage>(
+  const resp = await request<KnowledgeBaseDocumentsPage>(
     withDatapackID(
       `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/documents${suffix}`,
       rest.datapackId,
@@ -1325,6 +1325,9 @@ export async function getKnowledgeBaseDocuments(
     undefined,
     rest,
   );
+  // Defensive: a BE that ships `items: null` for an empty page would
+  // crash callers that .map / .slice the field.
+  return { ...resp, items: resp?.items ?? [] };
 }
 
 /** Aggregate stats + auto-generated text for the SharedKnowledge header
