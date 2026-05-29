@@ -1459,20 +1459,15 @@ impl Timeline {
             return Ok(BTreeMap::default());
         }
 
-        // yb-pageserver read path: every range we can route to
-        // `pageserver.pages` (rel pages) or `pageserver.slru_pages`
-        // (SLRU blocks) does so for tablet-local range scans. Any query
-        // that mixes in keys we haven't migrated yet (metadata, dir
-        // listings, aux, repl origins, rel-size sentinels, SLRU dir /
-        // segment-size sentinels) falls through to the layer-stack path;
-        // those keys are still populated there until Phase 4c.
+        // yb-pageserver read path: every range goes through the row
+        // store. Inside `get_vectored_via_page_writer` we classify each
+        // range by its start key:
+        //   - rel-page  → pageserver.pages    (chain + walredo)
+        //   - slru-block → pageserver.slru_pages (chain + walredo)
+        //   - else      → pageserver.meta     (single payload, no walredo)
         let ranges = &query.total_keyspace().ranges;
-        let all_row_store = self.page_writer.is_some()
-            && !ranges.is_empty()
-            && ranges
-                .iter()
-                .all(|r| r.start.is_rel_block_key() || r.start.is_slru_block_key());
-        if all_row_store && let Some(page_writer) = self.page_writer.clone() {
+        let row_store_eligible = self.page_writer.is_some() && !ranges.is_empty();
+        if row_store_eligible && let Some(page_writer) = self.page_writer.clone() {
             let redo_attempt_type = if ctx.task_kind() == TaskKind::Compaction {
                 RedoAttemptType::LegacyCompaction
             } else {
@@ -1687,10 +1682,22 @@ impl Timeline {
 
         let mut chains_by_key: std::collections::HashMap<Key, Vec<crate::page_store::PageRow>> =
             std::collections::HashMap::new();
+        // Meta keys go straight into the results map — no walredo.
+        let mut meta_results: BTreeMap<Key, Result<Bytes, PageReconstructError>> = BTreeMap::new();
+
         for range in &total_keyspace.ranges {
-            if range.start.is_slru_block_key() {
-                // SLRU range — `range` always stays within one
-                // (kind, segno) segment for vectored SLRU reads.
+            if range.start.is_rel_block_key() {
+                let scan = page_writer
+                    .scan_range(range.clone(), target_lsn)
+                    .await
+                    .map_err(|e| {
+                        GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
+                    })?;
+                for (key, chain) in scan {
+                    chains_by_key.entry(key).or_default().extend(chain);
+                }
+            } else if range.start.is_slru_block_key() {
+                // SLRU range — always stays within one (kind, segno).
                 let (kind, segno, blk_lo) = range.start.to_slru_block().map_err(|e| {
                     GetVectoredError::Other(anyhow!("SLRU range start decode: {e:#}"))
                 })?;
@@ -1716,14 +1723,18 @@ impl Timeline {
                     chains_by_key.entry(key).or_default().extend(converted);
                 }
             } else {
+                // Meta range: latest payload per key, no walredo.
                 let scan = page_writer
-                    .scan_range(range.clone(), target_lsn)
+                    .scan_meta_range(range.clone(), target_lsn)
                     .await
                     .map_err(|e| {
-                        GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
+                        GetVectoredError::Other(anyhow!("meta scan_range failed: {e:#}"))
                     })?;
-                for (key, chain) in scan {
-                    chains_by_key.entry(key).or_default().extend(chain);
+                for (_key_bytes, row) in scan {
+                    if row.key.len() == pageserver_api::key::KEY_SIZE {
+                        let k = Key::from_slice(&row.key);
+                        meta_results.insert(k, Ok(row.payload));
+                    }
                 }
             }
         }
@@ -1757,7 +1768,7 @@ impl Timeline {
         }
 
         use futures::StreamExt;
-        let mut results: BTreeMap<Key, Result<Bytes, PageReconstructError>> = BTreeMap::new();
+        let mut results: BTreeMap<Key, Result<Bytes, PageReconstructError>> = meta_results;
         futures::pin_mut!(futs);
         while let Some((key, res)) = futs.next().await {
             results.insert(key, res);
@@ -8089,29 +8100,36 @@ impl TimelineWriter<'_> {
 
         let batch_max_lsn = batch.max_lsn;
 
-        // yb-pageserver write path:
-        // - Relation-page keys go to PageWriter / `pageserver.pages`.
-        // - Non-rel keys (SLRUs, metadata, dir listings, aux, repl
-        //   origins, rel-size sentinels) still flow through the layer
-        //   stack into `public.blobs`. Phase 5 migrates these to YB
-        //   tables; until then we just filter rel-page entries out of
-        //   the layer write to avoid duplicating them.
+        // yb-pageserver write path: PageWriter routes every entry into
+        // one of pageserver.{pages, slru_pages, meta}. The layer-file
+        // path is dead code from the write perspective and is only
+        // kept around for legacy callers that bypass PageWriter (e.g.
+        // imports, tests); we still hand it the original batch so
+        // those paths stay functional until Phase 4d deletes the
+        // layer stack entirely.
         let layer_batch = if let Some(page_writer) = self.tl.page_writer.as_ref() {
             let triples = crate::page_writer::extract_triples(&batch)?;
             if !triples.is_empty() {
                 page_writer.put(&triples).await?;
             }
-            crate::page_writer::extract_non_row_store_batch(&batch)
+            None
         } else {
             Some(batch)
         };
 
         let Some(layer_batch) = layer_batch else {
-            // All entries were rel-page keys, all routed to PageWriter.
-            // No layer-stack work to do; still advance the writer state.
-            let state = self.write_guard.as_mut().unwrap();
-            state.prev_lsn = Some(batch_max_lsn);
-            state.max_lsn = std::cmp::max(state.max_lsn, Some(batch_max_lsn));
+            // All entries routed to PageWriter; no layer-stack work.
+            // Advance disk_consistent_lsn so callers that depend on it
+            // (bootstrap finalisation, basebackup gate, etc.) see the
+            // row-store writes as durable. PageWriter's flush is
+            // periodic; treating the in-memory buffer as "durable
+            // enough" matches the layer-stack's behaviour where data
+            // is visible to disk_consistent_lsn before reaching S3.
+            self.tl.disk_consistent_lsn.fetch_max(batch_max_lsn);
+            if let Some(state) = self.write_guard.as_mut() {
+                state.prev_lsn = Some(batch_max_lsn);
+                state.max_lsn = std::cmp::max(state.max_lsn, Some(batch_max_lsn));
+            }
             return Ok(());
         };
 

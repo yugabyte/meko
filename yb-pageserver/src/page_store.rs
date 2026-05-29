@@ -65,6 +65,17 @@ pub struct PageRow {
     pub payload: Bytes,
 }
 
+/// One row in `pageserver.meta`. The key is the 18-byte BYTEA encoding
+/// of any `Key` that isn't a relation-page or SLRU-block (those have
+/// their own tables). Full-overwrite semantics: read = latest row at
+/// LSN ≤ target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetaRow {
+    pub key: Bytes,
+    pub lsn: Lsn,
+    pub payload: Bytes,
+}
+
 /// One row in `pageserver.slru_pages`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlruPageRow {
@@ -223,6 +234,22 @@ impl PageStore {
             .execute(&create_pages, &[])
             .await
             .context("creating pages table")?;
+
+        let create_meta = format!(
+            "CREATE TABLE IF NOT EXISTS \"{}\".meta (
+                tenant_id    TEXT     NOT NULL,
+                timeline_id  TEXT     NOT NULL,
+                key          BYTEA    NOT NULL,
+                lsn          BIGINT   NOT NULL,
+                payload      BYTEA    NOT NULL,
+                PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+            )",
+            self.schema
+        );
+        self.client
+            .execute(&create_meta, &[])
+            .await
+            .context("creating meta table")?;
 
         let create_slru = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".slru_pages (
@@ -874,6 +901,178 @@ impl PageStore {
         Ok(by_block)
     }
 
+    // ------------------- meta ---------------------------------------------
+
+    pub async fn put_meta(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+        rows: &[MetaRow],
+    ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+
+        let mut sql = format!(
+            "INSERT INTO \"{}\".meta (tenant_id, timeline_id, key, lsn, payload) VALUES ",
+            self.schema
+        );
+        const COLS: usize = 5;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
+            Vec::with_capacity(rows.len() * COLS);
+        for (i, row) in rows.iter().enumerate() {
+            if i > 0 {
+                sql.push(',');
+            }
+            let base = i * COLS + 1;
+            sql.push_str(&format!(
+                "(${}, ${}, ${}, ${}, ${})",
+                base, base + 1, base + 2, base + 3, base + 4,
+            ));
+            if row.key.len() != KEY_SIZE {
+                bail!("put_meta row {i}: key bytes wrong length ({})", row.key.len());
+            }
+            params.push(Box::new(tenant_s.clone()));
+            params.push(Box::new(timeline_s.clone()));
+            params.push(Box::new(row.key.to_vec()));
+            params.push(Box::new(row.lsn.0 as i64));
+            params.push(Box::new(row.payload.to_vec()));
+        }
+        let params_ref: Vec<&(dyn ToSql + Sync)> =
+            params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+        self.client
+            .execute(&sql, &params_ref)
+            .await
+            .with_context(|| {
+                format!(
+                    "put_meta tenant={tenant} timeline={timeline} batch_rows={}",
+                    rows.len()
+                )
+            })?;
+        Ok(())
+    }
+
+    /// Read the latest payload for `key` at LSN ≤ `target_lsn`.
+    /// Returns `None` if no row exists at or below the target.
+    pub async fn read_meta(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+        key: &[u8],
+        target_lsn: Lsn,
+    ) -> Result<Option<MetaRow>> {
+        if key.len() != KEY_SIZE {
+            bail!("read_meta: key bytes wrong length ({})", key.len());
+        }
+        let sql = format!(
+            "SELECT key, lsn, payload FROM \"{}\".meta \
+             WHERE tenant_id=$1 AND timeline_id=$2 AND key=$3 AND lsn <= $4 \
+             ORDER BY lsn DESC LIMIT 1",
+            self.schema
+        );
+        let row_opt = self
+            .client
+            .query_opt(
+                &sql,
+                &[
+                    &tenant.to_string(),
+                    &timeline.to_string(),
+                    &key,
+                    &(target_lsn.0 as i64),
+                ],
+            )
+            .await
+            .context("read_meta")?;
+        row_opt.map(row_to_meta).transpose()
+    }
+
+    /// Range scan over meta keys. Returns the latest version per key
+    /// in `[range.start, range.end)` at LSN ≤ `target_lsn`. Uses a
+    /// LATERAL LIMIT 1 anchor seek per distinct key.
+    pub async fn scan_meta_range(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+        range: Range<Key>,
+        target_lsn: Lsn,
+    ) -> Result<HashMap<Bytes, MetaRow>> {
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+        let target = target_lsn.0 as i64;
+
+        let mut start_bytes = vec![0u8; KEY_SIZE];
+        range.start.write_to_byte_slice(&mut start_bytes);
+        let mut end_bytes = vec![0u8; KEY_SIZE];
+        range.end.write_to_byte_slice(&mut end_bytes);
+
+        // Single-key fast path: no GROUP BY / LATERAL — just LIMIT 1.
+        if range.end == range.start.next() {
+            let row = self
+                .read_meta(tenant, timeline, &start_bytes, target_lsn)
+                .await?;
+            let mut out = HashMap::with_capacity(1);
+            if let Some(r) = row {
+                out.insert(r.key.clone(), r);
+            }
+            return Ok(out);
+        }
+
+        let sql = format!(
+            "WITH keys AS ( \
+                 SELECT DISTINCT key FROM \"{schema}\".meta \
+                 WHERE tenant_id=$1 AND timeline_id=$2 \
+                   AND key >= $3 AND key < $4 AND lsn <= $5 \
+             ) \
+             SELECT k.key, latest.lsn, latest.payload \
+             FROM keys k \
+             CROSS JOIN LATERAL ( \
+                 SELECT lsn, payload FROM \"{schema}\".meta \
+                 WHERE tenant_id=$1 AND timeline_id=$2 \
+                   AND key = k.key AND lsn <= $5 \
+                 ORDER BY lsn DESC LIMIT 1 \
+             ) latest",
+            schema = self.schema
+        );
+        let rows = self
+            .client
+            .query(
+                &sql,
+                &[
+                    &tenant_s,
+                    &timeline_s,
+                    &start_bytes,
+                    &end_bytes,
+                    &target,
+                ],
+            )
+            .await
+            .context("scan_meta_range")?;
+        let mut out = HashMap::with_capacity(rows.len());
+        for r in rows {
+            let row = row_to_meta(r)?;
+            out.insert(row.key.clone(), row);
+        }
+        Ok(out)
+    }
+
+    pub async fn delete_all_meta(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+    ) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM \"{}\".meta WHERE tenant_id = $1 AND timeline_id = $2",
+            self.schema
+        );
+        self.client
+            .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .await
+            .context("delete_all_meta")?;
+        Ok(())
+    }
+
     // ------------------- timelines ----------------------------------------
 
     pub async fn upsert_timeline(&self, row: &TimelineRow) -> Result<()> {
@@ -1030,6 +1229,17 @@ fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {
         lsn: Lsn(lsn as u64),
         is_image,
         will_init,
+        payload: Bytes::from(payload),
+    })
+}
+
+fn row_to_meta(r: tokio_postgres::Row) -> Result<MetaRow> {
+    let key: Vec<u8> = r.try_get(0)?;
+    let lsn: i64 = r.try_get(1)?;
+    let payload: Vec<u8> = r.try_get(2)?;
+    Ok(MetaRow {
+        key: Bytes::from(key),
+        lsn: Lsn(lsn as u64),
         payload: Bytes::from(payload),
     })
 }

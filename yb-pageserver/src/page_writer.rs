@@ -33,7 +33,7 @@ use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
 use pageserver_api::reltag::SlruKind;
 
-use crate::page_store::{PageRow, PageStore, SlruPageRow};
+use crate::page_store::{MetaRow, PageRow, PageStore, SlruPageRow};
 
 /// Defaults from the project plan: flush every 5 seconds or every 100 MiB,
 /// whichever comes first.
@@ -64,6 +64,7 @@ pub struct PageWriter {
 struct WriterState {
     buffer: Vec<PageRow>,
     slru_buffer: Vec<SlruPageRow>,
+    meta_buffer: Vec<MetaRow>,
     bytes_in_buffer: usize,
     opened_at: Option<Instant>,
     rows_written: u64,
@@ -75,6 +76,7 @@ pub struct WriterStats {
     pub bytes_in_buffer: usize,
     pub buffered_rows: usize,
     pub buffered_slru_rows: usize,
+    pub buffered_meta_rows: usize,
 }
 
 impl PageWriter {
@@ -92,6 +94,7 @@ impl PageWriter {
             state: Mutex::new(WriterState {
                 buffer: Vec::new(),
                 slru_buffer: Vec::new(),
+                meta_buffer: Vec::new(),
                 bytes_in_buffer: 0,
                 opened_at: None,
                 rows_written: 0,
@@ -100,27 +103,32 @@ impl PageWriter {
     }
 
     /// Append a batch of entries to the in-RAM buffer. Does not flush.
-    /// Routes:
-    /// - relation-page keys → `pageserver.pages` (rel buffer)
-    /// - SLRU block keys → `pageserver.slru_pages` (slru buffer)
-    /// - everything else (metadata, dir listings, aux, repl origins,
-    ///   rel-size sentinels, SLRU dir/segment-size sentinels) silently
-    ///   skipped — those still flow through the layer-file path in
-    ///   `public.blobs` until Phase 4c migrates them.
+    /// Routes every entry into one of the three row-store tables:
+    /// - relation-page keys → `pageserver.pages`
+    /// - SLRU block keys   → `pageserver.slru_pages`
+    /// - everything else   → `pageserver.meta` (full-overwrite)
+    ///
+    /// Meta entries must arrive as `Value::Image` — they're
+    /// full-overwrite by convention. A `Value::WalRecord` here would
+    /// signal an unexpected walredo dependency on a non-page key and is
+    /// an error.
     pub async fn put(&self, entries: &[(Key, Lsn, Value)]) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
         let mut rel_rows = Vec::with_capacity(entries.len());
         let mut slru_rows = Vec::new();
+        let mut meta_rows = Vec::new();
         for (key, lsn, value) in entries {
             if key.is_rel_block_key() {
                 rel_rows.push(build_page_row(*key, *lsn, value)?);
             } else if key.is_slru_block_key() {
                 slru_rows.push(build_slru_page_row(*key, *lsn, value)?);
+            } else {
+                meta_rows.push(build_meta_row(*key, *lsn, value)?);
             }
         }
-        if rel_rows.is_empty() && slru_rows.is_empty() {
+        if rel_rows.is_empty() && slru_rows.is_empty() && meta_rows.is_empty() {
             return Ok(());
         }
         let mut s = self.state.lock().await;
@@ -135,6 +143,11 @@ impl PageWriter {
         for row in slru_rows {
             s.bytes_in_buffer += slru_row_size(&row);
             s.slru_buffer.push(row);
+            s.rows_written += 1;
+        }
+        for row in meta_rows {
+            s.bytes_in_buffer += meta_row_size(&row);
+            s.meta_buffer.push(row);
             s.rows_written += 1;
         }
         Ok(())
@@ -215,13 +228,14 @@ impl PageWriter {
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
     /// the buffer is empty. Resets the policy timer.
     pub async fn flush(&self) -> Result<()> {
-        let (rel_rows, slru_rows) = {
+        let (rel_rows, slru_rows, meta_rows) = {
             let mut s = self.state.lock().await;
             s.bytes_in_buffer = 0;
             s.opened_at = None;
             (
                 std::mem::take(&mut s.buffer),
                 std::mem::take(&mut s.slru_buffer),
+                std::mem::take(&mut s.meta_buffer),
             )
         };
         if !rel_rows.is_empty() {
@@ -232,6 +246,11 @@ impl PageWriter {
         if !slru_rows.is_empty() {
             self.page_store
                 .put_slru_pages(self.tenant_id, self.timeline_id, &slru_rows)
+                .await?;
+        }
+        if !meta_rows.is_empty() {
+            self.page_store
+                .put_meta(self.tenant_id, self.timeline_id, &meta_rows)
                 .await?;
         }
         Ok(())
@@ -257,7 +276,60 @@ impl PageWriter {
             bytes_in_buffer: s.bytes_in_buffer,
             buffered_rows: s.buffer.len(),
             buffered_slru_rows: s.slru_buffer.len(),
+            buffered_meta_rows: s.meta_buffer.len(),
         }
+    }
+
+    /// Read the latest meta value for `key` at LSN ≤ `target_lsn`,
+    /// blending buffer + PageStore.
+    pub async fn read_meta(&self, key: Key, target_lsn: Lsn) -> Result<Option<MetaRow>> {
+        let key_bytes = key_to_bytes(key);
+        let buffered = {
+            let s = self.state.lock().await;
+            s.meta_buffer
+                .iter()
+                .filter(|r| r.key == key_bytes && r.lsn <= target_lsn)
+                .max_by_key(|r| r.lsn)
+                .cloned()
+        };
+        let persisted = self
+            .page_store
+            .read_meta(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
+            .await?;
+        Ok(match (buffered, persisted) {
+            (Some(b), Some(p)) => Some(if b.lsn >= p.lsn { b } else { p }),
+            (Some(b), None) => Some(b),
+            (None, p) => p,
+        })
+    }
+
+    /// Range scan over meta keys. Returns the latest version per key.
+    pub async fn scan_meta_range(
+        &self,
+        range: std::ops::Range<Key>,
+        target_lsn: Lsn,
+    ) -> Result<std::collections::HashMap<bytes::Bytes, MetaRow>> {
+        let mut out = self
+            .page_store
+            .scan_meta_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
+            .await?;
+        let s = self.state.lock().await;
+        for row in s.meta_buffer.iter() {
+            if row.key.len() != KEY_SIZE || row.lsn > target_lsn {
+                continue;
+            }
+            let k = Key::from_slice(&row.key);
+            if k < range.start || k >= range.end {
+                continue;
+            }
+            match out.get(&row.key) {
+                Some(existing) if existing.lsn >= row.lsn => continue,
+                _ => {
+                    out.insert(row.key.clone(), row.clone());
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Per-block SLRU chain read, blending the in-RAM SLRU buffer with
@@ -399,72 +471,6 @@ pub fn extract_triples(batch: &SerializedValueBatch) -> Result<Vec<(Key, Lsn, Va
     Ok(out)
 }
 
-/// Build a copy of `batch` containing only entries whose key is neither
-/// a relation-page key nor an SLRU block key. Used by
-/// `TimelineWriter::put_batch` to keep rel-page + SLRU writes out of
-/// the layer-file path — those live in `pageserver.pages` /
-/// `pageserver.slru_pages` via `PageWriter` instead.
-///
-/// Returns `None` when the filtered batch would be empty so the caller
-/// can skip `layer.put_batch` entirely.
-pub fn extract_non_row_store_batch(batch: &SerializedValueBatch) -> Option<SerializedValueBatch> {
-    use wal_decoder::serialized_batch::{ObservedValueMeta, SerializedValueMeta};
-
-    let mut new_raw: Vec<u8> = Vec::with_capacity(batch.raw.len());
-    let mut new_metadata: Vec<ValueMeta> = Vec::with_capacity(batch.metadata.len());
-    let mut serialized_count: usize = 0;
-    let mut max_lsn = Lsn(0);
-
-    for meta in &batch.metadata {
-        match meta {
-            ValueMeta::Serialized(ser) => {
-                let key = Key::from_compact(ser.key);
-                if key.is_rel_block_key() || key.is_slru_block_key() {
-                    continue;
-                }
-                let start = ser.batch_offset as usize;
-                let end = start + ser.len;
-                let new_offset = new_raw.len() as u64;
-                new_raw.extend_from_slice(&batch.raw[start..end]);
-                new_metadata.push(ValueMeta::Serialized(SerializedValueMeta {
-                    key: ser.key,
-                    lsn: ser.lsn,
-                    batch_offset: new_offset,
-                    len: ser.len,
-                    will_init: ser.will_init,
-                }));
-                serialized_count += 1;
-                if ser.lsn > max_lsn {
-                    max_lsn = ser.lsn;
-                }
-            }
-            ValueMeta::Observed(obs) => {
-                let key = Key::from_compact(obs.key);
-                if key.is_rel_block_key() || key.is_slru_block_key() {
-                    continue;
-                }
-                new_metadata.push(ValueMeta::Observed(ObservedValueMeta {
-                    key: obs.key,
-                    lsn: obs.lsn,
-                }));
-                if obs.lsn > max_lsn {
-                    max_lsn = obs.lsn;
-                }
-            }
-        }
-    }
-
-    if new_metadata.is_empty() {
-        return None;
-    }
-    Some(SerializedValueBatch {
-        raw: new_raw,
-        metadata: new_metadata,
-        max_lsn,
-        len: serialized_count,
-    })
-}
-
 fn key_to_bytes(key: Key) -> Bytes {
     let mut buf = vec![0u8; KEY_SIZE];
     key.write_to_byte_slice(&mut buf);
@@ -523,6 +529,42 @@ fn build_slru_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<SlruPageRow>
 
 fn slru_row_size(r: &SlruPageRow) -> usize {
     r.payload.len() + 32
+}
+
+/// Convert a meta-key Value into a MetaRow. Meta keys are
+/// full-overwrite, so we only accept `Value::Image`; a WalRecord on a
+/// non-rel-non-slru key would mean walredo is expected for a meta key,
+/// which the row-store design doesn't support.
+fn build_meta_row(key: Key, lsn: Lsn, value: &Value) -> Result<MetaRow> {
+    let payload = match value {
+        Value::Image(b) => b.clone(),
+        Value::WalRecord(rec) => {
+            // Some walingest paths still emit Value::WalRecord for
+            // small meta deltas (e.g. relation-size sentinel updates
+            // that carry the new size in the record). Serialize and
+            // store as-is — meta reads return the row that's there;
+            // higher layers are responsible for interpreting the
+            // payload. The expectation is that these arrive with
+            // will_init=true (the record fully replaces the key's
+            // value at this LSN) — log if it isn't.
+            if !rec.will_init() {
+                tracing::warn!(
+                    "PageWriter: meta key {key} lsn={lsn} received a non-init WalRecord; \
+                     stored as opaque payload"
+                );
+            }
+            Bytes::from(rec.ser()?)
+        }
+    };
+    Ok(MetaRow {
+        key: key_to_bytes(key),
+        lsn,
+        payload,
+    })
+}
+
+fn meta_row_size(r: &MetaRow) -> usize {
+    r.payload.len() + r.key.len() + 16
 }
 
 #[cfg(test)]
@@ -745,12 +787,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ignores_non_relation_page_keys() {
-        // A key with field1 != 0 (non-page namespace) is silently
-        // skipped — PageWriter only stores relation pages.
-        let (store, schema) = make_store("skip_non_page").await;
-        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
-        let non_page = Key {
+    async fn routes_keys_to_three_buffers() {
+        // Each Key kind lands in its own buffer:
+        //   rel-page  → pages buffer
+        //   slru-block → slru buffer
+        //   anything else → meta buffer
+        let (store, schema) = make_store("route_three").await;
+        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+
+        let meta_key = Key {
             field1: 0x60,
             field2: 0,
             field3: 0,
@@ -758,10 +803,34 @@ mod tests {
             field5: 0,
             field6: 0,
         };
-        w.put(&[(non_page, Lsn(10), image()), (k(1), Lsn(10), image())])
+        let slru_key = pageserver_api::key::slru_block_to_key(
+            pageserver_api::reltag::SlruKind::Clog,
+            7,
+            42,
+        );
+
+        w.put(&[
+            (k(1), Lsn(10), image()),
+            (slru_key, Lsn(10), image()),
+            (meta_key, Lsn(10), image()),
+        ])
+        .await
+        .unwrap();
+        let stats = w.stats().await;
+        assert_eq!(stats.rows_written, 3);
+        assert_eq!(stats.buffered_rows, 1, "rel buffer");
+        assert_eq!(stats.buffered_slru_rows, 1, "slru buffer");
+        assert_eq!(stats.buffered_meta_rows, 1, "meta buffer");
+        w.flush().await.unwrap();
+        // Meta round-trips its payload bytes.
+        let mut meta_key_bytes = vec![0u8; pageserver_api::key::KEY_SIZE];
+        meta_key.write_to_byte_slice(&mut meta_key_bytes);
+        let got = store
+            .read_meta(t, tl, &meta_key_bytes, Lsn(100))
             .await
-            .unwrap();
-        assert_eq!(w.stats().await.rows_written, 1);
+            .unwrap()
+            .expect("meta row");
+        assert_eq!(got.payload.as_ref(), b"natural-image-bytes");
         drop_schema(&store, &schema).await;
     }
 

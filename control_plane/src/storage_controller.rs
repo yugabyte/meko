@@ -554,6 +554,28 @@ impl StorageController {
             .context("creating yb_storage.pageserver.slru_pages")?;
         println!("Ensured table yb_storage.pageserver.slru_pages");
 
+        // Metadata blobs — everything that isn't a relation page or
+        // SLRU block: relation-size sentinels, directory listings
+        // (TenantDir/DbDir/RelDir/SlruDir), aux files (zenith.signal,
+        // postgresql.auto.conf, replication slot state), two-phase
+        // commit files, replication origins, SLRU segment-size
+        // sentinels. All full-overwrite semantics — read = latest row
+        // ≤ target_lsn. No walredo, no chains.
+        client
+            .batch_execute(
+                "CREATE TABLE IF NOT EXISTS pageserver.meta (
+                    tenant_id    TEXT     NOT NULL,
+                    timeline_id  TEXT     NOT NULL,
+                    key          BYTEA    NOT NULL,
+                    lsn          BIGINT   NOT NULL,
+                    payload      BYTEA    NOT NULL,
+                    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+                )",
+            )
+            .await
+            .context("creating yb_storage.pageserver.meta")?;
+        println!("Ensured table yb_storage.pageserver.meta");
+
         client
             .batch_execute(
                 "CREATE TABLE IF NOT EXISTS pageserver.timelines (
