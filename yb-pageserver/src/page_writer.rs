@@ -228,6 +228,8 @@ impl PageWriter {
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
     /// the buffer is empty. Resets the policy timer.
     pub async fn flush(&self) -> Result<()> {
+        // Move buffers OUT under the lock, then drop the lock so the
+        // INSERT round-trip doesn't block walreceiver.
         let (rel_rows, slru_rows, meta_rows) = {
             let mut s = self.state.lock().await;
             s.bytes_in_buffer = 0;
@@ -238,19 +240,61 @@ impl PageWriter {
                 std::mem::take(&mut s.meta_buffer),
             )
         };
+
+        // On any INSERT failure, push the un-flushed rows back into the
+        // buffer so they get retried on the next periodic flush. Without
+        // this, a transient YB hiccup loses data that walreceiver has
+        // already marked as ingested via disk_consistent_lsn.
+        let res = self.try_write_rows(&rel_rows, &slru_rows, &meta_rows).await;
+        if res.is_err() {
+            let mut s = self.state.lock().await;
+            // Restore un-flushed rows. Prepend rather than append so the
+            // ordering stays roughly LSN-ascending; not strict, but the
+            // PageStore writes don't depend on order.
+            for r in &rel_rows {
+                s.bytes_in_buffer += row_size(r);
+            }
+            for r in &slru_rows {
+                s.bytes_in_buffer += slru_row_size(r);
+            }
+            for r in &meta_rows {
+                s.bytes_in_buffer += meta_row_size(r);
+            }
+            let mut old_buffer = std::mem::take(&mut s.buffer);
+            s.buffer = rel_rows;
+            s.buffer.append(&mut old_buffer);
+            let mut old_slru = std::mem::take(&mut s.slru_buffer);
+            s.slru_buffer = slru_rows;
+            s.slru_buffer.append(&mut old_slru);
+            let mut old_meta = std::mem::take(&mut s.meta_buffer);
+            s.meta_buffer = meta_rows;
+            s.meta_buffer.append(&mut old_meta);
+            if s.opened_at.is_none() && (!s.buffer.is_empty() || !s.slru_buffer.is_empty() || !s.meta_buffer.is_empty()) {
+                s.opened_at = Some(Instant::now());
+            }
+        }
+        res
+    }
+
+    async fn try_write_rows(
+        &self,
+        rel_rows: &[PageRow],
+        slru_rows: &[SlruPageRow],
+        meta_rows: &[MetaRow],
+    ) -> Result<()> {
         if !rel_rows.is_empty() {
             self.page_store
-                .put_pages(self.tenant_id, self.timeline_id, &rel_rows)
+                .put_pages(self.tenant_id, self.timeline_id, rel_rows)
                 .await?;
         }
         if !slru_rows.is_empty() {
             self.page_store
-                .put_slru_pages(self.tenant_id, self.timeline_id, &slru_rows)
+                .put_slru_pages(self.tenant_id, self.timeline_id, slru_rows)
                 .await?;
         }
         if !meta_rows.is_empty() {
             self.page_store
-                .put_meta(self.tenant_id, self.timeline_id, &meta_rows)
+                .put_meta(self.tenant_id, self.timeline_id, meta_rows)
                 .await?;
         }
         Ok(())

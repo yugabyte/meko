@@ -302,64 +302,61 @@ impl PageStore {
         timeline: TimelineId,
         rows: &[PageRow],
     ) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
+        // PostgreSQL caps a query at 65535 parameters; chunk to stay
+        // well below it. 11 columns/row × 4000 rows = 44k params.
+        const COLS: usize = 11;
+        const ROWS_PER_INSERT: usize = 500;
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
-        let mut sql = format!(
-            "INSERT INTO \"{}\".pages \
-             (tenant_id, timeline_id, spcnode, dbnode, relnode, forknum, blknum, \
-              lsn, is_image, will_init, payload) VALUES ",
-            self.schema
-        );
-        const COLS: usize = 11;
-        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::with_capacity(rows.len() * COLS);
-        for (i, row) in rows.iter().enumerate() {
-            if i > 0 {
-                sql.push(',');
+        for chunk in rows.chunks(ROWS_PER_INSERT) {
+            if chunk.is_empty() {
+                continue;
             }
-            let base = i * COLS + 1;
-            sql.push_str(&format!(
-                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                base,
-                base + 1,
-                base + 2,
-                base + 3,
-                base + 4,
-                base + 5,
-                base + 6,
-                base + 7,
-                base + 8,
-                base + 9,
-                base + 10,
-            ));
-            let (sp, db, rel, fork, blk) = key_columns(&row.key)
-                .with_context(|| format!("put_pages row {i}: bad key"))?;
-            params.push(Box::new(tenant_s.clone()));
-            params.push(Box::new(timeline_s.clone()));
-            params.push(Box::new(sp));
-            params.push(Box::new(db));
-            params.push(Box::new(rel));
-            params.push(Box::new(fork));
-            params.push(Box::new(blk));
-            params.push(Box::new(row.lsn.0 as i64));
-            params.push(Box::new(row.is_image));
-            params.push(Box::new(row.will_init));
-            params.push(Box::new(row.payload.to_vec()));
+            let mut sql = format!(
+                "INSERT INTO \"{}\".pages \
+                 (tenant_id, timeline_id, spcnode, dbnode, relnode, forknum, blknum, \
+                  lsn, is_image, will_init, payload) VALUES ",
+                self.schema
+            );
+            let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
+                Vec::with_capacity(chunk.len() * COLS);
+            for (i, row) in chunk.iter().enumerate() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                let base = i * COLS + 1;
+                sql.push_str(&format!(
+                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                    base, base + 1, base + 2, base + 3, base + 4,
+                    base + 5, base + 6, base + 7, base + 8, base + 9, base + 10,
+                ));
+                let (sp, db, rel, fork, blk) = key_columns(&row.key)
+                    .with_context(|| format!("put_pages row {i}: bad key"))?;
+                params.push(Box::new(tenant_s.clone()));
+                params.push(Box::new(timeline_s.clone()));
+                params.push(Box::new(sp));
+                params.push(Box::new(db));
+                params.push(Box::new(rel));
+                params.push(Box::new(fork));
+                params.push(Box::new(blk));
+                params.push(Box::new(row.lsn.0 as i64));
+                params.push(Box::new(row.is_image));
+                params.push(Box::new(row.will_init));
+                params.push(Box::new(row.payload.to_vec()));
+            }
+            let params_ref: Vec<&(dyn ToSql + Sync)> =
+                params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+            self.client
+                .execute(&sql, &params_ref)
+                .await
+                .with_context(|| {
+                    format!(
+                        "put_pages tenant={tenant} timeline={timeline} chunk_rows={}",
+                        chunk.len()
+                    )
+                })?;
         }
-        let params_ref: Vec<&(dyn ToSql + Sync)> =
-            params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-        self.client
-            .execute(&sql, &params_ref)
-            .await
-            .with_context(|| {
-                format!(
-                    "put_pages tenant={tenant} timeline={timeline} batch_rows={}",
-                    rows.len()
-                )
-            })?;
         Ok(())
     }
 
@@ -697,52 +694,55 @@ impl PageStore {
         timeline: TimelineId,
         rows: &[SlruPageRow],
     ) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
+        const COLS: usize = 9;
+        const ROWS_PER_INSERT: usize = 500;
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
-        let mut sql = format!(
-            "INSERT INTO \"{}\".slru_pages \
-             (tenant_id, timeline_id, kind, segno, blknum, \
-              is_image, lsn, will_init, payload) VALUES ",
-            self.schema
-        );
-        const COLS: usize = 9;
-        let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
-            Vec::with_capacity(rows.len() * COLS);
-        for (i, row) in rows.iter().enumerate() {
-            if i > 0 {
-                sql.push(',');
+        for chunk in rows.chunks(ROWS_PER_INSERT) {
+            if chunk.is_empty() {
+                continue;
             }
-            let base = i * COLS + 1;
-            sql.push_str(&format!(
-                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                base, base + 1, base + 2, base + 3, base + 4,
-                base + 5, base + 6, base + 7, base + 8,
-            ));
-            params.push(Box::new(tenant_s.clone()));
-            params.push(Box::new(timeline_s.clone()));
-            params.push(Box::new(slru_kind_to_i16(row.kind)));
-            params.push(Box::new(row.segno as i64));
-            params.push(Box::new(row.blknum as i64));
-            params.push(Box::new(row.is_image));
-            params.push(Box::new(row.lsn.0 as i64));
-            params.push(Box::new(row.will_init));
-            params.push(Box::new(row.payload.to_vec()));
+            let mut sql = format!(
+                "INSERT INTO \"{}\".slru_pages \
+                 (tenant_id, timeline_id, kind, segno, blknum, \
+                  is_image, lsn, will_init, payload) VALUES ",
+                self.schema
+            );
+            let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
+                Vec::with_capacity(chunk.len() * COLS);
+            for (i, row) in chunk.iter().enumerate() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                let base = i * COLS + 1;
+                sql.push_str(&format!(
+                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                    base, base + 1, base + 2, base + 3, base + 4,
+                    base + 5, base + 6, base + 7, base + 8,
+                ));
+                params.push(Box::new(tenant_s.clone()));
+                params.push(Box::new(timeline_s.clone()));
+                params.push(Box::new(slru_kind_to_i16(row.kind)));
+                params.push(Box::new(row.segno as i64));
+                params.push(Box::new(row.blknum as i64));
+                params.push(Box::new(row.is_image));
+                params.push(Box::new(row.lsn.0 as i64));
+                params.push(Box::new(row.will_init));
+                params.push(Box::new(row.payload.to_vec()));
+            }
+            let params_ref: Vec<&(dyn ToSql + Sync)> =
+                params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+            self.client
+                .execute(&sql, &params_ref)
+                .await
+                .with_context(|| {
+                    format!(
+                        "put_slru_pages tenant={tenant} timeline={timeline} chunk_rows={}",
+                        chunk.len()
+                    )
+                })?;
         }
-        let params_ref: Vec<&(dyn ToSql + Sync)> =
-            params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-        self.client
-            .execute(&sql, &params_ref)
-            .await
-            .with_context(|| {
-                format!(
-                    "put_slru_pages tenant={tenant} timeline={timeline} batch_rows={}",
-                    rows.len()
-                )
-            })?;
         Ok(())
     }
 
@@ -909,48 +909,51 @@ impl PageStore {
         timeline: TimelineId,
         rows: &[MetaRow],
     ) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
+        const COLS: usize = 5;
+        const ROWS_PER_INSERT: usize = 2000;
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
-        let mut sql = format!(
-            "INSERT INTO \"{}\".meta (tenant_id, timeline_id, key, lsn, payload) VALUES ",
-            self.schema
-        );
-        const COLS: usize = 5;
-        let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
-            Vec::with_capacity(rows.len() * COLS);
-        for (i, row) in rows.iter().enumerate() {
-            if i > 0 {
-                sql.push(',');
+        for chunk in rows.chunks(ROWS_PER_INSERT) {
+            if chunk.is_empty() {
+                continue;
             }
-            let base = i * COLS + 1;
-            sql.push_str(&format!(
-                "(${}, ${}, ${}, ${}, ${})",
-                base, base + 1, base + 2, base + 3, base + 4,
-            ));
-            if row.key.len() != KEY_SIZE {
-                bail!("put_meta row {i}: key bytes wrong length ({})", row.key.len());
+            let mut sql = format!(
+                "INSERT INTO \"{}\".meta (tenant_id, timeline_id, key, lsn, payload) VALUES ",
+                self.schema
+            );
+            let mut params: Vec<Box<dyn ToSql + Sync + Send>> =
+                Vec::with_capacity(chunk.len() * COLS);
+            for (i, row) in chunk.iter().enumerate() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                let base = i * COLS + 1;
+                sql.push_str(&format!(
+                    "(${}, ${}, ${}, ${}, ${})",
+                    base, base + 1, base + 2, base + 3, base + 4,
+                ));
+                if row.key.len() != KEY_SIZE {
+                    bail!("put_meta row {i}: key bytes wrong length ({})", row.key.len());
+                }
+                params.push(Box::new(tenant_s.clone()));
+                params.push(Box::new(timeline_s.clone()));
+                params.push(Box::new(row.key.to_vec()));
+                params.push(Box::new(row.lsn.0 as i64));
+                params.push(Box::new(row.payload.to_vec()));
             }
-            params.push(Box::new(tenant_s.clone()));
-            params.push(Box::new(timeline_s.clone()));
-            params.push(Box::new(row.key.to_vec()));
-            params.push(Box::new(row.lsn.0 as i64));
-            params.push(Box::new(row.payload.to_vec()));
+            let params_ref: Vec<&(dyn ToSql + Sync)> =
+                params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+            self.client
+                .execute(&sql, &params_ref)
+                .await
+                .with_context(|| {
+                    format!(
+                        "put_meta tenant={tenant} timeline={timeline} chunk_rows={}",
+                        chunk.len()
+                    )
+                })?;
         }
-        let params_ref: Vec<&(dyn ToSql + Sync)> =
-            params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-        self.client
-            .execute(&sql, &params_ref)
-            .await
-            .with_context(|| {
-                format!(
-                    "put_meta tenant={tenant} timeline={timeline} batch_rows={}",
-                    rows.len()
-                )
-            })?;
         Ok(())
     }
 
