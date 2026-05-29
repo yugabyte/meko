@@ -1826,4 +1826,78 @@ mod tests {
         }
         drop_schema(&store, &schema).await;
     }
+
+    /// put_pages must chunk INSERTs internally. Sending one giant
+    /// INSERT with N × 11 parameters either hits Postgres's 65535-param
+    /// hard cap or tokio-postgres's "value too large to transmit"
+    /// internal message limit when the per-row payload is 8 KiB.
+    ///
+    /// Was hit in the first sustained-load perf test, fixed in
+    /// c1f3fd44d (put_pages chunks at 500 rows/INSERT). This test
+    /// pushes 1200 rows in a single put_pages call — three full
+    /// chunks at the current limit — and verifies all rows land.
+    #[tokio::test]
+    async fn put_pages_chunks_large_batches() {
+        let (store, schema) = make_store("chunk_pages").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let n: u32 = 1200;
+        let payload = vec![0xABu8; 8192];
+        let mut rows = Vec::with_capacity(n as usize);
+        for blk in 0..n {
+            let k = page_key(1663, 5, 16384, 0, blk);
+            rows.push(page_row(k, 10, true, true, &payload));
+        }
+        store.put_pages(tenant, timeline, &rows).await.unwrap();
+
+        // Spot-check: first, middle, last row each read back.
+        for blk in [0u32, n / 2, n - 1] {
+            let k = page_key(1663, 5, 16384, 0, blk);
+            let chain = store
+                .read_chain(tenant, timeline, &k, Lsn(100))
+                .await
+                .unwrap();
+            assert_eq!(chain.len(), 1, "blk {blk}");
+            assert_eq!(chain[0].payload.as_ref(), payload.as_slice());
+        }
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Same story for put_meta — same root cause, separate chunk
+    /// constant. Meta values are small so the chunk is larger (2000),
+    /// but the boundary still needs exercising.
+    #[tokio::test]
+    async fn put_meta_chunks_large_batches() {
+        let (store, schema) = make_store("chunk_meta").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let n: u32 = 3500; // above the 2000-row chunk boundary
+        let mut rows = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let mut buf = vec![0u8; KEY_SIZE];
+            // A non-rel-page meta-namespace key (field1=0x60), unique by i.
+            buf[0] = 0x60;
+            buf[14..18].copy_from_slice(&i.to_be_bytes());
+            rows.push(MetaRow {
+                key: Bytes::from(buf),
+                lsn: Lsn(10),
+                payload: Bytes::from(format!("v{i}")),
+            });
+        }
+        store.put_meta(tenant, timeline, &rows).await.unwrap();
+
+        // Spot-check first, middle, last.
+        for i in [0u32, n / 2, n - 1] {
+            let mut buf = vec![0u8; KEY_SIZE];
+            buf[0] = 0x60;
+            buf[14..18].copy_from_slice(&i.to_be_bytes());
+            let got = store
+                .read_meta(tenant, timeline, &buf, Lsn(100))
+                .await
+                .unwrap()
+                .expect("row");
+            assert_eq!(got.payload.as_ref(), format!("v{i}").as_bytes());
+        }
+        drop_schema(&store, &schema).await;
+    }
 }

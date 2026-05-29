@@ -1033,6 +1033,63 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// Regression test for the flush race fixed in 8a685a4dd.
+    ///
+    /// Before the fix, PageWriter::flush() did `mem::take` on the
+    /// in-memory buffer up front, then issued the YB INSERT outside
+    /// the lock. During the round-trip the just-buffered rows were in
+    /// NEITHER the buffer NOR YB. Any concurrent read in that window
+    /// returned no data — walreceiver's read-modify-write on rel-size
+    /// sentinels then hit MissingKey, propagated corruption to compute,
+    /// and we'd lose the workload.
+    ///
+    /// Now flush clones the buffer, INSERTs from the clone, and drains
+    /// the originals only on success. Reads keep seeing the rows
+    /// throughout the round-trip.
+    ///
+    /// We exercise the window by spawning concurrent flush + read
+    /// tasks via tokio::join!. With a real YB round-trip the read
+    /// races into the flush window most of the time; an occasional
+    /// "read fires before flush even starts" outcome is also fine for
+    /// this assertion (the read still finds the row in the un-drained
+    /// buffer). The bug pattern would manifest as the read seeing an
+    /// empty result while the buffer is in flight.
+    #[tokio::test]
+    async fn read_during_in_flight_flush_sees_buffered_rows() {
+        let (store, schema) = make_store("flush_race").await;
+        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+        let w = Arc::new(w);
+
+        // Seed enough rows that the flush has a non-trivial round-trip
+        // (multiple chunks against YB) and a read fired concurrently
+        // has a real chance to land mid-flush.
+        let mut entries = Vec::with_capacity(800);
+        for i in 0u32..800 {
+            entries.push((k(i), Lsn(10 + i as u64), image()));
+        }
+        w.put(&entries).await.unwrap();
+        assert_eq!(w.stats().await.buffered_rows, 800);
+
+        let w_flush = w.clone();
+        let w_read = w.clone();
+        let target_key = k(500);
+        let (flush_res, read_res) = tokio::join!(
+            tokio::spawn(async move { w_flush.flush().await }),
+            tokio::spawn(async move { w_read.read_chain(target_key, Lsn(10_000)).await }),
+        );
+        flush_res.unwrap().unwrap();
+        let chain = read_res.unwrap().unwrap();
+        assert!(
+            !chain.is_empty(),
+            "concurrent read during flush returned empty — flush race regressed"
+        );
+        assert_eq!(chain[0].lsn, Lsn(10 + 500));
+        // Sanity: after flush completes, the buffer is empty and the
+        // row is persisted.
+        assert_eq!(w.stats().await.buffered_rows, 0);
+        drop_schema(&store, &schema).await;
+    }
+
     #[tokio::test]
     async fn passthrough_payload_is_serialised_wal_record() {
         let (store, schema) = make_store("ser_rt").await;
