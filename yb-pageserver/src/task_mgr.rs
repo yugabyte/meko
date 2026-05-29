@@ -329,9 +329,6 @@ pub enum TaskKind {
     // Tenant housekeeping (flush idle ephemeral layers, shut down idle walredo, etc.).
     TenantHousekeeping,
 
-    /// See [`crate::disk_usage_eviction_task`].
-    DiskUsageEviction,
-
     /// See [`crate::tenant::secondary`].
     SecondaryDownloads,
 

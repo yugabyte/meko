@@ -9,7 +9,7 @@ pub mod consumption_metrics;
 pub mod context;
 pub mod controller_upcall_client;
 pub mod deletion_queue;
-pub mod disk_usage_eviction_task;
+
 pub mod feature_resolver;
 pub mod http;
 pub mod import_datadir;
@@ -74,7 +74,6 @@ pub struct CancellableTask {
 pub struct HttpEndpointListener(pub CancellableTask);
 pub struct HttpsEndpointListener(pub CancellableTask);
 pub struct ConsumptionMetricsTasks(pub CancellableTask);
-pub struct DiskUsageEvictionTask(pub CancellableTask);
 // HADRON
 pub struct MetricsCollectionTask(pub CancellableTask);
 
@@ -94,7 +93,6 @@ pub async fn shutdown_pageserver(
     grpc_task: Option<CancellableTask>,
     metrics_collection_task: MetricsCollectionTask,
     consumption_metrics_worker: ConsumptionMetricsTasks,
-    disk_usage_eviction_task: Option<DiskUsageEvictionTask>,
     tenant_manager: &TenantManager,
     background_purges: BackgroundPurges,
     mut deletion_queue: DeletionQueue,
@@ -228,13 +226,6 @@ pub async fn shutdown_pageserver(
     timed(
         consumption_metrics_worker.0.shutdown(),
         "shutdown consumption metrics",
-        Duration::from_secs(1),
-    )
-    .await;
-
-    timed(
-        futures::future::OptionFuture::from(disk_usage_eviction_task.map(|t| t.0.shutdown())),
-        "shutdown disk usage eviction",
         Duration::from_secs(1),
     )
     .await;

@@ -92,7 +92,7 @@ use crate::tenant::{
     GetTimelineError, LogicalSizeCalculationCause, OffloadedTimeline, PageReconstructError,
     remote_timeline_client,
 };
-use crate::{DEFAULT_PG_VERSION, disk_usage_eviction_task, tenant};
+use crate::{DEFAULT_PG_VERSION, tenant};
 
 // For APIs that require an Active tenant, how long should we block waiting for that state?
 // This is not functionally necessary (clients will retry), but avoids generating a lot of
@@ -112,7 +112,6 @@ pub struct State {
     allowlist_routes: &'static [&'static str],
     remote_storage: GenericRemoteStorage,
     broker_client: storage_broker::BrokerClientChannel,
-    disk_usage_eviction_state: Arc<disk_usage_eviction_task::State>,
     deletion_queue_client: DeletionQueueClient,
     secondary_controller: SecondaryController,
     latest_utilization: tokio::sync::Mutex<Option<(std::time::Instant, bytes::Bytes)>>,
@@ -127,7 +126,6 @@ impl State {
         auth: Option<Arc<SwappableJwtAuth>>,
         remote_storage: GenericRemoteStorage,
         broker_client: storage_broker::BrokerClientChannel,
-        disk_usage_eviction_state: Arc<disk_usage_eviction_task::State>,
         deletion_queue_client: DeletionQueueClient,
         secondary_controller: SecondaryController,
         feature_resolver: FeatureResolver,
@@ -147,7 +145,6 @@ impl State {
             allowlist_routes,
             remote_storage,
             broker_client,
-            disk_usage_eviction_state,
             deletion_queue_client,
             secondary_controller,
             latest_utilization: Default::default(),
@@ -2864,66 +2861,6 @@ async fn always_panic_handler(
     json_response(StatusCode::NO_CONTENT, ())
 }
 
-async fn disk_usage_eviction_run(
-    mut r: Request<Body>,
-    cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    check_permission(&r, None)?;
-
-    #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-    struct Config {
-        /// How many bytes to evict before reporting that pressure is relieved.
-        evict_bytes: u64,
-
-        #[serde(default)]
-        eviction_order: pageserver_api::config::EvictionOrder,
-    }
-
-    #[derive(Debug, Clone, Copy, serde::Serialize)]
-    struct Usage {
-        // remains unchanged after instantiation of the struct
-        evict_bytes: u64,
-        // updated by `add_available_bytes`
-        freed_bytes: u64,
-    }
-
-    impl crate::disk_usage_eviction_task::Usage for Usage {
-        fn has_pressure(&self) -> bool {
-            self.evict_bytes > self.freed_bytes
-        }
-
-        fn add_available_bytes(&mut self, bytes: u64) {
-            self.freed_bytes += bytes;
-        }
-    }
-
-    let config = json_request::<Config>(&mut r).await?;
-
-    let usage = Usage {
-        evict_bytes: config.evict_bytes,
-        freed_bytes: 0,
-    };
-
-    let state = get_state(&r);
-    let eviction_state = state.disk_usage_eviction_state.clone();
-
-    let res = crate::disk_usage_eviction_task::disk_usage_eviction_task_iteration_impl(
-        &eviction_state,
-        &state.remote_storage,
-        usage,
-        &state.tenant_manager,
-        config.eviction_order.into(),
-        &cancel,
-    )
-    .await;
-
-    info!(?res, "disk_usage_eviction_task_iteration_impl finished");
-
-    let res = res.map_err(ApiError::InternalServerError)?;
-
-    json_response(StatusCode::OK, res)
-}
-
 async fn secondary_upload_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
@@ -4190,9 +4127,6 @@ pub fn make_router(
         })
         .get("/v1/tenant/:tenant_id/scan_remote_storage", |r| {
             api_handler(r, tenant_scan_remote_handler)
-        })
-        .put("/v1/disk_usage_eviction/run", |r| {
-            api_handler(r, disk_usage_eviction_run)
         })
         .put("/v1/deletion_queue/flush", |r| {
             api_handler(r, deletion_queue_flush)

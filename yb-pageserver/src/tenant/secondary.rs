@@ -25,7 +25,6 @@ use super::mgr::TenantManager;
 use super::span::debug_assert_current_span_has_tenant_id;
 use super::storage_layer::LayerName;
 use crate::context::RequestContext;
-use crate::disk_usage_eviction_task::DiskUsageEvictionInfo;
 use crate::metrics::{SECONDARY_HEATMAP_TOTAL_SIZE, SECONDARY_RESIDENT_PHYSICAL_SIZE};
 use crate::task_mgr::{self, BACKGROUND_RUNTIME, TaskKind};
 
@@ -210,10 +209,6 @@ impl SecondaryTenant {
 
     pub(crate) fn get_tenant_shard_id(&self) -> &TenantShardId {
         &self.tenant_shard_id
-    }
-
-    pub(crate) fn get_layers_for_eviction(self: &Arc<Self>) -> (DiskUsageEvictionInfo, usize) {
-        self.detail.lock().unwrap().get_layers_for_eviction(self)
     }
 
     /// Cancellation safe, but on cancellation the eviction will go through

@@ -104,7 +104,6 @@ use crate::config::PageServerConf;
 use crate::context::{
     DownloadBehavior, PerfInstrumentFutureExt, RequestContext, RequestContextBuilder,
 };
-use crate::disk_usage_eviction_task::{DiskUsageEvictionInfo, EvictionCandidate, finite_f32};
 use crate::feature_resolver::TenantFeatureResolver;
 use crate::keyspace::{KeyPartitioning, KeySpace};
 use crate::l0_flush::{self, L0FlushGlobalState};
@@ -7570,34 +7569,6 @@ impl Timeline {
 }
 
 impl Timeline {
-    /// Returns non-remote layers for eviction.
-    pub(crate) async fn get_local_layers_for_disk_usage_eviction(&self) -> DiskUsageEvictionInfo {
-        let guard = self.layers.read(LayerManagerLockHolder::Eviction).await;
-        let mut max_layer_size: Option<u64> = None;
-
-        let resident_layers = guard
-            .likely_resident_layers()
-            .map(|layer| {
-                let file_size = layer.layer_desc().file_size;
-                max_layer_size = max_layer_size.map_or(Some(file_size), |m| Some(m.max(file_size)));
-
-                let last_activity_ts = layer.latest_activity();
-
-                EvictionCandidate {
-                    layer: layer.to_owned().into(),
-                    last_activity_ts,
-                    relative_last_activity: finite_f32::FiniteF32::ZERO,
-                    visibility: layer.visibility(),
-                }
-            })
-            .collect();
-
-        DiskUsageEvictionInfo {
-            max_layer_size,
-            resident_layers,
-        }
-    }
-
     pub(crate) fn get_shard_index(&self) -> ShardIndex {
         ShardIndex {
             shard_number: self.tenant_shard_id.shard_number,

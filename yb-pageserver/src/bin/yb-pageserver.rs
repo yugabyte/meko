@@ -20,7 +20,6 @@ use yb_pageserver::basebackup_cache::BasebackupCache;
 use yb_pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
 use yb_pageserver::controller_upcall_client::StorageControllerUpcallClient;
 use yb_pageserver::deletion_queue::DeletionQueue;
-use yb_pageserver::disk_usage_eviction_task::{self, launch_disk_usage_global_eviction_task};
 use yb_pageserver::feature_resolver::FeatureResolver;
 use yb_pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
 use yb_pageserver::page_service::GrpcPageServiceHandler;
@@ -692,19 +691,8 @@ fn start_pageserver(
         shutdown_pageserver.clone(),
     );
 
-    // shared state between the disk-usage backed eviction background task and the http endpoint
-    // that allows triggering disk-usage based eviction manually. note that the http endpoint
-    // is still accessible even if background task is not configured as long as remote storage has
-    // been configured.
-    let disk_usage_eviction_state: Arc<disk_usage_eviction_task::State> = Arc::default();
-
-    let disk_usage_eviction_task = launch_disk_usage_global_eviction_task(
-        conf,
-        remote_storage.clone(),
-        disk_usage_eviction_state.clone(),
-        tenant_manager.clone(),
-        background_jobs_barrier.clone(),
-    );
+    // Disk-usage eviction is gone (Phase 4d.2). yb-pageserver has no
+    // local layer files to evict — all storage is in YB.
 
     // Start up the service to handle HTTP mgmt API request. We created the
     // listener earlier already.
@@ -718,7 +706,6 @@ fn start_pageserver(
                 http_auth.clone(),
                 remote_storage.clone(),
                 broker_client.clone(),
-                disk_usage_eviction_state,
                 deletion_queue.new_client(),
                 secondary_controller,
                 feature_resolver.clone(),
@@ -887,7 +874,6 @@ fn start_pageserver(
             page_service_grpc,
             metrics_collection_task,
             consumption_metrics_tasks,
-            disk_usage_eviction_task,
             &tenant_manager,
             background_purges,
             deletion_queue.clone(),

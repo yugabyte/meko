@@ -30,9 +30,6 @@ use super::{
 use crate::TEMP_FILE_SUFFIX;
 use crate::config::PageServerConf;
 use crate::context::RequestContext;
-use crate::disk_usage_eviction_task::{
-    DiskUsageEvictionInfo, EvictionCandidate, EvictionLayer, EvictionSecondaryLayer, finite_f32,
-};
 use crate::metrics::SECONDARY_MODE;
 use crate::tenant::config::SecondaryLocationConfig;
 use crate::tenant::debug_assert_current_span_has_tenant_and_timeline_id;
@@ -344,53 +341,6 @@ impl SecondaryDetail {
         }
     }
 
-    /// Additionally returns the total number of layers, used for more stable relative access time
-    /// based eviction.
-    pub(super) fn get_layers_for_eviction(
-        &self,
-        parent: &Arc<SecondaryTenant>,
-    ) -> (DiskUsageEvictionInfo, usize) {
-        let mut result = DiskUsageEvictionInfo::default();
-        let mut total_layers = 0;
-
-        for (timeline_id, timeline_detail) in &self.timelines {
-            result
-                .resident_layers
-                .extend(timeline_detail.on_disk_layers.iter().map(|(name, ods)| {
-                    EvictionCandidate {
-                        layer: EvictionLayer::Secondary(EvictionSecondaryLayer {
-                            secondary_tenant: parent.clone(),
-                            timeline_id: *timeline_id,
-                            name: name.clone(),
-                            metadata: ods.metadata.clone(),
-                        }),
-                        last_activity_ts: ods.access_time,
-                        relative_last_activity: finite_f32::FiniteF32::ZERO,
-                        // Secondary location layers are presumed visible, because Covered layers
-                        // are excluded from the heatmap
-                        visibility: LayerVisibilityHint::Visible,
-                    }
-                }));
-
-            // total might be missing currently downloading layers, but as a lower than actual
-            // value it is good enough approximation.
-            total_layers += timeline_detail.on_disk_layers.len() + timeline_detail.evicted_at.len();
-        }
-        result.max_layer_size = result
-            .resident_layers
-            .iter()
-            .map(|l| l.layer.get_file_size())
-            .max();
-
-        tracing::debug!(
-            "eviction: secondary tenant {} found {} timelines, {} layers",
-            parent.get_tenant_shard_id(),
-            self.timelines.len(),
-            result.resident_layers.len()
-        );
-
-        (result, total_layers)
-    }
 }
 
 struct PendingDownload {
