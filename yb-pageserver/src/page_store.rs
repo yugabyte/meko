@@ -383,10 +383,14 @@ impl PageStore {
     /// Implementation: detects the range shape and picks the most
     /// tablet-local SQL.
     ///
+    /// - **Single-key range** (`range.end == range.start.next()`) →
+    ///   delegates to `read_chain`. This is the getpage hot path —
+    ///   every compute getpage RPC ends up here, so the dispatch
+    ///   matters. No `GROUP BY` / `LEFT JOIN` overhead.
     /// - **One-fork range** (start and end share spcnode/dbnode/relnode
     ///   /forknum, differ only in blknum) → single-tablet hash-pinned
-    ///   range scan on `blknum`. The common case for basebackup,
-    ///   image-layer creation, compute vectored gets.
+    ///   range scan on `blknum`. Used by basebackup, image-layer
+    ///   creation, multi-block vectored gets.
     /// - **Cross-fork range** (start and end differ in some pre-blknum
     ///   field) → multi-column row comparison; scatters across hash
     ///   tablets. Rare in practice; we accept the cost.
@@ -414,10 +418,32 @@ impl PageStore {
             && range.start.field4 == range.end.field4
             && range.start.field5 == range.end.field5;
 
+        // Single-key fast path: every compute getpage RPC arrives as a
+        // 1-key vectored read (`KeySpace::single(k..k.next())`). Detect
+        // and dispatch to read_chain, which skips the multi-block
+        // GROUP BY / LEFT JOIN entirely.
+        if one_fork && range.end.field6 == range.start.field6.wrapping_add(1) {
+            let mut key_bytes = vec![0u8; KEY_SIZE];
+            range.start.write_to_byte_slice(&mut key_bytes);
+            let chain = self
+                .read_chain(tenant, timeline, &key_bytes, target_lsn)
+                .await?;
+            let mut out = HashMap::with_capacity(1);
+            if !chain.is_empty() {
+                out.insert(Bytes::from(key_bytes), chain);
+            }
+            return Ok(out);
+        }
+
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
         let target = target_lsn.0 as i64;
 
+        // Per-block image anchor via CTE: for each block in the range,
+        // find the latest image at or below target_lsn, then return
+        // only rows from that image onward. Blocks without an image get
+        // their full chain (slow path) — app-side will still truncate
+        // at the latest will_init delta.
         let rows = if one_fork {
             // Hash-pinned single-tablet scan.
             let sp = range.start.field2 as i64;
@@ -426,17 +452,43 @@ impl PageStore {
             let fork = range.start.field5 as i16;
             let blk_lo = range.start.field6 as i64;
             let blk_hi = range.end.field6 as i64;
+            // `blocks` enumerates distinct blknums in the range that have
+            // any row at or below target_lsn. `per_block_image` then
+            // does ONE seek per block via LATERAL + LIMIT 1 to find the
+            // latest image (or NULL for slow-path blocks). The main
+            // SELECT joins back and keeps only rows from the anchor up.
             let sql = format!(
-                "SELECT spcnode, dbnode, relnode, forknum, blknum, \
-                        lsn, is_image, will_init, payload \
-                 FROM \"{}\".pages \
-                 WHERE tenant_id=$1 AND timeline_id=$2 \
-                   AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
-                   AND forknum=$6 \
-                   AND blknum >= $7 AND blknum < $8 \
-                   AND lsn <= $9 \
-                 ORDER BY blknum, lsn DESC",
-                self.schema
+                "WITH blocks AS ( \
+                     SELECT DISTINCT blknum FROM \"{schema}\".pages \
+                     WHERE tenant_id=$1 AND timeline_id=$2 \
+                       AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
+                       AND forknum=$6 \
+                       AND blknum >= $7 AND blknum < $8 \
+                       AND lsn <= $9 \
+                 ), \
+                 per_block_image AS ( \
+                     SELECT b.blknum, i.image_lsn FROM blocks b \
+                     LEFT JOIN LATERAL ( \
+                         SELECT lsn AS image_lsn FROM \"{schema}\".pages \
+                         WHERE tenant_id=$1 AND timeline_id=$2 \
+                           AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
+                           AND forknum=$6 AND blknum = b.blknum \
+                           AND is_image=TRUE AND lsn <= $9 \
+                         ORDER BY lsn DESC LIMIT 1 \
+                     ) i ON TRUE \
+                 ) \
+                 SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                        p.lsn, p.is_image, p.will_init, p.payload \
+                 FROM \"{schema}\".pages p \
+                 LEFT JOIN per_block_image bi ON p.blknum = bi.blknum \
+                 WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+                   AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
+                   AND p.forknum=$6 \
+                   AND p.blknum >= $7 AND p.blknum < $8 \
+                   AND p.lsn <= $9 \
+                   AND (bi.image_lsn IS NULL OR p.lsn >= bi.image_lsn) \
+                 ORDER BY p.blknum, p.lsn DESC",
+                schema = self.schema
             );
             self.client
                 .query(
@@ -448,10 +500,10 @@ impl PageStore {
                 .await
                 .context("scan_range one-fork")?
         } else {
-            // Cross-fork range. Use a row-comparison predicate that
-            // mirrors the 18-byte BYTEA ordering. May scatter across
-            // tablets; acceptable because cross-fork scans are rare
-            // and we don't want to lose correctness.
+            // Cross-fork range. Same shape, with row-comparison
+            // predicates. Joining the CTE on the full (spcnode, dbnode,
+            // relnode, forknum, blknum) tuple keeps anchors paired with
+            // the right block when a range crosses forks.
             let sp_lo = range.start.field2 as i64;
             let db_lo = range.start.field3 as i64;
             let rel_lo = range.start.field4 as i64;
@@ -463,15 +515,42 @@ impl PageStore {
             let fork_hi = range.end.field5 as i16;
             let blk_hi = range.end.field6 as i64;
             let sql = format!(
-                "SELECT spcnode, dbnode, relnode, forknum, blknum, \
-                        lsn, is_image, will_init, payload \
-                 FROM \"{}\".pages \
-                 WHERE tenant_id=$1 AND timeline_id=$2 \
-                   AND (spcnode, dbnode, relnode, forknum, blknum) >= ($3, $4, $5, $6, $7) \
-                   AND (spcnode, dbnode, relnode, forknum, blknum) <  ($8, $9, $10, $11, $12) \
-                   AND lsn <= $13 \
-                 ORDER BY spcnode, dbnode, relnode, forknum, blknum, lsn DESC",
-                self.schema
+                "WITH blocks AS ( \
+                     SELECT DISTINCT spcnode, dbnode, relnode, forknum, blknum \
+                     FROM \"{schema}\".pages \
+                     WHERE tenant_id=$1 AND timeline_id=$2 \
+                       AND (spcnode, dbnode, relnode, forknum, blknum) >= ($3, $4, $5, $6, $7) \
+                       AND (spcnode, dbnode, relnode, forknum, blknum) <  ($8, $9, $10, $11, $12) \
+                       AND lsn <= $13 \
+                 ), \
+                 per_block_image AS ( \
+                     SELECT b.spcnode, b.dbnode, b.relnode, b.forknum, b.blknum, \
+                            i.image_lsn \
+                     FROM blocks b \
+                     LEFT JOIN LATERAL ( \
+                         SELECT lsn AS image_lsn FROM \"{schema}\".pages \
+                         WHERE tenant_id=$1 AND timeline_id=$2 \
+                           AND spcnode=b.spcnode AND dbnode=b.dbnode \
+                           AND relnode=b.relnode AND forknum=b.forknum \
+                           AND blknum=b.blknum \
+                           AND is_image=TRUE AND lsn <= $13 \
+                         ORDER BY lsn DESC LIMIT 1 \
+                     ) i ON TRUE \
+                 ) \
+                 SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                        p.lsn, p.is_image, p.will_init, p.payload \
+                 FROM \"{schema}\".pages p \
+                 LEFT JOIN per_block_image bi \
+                     ON p.spcnode = bi.spcnode AND p.dbnode = bi.dbnode \
+                    AND p.relnode = bi.relnode AND p.forknum = bi.forknum \
+                    AND p.blknum = bi.blknum \
+                 WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+                   AND (p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum) >= ($3, $4, $5, $6, $7) \
+                   AND (p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum) <  ($8, $9, $10, $11, $12) \
+                   AND p.lsn <= $13 \
+                   AND (bi.image_lsn IS NULL OR p.lsn >= bi.image_lsn) \
+                 ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC",
+                schema = self.schema
             );
             self.client
                 .query(
@@ -487,14 +566,15 @@ impl PageStore {
 
         // Bucket rows by key. Each chain comes back LSN-descending (per
         // the SQL ORDER BY); truncate at the first will_init=true row
-        // since older rows are shadowed by that anchor.
+        // since older rows are shadowed by that anchor. For blocks with
+        // an image, this kicks in at the image row (always will_init).
+        // For blocks without an image, it finds the latest will_init
+        // delta and trims older rows.
         let mut by_key: HashMap<Bytes, Vec<PageRow>> = HashMap::new();
         for r in rows {
             let row = row_to_page(r)?;
             let key = row.key.clone();
             let chain = by_key.entry(key).or_default();
-            // If this key's chain already includes an anchor, skip
-            // older rows.
             if chain.last().is_some_and(|last| last.will_init) {
                 continue;
             }
@@ -945,6 +1025,142 @@ mod tests {
             assert_eq!(chain[0].lsn, Lsn(20));
             assert_eq!(chain[1].lsn, Lsn(10));
         }
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn scan_range_single_key_dispatch() {
+        // Detects k..k.next() and uses the per-key fast path.
+        // Verifies the result is the same as read_chain for that key.
+        let (store, schema) = make_store("scan_single").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let k_bytes = page_key(1663, 5, 16384, 0, 7);
+        let k = Key::from_slice(&k_bytes);
+
+        store
+            .put_pages(
+                tenant,
+                timeline,
+                &[
+                    page_row(k_bytes.clone(), 10, true, true, b"img"),
+                    page_row(k_bytes.clone(), 20, false, false, b"d20"),
+                    page_row(k_bytes.clone(), 30, false, false, b"d30"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let range = k..k.next();
+        let got = store
+            .scan_range(tenant, timeline, range, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        let chain = &got[&k_bytes];
+        let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns, vec![30, 20, 10]);
+        assert!(chain.last().unwrap().is_image);
+
+        // Same target via read_chain — must match.
+        let direct = store
+            .read_chain(tenant, timeline, &k_bytes, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(chain.as_slice(), direct.as_slice());
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn scan_range_single_key_empty_when_no_anchor() {
+        // A key with no rows ≤ target returns an empty map.
+        let (store, schema) = make_store("scan_single_empty").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let k_bytes = page_key(1663, 5, 16384, 0, 99);
+        let k = Key::from_slice(&k_bytes);
+
+        let got = store
+            .scan_range(tenant, timeline, k..k.next(), Lsn(100))
+            .await
+            .unwrap();
+        assert!(got.is_empty());
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn scan_range_anchors_on_per_block_image() {
+        // Block 0: image at LSN 50, deltas at 20, 30, 40, 60, 70.
+        //          Expected return: 60, 70 above image, plus 50 itself => 3 rows.
+        //          (Rows 20, 30, 40 are shadowed by the image.)
+        // Block 1: image at LSN 30 only. Expected: just the image (1 row).
+        // Block 2: no image, will_init delta at LSN 20, deltas at 30, 40.
+        //          Expected: 40, 30, 20 => 3 rows (slow path).
+        // Block 3: no image, no will_init — only plain deltas at 30, 40.
+        //          Expected: 40, 30 (full chain, no anchor — chain-decoder
+        //          will fail walredo if reads ever ask for this, but the
+        //          scan itself returns what's there).
+        let (store, schema) = make_store("anchor_range").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+
+        let k0 = page_key(1663, 5, 16384, 0, 0);
+        let k1 = page_key(1663, 5, 16384, 0, 1);
+        let k2 = page_key(1663, 5, 16384, 0, 2);
+        let k3 = page_key(1663, 5, 16384, 0, 3);
+
+        let rows = vec![
+            // k0
+            page_row(k0.clone(), 20, false, false, b"k0-20"),
+            page_row(k0.clone(), 30, false, false, b"k0-30"),
+            page_row(k0.clone(), 40, false, false, b"k0-40"),
+            page_row(k0.clone(), 50, true, true, b"k0-img"),
+            page_row(k0.clone(), 60, false, false, b"k0-60"),
+            page_row(k0.clone(), 70, false, false, b"k0-70"),
+            // k1
+            page_row(k1.clone(), 30, true, true, b"k1-img"),
+            // k2
+            page_row(k2.clone(), 20, false, true, b"k2-init"),
+            page_row(k2.clone(), 30, false, false, b"k2-30"),
+            page_row(k2.clone(), 40, false, false, b"k2-40"),
+            // k3
+            page_row(k3.clone(), 30, false, false, b"k3-30"),
+            page_row(k3.clone(), 40, false, false, b"k3-40"),
+        ];
+        store.put_pages(tenant, timeline, &rows).await.unwrap();
+
+        let range = Key::from_slice(&k0)..Key::from_slice(&page_key(1663, 5, 16384, 0, 4));
+        let got = store
+            .scan_range(tenant, timeline, range, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 4);
+
+        // k0: image at 50 + deltas 60, 70 => LSNs 70, 60, 50.
+        let c0 = &got[&k0];
+        let lsns0: Vec<u64> = c0.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns0, vec![70, 60, 50], "k0 should anchor on image @ 50");
+        assert!(c0.last().unwrap().is_image);
+
+        // k1: just the image.
+        let c1 = &got[&k1];
+        assert_eq!(c1.len(), 1);
+        assert_eq!(c1[0].lsn, Lsn(30));
+        assert!(c1[0].is_image);
+
+        // k2: slow path — no image — full chain to the will_init delta.
+        let c2 = &got[&k2];
+        let lsns2: Vec<u64> = c2.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns2, vec![40, 30, 20]);
+        assert!(c2.last().unwrap().will_init);
+        assert!(!c2.last().unwrap().is_image);
+
+        // k3: full chain returned; no anchor (would be a walredo error
+        // upstream, but the store call itself succeeds).
+        let c3 = &got[&k3];
+        let lsns3: Vec<u64> = c3.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns3, vec![40, 30]);
+
         drop_schema(&store, &schema).await;
     }
 
