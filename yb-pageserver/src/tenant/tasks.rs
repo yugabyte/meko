@@ -23,7 +23,6 @@ use crate::metrics::{self, BackgroundLoopSemaphoreMetricsRecorder, TENANT_TASK_E
 use crate::task_mgr::{self, BACKGROUND_RUNTIME, TOKIO_WORKER_THREADS, TaskKind};
 use crate::tenant::throttle::Stats;
 use crate::tenant::timeline::CompactionError;
-use crate::tenant::timeline::compaction::CompactionOutcome;
 use crate::tenant::{TenantShard, TenantState};
 
 /// Semaphore limiting concurrent background tasks (across all tenants).
@@ -131,35 +130,15 @@ pub(crate) async fn acquire_concurrency_permit(
     }
 }
 
-/// Start per tenant background loops: compaction, GC, and ingest housekeeping.
+/// Start per tenant background loops: GC + ingest housekeeping.
+///
+/// yb-pageserver does not run compaction. The 10-delta image rule was
+/// a write-time invariant; with the image-anchored read path it's gone,
+/// and image-layer / L0→L1 work has nothing to do against
+/// `pageserver.pages`. A background image materialiser (Phase 3e) will
+/// replace this loop once we need it.
 pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barrier>) {
     let tenant_shard_id = tenant.tenant_shard_id;
-
-    task_mgr::spawn(
-        BACKGROUND_RUNTIME.handle(),
-        TaskKind::Compaction,
-        tenant_shard_id,
-        None,
-        &format!("compactor for tenant {tenant_shard_id}"),
-        {
-            let tenant = Arc::clone(tenant);
-            let can_start = can_start.cloned();
-            async move {
-                let cancel = task_mgr::shutdown_token(); // NB: must be in async context
-                tokio::select! {
-                    _ = cancel.cancelled() => return Ok(()),
-                    _ = Barrier::maybe_wait(can_start) => {}
-                };
-                TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
-                defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
-                compaction_loop(tenant, cancel)
-                    // If you rename this span, change the RUST_LOG env variable in test_runner/performance/test_branch_creation.py
-                    .instrument(info_span!("compaction_loop", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug()))
-                    .await;
-                Ok(())
-            }
-        },
-    );
 
     task_mgr::spawn(
         BACKGROUND_RUNTIME.handle(),
@@ -210,95 +189,6 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
             }
         },
     );
-}
-
-/// Compaction task's main loop.
-async fn compaction_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
-    const BASE_BACKOFF_SECS: f64 = 1.0;
-    const MAX_BACKOFF_SECS: f64 = 300.0;
-    const RECHECK_CONFIG_INTERVAL: Duration = Duration::from_secs(10);
-
-    let ctx = RequestContext::todo_child(TaskKind::Compaction, DownloadBehavior::Download);
-    let mut period = tenant.get_compaction_period();
-    let mut error_run = 0; // consecutive errors
-
-    // Stagger the compaction loop across tenants.
-    if wait_for_active_tenant(&tenant, &cancel).await.is_break() {
-        return;
-    }
-    if sleep_random(period, &cancel).await.is_err() {
-        return;
-    }
-
-    loop {
-        // Recheck that we're still active.
-        if wait_for_active_tenant(&tenant, &cancel).await.is_break() {
-            return;
-        }
-
-        // Refresh the period. If compaction is disabled, check again in a bit.
-        period = tenant.get_compaction_period();
-        if period == Duration::ZERO {
-            #[cfg(not(feature = "testing"))]
-            info!("automatic compaction is disabled");
-            tokio::select! {
-                _ = tokio::time::sleep(RECHECK_CONFIG_INTERVAL) => {},
-                _ = cancel.cancelled() => return,
-            }
-            continue;
-        }
-
-        // Wait for the next compaction run.
-        let backoff = exponential_backoff_duration(error_run, BASE_BACKOFF_SECS, MAX_BACKOFF_SECS);
-        tokio::select! {
-            _ = tokio::time::sleep(backoff), if error_run > 0 => {},
-            _ = tokio::time::sleep(period), if error_run == 0 => {},
-            _ = tenant.l0_compaction_trigger.notified(), if error_run == 0 => {},
-            _ = cancel.cancelled() => return,
-        }
-
-        // Run compaction.
-        let iteration = Iteration {
-            started_at: Instant::now(),
-            period,
-            kind: BackgroundLoopKind::Compaction,
-        };
-        let IterationResult { output, elapsed } = iteration
-            .run(tenant.compaction_iteration(&cancel, &ctx))
-            .await;
-
-        match output {
-            Ok(outcome) => {
-                error_run = 0;
-                // If there's more compaction work, L0 or not, schedule an immediate run.
-                match outcome {
-                    CompactionOutcome::Done => {}
-                    CompactionOutcome::Skipped => {}
-                    CompactionOutcome::YieldForL0 => tenant.l0_compaction_trigger.notify_one(),
-                    CompactionOutcome::Pending => tenant.l0_compaction_trigger.notify_one(),
-                }
-            }
-
-            Err(err) => {
-                error_run += 1;
-                let backoff =
-                    exponential_backoff_duration(error_run, BASE_BACKOFF_SECS, MAX_BACKOFF_SECS);
-                log_compaction_error(
-                    &err,
-                    Some((error_run, backoff)),
-                    cancel.is_cancelled(),
-                    false,
-                );
-                continue;
-            }
-        }
-
-        // NB: this log entry is recorded by performance tests.
-        debug!(
-            elapsed_ms = elapsed.as_millis(),
-            "compaction iteration complete"
-        );
-    }
 }
 
 pub(crate) fn log_compaction_error(

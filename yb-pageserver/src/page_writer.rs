@@ -304,6 +304,72 @@ pub fn extract_triples(batch: &SerializedValueBatch) -> Result<Vec<(Key, Lsn, Va
     Ok(out)
 }
 
+/// Build a copy of `batch` containing only entries whose key is NOT a
+/// relation-page key. Used by `TimelineWriter::put_batch` to remove
+/// rel-page entries from the layer-file write — they live in
+/// `pageserver.pages` via `PageWriter` instead.
+///
+/// Returns `None` when the filtered batch would be empty, so the caller
+/// can skip `layer.put_batch` entirely. (Empty batches still cost a
+/// layer flush handshake on the layer-stack side.)
+pub fn extract_non_rel_page_batch(batch: &SerializedValueBatch) -> Option<SerializedValueBatch> {
+    use wal_decoder::serialized_batch::{ObservedValueMeta, SerializedValueMeta};
+
+    let mut new_raw: Vec<u8> = Vec::with_capacity(batch.raw.len());
+    let mut new_metadata: Vec<ValueMeta> = Vec::with_capacity(batch.metadata.len());
+    let mut serialized_count: usize = 0;
+    let mut max_lsn = Lsn(0);
+
+    for meta in &batch.metadata {
+        match meta {
+            ValueMeta::Serialized(ser) => {
+                let key = Key::from_compact(ser.key);
+                if key.is_rel_block_key() {
+                    continue;
+                }
+                let start = ser.batch_offset as usize;
+                let end = start + ser.len;
+                let new_offset = new_raw.len() as u64;
+                new_raw.extend_from_slice(&batch.raw[start..end]);
+                new_metadata.push(ValueMeta::Serialized(SerializedValueMeta {
+                    key: ser.key,
+                    lsn: ser.lsn,
+                    batch_offset: new_offset,
+                    len: ser.len,
+                    will_init: ser.will_init,
+                }));
+                serialized_count += 1;
+                if ser.lsn > max_lsn {
+                    max_lsn = ser.lsn;
+                }
+            }
+            ValueMeta::Observed(obs) => {
+                let key = Key::from_compact(obs.key);
+                if key.is_rel_block_key() {
+                    continue;
+                }
+                new_metadata.push(ValueMeta::Observed(ObservedValueMeta {
+                    key: obs.key,
+                    lsn: obs.lsn,
+                }));
+                if obs.lsn > max_lsn {
+                    max_lsn = obs.lsn;
+                }
+            }
+        }
+    }
+
+    if new_metadata.is_empty() {
+        return None;
+    }
+    Some(SerializedValueBatch {
+        raw: new_raw,
+        metadata: new_metadata,
+        max_lsn,
+        len: serialized_count,
+    })
+}
+
 fn key_to_bytes(key: Key) -> Bytes {
     let mut buf = vec![0u8; KEY_SIZE];
     key.write_to_byte_slice(&mut buf);

@@ -8061,33 +8061,43 @@ impl TimelineWriter<'_> {
         }
 
         let batch_max_lsn = batch.max_lsn;
-        let buf_size: u64 = batch.buffer_size() as u64;
 
-        // yb-pageserver dual-write: forward the batch's (Key, LSN, Value)
-        // triples to the row-per-page store. Done before the layer-file
-        // write so a PageStore failure aborts the whole put_batch and
-        // walingest retries — keeps the two destinations in lockstep at
-        // the WAL-record granularity.
-        if let Some(page_writer) = self.tl.page_writer.as_ref() {
+        // yb-pageserver write path:
+        // - Relation-page keys go to PageWriter / `pageserver.pages`.
+        // - Non-rel keys (SLRUs, metadata, dir listings, aux, repl
+        //   origins, rel-size sentinels) still flow through the layer
+        //   stack into `public.blobs`. Phase 5 migrates these to YB
+        //   tables; until then we just filter rel-page entries out of
+        //   the layer write to avoid duplicating them.
+        let layer_batch = if let Some(page_writer) = self.tl.page_writer.as_ref() {
             let triples = crate::page_writer::extract_triples(&batch)?;
             if !triples.is_empty() {
                 page_writer.put(&triples).await?;
             }
-        }
+            crate::page_writer::extract_non_rel_page_batch(&batch)
+        } else {
+            Some(batch)
+        };
 
+        let Some(layer_batch) = layer_batch else {
+            // All entries were rel-page keys, all routed to PageWriter.
+            // No layer-stack work to do; still advance the writer state.
+            let state = self.write_guard.as_mut().unwrap();
+            state.prev_lsn = Some(batch_max_lsn);
+            state.max_lsn = std::cmp::max(state.max_lsn, Some(batch_max_lsn));
+            return Ok(());
+        };
+
+        let buf_size: u64 = layer_batch.buffer_size() as u64;
         let action = self.get_open_layer_action(batch_max_lsn, buf_size);
         let layer = self
             .handle_open_layer_action(batch_max_lsn, action, ctx)
             .await?;
 
-        let res = layer.put_batch(batch, ctx).await;
+        let res = layer.put_batch(layer_batch, ctx).await;
 
         if res.is_ok() {
             // Update the current size only when the entire write was ok.
-            // In case of failures, we may have had partial writes which
-            // render the size tracking out of sync. That's ok because
-            // the checkpoint distance should be significantly smaller
-            // than the S3 single shot upload limit of 5GiB.
             let state = self.write_guard.as_mut().unwrap();
 
             state.current_size += buf_size;
