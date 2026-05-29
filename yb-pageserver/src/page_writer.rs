@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use bytes::Bytes;
 use pageserver_api::key::{KEY_SIZE, Key};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use utils::bin_ser::BeSer;
 use utils::id::{TenantId, TimelineId};
@@ -35,8 +35,8 @@ use pageserver_api::reltag::SlruKind;
 
 use crate::page_store::{MetaRow, PageRow, PageStore, SlruPageRow};
 
-/// Defaults from the project plan: flush every 5 seconds or every 100 MiB,
-/// whichever comes first.
+/// Flush triggers (whichever fires first). Override via
+/// `YbPageWriterConfig` in `pageserver.toml`.
 #[derive(Clone, Debug)]
 pub struct FlushPolicy {
     pub max_age: Duration,
@@ -47,7 +47,7 @@ impl Default for FlushPolicy {
     fn default() -> Self {
         Self {
             max_age: Duration::from_secs(5),
-            max_bytes: 100 * 1024 * 1024,
+            max_bytes: 25 * 1024 * 1024,
         }
     }
 }
@@ -58,7 +58,7 @@ pub struct PageWriter {
     timeline_id: TimelineId,
     page_store: Arc<PageStore>,
     policy: FlushPolicy,
-    state: Mutex<WriterState>,
+    state: RwLock<WriterState>,
 }
 
 struct WriterState {
@@ -91,7 +91,7 @@ impl PageWriter {
             timeline_id,
             page_store,
             policy,
-            state: Mutex::new(WriterState {
+            state: RwLock::new(WriterState {
                 buffer: Vec::new(),
                 slru_buffer: Vec::new(),
                 meta_buffer: Vec::new(),
@@ -131,7 +131,7 @@ impl PageWriter {
         if rel_rows.is_empty() && slru_rows.is_empty() && meta_rows.is_empty() {
             return Ok(());
         }
-        let mut s = self.state.lock().await;
+        let mut s = self.state.write().await;
         if s.opened_at.is_none() {
             s.opened_at = Some(Instant::now());
         }
@@ -167,7 +167,7 @@ impl PageWriter {
             .scan_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
             .await?;
         let buffered: Vec<PageRow> = {
-            let s = self.state.lock().await;
+            let s = self.state.read().await;
             s.buffer
                 .iter()
                 .filter(|r| {
@@ -204,7 +204,7 @@ impl PageWriter {
     pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<PageRow>> {
         let key_bytes = key_to_bytes(key);
         let mut buffered: Vec<PageRow> = {
-            let s = self.state.lock().await;
+            let s = self.state.read().await;
             s.buffer
                 .iter()
                 .filter(|r| r.key == key_bytes && r.lsn <= target_lsn)
@@ -236,7 +236,7 @@ impl PageWriter {
         // read happening while the buffer is "in transit" to YB would
         // otherwise hit MissingKey and crash walingest.
         let (rel_count, slru_count, meta_count, rel_rows, slru_rows, meta_rows) = {
-            let s = self.state.lock().await;
+            let s = self.state.read().await;
             (
                 s.buffer.len(),
                 s.slru_buffer.len(),
@@ -258,7 +258,7 @@ impl PageWriter {
             // Drop the first N rows of each buffer — the ones we just
             // flushed. Anything appended after our snapshot stays and
             // will be picked up by the next periodic flush.
-            let mut s = self.state.lock().await;
+            let mut s = self.state.write().await;
             let drop_bytes: usize = s.buffer.iter().take(rel_count).map(row_size).sum::<usize>()
                 + s.slru_buffer.iter().take(slru_count).map(slru_row_size).sum::<usize>()
                 + s.meta_buffer.iter().take(meta_count).map(meta_row_size).sum::<usize>();
@@ -303,7 +303,7 @@ impl PageWriter {
     }
 
     pub async fn should_flush(&self) -> bool {
-        let s = self.state.lock().await;
+        let s = self.state.read().await;
         if s.bytes_in_buffer >= self.policy.max_bytes {
             return true;
         }
@@ -316,7 +316,7 @@ impl PageWriter {
     }
 
     pub async fn stats(&self) -> WriterStats {
-        let s = self.state.lock().await;
+        let s = self.state.read().await;
         WriterStats {
             rows_written: s.rows_written,
             bytes_in_buffer: s.bytes_in_buffer,
@@ -331,7 +331,7 @@ impl PageWriter {
     pub async fn read_meta(&self, key: Key, target_lsn: Lsn) -> Result<Option<MetaRow>> {
         let key_bytes = key_to_bytes(key);
         let buffered = {
-            let s = self.state.lock().await;
+            let s = self.state.read().await;
             s.meta_buffer
                 .iter()
                 .filter(|r| r.key == key_bytes && r.lsn <= target_lsn)
@@ -359,7 +359,7 @@ impl PageWriter {
             .page_store
             .scan_meta_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
             .await?;
-        let s = self.state.lock().await;
+        let s = self.state.read().await;
         for row in s.meta_buffer.iter() {
             if row.key.len() != KEY_SIZE || row.lsn > target_lsn {
                 continue;
@@ -388,7 +388,7 @@ impl PageWriter {
         target_lsn: Lsn,
     ) -> Result<Vec<SlruPageRow>> {
         let mut buffered: Vec<SlruPageRow> = {
-            let s = self.state.lock().await;
+            let s = self.state.read().await;
             s.slru_buffer
                 .iter()
                 .filter(|r| {
@@ -424,7 +424,7 @@ impl PageWriter {
             .scan_slru_range(self.tenant_id, self.timeline_id, kind, segno, blknum_range.clone(), target_lsn)
             .await?;
         let buffered: Vec<SlruPageRow> = {
-            let s = self.state.lock().await;
+            let s = self.state.read().await;
             s.slru_buffer
                 .iter()
                 .filter(|r| {

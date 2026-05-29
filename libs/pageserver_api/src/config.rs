@@ -294,7 +294,7 @@ pub struct YbPageWriterConfig {
     pub flush_interval: Duration,
 
     /// Flush the in-RAM buffer when its estimated size crosses this.
-    /// Default 100 MiB.
+    /// Default 25 MiB.
     pub flush_size_bytes: usize,
 
     /// Period at which the background flusher polls `should_flush()`.
@@ -307,7 +307,7 @@ impl Default for YbPageWriterConfig {
     fn default() -> Self {
         Self {
             flush_interval: Duration::from_secs(5),
-            flush_size_bytes: 100 * 1024 * 1024,
+            flush_size_bytes: 25 * 1024 * 1024,
             flush_poll_interval: Duration::from_millis(500),
         }
     }
