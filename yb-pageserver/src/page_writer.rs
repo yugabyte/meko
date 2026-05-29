@@ -228,51 +228,53 @@ impl PageWriter {
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
     /// the buffer is empty. Resets the policy timer.
     pub async fn flush(&self) -> Result<()> {
-        // Move buffers OUT under the lock, then drop the lock so the
-        // INSERT round-trip doesn't block walreceiver.
-        let (rel_rows, slru_rows, meta_rows) = {
-            let mut s = self.state.lock().await;
-            s.bytes_in_buffer = 0;
-            s.opened_at = None;
+        // Snapshot the buffer contents under the lock without removing
+        // them. Reads (scan_range, scan_meta_range, read_chain) keep
+        // seeing the in-flight rows during the YB INSERT round-trip —
+        // critical for the walreceiver's read-modify-write pattern on
+        // rel-size sentinels and other meta keys, where a concurrent
+        // read happening while the buffer is "in transit" to YB would
+        // otherwise hit MissingKey and crash walingest.
+        let (rel_count, slru_count, meta_count, rel_rows, slru_rows, meta_rows) = {
+            let s = self.state.lock().await;
             (
-                std::mem::take(&mut s.buffer),
-                std::mem::take(&mut s.slru_buffer),
-                std::mem::take(&mut s.meta_buffer),
+                s.buffer.len(),
+                s.slru_buffer.len(),
+                s.meta_buffer.len(),
+                s.buffer.clone(),
+                s.slru_buffer.clone(),
+                s.meta_buffer.clone(),
             )
         };
+        if rel_count == 0 && slru_count == 0 && meta_count == 0 {
+            return Ok(());
+        }
 
-        // On any INSERT failure, push the un-flushed rows back into the
-        // buffer so they get retried on the next periodic flush. Without
-        // this, a transient YB hiccup loses data that walreceiver has
-        // already marked as ingested via disk_consistent_lsn.
+        // INSERT to YB outside the lock so concurrent puts and reads
+        // aren't blocked by the round-trip.
         let res = self.try_write_rows(&rel_rows, &slru_rows, &meta_rows).await;
-        if res.is_err() {
+
+        if res.is_ok() {
+            // Drop the first N rows of each buffer — the ones we just
+            // flushed. Anything appended after our snapshot stays and
+            // will be picked up by the next periodic flush.
             let mut s = self.state.lock().await;
-            // Restore un-flushed rows. Prepend rather than append so the
-            // ordering stays roughly LSN-ascending; not strict, but the
-            // PageStore writes don't depend on order.
-            for r in &rel_rows {
-                s.bytes_in_buffer += row_size(r);
-            }
-            for r in &slru_rows {
-                s.bytes_in_buffer += slru_row_size(r);
-            }
-            for r in &meta_rows {
-                s.bytes_in_buffer += meta_row_size(r);
-            }
-            let mut old_buffer = std::mem::take(&mut s.buffer);
-            s.buffer = rel_rows;
-            s.buffer.append(&mut old_buffer);
-            let mut old_slru = std::mem::take(&mut s.slru_buffer);
-            s.slru_buffer = slru_rows;
-            s.slru_buffer.append(&mut old_slru);
-            let mut old_meta = std::mem::take(&mut s.meta_buffer);
-            s.meta_buffer = meta_rows;
-            s.meta_buffer.append(&mut old_meta);
-            if s.opened_at.is_none() && (!s.buffer.is_empty() || !s.slru_buffer.is_empty() || !s.meta_buffer.is_empty()) {
-                s.opened_at = Some(Instant::now());
+            let drop_bytes: usize = s.buffer.iter().take(rel_count).map(row_size).sum::<usize>()
+                + s.slru_buffer.iter().take(slru_count).map(slru_row_size).sum::<usize>()
+                + s.meta_buffer.iter().take(meta_count).map(meta_row_size).sum::<usize>();
+            s.bytes_in_buffer = s.bytes_in_buffer.saturating_sub(drop_bytes);
+            s.buffer.drain(0..rel_count);
+            s.slru_buffer.drain(0..slru_count);
+            s.meta_buffer.drain(0..meta_count);
+            if s.buffer.is_empty() && s.slru_buffer.is_empty() && s.meta_buffer.is_empty() {
+                s.opened_at = None;
             }
         }
+        // On error, leave buffers untouched — next periodic flush retries.
+        // Caveat: chunked INSERTs may have succeeded partially. The retry
+        // will re-attempt the already-inserted rows and hit a YB PK
+        // conflict. Acceptable for now; TODO upgrade to UPSERT or per-
+        // chunk progress tracking.
         res
     }
 
