@@ -78,7 +78,7 @@ use self::remote_timeline_client::upload::{upload_index_part, upload_tenant_mani
 use self::remote_timeline_client::{RemoteTimelineClient, WaitCompletionError};
 use self::timeline::uninit::{TimelineCreateGuard, TimelineExclusionError, UninitializedTimeline};
 use self::timeline::{
-    EvictionTaskTenantState, GcCutoffs, TimelineDeleteProgress, TimelineResources, WaitLsnError,
+    GcCutoffs, TimelineDeleteProgress, TimelineResources, WaitLsnError,
 };
 use crate::basebackup_cache::BasebackupCache;
 use crate::config::PageServerConf;
@@ -346,8 +346,6 @@ pub struct TenantShard {
     /// Cached logical sizes updated updated on each [`TenantShard::gather_size_inputs`].
     cached_logical_sizes: tokio::sync::Mutex<HashMap<(TimelineId, Lsn), u64>>,
     cached_synthetic_tenant_size: Arc<AtomicU64>,
-
-    eviction_task_tenant_state: tokio::sync::Mutex<EvictionTaskTenantState>,
 
     /// Track repeated failures to compact, so that we can back off.
     /// Overhead of mutex is acceptable because compaction is done with a multi-second period.
@@ -4500,7 +4498,6 @@ impl TenantShard {
             state,
             cached_logical_sizes: tokio::sync::Mutex::new(HashMap::new()),
             cached_synthetic_tenant_size: Arc::new(AtomicU64::new(0)),
-            eviction_task_tenant_state: tokio::sync::Mutex::new(EvictionTaskTenantState::default()),
             compaction_circuit_breaker: std::sync::Mutex::new(CircuitBreaker::new(
                 format!("compaction-{tenant_shard_id}"),
                 5,

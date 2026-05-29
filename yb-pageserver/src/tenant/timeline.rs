@@ -2,7 +2,6 @@ pub(crate) mod analysis;
 pub(crate) mod compaction;
 pub mod delete;
 pub(crate) mod detach_ancestor;
-mod eviction_task;
 pub(crate) mod handle;
 mod heatmap_layers_downloader;
 pub(crate) mod import_pgdata;
@@ -83,8 +82,6 @@ use wal_decoder::models::value::Value;
 use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
 use self::delete::DeleteTimelineFlow;
-pub(super) use self::eviction_task::EvictionTaskTenantState;
-use self::eviction_task::EvictionTaskTimelineState;
 use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
 use super::remote_timeline_client::RemoteTimelineClient;
@@ -384,8 +381,6 @@ pub struct Timeline {
     /// Prevent two tasks from deleting the timeline at the same time. If held, the
     /// timeline is being deleted. If 'true', the timeline has already been deleted.
     pub delete_progress: TimelineDeleteProgress,
-
-    eviction_task_timeline_state: tokio::sync::Mutex<EvictionTaskTimelineState>,
 
     /// Load or creation time information about the disk_consistent_lsn and when the loading
     /// happened. Used for consumption metrics.
@@ -2467,7 +2462,9 @@ impl Timeline {
         }
         self.launch_wal_receiver(ctx, broker_client);
         self.set_state(TimelineState::Active);
-        self.launch_eviction_task(parent, background_jobs_can_start);
+        // Per-timeline eviction task deleted in Phase 4d.2 — no layer
+        // files to evict in the YB row-store world.
+        let _ = (parent, background_jobs_can_start);
     }
 
     /// After this function returns, there are no timeline-scoped tasks are left running.
@@ -3499,9 +3496,6 @@ impl Timeline {
 
                 state,
 
-                eviction_task_timeline_state: tokio::sync::Mutex::new(
-                    EvictionTaskTimelineState::default(),
-                ),
                 delete_progress: TimelineDeleteProgress::default(),
 
                 cancel,
