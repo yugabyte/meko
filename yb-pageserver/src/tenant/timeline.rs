@@ -1,4 +1,3 @@
-pub(crate) mod analysis;
 pub(crate) mod compaction;
 pub mod delete;
 pub(crate) mod detach_ancestor;
