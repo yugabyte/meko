@@ -130,19 +130,10 @@ impl YsqlClient {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<u64> {
-        let client = self.current().await?;
-        match client.execute(sql, params).await {
-            Ok(n) => Ok(n),
-            Err(e) if client.is_closed() => {
-                drop(client);
-                let client = self.force_reconnect().await?;
-                client
-                    .execute(sql, params)
-                    .await
-                    .with_context(|| format!("YsqlClient: execute after reconnect ({e})"))
-            }
-            Err(e) => Err(anyhow::Error::from(e)),
-        }
+        self.run_with_retries("execute", |client| async move {
+            client.execute(sql, params).await
+        })
+        .await
     }
 
     pub async fn query(
@@ -150,19 +141,10 @@ impl YsqlClient {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<tokio_postgres::Row>> {
-        let client = self.current().await?;
-        match client.query(sql, params).await {
-            Ok(rows) => Ok(rows),
-            Err(e) if client.is_closed() => {
-                drop(client);
-                let client = self.force_reconnect().await?;
-                client
-                    .query(sql, params)
-                    .await
-                    .with_context(|| format!("YsqlClient: query after reconnect ({e})"))
-            }
-            Err(e) => Err(anyhow::Error::from(e)),
-        }
+        self.run_with_retries("query", |client| async move {
+            client.query(sql, params).await
+        })
+        .await
     }
 
     pub async fn query_opt(
@@ -170,19 +152,80 @@ impl YsqlClient {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Option<tokio_postgres::Row>> {
-        let client = self.current().await?;
-        match client.query_opt(sql, params).await {
-            Ok(row) => Ok(row),
-            Err(e) if client.is_closed() => {
-                drop(client);
-                let client = self.force_reconnect().await?;
-                client
-                    .query_opt(sql, params)
-                    .await
-                    .with_context(|| format!("YsqlClient: query_opt after reconnect ({e})"))
+        self.run_with_retries("query_opt", |client| async move {
+            client.query_opt(sql, params).await
+        })
+        .await
+    }
+
+    /// Run a statement-shaped operation against the current client
+    /// with two retry classes layered on top:
+    ///
+    /// 1. **Connection drop** — if the op errors and `is_closed()` is
+    ///    true, force a reconnect and retry once. Catches the case
+    ///    where the TCP socket died mid-statement (YB tserver
+    ///    restart, YBA rolling restart, etc.).
+    /// 2. **YB "Restart read required"** — a YugabyteDB-specific
+    ///    transient surfaced on read-only metadata operations that
+    ///    race a schema-change side-effect (common right after
+    ///    CREATE DATABASE / DDL bursts, also seen during shard
+    ///    splits and rebalances). The error means "the statement did
+    ///    not execute; retry it". Bounded to 5 attempts with doubling
+    ///    backoff from 200 ms. Safe to retry because the statement
+    ///    by definition didn't apply.
+    ///
+    /// All YsqlClient public methods (`execute` / `query` /
+    /// `query_opt`) go through here so every caller — pageserver,
+    /// safekeeper WAL backup, YbStore blob ops, storage controller
+    /// — gets the same retry semantics without each one having to
+    /// reimplement it.
+    async fn run_with_retries<F, Fut, T>(&self, op_label: &str, f: F) -> Result<T>
+    where
+        F: Fn(Arc<tokio_postgres::Client>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
+    {
+        let mut delay = std::time::Duration::from_millis(200);
+        for attempt in 1..=5u32 {
+            let client = self.current().await?;
+            match f(client.clone()).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    // (1) connection drop: reconnect once and retry inside
+                    // this same iteration. If the retry also fails, fall
+                    // through to the transient classifier below.
+                    let e = if client.is_closed() {
+                        drop(client);
+                        let client = self.force_reconnect().await?;
+                        match f(client).await {
+                            Ok(v) => return Ok(v),
+                            Err(e2) => {
+                                return Err(anyhow::Error::from(e2)).with_context(|| {
+                                    format!("YsqlClient: {op_label} after reconnect ({e})")
+                                });
+                            }
+                        }
+                    } else {
+                        e
+                    };
+                    // (2) YB "Restart read required" — match by message
+                    // because tokio-postgres does not surface a stable
+                    // SQLSTATE for this. Cheap string contain check.
+                    let msg = e.to_string();
+                    if attempt < 5 && msg.contains("Restart read required") {
+                        tracing::info!(
+                            attempt,
+                            backoff_ms = delay.as_millis() as u64,
+                            "YsqlClient: {op_label} hit YB 'Restart read required', retrying"
+                        );
+                        tokio::time::sleep(delay).await;
+                        delay = delay.saturating_mul(2);
+                        continue;
+                    }
+                    return Err(anyhow::Error::from(e));
+                }
             }
-            Err(e) => Err(anyhow::Error::from(e)),
         }
+        unreachable!("retry loop returns or errors")
     }
 }
 
