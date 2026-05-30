@@ -1890,6 +1890,49 @@ impl Timeline {
         self.disk_consistent_lsn.load()
     }
 
+    /// Phase 5b: write the full timeline row into `pageserver.timelines`
+    /// once at creation time, so the per-flush `advance_disk_consistent_lsn`
+    /// UPDATE has a row to target. Also seeds `PageWriter`'s in-memory
+    /// `dc_lsn_watermark` from the just-written `disk_consistent_lsn` —
+    /// otherwise the first flush would redundantly UPDATE to a value
+    /// already on disk.
+    ///
+    /// No-op when `page_writer` is None (upstream pageserver mode). The
+    /// upsert uses `internal_page_store` so the bootstrap I/O doesn't
+    /// land on the compute-reads connection.
+    pub(crate) async fn write_timeline_row_to_yb(&self) -> anyhow::Result<()> {
+        let Some(pw) = self.page_writer.as_ref() else {
+            return Ok(());
+        };
+        let dc_lsn = self.get_disk_consistent_lsn();
+        let gc_cutoff = *self.get_applied_gc_cutoff_lsn();
+        let ancestor_id = self.get_ancestor_timeline_id();
+        let ancestor_lsn = if ancestor_id.is_some() {
+            Some(self.get_ancestor_lsn())
+        } else {
+            None
+        };
+        let row = crate::page_store::TimelineRow {
+            tenant_id: self.tenant_shard_id.tenant_id,
+            timeline_id: self.timeline_id,
+            disk_consistent_lsn: dc_lsn,
+            applied_gc_cutoff_lsn: gc_cutoff,
+            ancestor_timeline_id: ancestor_id,
+            ancestor_lsn,
+            // Generation::into() returns None for `Generation::None`; in
+            // attached state we always have a Valid generation from the
+            // storage controller's most recent attach.
+            current_generation: self.generation.into().unwrap_or(0) as i32,
+            pg_version: self.pg_version.major_version_num(),
+        };
+        pw.internal_page_store()
+            .upsert_timeline(&row)
+            .await
+            .context("upsert_timeline at creation")?;
+        pw.seed_dc_lsn_watermark(dc_lsn);
+        Ok(())
+    }
+
     /// remote_consistent_lsn from the perspective of the tenant's current generation,
     /// not validated with control plane yet.
     /// See [`Self::get_remote_consistent_lsn_visible`].

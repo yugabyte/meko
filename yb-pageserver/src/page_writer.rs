@@ -181,6 +181,14 @@ impl PageWriter {
         }
     }
 
+    /// Borrow the internal-traffic `PageStore`. Used by
+    /// `Timeline::write_timeline_row_to_yb` (Phase 5b) and other
+    /// callers that need to issue side-effects (timeline-row upsert,
+    /// generation bump) on the same connection the flush path uses.
+    pub fn internal_page_store(&self) -> &Arc<PageStore> {
+        &self.internal_page_store
+    }
+
     /// Install the image-materialiser handle. Counter logic in `put`
     /// is a no-op until this is called. Must be called before any
     /// `put` traffic for that traffic to be observed.

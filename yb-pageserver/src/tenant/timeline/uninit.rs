@@ -125,6 +125,25 @@ impl<'t> UninitializedTimeline<'t> {
             ));
         }
 
+        // Phase 5b: persist the full timeline row to
+        // `pageserver.timelines` BEFORE we take the (sync) timelines
+        // mutex AND before the flush loop spawns. Three reasons:
+        // (a) holding a std::sync::Mutex across an await is a
+        // deadlock hazard, so this must precede the lock; (b) the
+        // flush path's per-success `advance_disk_consistent_lsn`
+        // UPDATE bails if no row matches — the row must exist by
+        // the time `maybe_spawn_flush_loop` returns; (c) failing
+        // here aborts creation before the timeline becomes visible
+        // in the tenant map, so a half-initialized state isn't
+        // exposed. No-op when page_writer is None (upstream mode).
+        self.raw_timeline
+            .as_ref()
+            .expect("checked above")
+            .0
+            .write_timeline_row_to_yb()
+            .await
+            .context("Phase 5b: write timeline row at creation")?;
+
         let mut timelines = self.owning_tenant.timelines.lock().unwrap();
         match timelines.entry(timeline_id) {
             Entry::Occupied(_) => {

@@ -277,7 +277,7 @@ impl PageStore {
             .context("creating slru_pages table")?;
 
         let create_timelines = format!(
-            "CREATE TABLE IF NOT EXISTS \"{}\".timelines (
+            "CREATE TABLE IF NOT EXISTS \"{}\".timeline_state (
                 tenant_id              TEXT    NOT NULL,
                 timeline_id            TEXT    NOT NULL,
                 disk_consistent_lsn    BIGINT  NOT NULL,
@@ -1118,7 +1118,7 @@ impl PageStore {
 
     pub async fn upsert_timeline(&self, row: &TimelineRow) -> Result<()> {
         let sql = format!(
-            "INSERT INTO \"{}\".timelines \
+            "INSERT INTO \"{}\".timeline_state \
              (tenant_id, timeline_id, disk_consistent_lsn, \
               applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
               current_generation, pg_version) \
@@ -1160,7 +1160,7 @@ impl PageStore {
             "SELECT tenant_id, timeline_id, disk_consistent_lsn, \
                     applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
                     current_generation, pg_version \
-             FROM \"{}\".timelines \
+             FROM \"{}\".timeline_state \
              WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
         );
@@ -1177,7 +1177,7 @@ impl PageStore {
             "SELECT tenant_id, timeline_id, disk_consistent_lsn, \
                     applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
                     current_generation, pg_version \
-             FROM \"{}\".timelines \
+             FROM \"{}\".timeline_state \
              WHERE tenant_id = $1",
             self.schema
         );
@@ -1195,7 +1195,7 @@ impl PageStore {
         timeline: TimelineId,
     ) -> Result<()> {
         let sql = format!(
-            "DELETE FROM \"{}\".timelines WHERE tenant_id = $1 AND timeline_id = $2",
+            "DELETE FROM \"{}\".timeline_state WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
         );
         self.client
@@ -1227,7 +1227,7 @@ impl PageStore {
         new_dc_lsn: Lsn,
     ) -> Result<()> {
         let sql = format!(
-            "UPDATE \"{}\".timelines \
+            "UPDATE \"{}\".timeline_state \
              SET disk_consistent_lsn = $3 \
              WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
@@ -1259,7 +1259,7 @@ impl PageStore {
         timeline: TimelineId,
     ) -> Result<i32> {
         let sql = format!(
-            "UPDATE \"{}\".timelines \
+            "UPDATE \"{}\".timeline_state \
              SET current_generation = current_generation + 1 \
              WHERE tenant_id = $1 AND timeline_id = $2 \
              RETURNING current_generation",
@@ -1280,7 +1280,7 @@ impl PageStore {
         timeline: TimelineId,
     ) -> Result<Option<i32>> {
         let sql = format!(
-            "SELECT current_generation FROM \"{}\".timelines \
+            "SELECT current_generation FROM \"{}\".timeline_state \
              WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
         );

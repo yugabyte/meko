@@ -39,8 +39,8 @@ The binary name is `yb-pageserver`. Builds with
 | `(Key, LSN) → Value` stored as B-tree leaves in delta/image layer files | One row per version in `pageserver.pages` (YB) |
 | Open in-memory layer + frozen layer + flush loop | In-RAM write buffer (5 s / 100 MB defaults), flushed as `INSERT … VALUES (…),(…),…` into `pageserver.pages` |
 | L0 → L1 compaction, image-layer creation | **Image-anchored reads** + background image materialiser (this file) |
-| `index_part.json` (per-timeline layer list) | The `pageserver.timelines` state row |
-| `metadata` (local file with ancestor/LSN bookkeeping) | Columns on the `pageserver.timelines` row |
+| `index_part.json` (per-timeline layer list) | The `pageserver.timeline_state` state row |
+| `metadata` (local file with ancestor/LSN bookkeeping) | Columns on the `pageserver.timeline_state` row |
 | `tenant-manifest.json` (per-gen layer tracking) | `current_generation` column on the timeline row |
 | Local layer cache + secondary cache + heatmap | None — every read hits YB |
 | Disk eviction + heatmap downloader | None |
@@ -93,13 +93,13 @@ key, a single block's rows are split into two sub-clusters; reads anchor
 on the latest `is_image=TRUE` row at or below the target LSN and walk
 the deltas above it.
 
-### `pageserver.timelines`
+### `pageserver.timeline_state`
 
 One row per timeline. Replaces the upstream split of `metadata` +
 `index_part.json` + `tenant-manifest.json`.
 
 ```sql
-CREATE TABLE pageserver.timelines (
+CREATE TABLE pageserver.timeline_state (
     tenant_id              TEXT    NOT NULL,
     timeline_id            TEXT    NOT NULL,
     disk_consistent_lsn    BIGINT  NOT NULL,
@@ -279,7 +279,7 @@ on disk grows monotonically.
 
 ## Generation fencing
 
-`current_generation` on the `pageserver.timelines` row is the gate.
+`current_generation` on the `pageserver.timeline_state` row is the gate.
 Sequence:
 
 1. Storage controller's attach decision bumps the generation. yb-pageserver
@@ -287,7 +287,7 @@ Sequence:
 2. yb-pageserver opens the timeline: reads the current state row, asserts
    `row.current_generation == attach_gen`.
 3. Each flush transaction wraps the `INSERT INTO pages …` in a
-   `BEGIN; UPDATE pageserver.timelines SET disk_consistent_lsn = $new
+   `BEGIN; UPDATE pageserver.timeline_state SET disk_consistent_lsn = $new
    WHERE tenant_id=$1 AND timeline_id=$2 AND current_generation =
    $expected; … COMMIT`. If the `UPDATE`'s row count is 0, the gen has
    moved; the flush aborts and the pageserver tears down the timeline.
@@ -320,7 +320,7 @@ Tracked phases:
 | Phase | Status | Description |
 |---|---|---|
 | 0 | ✅ done | Fork `pageserver/` → `yb-pageserver/`, rename crate + binary. |
-| 1 | ✅ done | `pageserver.pages` + `pageserver.timelines` schema, `PageStore` Rust module (`yb-pageserver/src/page_store.rs`) with full CRUD + generation helpers and 15 integration tests against a real YB. |
+| 1 | ✅ done | `pageserver.pages` + `pageserver.timeline_state` schema, `PageStore` Rust module (`yb-pageserver/src/page_store.rs`) with full CRUD + generation helpers and 15 integration tests against a real YB. |
 | 2a | ✅ done | `ImageRule` 10-delta enforcement logic (`yb-pageserver/src/image_rule.rs`) with 12 unit tests. Pure logic, no walredo or DB dep. |
 | 2b | ✅ done | `PageWriter` (`yb-pageserver/src/page_writer.rs`): buffered write path that applies `ImageRule`, calls a `Materializer` trait on `ForceImage`, blends buffered + persisted rows on read (`read_chain`), and flushes on a size/age trigger (defaults 100 MiB / 5 s). 12 integration tests including a long-workload property test that scans every LSN to confirm the LIMIT-10 invariant holds. |
 | 3a | ✅ done | `Materializer` trait refactored: now takes `(key, target_lsn, prior_chain, current)` so production wrappers don't need a back-reference to `PageWriter`. `WalRedoMaterializer` (`yb-pageserver/src/page_materializer.rs`) is the production impl — converts chain rows back into `(base_img, records)` and calls `walredo::PostgresRedoManager::request_redo`. 5 tests cover the pure decode helper. Walredo-driven end-to-end test deferred to Phase 3b wiring (needs a real PG subprocess). |
@@ -341,7 +341,7 @@ Tracked phases:
 | 4h | ✅ done | **Dedicated YSQL connection for internal traffic vs compute reads.** Two YsqlClients per pageserver: `yb-pageserver:compute_reads` serves GetPage reads (scan_range, read_chain, scan_meta_range, read_slru_chain) — idle when the cache absorbs them. `yb-pageserver:internal` serves walreceiver `PageWriter::flush` writes, materialiser `read_chain_durable` cache miss, and materialiser image INSERT. Visible in `pg_stat_activity` as two distinct `application_name`s. Compute getPage stays isolated from a 25 MiB flush or a multi-job materialiser INSERT and vice versa. No measurable perf delta on the single-client microbench (cache already absorbed contention) — the structural isolation is the point. |
 | 4i | ⏳ pending | **Revisit materialiser threshold.** Current `image_chain_limit=10` counts deltas only. Small WAL records (1–2 bytes) accumulate slowly and waste materialiser cycles; large deltas (near-full pages) leave reads doing many records' worth of walredo before triggering. Move to a hybrid: trigger when **20 deltas OR 4 KiB combined delta payload** since the last anchor for a key, whichever lands first. Per-key payload counter lives alongside `delta_counts` in `WriterState`, reset on `will_init`/image. Pick numbers by re-running microbench across (10/20/40 delta caps) × (2/4/8 KiB size caps). |
 | 4j | ⏳ pending | **Per-pageserver `s3_upload_limit_bytes` config.** Already shipped (commit `bdb1d133d`); promote `S3_UPLOAD_LIMIT` const → `ConfigToml` field, default preserved at 4_500_000_000. Operators on stores without the 5 GB single-PUT cap can lift the per-file ceiling. Tracked here for completeness. |
-| 5 | ⏳ pending | Replace `metadata` / `index_part.json` / `tenant-manifest.json` with reads/writes against `pageserver.timelines`. Rewrite attach. The table schema already exists (`tenant_id, timeline_id, last_record_lsn, disk_consistent_lsn, applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, current_generation, pg_version`) and `PageStore::{upsert_timeline,get_timeline,bump_generation}` are wired (Phase 1). What's missing: the runtime hookup that replaces the existing `RemoteTimelineClient` calls into the blob store. After 4a/4b/4c, layer files for rel/SLRU/meta keys are never created, so the upload of `index_part.json` (which is generated alongside layer-file uploads) silently stops happening — on restart, `attach` looks for `index_part.json` at the per-timeline blob key and sees nothing, then purges the local directory and fails the basebackup ("Timeline … was not found"). Fixing it means: (a) on every `disk_consistent_lsn` advance / generation bump / ancestor update, upsert the timeline row; (b) on attach, build the in-memory `IndexPart` equivalent from the row, skip the blob fetch; (c) tenant-manifest replacement is simpler — the generation column on the timeline row IS the manifest. |
+| 5 | ⏳ pending | Replace `metadata` / `index_part.json` / `tenant-manifest.json` with reads/writes against `pageserver.timeline_state`. Rewrite attach. The table schema already exists (`tenant_id, timeline_id, last_record_lsn, disk_consistent_lsn, applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, current_generation, pg_version`) and `PageStore::{upsert_timeline,get_timeline,bump_generation}` are wired (Phase 1). What's missing: the runtime hookup that replaces the existing `RemoteTimelineClient` calls into the blob store. After 4a/4b/4c, layer files for rel/SLRU/meta keys are never created, so the upload of `index_part.json` (which is generated alongside layer-file uploads) silently stops happening — on restart, `attach` looks for `index_part.json` at the per-timeline blob key and sees nothing, then purges the local directory and fails the basebackup ("Timeline … was not found"). Fixing it means: (a) on every `disk_consistent_lsn` advance / generation bump / ancestor update, upsert the timeline row; (b) on attach, build the in-memory `IndexPart` equivalent from the row, skip the blob fetch; (c) tenant-manifest replacement is simpler — the generation column on the timeline row IS the manifest. |
 | 6 | ⏳ deferred | GC: cron that prunes old `pages` rows. User said "figure out separately later". |
 
 ## Testing dual-write (Phase 3b verification)
@@ -437,4 +437,4 @@ both climb steadily.
 - `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
   — DDL bootstrap for `pageserver` schema.
 - `architecture/yugabyte.md` — full DDL reference for `pageserver.pages`
-  and `pageserver.timelines`.
+  and `pageserver.timeline_state`.
