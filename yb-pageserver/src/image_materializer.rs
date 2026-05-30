@@ -32,7 +32,7 @@ use pageserver_api::key::Key;
 use postgres_ffi::PgMajorVersion;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{Instrument, debug, info, info_span, warn};
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use wal_decoder::models::record::NeonWalRecord;
@@ -83,6 +83,15 @@ impl ImageMaterializer {
             walredo_mgr,
             pg_version,
         });
+        // Walredo's `debug_assert_current_span_has_tenant_id` requires
+        // both `tenant_id` and `shard_id` fields on the active span;
+        // we run with a single-shard hardcoded layout, so emit "0000".
+        let span = info_span!(
+            "image_materializer",
+            tenant_id = %tenant_id,
+            shard_id = "0000",
+            timeline_id = %timeline_id,
+        );
         let handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -106,7 +115,7 @@ impl ImageMaterializer {
                 timeline_id = %me.timeline_id,
                 "image materialiser exited",
             );
-        });
+        }.instrument(span));
         MaterializerTask { handle, cancel }
     }
 
