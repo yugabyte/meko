@@ -38,8 +38,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use tokio_postgres::binary_copy::BinaryCopyInWriter;
-use tokio_postgres::types::{ToSql, Type};
+use tokio_postgres::types::ToSql;
 
 use crate::config::YbStoreConfig;
 
@@ -164,25 +163,6 @@ impl YsqlClient {
             }
             Err(e) => Err(anyhow::Error::from(e)),
         }
-    }
-
-    /// Open a binary-COPY stream against `sql` (`COPY ... FROM STDIN
-    /// BINARY`). Caller writes rows via the returned writer and calls
-    /// `finish().await`. No reconnect-and-retry: if the connection
-    /// dies mid-stream, the error propagates; the caller logs and
-    /// the next batch reopens. (Mid-stream replay is impossible —
-    /// we'd have to remember every row already sent.)
-    pub async fn copy_in_binary(
-        &self,
-        sql: &str,
-        types: &[Type],
-    ) -> Result<BinaryCopyInWriter> {
-        let client = self.current().await?;
-        let sink = client
-            .copy_in(sql)
-            .await
-            .with_context(|| format!("YsqlClient: copy_in failed for {sql}"))?;
-        Ok(BinaryCopyInWriter::new(sink, types))
     }
 
     pub async fn query_opt(

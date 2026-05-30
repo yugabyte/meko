@@ -147,12 +147,12 @@ impl ImageMaterializer {
     }
 
     /// Materialise a batch of jobs end-to-end: read every chain,
-    /// walredo each, COPY all resulting images in one round-trip on
+    /// walredo each, INSERT all resulting images in one round-trip on
     /// the dedicated connection, then install each into the in-RAM
     /// cache. Errors from individual jobs are logged and skipped —
-    /// one bad chain shouldn't drop the whole batch's COPY. Errors
-    /// from the COPY itself propagate (caller logs + the next
-    /// trigger retries).
+    /// one bad chain shouldn't drop the whole batch. Errors from the
+    /// INSERT itself propagate (caller logs + the next trigger
+    /// retries).
     async fn materialize_batch(&self, jobs: &[MaterializeJob]) -> Result<()> {
         let t0 = std::time::Instant::now();
         let mut images: Vec<PageRow> = Vec::with_capacity(jobs.len());
@@ -179,13 +179,17 @@ impl ImageMaterializer {
         }
         let t_redo = t0.elapsed();
 
-        // One binary-COPY round-trip on the dedicated connection.
-        let t_copy_start = std::time::Instant::now();
+        // Parameterised batched INSERT, parallel chunks, same path
+        // the walreceiver flush uses. With ≤64 image rows per batch
+        // the whole thing typically lands in a single chunk; if it
+        // overflows, put_pages's `buffer_unordered(4)` pipelines the
+        // chunks on the dedicated connection.
+        let t_insert_start = std::time::Instant::now();
         self.materializer_page_store
-            .put_pages_copy(self.tenant_id, self.timeline_id, &images)
+            .put_pages(self.tenant_id, self.timeline_id, &images)
             .await
-            .context("put_pages_copy")?;
-        let t_copy = t_copy_start.elapsed();
+            .context("put_pages")?;
+        let t_insert = t_insert_start.elapsed();
 
         // 2) Install each image into the cache (one writer lock per
         // image — short and bounded; we don't merge them into one
@@ -205,7 +209,7 @@ impl ImageMaterializer {
                 tag = "materialise_batch",
                 total_ms = total.as_millis() as u64,
                 redo_ms = t_redo.as_millis() as u64,
-                copy_ms = t_copy.as_millis() as u64,
+                insert_ms = t_insert.as_millis() as u64,
                 install_ms = t_install.as_millis() as u64,
                 batch_size = jobs.len(),
                 images = images.len(),

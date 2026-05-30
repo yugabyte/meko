@@ -50,7 +50,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::reltag::SlruKind;
 use remote_storage::{YbStoreConfig, YsqlClient};
-use tokio_postgres::types::{ToSql, Type};
+use tokio_postgres::types::ToSql;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 
@@ -371,60 +371,6 @@ impl PageStore {
             .buffer_unordered(PARALLELISM)
             .try_collect::<Vec<_>>()
             .await?;
-        Ok(())
-    }
-
-    /// Bulk-insert variant of `put_pages` using PostgreSQL binary
-    /// COPY. Same row contract as `put_pages` — caller hands a slice
-    /// of `PageRow`. Used by the image materialiser to dump many
-    /// freshly-redo'd images per round-trip; the walreceiver still
-    /// uses `put_pages` (parameterised INSERT) for buffer flushes
-    /// because those are already batched into 25 MiB chunks. The
-    /// COPY here pays off when batches are small (5–50 rows) and
-    /// frequent — parameterised INSERT round-trip dominates at that
-    /// size.
-    pub async fn put_pages_copy(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-        rows: &[PageRow],
-    ) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let sql = format!(
-            "COPY \"{}\".pages \
-             (tenant_id, timeline_id, spcnode, dbnode, relnode, forknum, blknum, \
-              lsn, is_image, will_init, payload) FROM STDIN BINARY",
-            self.schema
-        );
-        let types = [
-            Type::TEXT, Type::TEXT, Type::INT8, Type::INT8, Type::INT8,
-            Type::INT2, Type::INT8, Type::INT8, Type::BOOL, Type::BOOL, Type::BYTEA,
-        ];
-        let writer = self.client.copy_in_binary(&sql, &types).await?;
-        futures::pin_mut!(writer);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
-        for (i, row) in rows.iter().enumerate() {
-            let (sp, db, rel, fork, blk) = key_columns(&row.key)
-                .with_context(|| format!("put_pages_copy row {i}: bad key"))?;
-            let lsn = row.lsn.0 as i64;
-            let payload: &[u8] = row.payload.as_ref();
-            let values: [&(dyn ToSql + Sync); 11] = [
-                &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk,
-                &lsn, &row.is_image, &row.will_init, &payload,
-            ];
-            writer
-                .as_mut()
-                .write(&values)
-                .await
-                .with_context(|| format!("put_pages_copy: write row {i}"))?;
-        }
-        writer
-            .finish()
-            .await
-            .with_context(|| format!("put_pages_copy tenant={tenant} timeline={timeline} rows={}", rows.len()))?;
         Ok(())
     }
 
@@ -1872,36 +1818,6 @@ mod tests {
             .unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].lsn.0, high);
-        drop_schema(&store, &schema).await;
-    }
-
-    /// `put_pages_copy` uses binary COPY against YugabyteDB and must
-    /// round-trip the same row contract as `put_pages`. Smoke-test by
-    /// COPYing a mixed-anchor mini-chain and reading it back via the
-    /// image-anchored CTE.
-    #[tokio::test]
-    async fn put_pages_copy_round_trips_against_yb() {
-        let (store, schema) = make_store("copy_rt").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
-        let k = page_key(1663, 5, 16384, 0, 0);
-        let rows = vec![
-            page_row(k.clone(), 10, true, true, b"img@10"),
-            page_row(k.clone(), 20, false, false, b"d@20"),
-            page_row(k.clone(), 30, false, false, b"d@30"),
-        ];
-        store
-            .put_pages_copy(tenant, timeline, &rows)
-            .await
-            .unwrap();
-        let got = store
-            .read_chain(tenant, timeline, &k, Lsn(100))
-            .await
-            .unwrap();
-        let lsns: Vec<u64> = got.iter().map(|r| r.lsn.0).collect();
-        assert_eq!(lsns, vec![30, 20, 10]);
-        assert_eq!(got[2].payload.as_ref(), b"img@10");
-        assert!(got[2].is_image);
         drop_schema(&store, &schema).await;
     }
 
