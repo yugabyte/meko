@@ -211,8 +211,7 @@ impl PageStore {
 
     pub async fn ensure_schema(&self) -> Result<()> {
         let create_schema = format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", self.schema);
-        self.client
-            .execute(&create_schema, &[])
+        self.run_ddl_with_retry(&create_schema, "creating schema")
             .await
             .with_context(|| format!("creating schema {}", self.schema))?;
 
@@ -234,10 +233,8 @@ impl PageStore {
             )",
             self.schema
         );
-        self.client
-            .execute(&create_pages, &[])
-            .await
-            .context("creating pages table")?;
+        self.run_ddl_with_retry(&create_pages, "creating pages table")
+            .await?;
 
         let create_meta = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".meta (
@@ -250,10 +247,8 @@ impl PageStore {
             )",
             self.schema
         );
-        self.client
-            .execute(&create_meta, &[])
-            .await
-            .context("creating meta table")?;
+        self.run_ddl_with_retry(&create_meta, "creating meta table")
+            .await?;
 
         let create_slru = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".slru_pages (
@@ -271,10 +266,8 @@ impl PageStore {
             )",
             self.schema
         );
-        self.client
-            .execute(&create_slru, &[])
-            .await
-            .context("creating slru_pages table")?;
+        self.run_ddl_with_retry(&create_slru, "creating slru_pages table")
+            .await?;
 
         let create_timelines = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".timeline_state (
@@ -290,11 +283,39 @@ impl PageStore {
             )",
             self.schema
         );
-        self.client
-            .execute(&create_timelines, &[])
-            .await
-            .context("creating timelines table")?;
+        self.run_ddl_with_retry(&create_timelines, "creating timeline_state table")
+            .await?;
         Ok(())
+    }
+
+    /// Run a DDL statement with retry-on-"Restart read required". YB
+    /// surfaces this transient on read-only metadata transactions that
+    /// race a schema-change side effect; client-side recipe is to
+    /// retry. We see it most often at startup right after a fresh
+    /// CREATE DATABASE. Bounded — five attempts with doubling backoff
+    /// from 200 ms — so a real schema-conflict still fails fast.
+    async fn run_ddl_with_retry(&self, sql: &str, desc: &str) -> Result<()> {
+        let mut delay = std::time::Duration::from_millis(200);
+        for attempt in 1..=5 {
+            match self.client.execute(sql, &[]).await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    if attempt < 5 && msg.contains("Restart read required") {
+                        tracing::info!(
+                            attempt,
+                            backoff_ms = delay.as_millis() as u64,
+                            "{desc}: YB Restart read required, retrying"
+                        );
+                        tokio::time::sleep(delay).await;
+                        delay = delay.saturating_mul(2);
+                        continue;
+                    }
+                    return Err(e).with_context(|| desc.to_string());
+                }
+            }
+        }
+        unreachable!("loop returns or errors")
     }
 
     // ------------------- pages ---------------------------------------------
