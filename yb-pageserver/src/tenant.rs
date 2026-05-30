@@ -1758,14 +1758,69 @@ impl TenantShard {
                     i
                 }
                 Err(DownloadError::NotFound) => {
-                    // There is no index_part on the remote. We only get here
-                    // if there is some prefix for the timeline in the remote storage.
-                    // This can e.g. be the initdb.tar.zst archive, maybe a
-                    // remnant from a prior incomplete creation or deletion attempt.
-                    // Delete the local directory as the deciding criterion for a
-                    // timeline's existence is presence of index_part.
-                    info!(%timeline_id, "index_part not found on remote");
-                    continue;
+                    // No index_part on the remote. Two paths converge here:
+                    //
+                    // (a) Upstream pageserver mode: there's some prefix for
+                    //     this timeline (initdb.tar.zst, a partial deletion,
+                    //     etc.) but no index_part. The right move is to
+                    //     drop the local dentry — original upstream behaviour.
+                    //
+                    // (b) yb-pageserver mode (Phase 5c): index_part.json
+                    //     was never uploaded because Phase 4a/b/c stopped
+                    //     producing layer files for rel/SLRU/meta keys, so
+                    //     the upload that piggybacks on layer-file flushes
+                    //     never fires. The authoritative timeline state
+                    //     lives in `pageserver.timeline_state` instead.
+                    //     Read the row, synthesise an IndexPart with empty
+                    //     `layer_metadata` (no layer files exist) and the
+                    //     metadata reconstructed from the row's columns.
+                    //
+                    // If yb mode is on AND the row exists → synthesise.
+                    // Else fall through to the original NotFound behaviour.
+                    let yb_row = match self.compute_page_store.as_ref() {
+                        Some(ps) => match ps
+                            .get_timeline(self.tenant_shard_id.tenant_id, timeline_id)
+                            .await
+                        {
+                            Ok(row) => row,
+                            Err(e) => {
+                                warn!(%timeline_id, "yb timeline_state lookup failed: {e:#}");
+                                None
+                            }
+                        },
+                        None => None,
+                    };
+                    if let Some(row) = yb_row {
+                        info!(%timeline_id, "Phase 5c: synthesising IndexPart from pageserver.timeline_state");
+                        let pg_major = match row.pg_version {
+                            14 => PgMajorVersion::PG14,
+                            15 => PgMajorVersion::PG15,
+                            16 => PgMajorVersion::PG16,
+                            17 => PgMajorVersion::PG17,
+                            v => anyhow::bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
+                        };
+                        let metadata = crate::tenant::metadata::TimelineMetadata::new(
+                            row.disk_consistent_lsn,
+                            None, // prev_record_lsn: not persisted (re-derived by walreceiver)
+                            row.ancestor_timeline_id,
+                            row.ancestor_lsn.unwrap_or(Lsn(0)),
+                            row.applied_gc_cutoff_lsn,
+                            // initdb_lsn: not persisted separately yet. Using
+                            // disk_consistent_lsn as a conservative stand-in
+                            // — it's only consulted by the bootstrap-time
+                            // image-layer optimisation (dead code in yb-mode)
+                            // and consumption metrics. Add a column if we
+                            // ever revive a code path that needs the true
+                            // bootstrap LSN.
+                            row.disk_consistent_lsn,
+                            pg_major,
+                        );
+                        existent_timelines.insert(timeline_id);
+                        MaybeDeletedIndexPart::IndexPart(IndexPart::empty(metadata))
+                    } else {
+                        info!(%timeline_id, "index_part not found on remote");
+                        continue;
+                    }
                 }
                 Err(DownloadError::Fatal(why)) => {
                     // If, while loading one remote timeline, we saw an indication that our generation
