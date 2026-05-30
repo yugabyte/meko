@@ -260,6 +260,10 @@ pub struct PageServerConf {
     /// Controls whether to collect all metrics on each scrape or to return potentially stale
     /// results.
     pub force_metric_collection_on_scrape: bool,
+
+    /// Maximum permitted size of a single on-disk layer file.
+    /// See `pageserver_api::config::ConfigToml::s3_upload_limit_bytes`.
+    pub s3_upload_limit_bytes: u64,
 }
 
 /// Token for authentication to safekeepers
@@ -442,6 +446,7 @@ impl PageServerConf {
             basebackup_cache_config,
             image_layer_generation_large_timeline_threshold,
             force_metric_collection_on_scrape,
+            s3_upload_limit_bytes,
             // yb_page_writer lives in the shared ConfigToml so yb-pageserver
             // can pick it up; the upstream `pageserver` binary ignores it.
             yb_page_writer: _,
@@ -505,6 +510,7 @@ impl PageServerConf {
             basebackup_cache_config,
             image_layer_generation_large_timeline_threshold,
             force_metric_collection_on_scrape,
+            s3_upload_limit_bytes,
 
             // ------------------------------------------------------------
             // fields that require additional validation or custom handling

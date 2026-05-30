@@ -261,6 +261,10 @@ pub struct PageServerConf {
     /// results.
     pub force_metric_collection_on_scrape: bool,
 
+    /// Maximum permitted size of a single on-disk layer file.
+    /// See `pageserver_api::config::ConfigToml::s3_upload_limit_bytes`.
+    pub s3_upload_limit_bytes: u64,
+
     /// yb-pageserver row-per-page writer tunables.
     pub yb_page_writer: pageserver_api::config::YbPageWriterConfig,
 }
@@ -445,6 +449,7 @@ impl PageServerConf {
             basebackup_cache_config,
             image_layer_generation_large_timeline_threshold,
             force_metric_collection_on_scrape,
+            s3_upload_limit_bytes,
             yb_page_writer,
         } = config_toml;
 
@@ -506,6 +511,7 @@ impl PageServerConf {
             basebackup_cache_config,
             image_layer_generation_large_timeline_threshold,
             force_metric_collection_on_scrape,
+            s3_upload_limit_bytes,
             yb_page_writer,
 
             // ------------------------------------------------------------

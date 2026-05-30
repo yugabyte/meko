@@ -276,6 +276,16 @@ pub struct ConfigToml {
     pub image_layer_generation_large_timeline_threshold: Option<u64>,
     pub force_metric_collection_on_scrape: bool,
 
+    /// Maximum permitted size of a single on-disk layer file before
+    /// `batch_split_writer` rolls to a new file. Originally a hard
+    /// 4.5 GB constant (the legacy single-PUT S3 upload cap; any
+    /// modern S3 client streams larger objects via multipart). Exposed
+    /// here so operators on stores without that cap (YB, GCS, local
+    /// disk, multipart-S3) can lift the per-file ceiling without
+    /// recompiling. Counted in bytes; default 4_500_000_000 preserves
+    /// the historical value.
+    pub s3_upload_limit_bytes: u64,
+
     /// yb-pageserver row-per-page writer tunables. The upstream
     /// `pageserver` binary ignores these — they only take effect when
     /// `remote_storage.kind = "YbStore"` and the binary is
@@ -899,6 +909,7 @@ impl Default for ConfigToml {
             posthog_config: None,
             image_layer_generation_large_timeline_threshold: Some(2 * 1024 * 1024 * 1024),
             force_metric_collection_on_scrape: true,
+            s3_upload_limit_bytes: 4_500_000_000,
             yb_page_writer: YbPageWriterConfig::default(),
         }
     }

@@ -11,7 +11,6 @@ use utils::shard::TenantShardId;
 use wal_decoder::models::value::Value;
 
 use super::errors::PutError;
-use super::layer::S3_UPLOAD_LIMIT;
 use super::{
     DeltaLayerWriter, ImageLayerWriter, PersistentLayerDesc, PersistentLayerKey, ResidentLayer,
 };
@@ -408,7 +407,7 @@ impl<'a> SplitDeltaLayerWriter<'a> {
                     start_key..key,
                     self.lsn_range.clone(),
                 );
-            } else if inner.estimated_size() >= S3_UPLOAD_LIMIT {
+            } else if inner.estimated_size() >= self.conf.s3_upload_limit_bytes {
                 // We have to produce a very large file b/c a key is updated too often.
                 return Err(PutError::Other(anyhow::anyhow!(
                     "a single key is updated too often: key={}, estimated_size={}, and the layer file cannot be produced",
