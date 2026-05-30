@@ -1205,52 +1205,51 @@ impl PageStore {
         Ok(())
     }
 
-    /// Column-scoped UPSERT of `disk_consistent_lsn`. Caller must
-    /// guard in-memory: only call when the new value is strictly
-    /// higher than the last value sent. No server-side monotonicity
-    /// check, so a stale caller could roll the LSN backward — the
-    /// in-memory guard at the flush completion site is the only
-    /// barrier.
+    /// Column-scoped UPDATE of `disk_consistent_lsn`. Caller guards
+    /// monotonicity in memory — only call when the new value is
+    /// strictly higher than the last value sent; no server-side
+    /// monotonicity check.
     ///
-    /// The `ON CONFLICT DO UPDATE` touches **only**
-    /// `disk_consistent_lsn`, leaving `current_generation`,
-    /// `applied_gc_cutoff_lsn`, etc. alone. Safe to run concurrently
-    /// with `bump_generation` / `advance_gc_cutoff_lsn` /
-    /// `upsert_timeline` — each operates on disjoint columns.
+    /// The base row is guaranteed to exist by Phase 5b
+    /// (`upsert_timeline` at timeline creation), so a plain UPDATE
+    /// is correct and avoids the INSERT branch's sentinel-default
+    /// concerns. Returns an error if zero rows matched — that
+    /// signals "flush ran before timeline_create wrote the row",
+    /// which is a wiring bug worth surfacing.
     ///
-    /// `row` is the in-memory shadow held by the timeline. Its other
-    /// columns only get written if the INSERT branch fires (the cold
-    /// case where no row exists yet, e.g. a very early flush before
-    /// timeline_create's full-row upsert lands). In that case stale
-    /// `current_generation` from the shadow is corrected by the
-    /// storage controller's next `bump_generation`.
-    pub async fn upsert_disk_consistent_lsn(&self, row: &TimelineRow) -> Result<()> {
+    /// Scoped to one column → safe to run concurrently with
+    /// `bump_generation` / `advance_gc_cutoff_lsn` /
+    /// `upsert_timeline`. Each touches disjoint columns.
+    pub async fn advance_disk_consistent_lsn(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+        new_dc_lsn: Lsn,
+    ) -> Result<()> {
         let sql = format!(
-            "INSERT INTO \"{}\".timelines \
-             (tenant_id, timeline_id, disk_consistent_lsn, \
-              applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
-              current_generation, pg_version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (tenant_id, timeline_id) DO UPDATE SET \
-                disk_consistent_lsn = EXCLUDED.disk_consistent_lsn",
+            "UPDATE \"{}\".timelines \
+             SET disk_consistent_lsn = $3 \
+             WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
         );
-        self.client
+        let n = self
+            .client
             .execute(
                 &sql,
                 &[
-                    &row.tenant_id.to_string(),
-                    &row.timeline_id.to_string(),
-                    &(row.disk_consistent_lsn.0 as i64),
-                    &(row.applied_gc_cutoff_lsn.0 as i64),
-                    &row.ancestor_timeline_id.map(|id| id.to_string()),
-                    &row.ancestor_lsn.map(|l| l.0 as i64),
-                    &row.current_generation,
-                    &(row.pg_version as i32),
+                    &tenant.to_string(),
+                    &timeline.to_string(),
+                    &(new_dc_lsn.0 as i64),
                 ],
             )
             .await
-            .context("upsert_disk_consistent_lsn")?;
+            .context("advance_disk_consistent_lsn")?;
+        if n == 0 {
+            anyhow::bail!(
+                "no timeline row for {tenant}/{timeline} — \
+                 advance_disk_consistent_lsn called before timeline_create wrote the row"
+            );
+        }
         Ok(())
     }
 

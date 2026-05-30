@@ -96,6 +96,15 @@ pub struct PageWriter {
     policy: FlushPolicy,
     state: RwLock<WriterState>,
     materializer: Option<MaterializerHandle>,
+    /// Highest LSN successfully reported as durable to
+    /// `pageserver.timelines.disk_consistent_lsn`. Advances only after
+    /// `try_write_rows` succeeds AND the subsequent
+    /// `upsert_disk_consistent_lsn` succeeds. Initialised to 0 at
+    /// construction; Phase 5 attach-side will seed it from the
+    /// persisted row. The flush path issues the upsert only when
+    /// the flush's max LSN exceeds this value — that's the in-memory
+    /// guard the column-scoped UPSERT relies on.
+    dc_lsn_watermark: std::sync::atomic::AtomicU64,
 }
 
 struct WriterState {
@@ -153,6 +162,22 @@ impl PageWriter {
                 delta_counts: std::collections::HashMap::new(),
             }),
             materializer: None,
+            dc_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Seed the in-memory `disk_consistent_lsn` watermark from the
+    /// persisted timeline row at attach time. Without this, the first
+    /// post-restart flush would upsert a smaller LSN than what's
+    /// already in YB (a no-op write but wasted round-trip). Idempotent
+    /// — uses `fetch_max` so a later flush that already advanced the
+    /// watermark isn't rolled back.
+    pub fn seed_dc_lsn_watermark(&self, lsn: utils::lsn::Lsn) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let prev = self.dc_lsn_watermark.load(Relaxed);
+        if lsn.0 > prev {
+            // Single writer at attach; no race with the flush loop yet.
+            self.dc_lsn_watermark.store(lsn.0, Relaxed);
         }
     }
 
@@ -518,31 +543,81 @@ impl PageWriter {
         let res = self.try_write_rows(&rel_rows, &slru_rows, &meta_rows).await;
 
         if res.is_ok() {
-            let mut s = self.state.write().await;
-            // Promote rel rows in-place (no copy), then opportunistically
-            // shrink the cache if it's over capacity.
-            s.pages.mark_first_n_flushed(rel_count);
-            s.pages.evict_to_capacity();
-            // Aux buffers drain as before.
-            let aux_drop_bytes: usize = s
-                .slru_buffer
+            // Compute the max LSN we just durabilised across all three
+            // tables — that's the new candidate for
+            // `disk_consistent_lsn`. We compute it from the snapshot
+            // we just flushed; the buffer is unchanged at this point.
+            let max_flushed_lsn = rel_rows
                 .iter()
-                .take(slru_count)
-                .map(slru_row_size)
-                .sum::<usize>()
-                + s.meta_buffer
-                    .iter()
-                    .take(meta_count)
-                    .map(meta_row_size)
-                    .sum::<usize>();
-            s.bytes_in_aux_buffers = s.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
-            s.slru_buffer.drain(0..slru_count);
-            s.meta_buffer.drain(0..meta_count);
-            if s.pages.unflushed_count() == 0
-                && s.slru_buffer.is_empty()
-                && s.meta_buffer.is_empty()
+                .map(|r| r.lsn.0)
+                .chain(slru_rows.iter().map(|r| r.lsn.0))
+                .chain(meta_rows.iter().map(|r| r.lsn.0))
+                .max();
             {
-                s.opened_at = None;
+                let mut s = self.state.write().await;
+                // Promote rel rows in-place (no copy), then opportunistically
+                // shrink the cache if it's over capacity.
+                s.pages.mark_first_n_flushed(rel_count);
+                s.pages.evict_to_capacity();
+                // Aux buffers drain as before.
+                let aux_drop_bytes: usize = s
+                    .slru_buffer
+                    .iter()
+                    .take(slru_count)
+                    .map(slru_row_size)
+                    .sum::<usize>()
+                    + s.meta_buffer
+                        .iter()
+                        .take(meta_count)
+                        .map(meta_row_size)
+                        .sum::<usize>();
+                s.bytes_in_aux_buffers = s.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
+                s.slru_buffer.drain(0..slru_count);
+                s.meta_buffer.drain(0..meta_count);
+                if s.pages.unflushed_count() == 0
+                    && s.slru_buffer.is_empty()
+                    && s.meta_buffer.is_empty()
+                {
+                    s.opened_at = None;
+                }
+            }
+            // Outside the writer lock: persist the dc_lsn advance to
+            // `pageserver.timelines` if it actually moved. In-memory
+            // guard (only call when `new > prev`) is the only check —
+            // the SQL is a column-scoped UPDATE on a row that
+            // Phase 5b's `timeline_create` guarantees exists. Order
+            // matters: pages are already in YB by this point, so
+            // even if this UPDATE fails the on-disk state is safe
+            // (next flush retries; SK still has the WAL because the
+            // timeline row's persisted dc_lsn hasn't moved).
+            if let Some(new_lsn) = max_flushed_lsn {
+                use std::sync::atomic::Ordering::Relaxed;
+                let prev = self.dc_lsn_watermark.load(Relaxed);
+                if new_lsn > prev {
+                    let lsn = utils::lsn::Lsn(new_lsn);
+                    match self
+                        .internal_page_store
+                        .advance_disk_consistent_lsn(self.tenant_id, self.timeline_id, lsn)
+                        .await
+                    {
+                        Ok(()) => {
+                            self.dc_lsn_watermark.store(new_lsn, Relaxed);
+                        }
+                        Err(e) => {
+                            // Decoupled from page durability: pages are in
+                            // YB, only the timeline row lags. Next flush
+                            // retries. The safekeeper truncation bound is
+                            // driven by the row, so the SK conservatively
+                            // keeps more WAL until we catch up.
+                            tracing::warn!(
+                                tenant_id = %self.tenant_id,
+                                timeline_id = %self.timeline_id,
+                                new_lsn = %lsn,
+                                "advance_disk_consistent_lsn failed: {e:#}"
+                            );
+                        }
+                    }
+                }
             }
         }
         // On error, leave buffers untouched — next periodic flush retries.
