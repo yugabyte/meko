@@ -301,6 +301,28 @@ pub struct YbPageWriterConfig {
     /// Default 500 ms.
     #[serde(with = "humantime_serde")]
     pub flush_poll_interval: Duration,
+
+    /// When a relation-page key accumulates this many consecutive
+    /// non-image, non-`will_init` deltas, queue it for the background
+    /// image materialiser. The materialiser walredos the chain at the
+    /// triggering LSN and INSERTs a fresh `is_image=TRUE, will_init=TRUE`
+    /// row, so subsequent reads land on the fast-path CTE seek instead
+    /// of walking the chain back to the latest `will_init` delta.
+    /// Set to 0 to disable the materialiser entirely (slow-path-only
+    /// reads). Default 10.
+    pub image_chain_limit: u32,
+
+    /// Bound on in-flight materialisation jobs. The trigger uses
+    /// `try_send` and silently drops on overflow — the chain stays long
+    /// for one more cycle, no correctness impact. Default 1024.
+    pub materialize_queue_capacity: usize,
+
+    /// Soft cap on the in-RAM `UnifiedPages` cache (pre-flush buffer +
+    /// post-flush LRU-ish cache). When `total_bytes` exceeds this,
+    /// durable entries are evicted FIFO. Pre-flush rows are pinned
+    /// regardless, so the cache can transiently exceed this when the
+    /// walreceiver is way ahead of the consumer. Default 1 GiB.
+    pub read_cache_bytes: usize,
 }
 
 impl Default for YbPageWriterConfig {
@@ -309,6 +331,9 @@ impl Default for YbPageWriterConfig {
             flush_interval: Duration::from_secs(5),
             flush_size_bytes: 25 * 1024 * 1024,
             flush_poll_interval: Duration::from_millis(500),
+            image_chain_limit: 10,
+            materialize_queue_capacity: 1024,
+            read_cache_bytes: 1024 * 1024 * 1024,
         }
     }
 }

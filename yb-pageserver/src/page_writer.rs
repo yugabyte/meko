@@ -52,6 +52,28 @@ impl Default for FlushPolicy {
     }
 }
 
+/// A request to walredo the chain for `key` at `target_lsn` and INSERT
+/// a fresh image row. Produced by `PageWriter::put` when a key's delta
+/// chain crosses `image_chain_limit`, consumed by the background image
+/// materialiser task. Materialisation is best-effort: dropped jobs (on
+/// channel-full or task error) just mean the chain stays long for one
+/// more cycle.
+#[derive(Debug, Clone)]
+pub struct MaterializeJob {
+    pub key: bytes::Bytes,
+    pub target_lsn: Lsn,
+}
+
+/// Trigger criteria for the image materialiser. `None` disables the
+/// counter logic in `PageWriter::put`; mostly useful for tests and the
+/// upstream-style PhysicalStorage-only mode that doesn't need a
+/// materialiser.
+#[derive(Clone)]
+pub struct MaterializerHandle {
+    pub limit: u32,
+    pub tx: tokio::sync::mpsc::Sender<MaterializeJob>,
+}
+
 /// Top-level write buffer + flusher for one timeline.
 pub struct PageWriter {
     tenant_id: TenantId,
@@ -59,15 +81,28 @@ pub struct PageWriter {
     page_store: Arc<PageStore>,
     policy: FlushPolicy,
     state: RwLock<WriterState>,
+    materializer: Option<MaterializerHandle>,
 }
 
 struct WriterState {
-    buffer: Vec<PageRow>,
+    /// Unified pre-flush buffer + post-flush LRU-ish cache for rel
+    /// pages. See [`crate::unified_pages::UnifiedPages`].
+    pages: crate::unified_pages::UnifiedPages,
     slru_buffer: Vec<SlruPageRow>,
     meta_buffer: Vec<MetaRow>,
-    bytes_in_buffer: usize,
+    /// Bytes pending durability for SLRU + meta only. Rel-page
+    /// unflushed bytes live on `pages.unflushed_bytes()`. Drives the
+    /// non-rel side of the size-based flush trigger.
+    bytes_in_aux_buffers: usize,
     opened_at: Option<Instant>,
     rows_written: u64,
+    /// Per-key count of consecutive non-image, non-`will_init` deltas
+    /// seen by `put` since the last image / will_init for that key.
+    /// Reset to zero (entry removed) when the count crosses
+    /// `materializer.limit` and we dispatch a job. Lives under the
+    /// same RwLock as the buffers so the threshold check is atomic
+    /// with the row push.
+    delta_counts: std::collections::HashMap<bytes::Bytes, u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -85,6 +120,7 @@ impl PageWriter {
         timeline_id: TimelineId,
         page_store: Arc<PageStore>,
         policy: FlushPolicy,
+        read_cache_bytes: usize,
     ) -> Self {
         Self {
             tenant_id,
@@ -92,14 +128,35 @@ impl PageWriter {
             page_store,
             policy,
             state: RwLock::new(WriterState {
-                buffer: Vec::new(),
+                pages: crate::unified_pages::UnifiedPages::new(read_cache_bytes),
                 slru_buffer: Vec::new(),
                 meta_buffer: Vec::new(),
-                bytes_in_buffer: 0,
+                bytes_in_aux_buffers: 0,
                 opened_at: None,
                 rows_written: 0,
+                delta_counts: std::collections::HashMap::new(),
             }),
+            materializer: None,
         }
+    }
+
+    /// Install the image-materialiser handle. Counter logic in `put`
+    /// is a no-op until this is called. Must be called before any
+    /// `put` traffic for that traffic to be observed.
+    pub fn set_materializer(&mut self, handle: MaterializerHandle) {
+        self.materializer = Some(handle);
+    }
+
+    pub fn tenant_id(&self) -> TenantId {
+        self.tenant_id
+    }
+
+    pub fn timeline_id(&self) -> TimelineId {
+        self.timeline_id
+    }
+
+    pub fn page_store(&self) -> &Arc<PageStore> {
+        &self.page_store
     }
 
     /// Append a batch of entries to the in-RAM buffer. Does not flush.
@@ -131,31 +188,70 @@ impl PageWriter {
         if rel_rows.is_empty() && slru_rows.is_empty() && meta_rows.is_empty() {
             return Ok(());
         }
-        let mut s = self.state.write().await;
-        if s.opened_at.is_none() {
-            s.opened_at = Some(Instant::now());
+        // Collect materialisation jobs while holding the lock; dispatch
+        // them after release so the tx.try_send (channel-full case)
+        // can't block another writer waiting on `state`.
+        let limit = self.materializer.as_ref().map(|m| m.limit);
+        let mut to_materialize: Vec<MaterializeJob> = Vec::new();
+        {
+            let mut s = self.state.write().await;
+            if s.opened_at.is_none() {
+                s.opened_at = Some(Instant::now());
+            }
+            for row in rel_rows {
+                let key = row.key.clone();
+                let lsn = row.lsn;
+                let resets_chain = row.is_image || row.will_init;
+                s.pages.push(row);
+                s.rows_written += 1;
+
+                if resets_chain {
+                    s.delta_counts.remove(&key);
+                } else if let Some(limit) = limit
+                    && limit > 0
+                {
+                    let count = s.delta_counts.entry(key.clone()).or_insert(0);
+                    *count += 1;
+                    if *count >= limit {
+                        s.delta_counts.remove(&key);
+                        to_materialize.push(MaterializeJob {
+                            key,
+                            target_lsn: lsn,
+                        });
+                    }
+                }
+            }
+            for row in slru_rows {
+                s.bytes_in_aux_buffers += slru_row_size(&row);
+                s.slru_buffer.push(row);
+                s.rows_written += 1;
+            }
+            for row in meta_rows {
+                s.bytes_in_aux_buffers += meta_row_size(&row);
+                s.meta_buffer.push(row);
+                s.rows_written += 1;
+            }
         }
-        for row in rel_rows {
-            s.bytes_in_buffer += row_size(&row);
-            s.buffer.push(row);
-            s.rows_written += 1;
-        }
-        for row in slru_rows {
-            s.bytes_in_buffer += slru_row_size(&row);
-            s.slru_buffer.push(row);
-            s.rows_written += 1;
-        }
-        for row in meta_rows {
-            s.bytes_in_buffer += meta_row_size(&row);
-            s.meta_buffer.push(row);
-            s.rows_written += 1;
+
+        if !to_materialize.is_empty()
+            && let Some(m) = self.materializer.as_ref()
+        {
+            for job in to_materialize {
+                // Channel-full is intentionally best-effort: skipping a
+                // materialise just leaves the chain long for one more
+                // cycle. The next read on this key falls back to the
+                // slow path; the next delta past the (now-reset)
+                // counter re-enqueues.
+                let _ = m.tx.try_send(job);
+            }
         }
         Ok(())
     }
 
     /// Range scan: return all page rows in `range` at LSN ≤
-    /// `target_lsn`, blending in-RAM buffered rows with PageStore's
-    /// persisted rows. Each per-key chain is LSN-descending and
+    /// `target_lsn`, blending the in-RAM UnifiedPages (both pre-flush
+    /// and post-flush cache) with PageStore's persisted rows. Each
+    /// per-key chain is LSN-descending, deduplicated by LSN, and
     /// truncated at the first `will_init=true` row.
     pub async fn scan_range(
         &self,
@@ -166,32 +262,25 @@ impl PageWriter {
             .page_store
             .scan_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
             .await?;
-        let buffered: Vec<PageRow> = {
+        let start_bytes = key_to_bytes(range.start);
+        let end_bytes = key_to_bytes(range.end);
+        let cached: std::collections::HashMap<bytes::Bytes, Vec<PageRow>> = {
             let s = self.state.read().await;
-            s.buffer
-                .iter()
-                .filter(|r| {
-                    if r.key.len() != KEY_SIZE {
-                        return false;
-                    }
-                    let k = Key::from_slice(&r.key);
-                    k >= range.start && k < range.end && r.lsn <= target_lsn
-                })
-                .cloned()
-                .collect()
+            s.pages.lookup_range(&start_bytes, &end_bytes, target_lsn)
         };
         let mut out: std::collections::HashMap<Key, Vec<PageRow>> =
-            std::collections::HashMap::with_capacity(persisted.len() + buffered.len());
+            std::collections::HashMap::with_capacity(persisted.len() + cached.len());
         for (key_bytes, chain) in persisted {
             let k = Key::from_slice(&key_bytes);
             out.insert(k, chain);
         }
-        for row in buffered {
-            let k = Key::from_slice(&row.key);
-            out.entry(k).or_default().push(row);
+        for (key_bytes, chain) in cached {
+            let k = Key::from_slice(&key_bytes);
+            out.entry(k).or_default().extend(chain);
         }
         for chain in out.values_mut() {
             chain.sort_by(|a, b| b.lsn.cmp(&a.lsn));
+            chain.dedup_by(|a, b| a.lsn == b.lsn);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
             }
@@ -199,49 +288,87 @@ impl PageWriter {
         Ok(out)
     }
 
-    /// Read the chain for `key` at `target_lsn`, blending in-RAM
-    /// buffered rows on top of PageStore's persisted chain.
+    /// Read the chain for `key` at `target_lsn`, blending UnifiedPages
+    /// (pre-flush + post-flush cache) with PageStore.
     pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<PageRow>> {
         let key_bytes = key_to_bytes(key);
-        let mut buffered: Vec<PageRow> = {
+        let cached: Vec<PageRow> = {
             let s = self.state.read().await;
-            s.buffer
-                .iter()
-                .filter(|r| r.key == key_bytes && r.lsn <= target_lsn)
-                .cloned()
-                .collect()
+            s.pages.lookup_chain(&key_bytes, target_lsn)
         };
         let persisted = self
             .page_store
             .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
             .await?;
-        buffered.extend(persisted);
-        buffered.sort_by(|a, b| b.lsn.cmp(&a.lsn));
-        // Truncate at the first will_init row — anything older is
-        // shadowed by that anchor.
-        if let Some(idx) = buffered.iter().position(|r| r.will_init) {
-            buffered.truncate(idx + 1);
+        let mut merged = cached;
+        merged.extend(persisted);
+        merged.sort_by(|a, b| b.lsn.cmp(&a.lsn));
+        merged.dedup_by(|a, b| a.lsn == b.lsn);
+        if let Some(idx) = merged.iter().position(|r| r.will_init) {
+            merged.truncate(idx + 1);
         }
-        Ok(buffered)
+        Ok(merged)
+    }
+
+    /// Read the chain for `key` at `target_lsn`, using only durable
+    /// sources (post-flush cache + PageStore). Pre-flush rows are
+    /// EXCLUDED. The image materialiser uses this so its image is
+    /// built only from data that survives a process crash.
+    pub async fn read_chain_durable(
+        &self,
+        key: Key,
+        target_lsn: Lsn,
+    ) -> Result<Vec<PageRow>> {
+        let key_bytes = key_to_bytes(key);
+        let cached: Vec<PageRow> = {
+            let s = self.state.read().await;
+            s.pages.lookup_chain_durable(&key_bytes, target_lsn)
+        };
+        let persisted = self
+            .page_store
+            .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
+            .await?;
+        let mut merged = cached;
+        merged.extend(persisted);
+        merged.sort_by(|a, b| b.lsn.cmp(&a.lsn));
+        merged.dedup_by(|a, b| a.lsn == b.lsn);
+        if let Some(idx) = merged.iter().position(|r| r.will_init) {
+            merged.truncate(idx + 1);
+        }
+        Ok(merged)
+    }
+
+    /// Install a freshly-materialised image into the cache. Call AFTER
+    /// `PageStore::put_pages([image])` succeeds. Drops the deltas the
+    /// image supersedes for that key (durable, lsn ≤ image.lsn) and
+    /// indexes the new image as a durable cache entry; subsequent
+    /// `read_chain` / `read_chain_durable` find the image first and
+    /// don't walk the chain back.
+    pub async fn install_materialized_image(&self, image: PageRow) {
+        let mut s = self.state.write().await;
+        let key = image.key.clone();
+        let lsn = image.lsn;
+        s.pages.trim_key_up_to(&key, lsn);
+        s.pages.push_durable(image);
+        s.pages.evict_to_capacity();
     }
 
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
     /// the buffer is empty. Resets the policy timer.
     pub async fn flush(&self) -> Result<()> {
-        // Snapshot the buffer contents under the lock without removing
-        // them. Reads (scan_range, scan_meta_range, read_chain) keep
-        // seeing the in-flight rows during the YB INSERT round-trip —
-        // critical for the walreceiver's read-modify-write pattern on
-        // rel-size sentinels and other meta keys, where a concurrent
-        // read happening while the buffer is "in transit" to YB would
-        // otherwise hit MissingKey and crash walingest.
+        // Snapshot under the lock. UnifiedPages snapshots the unflushed
+        // prefix without removing it (rows stay visible to concurrent
+        // reads during the YB round-trip — critical for walreceiver's
+        // RMW on rel-size sentinels). After the INSERT succeeds we
+        // flip those rows from unflushed → durable in one cursor pass.
         let (rel_count, slru_count, meta_count, rel_rows, slru_rows, meta_rows) = {
             let s = self.state.read().await;
+            let rel_rows = s.pages.snapshot_unflushed(None);
             (
-                s.buffer.len(),
+                rel_rows.len(),
                 s.slru_buffer.len(),
                 s.meta_buffer.len(),
-                s.buffer.clone(),
+                rel_rows,
                 s.slru_buffer.clone(),
                 s.meta_buffer.clone(),
             )
@@ -255,26 +382,36 @@ impl PageWriter {
         let res = self.try_write_rows(&rel_rows, &slru_rows, &meta_rows).await;
 
         if res.is_ok() {
-            // Drop the first N rows of each buffer — the ones we just
-            // flushed. Anything appended after our snapshot stays and
-            // will be picked up by the next periodic flush.
             let mut s = self.state.write().await;
-            let drop_bytes: usize = s.buffer.iter().take(rel_count).map(row_size).sum::<usize>()
-                + s.slru_buffer.iter().take(slru_count).map(slru_row_size).sum::<usize>()
-                + s.meta_buffer.iter().take(meta_count).map(meta_row_size).sum::<usize>();
-            s.bytes_in_buffer = s.bytes_in_buffer.saturating_sub(drop_bytes);
-            s.buffer.drain(0..rel_count);
+            // Promote rel rows in-place (no copy), then opportunistically
+            // shrink the cache if it's over capacity.
+            s.pages.mark_first_n_flushed(rel_count);
+            s.pages.evict_to_capacity();
+            // Aux buffers drain as before.
+            let aux_drop_bytes: usize = s
+                .slru_buffer
+                .iter()
+                .take(slru_count)
+                .map(slru_row_size)
+                .sum::<usize>()
+                + s.meta_buffer
+                    .iter()
+                    .take(meta_count)
+                    .map(meta_row_size)
+                    .sum::<usize>();
+            s.bytes_in_aux_buffers = s.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
             s.slru_buffer.drain(0..slru_count);
             s.meta_buffer.drain(0..meta_count);
-            if s.buffer.is_empty() && s.slru_buffer.is_empty() && s.meta_buffer.is_empty() {
+            if s.pages.unflushed_count() == 0
+                && s.slru_buffer.is_empty()
+                && s.meta_buffer.is_empty()
+            {
                 s.opened_at = None;
             }
         }
         // On error, leave buffers untouched — next periodic flush retries.
-        // Caveat: chunked INSERTs may have succeeded partially. The retry
-        // will re-attempt the already-inserted rows and hit a YB PK
-        // conflict. Acceptable for now; TODO upgrade to UPSERT or per-
-        // chunk progress tracking.
+        // With `yb_enable_upsert_mode=true` (set per-connection in
+        // YsqlClient), partial-chunk-success retries don't PK-conflict.
         res
     }
 
@@ -304,7 +441,8 @@ impl PageWriter {
 
     pub async fn should_flush(&self) -> bool {
         let s = self.state.read().await;
-        if s.bytes_in_buffer >= self.policy.max_bytes {
+        let unflushed_bytes = s.pages.unflushed_bytes() + s.bytes_in_aux_buffers;
+        if unflushed_bytes >= self.policy.max_bytes {
             return true;
         }
         if let Some(at) = s.opened_at
@@ -319,8 +457,8 @@ impl PageWriter {
         let s = self.state.read().await;
         WriterStats {
             rows_written: s.rows_written,
-            bytes_in_buffer: s.bytes_in_buffer,
-            buffered_rows: s.buffer.len(),
+            bytes_in_buffer: s.pages.unflushed_bytes() + s.bytes_in_aux_buffers,
+            buffered_rows: s.pages.unflushed_count(),
             buffered_slru_rows: s.slru_buffer.len(),
             buffered_meta_rows: s.meta_buffer.len(),
         }
@@ -702,10 +840,49 @@ mod tests {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
         (
-            PageWriter::new(t, tl, store, policy),
+            PageWriter::new(t, tl, store, policy, 64 * 1024 * 1024),
             t,
             tl,
         )
+    }
+
+    /// `writer` plus an installed materializer handle. Returns the
+    /// receiver so tests can pull queued jobs.
+    fn writer_with_materializer(
+        store: Arc<PageStore>,
+        policy: FlushPolicy,
+        limit: u32,
+    ) -> (
+        PageWriter,
+        TenantId,
+        TimelineId,
+        tokio::sync::mpsc::Receiver<MaterializeJob>,
+    ) {
+        let t = TenantId::generate();
+        let tl = TimelineId::generate();
+        let mut w = PageWriter::new(t, tl, store, policy, 64 * 1024 * 1024);
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        w.set_materializer(MaterializerHandle { limit, tx });
+        (w, t, tl, rx)
+    }
+
+    /// A non-`will_init` delta (the normal "modify existing page"
+    /// shape). `ClearVisibilityMapFlags` is convenient because it has
+    /// `will_init() == false` regardless of fields.
+    fn delta_non_init() -> Value {
+        Value::WalRecord(NeonWalRecord::ClearVisibilityMapFlags {
+            new_heap_blkno: Some(1),
+            old_heap_blkno: None,
+            flags: 0x01,
+        })
+    }
+
+    /// A `will_init=true` delta.
+    fn delta_will_init() -> Value {
+        Value::WalRecord(NeonWalRecord::Postgres {
+            will_init: true,
+            rec: Bytes::from_static(b"init-rec"),
+        })
     }
 
     #[test]
@@ -994,7 +1171,7 @@ mod tests {
             max_age: Duration::from_millis(40),
             max_bytes: 1 << 30,
         };
-        let w = Arc::new(PageWriter::new(t, tl, store.clone(), policy));
+        let w = Arc::new(PageWriter::new(t, tl, store.clone(), policy, 64 * 1024 * 1024));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -1018,7 +1195,7 @@ mod tests {
             max_age: Duration::from_secs(3600),
             max_bytes: 1 << 30,
         };
-        let w = Arc::new(PageWriter::new(t, tl, store.clone(), policy));
+        let w = Arc::new(PageWriter::new(t, tl, store.clone(), policy, 64 * 1024 * 1024));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         tokio::time::sleep(Duration::from_millis(80)).await;
@@ -1113,6 +1290,165 @@ mod tests {
         assert!(!delta_row.will_init);
         let decoded = NeonWalRecord::des(&delta_row.payload).expect("ser/des round-trip");
         assert_eq!(decoded, rec);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// After `limit` consecutive non-init deltas on one key, exactly
+    /// one materialise job lands on the queue. The counter then
+    /// resets, so the *next* delta only re-trips after another full
+    /// `limit` deltas (verified at the end).
+    #[tokio::test]
+    async fn delta_threshold_dispatches_one_job() {
+        let (store, schema) = make_store("mat_threshold").await;
+        const LIMIT: u32 = 10;
+        let (w, _t, _tl, mut rx) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // (LIMIT - 1) deltas: nothing queued yet.
+        for i in 0..(LIMIT - 1) {
+            w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+            assert!(
+                rx.try_recv().is_err(),
+                "premature dispatch after {} deltas",
+                i + 1
+            );
+        }
+        // LIMITth delta: dispatch.
+        w.put(&[(k(1), Lsn(10 + LIMIT as u64), delta_non_init())])
+            .await
+            .unwrap();
+        let job = rx
+            .try_recv()
+            .expect("dispatched on hitting threshold");
+        assert_eq!(job.target_lsn, Lsn(10 + LIMIT as u64));
+        assert_eq!(job.key.as_ref(), key_to_bytes(k(1)).as_ref());
+
+        // Counter reset: another (LIMIT-1) deltas must not re-dispatch.
+        for i in 0..(LIMIT - 1) {
+            w.put(&[(k(1), Lsn(100 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        assert!(rx.try_recv().is_err(), "dispatch before second threshold");
+        w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
+        let _ = rx.try_recv().expect("dispatch on second threshold");
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// An image row resets the per-key counter — the chain is anchored
+    /// again, so post-image deltas count from zero.
+    #[tokio::test]
+    async fn image_resets_chain_counter() {
+        let (store, schema) = make_store("mat_image_reset").await;
+        const LIMIT: u32 = 10;
+        let (w, _t, _tl, mut rx) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // 5 deltas, then an image, then 9 deltas — must NOT dispatch.
+        for i in 0..5 {
+            w.put(&[(k(1), Lsn(10 + i), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        w.put(&[(k(1), Lsn(50), image())]).await.unwrap();
+        for i in 0..(LIMIT - 1) {
+            w.put(&[(k(1), Lsn(100 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "image should have reset the counter"
+        );
+        // 10th post-image delta: now dispatch.
+        w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
+        let job = rx.try_recv().expect("dispatch after 10 post-image deltas");
+        assert_eq!(job.target_lsn, Lsn(200));
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A `will_init=true` delta is also a chain anchor and resets the
+    /// counter (same semantics as an image — the row says "future reads
+    /// can start the chain here").
+    #[tokio::test]
+    async fn will_init_delta_resets_chain_counter() {
+        let (store, schema) = make_store("mat_winit_reset").await;
+        const LIMIT: u32 = 5;
+        let (w, _t, _tl, mut rx) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        for i in 0..3 {
+            w.put(&[(k(1), Lsn(10 + i), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        w.put(&[(k(1), Lsn(50), delta_will_init())]).await.unwrap();
+        for i in 0..(LIMIT - 1) {
+            w.put(&[(k(1), Lsn(100 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "will_init should have reset the counter"
+        );
+        w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
+        let _ = rx.try_recv().expect("dispatch after will_init + LIMIT");
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Counters are per-key — interleaving doesn't cross-pollinate.
+    #[tokio::test]
+    async fn per_key_counters_are_independent() {
+        let (store, schema) = make_store("mat_per_key").await;
+        const LIMIT: u32 = 4;
+        let (w, _t, _tl, mut rx) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // Alternate keys k(1) and k(2). After 4 deltas total each, both
+        // should have hit the threshold once.
+        for i in 0..LIMIT {
+            w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+            w.put(&[(k(2), Lsn(100 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        let mut seen_keys = std::collections::HashSet::new();
+        for _ in 0..2 {
+            let job = rx.try_recv().expect("two dispatches expected");
+            seen_keys.insert(job.key);
+        }
+        assert_eq!(seen_keys.len(), 2, "one dispatch per key");
+        assert!(rx.try_recv().is_err(), "no extra dispatches");
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `image_chain_limit = 0` disables the counter entirely — no
+    /// dispatches no matter how many deltas land.
+    #[tokio::test]
+    async fn limit_zero_disables_dispatch() {
+        let (store, schema) = make_store("mat_disabled").await;
+        let (w, _t, _tl, mut rx) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), 0);
+
+        for i in 0..50 {
+            w.put(&[(k(1), Lsn(10 + i), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "limit=0 must not dispatch"
+        );
+
         drop_schema(&store, &schema).await;
     }
 }

@@ -263,6 +263,14 @@ pub struct Timeline {
     /// drained to PageStore before the pageserver exits.
     page_writer_flush_task: std::sync::Mutex<Option<crate::page_writer::FlushTask>>,
 
+    /// Handle for the background image materialiser task, when the
+    /// timeline has both a `page_writer` and a walredo manager. Taken
+    /// and `shutdown()`-ed during `Timeline::shutdown`. `None` when
+    /// materialisation is disabled or the timeline is running in
+    /// upstream-only mode.
+    image_materializer_task:
+        std::sync::Mutex<Option<crate::image_materializer::MaterializerTask>>,
+
     // What page versions do we hold in the repository? If we get a
     // request > last_record_lsn, we need to wait until we receive all
     // the WAL up to the request. The SeqWait provides functions for
@@ -2461,6 +2469,16 @@ impl Timeline {
             tracing::warn!("page_writer final flush failed during shutdown: {e:?}");
         }
 
+        // Stop the image materialiser AFTER the final flush so any
+        // jobs queued during the flush get a chance to drain. The
+        // shutdown is best-effort — pending jobs at cancel time are
+        // simply dropped; the next pageserver start sees longer
+        // chains and re-enqueues organically.
+        let mat_task = self.image_materializer_task.lock().unwrap().take();
+        if let Some(task) = mat_task {
+            task.shutdown().await;
+        }
+
         if let ShutdownMode::FreezeAndFlush = mode {
             let do_flush = if let Some((open, frozen)) = self
                 .layers
@@ -3260,23 +3278,64 @@ impl Timeline {
         // walredo at write time — so the walredo manager isn't needed
         // here. A future background image-materialiser task will use
         // the walredo manager directly to compact long chains.
-        let (page_writer, page_writer_flush_task) = match resources.page_store.as_ref() {
-            Some(ps) => {
-                let pw_cfg = &conf.yb_page_writer;
-                let writer = Arc::new(crate::page_writer::PageWriter::new(
-                    tenant_shard_id.tenant_id,
-                    timeline_id,
-                    ps.clone(),
-                    crate::page_writer::FlushPolicy {
-                        max_age: pw_cfg.flush_interval,
-                        max_bytes: pw_cfg.flush_size_bytes,
-                    },
-                ));
-                let task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
-                (Some(writer), Some(task))
-            }
-            None => (None, None),
-        };
+        let (page_writer, page_writer_flush_task, image_materializer_task) =
+            match resources.page_store.as_ref() {
+                Some(ps) => {
+                    let pw_cfg = &conf.yb_page_writer;
+                    let mut writer = crate::page_writer::PageWriter::new(
+                        tenant_shard_id.tenant_id,
+                        timeline_id,
+                        ps.clone(),
+                        crate::page_writer::FlushPolicy {
+                            max_age: pw_cfg.flush_interval,
+                            max_bytes: pw_cfg.flush_size_bytes,
+                        },
+                        pw_cfg.read_cache_bytes,
+                    );
+
+                    // Materialiser channel: established BEFORE we wrap
+                    // the writer in an Arc so we can set_materializer
+                    // on `&mut writer`. The spawn happens AFTER the
+                    // Arc exists because the materialiser needs to
+                    // hold its own Arc<PageWriter>.
+                    let mat_channel = if pw_cfg.image_chain_limit > 0
+                        && walredo_mgr.is_some()
+                    {
+                        let (tx, rx) = tokio::sync::mpsc::channel(
+                            pw_cfg.materialize_queue_capacity.max(1),
+                        );
+                        writer.set_materializer(crate::page_writer::MaterializerHandle {
+                            limit: pw_cfg.image_chain_limit,
+                            tx,
+                        });
+                        Some(rx)
+                    } else {
+                        None
+                    };
+
+                    let writer = Arc::new(writer);
+                    let flush_task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
+
+                    let materializer_task = match (mat_channel, walredo_mgr.clone()) {
+                        (Some(rx), Some(wr)) => {
+                            let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
+                                .expect("invalid pg_version in timeline init");
+                            Some(crate::image_materializer::ImageMaterializer::spawn(
+                                tenant_shard_id.tenant_id,
+                                timeline_id,
+                                writer.clone(),
+                                wr,
+                                pg_major,
+                                rx,
+                            ))
+                        }
+                        _ => None,
+                    };
+
+                    (Some(writer), Some(flush_task), materializer_task)
+                }
+                None => (None, None, None),
+            };
 
         Arc::new_cyclic(|myself| {
             let metrics = Arc::new(TimelineMetrics::new(
@@ -3308,6 +3367,7 @@ impl Timeline {
 
                 page_writer: page_writer.clone(),
                 page_writer_flush_task: std::sync::Mutex::new(page_writer_flush_task),
+                image_materializer_task: std::sync::Mutex::new(image_materializer_task),
 
                 // initialize in-memory 'last_record_lsn' from 'disk_consistent_lsn'.
                 last_record_lsn: SeqWait::new(RecordLsn {

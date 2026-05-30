@@ -177,28 +177,50 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
    with `will_init` taken from the record), and appends to the in-RAM
    buffer. **No walredo, no `ImageRule`** — writes are a straight
    serialise-and-buffer.
-4. Buffered rows live in an in-RAM `Vec<PageRow>` (per timeline) under
-   an `RwLock`. `put` and the flush drain take `.write()`; the
-   snapshot-clone in flush and every reader (`read_chain`,
-   `scan_range`, `read_meta`, `scan_*_range`, `stats`, `should_flush`)
-   takes `.read()`, so concurrent get_page handlers filter the buffer
-   in parallel. The buffer is flushed when either trigger fires
-   (default 5 s / 25 MiB).
-5. Flush snapshots each of the three buffers (`rel`, `slru`, `meta`)
-   under a brief read lock, drops the lock, then issues chunked
-   multi-row INSERTs against `pageserver.pages`, `pageserver.slru_pages`,
-   `pageserver.meta`. Chunks within each table are dispatched in
-   parallel via `stream::iter(...).buffer_unordered(N)` with N=4 for
-   pages, 2 for SLRU pages, 3 for meta. `yb_enable_upsert_mode = true`
-   is `SET` once per connection in `YsqlClient::open_*`, so a chunk
-   retry after a partial flush failure cannot PK-conflict. On success,
-   the snapshot length of each buffer is `drain(0..N)`-ed under a
-   write lock; rows appended during the YB round-trip stay for the
-   next flush.
-6. Reads between flushes (and DURING a flush) see in-buffer rows: the
-   read path checks the buffer first, then queries PageStore — and
-   because the flush only holds the write lock during the brief drain
-   phase, in-flight INSERTed rows remain visible to reads.
+4. Rel-page rows live in `UnifiedPages` — one in-RAM structure that
+   indexes both pre-flush (pinned in RAM until durable) and post-flush
+   (LRU-ish cache for read-latency) entries. SLRU and meta entries
+   stay in their own simpler `Vec` buffers for now. Everything is
+   under one `RwLock<WriterState>`: `put` and the flush cursor flip
+   take `.write()`; all readers (`read_chain`, `read_chain_durable`,
+   `scan_range`, `read_meta`, `should_flush`, `stats`) take `.read()`.
+   Concurrent get_page handlers filter the cache in parallel. Flushes
+   fire when either trigger crosses threshold (default 5 s / 25 MiB).
+5. Flush snapshots the unflushed prefix of `UnifiedPages` (no copy of
+   row data — just clones the rows to a Vec) plus the SLRU / meta
+   buffers, drops the lock, and dispatches chunked multi-row INSERTs
+   against `pageserver.pages` / `slru_pages` / `meta`. Chunks within
+   each table go in parallel via `stream::iter(...).buffer_unordered(N)`
+   with N=4/2/3. `yb_enable_upsert_mode = true` is `SET` once per
+   connection in `YsqlClient::open_*`, so a chunk retry after a
+   partial-flush failure can't PK-conflict. On success, `UnifiedPages`
+   flips the snapshot's rows from unflushed → durable in one cursor
+   pass (the rows do NOT move; they stay in the cache for reads) and
+   then evicts durable entries FIFO if `total_bytes > read_cache_bytes`.
+   SLRU / meta drain as before.
+6. Reads between flushes (and DURING a flush) see all in-RAM rows —
+   both pre-flush and durable cache — blended with PageStore via
+   `read_chain` / `scan_range` (dedup by LSN, truncate at the first
+   `will_init=true` row). Because flushes don't move the data, in-flight
+   INSERTed rows remain visible.
+7. Background image materialiser: when `PageWriter::put` observes a
+   key crossing `image_chain_limit` consecutive non-image, non-`will_init`
+   deltas, it `try_send`s a `MaterializeJob { key, target_lsn }` to a
+   bounded mpsc. The materialiser task drains the queue: per job it
+   calls `read_chain_durable` (cache + YB, **never** pre-flush — see
+   below), walredos to a fresh page image, `put_pages` the image to
+   YB, then `install_materialized_image` to trim the cache for that
+   key up to the image LSN and push the new image in as a durable
+   cache entry. Subsequent reads at LSN ≥ image_lsn anchor on the
+   image instead of walking back to the latest `will_init` delta.
+
+Why the materialiser uses **durable-only** reads: if it built an
+image from pre-flush rows and the process crashed, WAL replay would
+re-emit those deltas — but the image is already in YB at the same
+LSN. Reads at LSN > image_lsn would then walredo the re-emitted
+deltas on top of the image, double-applying them. `read_chain_durable`
+restricts the materialiser's inputs to data that survives crash +
+replay.
 
 Default knobs (configurable via `pageserver.toml` under the
 `yb_page_writer` block):
@@ -208,26 +230,50 @@ Default knobs (configurable via `pageserver.toml` under the
 | `flush_interval` | 5 s | Time-based flush trigger |
 | `flush_size_bytes` | 25 MiB | Size-based flush trigger |
 | `flush_poll_interval` | 500 ms | How often the background flusher checks the triggers |
+| `image_chain_limit` | 10 | Deltas-since-anchor before a key is queued for materialisation (0 disables) |
+| `materialize_queue_capacity` | 1024 | Bounded mpsc depth; `try_send` drops on overflow |
+| `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Durable entries are evicted FIFO when crossed; pre-flush entries are pinned regardless |
 
-## Background image materialiser (planned)
+## Background image materialiser
 
-The write path no longer materialises images, so chain length grows
-unbounded for hot blocks until the background task creates a fresh image.
-Reads stay correct (slow-path walks to the latest `will_init` delta);
-this is pure read-latency optimisation.
+Triggered **at write time**: when `PageWriter::put` observes a key
+accumulating `image_chain_limit` consecutive non-image, non-`will_init`
+deltas (counter resets on any image / will_init for the key, per-key
+state under the same RwLock as the buffer). On cross, a
+`MaterializeJob { key, target_lsn }` is `try_send`'d to a bounded mpsc.
 
-Planned behaviour:
+The worker task (`ImageMaterializer::spawn`, one per timeline) drains
+the queue:
 
-1. Periodic sweep over `pageserver.pages` per timeline.
-2. Identify keys with > N rows since their last image row (or no image
-   at all).
-3. For each, walredo the chain at the latest LSN and INSERT a fresh
-   image row.
-4. Optional follow-up: GC older images / deltas under
-   `applied_gc_cutoff_lsn`.
+1. `PageWriter::read_chain_durable(key, target_lsn)` — durable sources
+   only (cache + PageStore), excluding pre-flush rows. Returns the
+   LSN-descending chain truncated at the newest `will_init=TRUE`.
+2. If chain is empty (deltas not yet flushed to YB), skip; the next
+   post-flush trigger picks the key up.
+3. If the chain head is already an image at `lsn ≥ target_lsn`,
+   someone else materialised — skip.
+4. `parse_chain` splits the chain into `(base_img, records)`. Set
+   `actual_lsn = chain.first().lsn` (highest durable LSN we actually
+   have — may be < `target_lsn` if some triggering deltas aren't yet
+   durable; we make partial progress and re-trigger later).
+5. `WalRedoManager::request_redo(key, actual_lsn, base_img, records,
+   pg_version, RedoAttemptType::LegacyCompaction)` → 8 KiB image.
+6. `PageStore::put_pages` the image row to YB. Durable.
+7. `PageWriter::install_materialized_image` trims the cache for that
+   key up to `actual_lsn` (dropping the now-superseded deltas — they
+   stay in YB until GC) and `push_durable`s the new image into the
+   cache. Future reads anchor on the image directly.
 
-Until this lands, expect long chains for hot blocks; reads still work,
-just with more rows scanned and more walredo records to apply.
+Failure / restart behaviour: on any error the job is logged and
+dropped; the next delta past the (now-reset) counter re-enqueues. On
+process restart, per-key counters start at zero — restart-survivor
+keys with long chains keep reading via the slow path until 10 more
+deltas trigger materialisation. A periodic backstop scan could close
+that gap later; not in v1.
+
+GC of the superseded deltas in YB is Phase 6 — until then, the row
+count grows. The materialiser pays only for read-latency wins; size
+on disk grows monotonically.
 
 ## Generation fencing
 
@@ -281,7 +327,8 @@ Tracked phases:
 | 3c | ✅ done | `Timeline::get_vectored_impl` branches on `self.page_writer`: when yb-pageserver mode is active, reads go through `get_vectored_via_page_writer` — per-key parallel `PageWriter::read_chain` → `chain_to_value_reconstruct_state` (image-anchor → img, deltas → records) → `Timeline::reconstruct_value` (walredo). The LayerMap walk is bypassed entirely. Upstream pageserver behaviour preserved when `page_writer` is None. Layer-file path is now dead code from the read perspective; still populated by 3b dual-write, both removed by Phase 4. |
 | 3c+ | ✅ done | `yb_page_writer` config block in `ConfigToml` (3 knobs: flush_interval, flush_size_bytes, flush_poll_interval). |
 | 3d | ✅ done | **Schema reshape + design pivot.** `pageserver.pages` PK becomes `((tenant…forknum) HASH, blknum, is_image, lsn DESC)`: typed columns + per-block image clustering. Reads become an image-anchored CTE (fast path: latest image ≤ target + deltas above; slow path: walk to `will_init` delta). Writes drop all walredo at write time — pure passthrough. `image_rule.rs` + `page_materializer.rs` deleted. The "10-delta invariant" stops being a write-time contract; chain bounding moves to a background image materialiser (Phase 3e). End-to-end verified with `CREATE TABLE / INSERT 1000 / UPDATE×3 / SELECT` against compute; long chains (400+ rows on hot blocks) read correctly via the slow path. |
-| 3e | ⏳ pending | Background image materialiser: per-timeline task that scans `pageserver.pages`, picks keys with long chains, walredos to a fresh image at the latest LSN, INSERTs the image row. Pure optimisation — correctness is already guaranteed without it. |
+| 3e | ✅ done | **Background image materialiser** (at-write trigger, not periodic scan). `PageWriter::put` counts consecutive non-anchor deltas per key under the same RwLock as the buffer; on crossing `image_chain_limit` (default 10) `try_send`s `MaterializeJob { key, target_lsn }` to a bounded mpsc. Worker (`ImageMaterializer::spawn`, one per timeline) reads via `PageWriter::read_chain_durable` (cache + PageStore, EXCLUDES pre-flush — see write-path §7 for the correctness reason), walredos, `PageStore::put_pages` the image, then `PageWriter::install_materialized_image` trims the cache for that key up to the image LSN and inserts the new image as a durable entry. Five trigger-logic unit tests cover threshold dispatch, image/will_init reset, per-key independence, and limit=0 disable. |
+| 3f | ✅ done | **`UnifiedPages` — one in-RAM structure for the rel-page buffer + post-flush cache.** Replaces the prior `Vec<PageRow>` buffer that was drained on flush. Each entry has a `durable` bit; flush is a cursor flip (`mark_first_n_flushed`) — no copy, no move. Durable entries linger in a FIFO until `total_bytes` exceeds `read_cache_bytes` (default 1 GiB), at which point they evict FIFO. Pre-flush entries are pinned regardless. Two lookup APIs: `lookup_chain` (durable + pre-flush, used by compute reads) and `lookup_chain_durable` (cache + YB only, used by the materialiser to dodge the crash + replay double-apply hazard). 10 unit tests covering insert/lookup/mark/evict/trim/snapshot. |
 | 4a | ✅ done | **Stop dual-writing rel pages to layer files.** `TimelineWriter::put_batch` now filters relation-page entries out of the batch handed to `layer.put_batch`; only non-rel keys (SLRU, metadata, dir listings, aux, repl origins, rel-size sentinels) still flow into the layer stack. Batches with no non-rel entries skip the layer call entirely. **Compaction loop disabled** — `start_background_loops` no longer spawns `compaction_loop`; image-layer creation has nothing to do against `pageserver.pages` anyway. |
 | 4b | ✅ done | **SLRU pages → `pageserver.slru_pages`.** Same image-anchored design as `pages` (hash partition on `(tenant, timeline, kind, segno)`, cluster on `(blknum, is_image, lsn DESC)`); same LATERAL LIMIT 1 reads; same future bg materialiser. `kind` matches `Key::field2`: 0=Clog, 1=MultiXactMembers, 2=MultiXactOffsets. |
 | 4c | ✅ done | **Full-overwrite blobs → `pageserver.meta`.** Rel-size sentinels, dir listings (TenantDir/DbDir/RelDir/SlruDir), aux files, repl origins, two-phase, SLRU dir + segment-size sentinels — everything that isn't a rel-page or SLRU block. Single row per `(tenant, timeline, key, lsn)`; reads = LIMIT 1 at lsn DESC; no walredo. `TimelineWriter::put_batch` now sends the entire batch to PageWriter — the layer-file write is skipped unconditionally. End-state: a fresh tenant with INSERT 500 + UPDATE×2 + multixact + CREATE INDEX produces pages=2889, slru_pages=3, meta=968, blobs=2 (just initdb.tar.zst + tenant-manifest.json — bootstrap artifacts handled outside put_batch). |
