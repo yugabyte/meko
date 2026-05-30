@@ -193,12 +193,13 @@ pub struct TimelineResources {
     pub l0_flush_global_state: l0_flush::L0FlushGlobalState,
     pub basebackup_cache: Arc<BasebackupCache>,
     pub feature_resolver: Arc<TenantFeatureResolver>,
-    /// yb-pageserver row-per-page store. `Some` enables dual-write at
-    /// `TimelineWriter::put_batch`.
-    pub page_store: Option<Arc<crate::page_store::PageStore>>,
-    /// Dedicated-connection `PageStore` for the image materialiser.
-    /// See `TenantSharedResources::materializer_page_store` for why.
-    pub materializer_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// Compute-reads `PageStore` (see
+    /// `TenantSharedResources::compute_page_store`). `Some` enables
+    /// yb-pageserver mode for this timeline.
+    pub compute_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// Internal-traffic `PageStore` (see
+    /// `TenantSharedResources::internal_page_store`).
+    pub internal_page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 
 pub struct Timeline {
@@ -3274,21 +3275,24 @@ impl Timeline {
                 .unwrap_or(conf.default_tenant_conf.relsize_snapshot_cache_capacity)
         };
 
-        // Build the row-per-page writer if a PageStore is configured
-        // (resources.page_store comes from yb-pageserver's startup-time
-        // YB config; the upstream pageserver builds a Timeline with
-        // `page_store=None`). PageWriter is now pure passthrough — no
-        // walredo at write time — so the walredo manager isn't needed
-        // here. A future background image-materialiser task will use
-        // the walredo manager directly to compact long chains.
+        // Build the row-per-page writer if both PageStores are
+        // configured (yb-pageserver mode). Upstream pageserver builds
+        // a Timeline with both = None. PageWriter routes reads through
+        // `compute_page_store` and writes through `internal_page_store`
+        // so compute getPage stays off the walreceiver/materialiser
+        // write conn.
         let (page_writer, page_writer_flush_task, image_materializer_task) =
-            match resources.page_store.as_ref() {
-                Some(ps) => {
+            match (
+                resources.compute_page_store.as_ref(),
+                resources.internal_page_store.as_ref(),
+            ) {
+                (Some(compute_ps), Some(internal_ps)) => {
                     let pw_cfg = &conf.yb_page_writer;
                     let mut writer = crate::page_writer::PageWriter::new(
                         tenant_shard_id.tenant_id,
                         timeline_id,
-                        ps.clone(),
+                        compute_ps.clone(),
+                        internal_ps.clone(),
                         crate::page_writer::FlushPolicy {
                             max_age: pw_cfg.flush_interval,
                             max_bytes: pw_cfg.flush_size_bytes,
@@ -3319,19 +3323,15 @@ impl Timeline {
                     let writer = Arc::new(writer);
                     let flush_task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
 
-                    let materializer_task = match (
-                        mat_channel,
-                        walredo_mgr.clone(),
-                        resources.materializer_page_store.as_ref(),
-                    ) {
-                        (Some(rx), Some(wr), Some(mat_ps)) => {
+                    let materializer_task = match (mat_channel, walredo_mgr.clone()) {
+                        (Some(rx), Some(wr)) => {
                             let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
                                 .expect("invalid pg_version in timeline init");
                             Some(crate::image_materializer::ImageMaterializer::spawn(
                                 tenant_shard_id.tenant_id,
                                 timeline_id,
                                 writer.clone(),
-                                mat_ps.clone(),
+                                internal_ps.clone(),
                                 wr,
                                 pg_major,
                                 rx,
@@ -3342,7 +3342,7 @@ impl Timeline {
 
                     (Some(writer), Some(flush_task), materializer_task)
                 }
-                None => (None, None, None),
+                _ => (None, None, None),
             };
 
         Arc::new_cyclic(|myself| {

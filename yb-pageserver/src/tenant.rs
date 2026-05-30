@@ -166,17 +166,19 @@ pub struct TenantSharedResources {
     pub l0_flush_global_state: L0FlushGlobalState,
     pub basebackup_cache: Arc<BasebackupCache>,
     pub feature_resolver: FeatureResolver,
-    /// Row-per-page YugabyteDB store. `Some` enables dual-write at the
-    /// `TimelineWriter::put_batch` boundary: every (Key, LSN, Value)
-    /// also lands in `pageserver.pages`. `None` is upstream behaviour
-    /// (layer-file path only).
-    pub page_store: Option<Arc<crate::page_store::PageStore>>,
-    /// Second `PageStore` instance with its own YSQL connection,
-    /// reserved for the background image materialiser. Splitting the
-    /// connection keeps materialiser COPY inserts off the walreceiver's
-    /// hot-path connection, so a 10 ms image flush can't stall WAL
-    /// ingest. `None` follows `page_store` — both populated or neither.
-    pub materializer_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// Row-per-page YugabyteDB store dedicated to compute-facing
+    /// reads (GetPage hot path: `PageWriter::scan_range` and
+    /// `PageWriter::read_chain`). `Some` enables yb-pageserver mode;
+    /// `None` is upstream layer-file behaviour. Paired with
+    /// `internal_page_store` — both populated or neither.
+    pub compute_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// `PageStore` dedicated to internal traffic: walreceiver
+    /// `PageWriter::flush` (parameterised batched INSERT), and the
+    /// image materialiser (cache-miss `read_chain_durable` +
+    /// `put_pages`). Owning its own YSQL connection keeps walapply
+    /// writes and materialiser work off the compute getPage path so
+    /// reads stay isolated from internal load.
+    pub internal_page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 
 /// A [`TenantShard`] is really an _attached_ tenant.  The configuration
@@ -398,13 +400,12 @@ pub struct TenantShard {
 
     pub(crate) feature_resolver: Arc<TenantFeatureResolver>,
 
-    /// yb-pageserver row-per-page store. `Some` enables dual-write at
-    /// the `TimelineWriter::put_batch` boundary; `None` is upstream
-    /// layer-file-only behaviour.
-    pub(crate) page_store: Option<Arc<crate::page_store::PageStore>>,
-    /// Dedicated-connection `PageStore` for the image materialiser
-    /// (see `TenantSharedResources::materializer_page_store`).
-    pub(crate) materializer_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// Compute-reads `PageStore` (see
+    /// `TenantSharedResources::compute_page_store`).
+    pub(crate) compute_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// Internal-traffic `PageStore` (see
+    /// `TenantSharedResources::internal_page_store`).
+    pub(crate) internal_page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 impl std::fmt::Debug for TenantShard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1380,8 +1381,8 @@ impl TenantShard {
             l0_flush_global_state,
             basebackup_cache,
             feature_resolver,
-            page_store,
-            materializer_page_store,
+            compute_page_store,
+            internal_page_store,
         } = resources;
 
         let attach_mode = attached_conf.location.attach_mode;
@@ -1399,8 +1400,8 @@ impl TenantShard {
             l0_flush_global_state,
             basebackup_cache,
             feature_resolver,
-            page_store,
-            materializer_page_store,
+            compute_page_store,
+            internal_page_store,
         ));
 
         // The attach task will carry a GateGuard, so that shutdown() reliably waits for it to drop out if
@@ -4166,8 +4167,8 @@ impl TenantShard {
         l0_flush_global_state: L0FlushGlobalState,
         basebackup_cache: Arc<BasebackupCache>,
         feature_resolver: FeatureResolver,
-        page_store: Option<Arc<crate::page_store::PageStore>>,
-        materializer_page_store: Option<Arc<crate::page_store::PageStore>>,
+        compute_page_store: Option<Arc<crate::page_store::PageStore>>,
+        internal_page_store: Option<Arc<crate::page_store::PageStore>>,
     ) -> TenantShard {
         assert!(!attached_conf.location.generation.is_none());
 
@@ -4274,8 +4275,8 @@ impl TenantShard {
                 feature_resolver,
                 tenant_shard_id.tenant_id,
             )),
-            page_store,
-            materializer_page_store,
+            compute_page_store,
+            internal_page_store,
         }
     }
 
@@ -5212,8 +5213,8 @@ impl TenantShard {
             l0_flush_global_state: self.l0_flush_global_state.clone(),
             basebackup_cache: self.basebackup_cache.clone(),
             feature_resolver: self.feature_resolver.clone(),
-            page_store: self.page_store.clone(),
-            materializer_page_store: self.materializer_page_store.clone(),
+            compute_page_store: self.compute_page_store.clone(),
+            internal_page_store: self.internal_page_store.clone(),
         }
     }
 
@@ -5834,8 +5835,8 @@ pub(crate) mod harness {
                 L0FlushGlobalState::new(L0FlushConfig::default()),
                 basebackup_cache,
                 FeatureResolver::new_disabled(),
-                None, // page_store: tests don't dual-write to YB
-                None, // materializer_page_store: ditto
+                None, // compute_page_store: tests don't dual-write to YB
+                None, // internal_page_store: ditto
             ));
 
             let preload = tenant

@@ -76,10 +76,23 @@ pub struct MaterializerHandle {
 }
 
 /// Top-level write buffer + flusher for one timeline.
+///
+/// Two `PageStore` handles, each on its own YSQL connection:
+/// - `compute_page_store` serves compute-facing reads
+///   (`scan_range` / `read_chain`). Idle on cache hit.
+/// - `internal_page_store` serves walreceiver writes (`flush*`) and
+///   the image materialiser's cache-miss durable read
+///   (`read_chain_durable`). Materialiser image writes also go via
+///   this connection (held directly by `ImageMaterializer`).
+///
+/// Compute getPage stays isolated from internal load — a long flush
+/// or a materialiser walredo-and-INSERT can't queue behind a compute
+/// read and vice versa.
 pub struct PageWriter {
     tenant_id: TenantId,
     timeline_id: TimelineId,
-    page_store: Arc<PageStore>,
+    compute_page_store: Arc<PageStore>,
+    internal_page_store: Arc<PageStore>,
     policy: FlushPolicy,
     state: RwLock<WriterState>,
     materializer: Option<MaterializerHandle>,
@@ -119,14 +132,16 @@ impl PageWriter {
     pub fn new(
         tenant_id: TenantId,
         timeline_id: TimelineId,
-        page_store: Arc<PageStore>,
+        compute_page_store: Arc<PageStore>,
+        internal_page_store: Arc<PageStore>,
         policy: FlushPolicy,
         read_cache_bytes: usize,
     ) -> Self {
         Self {
             tenant_id,
             timeline_id,
-            page_store,
+            compute_page_store,
+            internal_page_store,
             policy,
             state: RwLock::new(WriterState {
                 pages: crate::unified_pages::UnifiedPages::new(read_cache_bytes),
@@ -154,10 +169,6 @@ impl PageWriter {
 
     pub fn timeline_id(&self) -> TimelineId {
         self.timeline_id
-    }
-
-    pub fn page_store(&self) -> &Arc<PageStore> {
-        &self.page_store
     }
 
     /// Append a batch of entries to the in-RAM buffer. Does not flush.
@@ -295,7 +306,7 @@ impl PageWriter {
             return Ok(out);
         }
         let persisted = self
-            .page_store
+            .compute_page_store
             .scan_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
             .await?;
         let t_yb = t0.elapsed();
@@ -370,7 +381,7 @@ impl PageWriter {
             s.pages.lookup_chain(&key_bytes, target_lsn)
         };
         let persisted = self
-            .page_store
+            .compute_page_store
             .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
@@ -416,8 +427,12 @@ impl PageWriter {
             let s = self.state.read().await;
             s.pages.lookup_chain_durable(&key_bytes, target_lsn)
         };
+        // Materialiser-side cache miss → the internal conn (same one
+        // the materialiser's write path uses). Keeping this off
+        // `compute_page_store` is the whole point of the split: a
+        // long materialiser walredo-and-INSERT can't stall compute.
         let persisted = self
-            .page_store
+            .internal_page_store
             .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
@@ -542,18 +557,20 @@ impl PageWriter {
         slru_rows: &[SlruPageRow],
         meta_rows: &[MetaRow],
     ) -> Result<()> {
+        // All flush writes go via the internal conn. Compute getPage
+        // never queues behind a 25 MiB INSERT.
         if !rel_rows.is_empty() {
-            self.page_store
+            self.internal_page_store
                 .put_pages(self.tenant_id, self.timeline_id, rel_rows)
                 .await?;
         }
         if !slru_rows.is_empty() {
-            self.page_store
+            self.internal_page_store
                 .put_slru_pages(self.tenant_id, self.timeline_id, slru_rows)
                 .await?;
         }
         if !meta_rows.is_empty() {
-            self.page_store
+            self.internal_page_store
                 .put_meta(self.tenant_id, self.timeline_id, meta_rows)
                 .await?;
         }
@@ -598,7 +615,7 @@ impl PageWriter {
                 .cloned()
         };
         let persisted = self
-            .page_store
+            .compute_page_store
             .read_meta(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
             .await?;
         Ok(match (buffered, persisted) {
@@ -615,7 +632,7 @@ impl PageWriter {
         target_lsn: Lsn,
     ) -> Result<std::collections::HashMap<bytes::Bytes, MetaRow>> {
         let mut out = self
-            .page_store
+            .compute_page_store
             .scan_meta_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
             .await?;
         let s = self.state.read().await;
@@ -658,7 +675,7 @@ impl PageWriter {
                 .collect()
         };
         let persisted = self
-            .page_store
+            .compute_page_store
             .read_slru_chain(self.tenant_id, self.timeline_id, kind, segno, blknum, target_lsn)
             .await?;
         buffered.extend(persisted);
@@ -679,7 +696,7 @@ impl PageWriter {
         target_lsn: Lsn,
     ) -> Result<std::collections::HashMap<u32, Vec<SlruPageRow>>> {
         let persisted = self
-            .page_store
+            .compute_page_store
             .scan_slru_range(self.tenant_id, self.timeline_id, kind, segno, blknum_range.clone(), target_lsn)
             .await?;
         let buffered: Vec<SlruPageRow> = {
@@ -961,7 +978,9 @@ mod tests {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
         (
-            PageWriter::new(t, tl, store, policy, 64 * 1024 * 1024),
+            // Tests don't exercise the connection split — pass the
+            // same PageStore arc as both compute + internal.
+            PageWriter::new(t, tl, store.clone(), store, policy, 64 * 1024 * 1024),
             t,
             tl,
         )
@@ -981,7 +1000,7 @@ mod tests {
     ) {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
-        let mut w = PageWriter::new(t, tl, store, policy, 64 * 1024 * 1024);
+        let mut w = PageWriter::new(t, tl, store.clone(), store, policy, 64 * 1024 * 1024);
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         w.set_materializer(MaterializerHandle { limit, tx });
         (w, t, tl, rx)
@@ -1292,7 +1311,7 @@ mod tests {
             max_age: Duration::from_millis(40),
             max_bytes: 1 << 30,
         };
-        let w = Arc::new(PageWriter::new(t, tl, store.clone(), policy, 64 * 1024 * 1024));
+        let w = Arc::new(PageWriter::new(t, tl, store.clone(), store.clone(), policy, 64 * 1024 * 1024));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -1316,7 +1335,7 @@ mod tests {
             max_age: Duration::from_secs(3600),
             max_bytes: 1 << 30,
         };
-        let w = Arc::new(PageWriter::new(t, tl, store.clone(), policy, 64 * 1024 * 1024));
+        let w = Arc::new(PageWriter::new(t, tl, store.clone(), store.clone(), policy, 64 * 1024 * 1024));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         tokio::time::sleep(Duration::from_millis(80)).await;

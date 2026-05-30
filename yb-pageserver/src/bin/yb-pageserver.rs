@@ -525,12 +525,14 @@ fn start_pageserver(
 
     // Set up remote storage client
     let remote_storage = BACKGROUND_RUNTIME.block_on(create_remote_storage_client(conf))?;
-    let page_store = BACKGROUND_RUNTIME.block_on(create_page_store(conf))?;
-    // Second PageStore (own YSQL connection) for the image materialiser
-    // so its COPY inserts don't share the walreceiver's hot-path
-    // connection. Constructed only when the main one was — same config.
-    let materializer_page_store = if page_store.is_some() {
-        BACKGROUND_RUNTIME.block_on(create_materializer_page_store(conf))?
+    // Two dedicated PageStore connections: compute-facing reads
+    // (GetPage hot path) and internal traffic (walreceiver flush +
+    // materialiser). Compute reads stay off the conn that walreceiver
+    // / materialiser writes pile onto, and vice versa.
+    let compute_page_store =
+        BACKGROUND_RUNTIME.block_on(create_compute_page_store(conf))?;
+    let internal_page_store = if compute_page_store.is_some() {
+        BACKGROUND_RUNTIME.block_on(create_internal_page_store(conf))?
     } else {
         None
     };
@@ -598,8 +600,8 @@ fn start_pageserver(
             l0_flush_global_state,
             basebackup_cache: Arc::clone(&basebackup_cache),
             feature_resolver: feature_resolver.clone(),
-            page_store: page_store.clone(),
-            materializer_page_store: materializer_page_store.clone(),
+            compute_page_store: compute_page_store.clone(),
+            internal_page_store: internal_page_store.clone(),
         },
         shutdown_pageserver.clone(),
     );
@@ -902,13 +904,13 @@ fn create_feature_resolver(
     FeatureResolver::spawn(conf, shutdown_pageserver, handle)
 }
 
-/// If `remote_storage_config` is a `YbStore`, open a `PageStore` over the
-/// same connection details. Used by yb-pageserver to dual-write into
-/// `pageserver.pages` alongside the existing layer-file path. Returns
-/// `None` for other backends (LocalFs/S3/Azure/GCS) — those run upstream
-/// behaviour only.
-async fn create_page_store(
+/// Open a `PageStore` against the configured YB cluster with the
+/// given Postgres `application_name`. Returns `None` if the
+/// pageserver isn't configured for yb-pageserver mode (no
+/// `YbStore` remote_storage backend).
+async fn create_page_store_with_app_name(
     conf: &'static PageServerConf,
+    application_name: &str,
 ) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
     use remote_storage::RemoteStorageKind;
     let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
@@ -919,37 +921,38 @@ async fn create_page_store(
         _ => return Ok(None),
     };
     let ps_cfg = yb_pageserver::page_store::PageStoreConfig::new(yb_cfg);
-    let store = yb_pageserver::page_store::PageStore::connect(ps_cfg, "yb-pageserver").await?;
-    store.ensure_schema().await?;
-    info!("PageStore connected; dual-write enabled");
+    let store = yb_pageserver::page_store::PageStore::connect(ps_cfg, application_name).await?;
     Ok(Some(Arc::new(store)))
 }
 
-/// Construct a second `PageStore` that owns its own YSQL connection,
-/// dedicated to the image materialiser. Same `YbStoreConfig` as the
-/// primary store; only the `application_name` differs so the two
-/// connections are distinguishable in `pg_stat_activity`. Schema is
-/// already created by `create_page_store`; we skip `ensure_schema`
-/// here.
-async fn create_materializer_page_store(
+/// Compute-reads `PageStore`: serves the compute GetPage hot path
+/// (`PageWriter::scan_range`, `read_chain`). Ensures the YB schema
+/// exists — we hit it once at startup before the other connection
+/// opens, so this one carries the DDL.
+async fn create_compute_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
-    use remote_storage::RemoteStorageKind;
-    let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
+    let Some(store) = create_page_store_with_app_name(conf, "yb-pageserver:compute_reads").await?
+    else {
         return Ok(None);
     };
-    let yb_cfg = match &rs_cfg.storage {
-        RemoteStorageKind::YbStore(cfg) => cfg.clone(),
-        _ => return Ok(None),
+    store.ensure_schema().await?;
+    info!("Compute-reads PageStore connected; yb-pageserver mode enabled");
+    Ok(Some(store))
+}
+
+/// Internal-traffic `PageStore`: walreceiver `PageWriter::flush` +
+/// materialiser `read_chain_durable` cache miss + materialiser
+/// `put_pages`. Schema already exists by the time this runs.
+async fn create_internal_page_store(
+    conf: &'static PageServerConf,
+) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
+    let Some(store) = create_page_store_with_app_name(conf, "yb-pageserver:internal").await?
+    else {
+        return Ok(None);
     };
-    let ps_cfg = yb_pageserver::page_store::PageStoreConfig::new(yb_cfg);
-    let store = yb_pageserver::page_store::PageStore::connect(
-        ps_cfg,
-        "yb-pageserver:materializer",
-    )
-    .await?;
-    info!("Materializer PageStore connected");
-    Ok(Some(Arc::new(store)))
+    info!("Internal PageStore connected");
+    Ok(Some(store))
 }
 
 async fn create_remote_storage_client(

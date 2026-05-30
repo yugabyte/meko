@@ -54,13 +54,12 @@ pub struct ImageMaterializer {
     tenant_id: TenantId,
     timeline_id: TimelineId,
     page_writer: Arc<PageWriter>,
-    /// Second `PageStore` instance, own YSQL connection. We bypass
-    /// `PageWriter::page_store()` here so the image COPY doesn't share
-    /// the walreceiver's hot-path connection. Reads still go through
-    /// `PageWriter::read_chain_durable` (cache-first; falls back to
-    /// the shared connection on miss — fine because the cache should
-    /// hit for the keys we're materialising).
-    materializer_page_store: Arc<PageStore>,
+    /// Internal-traffic `PageStore` (own YSQL connection, shared
+    /// with the walreceiver's `PageWriter::flush` write path and
+    /// the materialiser's own cache-miss `read_chain_durable`).
+    /// Keeps every materialiser write off the compute getPage
+    /// connection — that's the isolation we wanted.
+    internal_page_store: Arc<PageStore>,
     walredo_mgr: Arc<WalRedoManager>,
     pg_version: PgMajorVersion,
 }
@@ -84,7 +83,7 @@ impl ImageMaterializer {
         tenant_id: TenantId,
         timeline_id: TimelineId,
         page_writer: Arc<PageWriter>,
-        materializer_page_store: Arc<PageStore>,
+        internal_page_store: Arc<PageStore>,
         walredo_mgr: Arc<WalRedoManager>,
         pg_version: PgMajorVersion,
         mut rx: mpsc::Receiver<MaterializeJob>,
@@ -95,7 +94,7 @@ impl ImageMaterializer {
             tenant_id,
             timeline_id,
             page_writer,
-            materializer_page_store,
+            internal_page_store,
             walredo_mgr,
             pg_version,
         });
@@ -185,7 +184,7 @@ impl ImageMaterializer {
         // overflows, put_pages's `buffer_unordered(4)` pipelines the
         // chunks on the dedicated connection.
         let t_insert_start = std::time::Instant::now();
-        self.materializer_page_store
+        self.internal_page_store
             .put_pages(self.tenant_id, self.timeline_id, &images)
             .await
             .context("put_pages")?;
