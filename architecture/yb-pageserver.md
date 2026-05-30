@@ -102,7 +102,6 @@ One row per timeline. Replaces the upstream split of `metadata` +
 CREATE TABLE pageserver.timelines (
     tenant_id              TEXT    NOT NULL,
     timeline_id            TEXT    NOT NULL,
-    last_record_lsn        BIGINT  NOT NULL,
     disk_consistent_lsn    BIGINT  NOT NULL,
     applied_gc_cutoff_lsn  BIGINT  NOT NULL,
     ancestor_timeline_id   TEXT,
@@ -113,9 +112,12 @@ CREATE TABLE pageserver.timelines (
 );
 ```
 
-- `last_record_lsn` — latest WAL the pageserver has ingested.
-- `disk_consistent_lsn` — highest LSN durably present in `pageserver.pages`.
-  Advances on every successful flush.
+- `disk_consistent_lsn` — highest LSN durably present in `pageserver.pages`/
+  `slru_pages`/`meta`. Advances on every successful `PageWriter::flush`.
+  Drives both safekeeper WAL truncation and ingest resume on restart.
+  `last_record_lsn` is intentionally not persisted — on restart, the
+  walreceiver streams from `disk_consistent_lsn` forward and the
+  in-memory value re-derives within seconds.
 - `applied_gc_cutoff_lsn` — same meaning as upstream; reads below this
   LSN aren't supported.
 - `current_generation` — bumped by the storage controller on every

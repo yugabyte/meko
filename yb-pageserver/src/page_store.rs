@@ -122,7 +122,10 @@ fn slru_key_columns(key: Key) -> Result<(i16, i64, i64)> {
 pub struct TimelineRow {
     pub tenant_id: TenantId,
     pub timeline_id: TimelineId,
-    pub last_record_lsn: Lsn,
+    /// Highest LSN durably present in `pageserver.pages`/`slru_pages`/`meta`.
+    /// Advances on every successful `PageWriter::flush`. Drives both
+    /// safekeeper WAL truncation (SK keeps WAL ≥ this) and ingest
+    /// resume on restart (walreceiver replays from this LSN forward).
     pub disk_consistent_lsn: Lsn,
     pub applied_gc_cutoff_lsn: Lsn,
     pub ancestor_timeline_id: Option<TimelineId>,
@@ -277,7 +280,6 @@ impl PageStore {
             "CREATE TABLE IF NOT EXISTS \"{}\".timelines (
                 tenant_id              TEXT    NOT NULL,
                 timeline_id            TEXT    NOT NULL,
-                last_record_lsn        BIGINT  NOT NULL,
                 disk_consistent_lsn    BIGINT  NOT NULL,
                 applied_gc_cutoff_lsn  BIGINT  NOT NULL,
                 ancestor_timeline_id   TEXT,
@@ -1117,12 +1119,11 @@ impl PageStore {
     pub async fn upsert_timeline(&self, row: &TimelineRow) -> Result<()> {
         let sql = format!(
             "INSERT INTO \"{}\".timelines \
-             (tenant_id, timeline_id, last_record_lsn, disk_consistent_lsn, \
+             (tenant_id, timeline_id, disk_consistent_lsn, \
               applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
               current_generation, pg_version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (tenant_id, timeline_id) DO UPDATE SET \
-                last_record_lsn       = EXCLUDED.last_record_lsn, \
                 disk_consistent_lsn   = EXCLUDED.disk_consistent_lsn, \
                 applied_gc_cutoff_lsn = EXCLUDED.applied_gc_cutoff_lsn, \
                 ancestor_timeline_id  = EXCLUDED.ancestor_timeline_id, \
@@ -1137,7 +1138,6 @@ impl PageStore {
                 &[
                     &row.tenant_id.to_string(),
                     &row.timeline_id.to_string(),
-                    &(row.last_record_lsn.0 as i64),
                     &(row.disk_consistent_lsn.0 as i64),
                     &(row.applied_gc_cutoff_lsn.0 as i64),
                     &row.ancestor_timeline_id.map(|id| id.to_string()),
@@ -1157,7 +1157,7 @@ impl PageStore {
         timeline: TimelineId,
     ) -> Result<Option<TimelineRow>> {
         let sql = format!(
-            "SELECT tenant_id, timeline_id, last_record_lsn, disk_consistent_lsn, \
+            "SELECT tenant_id, timeline_id, disk_consistent_lsn, \
                     applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
                     current_generation, pg_version \
              FROM \"{}\".timelines \
@@ -1174,7 +1174,7 @@ impl PageStore {
 
     pub async fn list_timelines(&self, tenant: TenantId) -> Result<Vec<TimelineRow>> {
         let sql = format!(
-            "SELECT tenant_id, timeline_id, last_record_lsn, disk_consistent_lsn, \
+            "SELECT tenant_id, timeline_id, disk_consistent_lsn, \
                     applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
                     current_generation, pg_version \
              FROM \"{}\".timelines \
@@ -1202,6 +1202,55 @@ impl PageStore {
             .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("delete_timeline")?;
+        Ok(())
+    }
+
+    /// Column-scoped UPSERT of `disk_consistent_lsn`. Caller must
+    /// guard in-memory: only call when the new value is strictly
+    /// higher than the last value sent. No server-side monotonicity
+    /// check, so a stale caller could roll the LSN backward — the
+    /// in-memory guard at the flush completion site is the only
+    /// barrier.
+    ///
+    /// The `ON CONFLICT DO UPDATE` touches **only**
+    /// `disk_consistent_lsn`, leaving `current_generation`,
+    /// `applied_gc_cutoff_lsn`, etc. alone. Safe to run concurrently
+    /// with `bump_generation` / `advance_gc_cutoff_lsn` /
+    /// `upsert_timeline` — each operates on disjoint columns.
+    ///
+    /// `row` is the in-memory shadow held by the timeline. Its other
+    /// columns only get written if the INSERT branch fires (the cold
+    /// case where no row exists yet, e.g. a very early flush before
+    /// timeline_create's full-row upsert lands). In that case stale
+    /// `current_generation` from the shadow is corrected by the
+    /// storage controller's next `bump_generation`.
+    pub async fn upsert_disk_consistent_lsn(&self, row: &TimelineRow) -> Result<()> {
+        let sql = format!(
+            "INSERT INTO \"{}\".timelines \
+             (tenant_id, timeline_id, disk_consistent_lsn, \
+              applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
+              current_generation, pg_version) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (tenant_id, timeline_id) DO UPDATE SET \
+                disk_consistent_lsn = EXCLUDED.disk_consistent_lsn",
+            self.schema
+        );
+        self.client
+            .execute(
+                &sql,
+                &[
+                    &row.tenant_id.to_string(),
+                    &row.timeline_id.to_string(),
+                    &(row.disk_consistent_lsn.0 as i64),
+                    &(row.applied_gc_cutoff_lsn.0 as i64),
+                    &row.ancestor_timeline_id.map(|id| id.to_string()),
+                    &row.ancestor_lsn.map(|l| l.0 as i64),
+                    &row.current_generation,
+                    &(row.pg_version as i32),
+                ],
+            )
+            .await
+            .context("upsert_disk_consistent_lsn")?;
         Ok(())
     }
 
@@ -1305,17 +1354,15 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
 fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
     let tenant_s: String = r.try_get(0)?;
     let timeline_s: String = r.try_get(1)?;
-    let last_record_lsn: i64 = r.try_get(2)?;
-    let disk_consistent_lsn: i64 = r.try_get(3)?;
-    let applied_gc_cutoff_lsn: i64 = r.try_get(4)?;
-    let ancestor_tl: Option<String> = r.try_get(5)?;
-    let ancestor_lsn: Option<i64> = r.try_get(6)?;
-    let current_generation: i32 = r.try_get(7)?;
-    let pg_version: i32 = r.try_get(8)?;
+    let disk_consistent_lsn: i64 = r.try_get(2)?;
+    let applied_gc_cutoff_lsn: i64 = r.try_get(3)?;
+    let ancestor_tl: Option<String> = r.try_get(4)?;
+    let ancestor_lsn: Option<i64> = r.try_get(5)?;
+    let current_generation: i32 = r.try_get(6)?;
+    let pg_version: i32 = r.try_get(7)?;
     Ok(TimelineRow {
         tenant_id: tenant_s.parse().context("parsing tenant_id")?,
         timeline_id: timeline_s.parse().context("parsing timeline_id")?,
-        last_record_lsn: Lsn(last_record_lsn as u64),
         disk_consistent_lsn: Lsn(disk_consistent_lsn as u64),
         applied_gc_cutoff_lsn: Lsn(applied_gc_cutoff_lsn as u64),
         ancestor_timeline_id: ancestor_tl
@@ -1825,7 +1872,6 @@ mod tests {
         TimelineRow {
             tenant_id: t,
             timeline_id: tl,
-            last_record_lsn: Lsn(100),
             disk_consistent_lsn: Lsn(90),
             applied_gc_cutoff_lsn: Lsn(50),
             ancestor_timeline_id: None,
