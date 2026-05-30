@@ -526,6 +526,14 @@ fn start_pageserver(
     // Set up remote storage client
     let remote_storage = BACKGROUND_RUNTIME.block_on(create_remote_storage_client(conf))?;
     let page_store = BACKGROUND_RUNTIME.block_on(create_page_store(conf))?;
+    // Second PageStore (own YSQL connection) for the image materialiser
+    // so its COPY inserts don't share the walreceiver's hot-path
+    // connection. Constructed only when the main one was — same config.
+    let materializer_page_store = if page_store.is_some() {
+        BACKGROUND_RUNTIME.block_on(create_materializer_page_store(conf))?
+    } else {
+        None
+    };
 
     let feature_resolver = create_feature_resolver(
         conf,
@@ -591,6 +599,7 @@ fn start_pageserver(
             basebackup_cache: Arc::clone(&basebackup_cache),
             feature_resolver: feature_resolver.clone(),
             page_store: page_store.clone(),
+            materializer_page_store: materializer_page_store.clone(),
         },
         shutdown_pageserver.clone(),
     );
@@ -913,6 +922,33 @@ async fn create_page_store(
     let store = yb_pageserver::page_store::PageStore::connect(ps_cfg, "yb-pageserver").await?;
     store.ensure_schema().await?;
     info!("PageStore connected; dual-write enabled");
+    Ok(Some(Arc::new(store)))
+}
+
+/// Construct a second `PageStore` that owns its own YSQL connection,
+/// dedicated to the image materialiser. Same `YbStoreConfig` as the
+/// primary store; only the `application_name` differs so the two
+/// connections are distinguishable in `pg_stat_activity`. Schema is
+/// already created by `create_page_store`; we skip `ensure_schema`
+/// here.
+async fn create_materializer_page_store(
+    conf: &'static PageServerConf,
+) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
+    use remote_storage::RemoteStorageKind;
+    let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
+        return Ok(None);
+    };
+    let yb_cfg = match &rs_cfg.storage {
+        RemoteStorageKind::YbStore(cfg) => cfg.clone(),
+        _ => return Ok(None),
+    };
+    let ps_cfg = yb_pageserver::page_store::PageStoreConfig::new(yb_cfg);
+    let store = yb_pageserver::page_store::PageStore::connect(
+        ps_cfg,
+        "yb-pageserver:materializer",
+    )
+    .await?;
+    info!("Materializer PageStore connected");
     Ok(Some(Arc::new(store)))
 }
 

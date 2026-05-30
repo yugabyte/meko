@@ -196,6 +196,9 @@ pub struct TimelineResources {
     /// yb-pageserver row-per-page store. `Some` enables dual-write at
     /// `TimelineWriter::put_batch`.
     pub page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// Dedicated-connection `PageStore` for the image materialiser.
+    /// See `TenantSharedResources::materializer_page_store` for why.
+    pub materializer_page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 
 pub struct Timeline {
@@ -3316,14 +3319,19 @@ impl Timeline {
                     let writer = Arc::new(writer);
                     let flush_task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
 
-                    let materializer_task = match (mat_channel, walredo_mgr.clone()) {
-                        (Some(rx), Some(wr)) => {
+                    let materializer_task = match (
+                        mat_channel,
+                        walredo_mgr.clone(),
+                        resources.materializer_page_store.as_ref(),
+                    ) {
+                        (Some(rx), Some(wr), Some(mat_ps)) => {
                             let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
                                 .expect("invalid pg_version in timeline init");
                             Some(crate::image_materializer::ImageMaterializer::spawn(
                                 tenant_shard_id.tenant_id,
                                 timeline_id,
                                 writer.clone(),
+                                mat_ps.clone(),
                                 wr,
                                 pg_major,
                                 rx,

@@ -3008,6 +3008,7 @@ mod tests {
                 basebackup_cache,
                 feature_resolver: crate::feature_resolver::FeatureResolver::new_disabled(),
                 page_store: None,
+                materializer_page_store: None,
             },
             cancel: tokio_util::sync::CancellationToken::new(),
             background_purges: BackgroundPurges::default(),

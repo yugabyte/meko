@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use bytes::Bytes;
+use tracing::info;
 use pageserver_api::key::{KEY_SIZE, Key};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -236,13 +237,30 @@ impl PageWriter {
         if !to_materialize.is_empty()
             && let Some(m) = self.materializer.as_ref()
         {
+            let dispatched = to_materialize.len();
+            let mut dropped = 0usize;
             for job in to_materialize {
                 // Channel-full is intentionally best-effort: skipping a
                 // materialise just leaves the chain long for one more
                 // cycle. The next read on this key falls back to the
                 // slow path; the next delta past the (now-reset)
                 // counter re-enqueues.
-                let _ = m.tx.try_send(job);
+                if m.tx.try_send(job).is_err() {
+                    dropped += 1;
+                }
+            }
+            // m.tx.capacity() = remaining slots, m.tx.max_capacity() = bound.
+            let queue_remaining = m.tx.capacity();
+            let queue_cap = m.tx.max_capacity();
+            if dropped > 0 || queue_remaining < queue_cap / 2 {
+                info!(
+                    tag = "materialise_dispatch",
+                    dispatched = dispatched,
+                    dropped = dropped,
+                    queue_cap = queue_cap,
+                    queue_remaining = queue_remaining,
+                    "perf",
+                );
             }
         }
         Ok(())
@@ -258,16 +276,40 @@ impl PageWriter {
         range: std::ops::Range<Key>,
         target_lsn: Lsn,
     ) -> Result<std::collections::HashMap<Key, Vec<PageRow>>> {
+        let t0 = Instant::now();
+        // GetPage hot path: a 1-key vectored read arrives as
+        // `[k..k.next())`. Dispatch to `read_chain`, which holds the
+        // cache-only fast path; on a hit we skip YB entirely.
+        if range.end.field1 == range.start.field1
+            && range.end.field2 == range.start.field2
+            && range.end.field3 == range.start.field3
+            && range.end.field4 == range.start.field4
+            && range.end.field5 == range.start.field5
+            && range.end.field6 == range.start.field6.wrapping_add(1)
+        {
+            let chain = self.read_chain(range.start, target_lsn).await?;
+            let mut out = std::collections::HashMap::with_capacity(1);
+            if !chain.is_empty() {
+                out.insert(range.start, chain);
+            }
+            return Ok(out);
+        }
         let persisted = self
             .page_store
             .scan_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
             .await?;
+        let t_yb = t0.elapsed();
         let start_bytes = key_to_bytes(range.start);
         let end_bytes = key_to_bytes(range.end);
+        let t_lock_start = Instant::now();
         let cached: std::collections::HashMap<bytes::Bytes, Vec<PageRow>> = {
             let s = self.state.read().await;
             s.pages.lookup_range(&start_bytes, &end_bytes, target_lsn)
         };
+        let t_cache = t_lock_start.elapsed();
+        let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
+        let cached_rows: usize = cached.values().map(|v| v.len()).sum();
+        let t_merge_start = Instant::now();
         let mut out: std::collections::HashMap<Key, Vec<PageRow>> =
             std::collections::HashMap::with_capacity(persisted.len() + cached.len());
         for (key_bytes, chain) in persisted {
@@ -291,6 +333,21 @@ impl PageWriter {
                 chain.truncate(idx + 1);
             }
         }
+        let t_merge = t_merge_start.elapsed();
+        let total = t0.elapsed();
+        if total.as_millis() >= 5 {
+            info!(
+                tag = "scan_range",
+                total_ms = total.as_millis() as u64,
+                yb_ms = t_yb.as_millis() as u64,
+                cache_ms = t_cache.as_millis() as u64,
+                merge_ms = t_merge.as_millis() as u64,
+                yb_rows = persisted_rows,
+                cache_rows = cached_rows,
+                keys_out = out.len(),
+                "perf",
+            );
+        }
         Ok(out)
     }
 
@@ -298,6 +355,16 @@ impl PageWriter {
     /// (pre-flush + post-flush cache) with PageStore.
     pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<PageRow>> {
         let key_bytes = key_to_bytes(key);
+        // Cache-only fast path: if the cache holds a complete chain
+        // (image-anchor reachable from target_lsn, no eviction in
+        // between), serve from RAM and skip YB entirely. This is the
+        // common case for hot pages after the materialiser has run.
+        {
+            let s = self.state.read().await;
+            if let Some(chain) = s.pages.lookup_chain_if_complete(&key_bytes, target_lsn) {
+                return Ok(chain);
+            }
+        }
         let cached: Vec<PageRow> = {
             let s = self.state.read().await;
             s.pages.lookup_chain(&key_bytes, target_lsn)
@@ -334,6 +401,17 @@ impl PageWriter {
         target_lsn: Lsn,
     ) -> Result<Vec<PageRow>> {
         let key_bytes = key_to_bytes(key);
+        // Cache-only fast path (durable-only variant for the
+        // materialiser): same completeness criterion as `read_chain`,
+        // but restricted to durable rows.
+        {
+            let s = self.state.read().await;
+            if let Some(chain) =
+                s.pages.lookup_chain_durable_if_complete(&key_bytes, target_lsn)
+            {
+                return Ok(chain);
+            }
+        }
         let cached: Vec<PageRow> = {
             let s = self.state.read().await;
             s.pages.lookup_chain_durable(&key_bytes, target_lsn)
@@ -367,12 +445,33 @@ impl PageWriter {
     /// `read_chain` / `read_chain_durable` find the image first and
     /// don't walk the chain back.
     pub async fn install_materialized_image(&self, image: PageRow) {
+        let t_acquire = Instant::now();
         let mut s = self.state.write().await;
+        let t_held_start = Instant::now();
         let key = image.key.clone();
         let lsn = image.lsn;
+        let t_trim_start = Instant::now();
         s.pages.trim_key_up_to(&key, lsn);
+        let t_trim = t_trim_start.elapsed();
+        let t_push_start = Instant::now();
         s.pages.push_durable(image);
+        let t_push = t_push_start.elapsed();
+        let t_evict_start = Instant::now();
         s.pages.evict_to_capacity();
+        let t_evict = t_evict_start.elapsed();
+        let t_held = t_held_start.elapsed();
+        let t_acq = t_held_start.duration_since(t_acquire);
+        if t_held.as_millis() >= 2 || t_acq.as_millis() >= 5 {
+            info!(
+                tag = "install_image",
+                acquire_ms = t_acq.as_millis() as u64,
+                held_ms = t_held.as_millis() as u64,
+                trim_us = t_trim.as_micros() as u64,
+                push_us = t_push.as_micros() as u64,
+                evict_us = t_evict.as_micros() as u64,
+                "perf",
+            );
+        }
     }
 
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
