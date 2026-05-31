@@ -356,9 +356,6 @@ pub(crate) static GLOBAL_RESOURCES: GlobalResources = GlobalResources {
 };
 
 impl InMemoryLayer {
-    pub(crate) fn file_id(&self) -> InMemoryLayerFileId {
-        self.file_id
-    }
 
     pub(crate) fn get_timeline_id(&self) -> TimelineId {
         self.timeline_id
@@ -374,9 +371,6 @@ impl InMemoryLayer {
         }
     }
 
-    pub(crate) fn len(&self) -> u64 {
-        self.file.len()
-    }
 
     pub(crate) fn assert_writable(&self) {
         assert!(self.end_lsn.get().is_none());
@@ -404,101 +398,6 @@ impl InMemoryLayer {
         Ok(())
     }
 
-    // Look up the keys in the provided keyspace and update
-    // the reconstruct state with whatever is found.
-    pub async fn get_values_reconstruct_data(
-        self: &Arc<InMemoryLayer>,
-        keyspace: KeySpace,
-        lsn_range: Range<Lsn>,
-        reconstruct_state: &mut ValuesReconstructState,
-        ctx: &RequestContext,
-    ) -> Result<(), GetVectoredError> {
-        let ctx = RequestContextBuilder::from(ctx)
-            .page_content_kind(PageContentKind::InMemoryLayer)
-            .attached_child();
-
-        let index = self.index.read().await;
-
-        struct ValueRead {
-            entry_lsn: Lsn,
-            read: vectored_dio_read::LogicalRead<Vec<u8>>,
-        }
-        let mut reads: HashMap<Key, Vec<ValueRead>> = HashMap::new();
-        let mut ios: HashMap<(Key, Lsn), OnDiskValueIo> = Default::default();
-
-        for range in keyspace.ranges.iter() {
-            for (key, vec_map) in index.range(range.start.to_compact()..range.end.to_compact()) {
-                let key = Key::from_compact(*key);
-                let slice = vec_map.slice_range(lsn_range.clone());
-
-                for (entry_lsn, index_entry) in slice.iter().rev() {
-                    let IndexEntryUnpacked {
-                        pos,
-                        len,
-                        will_init,
-                    } = index_entry.unpack();
-
-                    reads.entry(key).or_default().push(ValueRead {
-                        entry_lsn: *entry_lsn,
-                        read: vectored_dio_read::LogicalRead::new(
-                            pos,
-                            Vec::with_capacity(len as usize),
-                        ),
-                    });
-
-                    let io = reconstruct_state.update_key(&key, *entry_lsn, will_init);
-                    ios.insert((key, *entry_lsn), io);
-
-                    if will_init {
-                        break;
-                    }
-                }
-            }
-        }
-        drop(index); // release the lock before we spawn the IO
-        let read_from = Arc::clone(self);
-        let read_ctx = ctx.attached_child();
-        reconstruct_state
-            .spawn_io(async move {
-                let f = vectored_dio_read::execute(
-                    &read_from.file,
-                    reads
-                        .iter()
-                        .flat_map(|(_, value_reads)| value_reads.iter().map(|v| &v.read)),
-                    &read_ctx,
-                );
-                send_future::SendFuture::send(f) // https://github.com/rust-lang/rust/issues/96865
-                    .await;
-
-                for (key, value_reads) in reads {
-                    for ValueRead { entry_lsn, read } in value_reads {
-                        let io = ios.remove(&(key, entry_lsn)).expect("sender must exist");
-                        match read.into_result().expect("we run execute() above") {
-                            Err(e) => {
-                                io.complete(Err(std::io::Error::new(
-                                    e.kind(),
-                                    "dio vec read failed",
-                                )));
-                            }
-                            Ok(value_buf) => {
-                                io.complete(Ok(OnDiskValue::WalRecordOrImage(value_buf.into())));
-                            }
-                        }
-                    }
-                }
-
-                assert!(ios.is_empty());
-
-                // Keep layer existent until this IO is done;
-                // This is kinda forced for InMemoryLayer because we need to inner.read() anyway,
-                // but it's less obvious for DeltaLayer and ImageLayer. So, keep this explicit
-                // drop for consistency among all three layer types.
-                drop(read_from);
-            })
-            .await;
-
-        Ok(())
-    }
 }
 
 fn inmem_layer_display(mut f: impl Write, start_lsn: Lsn, end_lsn: Lsn) -> std::fmt::Result {
@@ -643,18 +542,8 @@ impl InMemoryLayer {
         Ok(())
     }
 
-    pub(crate) fn get_opened_at(&self) -> Instant {
-        self.opened_at
-    }
 
-    pub(crate) fn tick(&self) -> Option<u64> {
-        self.file.tick()
-    }
 
-    pub(crate) async fn put_tombstones(&self, _key_ranges: &[(Range<Key>, Lsn)]) -> Result<()> {
-        // TODO: Currently, we just leak the storage for any deleted keys
-        Ok(())
-    }
 
     /// Records the end_lsn for non-dropped layers.
     /// `end_lsn` is exclusive
