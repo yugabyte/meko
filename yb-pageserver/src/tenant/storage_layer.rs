@@ -9,9 +9,7 @@ pub(crate) mod layer;
 mod layer_desc;
 mod layer_name;
 
-use std::cmp::Ordering;
-use std::collections::hash_map::Entry;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -38,10 +36,9 @@ use utils::sync::gate::GateGuard;
 use wal_decoder::models::record::NeonWalRecord;
 use wal_decoder::models::value::Value;
 
-use self::inmemory_layer::InMemoryLayerFileId;
 use super::PageReconstructError;
 use super::layer_map::InMemoryLayerDesc;
-use super::timeline::{GetVectoredError, ReadPath};
+use super::timeline::GetVectoredError;
 use crate::context::{
     AccessStatsBehavior, PerfInstrumentFutureExt, RequestContext, RequestContextBuilder,
 };
@@ -311,8 +308,6 @@ pub struct ValuesReconstructState {
 
     pub(crate) io_concurrency: IoConcurrency,
     num_active_ios: Arc<AtomicUsize>,
-
-    pub(crate) read_path: Option<ReadPath>,
 }
 
 /// The level of IO concurrency to be used on the read path
@@ -661,7 +656,6 @@ impl ValuesReconstructState {
             enable_debug: false,
             debug_state: ValueReconstructState::default(),
             num_active_ios: Arc::new(AtomicUsize::new(0)),
-            read_path: None,
         }
     }
 
@@ -676,7 +670,6 @@ impl ValuesReconstructState {
             enable_debug: true,
             debug_state: ValueReconstructState::default(),
             num_active_ios: Arc::new(AtomicUsize::new(0)),
-            read_path: None,
         }
     }
 
@@ -777,44 +770,6 @@ impl ValuesReconstructState {
     }
 }
 
-/// A key that uniquely identifies a layer in a timeline
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
-pub(crate) enum LayerId {
-    PersitentLayerId(PersistentLayerKey),
-    InMemoryLayerId(InMemoryLayerFileId),
-}
-
-/// Uniquely identify a layer visit by the layer
-/// and LSN range of the reads. Note that the end of the range is exclusive.
-///
-/// The layer itself is not enough since we may have different LSN lower
-/// bounds for delta layer reads. Scenarios where this can happen are:
-///
-/// 1. Layer overlaps: imagine an image layer inside and in-memory layer
-///    and a query that only partially hits the image layer. Part of the query
-///    needs to read the whole in-memory layer and the other part needs to read
-///    only up to the image layer. Hence, they'll have different LSN floor values
-///    for the read.
-///
-/// 2. Scattered reads: the read path supports starting at different LSNs. Imagine
-///    The start LSN for one range is inside a layer and the start LSN for another range
-///    Is above the layer (includes all of it). Both ranges need to read the layer all the
-///    Way to the end but starting at different points. Hence, they'll have different LSN
-///    Ceil values.
-///
-/// The implication is that we might visit the same layer multiple times
-/// in order to read different LSN ranges from it. In practice, this isn't very concerning
-/// because:
-/// 1. Layer overlaps are rare and generally not intended
-/// 2. Scattered reads will stabilise after the first few layers provided their starting LSNs
-///    are grouped tightly enough (likely the case).
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
-struct LayerToVisitId {
-    layer_id: LayerId,
-    lsn_floor: Lsn,
-    lsn_ceil: Lsn,
-}
-
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum ReadableLayerWeak {
     PersistentLayer(Arc<PersistentLayerDesc>),
@@ -830,135 +785,7 @@ pub(crate) enum ReadableLayer {
     InMemoryLayer(Arc<InMemoryLayer>),
 }
 
-/// A partial description of a read to be done.
-#[derive(Debug, Clone)]
-struct LayerVisit {
-    /// An id used to resolve the readable layer within the fringe
-    layer_to_visit_id: LayerToVisitId,
-    /// Lsn range for the read, used for selecting the next read
-    lsn_range: Range<Lsn>,
-}
-
-/// Data structure which maintains a fringe of layers for the
-/// read path. The fringe is the set of layers which intersects
-/// the current keyspace that the search is descending on.
-/// Each layer tracks the keyspace that intersects it.
-///
-/// The fringe must appear sorted by Lsn. Hence, it uses
-/// a two layer indexing scheme.
-#[derive(Debug)]
-pub(crate) struct LayerFringe {
-    planned_visits_by_lsn: BinaryHeap<LayerVisit>,
-    visit_reads: HashMap<LayerToVisitId, LayerVisitReads>,
-}
-
-#[derive(Debug)]
-struct LayerVisitReads {
-    layer: ReadableLayer,
-    target_keyspace: KeySpaceRandomAccum,
-}
-
-impl LayerFringe {
-    pub(crate) fn new() -> Self {
-        LayerFringe {
-            planned_visits_by_lsn: BinaryHeap::new(),
-            visit_reads: HashMap::new(),
-        }
-    }
-
-    pub(crate) fn next_layer(&mut self) -> Option<(ReadableLayer, KeySpace, Range<Lsn>)> {
-        let read_desc = self.planned_visits_by_lsn.pop()?;
-
-        let removed = self.visit_reads.remove_entry(&read_desc.layer_to_visit_id);
-
-        match removed {
-            Some((
-                _,
-                LayerVisitReads {
-                    layer,
-                    mut target_keyspace,
-                },
-            )) => Some((
-                layer,
-                target_keyspace.consume_keyspace(),
-                read_desc.lsn_range,
-            )),
-            None => unreachable!("fringe internals are always consistent"),
-        }
-    }
-
-    pub(crate) fn update(
-        &mut self,
-        layer: ReadableLayer,
-        keyspace: KeySpace,
-        lsn_range: Range<Lsn>,
-    ) {
-        let layer_to_visit_id = LayerToVisitId {
-            layer_id: layer.id(),
-            lsn_floor: lsn_range.start,
-            lsn_ceil: lsn_range.end,
-        };
-
-        let entry = self.visit_reads.entry(layer_to_visit_id.clone());
-        match entry {
-            Entry::Occupied(mut entry) => {
-                entry.get_mut().target_keyspace.add_keyspace(keyspace);
-            }
-            Entry::Vacant(entry) => {
-                self.planned_visits_by_lsn.push(LayerVisit {
-                    lsn_range,
-                    layer_to_visit_id: layer_to_visit_id.clone(),
-                });
-                let mut accum = KeySpaceRandomAccum::new();
-                accum.add_keyspace(keyspace);
-                entry.insert(LayerVisitReads {
-                    layer,
-                    target_keyspace: accum,
-                });
-            }
-        }
-    }
-}
-
-impl Default for LayerFringe {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Ord for LayerVisit {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let ord = self.lsn_range.end.cmp(&other.lsn_range.end);
-        if ord == std::cmp::Ordering::Equal {
-            self.lsn_range.start.cmp(&other.lsn_range.start).reverse()
-        } else {
-            ord
-        }
-    }
-}
-
-impl PartialOrd for LayerVisit {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for LayerVisit {
-    fn eq(&self, other: &Self) -> bool {
-        self.lsn_range == other.lsn_range
-    }
-}
-
-impl Eq for LayerVisit {}
-
 impl ReadableLayer {
-    pub(crate) fn id(&self) -> LayerId {
-        match self {
-            Self::PersistentLayer(layer) => LayerId::PersitentLayerId(layer.layer_desc().key()),
-            Self::InMemoryLayer(layer) => LayerId::InMemoryLayerId(layer.file_id()),
-        }
-    }
-
     pub(crate) async fn get_values_reconstruct_data(
         &self,
         keyspace: KeySpace,

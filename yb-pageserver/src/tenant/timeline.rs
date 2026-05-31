@@ -71,7 +71,7 @@ use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
 use super::remote_timeline_client::RemoteTimelineClient;
 use super::remote_timeline_client::index::GcCompactionState;
-use super::storage_layer::{LayerFringe, ReadableLayer};
+use super::storage_layer::ReadableLayer;
 use super::upload_queue::NotInitialized;
 use super::{
     AttachedTenantConf, GcError, MaybeOffloaded,
@@ -99,8 +99,8 @@ use crate::tenant::gc_result::GcResult;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::storage_layer::inmemory_layer::IndexEntry;
 use crate::tenant::storage_layer::{
-    AsLayerDesc, BatchLayerWriter, EvictionError, ImageLayerName,
-    ImageLayerWriter, InMemoryLayer, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, PersistentLayerKey, ResidentLayer,
+    BatchLayerWriter, EvictionError, ImageLayerName,
+    ImageLayerWriter, InMemoryLayer, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, ResidentLayer,
     ValueReconstructState, ValuesReconstructState,
 };
 use crate::tenant::tasks::BackgroundLoopKind;
@@ -532,11 +532,6 @@ impl GcCutoffs {
     }
 }
 
-pub(crate) struct TimelineVisitOutcome {
-    completed_keyspace: KeySpace,
-    image_covered_keyspace: KeySpace,
-}
-
 /// An error happened in a get() operation.
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum PageReconstructError {
@@ -614,71 +609,6 @@ impl From<layer_manager::Shutdown> for GetVectoredError {
     }
 }
 
-/// A layer identifier when used in the [`ReadPath`] structure. This enum is for observability purposes
-/// only and not used by the "real read path".
-pub enum ReadPathLayerId {
-    PersistentLayer(PersistentLayerKey),
-    InMemoryLayer(Range<Lsn>),
-}
-
-impl std::fmt::Display for ReadPathLayerId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReadPathLayerId::PersistentLayer(key) => write!(f, "{key}"),
-            ReadPathLayerId::InMemoryLayer(range) => {
-                write!(f, "in-mem {}..{}", range.start, range.end)
-            }
-        }
-    }
-}
-pub struct ReadPath {
-    keyspace: KeySpace,
-    lsn: Lsn,
-    path: Vec<(ReadPathLayerId, KeySpace, Range<Lsn>)>,
-}
-
-impl ReadPath {
-    pub fn new(keyspace: KeySpace, lsn: Lsn) -> Self {
-        Self {
-            keyspace,
-            lsn,
-            path: Vec::new(),
-        }
-    }
-
-    pub fn record_layer_visit(
-        &mut self,
-        layer_to_read: &ReadableLayer,
-        keyspace_to_read: &KeySpace,
-        lsn_range: &Range<Lsn>,
-    ) {
-        let id = match layer_to_read {
-            ReadableLayer::PersistentLayer(layer) => {
-                ReadPathLayerId::PersistentLayer(layer.layer_desc().key())
-            }
-            ReadableLayer::InMemoryLayer(layer) => {
-                ReadPathLayerId::InMemoryLayer(layer.get_lsn_range())
-            }
-        };
-        self.path
-            .push((id, keyspace_to_read.clone(), lsn_range.clone()));
-    }
-}
-
-impl std::fmt::Display for ReadPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Read path for {} at lsn {}:", self.keyspace, self.lsn)?;
-        for (idx, (layer_id, keyspace, lsn_range)) in self.path.iter().enumerate() {
-            writeln!(
-                f,
-                "{}: {} {}..{} {}",
-                idx, layer_id, lsn_range.start, lsn_range.end, keyspace
-            )?;
-        }
-        Ok(())
-    }
-}
-
 #[derive(thiserror::Error)]
 pub struct MissingKeyError {
     keyspace: KeySpace,
@@ -687,15 +617,7 @@ pub struct MissingKeyError {
     // This is largest request LSN from the get page request batch
     original_hwm_lsn: Lsn,
     ancestor_lsn: Option<Lsn>,
-    /// Debug information about the read path if there's an error
-    read_path: Option<ReadPath>,
     backtrace: Option<std::backtrace::Backtrace>,
-}
-
-impl MissingKeyError {
-    fn enrich(&mut self, query: VersionedKeySpaceQuery) {
-        self.query = Some(query);
-    }
 }
 
 impl std::fmt::Debug for MissingKeyError {
@@ -718,10 +640,6 @@ impl std::fmt::Display for MissingKeyError {
 
         if let Some(ref query) = self.query {
             write!(f, ", query {query}")?;
-        }
-
-        if let Some(ref read_path) = self.read_path {
-            write!(f, "\n{read_path}")?;
         }
 
         if let Some(ref backtrace) = self.backtrace {
@@ -1186,14 +1104,11 @@ impl Timeline {
                     original_hwm_lsn: lsn,
                     ancestor_lsn: None,
                     backtrace: None,
-                    read_path: None,
                     query: None,
                 },
             ))),
         }
     }
-
-    pub(crate) const LAYERS_VISITED_WARN_THRESHOLD: u32 = 100;
 
     /// Look up multiple page versions at a given LSN
     ///

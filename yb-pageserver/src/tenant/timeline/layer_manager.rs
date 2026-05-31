@@ -6,18 +6,17 @@ use std::time::Duration;
 
 use anyhow::{Context, bail, ensure};
 use itertools::Itertools;
-use pageserver_api::keyspace::KeySpace;
 use pageserver_api::shard::TenantShardId;
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use utils::id::TimelineId;
 use utils::lsn::{AtomicLsn, Lsn};
 
-use super::{LayerFringe, ReadableLayer, TimelineWriterState};
+use super::{ReadableLayer, TimelineWriterState};
 use crate::config::PageServerConf;
 use crate::context::RequestContext;
 use crate::metrics::TimelineMetrics;
-use crate::tenant::layer_map::{BatchedUpdates, LayerMap, SearchResult};
+use crate::tenant::layer_map::{BatchedUpdates, LayerMap};
 use crate::tenant::storage_layer::{
     AsLayerDesc, InMemoryLayer, Layer, PersistentLayerDesc,
     PersistentLayerKey, ReadableLayerWeak, ResidentLayer,
@@ -287,36 +286,6 @@ impl LayerManager {
 
     pub(crate) fn all_persistent_layers(&self) -> Vec<PersistentLayerKey> {
         self.layers().keys().cloned().collect_vec()
-    }
-
-    /// Update the [`LayerFringe`] of a read request
-    ///
-    /// Take a key space at a given LSN and query the layer map below each range
-    /// of the key space to find the next layers to visit.
-    pub(crate) fn update_search_fringe(
-        &self,
-        keyspace: &KeySpace,
-        cont_lsn: Lsn,
-        fringe: &mut LayerFringe,
-    ) -> Result<(), Shutdown> {
-        let map = self.layer_map()?;
-
-        for range in keyspace.ranges.iter() {
-            let results = map.range_search(range.clone(), cont_lsn);
-            results
-                .found
-                .into_iter()
-                .map(|(SearchResult { layer, lsn_floor }, keyspace_accum)| {
-                    (
-                        self.upgrade(layer),
-                        keyspace_accum.to_keyspace(),
-                        lsn_floor..cont_lsn,
-                    )
-                })
-                .for_each(|(layer, keyspace, lsn_range)| fringe.update(layer, keyspace, lsn_range));
-        }
-
-        Ok(())
     }
 
     fn layers(&self) -> &HashMap<PersistentLayerKey, Layer> {

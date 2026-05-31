@@ -1215,16 +1215,16 @@ static SYNC_MODE: AtomicU8 = AtomicU8::new(SyncMode::Sync as u8);
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::FileExt;
-    use std::sync::Arc;
+    
+    
 
-    use owned_buffers_io::io_buf_ext::IoBufExt;
-    use rand::Rng;
-    use rand::seq::SliceRandom;
+    
+    
+    
 
     use super::*;
-    use crate::context::DownloadBehavior;
-    use crate::task_mgr::TaskKind;
+    
+    
 
     // TODO: test_virtual_files aborts the test binary with SIGABRT, same
     // failure mode as test_vfile_concurrency below — opens >2×
