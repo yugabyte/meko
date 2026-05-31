@@ -106,8 +106,6 @@ pub struct TimelineResources {
     pub remote_client: RemoteTimelineClient,
     pub pagestream_throttle: Arc<crate::tenant::throttle::Throttle>,
     pub pagestream_throttle_metrics: Arc<crate::metrics::tenant_throttling::Pagestream>,
-    pub l0_compaction_trigger: Arc<Notify>,
-    pub l0_flush_global_state: l0_flush::L0FlushGlobalState,
     pub basebackup_cache: Arc<BasebackupCache>,
     /// Compute-reads `PageStore` (see
     /// `TenantSharedResources::compute_page_store`). `Some` enables
@@ -243,8 +241,6 @@ pub struct Timeline {
     // the planned GC cutoff.
     pub applied_gc_cutoff_lsn: Rcu<Lsn>,
 
-    pub(crate) gc_compaction_layer_update_lock: tokio::sync::RwLock<()>,
-
     // List of child timelines and their branch points. This is needed to avoid
     // garbage collecting data that is still needed by the child timelines.
     pub(crate) gc_info: std::sync::RwLock<GcInfo>,
@@ -256,15 +252,6 @@ pub struct Timeline {
     // It can be unified with latest_gc_cutoff_lsn under some "first_valid_lsn",
     // though let's keep them both for better error visibility.
     pub initdb_lsn: Lsn,
-
-    /// The repartitioning result. Allows a single writer and multiple readers.
-    pub(crate) partitioning: GuardArcSwap<((KeyPartitioning, SparseKeyPartitioning), Lsn)>,
-
-    /// Configuration: how often should the partitioning be recalculated.
-    repartition_threshold: u64,
-
-    last_image_layer_creation_check_at: AtomicLsn,
-    last_image_layer_creation_check_instant: std::sync::Mutex<Option<Instant>>,
 
     /// Current logical size of the "datadir", at the last LSN.
     current_logical_size: LogicalSize,
@@ -287,10 +274,6 @@ pub struct Timeline {
     /// timeline is being deleted. If 'true', the timeline has already been deleted.
     pub delete_progress: TimelineDeleteProgress,
 
-    /// Load or creation time information about the disk_consistent_lsn and when the loading
-    /// happened. Used for consumption metrics.
-    pub(crate) loaded_at: (Lsn, SystemTime),
-
     /// Gate to prevent shutdown completing while I/O is still happening to this timeline's data
     pub(crate) gate: Gate,
 
@@ -307,16 +290,10 @@ pub struct Timeline {
     /// Timeline deletion will acquire both compaction and gc locks in whatever order.
     compaction_lock: tokio::sync::Mutex<()>,
 
-    /// If true, the last compaction failed.
-    compaction_failed: AtomicBool,
-
     /// Begin Hadron: If true, the pageserver has likely detected data corruption in the timeline.
     /// We need to feed this information back to the Safekeeper and postgres for them to take the
     /// appropriate action.
     corruption_detected: AtomicBool,
-
-    /// Notifies the tenant compaction loop that there is pending L0 compaction work.
-    l0_compaction_trigger: Arc<Notify>,
 
     /// Make sure we only have one running gc at a time.
     ///
@@ -332,8 +309,6 @@ pub struct Timeline {
 
     /// Size estimator for aux file v2
     pub(crate) aux_file_size_estimator: AuxFileSizeEstimator,
-
-    pub(crate) l0_flush_global_state: L0FlushGlobalState,
 
     pub(crate) handles: handle::PerTimelineState<TenantManagerTypes>,
 
@@ -2099,9 +2074,6 @@ impl Timeline {
     }
 }
 
-/// Number of times we will compute partition within a checkpoint distance.
-const REPARTITION_FREQ_IN_CHECKPOINT_DISTANCE: u64 = 10;
-
 // Private functions
 impl Timeline {
     pub(crate) fn get_lsn_lease_length(&self) -> Duration {
@@ -2156,14 +2128,6 @@ impl Timeline {
             }
             None => false,
         }
-    }
-
-    fn get_checkpoint_distance(&self) -> u64 {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .checkpoint_distance
-            .unwrap_or(self.conf.default_tenant_conf.checkpoint_distance)
     }
 
 
@@ -2411,7 +2375,6 @@ impl Timeline {
                 shard_identity,
                 pg_version,
                 layers: Default::default(),
-                gc_compaction_layer_update_lock: tokio::sync::RwLock::new(()),
 
                 walredo_mgr,
                 walreceiver: Mutex::new(None),
@@ -2430,8 +2393,6 @@ impl Timeline {
                 disk_consistent_lsn: AtomicLsn::new(disk_consistent_lsn.0),
 
                 gc_compaction_state: ArcSwapOption::from_pointee(gc_compaction_state),
-
-                loaded_at: (disk_consistent_lsn, SystemTime::now()),
 
                 ancestor_timeline: ancestor,
                 ancestor_lsn: metadata.ancestor_lsn(),
@@ -2464,13 +2425,6 @@ impl Timeline {
                     LogicalSize::empty_initial()
                 },
 
-                partitioning: GuardArcSwap::new((
-                    (KeyPartitioning::new(), KeyPartitioning::new().into_sparse()),
-                    Lsn(0),
-                )),
-                repartition_threshold: 0,
-                last_image_layer_creation_check_at: AtomicLsn::new(0),
-                last_image_layer_creation_check_instant: Mutex::new(None),
                 last_received_wal: Mutex::new(None),
                 rel_size_latest_cache: RwLock::new(HashMap::new()),
                 rel_size_snapshot_cache: Mutex::new(LruCache::new(relsize_snapshot_cache_capacity)),
@@ -2485,9 +2439,7 @@ impl Timeline {
                 gate: Gate::default(),
 
                 compaction_lock: tokio::sync::Mutex::default(),
-                compaction_failed: AtomicBool::default(),
                 corruption_detected: AtomicBool::default(),
-                l0_compaction_trigger: resources.l0_compaction_trigger,
                 gc_lock: tokio::sync::Mutex::default(),
 
                 standby_horizon: AtomicLsn::new(0),
@@ -2495,8 +2447,6 @@ impl Timeline {
                 pagestream_throttle: resources.pagestream_throttle,
 
                 aux_file_size_estimator: AuxFileSizeEstimator::new(aux_file_metrics),
-
-                l0_flush_global_state: resources.l0_flush_global_state,
 
                 handles: Default::default(),
 
@@ -2517,9 +2467,6 @@ impl Timeline {
 
                 db_rel_count: ArcSwapOption::from_pointee(None),
             };
-
-            result.repartition_threshold =
-                result.get_checkpoint_distance() / REPARTITION_FREQ_IN_CHECKPOINT_DISTANCE;
 
             result
                 .metrics

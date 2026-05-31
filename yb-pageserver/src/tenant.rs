@@ -149,7 +149,6 @@ pub struct TenantSharedResources {
     pub broker_client: storage_broker::BrokerClientChannel,
     pub remote_storage: GenericRemoteStorage,
     pub deletion_queue_client: DeletionQueueClient,
-    pub l0_flush_global_state: L0FlushGlobalState,
     pub basebackup_cache: Arc<BasebackupCache>,
     /// Row-per-page YugabyteDB store dedicated to compute-facing
     /// reads (GetPage hot path: `PageWriter::scan_range` and
@@ -326,9 +325,6 @@ pub struct TenantShard {
     /// A channel to send async requests to prepare a basebackup for the basebackup cache.
     basebackup_cache: Arc<BasebackupCache>,
 
-    /// Signals the tenant compaction loop that there is L0 compaction work to be done.
-    pub(crate) l0_compaction_trigger: Arc<Notify>,
-
     /// If the tenant is in Activating state, notify this to encourage it
     /// to proceed to Active as soon as possible, rather than waiting for lazy
     /// background warmup.
@@ -363,8 +359,6 @@ pub struct TenantShard {
     /// New gc iterations must start a new iteration by acquiring `GcBlock::start` before
     /// proceeding.
     pub(crate) gc_block: gc_block::GcBlock,
-
-    l0_flush_global_state: L0FlushGlobalState,
 
     /// Compute-reads `PageStore` (see
     /// `TenantSharedResources::compute_page_store`).
@@ -1214,7 +1208,6 @@ impl TenantShard {
             broker_client,
             remote_storage,
             deletion_queue_client,
-            l0_flush_global_state,
             basebackup_cache,
             compute_page_store,
             internal_page_store,
@@ -1232,7 +1225,6 @@ impl TenantShard {
             tenant_shard_id,
             remote_storage.clone(),
             deletion_queue_client,
-            l0_flush_global_state,
             basebackup_cache,
             compute_page_store,
             internal_page_store,
@@ -3694,7 +3686,6 @@ impl TenantShard {
         tenant_shard_id: TenantShardId,
         remote_storage: GenericRemoteStorage,
         deletion_queue_client: DeletionQueueClient,
-        l0_flush_global_state: L0FlushGlobalState,
         basebackup_cache: Arc<BasebackupCache>,
         compute_page_store: Option<Arc<crate::page_store::PageStore>>,
         internal_page_store: Option<Arc<crate::page_store::PageStore>>,
@@ -3774,7 +3765,6 @@ impl TenantShard {
             remote_storage,
             deletion_queue_client,
             state,
-            l0_compaction_trigger: Arc::new(Notify::new()),
             activate_now_sem: tokio::sync::Semaphore::new(0),
             attach_wal_lag_cooldown: Arc::new(std::sync::OnceLock::new()),
             cancel: CancellationToken::default(),
@@ -3788,7 +3778,6 @@ impl TenantShard {
             tenant_conf: Arc::new(ArcSwap::from_pointee(attached_conf)),
             ongoing_timeline_detach: std::sync::Mutex::default(),
             gc_block: Default::default(),
-            l0_flush_global_state,
             basebackup_cache,
             compute_page_store,
             internal_page_store,
@@ -4652,8 +4641,6 @@ impl TenantShard {
             remote_client,
             pagestream_throttle: self.pagestream_throttle.clone(),
             pagestream_throttle_metrics: self.pagestream_throttle_metrics.clone(),
-            l0_compaction_trigger: self.l0_compaction_trigger.clone(),
-            l0_flush_global_state: self.l0_flush_global_state.clone(),
             basebackup_cache: self.basebackup_cache.clone(),
             compute_page_store: self.compute_page_store.clone(),
             internal_page_store: self.internal_page_store.clone(),

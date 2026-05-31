@@ -17,11 +17,6 @@ use utils::lsn::Lsn;
 
 use crate::assert_u64_eq_usize::u64_to_usize;
 use crate::context::RequestContext;
-use crate::page_cache;
-
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-pub(crate) struct InMemoryLayerFileId(page_cache::FileId);
 
 pub struct InMemoryLayer {
     timeline_id: TimelineId,

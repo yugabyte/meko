@@ -571,10 +571,6 @@ fn start_pageserver(
         background_jobs_can_start: background_jobs_barrier.clone(),
     };
 
-    info!(config=?conf.l0_flush, "using l0_flush config");
-    let l0_flush_global_state =
-        yb_pageserver::l0_flush::L0FlushGlobalState::new(conf.l0_flush.clone());
-
     // Scan the local 'tenants/' directory and start loading the tenants
     let (basebackup_cache, basebackup_prepare_receiver) = BasebackupCache::new(
         conf.basebackup_cache_dir(),
@@ -590,7 +586,6 @@ fn start_pageserver(
             broker_client: broker_client.clone(),
             remote_storage: remote_storage.clone(),
             deletion_queue_client,
-            l0_flush_global_state,
             basebackup_cache: Arc::clone(&basebackup_cache),
             compute_page_store: compute_page_store.clone(),
             internal_page_store: internal_page_store.clone(),
