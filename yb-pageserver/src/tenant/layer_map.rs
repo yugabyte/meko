@@ -745,13 +745,6 @@ impl LayerMap {
             })
     }
 
-    pub(crate) fn in_memory_layer(&self, desc: &InMemoryLayerDesc) -> Arc<InMemoryLayer> {
-        match desc.handle {
-            InMemoryLayerHandle::Open => self.open_layer.as_ref().unwrap().clone(),
-            InMemoryLayerHandle::Frozen(idx) => self.frozen_layers[idx].clone(),
-        }
-    }
-
     ///
     /// Divide the whole given range of keys into sub-ranges based on the latest
     /// image layer that covers each range at the specified lsn (inclusive).
