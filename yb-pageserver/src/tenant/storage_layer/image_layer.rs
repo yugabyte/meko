@@ -164,13 +164,8 @@ pub struct ImageLayerInner {
     index_start_blk: u32,
     index_root_blk: u32,
 
-    key_range: Range<Key>,
-    lsn: Lsn,
-
     file: Arc<VirtualFile>,
     file_id: FileId,
-
-    max_vectored_read_bytes: Option<MaxVectoredReadBytes>,
 }
 
 impl std::fmt::Debug for ImageLayerInner {
@@ -370,9 +365,9 @@ impl ImageLayer {
 impl ImageLayerInner {
     pub(super) async fn load(
         path: &Utf8Path,
-        lsn: Lsn,
+        _lsn: Lsn,
         summary: Option<Summary>,
-        max_vectored_read_bytes: Option<MaxVectoredReadBytes>,
+        _max_vectored_read_bytes: Option<MaxVectoredReadBytes>,
         ctx: &RequestContext,
     ) -> anyhow::Result<Self> {
         let file = Arc::new(
@@ -413,11 +408,8 @@ impl ImageLayerInner {
         Ok(ImageLayerInner {
             index_start_blk: actual_summary.index_start_blk,
             index_root_blk: actual_summary.index_root_blk,
-            lsn,
             file,
             file_id,
-            max_vectored_read_bytes,
-            key_range: actual_summary.key_range,
         })
     }
 
