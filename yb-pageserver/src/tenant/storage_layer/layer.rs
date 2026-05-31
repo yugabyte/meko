@@ -295,65 +295,6 @@ impl Layer {
         self.0.delete_on_drop();
     }
 
-    pub(crate) async fn get_values_reconstruct_data(
-        &self,
-        keyspace: KeySpace,
-        lsn_range: Range<Lsn>,
-        reconstruct_data: &mut ValuesReconstructState,
-        ctx: &RequestContext,
-    ) -> Result<(), GetVectoredError> {
-        let downloaded = {
-            let ctx = RequestContextBuilder::from(ctx)
-                .perf_span(|crnt_perf_span| {
-                    info_span!(
-                        target: PERF_TRACE_TARGET,
-                        parent: crnt_perf_span,
-                        "GET_LAYER",
-                    )
-                })
-                .attached_child();
-
-            self.0
-                .get_or_maybe_download(true, &ctx)
-                .maybe_perf_instrument(&ctx, |crnt_perf_context| crnt_perf_context.clone())
-                .await
-                .map_err(|err| match err {
-                    DownloadError::TimelineShutdown | DownloadError::DownloadCancelled => {
-                        GetVectoredError::Cancelled
-                    }
-                    other => GetVectoredError::Other(anyhow::anyhow!(other)),
-                })?
-        };
-
-        let this = ResidentLayer {
-            downloaded: downloaded.clone(),
-            owner: self.clone(),
-        };
-
-        self.record_access(ctx);
-
-        let ctx = RequestContextBuilder::from(ctx)
-            .perf_span(|crnt_perf_span| {
-                info_span!(
-                    target: PERF_TRACE_TARGET,
-                    parent: crnt_perf_span,
-                    "VISIT_LAYER",
-                )
-            })
-            .attached_child();
-
-        downloaded
-            .get_values_reconstruct_data(this, keyspace, lsn_range, reconstruct_data, &ctx)
-            .instrument(tracing::debug_span!("get_values_reconstruct_data", layer=%self))
-            .maybe_perf_instrument(&ctx, |crnt_perf_span| crnt_perf_span.clone())
-            .await
-            .map_err(|err| match err {
-                GetVectoredError::Other(err) => GetVectoredError::Other(
-                    err.context(format!("get_values_reconstruct_data for layer {self}")),
-                ),
-                err => err,
-            })
-    }
 
     /// Download the layer if evicted.
     ///
@@ -1766,32 +1707,6 @@ impl DownloadedLayer {
             .as_ref()
             // We already logged the full backtrace above, once. Don't repeat that here.
             .map_err(|e| anyhow::anyhow!("layer load failed earlier: {e}"))
-    }
-
-    async fn get_values_reconstruct_data(
-        &self,
-        this: ResidentLayer,
-        keyspace: KeySpace,
-        lsn_range: Range<Lsn>,
-        reconstruct_data: &mut ValuesReconstructState,
-        ctx: &RequestContext,
-    ) -> Result<(), GetVectoredError> {
-        use LayerKind::*;
-
-        match self
-            .get(&this.owner.0, ctx)
-            .await
-            .map_err(GetVectoredError::Other)?
-        {
-            Delta(d) => {
-                d.get_values_reconstruct_data(this, keyspace, lsn_range, reconstruct_data, ctx)
-                    .await
-            }
-            Image(i) => {
-                i.get_values_reconstruct_data(this, keyspace, reconstruct_data, ctx)
-                    .await
-            }
-        }
     }
 
     async fn dump(&self, owner: &Arc<LayerInner>, ctx: &RequestContext) -> anyhow::Result<()> {
