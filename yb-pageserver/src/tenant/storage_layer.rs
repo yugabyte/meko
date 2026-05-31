@@ -89,11 +89,9 @@ impl ValueReconstructState {
 /// to accumulate per-key reconstruct buffers. yb-pageserver's
 /// `Timeline::get_vectored_impl` ignores it entirely (the row-store
 /// read path runs through `PageWriter::scan_range`); we keep the
-/// struct + the `IoConcurrency` carrier so external callers
-/// (basebackup, pgdatadir_mapping) can keep their existing signatures.
-pub struct ValuesReconstructState {
-    pub(crate) io_concurrency: IoConcurrency,
-}
+/// struct as a unit type so external callers (basebackup,
+/// pgdatadir_mapping) can keep their existing signatures.
+pub struct ValuesReconstructState;
 
 /// The level of IO concurrency to be used on the read path
 ///
@@ -329,8 +327,8 @@ impl Clone for IoConcurrency {
 }
 
 impl ValuesReconstructState {
-    pub fn new(io_concurrency: IoConcurrency) -> Self {
-        Self { io_concurrency }
+    pub fn new(_io_concurrency: IoConcurrency) -> Self {
+        Self
     }
 }
 
