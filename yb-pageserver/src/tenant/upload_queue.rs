@@ -102,9 +102,6 @@ pub struct UploadQueueInitialized {
     /// Ensure we order file operations correctly.
     pub(crate) recently_deleted: HashSet<(LayerName, Generation)>,
 
-    /// Deletions that are blocked by the tenant configuration
-    pub(crate) blocked_deletions: Vec<Delete>,
-
     /// Set to true when we have inserted the `UploadOp::Shutdown` into the `inprogress_tasks`.
     pub(crate) shutting_down: bool,
 
@@ -359,7 +356,6 @@ impl UploadQueue {
             #[cfg(feature = "testing")]
             dangling_files: HashMap::new(),
             recently_deleted: HashSet::new(),
-            blocked_deletions: Vec::new(),
             shutting_down: false,
             shutdown_ready: Arc::new(tokio::sync::Semaphore::new(0)),
         };
@@ -400,7 +396,6 @@ impl UploadQueue {
             #[cfg(feature = "testing")]
             dangling_files: HashMap::new(),
             recently_deleted: HashSet::new(),
-            blocked_deletions: Vec::new(),
             shutting_down: false,
             shutdown_ready: Arc::new(tokio::sync::Semaphore::new(0)),
         };
@@ -451,26 +446,13 @@ pub struct UploadTask {
     pub coalesced_ops: Vec<UploadOp>,
 }
 
-/// A deletion of some layers within the lifetime of a timeline.  This is not used
-/// for timeline deletion, which skips this queue and goes directly to DeletionQueue.
-#[derive(Debug, Clone)]
-pub struct Delete {
-    pub layers: Vec<(LayerName, LayerFileMetadata)>,
-}
-
 #[derive(Clone, Debug)]
 pub enum UploadOp {
-    /// Upload a layer file. The last field indicates the last operation for thie file.
-    UploadLayer(ResidentLayer, LayerFileMetadata, Option<OpType>),
-
     /// Upload a index_part.json file
     UploadMetadata {
         /// The next [`UploadQueueInitialized::clean`] after this upload succeeds.
         uploaded: Box<IndexPart>,
     },
-
-    /// Delete layer files
-    Delete(Delete),
 
     /// Barrier. When the barrier operation is reached, the channel is closed.
     Barrier(tokio::sync::watch::Sender<()>),
@@ -483,22 +465,12 @@ pub enum UploadOp {
 impl std::fmt::Display for UploadOp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            UploadOp::UploadLayer(layer, metadata, mode) => {
-                write!(
-                    f,
-                    "UploadLayer({}, size={:?}, gen={:?}, mode={:?})",
-                    layer, metadata.file_size, metadata.generation, mode
-                )
-            }
             UploadOp::UploadMetadata { uploaded, .. } => {
                 write!(
                     f,
                     "UploadMetadata(lsn: {})",
                     uploaded.metadata.disk_consistent_lsn()
                 )
-            }
-            UploadOp::Delete(delete) => {
-                write!(f, "Delete({} layers)", delete.layers.len())
             }
             UploadOp::Barrier(_) => write!(f, "Barrier"),
             UploadOp::Shutdown => write!(f, "Shutdown"),
@@ -507,52 +479,13 @@ impl std::fmt::Display for UploadOp {
 }
 
 impl UploadOp {
-    /// Returns true if self can bypass other, i.e. if the operations don't conflict. index is the
-    /// active index when other would be uploaded -- if we allow self to bypass other, this would
-    /// be the active index when self is uploaded.
-    pub fn can_bypass(&self, other: &UploadOp, index: &IndexPart) -> bool {
+    /// In yb-mode the upload queue only carries index uploads, barriers,
+    /// and shutdowns. Indexes can never bypass each other; barriers and
+    /// shutdowns block everything.
+    pub fn can_bypass(&self, other: &UploadOp, _index: &IndexPart) -> bool {
         match (self, other) {
-            // Nothing can bypass a barrier or shutdown, and it can't bypass anything.
             (UploadOp::Barrier(_), _) | (_, UploadOp::Barrier(_)) => false,
             (UploadOp::Shutdown, _) | (_, UploadOp::Shutdown) => false,
-
-            // Uploads and deletes can bypass each other unless they're for the same file.
-            (UploadOp::UploadLayer(a, ameta, _), UploadOp::UploadLayer(b, bmeta, _)) => {
-                let aname = &a.layer_desc().layer_name();
-                let bname = &b.layer_desc().layer_name();
-                !is_same_remote_layer_path(aname, ameta, bname, bmeta)
-            }
-            (UploadOp::UploadLayer(u, umeta, _), UploadOp::Delete(d))
-            | (UploadOp::Delete(d), UploadOp::UploadLayer(u, umeta, _)) => {
-                d.layers.iter().all(|(dname, dmeta)| {
-                    !is_same_remote_layer_path(&u.layer_desc().layer_name(), umeta, dname, dmeta)
-                })
-            }
-
-            // Deletes are idempotent and can always bypass each other.
-            (UploadOp::Delete(_), UploadOp::Delete(_)) => true,
-
-            // Uploads and deletes can bypass an index upload as long as neither the uploaded index
-            // nor the active index below it references the file. A layer can't be modified or
-            // deleted while referenced by an index.
-            //
-            // Similarly, index uploads can bypass uploads and deletes as long as neither the
-            // uploaded index nor the active index references the file (the latter would be
-            // incorrect use by the caller).
-            (UploadOp::UploadLayer(u, umeta, _), UploadOp::UploadMetadata { uploaded: i })
-            | (UploadOp::UploadMetadata { uploaded: i }, UploadOp::UploadLayer(u, umeta, _)) => {
-                let uname = u.layer_desc().layer_name();
-                !i.references(&uname, umeta) && !index.references(&uname, umeta)
-            }
-            (UploadOp::Delete(d), UploadOp::UploadMetadata { uploaded: i })
-            | (UploadOp::UploadMetadata { uploaded: i }, UploadOp::Delete(d)) => {
-                d.layers.iter().all(|(dname, dmeta)| {
-                    !i.references(dname, dmeta) && !index.references(dname, dmeta)
-                })
-            }
-
-            // Indexes can never bypass each other. They can coalesce though, and
-            // `UploadQueue::next_ready()` currently does this when possible.
             (UploadOp::UploadMetadata { .. }, UploadOp::UploadMetadata { .. }) => false,
         }
     }
