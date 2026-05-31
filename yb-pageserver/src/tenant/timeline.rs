@@ -419,14 +419,6 @@ pub struct Timeline {
     /// Size estimator for aux file v2
     pub(crate) aux_file_size_estimator: AuxFileSizeEstimator,
 
-    /// Some test cases directly place keys into the timeline without actually modifying the directory
-    /// keys (i.e., DB_DIR). The test cases creating such keys will put the keyspaces here, so that
-    /// these keys won't get garbage-collected during compaction/GC. This field only modifies the dense
-    /// keyspace return value of `collect_keyspace`. For sparse keyspaces, use AUX keys for testing, and
-    /// in the future, add `extra_test_sparse_keyspace` if necessary.
-    #[cfg(test)]
-    pub(crate) extra_test_dense_keyspace: ArcSwap<KeySpace>,
-
     pub(crate) l0_flush_global_state: L0FlushGlobalState,
 
     pub(crate) handles: handle::PerTimelineState<TenantManagerTypes>,
@@ -3419,9 +3411,6 @@ impl Timeline {
                 pagestream_throttle: resources.pagestream_throttle,
 
                 aux_file_size_estimator: AuxFileSizeEstimator::new(aux_file_metrics),
-
-                #[cfg(test)]
-                extra_test_dense_keyspace: ArcSwap::new(Arc::new(KeySpace::default())),
 
                 l0_flush_global_state: resources.l0_flush_global_state,
 
@@ -6951,12 +6940,6 @@ impl Timeline {
         self.disk_consistent_lsn.store(new_value);
     }
 
-    #[cfg(test)]
-    pub(crate) fn add_extra_test_dense_keyspace(&self, ks: KeySpace) {
-        let mut keyspace = self.extra_test_dense_keyspace.load().as_ref().clone();
-        keyspace.merge(&ks);
-        self.extra_test_dense_keyspace.store(Arc::new(keyspace));
-    }
 }
 
 /// Tracking writes ingestion does to a particular in-memory layer.

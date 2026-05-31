@@ -1514,17 +1514,6 @@ impl Timeline {
         result.add_key(CONTROLFILE_KEY);
         result.add_key(CHECKPOINT_KEY);
 
-        // Add extra keyspaces in the test cases. Some test cases write keys into the storage without
-        // creating directory keys. These test cases will add such keyspaces into `extra_test_dense_keyspace`
-        // and the keys will not be garbage-colllected.
-        #[cfg(test)]
-        {
-            let guard = self.extra_test_dense_keyspace.load();
-            for kr in &guard.ranges {
-                result.add_range(kr.clone());
-            }
-        }
-
         let dense_keyspace = result.to_keyspace();
         let sparse_keyspace = SparseKeySpace(KeySpace {
             ranges: vec![

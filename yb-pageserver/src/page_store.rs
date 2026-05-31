@@ -575,30 +575,26 @@ impl PageStore {
             let fork = range.start.field5 as i16;
             let blk_lo = range.start.field6 as i64;
             let blk_hi = range.end.field6 as i64;
-            // `blocks` enumerates distinct blknums in the range that have
-            // any row at or below target_lsn. `per_block_image` then
-            // does ONE seek per block via LATERAL + LIMIT 1 to find the
-            // latest image (or NULL for slow-path blocks). The main
-            // SELECT joins back and keeps only rows from the anchor up.
+            // `per_block_image` is a single contiguous scan of the
+            // `is_image=TRUE` cluster within the blknum range, reduced
+            // by `GROUP BY blknum MAX(lsn)`. The PK clustering
+            // `(blknum, is_image, lsn DESC)` makes this one tablet-local
+            // range scan instead of one LATERAL subquery + LIMIT 1 per
+            // block (the prior shape, which scaled RPCs at ~1 per block
+            // — wasteful when most blocks have no image at all). The
+            // main SELECT then LEFT JOINs back and keeps only rows from
+            // the anchor up; blocks without an image fall through as
+            // `bi.image_lsn IS NULL` and replay the full chain.
             let sql = format!(
-                "WITH blocks AS ( \
-                     SELECT DISTINCT blknum FROM \"{schema}\".pages \
+                "WITH per_block_image AS ( \
+                     SELECT blknum, MAX(lsn) AS image_lsn \
+                     FROM \"{schema}\".pages \
                      WHERE tenant_id=$1 AND timeline_id=$2 \
                        AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
                        AND forknum=$6 \
                        AND blknum >= $7 AND blknum < $8 \
-                       AND lsn <= $9 \
-                 ), \
-                 per_block_image AS ( \
-                     SELECT b.blknum, i.image_lsn FROM blocks b \
-                     LEFT JOIN LATERAL ( \
-                         SELECT lsn AS image_lsn FROM \"{schema}\".pages \
-                         WHERE tenant_id=$1 AND timeline_id=$2 \
-                           AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
-                           AND forknum=$6 AND blknum = b.blknum \
-                           AND is_image=TRUE AND lsn <= $9 \
-                         ORDER BY lsn DESC LIMIT 1 \
-                     ) i ON TRUE \
+                       AND is_image=TRUE AND lsn <= $9 \
+                     GROUP BY blknum \
                  ) \
                  SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                         p.lsn, p.is_image, p.will_init, p.payload \
@@ -637,28 +633,21 @@ impl PageStore {
             let rel_hi = range.end.field4 as i64;
             let fork_hi = range.end.field5 as i16;
             let blk_hi = range.end.field6 as i64;
+            // Same GROUP BY MAX rewrite as the one-fork variant, but
+            // keyed on the full (spcnode, dbnode, relnode, forknum,
+            // blknum) tuple so anchors stay paired with the right block
+            // when the range crosses forks. Single ranged scan of the
+            // `is_image=TRUE` cluster across the tablets the range
+            // touches, reduced inline.
             let sql = format!(
-                "WITH blocks AS ( \
-                     SELECT DISTINCT spcnode, dbnode, relnode, forknum, blknum \
+                "WITH per_block_image AS ( \
+                     SELECT spcnode, dbnode, relnode, forknum, blknum, MAX(lsn) AS image_lsn \
                      FROM \"{schema}\".pages \
                      WHERE tenant_id=$1 AND timeline_id=$2 \
                        AND (spcnode, dbnode, relnode, forknum, blknum) >= ($3, $4, $5, $6, $7) \
                        AND (spcnode, dbnode, relnode, forknum, blknum) <  ($8, $9, $10, $11, $12) \
-                       AND lsn <= $13 \
-                 ), \
-                 per_block_image AS ( \
-                     SELECT b.spcnode, b.dbnode, b.relnode, b.forknum, b.blknum, \
-                            i.image_lsn \
-                     FROM blocks b \
-                     LEFT JOIN LATERAL ( \
-                         SELECT lsn AS image_lsn FROM \"{schema}\".pages \
-                         WHERE tenant_id=$1 AND timeline_id=$2 \
-                           AND spcnode=b.spcnode AND dbnode=b.dbnode \
-                           AND relnode=b.relnode AND forknum=b.forknum \
-                           AND blknum=b.blknum \
-                           AND is_image=TRUE AND lsn <= $13 \
-                         ORDER BY lsn DESC LIMIT 1 \
-                     ) i ON TRUE \
+                       AND is_image=TRUE AND lsn <= $13 \
+                     GROUP BY spcnode, dbnode, relnode, forknum, blknum \
                  ) \
                  SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                         p.lsn, p.is_image, p.will_init, p.payload \
@@ -903,20 +892,13 @@ impl PageStore {
         let target = target_lsn.0 as i64;
 
         let sql = format!(
-            "WITH blocks AS ( \
-                 SELECT DISTINCT blknum FROM \"{schema}\".slru_pages \
+            "WITH per_block_image AS ( \
+                 SELECT blknum, MAX(lsn) AS image_lsn \
+                 FROM \"{schema}\".slru_pages \
                  WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 AND segno=$4 \
-                   AND blknum >= $5 AND blknum < $6 AND lsn <= $7 \
-             ), \
-             per_block_image AS ( \
-                 SELECT b.blknum, i.image_lsn FROM blocks b \
-                 LEFT JOIN LATERAL ( \
-                     SELECT lsn AS image_lsn FROM \"{schema}\".slru_pages \
-                     WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 \
-                       AND segno=$4 AND blknum = b.blknum \
-                       AND is_image=TRUE AND lsn <= $7 \
-                     ORDER BY lsn DESC LIMIT 1 \
-                 ) i ON TRUE \
+                   AND blknum >= $5 AND blknum < $6 \
+                   AND is_image=TRUE AND lsn <= $7 \
+                 GROUP BY blknum \
              ) \
              SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
              FROM \"{schema}\".slru_pages p \
