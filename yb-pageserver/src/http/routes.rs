@@ -37,8 +37,7 @@ use pageserver_api::models::{
     TenantLocationConfigRequest, TenantLocationConfigResponse, TenantScanRemoteStorageResponse,
     TenantScanRemoteStorageShard, TenantShardLocation, TenantShardSplitRequest,
     TenantShardSplitResponse, TenantSorting, TenantState, TenantWaitLsnRequest,
-    TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateRequestMode,
-    TimelineCreateRequestModeImportPgdata, TimelineGcRequest, TimelineInfo,
+    TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateRequestMode, TimelineGcRequest, TimelineInfo,
     TimelinePatchIndexPartRequest, TimelineVisibilityState, TimelinesInfoAndOffloaded,
     TopTenantShardItem, TopTenantShardsRequest, TopTenantShardsResponse,
 };
@@ -74,7 +73,7 @@ use crate::tenant::remote_timeline_client::{
 use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerName};
 use crate::tenant::timeline::{
     CompactFlags, MarkInvisibleRequest, Timeline, WaitLsnTimeout,
-    WaitLsnWaiter, import_pgdata,
+    WaitLsnWaiter,
 };
 use crate::tenant::{
     GetTimelineError, OffloadedTimeline, PageReconstructError,
@@ -584,35 +583,13 @@ async fn timeline_create_handler(
             ancestor_timeline_id,
             ancestor_start_lsn,
         }),
-        TimelineCreateRequestMode::ImportPgdata {
-            import_pgdata:
-                TimelineCreateRequestModeImportPgdata {
-                    location,
-                    idempotency_key,
-                },
-        } => tenant::CreateTimelineParams::ImportPgdata(tenant::CreateTimelineParamsImportPgdata {
-            idempotency_key: import_pgdata::index_part_format::IdempotencyKey::new(
-                idempotency_key.0,
-            ),
-            new_timeline_id,
-            location: {
-                use import_pgdata::index_part_format::Location;
-                use pageserver_api::models::ImportPgdataLocation;
-                match location {
-                    #[cfg(feature = "testing")]
-                    ImportPgdataLocation::LocalFs { path } => Location::LocalFs { path },
-                    ImportPgdataLocation::AwsS3 {
-                        region,
-                        bucket,
-                        key,
-                    } => Location::AwsS3 {
-                        region,
-                        bucket,
-                        key,
-                    },
-                }
-            },
-        }),
+        TimelineCreateRequestMode::ImportPgdata { .. } => {
+            return Err(ApiError::BadRequest(anyhow::anyhow!(
+                "yb-pageserver: external pgdata-bucket import is not supported. \
+                 Bootstrap a tenant by creating a normal timeline and ingesting \
+                 WAL through the safekeeper."
+            )));
+        }
     };
 
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Error);
@@ -2818,105 +2795,6 @@ async fn put_tenant_timeline_import_wal(
     }.instrument(span).await
 }
 
-/// Activate a timeline after its import has completed
-///
-/// The endpoint is idempotent and callers are expected to retry all
-/// errors until a successful response.
-async fn activate_post_import_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    const DEFAULT_ACTIVATE_TIMEOUT: Duration = Duration::from_secs(1);
-    let activate_timeout = parse_query_param(&request, "timeline_activate_timeout_ms")?
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_ACTIVATE_TIMEOUT);
-
-    let span = info_span!(
-        "activate_post_import_handler",
-        tenant_id=%tenant_shard_id.tenant_id,
-        timeline_id=%timeline_id,
-        shard_id=%tenant_shard_id.shard_slug()
-    );
-
-    async move {
-        let state = get_state(&request);
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_shard_id)?;
-
-        tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
-
-        tenant.finalize_importing_timeline(timeline_id).await?;
-
-        match tenant.get_timeline(timeline_id, false) {
-            Ok(_timeline) => {
-                // Timeline is already visible. Reset not required: fall through.
-            }
-            Err(GetTimelineError::NotFound { .. }) => {
-                // This is crude: we reset the whole tenant such that the new timeline is detected
-                // and activated. We can come up with something more granular in the future.
-                //
-                // Note that we only reset the tenant if required: when the timeline is
-                // not present in [`Tenant::timelines`].
-                let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Warn);
-                state
-                    .tenant_manager
-                    .reset_tenant(tenant_shard_id, false, &ctx)
-                    .await
-                    .map_err(ApiError::InternalServerError)?;
-            }
-            Err(GetTimelineError::ShuttingDown) => {
-                return Err(ApiError::ShuttingDown);
-            }
-            Err(GetTimelineError::NotActive { .. }) => {
-                unreachable!("Called get_timeline with active_only=false");
-            }
-        }
-
-        let timeline = tenant.get_timeline(timeline_id, false)?;
-
-        let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Warn)
-            .with_scope_timeline(&timeline);
-
-        let result =
-            tokio::time::timeout(activate_timeout, timeline.wait_to_become_active(&ctx)).await;
-        match result {
-            Ok(Ok(())) => {
-                // fallthrough
-            }
-            // Timeline reached some other state that's not active
-            // TODO(vlad): if the tenant is broken, return a permananet error
-            Ok(Err(_timeline_state)) => {
-                return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                    "Timeline activation failed"
-                )));
-            }
-            // Activation timed out
-            Err(_) => {
-                return Err(ApiError::Timeout("Timeline activation timed out".into()));
-            }
-        }
-
-        let timeline_info = build_timeline_info(
-            &timeline, false, // include_non_incremental_logical_size,
-            false, // force_await_initial_logical_size
-            false, // include_image_consistent_lsn
-            &ctx,
-        )
-        .await
-        .context("get local timeline info")
-        .map_err(ApiError::InternalServerError)?;
-
-        json_response(StatusCode::OK, timeline_info)
-    }
-    .instrument(span)
-    .await
-}
-
 // [Hadron] Reset gauge metrics that are used to raised alerts. We need this API as a stop-gap measure to reset alerts
 // after we manually rectify situations such as local SSD data loss. We will eventually automate this.
 async fn hadron_reset_alert_gauges(
@@ -3302,10 +3180,6 @@ pub fn make_router(
         .put(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/import_wal",
             |r| api_handler(r, put_tenant_timeline_import_wal),
-        )
-        .put(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/activate_post_import",
-            |r| api_handler(r, activate_post_import_handler),
         )
         .post("/hadron-internal/reset_alert_gauges", |r| {
             api_handler(r, hadron_reset_alert_gauges)

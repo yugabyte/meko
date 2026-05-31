@@ -44,7 +44,7 @@ use remote_timeline_client::manifest::{
     LATEST_TENANT_MANIFEST_VERSION, OffloadedTimelineManifest, TenantManifest,
 };
 use remote_timeline_client::{
-    FAILED_REMOTE_OP_RETRIES, FAILED_UPLOAD_WARN_THRESHOLD, UploadQueueNotReadyError,
+    FAILED_REMOTE_OP_RETRIES, FAILED_UPLOAD_WARN_THRESHOLD,
     download_tenant_manifest,
 };
 use storage_broker::BrokerClientChannel;
@@ -1729,35 +1729,17 @@ impl TenantShard {
                     // activation happens later, on Tenant::activate
                 }
                 TimelineInitAndSyncResult::NeedsSpawnImportPgdata(
-                    TimelineInitAndSyncNeedsSpawnImportPgdata {
-                        timeline,
-                        import_pgdata,
-                        guard,
-                    },
+                    TimelineInitAndSyncNeedsSpawnImportPgdata { timeline, .. },
                 ) => {
-                    let timeline_id = timeline.timeline_id;
-                    let import_task_gate = Gate::default();
-                    let import_task_guard = import_task_gate.enter().unwrap();
-                    let import_task_handle =
-                        tokio::task::spawn(self.clone().create_timeline_import_pgdata_task(
-                            timeline.clone(),
-                            import_pgdata,
-                            guard,
-                            import_task_guard,
-                            ctx.detached_child(TaskKind::ImportPgdata, DownloadBehavior::Warn),
-                        ));
-
-                    let prev = self.timelines_importing.lock().unwrap().insert(
-                        timeline_id,
-                        Arc::new(ImportingTimeline {
-                            timeline: timeline.clone(),
-                            import_task_handle,
-                            import_task_gate,
-                            delete_progress: TimelineDeleteProgress::default(),
-                        }),
+                    // yb-mode: external pgdata-bucket import is unsupported
+                    // (the flow.rs orchestrator was deleted in Phase 4d).
+                    // An attaching tenant with an in-progress import is a
+                    // stale state from before the migration; surface it as
+                    // a warning and skip.
+                    warn!(
+                        timeline_id = %timeline.timeline_id,
+                        "skipping in-progress import-pgdata timeline — yb-mode does not support pgdata-bucket import"
                     );
-
-                    assert!(prev.is_none());
                 }
             }
         }
@@ -2360,16 +2342,6 @@ impl TenantShard {
             .collect()
     }
 
-    /// Lists timelines the tenant contains.
-    /// It's up to callers to omit certain timelines that are not considered ready for use.
-    pub fn list_importing_timelines(&self) -> Vec<Arc<ImportingTimeline>> {
-        self.timelines_importing
-            .lock()
-            .unwrap()
-            .values()
-            .map(Arc::clone)
-            .collect()
-    }
 
     /// Lists timelines the tenant manages, including offloaded ones.
     ///
@@ -2601,8 +2573,10 @@ impl TenantShard {
                 self.branch_timeline(&ancestor_timeline, new_timeline_id, ancestor_start_lsn, ctx)
                     .await?
             }
-            CreateTimelineParams::ImportPgdata(params) => {
-                self.create_timeline_import_pgdata(params, ctx).await?
+            CreateTimelineParams::ImportPgdata(_) => {
+                return Err(CreateTimelineError::Other(anyhow::anyhow!(
+                    "yb-pageserver: import-pgdata is not supported"
+                )));
             }
         };
 
@@ -2668,210 +2642,9 @@ impl TenantShard {
         Ok(activated_timeline)
     }
 
-    /// The returned [`Arc<Timeline>`] is NOT in the [`TenantShard::timelines`] map until the import
-    /// completes in the background. A DIFFERENT [`Arc<Timeline>`] will be inserted into the
-    /// [`TenantShard::timelines`] map when the import completes.
-    /// We only return an [`Arc<Timeline>`] here so the API handler can create a [`pageserver_api::models::TimelineInfo`]
-    /// for the response.
-    async fn create_timeline_import_pgdata(
-        self: &Arc<Self>,
-        params: CreateTimelineParamsImportPgdata,
-        ctx: &RequestContext,
-    ) -> Result<CreateTimelineResult, CreateTimelineError> {
-        let CreateTimelineParamsImportPgdata {
-            new_timeline_id,
-            location,
-            idempotency_key,
-        } = params;
-
-        let started_at = chrono::Utc::now().naive_utc();
-
-        //
-        // There's probably a simpler way to upload an index part, but, remote_timeline_client
-        // is the canonical way we do it.
-        // - create an empty timeline in-memory
-        // - use its remote_timeline_client to do the upload
-        // - dispose of the uninit timeline
-        // - keep the creation guard alive
-
-        let timeline_create_guard = match self
-            .start_creating_timeline(
-                new_timeline_id,
-                CreateTimelineIdempotency::ImportPgdata(CreatingTimelineIdempotencyImportPgdata {
-                    idempotency_key: idempotency_key.clone(),
-                }),
-            )
-            .await?
-        {
-            StartCreatingTimelineResult::CreateGuard(guard) => guard,
-            StartCreatingTimelineResult::Idempotent(timeline) => {
-                return Ok(CreateTimelineResult::Idempotent(timeline));
-            }
-        };
-
-        let (mut uninit_timeline, timeline_ctx) = {
-            let this = &self;
-            let initdb_lsn = Lsn(0);
-            async move {
-                let new_metadata = TimelineMetadata::new(
-                    // Initialize disk_consistent LSN to 0, The caller must import some data to
-                    // make it valid, before calling finish_creation()
-                    Lsn(0),
-                    None,
-                    None,
-                    Lsn(0),
-                    initdb_lsn,
-                    initdb_lsn,
-                    PgMajorVersion::PG15,
-                );
-                this.prepare_new_timeline(
-                    new_timeline_id,
-                    &new_metadata,
-                    timeline_create_guard,
-                    initdb_lsn,
-                    None,
-                    None,
-                    None,
-                    ctx,
-                )
-                .await
-            }
-        }
-        .await?;
-
-        let in_progress = import_pgdata::index_part_format::InProgress {
-            idempotency_key,
-            location,
-            started_at,
-        };
-        let index_part = import_pgdata::index_part_format::Root::V1(
-            import_pgdata::index_part_format::V1::InProgress(in_progress),
-        );
-        uninit_timeline
-            .raw_timeline()
-            .unwrap()
-            .remote_client
-            .schedule_index_upload_for_import_pgdata_state_update(Some(index_part.clone()))?;
-
-        // wait_completion happens in caller
-
-        let (timeline, timeline_create_guard) = uninit_timeline.finish_creation_myself();
-
-        let import_task_gate = Gate::default();
-        let import_task_guard = import_task_gate.enter().unwrap();
-
-        let import_task_handle = tokio::spawn(self.clone().create_timeline_import_pgdata_task(
-            timeline.clone(),
-            index_part,
-            timeline_create_guard,
-            import_task_guard,
-            timeline_ctx.detached_child(TaskKind::ImportPgdata, DownloadBehavior::Warn),
-        ));
-
-        let prev = self.timelines_importing.lock().unwrap().insert(
-            timeline.timeline_id,
-            Arc::new(ImportingTimeline {
-                timeline: timeline.clone(),
-                import_task_handle,
-                import_task_gate,
-                delete_progress: TimelineDeleteProgress::default(),
-            }),
-        );
-
-        // Idempotency is enforced higher up the stack
-        assert!(prev.is_none());
-
-        // NB: the timeline doesn't exist in self.timelines at this point
-        Ok(CreateTimelineResult::ImportSpawned(timeline))
-    }
 
     /// Finalize the import of a timeline on this shard by marking it complete in
     /// the index part. If the import task hasn't finished yet, returns an error.
-    ///
-    /// This method is idempotent. If the import was finalized once, the next call
-    /// will be a no-op.
-    pub(crate) async fn finalize_importing_timeline(
-        &self,
-        timeline_id: TimelineId,
-    ) -> Result<(), FinalizeTimelineImportError> {
-        let timeline = {
-            let locked = self.timelines_importing.lock().unwrap();
-            match locked.get(&timeline_id) {
-                Some(importing_timeline) => {
-                    if !importing_timeline.import_task_handle.is_finished() {
-                        return Err(FinalizeTimelineImportError::ImportTaskStillRunning);
-                    }
-
-                    importing_timeline.timeline.clone()
-                }
-                None => {
-                    return Ok(());
-                }
-            }
-        };
-
-        timeline
-            .remote_client
-            .schedule_index_upload_for_import_pgdata_finalize()
-            .map_err(|_err| FinalizeTimelineImportError::ShuttingDown)?;
-        timeline
-            .remote_client
-            .wait_completion()
-            .await
-            .map_err(|_err| FinalizeTimelineImportError::ShuttingDown)?;
-
-        self.timelines_importing
-            .lock()
-            .unwrap()
-            .remove(&timeline_id);
-
-        Ok(())
-    }
-
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%timeline.timeline_id))]
-    async fn create_timeline_import_pgdata_task(
-        self: Arc<TenantShard>,
-        timeline: Arc<Timeline>,
-        index_part: import_pgdata::index_part_format::Root,
-        timeline_create_guard: TimelineCreateGuard,
-        _import_task_guard: GateGuard,
-        ctx: RequestContext,
-    ) {
-        debug_assert_current_span_has_tenant_and_timeline_id();
-        info!("starting");
-        scopeguard::defer! {info!("exiting")};
-
-        let res = self
-            .create_timeline_import_pgdata_task_impl(
-                timeline,
-                index_part,
-                timeline_create_guard,
-                ctx,
-            )
-            .await;
-        if let Err(err) = &res {
-            error!(?err, "task failed");
-            // TODO sleep & retry, sensitive to tenant shutdown
-            // TODO: allow timeline deletion requests => should cancel the task
-        }
-    }
-
-    async fn create_timeline_import_pgdata_task_impl(
-        self: Arc<TenantShard>,
-        timeline: Arc<Timeline>,
-        index_part: import_pgdata::index_part_format::Root,
-        _timeline_create_guard: TimelineCreateGuard,
-        ctx: RequestContext,
-    ) -> Result<(), anyhow::Error> {
-        info!("importing pgdata");
-        let ctx = ctx.with_scope_timeline(&timeline);
-        import_pgdata::doit(&timeline, index_part, &ctx, self.cancel.clone())
-            .await
-            .context("import")?;
-        info!("import done - waiting for activation");
-
-        anyhow::Ok(())
-    }
 
     pub(crate) async fn delete_timeline(
         self: Arc<Self>,
