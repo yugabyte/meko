@@ -414,11 +414,7 @@ pub(super) async fn prepare(
             res.map_err(|e| {
                 use FlushLayerError::*;
                 match e {
-                    Cancelled | NotRunning(_) => {
-                        // FIXME(#6424): technically statically unreachable right now, given how we never
-                        // drop the sender
-                        Error::ShuttingDown
-                    }
+                    Cancelled => Error::ShuttingDown,
                     CreateImageLayersError(_) | Other(_) => Error::Prepare(e.into()),
                 }
             })?;

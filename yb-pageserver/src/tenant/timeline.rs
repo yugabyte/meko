@@ -100,14 +100,6 @@ use crate::walingest::WalLagCooldown;
 use crate::walredo::RedoAttemptType;
 use crate::{task_mgr, walredo};
 
-/// yb-mode: the flush loop never spawns (maybe_spawn_flush_loop is a
-/// stub), so the state machine collapses to its initial variant. Kept
-/// so callers that pattern-match TimelineState::NotRunning(...) keep
-/// the same shape.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum FlushLoopState {
-    NotStarted,
-}
 
 /// The outward-facing resources required to build a Timeline
 pub struct TimelineResources {
@@ -248,19 +240,6 @@ pub struct Timeline {
     ///
     /// The state is cleared upon freezing.
     write_lock: tokio::sync::Mutex<Option<TimelineWriterState>>,
-
-    /// Used to avoid multiple `flush_loop` tasks running
-    pub(super) flush_loop_state: Mutex<FlushLoopState>,
-
-    /// layer_flush_start_tx can be used to wake up the layer-flushing task.
-    /// - The u64 value is a counter, incremented every time a new flush cycle is requested.
-    ///   The flush cycle counter is sent back on the layer_flush_done channel when
-    ///   the flush finishes. You can use that to wait for the flush to finish.
-    /// - The LSN is updated to max() of its current value and the latest disk_consistent_lsn
-    ///   read by whoever sends an update
-    layer_flush_start_tx: tokio::sync::watch::Sender<(u64, Lsn)>,
-    /// to be notified when layer flushing has finished, subscribe to the layer_flush_done channel
-    layer_flush_done_tx: tokio::sync::watch::Sender<(u64, Result<(), FlushLayerError>)>,
 
     // The LSN at which we have executed GC: whereas [`Self::gc_info`] records the LSN at which
     // we _intend_ to GC (i.e. the PITR cutoff), this LSN records where we actually last did it.
@@ -624,10 +603,6 @@ pub(crate) enum FlushLayerError {
     /// Timeline cancellation token was cancelled
     #[error("timeline shutting down")]
     Cancelled,
-
-    /// We tried to flush a layer while the Timeline is in an unexpected state
-    #[error("cannot flush frozen layers when flush_loop is not running, state is {0:?}")]
-    NotRunning(FlushLoopState),
 
     // Arc<> the following non-clonable error types: we must be Clone-able because the flush error is propagated from the flush
     // loop via a watch channel, where we can only borrow it.
@@ -2317,9 +2292,6 @@ impl Timeline {
         let disk_consistent_lsn = metadata.disk_consistent_lsn();
         let (state, _) = watch::channel(state);
 
-        let (layer_flush_start_tx, _) = tokio::sync::watch::channel((0, disk_consistent_lsn));
-        let (layer_flush_done_tx, _) = tokio::sync::watch::channel((0, Ok(())));
-
         let evictions_low_residence_duration_metric_threshold = {
             let loaded_tenant_conf = tenant_conf.load();
             Self::get_evictions_low_residence_duration_metric_threshold(
@@ -2481,11 +2453,6 @@ impl Timeline {
 
                 directory_metrics: array::from_fn(|_| AtomicU64::new(0)),
                 directory_metrics_inited: array::from_fn(|_| AtomicBool::new(false)),
-
-                flush_loop_state: Mutex::new(FlushLoopState::NotStarted),
-
-                layer_flush_start_tx,
-                layer_flush_done_tx,
 
                 write_lock: tokio::sync::Mutex::new(None),
 
