@@ -192,7 +192,6 @@ pub(crate) use download::{
     download_index_part, download_initdb_tar_zst, download_tenant_manifest,
     list_remote_tenant_shards, list_remote_timelines,
 };
-use index::GcCompactionState;
 pub(crate) use index::LayerFileMetadata;
 use pageserver_api::models::{RelSizeMigration, TimelineArchivalState, TimelineVisibilityState};
 use pageserver_api::shard::{ShardIndex, TenantShardId};
@@ -214,7 +213,6 @@ use utils::shard::ShardNumber;
 
 use self::index::IndexPart;
 use super::config::AttachedLocationConfig;
-use super::metadata::MetadataUpdate;
 use super::storage_layer::LayerName;
 use super::upload_queue::{NotInitialized, SetDeletedFlagProgress};
 use super::{DeleteTimelineError, Generation};

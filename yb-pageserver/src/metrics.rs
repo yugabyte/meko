@@ -33,9 +33,7 @@ use crate::config::PageServerConf;
 use crate::context::{PageContentKind, RequestContext};
 use crate::pgdatadir_mapping::DatadirModificationStats;
 use crate::task_mgr::TaskKind;
-use crate::tenant::layer_map::LayerMap;
 use crate::tenant::mgr::TenantSlot;
-use crate::tenant::storage_layer::PersistentLayerDesc;
 use crate::tenant::tasks::BackgroundLoopKind;
 use crate::tenant::throttle::ThrottleResult;
 

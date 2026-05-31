@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use enumset::EnumSet;
 use futures::future::join_all;
 use futures::{StreamExt, TryFutureExt};
 use http_utils::endpoint::{
@@ -66,7 +65,6 @@ use crate::tenant::mgr::{
     GetActiveTenantError, GetTenantError, TenantManager, TenantMapError, TenantMapInsertError,
     TenantSlot, TenantSlotError, TenantSlotUpsertError, TenantStateError, UpsertLocationError,
 };
-use crate::tenant::remote_timeline_client::index::GcCompactionState;
 use crate::tenant::remote_timeline_client::{
     download_index_part, download_tenant_manifest, list_remote_tenant_shards, list_remote_timelines,
 };
