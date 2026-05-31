@@ -63,7 +63,19 @@ type OpenFn = Arc<dyn Fn() -> OpenFut + Send + Sync>;
 
 pub struct YsqlClient {
     open: OpenFn,
-    state: tokio::sync::Mutex<State>,
+    /// Connection pool. One slot per parallel YSQL connection. PostgreSQL
+    /// processes statements on a given connection serially, so single-
+    /// connection clients bottleneck at one query at a time even when
+    /// `tokio_postgres` pipelines the wire. With `pool_size > 1`, callers
+    /// pick a slot via round-robin (the `next` atomic counter below) and
+    /// the slots run independently in parallel.
+    ///
+    /// Pool size is fixed at construction. Each slot holds its own
+    /// connection + its own prepared-statement cache (cached `Statement`
+    /// handles are bound to a specific `Client` so they can't be shared
+    /// across slots).
+    pool: Vec<tokio::sync::Mutex<State>>,
+    next: std::sync::atomic::AtomicUsize,
 }
 
 /// The live connection and its per-connection prepared-statement cache.
@@ -79,9 +91,19 @@ struct State {
 }
 
 impl YsqlClient {
-    /// Build a `YsqlClient` that connects without TLS. Opens the
-    /// initial connection eagerly so config errors surface at construction.
+    /// Build a `YsqlClient` with a single connection (no pool). Equivalent
+    /// to `connect_no_tls_pooled(config, 1)`.
     pub async fn connect_no_tls(config: tokio_postgres::Config) -> Result<Self> {
+        Self::connect_no_tls_pooled(config, 1).await
+    }
+
+    /// Build a `YsqlClient` that connects without TLS, with `pool_size`
+    /// independent connections. Opens all connections eagerly so config
+    /// errors surface at construction.
+    pub async fn connect_no_tls_pooled(
+        config: tokio_postgres::Config,
+        pool_size: usize,
+    ) -> Result<Self> {
         let config = Arc::new(config);
         let open: OpenFn = {
             let config = config.clone();
@@ -90,16 +112,25 @@ impl YsqlClient {
                 async move { open_no_tls(&config).await }.boxed()
             })
         };
-        let client = (open)().await?;
-        Ok(Self::from_parts(open, client))
+        Self::from_open(open, pool_size).await
     }
 
-    /// Build a `YsqlClient` that connects via the supplied rustls
-    /// connector (typically built with an AcceptAll verifier — see
-    /// the YbStore-side helper). Opens the initial connection eagerly.
+    /// Build a `YsqlClient` with a single TLS connection. Equivalent to
+    /// `connect_rustls_pooled(config, tls, 1)`.
     pub async fn connect_rustls(
         config: tokio_postgres::Config,
         tls: tokio_postgres_rustls::MakeRustlsConnect,
+    ) -> Result<Self> {
+        Self::connect_rustls_pooled(config, tls, 1).await
+    }
+
+    /// Build a `YsqlClient` that connects via the supplied rustls
+    /// connector with `pool_size` independent connections. Opens all
+    /// eagerly.
+    pub async fn connect_rustls_pooled(
+        config: tokio_postgres::Config,
+        tls: tokio_postgres_rustls::MakeRustlsConnect,
+        pool_size: usize,
     ) -> Result<Self> {
         let config = Arc::new(config);
         let tls = Arc::new(tls);
@@ -112,24 +143,35 @@ impl YsqlClient {
                 async move { open_rustls(&config, &tls).await }.boxed()
             })
         };
-        let client = (open)().await?;
-        Ok(Self::from_parts(open, client))
+        Self::from_open(open, pool_size).await
     }
 
-    fn from_parts(open: OpenFn, client: tokio_postgres::Client) -> Self {
-        Self {
-            open,
-            state: tokio::sync::Mutex::new(State {
+    async fn from_open(open: OpenFn, pool_size: usize) -> Result<Self> {
+        let pool_size = pool_size.max(1);
+        let mut pool = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
+            let client = (open)().await?;
+            pool.push(tokio::sync::Mutex::new(State {
                 client: Arc::new(client),
                 prepared: HashMap::new(),
-            }),
+            }));
         }
+        Ok(Self {
+            open,
+            pool,
+            next: std::sync::atomic::AtomicUsize::new(0),
+        })
     }
 
-    /// Return the live client, reconnecting first if `is_closed()` is
-    /// already true. The reconnect clears the prepared-statement cache
-    /// because cached `Statement`s belong to the old (now-dead)
-    /// connection.
+    /// Round-robin pick a pool slot index.
+    fn pick_slot(&self) -> usize {
+        self.next
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.pool.len()
+    }
+
+    /// Pick a pool slot and return the live client at that slot,
+    /// reconnecting first if `is_closed()` is already true.
     ///
     /// Exposed publicly so callers can reach `query_raw` / `execute_raw`
     /// and other `tokio_postgres::Client` APIs not mirrored here (used
@@ -137,32 +179,41 @@ impl YsqlClient {
     /// **Bypasses** the prepared-statement cache — callers that want
     /// caching should use the wrapped `execute` / `query` / `query_opt`
     /// methods.
+    ///
+    /// Different callers calling `current()` get different pool slots
+    /// (round-robin). A streaming caller that holds the returned Arc
+    /// for a long time doesn't lock anyone else out — other callers
+    /// pick other slots.
     pub async fn current(&self) -> Result<Arc<tokio_postgres::Client>> {
-        let mut guard = self.state.lock().await;
+        let slot = self.pick_slot();
+        self.current_client_at(slot).await
+    }
+
+    /// Return the live client at a specific pool slot, reconnecting
+    /// first if it's dead. The reconnect clears that slot's prepared-
+    /// statement cache because cached `Statement`s belong to the old
+    /// (now-dead) connection. Other slots are unaffected.
+    async fn current_client_at(&self, slot: usize) -> Result<Arc<tokio_postgres::Client>> {
+        let mut guard = self.pool[slot].lock().await;
         if guard.client.is_closed() {
-            tracing::info!("YsqlClient: previous client closed, reconnecting");
+            tracing::info!(slot, "YsqlClient: previous client closed, reconnecting");
             guard.client = Arc::new((self.open)().await?);
             guard.prepared.clear();
         }
         Ok(guard.client.clone())
     }
 
-    /// Same as `current` but the name is kept short for internal callers
-    /// in this module.
-    async fn current_client(&self) -> Result<Arc<tokio_postgres::Client>> {
-        self.current().await
-    }
-
-    /// Force a reconnect after an op observed `is_closed()`. Double-checks
-    /// inside the mutex in case another task already reconnected while
-    /// we were waiting on the lock. Clears the prepared-statement cache
-    /// on the actual reconnect path.
-    async fn force_reconnect(&self) -> Result<Arc<tokio_postgres::Client>> {
-        let mut guard = self.state.lock().await;
+    /// Force a reconnect on a specific slot after an op observed
+    /// `is_closed()`. Double-checks inside the mutex in case another
+    /// task already reconnected while we were waiting on the lock.
+    /// Clears that slot's prepared-statement cache on the actual
+    /// reconnect path.
+    async fn force_reconnect_at(&self, slot: usize) -> Result<Arc<tokio_postgres::Client>> {
+        let mut guard = self.pool[slot].lock().await;
         if !guard.client.is_closed() {
             return Ok(guard.client.clone());
         }
-        tracing::info!("YsqlClient: forcing reconnect after failed op");
+        tracing::info!(slot, "YsqlClient: forcing reconnect after failed op");
         guard.client = Arc::new((self.open)().await?);
         guard.prepared.clear();
         Ok(guard.client.clone())
@@ -180,23 +231,24 @@ impl YsqlClient {
     /// etc.) get cache hits; callers that build SQL with per-call-unique
     /// inputs (such as bulk INSERTs whose VALUES list scales with the
     /// chunk size) get one cache entry per shape — bounded in practice.
-    async fn get_or_prepare(
+    async fn get_or_prepare_at(
         &self,
+        slot: usize,
         client: &tokio_postgres::Client,
         sql: &str,
     ) -> Result<Statement, tokio_postgres::Error> {
         {
-            let guard = self.state.lock().await;
+            let guard = self.pool[slot].lock().await;
             if let Some(stmt) = guard.prepared.get(sql) {
                 return Ok(stmt.clone());
             }
         }
         let stmt = client.prepare(sql).await?;
-        let mut guard = self.state.lock().await;
-        // Another task may have prepared the same SQL while we were
-        // awaiting `client.prepare()`; keep whichever entry is already
-        // there (statements are interchangeable for a given SQL on a
-        // given Client) and drop ours.
+        let mut guard = self.pool[slot].lock().await;
+        // Another task may have prepared the same SQL on this slot
+        // while we were awaiting `client.prepare()`; keep whichever
+        // entry is already there (statements are interchangeable for a
+        // given SQL on a given Client) and drop ours.
         let cached = guard
             .prepared
             .entry(sql.to_string())
@@ -271,18 +323,19 @@ impl YsqlClient {
         F: Fn(Arc<tokio_postgres::Client>, Statement) -> Fut,
         Fut: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
     {
+        let slot = self.pick_slot();
         let mut delay = std::time::Duration::from_millis(200);
         for attempt in 1..=5u32 {
-            let mut client = self.current_client().await?;
-            let stmt = match self.get_or_prepare(&client, sql).await {
+            let mut client = self.current_client_at(slot).await?;
+            let stmt = match self.get_or_prepare_at(slot, &client, sql).await {
                 Ok(s) => s,
                 Err(e) => {
                     // prepare() failed — same retry classification as a
                     // failed op below. Connection-drop path reconnects
                     // and retries; transient YB errors backoff.
                     if client.is_closed() {
-                        client = self.force_reconnect().await?;
-                        match self.get_or_prepare(&client, sql).await {
+                        client = self.force_reconnect_at(slot).await?;
+                        match self.get_or_prepare_at(slot, &client, sql).await {
                             Ok(s) => s,
                             Err(e2) => {
                                 return Err(anyhow::Error::from(e2)).with_context(|| {
@@ -310,10 +363,10 @@ impl YsqlClient {
                     // this same iteration. If the retry also fails, fall
                     // through to the transient classifier below.
                     let e = if client.is_closed() {
-                        let fresh = self.force_reconnect().await?;
+                        let fresh = self.force_reconnect_at(slot).await?;
                         // Re-prepare on the fresh connection.
                         let stmt = self
-                            .get_or_prepare(&fresh, sql)
+                            .get_or_prepare_at(slot, &fresh, sql)
                             .await
                             .map_err(anyhow::Error::from)
                             .with_context(|| {
@@ -366,12 +419,25 @@ impl YsqlClient {
         cfg: &YbStoreConfig,
         application_name: &str,
     ) -> Result<Self> {
+        Self::from_yb_config_pooled(cfg, application_name, 1).await
+    }
+
+    /// Same as `from_yb_config` but opens `pool_size` independent
+    /// connections. Use for hot read paths that benefit from parallel
+    /// SQL execution (e.g. pageserver compute_page_store at pool_size=4).
+    pub async fn from_yb_config_pooled(
+        cfg: &YbStoreConfig,
+        application_name: &str,
+        pool_size: usize,
+    ) -> Result<Self> {
         let pg_config = build_pg_config(cfg, application_name)?;
         match cfg.sslmode.as_deref() {
-            None | Some("disable") => Self::connect_no_tls(pg_config).await,
+            None | Some("disable") => {
+                Self::connect_no_tls_pooled(pg_config, pool_size).await
+            }
             Some(_mode) => {
                 let tls = build_yb_rustls_connector(cfg.sslrootcert.as_deref())?;
-                Self::connect_rustls(pg_config, tls).await
+                Self::connect_rustls_pooled(pg_config, tls, pool_size).await
             }
         }
     }

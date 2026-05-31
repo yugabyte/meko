@@ -187,8 +187,23 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
 }
 
 impl PageStore {
+    /// Open a `PageStore` with a single YSQL connection. Equivalent to
+    /// `connect_pooled(config, app, 1)`.
     pub async fn connect(config: PageStoreConfig, application_name: &str) -> Result<Self> {
-        let client = YsqlClient::from_yb_config(&config.yb, application_name)
+        Self::connect_pooled(config, application_name, 1).await
+    }
+
+    /// Open a `PageStore` with `pool_size` independent YSQL connections.
+    /// Use for the compute-facing read path where parallel prefetches
+    /// from one Postgres backend (or many concurrent computes) need
+    /// to overlap SQL execution. `pool_size = 1` matches the single-
+    /// connection behaviour of `connect()`.
+    pub async fn connect_pooled(
+        config: PageStoreConfig,
+        application_name: &str,
+        pool_size: usize,
+    ) -> Result<Self> {
+        let client = YsqlClient::from_yb_config_pooled(&config.yb, application_name, pool_size)
             .await
             .context("opening PageStore connection")?;
         Ok(Self {

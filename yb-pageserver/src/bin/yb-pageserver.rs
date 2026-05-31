@@ -896,12 +896,13 @@ fn create_feature_resolver(
 }
 
 /// Open a `PageStore` against the configured YB cluster with the
-/// given Postgres `application_name`. Returns `None` if the
-/// pageserver isn't configured for yb-pageserver mode (no
-/// `YbStore` remote_storage backend).
+/// given Postgres `application_name` and `pool_size` independent YSQL
+/// connections. Returns `None` if the pageserver isn't configured for
+/// yb-pageserver mode (no `YbStore` remote_storage backend).
 async fn create_page_store_with_app_name(
     conf: &'static PageServerConf,
     application_name: &str,
+    pool_size: usize,
 ) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
     use remote_storage::RemoteStorageKind;
     let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
@@ -912,7 +913,12 @@ async fn create_page_store_with_app_name(
         _ => return Ok(None),
     };
     let ps_cfg = yb_pageserver::page_store::PageStoreConfig::new(yb_cfg);
-    let store = yb_pageserver::page_store::PageStore::connect(ps_cfg, application_name).await?;
+    let store = yb_pageserver::page_store::PageStore::connect_pooled(
+        ps_cfg,
+        application_name,
+        pool_size,
+    )
+    .await?;
     Ok(Some(Arc::new(store)))
 }
 
@@ -920,25 +926,46 @@ async fn create_page_store_with_app_name(
 /// (`PageWriter::scan_range`, `read_chain`). Ensures the YB schema
 /// exists — we hit it once at startup before the other connection
 /// opens, so this one carries the DDL.
+///
+/// Pool size 4: compute-side Postgres backends issue prefetch reads in
+/// parallel (`effective_io_concurrency` + the PG17 read_stream API +
+/// pg_neon's prefetch ring), and the pageserver page_service handler
+/// dispatches each one as a concurrent gRPC stream. A single YSQL
+/// connection would serialise them on the YB side (Postgres processes
+/// one statement per backend at a time). With 4 conns + the
+/// prepared-statement cache + the LATERAL→GROUP BY rewrite, four
+/// prefetches overlap on YB instead of queueing.
 async fn create_compute_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
-    let Some(store) = create_page_store_with_app_name(conf, "yb-pageserver:compute_reads").await?
+    const COMPUTE_POOL_SIZE: usize = 4;
+    let Some(store) =
+        create_page_store_with_app_name(conf, "yb-pageserver:compute_reads", COMPUTE_POOL_SIZE)
+            .await?
     else {
         return Ok(None);
     };
     store.ensure_schema().await?;
-    info!("Compute-reads PageStore connected; yb-pageserver mode enabled");
+    info!(
+        pool_size = COMPUTE_POOL_SIZE,
+        "Compute-reads PageStore connected; yb-pageserver mode enabled"
+    );
     Ok(Some(store))
 }
 
 /// Internal-traffic `PageStore`: walreceiver `PageWriter::flush` +
 /// materialiser `read_chain_durable` cache miss + materialiser
 /// `put_pages`. Schema already exists by the time this runs.
+///
+/// Single connection: the walreceiver feeds one stream of WAL,
+/// `PageWriter::flush` parallelises within its own chunked INSERT
+/// (`buffer_unordered(4)`) on this conn via tokio_postgres pipelining,
+/// and the materialiser drains its queue serially. No benefit from
+/// extra connections.
 async fn create_internal_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
-    let Some(store) = create_page_store_with_app_name(conf, "yb-pageserver:internal").await?
+    let Some(store) = create_page_store_with_app_name(conf, "yb-pageserver:internal", 1).await?
     else {
         return Ok(None);
     };
