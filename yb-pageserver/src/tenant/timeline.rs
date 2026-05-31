@@ -6,7 +6,6 @@ mod init;
 pub mod layer_manager;
 pub(crate) mod logical_size;
 pub mod offload;
-pub mod span;
 pub mod uninit;
 mod walreceiver;
 

@@ -4,8 +4,6 @@ use std::ops::Range;
 use pageserver_api::key::Key;
 use pageserver_api::shard::TenantShardId;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use utils::id::TenantId;
 use utils::id::TimelineId;
 use utils::lsn::Lsn;
 
@@ -95,18 +93,6 @@ impl PersistentLayerDesc {
 
     pub fn short_id(&self) -> impl Display {
         self.layer_name()
-    }
-
-    #[cfg(test)]
-    pub fn new_test(key_range: Range<Key>, lsn_range: Range<Lsn>, is_delta: bool) -> Self {
-        Self {
-            tenant_shard_id: TenantShardId::unsharded(TenantId::generate()),
-            timeline_id: TimelineId::generate(),
-            key_range,
-            lsn_range,
-            is_delta,
-            file_size: 0,
-        }
     }
 
     pub fn new_img(
