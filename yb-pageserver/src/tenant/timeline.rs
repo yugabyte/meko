@@ -83,7 +83,7 @@ use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::storage_layer::{
-    IoConcurrency, Layer, LayerAccessStatsReset, LayerName,
+    IoConcurrency, LayerAccessStatsReset, LayerName,
     ValueReconstructState, ValuesReconstructState,
 };
 use crate::tenant::tasks::BackgroundLoopKind;
