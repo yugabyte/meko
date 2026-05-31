@@ -69,10 +69,30 @@ pub struct MaterializeJob {
 /// counter logic in `PageWriter::put`; mostly useful for tests and the
 /// upstream-style PhysicalStorage-only mode that doesn't need a
 /// materialiser.
+///
+/// Materialisation fires on **whichever threshold lands first**:
+/// `count_limit` deltas accumulated since the last anchor, OR
+/// `payload_bytes_limit` of combined delta payload bytes accumulated
+/// since the last anchor. Reasoning: small WAL records (single-bit
+/// `ClearVisibilityMapFlags`, 1-byte payloads) accumulate slowly
+/// and waste materialiser cycles when count-only; large deltas
+/// (near-full pages) leave reads doing many records' worth of
+/// walredo before the count trigger fires. Either zero disables the
+/// corresponding trigger (both zero → materialiser fully disabled,
+/// equivalent to `image_chain_limit = 0`).
 #[derive(Clone)]
 pub struct MaterializerHandle {
-    pub limit: u32,
+    pub count_limit: u32,
+    pub payload_bytes_limit: u32,
     pub tx: tokio::sync::mpsc::Sender<MaterializeJob>,
+}
+
+/// Running per-key delta tally — both count and payload bytes since
+/// the last anchor. See `WriterState::delta_counts`.
+#[derive(Clone, Copy, Default)]
+struct DeltaTally {
+    count: u32,
+    payload_bytes: u32,
 }
 
 /// Top-level write buffer + flusher for one timeline.
@@ -136,13 +156,13 @@ struct WriterState {
     bytes_in_aux_buffers: usize,
     opened_at: Option<Instant>,
     rows_written: u64,
-    /// Per-key count of consecutive non-image, non-`will_init` deltas
-    /// seen by `put` since the last image / will_init for that key.
-    /// Reset to zero (entry removed) when the count crosses
-    /// `materializer.limit` and we dispatch a job. Lives under the
-    /// same RwLock as the buffers so the threshold check is atomic
-    /// with the row push.
-    delta_counts: std::collections::HashMap<bytes::Bytes, u32>,
+    /// Per-key tally of consecutive non-image, non-`will_init` deltas
+    /// since the last anchor for that key. Both fields advance on
+    /// each non-anchor `put`; either hitting its
+    /// `MaterializerHandle` threshold dispatches a job and removes
+    /// the entry. Lives under the same RwLock as the buffers so the
+    /// threshold check is atomic with the row push.
+    delta_counts: std::collections::HashMap<bytes::Bytes, DeltaTally>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -278,7 +298,10 @@ impl PageWriter {
         // Collect materialisation jobs while holding the lock; dispatch
         // them after release so the tx.try_send (channel-full case)
         // can't block another writer waiting on `state`.
-        let limit = self.materializer.as_ref().map(|m| m.limit);
+        let trigger = self
+            .materializer
+            .as_ref()
+            .map(|m| (m.count_limit, m.payload_bytes_limit));
         let mut to_materialize: Vec<MaterializeJob> = Vec::new();
         {
             let mut s = self.state.write().await;
@@ -289,17 +312,24 @@ impl PageWriter {
                 let key = row.key.clone();
                 let lsn = row.lsn;
                 let resets_chain = row.is_image || row.will_init;
+                let payload_len = row.payload.len() as u32;
                 s.pages.push(row);
                 s.rows_written += 1;
 
                 if resets_chain {
                     s.delta_counts.remove(&key);
-                } else if let Some(limit) = limit
-                    && limit > 0
+                } else if let Some((count_limit, bytes_limit)) = trigger
+                    && (count_limit > 0 || bytes_limit > 0)
                 {
-                    let count = s.delta_counts.entry(key.clone()).or_insert(0);
-                    *count += 1;
-                    if *count >= limit {
+                    let tally = s.delta_counts.entry(key.clone()).or_default();
+                    tally.count = tally.count.saturating_add(1);
+                    tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
+                    // Whichever threshold lands first dispatches. A
+                    // disabled threshold (zero) is treated as "infinity"
+                    // so it never alone fires.
+                    let count_hit = count_limit > 0 && tally.count >= count_limit;
+                    let bytes_hit = bytes_limit > 0 && tally.payload_bytes >= bytes_limit;
+                    if count_hit || bytes_hit {
                         s.delta_counts.remove(&key);
                         to_materialize.push(MaterializeJob {
                             key,
@@ -1155,7 +1185,13 @@ mod tests {
         let tl = TimelineId::generate();
         let mut w = PageWriter::new(t, tl, store.clone(), store, policy, 64 * 1024 * 1024);
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        w.set_materializer(MaterializerHandle { limit, tx });
+        // Tests pass a count limit; payload-bytes limit disabled
+        // (0) so tests stay deterministic on count-based thresholds.
+        w.set_materializer(MaterializerHandle {
+            count_limit: limit,
+            payload_bytes_limit: 0,
+            tx,
+        });
         (w, t, tl, rx)
     }
 

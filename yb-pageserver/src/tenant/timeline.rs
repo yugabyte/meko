@@ -3348,14 +3348,18 @@ impl Timeline {
                     // on `&mut writer`. The spawn happens AFTER the
                     // Arc exists because the materialiser needs to
                     // hold its own Arc<PageWriter>.
-                    let mat_channel = if pw_cfg.image_chain_limit > 0
-                        && walredo_mgr.is_some()
-                    {
+                    // Either-threshold trigger: count OR payload bytes,
+                    // whichever lands first. Both zero disables.
+                    let mat_enabled = (pw_cfg.image_chain_limit > 0
+                        || pw_cfg.image_chain_payload_bytes_limit > 0)
+                        && walredo_mgr.is_some();
+                    let mat_channel = if mat_enabled {
                         let (tx, rx) = tokio::sync::mpsc::channel(
                             pw_cfg.materialize_queue_capacity.max(1),
                         );
                         writer.set_materializer(crate::page_writer::MaterializerHandle {
-                            limit: pw_cfg.image_chain_limit,
+                            count_limit: pw_cfg.image_chain_limit,
+                            payload_bytes_limit: pw_cfg.image_chain_payload_bytes_limit,
                             tx,
                         });
                         Some(rx)

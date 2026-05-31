@@ -318,9 +318,19 @@ pub struct YbPageWriterConfig {
     /// triggering LSN and INSERTs a fresh `is_image=TRUE, will_init=TRUE`
     /// row, so subsequent reads land on the fast-path CTE seek instead
     /// of walking the chain back to the latest `will_init` delta.
-    /// Set to 0 to disable the materialiser entirely (slow-path-only
-    /// reads). Default 10.
+    /// Set to 0 to disable this count-based trigger (the
+    /// `image_chain_payload_bytes_limit` trigger remains in effect).
+    /// Setting both to 0 disables the materialiser entirely. Default 20.
     pub image_chain_limit: u32,
+
+    /// Materialiser trigger by combined-delta-payload size: when the
+    /// sum of non-anchor delta payloads since the last anchor for a
+    /// key exceeds this many bytes, dispatch the materialiser even
+    /// if `image_chain_limit` hasn't been reached. Catches the case
+    /// of a few large deltas (heap rewrites, near-full pages) that
+    /// already represent a lot of walredo work to apply on read.
+    /// Set to 0 to disable. Default 4 KiB.
+    pub image_chain_payload_bytes_limit: u32,
 
     /// Bound on in-flight materialisation jobs. The trigger uses
     /// `try_send` and silently drops on overflow — the chain stays long
@@ -341,7 +351,8 @@ impl Default for YbPageWriterConfig {
             flush_interval: Duration::from_secs(5),
             flush_size_bytes: 25 * 1024 * 1024,
             flush_poll_interval: Duration::from_millis(500),
-            image_chain_limit: 10,
+            image_chain_limit: 20,
+            image_chain_payload_bytes_limit: 4096,
             materialize_queue_capacity: 1024,
             read_cache_bytes: 1024 * 1024 * 1024,
         }
