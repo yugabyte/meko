@@ -6590,10 +6590,6 @@ impl From<super::storage_layer::layer::DownloadError> for CompactionError {
             | super::storage_layer::layer::DownloadError::PreStatFailed(_) => {
                 CompactionError::Other(anyhow::anyhow!(e))
             }
-            #[cfg(test)]
-            super::storage_layer::layer::DownloadError::Failpoint(_) => {
-                CompactionError::Other(anyhow::anyhow!(e))
-            }
         }
     }
 }

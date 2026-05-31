@@ -1514,10 +1514,6 @@ async fn timeline_layer_scan_disposable_keys(
             | tenant::storage_layer::layer::DownloadError::PreStatFailed(_) => {
                 ApiError::InternalServerError(err.into())
             }
-            #[cfg(test)]
-            tenant::storage_layer::layer::DownloadError::Failpoint(_) => {
-                ApiError::InternalServerError(err.into())
-            }
         })?;
 
     let keys = resident_layer

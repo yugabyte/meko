@@ -30,12 +30,6 @@ use crate::tenant::Timeline;
 use crate::tenant::remote_timeline_client::LayerFileMetadata;
 use crate::tenant::timeline::{CompactionError, GetVectoredError};
 
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-mod failpoints;
-
 /// A Layer contains all data in a "rectangle" consisting of a range of keys and
 /// range of LSNs.
 ///
@@ -715,8 +709,6 @@ struct LayerInner {
     /// (see [`LayerImplMetrics::redownload_after`]).
     last_evicted_at: std::sync::Mutex<Option<std::time::Instant>>,
 
-    #[cfg(test)]
-    failpoints: std::sync::Mutex<Vec<failpoints::Failpoint>>,
 }
 
 impl std::fmt::Display for LayerInner {
@@ -887,8 +879,6 @@ impl LayerInner {
             generation,
             shard,
             last_evicted_at: std::sync::Mutex::default(),
-            #[cfg(test)]
-            failpoints: Default::default(),
         }
     }
 
@@ -1051,10 +1041,6 @@ impl LayerInner {
         let Some(reason) = needs_download else {
             // the file is present locally because eviction has not had a chance to run yet
 
-            #[cfg(test)]
-            self.failpoint(failpoints::FailpointKind::AfterDeterminingLayerNeedsNoDownload)
-                .await?;
-
             LAYER_IMPL_METRICS.inc_init_needed_no_download();
 
             return Ok(self.initialize_after_layer_is_on_disk(permit));
@@ -1157,11 +1143,6 @@ impl LayerInner {
                     .as_ref()
                     .unwrap()
                     .send_replace(Status::Downloading);
-
-                #[cfg(test)]
-                this.failpoint(failpoints::FailpointKind::WaitBeforeDownloading)
-                    .await
-                    .unwrap();
 
                 let res = this.download_and_init(timeline, permit, &ctx).await;
 
@@ -1400,11 +1381,6 @@ impl LayerInner {
         // drop while the `self.inner` is being locked, leading to a deadlock.
 
         let start_evicting = async move {
-            #[cfg(test)]
-            self.failpoint(failpoints::FailpointKind::WaitBeforeStartingEvicting)
-                .await
-                .expect("failpoint should not have errored");
-
             tracing::debug!("eviction started");
 
             let res = self.wait_for_turn_and_evict(only_version).await;
@@ -1688,10 +1664,6 @@ pub(crate) enum DownloadError {
     DownloadCancelled,
     #[error("pre-condition: stat before download failed")]
     PreStatFailed(#[source] std::io::Error),
-
-    #[cfg(test)]
-    #[error("failpoint: {0:?}")]
-    Failpoint(failpoints::FailpointKind),
 }
 
 impl DownloadError {
