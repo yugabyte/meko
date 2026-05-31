@@ -1870,35 +1870,6 @@ impl ResidentLayer {
         self.into()
     }
 
-    /// Read all they keys in this layer which match the ShardIdentity, and write them all to
-    /// the provided writer.  Return the number of keys written.
-    #[tracing::instrument(level = tracing::Level::DEBUG, skip_all, fields(layer=%self))]
-    pub(crate) async fn filter(
-        &self,
-        shard_identity: &ShardIdentity,
-        writer: &mut ImageLayerWriter,
-        ctx: &RequestContext,
-    ) -> Result<usize, CompactionError> {
-        use LayerKind::*;
-
-        match self
-            .downloaded
-            .get(&self.owner.0, ctx)
-            .await
-            .map_err(CompactionError::Other)?
-        {
-            Delta(_) => {
-                return Err(CompactionError::Other(anyhow::anyhow!(format!(
-                    "cannot filter() on a delta layer {self}"
-                ))));
-            }
-            Image(i) => i
-                .filter(shard_identity, writer, ctx)
-                .await
-                .map_err(CompactionError::Other),
-        }
-    }
-
     /// Returns the amount of keys and values written to the writer.
     pub(crate) async fn copy_delta_prefix(
         &self,

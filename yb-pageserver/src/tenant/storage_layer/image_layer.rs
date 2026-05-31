@@ -377,14 +377,6 @@ impl ImageLayer {
 }
 
 impl ImageLayerInner {
-    pub(crate) fn key_range(&self) -> &Range<Key> {
-        &self.key_range
-    }
-
-    pub(crate) fn lsn(&self) -> Lsn {
-        self.lsn
-    }
-
     pub(super) async fn load(
         path: &Utf8Path,
         lsn: Lsn,
@@ -528,51 +520,6 @@ impl ImageLayerInner {
         Ok(planner.finish())
     }
 
-    /// Given a key range, select the parts of that range that should be retained by the ShardIdentity,
-    /// then execute vectored GET operations, passing the results of all read keys into the writer.
-    pub(super) async fn filter(
-        &self,
-        shard_identity: &ShardIdentity,
-        writer: &mut ImageLayerWriter,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<usize> {
-        // Fragment the range into the regions owned by this ShardIdentity
-        let plan = self
-            .plan_reads(
-                KeySpace {
-                    // If asked for the total key space, plan_reads will give us all the keys in the layer
-                    ranges: vec![Key::MIN..Key::MAX],
-                },
-                Some(shard_identity),
-                ctx,
-            )
-            .await?;
-
-        let vectored_blob_reader = VectoredBlobReader::new(&self.file);
-        let mut key_count = 0;
-        for read in plan.into_iter() {
-            let buf_size = read.size();
-
-            let buf = IoBufferMut::with_capacity(buf_size);
-            let blobs_buf = vectored_blob_reader.read_blobs(&read, buf, ctx).await?;
-
-            let view = BufView::new_slice(&blobs_buf.buf);
-
-            for meta in blobs_buf.blobs.iter() {
-                // Just read the raw header+data and pass it through to the target layer, without
-                // decoding and recompressing it.
-                let raw = meta.raw_with_header(&view);
-                key_count += 1;
-                writer
-                    .put_image_raw(meta.meta.key, raw.into_bytes(), ctx)
-                    .await
-                    .context(format!("Storing key {}", meta.meta.key))?;
-            }
-        }
-
-        Ok(key_count)
-    }
-
     async fn do_reads_and_update_state(
         &self,
         this: ResidentLayer,
@@ -670,25 +617,6 @@ impl ImageLayerInner {
                     drop(read_extend_residency);
                 })
                 .await;
-        }
-    }
-
-    pub(crate) fn iter_with_options<'a>(
-        &'a self,
-        ctx: &'a RequestContext,
-        max_read_size: u64,
-        max_batch_size: usize,
-    ) -> ImageLayerIterator<'a> {
-        let block_reader = FileBlockReader::new(&self.file, self.file_id);
-        let tree_reader =
-            DiskBtreeReader::new(self.index_start_blk, self.index_root_blk, block_reader);
-        ImageLayerIterator {
-            image_layer: self,
-            ctx,
-            index_iter: tree_reader.iter(&[0; KEY_SIZE], ctx),
-            key_values_batch: VecDeque::new(),
-            is_end: false,
-            planner: StreamingVectoredReadPlanner::new(max_read_size, max_batch_size),
         }
     }
 
