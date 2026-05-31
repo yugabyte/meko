@@ -863,8 +863,7 @@ pub(crate) enum WaitLsnTimeout {
     Default,
 }
 
-pub(crate) enum WaitLsnWaiter<'a> {
-    Timeline(&'a Timeline),
+pub(crate) enum WaitLsnWaiter {
     Tenant,
     PageService,
     HttpEndpoint,
@@ -1371,7 +1370,7 @@ impl Timeline {
     pub(crate) async fn wait_lsn(
         &self,
         lsn: Lsn,
-        who_is_waiting: WaitLsnWaiter<'_>,
+        who_is_waiting: WaitLsnWaiter,
         timeout: WaitLsnTimeout,
         ctx: &RequestContext, /* Prepare for use by cancellation */
     ) -> Result<(), WaitLsnError> {
@@ -1388,9 +1387,6 @@ impl Timeline {
                 | TaskKind::WalReceiverConnectionHandler
                 | TaskKind::WalReceiverConnectionPoller => {
                     let is_myself = match who_is_waiting {
-                        WaitLsnWaiter::Timeline(waiter) => {
-                            Weak::ptr_eq(&waiter.myself, &self.myself)
-                        }
                         WaitLsnWaiter::Tenant
                         | WaitLsnWaiter::PageService
                         | WaitLsnWaiter::HttpEndpoint
