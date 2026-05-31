@@ -33,7 +33,6 @@ use crate::context::{PageContentKind, RequestContext, RequestContextBuilder};
 // avoid binding to Write (conflicts with std::io::Write)
 // while being able to use std::fmt::Write's methods
 use crate::metrics::TIMELINE_EPHEMERAL_BYTES;
-use crate::tenant::ephemeral_file::EphemeralFile;
 use crate::tenant::timeline::GetVectoredError;
 use crate::virtual_file::owned_buffers_io::io_buf_ext::IoBufExt;
 use crate::{l0_flush, page_cache};
@@ -74,9 +73,6 @@ pub struct InMemoryLayer {
     /// 1. It is safe to read and release [`InMemoryLayer::index`] before reading from [`InMemoryLayer::file`].
     /// 2. It is safe to write to [`InMemoryLayer::file`] before locking and updating [`InMemoryLayer::index`].
     index: RwLock<BTreeMap<CompactKey, VecMap<Lsn, IndexEntry>>>,
-
-    /// Wrapper for the actual on-disk file. Uses interior mutability for concurrent reads/writes.
-    file: EphemeralFile,
 
     estimated_in_mem_size: AtomicU64,
 }

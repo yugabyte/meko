@@ -112,7 +112,6 @@ pub mod block_io;
 pub mod vectored_blob_io;
 
 pub mod disk_btree;
-pub(crate) mod ephemeral_file;
 pub mod layer_map;
 
 pub mod metadata;
