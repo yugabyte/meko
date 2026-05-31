@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/yugabytedb-light-logo.png" alt="yugabyteDB Light" width="600">
+</p>
+
 # ybLight
 
 **ybLight** is a serverless Postgres-compatible storage system that runs

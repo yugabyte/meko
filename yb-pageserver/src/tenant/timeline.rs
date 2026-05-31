@@ -1360,7 +1360,7 @@ impl Timeline {
     pub(super) async fn get_vectored_impl(
         &self,
         query: VersionedKeySpaceQuery,
-        reconstruct_state: &mut ValuesReconstructState,
+        _reconstruct_state: &mut ValuesReconstructState,
         ctx: &RequestContext,
     ) -> Result<BTreeMap<Key, Result<Bytes, PageReconstructError>>, GetVectoredError> {
         if query.is_empty() {
@@ -1373,196 +1373,25 @@ impl Timeline {
         //   - rel-page  → pageserver.pages    (chain + walredo)
         //   - slru-block → pageserver.slru_pages (chain + walredo)
         //   - else      → pageserver.meta     (single payload, no walredo)
-        let ranges = &query.total_keyspace().ranges;
-        let row_store_eligible = self.page_writer.is_some() && !ranges.is_empty();
-        if row_store_eligible && let Some(page_writer) = self.page_writer.clone() {
-            let redo_attempt_type = if ctx.task_kind() == TaskKind::Compaction {
-                RedoAttemptType::LegacyCompaction
-            } else {
-                RedoAttemptType::ReadPage
-            };
-            return self
-                .get_vectored_via_page_writer(page_writer, query, redo_attempt_type, ctx)
-                .await;
-        }
-
-        let read_path = if self.conf.enable_read_path_debugging || ctx.read_path_debug() {
-            Some(ReadPath::new(
-                query.total_keyspace(),
-                query.high_watermark_lsn()?,
-            ))
-        } else {
-            None
+        //
+        // Production yb-pageserver always has `page_writer = Some(_)`;
+        // the legacy LayerMap traversal that used to fall through here
+        // is gone (Phase 4d). If page_writer is None at this point the
+        // tenant is misconfigured — surface that as a clear error
+        // rather than a panic from `expect`.
+        let Some(page_writer) = self.page_writer.clone() else {
+            return Err(GetVectoredError::Other(anyhow::anyhow!(
+                "Timeline has no PageWriter — yb-pageserver mode requires both \
+                 compute_page_store and internal_page_store to be configured"
+            )));
         };
-
-        reconstruct_state.read_path = read_path;
-
         let redo_attempt_type = if ctx.task_kind() == TaskKind::Compaction {
             RedoAttemptType::LegacyCompaction
         } else {
             RedoAttemptType::ReadPage
         };
-
-        let traversal_res: Result<(), _> = {
-            let ctx = RequestContextBuilder::from(ctx)
-                .perf_span(|crnt_perf_span| {
-                    info_span!(
-                        target: PERF_TRACE_TARGET,
-                        parent: crnt_perf_span,
-                        "PLAN_IO",
-                    )
-                })
-                .attached_child();
-
-            self.get_vectored_reconstruct_data(query.clone(), reconstruct_state, &ctx)
-                .maybe_perf_instrument(&ctx, |crnt_perf_span| crnt_perf_span.clone())
-                .await
-        };
-
-        if let Err(err) = traversal_res {
-            // Wait for all the spawned IOs to complete.
-            // See comments on `spawn_io` inside `storage_layer` for more details.
-            let mut collect_futs = std::mem::take(&mut reconstruct_state.keys)
-                .into_values()
-                .map(|state| state.collect_pending_ios())
-                .collect::<FuturesUnordered<_>>();
-            while collect_futs.next().await.is_some() {}
-
-            // Enrich the missing key error with the original query.
-            if let GetVectoredError::MissingKey(mut missing_err) = err {
-                missing_err.enrich(query.clone());
-                return Err(GetVectoredError::MissingKey(missing_err));
-            }
-
-            return Err(err);
-        };
-
-        let layers_visited = reconstruct_state.get_layers_visited();
-
-        let ctx = RequestContextBuilder::from(ctx)
-            .perf_span(|crnt_perf_span| {
-                info_span!(
-                    target: PERF_TRACE_TARGET,
-                    parent: crnt_perf_span,
-                    "RECONSTRUCT",
-                )
-            })
-            .attached_child();
-
-        let futs = FuturesUnordered::new();
-        for (key, state) in std::mem::take(&mut reconstruct_state.keys) {
-            let req_lsn_for_key = query.map_key_to_lsn(&key);
-
-            futs.push({
-                let walredo_self = self.myself.upgrade().expect("&self method holds the arc");
-                let ctx = RequestContextBuilder::from(&ctx)
-                    .perf_span(|crnt_perf_span| {
-                        info_span!(
-                            target: PERF_TRACE_TARGET,
-                            parent: crnt_perf_span,
-                            "RECONSTRUCT_KEY",
-                            key = %key,
-                        )
-                    })
-                    .attached_child();
-
-                async move {
-                    assert_eq!(state.situation, ValueReconstructSituation::Complete);
-
-                    let res = state
-                        .collect_pending_ios()
-                        .maybe_perf_instrument(&ctx, |crnt_perf_span| {
-                            info_span!(
-                                target: PERF_TRACE_TARGET,
-                                parent: crnt_perf_span,
-                                "WAIT_FOR_IO_COMPLETIONS",
-                            )
-                        })
-                        .await;
-
-                    let converted = match res {
-                        Ok(ok) => ok,
-                        Err(err) => {
-                            return (key, Err(err));
-                        }
-                    };
-                    DELTAS_PER_READ_GLOBAL.observe(converted.num_deltas() as f64);
-
-                    // The walredo module expects the records to be descending in terms of Lsn.
-                    // And we submit the IOs in that order, so, there shuold be no need to sort here.
-                    debug_assert!(
-                        converted
-                            .records
-                            .is_sorted_by_key(|(lsn, _)| std::cmp::Reverse(*lsn)),
-                        "{converted:?}"
-                    );
-
-                    let walredo_deltas = converted.num_deltas();
-                    let walredo_res = walredo_self
-                        .reconstruct_value(key, req_lsn_for_key, converted, redo_attempt_type)
-                        .maybe_perf_instrument(&ctx, |crnt_perf_span| {
-                            info_span!(
-                                target: PERF_TRACE_TARGET,
-                                parent: crnt_perf_span,
-                                "WALREDO",
-                                deltas = %walredo_deltas,
-                            )
-                        })
-                        .await;
-
-                    (key, walredo_res)
-                }
-            });
-        }
-
-        let results = futs
-            .collect::<BTreeMap<Key, Result<Bytes, PageReconstructError>>>()
-            .maybe_perf_instrument(&ctx, |crnt_perf_span| crnt_perf_span.clone())
-            .await;
-
-        // For aux file keys (v1 or v2) the vectored read path does not return an error
-        // when they're missing. Instead they are omitted from the resulting btree
-        // (this is a requirement, not a bug). Skip updating the metric in these cases
-        // to avoid infinite results.
-        if !results.is_empty() {
-            if layers_visited >= Self::LAYERS_VISITED_WARN_THRESHOLD {
-                let total_keyspace = query.total_keyspace();
-                let max_request_lsn = query.high_watermark_lsn().expect("Validated previously");
-
-                static LOG_PACER: Lazy<Mutex<RateLimit>> =
-                    Lazy::new(|| Mutex::new(RateLimit::new(Duration::from_secs(60))));
-                LOG_PACER.lock().unwrap().call(|| {
-                    let num_keys = total_keyspace.total_raw_size();
-                    let num_pages = results.len();
-                    tracing::info!(
-                      shard_id = %self.tenant_shard_id.shard_slug(),
-                      lsn = %max_request_lsn,
-                      "Vectored read for {total_keyspace} visited {layers_visited} layers. Returned {num_pages}/{num_keys} pages.",
-                    );
-                });
-            }
-
-            // Records the number of layers visited in a few different ways:
-            //
-            // * LAYERS_PER_READ: all layers count towards every read in the batch, because each
-            //   layer directly affects its observed latency.
-            //
-            // * LAYERS_PER_READ_BATCH: all layers count towards each batch, to get the per-batch
-            //   layer visits and access cost.
-            //
-            // * LAYERS_PER_READ_AMORTIZED: the average layer count per read, to get the amortized
-            //   read amplification after batching.
-            let layers_visited = layers_visited as f64;
-            let avg_layers_visited = layers_visited / results.len() as f64;
-            LAYERS_PER_READ_BATCH_GLOBAL.observe(layers_visited);
-            for _ in &results {
-                self.metrics.layers_per_read.observe(layers_visited);
-                LAYERS_PER_READ_GLOBAL.observe(layers_visited);
-                LAYERS_PER_READ_AMORTIZED_GLOBAL.observe(avg_layers_visited);
-            }
-        }
-
-        Ok(results)
+        self.get_vectored_via_page_writer(page_writer, query, redo_attempt_type, ctx)
+            .await
     }
 
     /// yb-pageserver row-per-page read path. Replaces the LayerMap
