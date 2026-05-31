@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use bytes::Bytes;
 use enumset::EnumSet;
 use futures::future::join_all;
 use futures::{StreamExt, TryFutureExt};
@@ -47,7 +46,6 @@ use pageserver_api::shard::{ShardCount, TenantShardId};
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeTravelError};
 use scopeguard::defer;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tenant_size_model::svg::SvgBranchKind;
 use tenant_size_model::{SizeResult, StorageModel};
@@ -59,7 +57,6 @@ use utils::auth::SwappableJwtAuth;
 use utils::generation::Generation;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
-use wal_decoder::models::record::NeonWalRecord;
 
 use crate::config::PageServerConf;
 use crate::context;
@@ -79,7 +76,6 @@ use crate::tenant::remote_timeline_client::{
     download_index_part, download_tenant_manifest, list_remote_tenant_shards, list_remote_timelines,
 };
 use crate::tenant::size::ModelInputs;
-use crate::tenant::storage_layer::ValuesReconstructState;
 use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerName};
 use crate::tenant::timeline::offload::{OffloadError, offload_timeline};
 use crate::tenant::timeline::{
@@ -2392,87 +2388,6 @@ async fn deletion_queue_flush(
     }
 }
 
-/// Try if `GetPage@Lsn` is successful, useful for manual debugging.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct GetPageResponse {
-    pub page: Bytes,
-    pub layers_visited: u32,
-    pub delta_layers_visited: u32,
-    pub records: Vec<(Lsn, NeonWalRecord)>,
-    pub img: Option<(Lsn, Bytes)>,
-}
-
-async fn getpage_at_lsn_handler(
-    request: Request<Body>,
-    cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    getpage_at_lsn_handler_inner(false, request, cancel).await
-}
-
-async fn touchpage_at_lsn_handler(
-    request: Request<Body>,
-    cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    getpage_at_lsn_handler_inner(true, request, cancel).await
-}
-
-/// Try if `GetPage@Lsn` is successful, useful for manual debugging.
-async fn getpage_at_lsn_handler_inner(
-    touch: bool,
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    // Require pageserver admin permission for this API instead of only tenant-level token.
-    check_permission(&request, None)?;
-    let state = get_state(&request);
-
-    struct Key(pageserver_api::key::Key);
-
-    impl std::str::FromStr for Key {
-        type Err = anyhow::Error;
-
-        fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-            pageserver_api::key::Key::from_hex(s).map(Key)
-        }
-    }
-
-    let key: Key = parse_query_param(&request, "key")?
-        .ok_or_else(|| ApiError::BadRequest(anyhow!("missing 'key' query parameter")))?;
-    let lsn: Option<Lsn> = parse_query_param(&request, "lsn")?;
-
-    async {
-        let timeline = active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id).await?;
-        let ctx = RequestContextBuilder::new(TaskKind::MgmtRequest)
-            .download_behavior(DownloadBehavior::Download)
-            .scope(context::Scope::new_timeline(&timeline))
-            .read_path_debug(true)
-            .root();
-
-        // Use last_record_lsn if no lsn is provided
-        let lsn = lsn.unwrap_or_else(|| timeline.get_last_record_lsn());
-
-        if touch {
-            json_response(StatusCode::OK, ())
-        } else {
-            let mut reconstruct_state = ValuesReconstructState::new_with_debug(IoConcurrency::sequential());
-            let page = timeline.debug_get(key.0, lsn, &ctx, &mut reconstruct_state).await?;
-            let response = GetPageResponse {
-                page,
-                layers_visited: reconstruct_state.get_layers_visited(),
-                delta_layers_visited: reconstruct_state.get_delta_layers_visited(),
-                records: reconstruct_state.debug_state.records.clone(),
-                img: reconstruct_state.debug_state.img.clone(),
-            };
-
-            json_response(StatusCode::OK, response)
-        }
-    }
-    .instrument(info_span!("timeline_debug_get", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
-    .await
-}
-
 async fn timeline_collect_keyspace(
     request: Request<Body>,
     _cancel: CancellationToken,
@@ -3676,14 +3591,6 @@ pub fn make_router(
         .post("/v1/tracing/event", |r| {
             testing_api_handler("emit a tracing event", r, post_tracing_event_handler)
         })
-        .get(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/getpage",
-            |r|  testing_api_handler("getpage@lsn", r, getpage_at_lsn_handler),
-        )
-        .get(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/touchpage",
-            |r| api_handler(r, touchpage_at_lsn_handler),
-        )
         .get(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/keyspace",
             |r| api_handler(r, timeline_collect_keyspace),
