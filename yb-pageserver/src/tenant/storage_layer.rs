@@ -1,6 +1,5 @@
 //! Common traits and structs for layers
 
-pub mod batch_split_writer;
 pub mod delta_layer;
 pub mod errors;
 pub mod image_layer;
@@ -16,7 +15,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub use batch_split_writer::BatchLayerWriter;
 use bytes::Bytes;
 pub use delta_layer::{DeltaLayer, DeltaLayerWriter, ValueRef};
 use futures::StreamExt;
