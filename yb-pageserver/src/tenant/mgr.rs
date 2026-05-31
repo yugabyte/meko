@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +13,7 @@ use camino::{Utf8DirEntry, Utf8Path, Utf8PathBuf};
 use futures::StreamExt;
 use itertools::Itertools;
 use pageserver_api::key::Key;
-use pageserver_api::models::{DetachBehavior, LocationConfigMode};
+use pageserver_api::models::LocationConfigMode;
 use pageserver_api::shard::{
     ShardCount, ShardIdentity, ShardIndex, ShardNumber, ShardStripeSize, TenantShardId,
 };

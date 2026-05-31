@@ -30,7 +30,7 @@ use hyper::{Body, Request, Response, StatusCode, Uri, header};
 use metrics::launch_timestamp::LaunchTimestamp;
 use pageserver_api::models::virtual_file::IoMode;
 use pageserver_api::models::{
-    DetachBehavior, DownloadRemoteLayersTaskSpawnRequest, IngestAuxFilesRequest,
+    DownloadRemoteLayersTaskSpawnRequest, IngestAuxFilesRequest,
     ListAuxFilesRequest, LocationConfig, LocationConfigListResponse, LocationConfigMode, LsnLease,
     LsnLeaseRequest, OffloadedTimelineInfo, PageTraceEvent, ShardParameters, StatusResponse,
     TenantConfigPatchRequest, TenantConfigRequest, TenantDetails, TenantInfo,
