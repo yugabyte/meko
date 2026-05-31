@@ -7,7 +7,6 @@ pub(crate) mod logical_size;
 pub mod uninit;
 mod walreceiver;
 
-use enumset::EnumSet;
 use hashlink::LruCache;
 use std::array;
 use std::cmp::{max, min};
@@ -1779,7 +1778,7 @@ impl Timeline {
     pub(crate) async fn compact(
         self: &std::sync::Arc<Self>,
         _cancel: &CancellationToken,
-        _flags: EnumSet<CompactFlags>,
+        _flags: enumset::EnumSet<CompactFlags>,
         _ctx: &RequestContext,
     ) -> Result<(), anyhow::Error> {
         Ok(())

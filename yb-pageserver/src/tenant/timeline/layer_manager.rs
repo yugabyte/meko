@@ -10,7 +10,7 @@ use pageserver_api::shard::TenantShardId;
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use utils::id::TimelineId;
-use utils::lsn::{AtomicLsn, Lsn};
+use utils::lsn::Lsn;
 
 use super::TimelineWriterState;
 use crate::config::PageServerConf;
@@ -365,54 +365,6 @@ impl OpenLayerManager {
         Ok(layer)
     }
 
-    /// Tries to freeze an open layer and also manages clearing the TimelineWriterState.
-    ///
-    /// Returns true if anything was frozen.
-    pub(super) async fn try_freeze_in_memory_layer(
-        &mut self,
-        lsn: Lsn,
-        last_freeze_at: &AtomicLsn,
-        write_lock: &mut tokio::sync::MutexGuard<'_, Option<TimelineWriterState>>,
-        metrics: &TimelineMetrics,
-    ) -> bool {
-        let Lsn(last_record_lsn) = lsn;
-        let end_lsn = Lsn(last_record_lsn + 1);
-
-        let froze = if let Some(open_layer) = &self.layer_map.open_layer {
-            let open_layer_rc = Arc::clone(open_layer);
-            open_layer.freeze(end_lsn).await;
-
-            // Increment the frozen layer metrics. This is decremented in `finish_flush_l0_layer()`.
-            // TODO: It would be nicer to do this via `InMemoryLayer::drop()`, but it requires a
-            // reference to the timeline metrics. Other methods use a metrics borrow as well.
-            metrics.inc_frozen_layer(open_layer);
-
-            // The layer is no longer open, update the layer map to reflect this.
-            // We will replace it with on-disk historics below.
-            self.layer_map.frozen_layers.push_back(open_layer_rc);
-            self.layer_map.open_layer = None;
-            self.layer_map.next_open_layer_at = Some(end_lsn);
-
-            true
-        } else {
-            false
-        };
-
-        // Even if there was no layer to freeze, advance last_freeze_at to last_record_lsn+1: this
-        // accounts for regions in the LSN range where we might have ingested no data due to sharding.
-        last_freeze_at.store(end_lsn);
-
-        // the writer state must no longer have a reference to the frozen layer
-        let taken = write_lock.take();
-        assert_eq!(
-            froze,
-            taken.is_some(),
-            "should only had frozen a layer when TimelineWriterState existed"
-        );
-
-        froze
-    }
-
     /// Add image layers to the layer map, called from [`super::Timeline::create_image_layers`].
     pub(crate) fn track_new_image_layers(
         &mut self,
@@ -429,33 +381,6 @@ impl OpenLayerManager {
             metrics.record_new_file_metrics(layer.layer_desc().file_size);
         }
         updates.flush();
-    }
-
-    /// Flush a frozen layer and add the written delta layer to the layer map.
-    pub(crate) fn finish_flush_l0_layer(
-        &mut self,
-        delta_layer: Option<&ResidentLayer>,
-        frozen_layer_for_check: &Arc<InMemoryLayer>,
-        metrics: &TimelineMetrics,
-    ) {
-        let inmem = self
-            .layer_map
-            .frozen_layers
-            .pop_front()
-            .expect("there must be a inmem layer to flush");
-        metrics.dec_frozen_layer(&inmem);
-
-        // Only one task may call this function at a time (for this
-        // timeline). If two tasks tried to flush the same frozen
-        // layer to disk at the same time, that would not work.
-        assert_eq!(Arc::as_ptr(&inmem), Arc::as_ptr(frozen_layer_for_check));
-
-        if let Some(l) = delta_layer {
-            let mut updates = self.layer_map.batch_update();
-            Self::insert_historic_layer(l.as_ref().clone(), &mut updates, &mut self.layer_fmgr);
-            metrics.record_new_file_metrics(l.layer_desc().file_size);
-            updates.flush();
-        }
     }
 
     /// Called post-compaction when some previous generation image layers were trimmed.
