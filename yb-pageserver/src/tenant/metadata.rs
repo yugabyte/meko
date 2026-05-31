@@ -338,11 +338,6 @@ impl TimelineMetadata {
         Self::from_bytes(&bytes).unwrap()
     }
 
-    pub(crate) fn apply(&mut self, update: &MetadataUpdate) {
-        self.body.disk_consistent_lsn = update.disk_consistent_lsn;
-        self.body.prev_record_lsn = update.prev_record_lsn;
-        self.body.latest_gc_cutoff_lsn = update.latest_gc_cutoff_lsn;
-    }
 }
 
 pub(crate) mod modern_serde {
@@ -433,27 +428,6 @@ pub(crate) mod modern_serde {
         let wrapper_from_json = serde_json::value::from_value::<Wrapper>(serialized).unwrap();
 
         assert_eq!(wrapper_from_bytes.0, wrapper_from_json.0);
-    }
-}
-
-/// Parts of the metadata which are regularly modified.
-pub(crate) struct MetadataUpdate {
-    disk_consistent_lsn: Lsn,
-    prev_record_lsn: Option<Lsn>,
-    latest_gc_cutoff_lsn: Lsn,
-}
-
-impl MetadataUpdate {
-    pub(crate) fn new(
-        disk_consistent_lsn: Lsn,
-        prev_record_lsn: Option<Lsn>,
-        latest_gc_cutoff_lsn: Lsn,
-    ) -> Self {
-        Self {
-            disk_consistent_lsn,
-            prev_record_lsn,
-            latest_gc_cutoff_lsn,
-        }
     }
 }
 
