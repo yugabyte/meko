@@ -71,7 +71,6 @@ use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
 use super::remote_timeline_client::RemoteTimelineClient;
 use super::remote_timeline_client::index::GcCompactionState;
-use super::storage_layer::ReadableLayer;
 use super::upload_queue::NotInitialized;
 use super::{
     AttachedTenantConf, GcError, MaybeOffloaded,

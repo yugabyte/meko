@@ -751,62 +751,6 @@ pub enum ReadableLayerWeak {
     InMemoryLayer(InMemoryLayerDesc),
 }
 
-/// Layer wrapper for the read path. Note that it is valid
-/// to use these layers even after external operations have
-/// been performed on them (compaction, freeze, etc.).
-#[derive(Debug)]
-pub(crate) enum ReadableLayer {
-    PersistentLayer(Layer),
-    InMemoryLayer(Arc<InMemoryLayer>),
-}
-
-impl ReadableLayer {
-    pub(crate) async fn get_values_reconstruct_data(
-        &self,
-        keyspace: KeySpace,
-        lsn_range: Range<Lsn>,
-        reconstruct_state: &mut ValuesReconstructState,
-        ctx: &RequestContext,
-    ) -> Result<(), GetVectoredError> {
-        match self {
-            ReadableLayer::PersistentLayer(layer) => {
-                let ctx = RequestContextBuilder::from(ctx)
-                    .perf_span(|crnt_perf_span| {
-                        info_span!(
-                            target: PERF_TRACE_TARGET,
-                            parent: crnt_perf_span,
-                            "PLAN_LAYER",
-                            layer = %layer
-                        )
-                    })
-                    .attached_child();
-
-                layer
-                    .get_values_reconstruct_data(keyspace, lsn_range, reconstruct_state, &ctx)
-                    .maybe_perf_instrument(&ctx, |crnt_perf_span| crnt_perf_span.clone())
-                    .await
-            }
-            ReadableLayer::InMemoryLayer(layer) => {
-                let ctx = RequestContextBuilder::from(ctx)
-                    .perf_span(|crnt_perf_span| {
-                        info_span!(
-                            target: PERF_TRACE_TARGET,
-                            parent: crnt_perf_span,
-                            "PLAN_LAYER",
-                            layer = %layer
-                        )
-                    })
-                    .attached_child();
-
-                layer
-                    .get_values_reconstruct_data(keyspace, lsn_range, reconstruct_state, &ctx)
-                    .maybe_perf_instrument(&ctx, |crnt_perf_span| crnt_perf_span.clone())
-                    .await
-            }
-        }
-    }
-}
-
 /// Layers contain a hint indicating whether they are likely to be used for reads.
 ///
 /// This is a hint rather than an authoritative value, so that we do not have to update it synchronously
