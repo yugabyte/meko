@@ -277,36 +277,6 @@ impl OpenLayerManager {
     }
 
 
-    /// Called when garbage collect has selected the layers to be removed.
-    pub(crate) fn finish_gc_timeline(&mut self, gc_layers: &[Layer]) {
-        let mut updates = self.layer_map.batch_update();
-        for doomed_layer in gc_layers {
-            Self::delete_historic_layer(doomed_layer, &mut updates, &mut self.layer_fmgr);
-        }
-        updates.flush()
-    }
-
-
-    /// Removes the layer from local FS (if present) and from memory.
-    /// Remote storage is not affected by this operation.
-    fn delete_historic_layer(
-        // we cannot remove layers otherwise, since gc and compaction will race
-        layer: &Layer,
-        updates: &mut BatchedUpdates<'_>,
-        mapping: &mut LayerFileManager<Layer>,
-    ) {
-        let desc = layer.layer_desc();
-
-        // TODO Removing from the bottom of the layer map is expensive.
-        //      Maybe instead discard all layer map historic versions that
-        //      won't be needed for page reconstruction for this timeline,
-        //      and mark what we can't delete yet as deleted from the layer
-        //      map index without actually rebuilding the index.
-        updates.remove_historic(desc);
-        mapping.remove(layer);
-        layer.delete_on_drop();
-    }
-
 }
 
 pub(crate) struct LayerFileManager<T>(HashMap<PersistentLayerKey, T>);

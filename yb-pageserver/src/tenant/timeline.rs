@@ -1912,7 +1912,7 @@ impl Timeline {
         &self,
         _layer_file_name: &LayerName,
         _ctx: &RequestContext,
-    ) -> Result<Option<bool>, super::storage_layer::layer::DownloadError> {
+    ) -> anyhow::Result<Option<bool>> {
         // yb-mode: no layer files. The HTTP admin endpoint that calls
         // this is effectively a no-op; return None ("not found").
         Ok(None)
@@ -2901,21 +2901,6 @@ impl Timeline {
         }
     }
 
-    async fn find_layer(
-        &self,
-        layer_name: &LayerName,
-    ) -> Result<Option<Layer>, layer_manager::Shutdown> {
-        let guard = self
-            .layers
-            .read(LayerManagerLockHolder::GetLayerMapInfo)
-            .await;
-        let layer = guard
-            .layer_map()?
-            .iter_historic_layers()
-            .find(|l| &l.layer_name() == layer_name)
-            .map(|found| guard.get_from_desc(&found));
-        Ok(layer)
-    }
 
     /// Returns true if the given lsn is or was an ancestor branchpoint.
     pub(crate) fn is_ancestor_lsn(&self, lsn: Lsn) -> bool {

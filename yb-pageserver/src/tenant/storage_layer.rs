@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 pub use inmemory_layer::InMemoryLayer;
-pub(crate) use layer::{EvictionError, Layer, ResidentLayer};
+pub(crate) use layer::{Layer, ResidentLayer};
 pub use layer_desc::{PersistentLayerDesc, PersistentLayerKey};
 pub use layer_name::{DeltaLayerName, ImageLayerName, LayerName};
 use pageserver_api::config::GetVectoredConcurrentIo;
