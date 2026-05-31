@@ -7,6 +7,7 @@ pub(crate) mod logical_size;
 pub mod uninit;
 mod walreceiver;
 
+use enumset::EnumSet;
 use hashlink::LruCache;
 use std::array;
 use std::cmp::{max, min};
@@ -21,21 +22,19 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use enumset::EnumSet;
 use fail::fail_point;
 use futures::{FutureExt, StreamExt};
 use handle::ShardTimelineId;
 use layer_manager::{
     LayerManagerLockHolder, LayerManagerWriteGuard, LockedLayerManager,
-    Shutdown,
 };
 
 use once_cell::sync::Lazy;
 use pageserver_api::config::tenant_conf_defaults::DEFAULT_PITR_INTERVAL;
 use pageserver_api::key::{
-    KEY_SIZE, Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX,
+    Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX,
 };
-use pageserver_api::keyspace::{KeySpaceAccum, KeySpaceRandomAccum, SparseKeyPartitioning};
+use pageserver_api::keyspace::{KeySpaceRandomAccum, SparseKeyPartitioning};
 use pageserver_api::models::{
     DetachBehavior, DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, LayerMapInfo, LsnLease, PageTraceEvent, RelSizeMigration,
     TimelineState,
@@ -48,7 +47,6 @@ use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE, to_pg_timestamp};
 use rand::Rng;
 use remote_storage::DownloadError;
 use storage_broker::BrokerClientChannel;
-use tokio::runtime::Handle;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{Notify, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -95,16 +93,15 @@ use crate::tenant::gc_result::GcResult;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::storage_layer::inmemory_layer::IndexEntry;
 use crate::tenant::storage_layer::{
-    BatchLayerWriter, EvictionError, ImageLayerName,
+    EvictionError,
     ImageLayerWriter, InMemoryLayer, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, ResidentLayer,
     ValueReconstructState, ValuesReconstructState,
 };
 use crate::tenant::tasks::BackgroundLoopKind;
 use crate::tenant::timeline::logical_size::CurrentLogicalSize;
-use crate::virtual_file::{MaybeFatalIo, VirtualFile};
 use crate::walingest::WalLagCooldown;
 use crate::walredo::RedoAttemptType;
-use crate::{ZERO_PAGE, task_mgr, walredo};
+use crate::{task_mgr, walredo};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum FlushLoopState {
