@@ -3890,13 +3890,6 @@ mod compaction_error {
                 CompactionError::Other(e) => e,
             }
         }
-        pub fn from_collect_keyspace(err: CollectKeySpaceError) -> Self {
-            if err.is_cancel() {
-                Self::new_cancelled()
-            } else {
-                Self::Other(err.into_anyhow())
-            }
-        }
     }
 }
 

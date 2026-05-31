@@ -915,10 +915,6 @@ struct TimelineInitAndSyncNeedsSpawnImportPgdata {
 enum CreateTimelineResult {
     Created(Arc<Timeline>),
     Idempotent(Arc<Timeline>),
-    /// IMPORTANT: This [`Arc<Timeline>`] object is not in [`TenantShard::timelines`] when
-    /// we return this result, nor will this concrete object ever be added there.
-    /// Cf method comment on [`TenantShard::create_timeline_import_pgdata`].
-    ImportSpawned(Arc<Timeline>),
 }
 
 impl CreateTimelineResult {
@@ -926,19 +922,18 @@ impl CreateTimelineResult {
         match self {
             Self::Created(_) => "Created",
             Self::Idempotent(_) => "Idempotent",
-            Self::ImportSpawned(_) => "ImportSpawned",
         }
     }
     fn timeline(&self) -> &Arc<Timeline> {
         match self {
-            Self::Created(t) | Self::Idempotent(t) | Self::ImportSpawned(t) => t,
+            Self::Created(t) | Self::Idempotent(t) => t,
         }
     }
     /// Unit test timelines aren't activated, test has to do it if it needs to.
     #[cfg(test)]
     fn into_timeline_for_test(self) -> Arc<Timeline> {
         match self {
-            Self::Created(t) | Self::Idempotent(t) | Self::ImportSpawned(t) => t,
+            Self::Created(t) | Self::Idempotent(t) => t,
         }
     }
 }
@@ -2610,20 +2605,10 @@ impl TenantShard {
                 );
                 timeline
             }
-            CreateTimelineResult::ImportSpawned(timeline) => {
-                info!(
-                    "import task spawned, timeline will become visible and activated once the import is done"
-                );
-                timeline
-            }
         };
 
         Ok(activated_timeline)
     }
-
-
-    /// Finalize the import of a timeline on this shard by marking it complete in
-    /// the index part. If the import task hasn't finished yet, returns an error.
 
     pub(crate) async fn delete_timeline(
         self: Arc<Self>,

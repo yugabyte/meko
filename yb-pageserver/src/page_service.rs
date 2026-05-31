@@ -580,12 +580,12 @@ impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrappe
 }
 
 /// Whether to hold the applied GC cutoff guard when processing GetPage requests.
-/// This is determined once at the start of pagestream subprotocol handling based on
-/// feature flags, configuration, and test conditions.
+/// In yb-mode this is always `Yes` (GC runs on YB rows, not on local layer
+/// files, so the original Neon escape valve doesn't apply). Kept as a
+/// single-variant enum so the parameter threading stays explicit.
 #[derive(Debug, Clone, Copy)]
 enum HoldAppliedGcCutoffGuard {
     Yes,
-    No,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -1213,13 +1213,8 @@ impl PageServerHandler {
                         return respond_error!(span, e);
                     }
                 };
-                let applied_gc_cutoff_guard = match hold_gc_cutoff_guard {
-                    HoldAppliedGcCutoffGuard::Yes => Some(applied_gc_cutoff_guard),
-                    HoldAppliedGcCutoffGuard::No => {
-                        drop(applied_gc_cutoff_guard);
-                        None
-                    }
-                };
+                let HoldAppliedGcCutoffGuard::Yes = hold_gc_cutoff_guard;
+                let applied_gc_cutoff_guard = Some(applied_gc_cutoff_guard);
 
                 let batch_wait_ctx = if ctx.has_perf_span() {
                     Some(
