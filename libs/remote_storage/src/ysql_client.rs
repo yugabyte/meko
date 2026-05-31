@@ -1,4 +1,5 @@
-//! Auto-reconnecting wrapper around `tokio_postgres::Client`.
+//! Auto-reconnecting, prepared-statement-caching wrapper around
+//! `tokio_postgres::Client`.
 //!
 //! Both the pageserver's `YbStore` and the safekeeper's `YbWalStorage`
 //! hold a long-lived Postgres-protocol connection to YugabyteDB. Each
@@ -18,26 +19,37 @@
 //!
 //!   1. Checks `is_closed()`; reconnects first if the previous client is
 //!      dead.
-//!   2. Runs the operation.
-//!   3. On error, checks `is_closed()` again; if true, forces a
-//!      reconnect and retries **once**. This catches the case where the
-//!      connection dropped mid-statement.
+//!   2. Looks up the SQL string in a per-connection prepared-statement
+//!      cache. On miss, `tokio_postgres::Client::prepare()` is invoked
+//!      once and the resulting `Statement` is cached. On hit, the
+//!      cached `Statement` is reused — YB skips the parse+plan round
+//!      trip on every subsequent call. Hot-path SQL (read_chain,
+//!      scan_range, the bulk INSERT shapes) thus pays parse+plan once
+//!      per connection lifetime, not per query.
+//!   3. Runs the operation against the cached `Statement`.
+//!   4. On error, checks `is_closed()` again; if true, forces a
+//!      reconnect (which **clears the cache** because Statements are
+//!      tied to a specific Client) and retries **once**.
+//!
+//! Cache keying: the raw SQL string. Each call site `format!()`s the
+//! schema name in, so the string varies by schema but is stable per
+//! call site; with one PageStore per process the cache converges to
+//! ~10-20 entries (one per distinct query shape). The bulk INSERT
+//! generates one cache entry per distinct chunk size (max ~3 in
+//! practice — full chunks plus a possibly-short tail).
 //!
 //! The mutex is held only across the cheap `is_closed()` check and the
 //! reconnect itself; the `Arc<Client>` is cloned out before the real DB
 //! operation runs, so multiple writers hit `tokio_postgres`'s internal
 //! statement multiplexing concurrently with no extra serialization.
-//!
-//! For streaming reads (`query_raw`) and other Client APIs not mirrored
-//! here, callers should use `current()` which returns the live
-//! `Arc<Client>` (reconnecting first if it's dead). The retry-once
-//! semantics don't compose cleanly with streams — caller handles those.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use tokio_postgres::Statement;
 use tokio_postgres::types::ToSql;
 
 use crate::config::YbStoreConfig;
@@ -51,7 +63,19 @@ type OpenFn = Arc<dyn Fn() -> OpenFut + Send + Sync>;
 
 pub struct YsqlClient {
     open: OpenFn,
-    current: tokio::sync::Mutex<Arc<tokio_postgres::Client>>,
+    state: tokio::sync::Mutex<State>,
+}
+
+/// The live connection and its per-connection prepared-statement cache.
+/// They live together because `Statement` values are scoped to the
+/// `Client` that produced them — when the client is replaced (forced
+/// reconnect), the cache must be cleared in the same critical section
+/// so concurrent callers never see a stale `Statement`.
+struct State {
+    client: Arc<tokio_postgres::Client>,
+    /// SQL string → cached prepared `Statement`. `Statement` is `Clone`
+    /// and internally `Arc` so the clone we hand out is cheap.
+    prepared: HashMap<String, Statement>,
 }
 
 impl YsqlClient {
@@ -95,34 +119,90 @@ impl YsqlClient {
     fn from_parts(open: OpenFn, client: tokio_postgres::Client) -> Self {
         Self {
             open,
-            current: tokio::sync::Mutex::new(Arc::new(client)),
+            state: tokio::sync::Mutex::new(State {
+                client: Arc::new(client),
+                prepared: HashMap::new(),
+            }),
         }
     }
 
     /// Return the live client, reconnecting first if `is_closed()` is
-    /// already true. Use for streaming reads (`query_raw`) or other
-    /// Client APIs not mirrored here. The next call after a failed
-    /// streaming op will pick up a fresh connection automatically.
+    /// already true. The reconnect clears the prepared-statement cache
+    /// because cached `Statement`s belong to the old (now-dead)
+    /// connection.
+    ///
+    /// Exposed publicly so callers can reach `query_raw` / `execute_raw`
+    /// and other `tokio_postgres::Client` APIs not mirrored here (used
+    /// by the YbStore blob path for COPY-shaped streaming reads).
+    /// **Bypasses** the prepared-statement cache — callers that want
+    /// caching should use the wrapped `execute` / `query` / `query_opt`
+    /// methods.
     pub async fn current(&self) -> Result<Arc<tokio_postgres::Client>> {
-        let mut guard = self.current.lock().await;
-        if guard.is_closed() {
+        let mut guard = self.state.lock().await;
+        if guard.client.is_closed() {
             tracing::info!("YsqlClient: previous client closed, reconnecting");
-            *guard = Arc::new((self.open)().await?);
+            guard.client = Arc::new((self.open)().await?);
+            guard.prepared.clear();
         }
-        Ok(guard.clone())
+        Ok(guard.client.clone())
+    }
+
+    /// Same as `current` but the name is kept short for internal callers
+    /// in this module.
+    async fn current_client(&self) -> Result<Arc<tokio_postgres::Client>> {
+        self.current().await
     }
 
     /// Force a reconnect after an op observed `is_closed()`. Double-checks
     /// inside the mutex in case another task already reconnected while
-    /// we were waiting on the lock.
+    /// we were waiting on the lock. Clears the prepared-statement cache
+    /// on the actual reconnect path.
     async fn force_reconnect(&self) -> Result<Arc<tokio_postgres::Client>> {
-        let mut guard = self.current.lock().await;
-        if !guard.is_closed() {
-            return Ok(guard.clone());
+        let mut guard = self.state.lock().await;
+        if !guard.client.is_closed() {
+            return Ok(guard.client.clone());
         }
         tracing::info!("YsqlClient: forcing reconnect after failed op");
-        *guard = Arc::new((self.open)().await?);
-        Ok(guard.clone())
+        guard.client = Arc::new((self.open)().await?);
+        guard.prepared.clear();
+        Ok(guard.client.clone())
+    }
+
+    /// Resolve `sql` to a prepared `Statement`, preparing it once per
+    /// connection lifetime and caching the result. Two concurrent
+    /// callers that miss the cache for the same SQL may both call
+    /// `client.prepare()`; the second one's `Statement` is dropped via
+    /// `entry().or_insert_with()`, which is harmless (prepare is
+    /// idempotent on the YB side).
+    ///
+    /// The cache key is the raw SQL string. Callers that build SQL via
+    /// `format!()` with stable inputs (schema name, fixed chunk size,
+    /// etc.) get cache hits; callers that build SQL with per-call-unique
+    /// inputs (such as bulk INSERTs whose VALUES list scales with the
+    /// chunk size) get one cache entry per shape — bounded in practice.
+    async fn get_or_prepare(
+        &self,
+        client: &tokio_postgres::Client,
+        sql: &str,
+    ) -> Result<Statement, tokio_postgres::Error> {
+        {
+            let guard = self.state.lock().await;
+            if let Some(stmt) = guard.prepared.get(sql) {
+                return Ok(stmt.clone());
+            }
+        }
+        let stmt = client.prepare(sql).await?;
+        let mut guard = self.state.lock().await;
+        // Another task may have prepared the same SQL while we were
+        // awaiting `client.prepare()`; keep whichever entry is already
+        // there (statements are interchangeable for a given SQL on a
+        // given Client) and drop ours.
+        let cached = guard
+            .prepared
+            .entry(sql.to_string())
+            .or_insert_with(|| stmt.clone())
+            .clone();
+        Ok(cached)
     }
 
     pub async fn execute(
@@ -130,8 +210,8 @@ impl YsqlClient {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<u64> {
-        self.run_with_retries("execute", |client| async move {
-            client.execute(sql, params).await
+        self.run_with_retries("execute", sql, |client, stmt| async move {
+            client.execute(&stmt, params).await
         })
         .await
     }
@@ -141,8 +221,8 @@ impl YsqlClient {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<tokio_postgres::Row>> {
-        self.run_with_retries("query", |client| async move {
-            client.query(sql, params).await
+        self.run_with_retries("query", sql, |client, stmt| async move {
+            client.query(&stmt, params).await
         })
         .await
     }
@@ -152,8 +232,8 @@ impl YsqlClient {
         sql: &str,
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Option<tokio_postgres::Row>> {
-        self.run_with_retries("query_opt", |client| async move {
-            client.query_opt(sql, params).await
+        self.run_with_retries("query_opt", sql, |client, stmt| async move {
+            client.query_opt(&stmt, params).await
         })
         .await
     }
@@ -162,9 +242,11 @@ impl YsqlClient {
     /// with two retry classes layered on top:
     ///
     /// 1. **Connection drop** — if the op errors and `is_closed()` is
-    ///    true, force a reconnect and retry once. Catches the case
-    ///    where the TCP socket died mid-statement (YB tserver
-    ///    restart, YBA rolling restart, etc.).
+    ///    true, force a reconnect (which clears the prepared-statement
+    ///    cache, since old `Statement`s are bound to the dead client),
+    ///    re-prepare the SQL on the fresh connection, and retry once.
+    ///    Catches the case where the TCP socket died mid-statement (YB
+    ///    tserver restart, YBA rolling restart, etc.).
     /// 2. **YB "Restart read required"** — a YugabyteDB-specific
     ///    transient surfaced on read-only metadata operations that
     ///    race a schema-change side-effect (common right after
@@ -177,26 +259,67 @@ impl YsqlClient {
     /// All YsqlClient public methods (`execute` / `query` /
     /// `query_opt`) go through here so every caller — pageserver,
     /// safekeeper WAL backup, YbStore blob ops, storage controller
-    /// — gets the same retry semantics without each one having to
-    /// reimplement it.
-    async fn run_with_retries<F, Fut, T>(&self, op_label: &str, f: F) -> Result<T>
+    /// — gets the same retry semantics and prepared-statement caching
+    /// without each one having to reimplement it.
+    async fn run_with_retries<F, Fut, T>(
+        &self,
+        op_label: &str,
+        sql: &str,
+        f: F,
+    ) -> Result<T>
     where
-        F: Fn(Arc<tokio_postgres::Client>) -> Fut,
+        F: Fn(Arc<tokio_postgres::Client>, Statement) -> Fut,
         Fut: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
     {
         let mut delay = std::time::Duration::from_millis(200);
         for attempt in 1..=5u32 {
-            let client = self.current().await?;
-            match f(client.clone()).await {
+            let mut client = self.current_client().await?;
+            let stmt = match self.get_or_prepare(&client, sql).await {
+                Ok(s) => s,
+                Err(e) => {
+                    // prepare() failed — same retry classification as a
+                    // failed op below. Connection-drop path reconnects
+                    // and retries; transient YB errors backoff.
+                    if client.is_closed() {
+                        client = self.force_reconnect().await?;
+                        match self.get_or_prepare(&client, sql).await {
+                            Ok(s) => s,
+                            Err(e2) => {
+                                return Err(anyhow::Error::from(e2)).with_context(|| {
+                                    format!(
+                                        "YsqlClient: {op_label} prepare after reconnect ({e})"
+                                    )
+                                });
+                            }
+                        }
+                    } else {
+                        let msg = e.to_string();
+                        if attempt < 5 && msg.contains("Restart read required") {
+                            tokio::time::sleep(delay).await;
+                            delay = delay.saturating_mul(2);
+                            continue;
+                        }
+                        return Err(anyhow::Error::from(e));
+                    }
+                }
+            };
+            match f(client.clone(), stmt).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
                     // (1) connection drop: reconnect once and retry inside
                     // this same iteration. If the retry also fails, fall
                     // through to the transient classifier below.
                     let e = if client.is_closed() {
-                        drop(client);
-                        let client = self.force_reconnect().await?;
-                        match f(client).await {
+                        let fresh = self.force_reconnect().await?;
+                        // Re-prepare on the fresh connection.
+                        let stmt = self
+                            .get_or_prepare(&fresh, sql)
+                            .await
+                            .map_err(anyhow::Error::from)
+                            .with_context(|| {
+                                format!("YsqlClient: {op_label} re-prepare after reconnect")
+                            })?;
+                        match f(fresh, stmt).await {
                             Ok(v) => return Ok(v),
                             Err(e2) => {
                                 return Err(anyhow::Error::from(e2)).with_context(|| {
