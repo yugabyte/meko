@@ -267,6 +267,9 @@ impl BucketConfig {
                 config.container_name, config.storage_account, config.container_region
             ),
             RemoteStorageKind::GCS(config) => format!("bucket {}", config.bucket_name),
+            RemoteStorageKind::YbStore(config) => {
+                format!("yb table {} at {}:{}", config.table_name, config.host, config.port)
+            }
         }
     }
     pub fn bucket_name(&self) -> Option<&str> {
@@ -384,6 +387,9 @@ async fn init_remote(
         RemoteStorageKind::LocalFs { .. } => (),
         RemoteStorageKind::GCS(config) => {
             config.prefix_in_bucket.get_or_insert(default_prefix);
+        }
+        RemoteStorageKind::YbStore(config) => {
+            config.prefix.get_or_insert(default_prefix);
         }
     }
 
