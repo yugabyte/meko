@@ -25,7 +25,7 @@
 //! layer, and offsets to the other parts. The "index" is a B-tree,
 //! mapping from Key to an offset in the "values" part.  The
 //! actual page images are stored in the "values" part.
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs::File;
 use std::ops::Range;
 use std::os::unix::prelude::FileExt;
@@ -51,7 +51,6 @@ use utils::bin_ser::BeSer;
 use utils::bin_ser::SerializeError;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
-use wal_decoder::models::value::Value;
 
 use super::errors::PutError;
 use super::layer_name::ImageLayerName;
@@ -65,11 +64,11 @@ use crate::page_cache::{self, FileId, PAGE_SZ};
 use crate::tenant::blob_io::BlobWriter;
 use crate::tenant::block_io::{BlockBuf, FileBlockReader};
 use crate::tenant::disk_btree::{
-    DiskBtreeBuilder, DiskBtreeIterator, DiskBtreeReader, VisitDirection,
+    DiskBtreeBuilder, DiskBtreeReader, VisitDirection,
 };
 use crate::tenant::timeline::GetVectoredError;
 use crate::tenant::vectored_blob_io::{
-    BlobFlag, BufView, StreamingVectoredReadPlanner, VectoredBlobReader, VectoredRead,
+    BlobFlag, BufView, VectoredBlobReader, VectoredRead,
     VectoredReadPlanner,
 };
 use crate::virtual_file::TempVirtualFile;

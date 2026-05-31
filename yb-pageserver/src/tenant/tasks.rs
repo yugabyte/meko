@@ -22,7 +22,6 @@ use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{self, BackgroundLoopSemaphoreMetricsRecorder, TENANT_TASK_EVENTS};
 use crate::task_mgr::{self, BACKGROUND_RUNTIME, TOKIO_WORKER_THREADS, TaskKind};
 use crate::tenant::throttle::Stats;
-use crate::tenant::timeline::CompactionError;
 use crate::tenant::{TenantShard, TenantState};
 
 /// Semaphore limiting concurrent background tasks (across all tenants).

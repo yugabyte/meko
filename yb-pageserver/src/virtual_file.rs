@@ -12,7 +12,7 @@
 //! src/backend/storage/file/fd.c
 //!
 use std::fs::File;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};

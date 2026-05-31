@@ -19,7 +19,7 @@ use crate::context::RequestContext;
 use crate::metrics::TimelineMetrics;
 use crate::tenant::layer_map::{BatchedUpdates, LayerMap, SearchResult};
 use crate::tenant::storage_layer::{
-    AsLayerDesc, InMemoryLayer, Layer, LayerVisibilityHint, PersistentLayerDesc,
+    AsLayerDesc, InMemoryLayer, Layer, PersistentLayerDesc,
     PersistentLayerKey, ReadableLayerWeak, ResidentLayer,
 };
 

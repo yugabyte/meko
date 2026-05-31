@@ -26,7 +26,6 @@ use anyhow::{Context, bail};
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::NaiveDateTime;
-use enumset::EnumSet;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use itertools::Itertools as _;
@@ -34,7 +33,7 @@ use once_cell::sync::Lazy;
 pub use pageserver_api::models::TenantState;
 use pageserver_api::models::{self, RelSizeMigration};
 use pageserver_api::models::{
-    CompactInfoResponse, TimelineArchivalState, TimelineState, TopTenantShardItem,
+    TimelineArchivalState, TimelineState, TopTenantShardItem,
     WalRedoManagerStatus,
 };
 use pageserver_api::shard::{ShardIdentity, ShardStripeSize, TenantShardId};
@@ -51,17 +50,13 @@ use remote_timeline_client::{
 use storage_broker::BrokerClientChannel;
 use timeline::import_pgdata::ImportingTimeline;
 use timeline::layer_manager::LayerManagerLockHolder;
-use timeline::offload::{OffloadError, offload_timeline};
-use timeline::{
-    CompactFlags, CompactOptions, CompactionError, ShutdownMode, import_pgdata,
-};
+use timeline::{ShutdownMode, import_pgdata};
 use tokio::io::BufReader;
 use tokio::sync::{Notify, Semaphore, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use upload_queue::NotInitialized;
-use utils::circuit_breaker::CircuitBreaker;
 use utils::crashsafe::path_with_suffix_extension;
 use utils::sync::gate::{Gate, GateGuard};
 use utils::timeout::{TimeoutCancellableError, timeout_cancellable};
@@ -87,7 +82,7 @@ use crate::deletion_queue::{DeletionQueueClient, DeletionQueueError};
 use crate::feature_resolver::{FeatureResolver, TenantFeatureResolver};
 use crate::l0_flush::L0FlushGlobalState;
 use crate::metrics::{
-    BROKEN_TENANTS_SET, CIRCUIT_BREAKERS_BROKEN, CIRCUIT_BREAKERS_UNBROKEN, CONCURRENT_INITDBS,
+    BROKEN_TENANTS_SET, CONCURRENT_INITDBS,
     INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME, TENANT, TENANT_OFFLOADED_TIMELINES,
     TENANT_STATE_METRIC, TENANT_SYNTHETIC_SIZE_METRIC, TIMELINE_STATE_METRIC,
     remove_tenant_metrics,

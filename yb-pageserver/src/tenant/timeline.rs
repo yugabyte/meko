@@ -12,7 +12,7 @@ use hashlink::LruCache;
 use std::array;
 use std::cmp::{max, min};
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::ops::{ControlFlow, Deref, Range};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
@@ -21,7 +21,6 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use bytes::Bytes;
-use camino::Utf8Path;
 use chrono::{DateTime, Utc};
 use enumset::EnumSet;
 use fail::fail_point;
@@ -29,7 +28,7 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use handle::ShardTimelineId;
 use layer_manager::{
-    LayerManagerLockHolder, LayerManagerReadGuard, LayerManagerWriteGuard, LockedLayerManager,
+    LayerManagerLockHolder, LayerManagerWriteGuard, LockedLayerManager,
     Shutdown,
 };
 
@@ -41,9 +40,7 @@ use pageserver_api::key::{
 };
 use pageserver_api::keyspace::{KeySpaceAccum, KeySpaceRandomAccum, SparseKeyPartitioning};
 use pageserver_api::models::{
-    CompactKeyRange, CompactLsnRange, CompactionAlgorithm, CompactionAlgorithmSettings,
-    DetachBehavior, DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest,
-    EvictionPolicy, InMemoryLayerInfo, LayerMapInfo, LsnLease, PageTraceEvent, RelSizeMigration,
+    DetachBehavior, DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, InMemoryLayerInfo, LayerMapInfo, LsnLease, PageTraceEvent, RelSizeMigration,
     TimelineState,
 };
 use pageserver_api::reltag::{BlockNumber, RelTag};
@@ -53,7 +50,6 @@ use postgres_ffi::v14::xlog_utils;
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE, to_pg_timestamp};
 use rand::Rng;
 use remote_storage::DownloadError;
-use serde_with::serde_as;
 use storage_broker::BrokerClientChannel;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Sender;
@@ -70,15 +66,15 @@ use utils::rate_limit::RateLimit;
 use utils::seqwait::SeqWait;
 use utils::simple_rcu::{Rcu, RcuReadGuard};
 use utils::sync::gate::{Gate, GateGuard};
-use utils::{completion, critical_timeline, fs_ext, pausable_failpoint};
+use utils::{completion, critical_timeline, pausable_failpoint};
 use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
 use self::delete::DeleteTimelineFlow;
 use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
 use super::remote_timeline_client::RemoteTimelineClient;
-use super::remote_timeline_client::index::{GcCompactionState, IndexPart};
-use super::storage_layer::{LayerFringe, LayerVisibilityHint, ReadableLayer};
+use super::remote_timeline_client::index::GcCompactionState;
+use super::storage_layer::{LayerFringe, ReadableLayer};
 use super::upload_queue::NotInitialized;
 use super::{
     AttachedTenantConf, GcError, MaybeOffloaded,
@@ -105,14 +101,11 @@ use crate::pgdatadir_mapping::{
 };
 use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
-use crate::tenant::layer_map::LayerMap;
 use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::storage_layer::delta_layer::DeltaEntry;
 use crate::tenant::storage_layer::inmemory_layer::IndexEntry;
 use crate::tenant::storage_layer::{
-    AsLayerDesc, BatchLayerWriter, DeltaLayerWriter, EvictionError, ImageLayerName,
-    ImageLayerWriter, InMemoryLayer, IoConcurrency, Layer, LayerAccessStatsReset, LayerName,
-    PersistentLayerDesc, PersistentLayerKey, ResidentLayer, ValueReconstructSituation,
+    AsLayerDesc, BatchLayerWriter, EvictionError, ImageLayerName,
+    ImageLayerWriter, InMemoryLayer, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, PersistentLayerKey, ResidentLayer, ValueReconstructSituation,
     ValueReconstructState, ValuesReconstructState,
 };
 use crate::tenant::tasks::BackgroundLoopKind;
@@ -891,37 +884,6 @@ pub(crate) enum CompactFlags {
 pub(crate) struct MarkInvisibleRequest {
     #[serde(default)]
     pub is_visible: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct CompactOptions {
-    pub flags: EnumSet<CompactFlags>,
-    /// If set, the compaction will only compact the key range specified by this option.
-    /// This option is only used by GC compaction. For the full explanation, see [`compaction::GcCompactJob`].
-    pub compact_key_range: Option<CompactKeyRange>,
-    /// If set, the compaction will only compact the LSN within this value.
-    /// This option is only used by GC compaction. For the full explanation, see [`compaction::GcCompactJob`].
-    pub compact_lsn_range: Option<CompactLsnRange>,
-    /// Enable sub-compaction (split compaction job across key ranges).
-    /// This option is only used by GC compaction.
-    pub sub_compaction: bool,
-    /// Set job size for the GC compaction.
-    /// This option is only used by GC compaction.
-    pub sub_compaction_max_job_size_mb: Option<u64>,
-    /// Only for GC compaction.
-    /// If set, the compaction will compact the metadata layers. Should be only set to true in unit tests
-    /// because metadata compaction is not fully supported yet.
-    pub gc_compaction_do_metadata_compaction: bool,
-}
-
-impl CompactOptions {
-    #[cfg(test)]
-    pub fn default_for_gc_compaction_unit_tests() -> Self {
-        Self {
-            gc_compaction_do_metadata_compaction: true,
-            ..Default::default()
-        }
-    }
 }
 
 impl std::fmt::Debug for Timeline {
@@ -2340,17 +2302,6 @@ impl Timeline {
         self: &std::sync::Arc<Self>,
         _cancel: &CancellationToken,
         _flags: EnumSet<CompactFlags>,
-        _ctx: &RequestContext,
-    ) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
-    /// Test-only no-op stub (see `compact`).
-    #[cfg(test)]
-    pub(crate) async fn compact_with_gc(
-        self: &std::sync::Arc<Self>,
-        _cancel: &CancellationToken,
-        _options: CompactOptions,
         _ctx: &RequestContext,
     ) -> Result<(), anyhow::Error> {
         Ok(())

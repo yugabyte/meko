@@ -81,7 +81,6 @@ use crate::tenant::remote_timeline_client::{
 use crate::tenant::size::ModelInputs;
 use crate::tenant::storage_layer::ValuesReconstructState;
 use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerName};
-use crate::tenant::timeline::layer_manager::LayerManagerLockHolder;
 use crate::tenant::timeline::offload::{OffloadError, offload_timeline};
 use crate::tenant::timeline::{
     CompactFlags, MarkInvisibleRequest, Timeline, WaitLsnTimeout,

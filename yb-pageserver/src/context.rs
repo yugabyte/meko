@@ -93,7 +93,6 @@ use std::{sync::Arc, time::Duration};
 
 use once_cell::sync::Lazy;
 use tracing::warn;
-use utils::{id::TimelineId, shard::TenantShardId};
 
 use crate::{
     metrics::{StorageIoSizeMetrics, TimelineMetrics},

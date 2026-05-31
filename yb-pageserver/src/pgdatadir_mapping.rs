@@ -16,7 +16,7 @@ use anyhow::Context;
 use bytes::{Buf, Bytes, BytesMut};
 use enum_map::Enum;
 use pageserver_api::key::{
-    AUX_FILES_KEY, CHECKPOINT_KEY, CONTROLFILE_KEY, CompactKey, DBDIR_KEY, Key, RelDirExists,
+    CHECKPOINT_KEY, CONTROLFILE_KEY, CompactKey, DBDIR_KEY, Key, RelDirExists,
     TWOPHASEDIR_KEY, dbdir_key_range, rel_block_to_key, rel_dir_to_key, rel_key_range,
     rel_size_to_key, rel_tag_sparse_key, rel_tag_sparse_key_range, relmap_file_key,
     repl_origin_key, repl_origin_key_range, slru_block_to_key, slru_dir_to_key,

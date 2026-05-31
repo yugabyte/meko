@@ -27,7 +27,7 @@
 //! "values" part.  The actual page images and WAL records are stored in the
 //! "values" part.
 //!
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs::File;
 use std::ops::Range;
 use std::os::unix::fs::FileExt;
@@ -66,11 +66,11 @@ use crate::page_cache::{self, FileId, PAGE_SZ};
 use crate::tenant::blob_io::BlobWriter;
 use crate::tenant::block_io::{BlockBuf, BlockCursor, BlockLease, BlockReader, FileBlockReader};
 use crate::tenant::disk_btree::{
-    DiskBtreeBuilder, DiskBtreeIterator, DiskBtreeReader, VisitDirection,
+    DiskBtreeBuilder, DiskBtreeReader, VisitDirection,
 };
 use crate::tenant::timeline::GetVectoredError;
 use crate::tenant::vectored_blob_io::{
-    BlobFlag, BufView, StreamingVectoredReadPlanner, VectoredBlobReader, VectoredRead,
+    BlobFlag, BufView, VectoredBlobReader, VectoredRead,
     VectoredReadPlanner,
 };
 use crate::virtual_file::TempVirtualFile;
