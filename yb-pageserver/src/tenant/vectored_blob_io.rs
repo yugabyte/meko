@@ -55,16 +55,6 @@ impl<'a> BufView<'a> {
         Self::Bytes(bytes)
     }
 
-    /// Convert the view into `Bytes`.
-    ///
-    /// If using slice as the underlying storage, the copy will be an O(n) operation.
-    pub fn into_bytes(self) -> Bytes {
-        match self {
-            BufView::Slice(slice) => Bytes::copy_from_slice(slice),
-            BufView::Bytes(bytes) => bytes,
-        }
-    }
-
     /// Creates a sub-view of the blob based on the range.
     fn view(&self, range: std::ops::Range<usize>) -> Self {
         match self {
