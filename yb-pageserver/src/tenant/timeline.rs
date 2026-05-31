@@ -3263,12 +3263,16 @@ impl Timeline {
                         let (tx, rx) = tokio::sync::mpsc::channel(
                             pw_cfg.materialize_queue_capacity.max(1),
                         );
+                        let in_flight = std::sync::Arc::new(std::sync::Mutex::new(
+                            std::collections::HashSet::new(),
+                        ));
                         writer.set_materializer(crate::page_writer::MaterializerHandle {
                             count_limit: pw_cfg.image_chain_limit,
                             payload_bytes_limit: pw_cfg.image_chain_payload_bytes_limit,
                             tx,
+                            in_flight: in_flight.clone(),
                         });
-                        Some(rx)
+                        Some((rx, in_flight))
                     } else {
                         None
                     };
@@ -3277,7 +3281,7 @@ impl Timeline {
                     let flush_task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
 
                     let materializer_task = match (mat_channel, walredo_mgr.clone()) {
-                        (Some(rx), Some(wr)) => {
+                        (Some((rx, in_flight)), Some(wr)) => {
                             let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
                                 .expect("invalid pg_version in timeline init");
                             Some(crate::image_materializer::ImageMaterializer::spawn(
@@ -3288,6 +3292,7 @@ impl Timeline {
                                 wr,
                                 pg_major,
                                 rx,
+                                in_flight,
                             ))
                         }
                         _ => None,

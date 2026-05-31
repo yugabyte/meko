@@ -77,6 +77,12 @@ pub struct ImageMaterializer {
     internal_page_store: Arc<PageStore>,
     walredo_mgr: Arc<WalRedoManager>,
     pg_version: PgMajorVersion,
+    /// Shared with the write trigger in `PageWriter::put` — see
+    /// `MaterializerHandle::in_flight`. After each batch (success or
+    /// failure) the materialiser removes every key it pulled from the
+    /// queue so the next delta past the per-key threshold can re-fire
+    /// at the current LSN.
+    in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
 }
 
 /// Handle returned by [`ImageMaterializer::spawn`]. Drop to leak; call
@@ -102,6 +108,7 @@ impl ImageMaterializer {
         walredo_mgr: Arc<WalRedoManager>,
         pg_version: PgMajorVersion,
         mut rx: mpsc::Receiver<MaterializeJob>,
+        in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
     ) -> MaterializerTask {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
@@ -112,6 +119,7 @@ impl ImageMaterializer {
             internal_page_store,
             walredo_mgr,
             pg_version,
+            in_flight,
         });
         // Walredo's `debug_assert_current_span_has_tenant_id` requires
         // both `tenant_id` and `shard_id` fields on the active span;
@@ -163,10 +171,26 @@ impl ImageMaterializer {
     /// Materialise a batch of jobs end-to-end: read every chain,
     /// walredo each, INSERT all resulting images in one round-trip on
     /// the dedicated connection, then install each into the in-RAM
-    /// cache. Errors from individual jobs are logged and skipped —
-    /// one bad chain shouldn't drop the whole batch. Errors from the
-    /// INSERT itself propagate (caller logs + the next trigger
-    /// retries).
+    /// cache. Always clears the per-key in_flight entries at the end
+    /// (success OR failure) so the write trigger can re-fire on the
+    /// next delta past the threshold.
+    async fn materialize_batch(&self, jobs: &[MaterializeJob]) -> Result<()> {
+        let result = self.materialize_batch_inner(jobs).await;
+        // Unblock future write triggers for these keys regardless of
+        // success or failure. On failure the next trigger will re-fire
+        // after the per-key counter accumulates another threshold; on
+        // success the trigger fires immediately on the next delta (the
+        // counter was held at >= threshold during the in-flight stall).
+        let mut in_flight = self.in_flight.lock().unwrap();
+        for job in jobs {
+            in_flight.remove(&job.key);
+        }
+        result
+    }
+
+    /// Errors from individual jobs are logged and skipped — one bad
+    /// chain shouldn't drop the whole batch. Errors from the INSERT
+    /// itself propagate (caller logs + the next trigger retries).
     ///
     /// The redo phase runs up to `REDO_CONCURRENCY` `redo_one` futures
     /// in parallel via `FuturesUnordered`. Each future reads its chain
@@ -177,7 +201,7 @@ impl ImageMaterializer {
     /// callers amortise the stdin-write / stdout-read latency. Order
     /// of completion is irrelevant since each result is independent
     /// and they're all merged into `images` for the single bulk INSERT.
-    async fn materialize_batch(&self, jobs: &[MaterializeJob]) -> Result<()> {
+    async fn materialize_batch_inner(&self, jobs: &[MaterializeJob]) -> Result<()> {
         use futures::StreamExt;
         use futures::future::{BoxFuture, FutureExt};
         use futures::stream::FuturesUnordered;

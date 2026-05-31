@@ -85,6 +85,22 @@ pub struct MaterializerHandle {
     pub count_limit: u32,
     pub payload_bytes_limit: u32,
     pub tx: tokio::sync::mpsc::Sender<MaterializeJob>,
+    /// Keys with a job currently queued or being processed. The write
+    /// trigger refuses to enqueue (and refuses to clear the per-key
+    /// delta counter) when a key is already in flight — this prevents
+    /// the "hot page modified 100 times during materialiser stall"
+    /// case from queueing 5 jobs at LSNs (20, 40, 60, 80, 100). Instead
+    /// the counter stays at >= threshold across the stall and the next
+    /// delta after the in-flight job completes fires a single fresh
+    /// job at the *current* LSN — strictly better for read latency
+    /// (image is closer to last_record_lsn) and avoids 4 wasted
+    /// walredo cycles.
+    ///
+    /// Cleared by the materialiser after each batch completes
+    /// (success OR failure — on failure the next trigger needs to be
+    /// able to fire). Task panics leak entries; pageserver restart
+    /// clears all timeline state including this set.
+    pub in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
 }
 
 /// Running per-key delta tally — both count and payload bytes since
@@ -296,12 +312,12 @@ impl PageWriter {
             return Ok(());
         }
         // Collect materialisation jobs while holding the lock; dispatch
-        // them after release so the tx.try_send (channel-full case)
-        // can't block another writer waiting on `state`.
+        // them after release so the tx.send (channel-full case) can't
+        // block another writer waiting on `state`.
         let trigger = self
             .materializer
             .as_ref()
-            .map(|m| (m.count_limit, m.payload_bytes_limit));
+            .map(|m| (m.count_limit, m.payload_bytes_limit, m.in_flight.clone()));
         let mut to_materialize: Vec<MaterializeJob> = Vec::new();
         {
             let mut s = self.state.write().await;
@@ -318,8 +334,8 @@ impl PageWriter {
 
                 if resets_chain {
                     s.delta_counts.remove(&key);
-                } else if let Some((count_limit, bytes_limit)) = trigger
-                    && (count_limit > 0 || bytes_limit > 0)
+                } else if let Some((count_limit, bytes_limit, in_flight)) = trigger.as_ref()
+                    && (*count_limit > 0 || *bytes_limit > 0)
                 {
                     let tally = s.delta_counts.entry(key.clone()).or_default();
                     tally.count = tally.count.saturating_add(1);
@@ -327,14 +343,24 @@ impl PageWriter {
                     // Whichever threshold lands first dispatches. A
                     // disabled threshold (zero) is treated as "infinity"
                     // so it never alone fires.
-                    let count_hit = count_limit > 0 && tally.count >= count_limit;
-                    let bytes_hit = bytes_limit > 0 && tally.payload_bytes >= bytes_limit;
+                    let count_hit = *count_limit > 0 && tally.count >= *count_limit;
+                    let bytes_hit = *bytes_limit > 0 && tally.payload_bytes >= *bytes_limit;
                     if count_hit || bytes_hit {
-                        s.delta_counts.remove(&key);
-                        to_materialize.push(MaterializeJob {
-                            key,
-                            target_lsn: lsn,
-                        });
+                        // Only enqueue + reset the counter if this key
+                        // doesn't already have a job in flight. If it
+                        // does, leave the counter at >= threshold so the
+                        // first delta past the in-flight job's completion
+                        // immediately re-fires — at the *current* LSN,
+                        // not stale intermediate LSNs we'd waste walredo
+                        // cycles on.
+                        let inserted = in_flight.lock().unwrap().insert(key.clone());
+                        if inserted {
+                            s.delta_counts.remove(&key);
+                            to_materialize.push(MaterializeJob {
+                                key,
+                                target_lsn: lsn,
+                            });
+                        }
                     }
                 }
             }
@@ -364,15 +390,18 @@ impl PageWriter {
                 // bursts and stay deep forever once ingest went idle
                 // (no later put would re-trigger after the counter
                 // cleared). Receiver lives as long as the timeline, so
-                // SendError here means timeline shutdown — log and move
-                // on.
+                // SendError here means timeline shutdown — undo the
+                // in_flight reservation for this and remaining jobs so
+                // a later restart's trigger isn't blocked.
                 if !waited_for_capacity && m.tx.capacity() == 0 {
                     waited_for_capacity = true;
                 }
+                let key_for_rollback = job.key.clone();
                 if let Err(e) = m.tx.send(job).await {
                     tracing::debug!(
                         "materialiser send dropped (receiver closed): {e}"
                     );
+                    m.in_flight.lock().unwrap().remove(&key_for_rollback);
                     break;
                 }
             }
@@ -1176,7 +1205,11 @@ mod tests {
     }
 
     /// `writer` plus an installed materializer handle. Returns the
-    /// receiver so tests can pull queued jobs.
+    /// receiver so tests can pull queued jobs AND the `in_flight`
+    /// Arc so tests can simulate the materialiser's per-batch
+    /// cleanup (production: `ImageMaterializer::materialize_batch`
+    /// removes each batched key from `in_flight` after the INSERT;
+    /// tests do the equivalent inline after pulling a job).
     fn writer_with_materializer(
         store: Arc<PageStore>,
         policy: FlushPolicy,
@@ -1186,19 +1219,22 @@ mod tests {
         TenantId,
         TimelineId,
         tokio::sync::mpsc::Receiver<MaterializeJob>,
+        Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
     ) {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
         let mut w = PageWriter::new(t, tl, store.clone(), store, policy, 64 * 1024 * 1024);
         let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let in_flight = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
         // Tests pass a count limit; payload-bytes limit disabled
         // (0) so tests stay deterministic on count-based thresholds.
         w.set_materializer(MaterializerHandle {
             count_limit: limit,
             payload_bytes_limit: 0,
             tx,
+            in_flight: in_flight.clone(),
         });
-        (w, t, tl, rx)
+        (w, t, tl, rx, in_flight)
     }
 
     /// A non-`will_init` delta (the normal "modify existing page"
@@ -1636,7 +1672,7 @@ mod tests {
     async fn delta_threshold_dispatches_one_job() {
         let (store, schema) = make_store("mat_threshold").await;
         const LIMIT: u32 = 10;
-        let (w, _t, _tl, mut rx) =
+        let (w, _t, _tl, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // (LIMIT - 1) deltas: nothing queued yet.
@@ -1659,6 +1695,11 @@ mod tests {
             .expect("dispatched on hitting threshold");
         assert_eq!(job.target_lsn, Lsn(10 + LIMIT as u64));
         assert_eq!(job.key.as_ref(), key_to_bytes(k(1)).as_ref());
+        // Simulate the materialiser finishing this batch (production:
+        // `ImageMaterializer::materialize_batch` does this after the
+        // INSERT). Until this happens the in_flight dedup blocks
+        // re-enqueue for the same key.
+        in_flight.lock().unwrap().remove(&job.key);
 
         // Counter reset: another (LIMIT-1) deltas must not re-dispatch.
         for i in 0..(LIMIT - 1) {
@@ -1679,7 +1720,7 @@ mod tests {
     async fn image_resets_chain_counter() {
         let (store, schema) = make_store("mat_image_reset").await;
         const LIMIT: u32 = 10;
-        let (w, _t, _tl, mut rx) =
+        let (w, _t, _tl, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // 5 deltas, then an image, then 9 deltas — must NOT dispatch.
@@ -1713,7 +1754,7 @@ mod tests {
     async fn will_init_delta_resets_chain_counter() {
         let (store, schema) = make_store("mat_winit_reset").await;
         const LIMIT: u32 = 5;
-        let (w, _t, _tl, mut rx) =
+        let (w, _t, _tl, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         for i in 0..3 {
@@ -1742,7 +1783,7 @@ mod tests {
     async fn per_key_counters_are_independent() {
         let (store, schema) = make_store("mat_per_key").await;
         const LIMIT: u32 = 4;
-        let (w, _t, _tl, mut rx) =
+        let (w, _t, _tl, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // Alternate keys k(1) and k(2). After 4 deltas total each, both
@@ -1771,7 +1812,7 @@ mod tests {
     #[tokio::test]
     async fn limit_zero_disables_dispatch() {
         let (store, schema) = make_store("mat_disabled").await;
-        let (w, _t, _tl, mut rx) =
+        let (w, _t, _tl, mut rx, _) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), 0);
 
         for i in 0..50 {
