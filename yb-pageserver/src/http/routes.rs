@@ -2026,100 +2026,15 @@ async fn timeline_download_remote_layers_handler_get(
 }
 
 async fn timeline_detach_ancestor_handler(
-    request: Request<Body>,
+    _request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    use pageserver_api::models::detach_ancestor::AncestorDetached;
-
-    use crate::tenant::timeline::detach_ancestor;
-
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    let behavior: Option<DetachBehavior> = parse_query_param(&request, "detach_behavior")?;
-
-    let behavior = behavior.unwrap_or_default();
-
-    let span = tracing::info_span!("detach_ancestor", tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(), %timeline_id);
-
-    async move {
-        let mut options = detach_ancestor::Options::default();
-
-        let rewrite_concurrency =
-            parse_query_param::<_, std::num::NonZeroUsize>(&request, "rewrite_concurrency")?;
-        let copy_concurrency =
-            parse_query_param::<_, std::num::NonZeroUsize>(&request, "copy_concurrency")?;
-
-        [
-            (&mut options.rewrite_concurrency, rewrite_concurrency),
-            (&mut options.copy_concurrency, copy_concurrency),
-        ]
-        .into_iter()
-        .filter_map(|(target, val)| val.map(|val| (target, val)))
-        .for_each(|(target, val)| *target = val);
-
-        let state = get_state(&request);
-
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_shard_id)?;
-
-        tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
-
-        let ctx = RequestContext::new(TaskKind::DetachAncestor, DownloadBehavior::Download);
-        let ctx = &ctx;
-
-        // Flush the upload queues of all timelines before detaching ancestor. We do the same thing again
-        // during shutdown. This early upload ensures the pageserver does not need to upload too many
-        // things and creates downtime during timeline reloads.
-        for timeline in tenant.list_timelines() {
-            timeline
-                .remote_client
-                .wait_completion()
-                .await
-                .map_err(|e| {
-                    ApiError::PreconditionFailed(format!("cannot drain upload queue: {e}").into())
-                })?;
-        }
-
-        tracing::info!("all timeline upload queues are drained");
-
-        let timeline = tenant.get_timeline(timeline_id, true)?;
-        let ctx = &ctx.with_scope_timeline(&timeline);
-
-        let progress = timeline
-            .prepare_to_detach_from_ancestor(&tenant, options, behavior, ctx)
-            .await?;
-
-        // uncomment to allow early as possible Tenant::drop
-        // drop(tenant);
-
-        let resp = match progress {
-            detach_ancestor::Progress::Prepared(attempt, prepared) => {
-                // it would be great to tag the guard on to the tenant activation future
-                let reparented_timelines = state
-                    .tenant_manager
-                    .complete_detaching_timeline_ancestor(
-                        tenant_shard_id,
-                        timeline_id,
-                        prepared,
-                        behavior,
-                        attempt,
-                        ctx,
-                    )
-                    .await?;
-
-                AncestorDetached {
-                    reparented_timelines,
-                }
-            }
-            detach_ancestor::Progress::Done(resp) => resp,
-        };
-
-        json_response(StatusCode::OK, resp)
-    }
-    .instrument(span)
-    .await
+    // yb-pageserver: ancestor detach is a layer-rewriting operation
+    // that has no analogue in the row store. Timelines never have an
+    // ancestor in yb-mode, so this endpoint is rejected unconditionally.
+    Err(ApiError::BadRequest(anyhow::anyhow!(
+        "detach_ancestor is not supported in yb-pageserver mode"
+    )))
 }
 
 async fn deletion_queue_flush(

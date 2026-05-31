@@ -1,5 +1,4 @@
 pub mod delete;
-pub(crate) mod detach_ancestor;
 pub(crate) mod handle;
 pub(crate) mod import_pgdata;
 pub mod layer_manager;
@@ -3205,70 +3204,6 @@ impl Timeline {
         )
     }
 
-    /// Detach this timeline from its ancestor by copying all of ancestors layers as this
-    /// Timelines layers up to the ancestor_lsn.
-    ///
-    /// Requires a timeline that:
-    /// - has an ancestor to detach from
-    /// - the ancestor does not have an ancestor -- follows from the original RFC limitations, not
-    ///   a technical requirement
-    ///
-    /// After the operation has been started, it cannot be canceled. Upon restart it needs to be
-    /// polled again until completion.
-    ///
-    /// During the operation all timelines sharing the data with this timeline will be reparented
-    /// from our ancestor to be branches of this timeline.
-    pub(crate) async fn prepare_to_detach_from_ancestor(
-        self: &Arc<Timeline>,
-        tenant: &crate::tenant::TenantShard,
-        options: detach_ancestor::Options,
-        behavior: DetachBehavior,
-        ctx: &RequestContext,
-    ) -> Result<detach_ancestor::Progress, detach_ancestor::Error> {
-        detach_ancestor::prepare(self, tenant, behavior, options, ctx).await
-    }
-
-    /// Second step of detach from ancestor; detaches the `self` from it's current ancestor and
-    /// reparents any reparentable children of previous ancestor.
-    ///
-    /// This method is to be called while holding the TenantManager's tenant slot, so during this
-    /// method we cannot be deleted nor can any timeline be deleted. After this method returns
-    /// successfully, tenant must be reloaded.
-    ///
-    /// Final step will be to [`Self::complete_detaching_timeline_ancestor`] after optionally
-    /// resetting the tenant.
-    pub(crate) async fn detach_from_ancestor_and_reparent(
-        self: &Arc<Timeline>,
-        tenant: &crate::tenant::TenantShard,
-        prepared: detach_ancestor::PreparedTimelineDetach,
-        ancestor_timeline_id: TimelineId,
-        ancestor_lsn: Lsn,
-        behavior: DetachBehavior,
-        ctx: &RequestContext,
-    ) -> Result<detach_ancestor::DetachingAndReparenting, detach_ancestor::Error> {
-        detach_ancestor::detach_and_reparent(
-            self,
-            tenant,
-            prepared,
-            ancestor_timeline_id,
-            ancestor_lsn,
-            behavior,
-            ctx,
-        )
-        .await
-    }
-
-    /// Final step which unblocks the GC.
-    ///
-    /// The tenant must've been reset if ancestry was modified previously (in tenant manager).
-    pub(crate) async fn complete_detaching_timeline_ancestor(
-        self: &Arc<Timeline>,
-        tenant: &crate::tenant::TenantShard,
-        attempt: detach_ancestor::Attempt,
-        ctx: &RequestContext,
-    ) -> Result<(), detach_ancestor::Error> {
-        detach_ancestor::complete(self, tenant, attempt, ctx).await
-    }
 }
 
 impl Drop for Timeline {
