@@ -2199,13 +2199,6 @@ impl Timeline {
             .unwrap_or(self.conf.default_tenant_conf.checkpoint_distance)
     }
 
-    fn get_checkpoint_timeout(&self) -> Duration {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .checkpoint_timeout
-            .unwrap_or(self.conf.default_tenant_conf.checkpoint_timeout)
-    }
 
     pub(crate) fn get_pitr_interval(&self) -> Duration {
         let tenant_conf = &self.tenant_conf.load().tenant_conf;
@@ -2214,12 +2207,6 @@ impl Timeline {
             .unwrap_or(self.conf.default_tenant_conf.pitr_interval)
     }
 
-    fn get_compaction_period(&self) -> Duration {
-        let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
-        tenant_conf
-            .compaction_period
-            .unwrap_or(self.conf.default_tenant_conf.compaction_period)
-    }
 
     fn get_compaction_target_size(&self) -> u64 {
         let tenant_conf = self.tenant_conf.load();
@@ -2229,13 +2216,6 @@ impl Timeline {
             .unwrap_or(self.conf.default_tenant_conf.compaction_target_size)
     }
 
-    fn get_compaction_threshold(&self) -> usize {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .compaction_threshold
-            .unwrap_or(self.conf.default_tenant_conf.compaction_threshold)
-    }
 
     /// Returns `true` if the rel_size_v2 config is enabled. NOTE: the write path and read path
     /// should look at `get_rel_size_v2_status()` to get the actual status of the timeline. It is
@@ -2267,94 +2247,8 @@ impl Timeline {
             .unwrap_or(self.conf.default_tenant_conf.compaction_l0_semaphore)
     }
 
-    fn get_l0_flush_delay_threshold(&self) -> Option<usize> {
-        // By default, delay L0 flushes at 3x the compaction threshold. The compaction threshold
-        // defaults to 10, and L0 compaction is generally able to keep L0 counts below 30.
-        const DEFAULT_L0_FLUSH_DELAY_FACTOR: usize = 3;
 
-        // If compaction is disabled, don't delay.
-        if self.get_compaction_period() == Duration::ZERO {
-            return None;
-        }
 
-        let compaction_threshold = self.get_compaction_threshold();
-        let tenant_conf = self.tenant_conf.load();
-        let l0_flush_delay_threshold = tenant_conf
-            .tenant_conf
-            .l0_flush_delay_threshold
-            .or(self.conf.default_tenant_conf.l0_flush_delay_threshold)
-            .unwrap_or(DEFAULT_L0_FLUSH_DELAY_FACTOR * compaction_threshold);
-
-        // 0 disables backpressure.
-        if l0_flush_delay_threshold == 0 {
-            return None;
-        }
-
-        // Clamp the flush delay threshold to the compaction threshold; it doesn't make sense to
-        // backpressure flushes below this.
-        // TODO: the tenant config should have validation to prevent this instead.
-        debug_assert!(l0_flush_delay_threshold >= compaction_threshold);
-        Some(max(l0_flush_delay_threshold, compaction_threshold))
-    }
-
-    fn get_l0_flush_stall_threshold(&self) -> Option<usize> {
-        // Disable L0 stalls by default. Stalling can cause unavailability if L0 compaction isn't
-        // responsive, and it can e.g. block on other compaction via the compaction semaphore or
-        // sibling timelines. We need more confidence before enabling this.
-        const DEFAULT_L0_FLUSH_STALL_FACTOR: usize = 0; // TODO: default to e.g. 5
-
-        // If compaction is disabled, don't stall.
-        if self.get_compaction_period() == Duration::ZERO {
-            return None;
-        }
-
-        // If compaction is failing, don't stall and try to keep the tenant alive. This may not be a
-        // good idea: read amp can grow unbounded, leading to terrible performance, and we may take
-        // on unbounded compaction debt that can take a long time to fix once compaction comes back
-        // online. At least we'll delay flushes, slowing down the growth and buying some time.
-        if self.compaction_failed.load(AtomicOrdering::Relaxed) {
-            return None;
-        }
-
-        let compaction_threshold = self.get_compaction_threshold();
-        let tenant_conf = self.tenant_conf.load();
-        let l0_flush_stall_threshold = tenant_conf
-            .tenant_conf
-            .l0_flush_stall_threshold
-            .or(self.conf.default_tenant_conf.l0_flush_stall_threshold);
-
-        // Tests sometimes set compaction_threshold=1 to generate lots of layer files, and don't
-        // handle the 20-second compaction delay. Some (e.g. `test_backward_compatibility`) can't
-        // easily adjust the L0 backpressure settings, so just disable stalls in this case.
-        if cfg!(feature = "testing")
-            && compaction_threshold == 1
-            && l0_flush_stall_threshold.is_none()
-        {
-            return None;
-        }
-
-        let l0_flush_stall_threshold = l0_flush_stall_threshold
-            .unwrap_or(DEFAULT_L0_FLUSH_STALL_FACTOR * compaction_threshold);
-
-        // 0 disables backpressure.
-        if l0_flush_stall_threshold == 0 {
-            return None;
-        }
-
-        // Clamp the flush stall threshold to the compaction threshold; it doesn't make sense to
-        // backpressure flushes below this.
-        // TODO: the tenant config should have validation to prevent this instead.
-        debug_assert!(l0_flush_stall_threshold >= compaction_threshold);
-        Some(max(l0_flush_stall_threshold, compaction_threshold))
-    }
-
-    fn get_image_creation_threshold(&self) -> usize {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .image_creation_threshold
-            .unwrap_or(self.conf.default_tenant_conf.image_creation_threshold)
-    }
 
     // HADRON
     pub fn get_compaction_shard_ancestor(&self) -> bool {
@@ -2374,30 +2268,8 @@ impl Timeline {
             .unwrap_or(default_tenant_conf.evictions_low_residence_duration_metric_threshold)
     }
 
-    fn get_image_layer_creation_check_threshold(&self) -> u8 {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .image_layer_creation_check_threshold
-            .unwrap_or(
-                self.conf
-                    .default_tenant_conf
-                    .image_layer_creation_check_threshold,
-            )
-    }
 
 
-    fn get_image_creation_preempt_threshold(&self) -> usize {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .image_creation_preempt_threshold
-            .unwrap_or(
-                self.conf
-                    .default_tenant_conf
-                    .image_creation_preempt_threshold,
-            )
-    }
 
     pub(super) fn tenant_conf_updated(&self, new_conf: &AttachedTenantConf) {
         // NB: Most tenant conf options are read by background loops, so,
