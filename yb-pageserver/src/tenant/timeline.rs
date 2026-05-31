@@ -9,7 +9,7 @@ mod walreceiver;
 
 use hashlink::LruCache;
 use std::array;
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::{ControlFlow, Deref, Range};
@@ -33,7 +33,6 @@ use pageserver_api::config::tenant_conf_defaults::DEFAULT_PITR_INTERVAL;
 use pageserver_api::key::{
     Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX,
 };
-use pageserver_api::keyspace::SparseKeyPartitioning;
 use pageserver_api::models::{
     DetachBehavior, DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, LayerMapInfo, LsnLease, PageTraceEvent, RelSizeMigration,
     TimelineState,
@@ -47,11 +46,10 @@ use rand::Rng;
 use remote_storage::DownloadError;
 use storage_broker::BrokerClientChannel;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::{Notify, oneshot, watch};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::generation::Generation;
-use utils::guard_arc_swap::GuardArcSwap;
 use utils::id::TimelineId;
 use utils::logging::{MonitorSlowFutureCallback, log_slow, monitor_slow_future};
 use utils::lsn::{AtomicLsn, Lsn, RecordLsn};
@@ -67,7 +65,6 @@ use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
 use super::remote_timeline_client::RemoteTimelineClient;
 use super::remote_timeline_client::index::GcCompactionState;
-use super::upload_queue::NotInitialized;
 use super::{
     AttachedTenantConf, GcError, MaybeOffloaded,
     debug_assert_current_span_has_tenant_and_timeline_id,
@@ -78,8 +75,7 @@ use crate::config::PageServerConf;
 use crate::context::{
     DownloadBehavior, RequestContext,
 };
-use crate::keyspace::{KeyPartitioning, KeySpace};
-use crate::l0_flush::{self, L0FlushGlobalState};
+use crate::keyspace::KeySpace;
 use crate::metrics::{
     DELTAS_PER_READ_GLOBAL, ScanLatencyOngoingRecording, TimelineMetrics,
 };
@@ -2344,7 +2340,7 @@ impl Timeline {
             ));
             let aux_file_metrics = metrics.aux_file_size_gauge.clone();
 
-            let mut result = Timeline {
+            let result = Timeline {
                 conf,
                 tenant_conf,
                 myself: myself.clone(),

@@ -52,7 +52,7 @@ use timeline::import_pgdata::ImportingTimeline;
 use timeline::layer_manager::LayerManagerLockHolder;
 use timeline::{ShutdownMode, import_pgdata};
 use tokio::io::BufReader;
-use tokio::sync::{Notify, Semaphore, watch};
+use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
@@ -79,7 +79,6 @@ use crate::context;
 use crate::context::RequestContextBuilder;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::deletion_queue::{DeletionQueueClient, DeletionQueueError};
-use crate::l0_flush::L0FlushGlobalState;
 use crate::metrics::{
     BROKEN_TENANTS_SET, CONCURRENT_INITDBS,
     INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME, TENANT, TENANT_OFFLOADED_TIMELINES,
