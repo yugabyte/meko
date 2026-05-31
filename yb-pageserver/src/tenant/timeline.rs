@@ -206,9 +206,6 @@ pub struct Timeline {
     ancestor_timeline: Option<Arc<Timeline>>,
     ancestor_lsn: Lsn,
 
-    // The LSN of gc-compaction that was last applied to this timeline.
-    gc_compaction_state: ArcSwapOption<GcCompactionState>,
-
     pub(crate) metrics: Arc<TimelineMetrics>,
 
     // `Timeline` doesn't write these metrics itself, but it manages the lifetime.  Code
@@ -629,24 +626,6 @@ pub enum LogicalSizeCalculationCause {
 pub enum GetLogicalSizePriority {
     User,
     Background,
-}
-
-#[derive(Debug, enumset::EnumSetType)]
-pub(crate) enum CompactFlags {
-    ForceRepartition,
-    ForceImageLayerCreation,
-    ForceL0Compaction,
-    OnlyL0Compaction,
-    EnhancedGcBottomMostCompaction,
-    DryRun,
-    /// Makes image compaction yield if there's pending L0 compaction. This should always be used in
-    /// the background compaction task, since we want to aggressively compact down L0 to bound
-    /// read amplification.
-    ///
-    /// It only makes sense to use this when `compaction_l0_first` is enabled (such that we yield to
-    /// an L0 compaction pass), and without `OnlyL0Compaction` (L0 compaction shouldn't yield for L0
-    /// compaction).
-    YieldForL0,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1552,20 +1531,6 @@ impl Timeline {
     /// triggers (`should_flush_*`) and a dedicated background flush.
     pub(super) async fn maybe_freeze_ephemeral_layer(&self) {}
 
-    /// Test-only no-op stub left after Phase 4d.2 deleted compaction.rs.
-    /// Tests under tenant.rs still call `.compact()` to drive
-    /// freeze+flush+compact sequences; with no layer files there's
-    /// nothing to compact, so this just returns Done.
-    #[cfg(test)]
-    pub(crate) async fn compact(
-        self: &std::sync::Arc<Self>,
-        _cancel: &CancellationToken,
-        _flags: enumset::EnumSet<CompactFlags>,
-        _ctx: &RequestContext,
-    ) -> Result<(), anyhow::Error> {
-        Ok(())
-    }
-
     /// Mutate the timeline with a [`TimelineWriter`].
     pub(crate) async fn writer(&self) -> TimelineWriter<'_> {
         TimelineWriter {
@@ -2162,7 +2127,7 @@ impl Timeline {
         state: TimelineState,
         attach_wal_lag_cooldown: Arc<OnceLock<WalLagCooldown>>,
         create_idempotency: crate::tenant::CreateTimelineIdempotency,
-        gc_compaction_state: Option<GcCompactionState>,
+        _gc_compaction_state: Option<GcCompactionState>,
         rel_size_v2_status: Option<RelSizeMigration>,
         rel_size_migrated_at: Option<Lsn>,
         cancel: CancellationToken,
@@ -2310,8 +2275,6 @@ impl Timeline {
                 }),
                 disk_consistent_lsn: AtomicLsn::new(disk_consistent_lsn.0),
 
-                gc_compaction_state: ArcSwapOption::from_pointee(gc_compaction_state),
-
                 ancestor_timeline: ancestor,
                 ancestor_lsn: metadata.ancestor_lsn(),
 
@@ -2400,16 +2363,6 @@ impl Timeline {
     /// into YB rows), so spawning the loop is wasted. Kept as a stub
     /// so callers in tenant.rs / uninit.rs don't have to change.
     pub(super) fn maybe_spawn_flush_loop(self: &Arc<Self>) {}
-
-    pub(crate) fn update_gc_compaction_state(
-        &self,
-        gc_compaction_state: GcCompactionState,
-    ) -> anyhow::Result<()> {
-        self.gc_compaction_state
-            .store(Some(Arc::new(gc_compaction_state.clone())));
-        self.remote_client
-            .schedule_index_upload_for_gc_compaction_state_update(gc_compaction_state)
-    }
 
     pub(crate) fn update_rel_size_v2_status(
         &self,

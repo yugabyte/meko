@@ -72,7 +72,7 @@ use crate::tenant::remote_timeline_client::{
 };
 use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerName};
 use crate::tenant::timeline::{
-    CompactFlags, MarkInvisibleRequest, Timeline, WaitLsnTimeout,
+    MarkInvisibleRequest, Timeline, WaitLsnTimeout,
     WaitLsnWaiter,
 };
 use crate::tenant::{
@@ -880,15 +880,8 @@ async fn timeline_patch_index_part_handler(
                 .map_err(ApiError::InternalServerError)?;
         }
 
-        if let Some(gc_compaction_last_completed_lsn) =
-            request_data.gc_compaction_last_completed_lsn
-        {
-            timeline
-                .update_gc_compaction_state(GcCompactionState {
-                    last_completed_lsn: gc_compaction_last_completed_lsn,
-                })
-                .map_err(ApiError::InternalServerError)?;
-        }
+        // yb-pageserver: gc_compaction is not supported; ignore.
+        let _ = request_data.gc_compaction_last_completed_lsn;
 
         if let Some(applied_gc_cutoff_lsn) = request_data.applied_gc_cutoff_lsn {
             {
@@ -1927,19 +1920,11 @@ async fn timeline_checkpoint_handler(
 
     let state = get_state(&request);
 
-    let mut flags = EnumSet::empty();
-    if Some(true) == parse_query_param::<_, bool>(&request, "force_l0_compaction")? {
-        flags |= CompactFlags::ForceL0Compaction;
-    }
-    if Some(true) == parse_query_param::<_, bool>(&request, "force_repartition")? {
-        flags |= CompactFlags::ForceRepartition;
-    }
-    if Some(true) == parse_query_param::<_, bool>(&request, "force_image_layer_creation")? {
-        flags |= CompactFlags::ForceImageLayerCreation;
-    }
-
-    // By default, checkpoints come with a compaction, but this may be optionally disabled by tests that just want to flush + upload.
-    let compact = parse_query_param::<_, bool>(&request, "compact")?.unwrap_or(true);
+    // yb-pageserver: compaction is gone; force_* flags are ignored.
+    let _ = parse_query_param::<_, bool>(&request, "force_l0_compaction")?;
+    let _ = parse_query_param::<_, bool>(&request, "force_repartition")?;
+    let _ = parse_query_param::<_, bool>(&request, "force_image_layer_creation")?;
+    let _ = parse_query_param::<_, bool>(&request, "compact")?;
 
     let wait_until_flushed: bool =
         parse_query_param(&request, "wait_until_flushed")?.unwrap_or(true);
@@ -1962,7 +1947,7 @@ async fn timeline_checkpoint_handler(
                 }
             })?;
         // Compaction removed in phase 4d.2 (compaction.rs deletion).
-        let _ = (compact, flags, ctx, &cancel);
+        let _ = (ctx, &cancel);
 
         if wait_until_uploaded {
             tracing::info!("Waiting for uploads to complete...");
