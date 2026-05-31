@@ -28,7 +28,7 @@ use yb_pageserver::task_mgr::{
 };
 use yb_pageserver::tenant::{TenantSharedResources, mgr};
 use yb_pageserver::{
-    CancellableTask, ConsumptionMetricsTasks, HttpEndpointListener, HttpsEndpointListener,
+    CancellableTask, HttpEndpointListener, HttpsEndpointListener,
     MetricsCollectionTask, http, page_cache, page_service, task_mgr, virtual_file,
 };
 use postgres_backend::AuthType;
@@ -794,28 +794,6 @@ fn start_pageserver(
     };
     /* END_HADRON */
 
-    let consumption_metrics_tasks = {
-        let cancel = shutdown_pageserver.child_token();
-        let task = crate::BACKGROUND_RUNTIME.spawn({
-            let tenant_manager = tenant_manager.clone();
-            let cancel = cancel.clone();
-            async move {
-                // first wait until background jobs are cleared to launch.
-                //
-                // this is because we only process active tenants and timelines, and the
-                // Timeline::get_current_logical_size will spawn the logical size calculation,
-                // which will not be rate-limited.
-                tokio::select! {
-                    _ = cancel.cancelled() => { return; },
-                    _ = background_jobs_barrier.wait() => {}
-                };
-
-                yb_pageserver::consumption_metrics::run(conf, tenant_manager, cancel).await;
-            }
-        });
-        ConsumptionMetricsTasks(CancellableTask { task, cancel })
-    };
-
     // Spawn a task to listen for libpq connections. It will spawn further tasks
     // for each connection. We created the listener earlier already.
     let perf_trace_dispatch = otel_guard.as_ref().map(|g| g.dispatch.clone());
@@ -876,7 +854,6 @@ fn start_pageserver(
             page_service,
             page_service_grpc,
             metrics_collection_task,
-            consumption_metrics_tasks,
             &tenant_manager,
             background_purges,
             deletion_queue.clone(),

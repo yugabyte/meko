@@ -1292,8 +1292,7 @@ async fn tenant_delete_handler(
 
 /// HTTP endpoint to query the current tenant_size of a tenant.
 ///
-/// This is not used by consumption metrics under [`crate::consumption_metrics`], but can be used
-/// to debug any of the calculations. Requires `tenant_id` request parameter, supports
+/// Debug endpoint for tenant-size-model inputs. Requires `tenant_id` request parameter, supports
 /// `inputs_only=true|false` (default false) which supports debugging failure to calculate model
 /// values.
 ///

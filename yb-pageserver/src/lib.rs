@@ -5,7 +5,6 @@ mod auth;
 pub mod basebackup;
 pub mod basebackup_cache;
 pub mod config;
-pub mod consumption_metrics;
 pub mod context;
 pub mod controller_upcall_client;
 pub mod deletion_queue;
@@ -73,7 +72,6 @@ pub struct CancellableTask {
 }
 pub struct HttpEndpointListener(pub CancellableTask);
 pub struct HttpsEndpointListener(pub CancellableTask);
-pub struct ConsumptionMetricsTasks(pub CancellableTask);
 // HADRON
 pub struct MetricsCollectionTask(pub CancellableTask);
 
@@ -92,7 +90,6 @@ pub async fn shutdown_pageserver(
     page_service: page_service::Listener,
     grpc_task: Option<CancellableTask>,
     metrics_collection_task: MetricsCollectionTask,
-    consumption_metrics_worker: ConsumptionMetricsTasks,
     tenant_manager: &TenantManager,
     background_purges: BackgroundPurges,
     mut deletion_queue: DeletionQueue,
@@ -218,13 +215,6 @@ pub async fn shutdown_pageserver(
     timed(
         metrics_collection_task.0.shutdown(),
         "shutdown metrics collections metrics",
-        Duration::from_secs(1),
-    )
-    .await;
-
-    timed(
-        consumption_metrics_worker.0.shutdown(),
-        "shutdown consumption metrics",
         Duration::from_secs(1),
     )
     .await;
