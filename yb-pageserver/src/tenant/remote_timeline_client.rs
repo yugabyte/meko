@@ -692,55 +692,6 @@ impl RemoteTimelineClient {
         }
     }
 
-    /// Download a (layer) file from `path`, into local filesystem.
-    ///
-    /// 'layer_metadata' is the metadata from the remote index file.
-    ///
-    /// On success, returns the size of the downloaded file.
-    pub async fn download_layer_file(
-        &self,
-        layer_file_name: &LayerName,
-        layer_metadata: &LayerFileMetadata,
-        local_path: &Utf8Path,
-        gate: &utils::sync::gate::Gate,
-        cancel: &CancellationToken,
-        ctx: &RequestContext,
-    ) -> Result<u64, DownloadError> {
-        let downloaded_size = {
-            let _unfinished_gauge_guard = self.metrics.call_begin(
-                &RemoteOpFileKind::Layer,
-                &RemoteOpKind::Download,
-                crate::metrics::RemoteTimelineClientMetricsCallTrackSize::DontTrackSize {
-                    reason: "no need for a downloads gauge",
-                },
-            );
-            download::download_layer_file(
-                self.conf,
-                &self.storage_impl,
-                self.tenant_shard_id,
-                self.timeline_id,
-                layer_file_name,
-                layer_metadata,
-                local_path,
-                gate,
-                cancel,
-                ctx,
-            )
-            .measure_remote_op(
-                Some(ctx.task_kind()),
-                RemoteOpFileKind::Layer,
-                RemoteOpKind::Download,
-                Arc::clone(&self.metrics),
-            )
-            .await?
-        };
-
-        REMOTE_ONDEMAND_DOWNLOADED_LAYERS.inc();
-        REMOTE_ONDEMAND_DOWNLOADED_BYTES.inc_by(downloaded_size);
-
-        Ok(downloaded_size)
-    }
-
     //
     // Upload operations.
     //
@@ -969,44 +920,6 @@ impl RemoteTimelineClient {
         self.launch_queued_tasks(upload_queue);
     }
 
-    /// Reparent this timeline to a new parent.
-    ///
-    /// A retryable step of timeline ancestor detach.
-    pub(crate) async fn schedule_reparenting_and_wait(
-        self: &Arc<Self>,
-        new_parent: &TimelineId,
-    ) -> anyhow::Result<()> {
-        let receiver = {
-            let mut guard = self.upload_queue.lock().unwrap();
-            let upload_queue = guard.initialized_mut()?;
-
-            let Some(prev) = upload_queue.dirty.metadata.ancestor_timeline() else {
-                return Err(anyhow::anyhow!(
-                    "cannot reparent without a current ancestor"
-                ));
-            };
-
-            let uploaded = &upload_queue.clean.0.metadata;
-
-            if uploaded.ancestor_timeline().is_none() && !uploaded.ancestor_lsn().is_valid() {
-                // nothing to do
-                None
-            } else {
-                upload_queue.dirty.metadata.reparent(new_parent);
-                upload_queue.dirty.lineage.record_previous_ancestor(&prev);
-
-                self.schedule_index_upload(upload_queue);
-
-                Some(self.schedule_barrier0(upload_queue))
-            }
-        };
-
-        if let Some(receiver) = receiver {
-            Self::wait_completion0(receiver).await?;
-        }
-        Ok(())
-    }
-
     /// Adds a gc blocking reason for this timeline if one does not exist already.
     ///
     /// A retryable step of timeline detach ancestor.
@@ -1126,195 +1039,6 @@ impl RemoteTimelineClient {
         })
     }
 
-    /// Launch an upload operation in the background; the file is added to be included in next
-    /// `index_part.json` upload.
-    pub(crate) fn schedule_layer_file_upload(
-        self: &Arc<Self>,
-        layer: ResidentLayer,
-    ) -> Result<(), NotInitialized> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-
-        self.schedule_layer_file_upload0(upload_queue, layer);
-        self.launch_queued_tasks(upload_queue);
-        Ok(())
-    }
-
-    fn schedule_layer_file_upload0(
-        self: &Arc<Self>,
-        upload_queue: &mut UploadQueueInitialized,
-        layer: ResidentLayer,
-    ) {
-        let metadata = layer.metadata();
-
-        upload_queue
-            .dirty
-            .layer_metadata
-            .insert(layer.layer_desc().layer_name(), metadata.clone());
-        upload_queue.latest_files_changes_since_metadata_upload_scheduled += 1;
-
-        info!(
-            gen=?metadata.generation,
-            shard=?metadata.shard,
-            "scheduled layer file upload {layer}",
-        );
-
-        let op = UploadOp::UploadLayer(layer, metadata, None);
-        self.metric_begin(&op);
-        upload_queue.queued_operations.push_back(op);
-    }
-
-    /// Unlinks the layer files from `index_part.json` but does not yet schedule deletion for the
-    /// layer files, leaving them dangling.
-    ///
-    /// The files will be leaked in remote storage unless [`Self::schedule_deletion_of_unlinked`]
-    /// is invoked on them.
-    pub(crate) fn schedule_gc_update(
-        self: &Arc<Self>,
-        gc_layers: &[Layer],
-    ) -> Result<(), NotInitialized> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-
-        // just forget the return value; after uploading the next index_part.json, we can consider
-        // the layer files as "dangling". this is fine, at worst case we create work for the
-        // scrubber.
-
-        let names = gc_layers.iter().map(|x| x.layer_desc().layer_name());
-
-        self.schedule_unlinking_of_layers_from_index_part0(upload_queue, names);
-
-        self.launch_queued_tasks(upload_queue);
-
-        Ok(())
-    }
-
-    /// Update the remote index file, removing the to-be-deleted files from the index,
-    /// allowing scheduling of actual deletions later.
-    fn schedule_unlinking_of_layers_from_index_part0<I>(
-        self: &Arc<Self>,
-        upload_queue: &mut UploadQueueInitialized,
-        names: I,
-    ) -> Vec<(LayerName, LayerFileMetadata)>
-    where
-        I: IntoIterator<Item = LayerName>,
-    {
-        // Decorate our list of names with each name's metadata, dropping
-        // names that are unexpectedly missing from our metadata.  This metadata
-        // is later used when physically deleting layers, to construct key paths.
-        let with_metadata: Vec<_> = names
-            .into_iter()
-            .filter_map(|name| {
-                let meta = upload_queue.dirty.layer_metadata.remove(&name);
-
-                if let Some(meta) = meta {
-                    upload_queue.latest_files_changes_since_metadata_upload_scheduled += 1;
-                    Some((name, meta))
-                } else {
-                    // This can only happen if we forgot to to schedule the file upload
-                    // before scheduling the delete. Log it because it is a rare/strange
-                    // situation, and in case something is misbehaving, we'd like to know which
-                    // layers experienced this.
-                    info!("Deleting layer {name} not found in latest_files list, never uploaded?");
-                    None
-                }
-            })
-            .collect();
-
-        #[cfg(feature = "testing")]
-        for (name, metadata) in &with_metadata {
-            let gen_ = metadata.generation;
-            if let Some(unexpected) = upload_queue.dangling_files.insert(name.to_owned(), gen_) {
-                if unexpected == gen_ {
-                    tracing::error!("{name} was unlinked twice with same generation");
-                } else {
-                    tracing::error!(
-                        "{name} was unlinked twice with different generations {gen_:?} and {unexpected:?}"
-                    );
-                }
-            }
-        }
-
-        // after unlinking files from the upload_queue.latest_files we must always schedule an
-        // index_part update, because that needs to be uploaded before we can actually delete the
-        // files.
-        if upload_queue.latest_files_changes_since_metadata_upload_scheduled > 0 {
-            self.schedule_index_upload(upload_queue);
-        }
-
-        with_metadata
-    }
-
-    /// Schedules deletion for layer files which have previously been unlinked from the
-    /// `index_part.json` with [`Self::schedule_gc_update`] or [`Self::schedule_compaction_update`].
-    pub(crate) fn schedule_deletion_of_unlinked(
-        self: &Arc<Self>,
-        layers: Vec<(LayerName, LayerFileMetadata)>,
-    ) -> anyhow::Result<()> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-
-        self.schedule_deletion_of_unlinked0(upload_queue, layers);
-        self.launch_queued_tasks(upload_queue);
-        Ok(())
-    }
-
-    fn schedule_deletion_of_unlinked0(
-        self: &Arc<Self>,
-        upload_queue: &mut UploadQueueInitialized,
-        mut with_metadata: Vec<(LayerName, LayerFileMetadata)>,
-    ) {
-        // Filter out any layers which were not created by this tenant shard.  These are
-        // layers that originate from some ancestor shard after a split, and may still
-        // be referenced by other shards. We are free to delete them locally and remove
-        // them from our index (and would have already done so when we reach this point
-        // in the code), but we may not delete them remotely.
-        with_metadata.retain(|(name, meta)| {
-            let retain = meta.shard.shard_number == self.tenant_shard_id.shard_number
-                && meta.shard.shard_count == self.tenant_shard_id.shard_count;
-            if !retain {
-                tracing::debug!(
-                    "Skipping deletion of ancestor-shard layer {name}, from shard {}",
-                    meta.shard
-                );
-            }
-            retain
-        });
-
-        for (name, meta) in &with_metadata {
-            info!(
-                "scheduling deletion of layer {}{} (shard {})",
-                name,
-                meta.generation.get_suffix(),
-                meta.shard
-            );
-        }
-
-        #[cfg(feature = "testing")]
-        for (name, meta) in &with_metadata {
-            let gen_ = meta.generation;
-            match upload_queue.dangling_files.remove(name) {
-                Some(same) if same == gen_ => { /* expected */ }
-                Some(other) => {
-                    tracing::error!("{name} was unlinked with {other:?} but deleted with {gen_:?}");
-                }
-                None => {
-                    tracing::error!("{name} was unlinked but was not dangling");
-                }
-            }
-        }
-
-        // schedule the actual deletions
-        if with_metadata.is_empty() {
-            // avoid scheduling the op & bumping the metric
-            return;
-        }
-        let op = UploadOp::Delete(Delete {
-            layers: with_metadata,
-        });
-        self.metric_begin(&op);
-        upload_queue.queued_operations.push_back(op);
-    }
 
     /// Wait for all previously scheduled uploads/deletions to complete
     pub(crate) async fn wait_completion(self: &Arc<Self>) -> Result<(), WaitCompletionError> {
@@ -1532,44 +1256,6 @@ impl RemoteTimelineClient {
         Ok(())
     }
 
-    /// Uploads the given layer **without** adding it to be part of a future `index_part.json` upload.
-    ///
-    /// This is not normally needed.
-    pub(crate) async fn upload_layer_file(
-        self: &Arc<Self>,
-        uploaded: &ResidentLayer,
-        cancel: &CancellationToken,
-    ) -> anyhow::Result<()> {
-        let remote_path = remote_layer_path(
-            &self.tenant_shard_id.tenant_id,
-            &self.timeline_id,
-            uploaded.metadata().shard,
-            &uploaded.layer_desc().layer_name(),
-            uploaded.metadata().generation,
-        );
-
-        backoff::retry(
-            || async {
-                upload::upload_timeline_layer(
-                    &self.storage_impl,
-                    uploaded.local_path(),
-                    &remote_path,
-                    uploaded.metadata().file_size,
-                    cancel,
-                )
-                .await
-            },
-            TimeoutOrCancel::caused_by_cancel,
-            FAILED_UPLOAD_WARN_THRESHOLD,
-            FAILED_REMOTE_OP_RETRIES,
-            "upload a layer without adding it to latest files",
-            cancel,
-        )
-        .await
-        .ok_or_else(|| anyhow::Error::new(TimeoutOrCancel::Cancel))
-        .and_then(|x| x)
-        .context("upload a layer without adding it to latest files")
-    }
 
     async fn flush_deletion_queue(&self) -> Result<(), DeletionQueueError> {
         match tokio::time::timeout(
@@ -2325,16 +2011,6 @@ impl RemoteTimelineClient {
         }
     }
 
-    /// Returns an accessor which will hold the UploadQueue mutex for accessing the upload queue
-    /// externally to RemoteTimelineClient.
-    pub(crate) fn initialized_upload_queue(
-        &self,
-    ) -> Result<UploadQueueAccessor<'_>, NotInitialized> {
-        let mut inner = self.upload_queue.lock().unwrap();
-        inner.initialized_mut()?;
-        Ok(UploadQueueAccessor { inner })
-    }
-
     pub(crate) fn no_pending_work(&self) -> bool {
         let inner = self.upload_queue.lock().unwrap();
         match &*inner {
@@ -2367,21 +2043,6 @@ impl RemoteTimelineClient {
             cancel,
         )
         .await
-    }
-}
-
-pub(crate) struct UploadQueueAccessor<'a> {
-    inner: std::sync::MutexGuard<'a, UploadQueue>,
-}
-
-impl UploadQueueAccessor<'_> {
-    pub(crate) fn latest_uploaded_index_part(&self) -> &IndexPart {
-        match &*self.inner {
-            UploadQueue::Initialized(x) => &x.clean.0,
-            UploadQueue::Uninitialized | UploadQueue::Stopped(_) => {
-                unreachable!("checked before constructing")
-            }
-        }
     }
 }
 
