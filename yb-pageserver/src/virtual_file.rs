@@ -28,7 +28,6 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::time::Instant;
 use tokio_epoll_uring::{BoundedBuf, IoBuf, IoBufMut, Slice};
 
-use self::owned_buffers_io::write::OwnedAsyncWriter;
 use crate::assert_u64_eq_usize::UsizeIsU64;
 use crate::context::RequestContext;
 use crate::metrics::{STORAGE_IO_TIME_METRIC, StorageIoOperation};
@@ -43,12 +42,10 @@ pub use io_engine::{
 pub(crate) use metadata::Metadata;
 pub(crate) use open_options::*;
 pub use pageserver_api::models::virtual_file as api;
-pub use temporary::TempVirtualFile;
 
 pub(crate) mod io_engine;
 mod metadata;
 mod open_options;
-mod temporary;
 pub(crate) mod owned_buffers_io {
     //! Abstractions for IO with owned buffers.
     //!
@@ -63,7 +60,6 @@ pub(crate) mod owned_buffers_io {
     pub(crate) mod io_buf_aligned;
     pub(crate) mod io_buf_ext;
     pub(crate) mod slice;
-    pub(crate) mod write;
 }
 
 #[derive(Debug)]
@@ -1122,20 +1118,6 @@ impl Drop for VirtualFileInner {
                 clean_slot(slot, slot_guard, tag);
             });
         };
-    }
-}
-
-impl OwnedAsyncWriter for VirtualFile {
-    async fn write_all_at<Buf: IoBufAligned + Send>(
-        &self,
-        buf: FullSlice<Buf>,
-        offset: u64,
-        ctx: &RequestContext,
-    ) -> (FullSlice<Buf>, std::io::Result<()>) {
-        VirtualFile::write_all_at(self, buf, offset, ctx).await
-    }
-    async fn set_len(&self, len: u64, ctx: &RequestContext) -> std::io::Result<()> {
-        VirtualFile::set_len(self, len, ctx).await
     }
 }
 

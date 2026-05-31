@@ -5,8 +5,13 @@ use std::ops::{Deref, Range};
 use bytes::{Bytes, BytesMut};
 use tokio_epoll_uring::{BoundedBuf, IoBuf, Slice};
 
-use super::write::CheapCloneForRead;
 use crate::virtual_file::{IoBuffer, IoBufferMut};
+
+/// Cheap clone for read-only views. In yb-mode this trait used to live
+/// in the deleted `write` submodule; kept here as a leaf trait.
+pub(crate) trait CheapCloneForRead {
+    fn cheap_clone(&self) -> Self;
+}
 
 /// The true owned equivalent for Rust [`slice`]. Use this for the write path.
 ///
