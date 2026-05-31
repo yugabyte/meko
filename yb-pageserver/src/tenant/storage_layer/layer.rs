@@ -347,10 +347,6 @@ impl Layer {
         self.0.info(reset)
     }
 
-    pub(crate) fn visibility(&self) -> LayerVisibilityHint {
-        self.0.access_stats.visibility()
-    }
-
     pub(crate) fn local_path(&self) -> &Utf8Path {
         &self.0.path
     }

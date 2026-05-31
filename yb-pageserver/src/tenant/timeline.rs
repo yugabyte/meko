@@ -101,16 +101,13 @@ use crate::walingest::WalLagCooldown;
 use crate::walredo::RedoAttemptType;
 use crate::{task_mgr, walredo};
 
+/// yb-mode: the flush loop never spawns (maybe_spawn_flush_loop is a
+/// stub), so the state machine collapses to its initial variant. Kept
+/// so callers that pattern-match TimelineState::NotRunning(...) keep
+/// the same shape.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum FlushLoopState {
     NotStarted,
-    Running {
-        #[cfg(test)]
-        expect_initdb_optimization: bool,
-        #[cfg(test)]
-        initdb_optimization_count: usize,
-    },
-    Exited,
 }
 
 /// Temporary function for immutable storage state refactor, ensures we are dropping mutex guard instead of other things.
