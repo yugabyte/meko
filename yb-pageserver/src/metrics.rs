@@ -491,24 +491,6 @@ pub(crate) static WAIT_LSN_IN_PROGRESS_GLOBAL_MICROS: Lazy<IntCounter> = Lazy::n
     .expect("failed to define a metric")
 });
 
-pub(crate) static ONDEMAND_DOWNLOAD_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
-    register_int_counter_vec!(
-        "pageserver_ondemand_download_bytes_total",
-        "Total bytes of layers on-demand downloaded",
-        &["task_kind"]
-    )
-    .expect("failed to define a metric")
-});
-
-pub(crate) static ONDEMAND_DOWNLOAD_COUNT: Lazy<IntCounterVec> = Lazy::new(|| {
-    register_int_counter_vec!(
-        "pageserver_ondemand_download_count",
-        "Total count of layers on-demand downloaded",
-        &["task_kind"]
-    )
-    .expect("failed to define a metric")
-});
-
 pub(crate) mod wait_ondemand_download_time {
     use super::*;
     const WAIT_ONDEMAND_DOWNLOAD_TIME_BUCKETS: &[f64] = &[
@@ -657,24 +639,6 @@ pub(crate) enum LayerLevel {
     L1,
 }
 
-static TIMELINE_LAYER_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_layer_bytes",
-        "Sum of frozen, L0, and L1 layer physical sizes in bytes (excluding the open ephemeral layer)",
-        &["tenant_id", "shard_id", "timeline_id", "level", "kind"]
-    )
-    .expect("failed to define a metric")
-});
-
-static TIMELINE_LAYER_COUNT: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_layer_count",
-        "Number of frozen, L0, and L1 layers (excluding the open ephemeral layer)",
-        &["tenant_id", "shard_id", "timeline_id", "level", "kind"]
-    )
-    .expect("failed to define a metric")
-});
-
 static TIMELINE_ARCHIVE_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_archive_size",
@@ -737,22 +701,6 @@ static REMOTE_PHYSICAL_SIZE_GLOBAL: Lazy<UIntGauge> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-pub(crate) static REMOTE_ONDEMAND_DOWNLOADED_LAYERS: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "pageserver_remote_ondemand_downloaded_layers_total",
-        "Total on-demand downloaded layers"
-    )
-    .unwrap()
-});
-
-pub(crate) static REMOTE_ONDEMAND_DOWNLOADED_BYTES: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "pageserver_remote_ondemand_downloaded_bytes_total",
-        "Total bytes of layers on-demand downloaded",
-    )
-    .unwrap()
-});
-
 static CURRENT_LOGICAL_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_current_logical_size",
@@ -792,38 +740,6 @@ pub(crate) static CIRCUIT_BREAKERS_UNBROKEN: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "pageserver_circuit_breaker_unbroken",
         "How many times a circuit breaker has been un-broken (recovered)"
-    )
-    .expect("failed to define a metric")
-});
-
-pub(crate) static COMPRESSION_IMAGE_INPUT_BYTES: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "pageserver_compression_image_in_bytes_total",
-        "Size of data written into image layers before compression"
-    )
-    .expect("failed to define a metric")
-});
-
-pub(crate) static COMPRESSION_IMAGE_INPUT_BYTES_CONSIDERED: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "pageserver_compression_image_in_bytes_considered",
-        "Size of potentially compressible data written into image layers before compression"
-    )
-    .expect("failed to define a metric")
-});
-
-pub(crate) static COMPRESSION_IMAGE_INPUT_BYTES_CHOSEN: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "pageserver_compression_image_in_bytes_chosen",
-        "Size of data whose compressed form was written into image layers"
-    )
-    .expect("failed to define a metric")
-});
-
-pub(crate) static COMPRESSION_IMAGE_OUTPUT_BYTES: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "pageserver_compression_image_out_bytes_total",
-        "Size of compressed image layer written"
     )
     .expect("failed to define a metric")
 });
@@ -3202,63 +3118,8 @@ impl TimelineMetrics {
         }
     }
 
-    pub(crate) fn resident_physical_size_sub(&self, sz: u64) {
-        self.resident_physical_size_gauge.sub(sz);
-        crate::metrics::RESIDENT_PHYSICAL_SIZE_GLOBAL.sub(sz);
-    }
-
-    pub(crate) fn resident_physical_size_add(&self, sz: u64) {
-        self.resident_physical_size_gauge.add(sz);
-        crate::metrics::RESIDENT_PHYSICAL_SIZE_GLOBAL.add(sz);
-    }
-
     pub(crate) fn resident_physical_size_get(&self) -> u64 {
         self.resident_physical_size_gauge.get()
-    }
-
-    /// Generates TIMELINE_LAYER labels for a persistent layer.
-    fn make_layer_labels(&self, layer_desc: &PersistentLayerDesc) -> [&str; 5] {
-        let level = match LayerMap::is_l0(&layer_desc.key_range, layer_desc.is_delta()) {
-            true => LayerLevel::L0,
-            false => LayerLevel::L1,
-        };
-        let kind = match layer_desc.is_delta() {
-            true => LayerKind::Delta,
-            false => LayerKind::Image,
-        };
-        [
-            &self.tenant_id,
-            &self.shard_id,
-            &self.timeline_id,
-            level.into(),
-            kind.into(),
-        ]
-    }
-
-    /// Removes a persistent layer from TIMELINE_LAYER metrics.
-    pub fn dec_layer(&self, layer_desc: &PersistentLayerDesc) {
-        let labels = self.make_layer_labels(layer_desc);
-        TIMELINE_LAYER_COUNT
-            .get_metric_with_label_values(&labels)
-            .unwrap()
-            .dec();
-        TIMELINE_LAYER_SIZE
-            .get_metric_with_label_values(&labels)
-            .unwrap()
-            .sub(layer_desc.file_size);
-    }
-
-    /// Adds a persistent layer to TIMELINE_LAYER metrics.
-    pub fn inc_layer(&self, layer_desc: &PersistentLayerDesc) {
-        let labels = self.make_layer_labels(layer_desc);
-        TIMELINE_LAYER_COUNT
-            .get_metric_with_label_values(&labels)
-            .unwrap()
-            .inc();
-        TIMELINE_LAYER_SIZE
-            .get_metric_with_label_values(&labels)
-            .unwrap()
-            .add(layer_desc.file_size);
     }
 
     pub(crate) fn shutdown(&self) {
@@ -3292,15 +3153,6 @@ impl TimelineMetrics {
 
         let _ = TIMELINE_ARCHIVE_SIZE.remove_label_values(&[tenant_id, shard_id, timeline_id]);
         let _ = PITR_HISTORY_SIZE.remove_label_values(&[tenant_id, shard_id, timeline_id]);
-
-        for ref level in LayerLevel::iter() {
-            for ref kind in LayerKind::iter() {
-                let labels: [&str; 5] =
-                    [tenant_id, shard_id, timeline_id, level.into(), kind.into()];
-                let _ = TIMELINE_LAYER_SIZE.remove_label_values(&labels);
-                let _ = TIMELINE_LAYER_COUNT.remove_label_values(&labels);
-            }
-        }
 
         let _ = LAYERS_PER_READ.remove_label_values(&[tenant_id, shard_id, timeline_id]);
 
@@ -4224,8 +4076,6 @@ pub fn preinitialize_metrics(
         &WALRECEIVER_CANDIDATES_REMOVED,
         &tokio_epoll_uring::THREAD_LOCAL_LAUNCH_FAILURES,
         &tokio_epoll_uring::THREAD_LOCAL_LAUNCH_SUCCESSES,
-        &REMOTE_ONDEMAND_DOWNLOADED_LAYERS,
-        &REMOTE_ONDEMAND_DOWNLOADED_BYTES,
         &CIRCUIT_BREAKERS_BROKEN,
         &CIRCUIT_BREAKERS_UNBROKEN,
         &PAGE_SERVICE_SMGR_FLUSH_INPROGRESS_MICROS_GLOBAL,

@@ -713,26 +713,6 @@ impl RemoteTimelineClient {
     ///
     /// Using this lighter update mechanism allows for reparenting and detaching without changes to
     /// `index_part.json`, while being more clear on what values update regularly.
-    pub(crate) fn schedule_index_upload_for_metadata_update(
-        self: &Arc<Self>,
-        update: &MetadataUpdate,
-    ) -> anyhow::Result<()> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-
-        upload_queue.dirty.metadata.apply(update);
-
-        // Defense in depth: if we somehow generated invalid metadata, do not persist it.
-        upload_queue
-            .dirty
-            .validate()
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        self.schedule_index_upload(upload_queue);
-
-        Ok(())
-    }
-
     /// Launch an index-file upload operation in the background, with only the `archived_at` field updated.
     ///
     /// Returns whether it is required to wait for the queue to be empty to ensure that the change is uploaded,
@@ -810,18 +790,6 @@ impl RemoteTimelineClient {
 
     /// If the `import_pgdata` field marks the timeline as having an import in progress,
     /// launch an index-file upload operation that transitions it to done in the background
-
-    /// Launch an index-file upload operation in the background, setting `gc_compaction_state` field.
-    pub(crate) fn schedule_index_upload_for_gc_compaction_state_update(
-        self: &Arc<Self>,
-        gc_compaction_state: GcCompactionState,
-    ) -> anyhow::Result<()> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-        upload_queue.dirty.gc_compaction = Some(gc_compaction_state);
-        self.schedule_index_upload(upload_queue);
-        Ok(())
-    }
 
     /// Launch an index-file upload operation in the background, setting `rel_size_v2_status` field.
     pub(crate) fn schedule_index_upload_for_rel_size_v2_status_update(
