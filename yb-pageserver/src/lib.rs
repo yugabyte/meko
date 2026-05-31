@@ -32,7 +32,6 @@ pub mod unified_pages;
 pub mod image_materializer;
 pub mod pgdatadir_mapping;
 pub mod span;
-pub(crate) mod statvfs;
 pub mod task_mgr;
 pub mod tenant;
 pub mod utilization;

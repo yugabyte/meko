@@ -106,18 +106,6 @@ fn slru_kind_from_i16(v: i16) -> Result<SlruKind> {
     })
 }
 
-/// Decompose an SLRU-block Key into typed columns. `Err` for non-SLRU keys.
-fn slru_key_columns(key: Key) -> Result<(i16, i64, i64)> {
-    if !key.is_slru_block_key() {
-        bail!(
-            "PageStore: key {key} is not an SLRU block (field1=0x{:02x}, field3={}, field6=0x{:x})",
-            key.field1, key.field3, key.field6
-        );
-    }
-    let kind = slru_kind_from_i16(key.field2 as i16)?;
-    Ok((slru_kind_to_i16(kind), key.field4 as i64, key.field6 as i64))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineRow {
     pub tenant_id: TenantId,

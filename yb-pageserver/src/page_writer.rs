@@ -1004,10 +1004,6 @@ fn build_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<PageRow> {
     })
 }
 
-fn row_size(r: &PageRow) -> usize {
-    r.payload.len() + r.key.len() + 16
-}
-
 /// SLRU equivalent of `build_page_row`. `key` must be an SLRU block key
 /// (`Key::is_slru_block_key`); the caller is expected to have already
 /// filtered.

@@ -83,7 +83,6 @@ use super::remote_timeline_client::RemoteTimelineClient;
 use super::remote_timeline_client::index::{GcCompactionState, IndexPart};
 use super::secondary::heatmap::HeatMapLayer;
 use super::storage_layer::{LayerFringe, LayerVisibilityHint, ReadableLayer};
-use super::tasks::log_compaction_error;
 use super::upload_queue::NotInitialized;
 use super::{
     AttachedTenantConf, GcError, HeatMapTimeline, MaybeOffloaded,

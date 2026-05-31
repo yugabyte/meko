@@ -191,44 +191,6 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
     );
 }
 
-pub(crate) fn log_compaction_error(
-    err: &CompactionError,
-    retry_info: Option<(u32, Duration)>,
-    task_cancelled: bool,
-    degrade_to_warning: bool,
-) {
-    let is_cancel = err.is_cancel();
-
-    let level = if is_cancel || task_cancelled {
-        Level::INFO
-    } else {
-        Level::ERROR
-    };
-
-    if let Some((error_count, sleep_duration)) = retry_info {
-        match level {
-            Level::ERROR => {
-                error!(
-                    "Compaction failed {error_count} times, retrying in {sleep_duration:?}: {err:#}"
-                )
-            }
-            Level::INFO => {
-                info!(
-                    "Compaction failed {error_count} times, retrying in {sleep_duration:?}: {err:#}"
-                )
-            }
-            level => unimplemented!("unexpected level {level:?}"),
-        }
-    } else {
-        match level {
-            Level::ERROR if degrade_to_warning => warn!("Compaction failed and discarded: {err:#}"),
-            Level::ERROR => error!("Compaction failed: {err:?}"),
-            Level::INFO => info!("Compaction failed: {err:#}"),
-            level => unimplemented!("unexpected level {level:?}"),
-        }
-    }
-}
-
 /// GC task's main loop.
 async fn gc_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
     const MAX_BACKOFF_SECS: f64 = 300.0;
