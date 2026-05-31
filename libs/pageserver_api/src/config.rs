@@ -332,9 +332,13 @@ pub struct YbPageWriterConfig {
     /// Set to 0 to disable. Default 4 KiB.
     pub image_chain_payload_bytes_limit: u32,
 
-    /// Bound on in-flight materialisation jobs. The trigger uses
-    /// `try_send` and silently drops on overflow — the chain stays long
-    /// for one more cycle, no correctness impact. Default 1024.
+    /// Bound on in-flight materialisation jobs. The write-side trigger
+    /// awaits send (backpressures the walreceiver if the materialiser
+    /// can't keep up — preferred over silent drops, which leak deep
+    /// chains into the steady state). The read-side trigger uses
+    /// `try_send` (drop OK — the next read of the same key re-evaluates).
+    /// At ~100 B per slot (job + mpsc overhead), 5000 ≈ 500 KB total.
+    /// Default 5000.
     pub materialize_queue_capacity: usize,
 
     /// Soft cap on the in-RAM `UnifiedPages` cache (pre-flush buffer +
@@ -353,7 +357,7 @@ impl Default for YbPageWriterConfig {
             flush_poll_interval: Duration::from_millis(500),
             image_chain_limit: 20,
             image_chain_payload_bytes_limit: 4096,
-            materialize_queue_capacity: 1024,
+            materialize_queue_capacity: 5000,
             read_cache_bytes: 1024 * 1024 * 1024,
         }
     }
