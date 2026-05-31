@@ -490,14 +490,15 @@ impl LocalEnv {
     }
 
     pub fn pageserver_bin(&self) -> PathBuf {
-        // For validation / A-B testing, allow swapping in a different
-        // pageserver binary (e.g. yb-pageserver) without disturbing the
-        // distrib_dir layout. Used by the yb-pageserver refactor's
-        // validation harness.
+        // Default to the yb-pageserver fork (row-per-page YB storage).
+        // Override with `NEON_PAGESERVER_BIN=<path-to-pageserver>` to
+        // run the upstream layer-file pageserver — useful for A/B
+        // benchmarking. The env var wins over the default whichever
+        // binary is named.
         if let Ok(custom) = std::env::var("NEON_PAGESERVER_BIN") {
             return PathBuf::from(custom);
         }
-        self.neon_distrib_dir.join("pageserver")
+        self.neon_distrib_dir.join("yb-pageserver")
     }
 
     pub fn storage_controller_bin(&self) -> PathBuf {
