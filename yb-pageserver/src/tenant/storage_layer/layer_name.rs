@@ -243,14 +243,6 @@ impl LayerName {
         }
     }
 
-    pub(crate) fn kind(&self) -> &'static str {
-        use LayerName::*;
-        match self {
-            Delta(_) => "delta",
-            Image(_) => "image",
-        }
-    }
-
     /// Gets the key range encoded in the layer name.
     pub fn key_range(&self) -> &Range<Key> {
         match &self {

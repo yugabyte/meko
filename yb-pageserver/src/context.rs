@@ -295,13 +295,6 @@ impl RequestContextBuilder {
         self
     }
 
-    /// Configure the AccessStatsBehavior of the context: whether layer
-    /// accesses should update the access time of the layer.
-    pub(crate) fn access_stats_behavior(mut self, b: AccessStatsBehavior) -> Self {
-        self.inner.access_stats_behavior = b;
-        self
-    }
-
     pub(crate) fn page_content_kind(mut self, k: PageContentKind) -> Self {
         self.inner.page_content_kind = k;
         self

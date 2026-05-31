@@ -3028,14 +3028,6 @@ impl Timeline {
         (status.unwrap_or(RelSizeMigration::Legacy), migrated_at)
     }
 
-    fn get_compaction_upper_limit(&self) -> usize {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .compaction_upper_limit
-            .unwrap_or(self.conf.default_tenant_conf.compaction_upper_limit)
-    }
-
     pub fn get_compaction_l0_first(&self) -> bool {
         let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
         tenant_conf
@@ -3140,41 +3132,12 @@ impl Timeline {
     }
 
     // HADRON
-    fn get_image_layer_force_creation_period(&self) -> Option<Duration> {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .image_layer_force_creation_period
-            .or(self
-                .conf
-                .default_tenant_conf
-                .image_layer_force_creation_period)
-    }
-
-    fn get_compaction_algorithm_settings(&self) -> CompactionAlgorithmSettings {
-        let tenant_conf = &self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .compaction_algorithm
-            .as_ref()
-            .unwrap_or(&self.conf.default_tenant_conf.compaction_algorithm)
-            .clone()
-    }
-
     pub fn get_compaction_shard_ancestor(&self) -> bool {
         let tenant_conf = self.tenant_conf.load();
         tenant_conf
             .tenant_conf
             .compaction_shard_ancestor
             .unwrap_or(self.conf.default_tenant_conf.compaction_shard_ancestor)
-    }
-
-    fn get_eviction_policy(&self) -> EvictionPolicy {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .eviction_policy
-            .unwrap_or(self.conf.default_tenant_conf.eviction_policy)
     }
 
     fn get_evictions_low_residence_duration_metric_threshold(
@@ -3608,13 +3571,6 @@ impl Timeline {
                 rel_size_v2_status,
                 rel_size_migrated_at,
             )
-    }
-
-    pub(crate) fn get_gc_compaction_state(&self) -> Option<GcCompactionState> {
-        self.gc_compaction_state
-            .load()
-            .as_ref()
-            .map(|x| x.as_ref().clone())
     }
 
     /// Creates and starts the wal receiver.
@@ -6409,37 +6365,6 @@ impl From<super::storage_layer::errors::PutError> for CompactionError {
             CompactionError::new_cancelled()
         } else {
             CompactionError::Other(e.into_anyhow())
-        }
-    }
-}
-
-#[serde_as]
-#[derive(serde::Serialize)]
-struct RecordedDuration(#[serde_as(as = "serde_with::DurationMicroSeconds")] Duration);
-
-#[derive(Default)]
-enum DurationRecorder {
-    #[default]
-    NotStarted,
-    Recorded(RecordedDuration, tokio::time::Instant),
-}
-
-impl DurationRecorder {
-    fn till_now(&self) -> DurationRecorder {
-        match self {
-            DurationRecorder::NotStarted => {
-                panic!("must only call on recorded measurements")
-            }
-            DurationRecorder::Recorded(_, ended) => {
-                let now = tokio::time::Instant::now();
-                DurationRecorder::Recorded(RecordedDuration(now - *ended), now)
-            }
-        }
-    }
-    fn into_recorded(self) -> Option<RecordedDuration> {
-        match self {
-            DurationRecorder::NotStarted => None,
-            DurationRecorder::Recorded(recorded, _) => Some(recorded),
         }
     }
 }
