@@ -4738,31 +4738,14 @@ impl Timeline {
 
 }
 
-/// Tracking writes ingestion does to a particular in-memory layer.
-///
-/// Cleared upon freezing a layer.
-pub(crate) struct TimelineWriterState {
-    open_layer: Arc<InMemoryLayer>,
-    current_size: u64,
-    // Previous Lsn which passed through
-    prev_lsn: Option<Lsn>,
-    // Largest Lsn which passed through the current writer
-    max_lsn: Option<Lsn>,
-    // Cached details of the last freeze. Avoids going trough the atomic/lock on every put.
-    cached_last_freeze_at: Lsn,
-}
-
-impl TimelineWriterState {
-    fn new(open_layer: Arc<InMemoryLayer>, current_size: u64, last_freeze_at: Lsn) -> Self {
-        Self {
-            open_layer,
-            current_size,
-            prev_lsn: None,
-            max_lsn: None,
-            cached_last_freeze_at: last_freeze_at,
-        }
-    }
-}
+/// yb-mode placeholder. The original Neon TimelineWriter tracked the
+/// open InMemoryLayer + size + last-freeze hints to drive the
+/// roll-layer trigger heuristic. ybLight has no InMemoryLayer
+/// (writes go through PageWriter → YB rows), so the state is empty.
+/// Kept as a unit struct so the `Mutex<Option<TimelineWriterState>>`
+/// surface that the TimelineWriter wrapper holds doesn't have to
+/// change.
+pub(crate) struct TimelineWriterState;
 
 /// Various functions to mutate the timeline.
 // TODO Currently, Deref is used to allow easy access to read methods from this trait.
@@ -4831,10 +4814,10 @@ impl TimelineWriter<'_> {
         // layer-stack's behaviour where data is visible to
         // disk_consistent_lsn before reaching remote storage.
         self.tl.disk_consistent_lsn.fetch_max(batch_max_lsn);
-        if let Some(state) = self.write_guard.as_mut() {
-            state.prev_lsn = Some(batch_max_lsn);
-            state.max_lsn = std::cmp::max(state.max_lsn, Some(batch_max_lsn));
-        }
+        // yb-mode: the legacy TimelineWriterState (prev_lsn, max_lsn,
+        // open_layer) has no writers anymore — those fields fed the
+        // deleted roll-layer trigger heuristic.
+        let _ = batch_max_lsn;
         Ok(())
     }
 
