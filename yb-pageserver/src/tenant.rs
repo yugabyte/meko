@@ -44,7 +44,6 @@ use remote_timeline_client::index::GcCompactionState;
 use remote_timeline_client::manifest::{
     LATEST_TENANT_MANIFEST_VERSION, OffloadedTimelineManifest, TenantManifest,
 };
-use heatmap::{HeatMapTenant, HeatMapTimeline};
 use remote_timeline_client::{
     FAILED_REMOTE_OP_RETRIES, FAILED_UPLOAD_WARN_THRESHOLD, UploadQueueNotReadyError,
     download_tenant_manifest,
@@ -54,7 +53,7 @@ use timeline::import_pgdata::ImportingTimeline;
 use timeline::layer_manager::LayerManagerLockHolder;
 use timeline::offload::{OffloadError, offload_timeline};
 use timeline::{
-    CompactFlags, CompactOptions, CompactionError, PreviousHeatmap, ShutdownMode, import_pgdata,
+    CompactFlags, CompactOptions, CompactionError, ShutdownMode, import_pgdata,
 };
 use tokio::io::BufReader;
 use tokio::sync::{Notify, Semaphore, watch};
@@ -128,7 +127,6 @@ pub mod storage_layer;
 
 pub mod checks;
 pub mod config;
-pub mod heatmap;
 pub mod mgr;
 pub mod tasks;
 pub mod upload_queue;
@@ -237,7 +235,6 @@ struct TimelinePreload {
     timeline_id: TimelineId,
     client: RemoteTimelineClient,
     index_part: Result<MaybeDeletedIndexPart, DownloadError>,
-    previous_heatmap: Option<PreviousHeatmap>,
 }
 
 pub(crate) struct TenantPreload {
@@ -1166,7 +1163,6 @@ impl TenantShard {
         resources: TimelineResources,
         index_part: IndexPart,
         metadata: TimelineMetadata,
-        previous_heatmap: Option<PreviousHeatmap>,
         ancestor: Option<Arc<Timeline>>,
         cause: LoadTimelineCause,
         ctx: &RequestContext,
@@ -1197,7 +1193,6 @@ impl TenantShard {
         let (timeline, _timeline_ctx) = self.create_timeline_struct(
             timeline_id,
             &metadata,
-            previous_heatmap,
             ancestor.clone(),
             resources,
             CreateTimelineCause::Load,
@@ -1230,37 +1225,7 @@ impl TenantShard {
 
         timeline.remote_client.init_upload_queue(&index_part)?;
 
-        // When unarchiving, we've mostly likely lost the heatmap generated prior
-        // to the archival operation. To allow warming this timeline up, generate
-        // a previous heatmap which contains all visible layers in the layer map.
-        // This previous heatmap will be used whenever a fresh heatmap is generated
-        // for the timeline.
-        if self.conf.generate_unarchival_heatmap && matches!(cause, LoadTimelineCause::Unoffload) {
-            let mut tline_ending_at = Some((&timeline, timeline.get_last_record_lsn()));
-            while let Some((tline, end_lsn)) = tline_ending_at {
-                let unarchival_heatmap = tline.generate_unarchival_heatmap(end_lsn).await;
-                // Another unearchived timeline might have generated a heatmap for this ancestor.
-                // If the current branch point greater than the previous one use the the heatmap
-                // we just generated - it should include more layers.
-                if !tline.should_keep_previous_heatmap(end_lsn) {
-                    tline
-                        .previous_heatmap
-                        .store(Some(Arc::new(unarchival_heatmap)));
-                } else {
-                    tracing::info!("Previous heatmap preferred. Dropping unarchival heatmap.")
-                }
-
-                match tline.ancestor_timeline() {
-                    Some(ancestor) => {
-                        // update_layer_visibility removed in phase 4d.2.
-                        tline_ending_at = Some((ancestor, tline.get_ancestor_lsn()));
-                    }
-                    None => {
-                        tline_ending_at = None;
-                    }
-                }
-            }
-        }
+        let _ = cause;
 
         match import_pgdata {
             Some(import_pgdata) if !import_pgdata.is_done() => {
@@ -1633,18 +1598,8 @@ impl TenantShard {
             }
         }
 
-        // TODO(vlad): Could go to S3 if the secondary is freezing cold and hasn't even
-        // pulled the first heatmap. Not entirely necessary since the storage controller
-        // will kick the secondary in any case and cause a download.
-        let maybe_heatmap_at = self.read_on_disk_heatmap().await;
-
         let timelines = self
-            .load_timelines_metadata(
-                remote_timeline_ids,
-                remote_storage,
-                maybe_heatmap_at,
-                cancel,
-            )
+            .load_timelines_metadata(remote_timeline_ids, remote_storage, cancel)
             .await?;
 
         Ok(TenantPreload {
@@ -1655,30 +1610,6 @@ impl TenantShard {
                 .chain(offloaded_with_prefix.into_iter().map(|id| (id, None)))
                 .collect(),
         })
-    }
-
-    async fn read_on_disk_heatmap(&self) -> Option<(HeatMapTenant, std::time::Instant)> {
-        if !self.conf.load_previous_heatmap {
-            return None;
-        }
-
-        let on_disk_heatmap_path = self.conf.tenant_heatmap_path(&self.tenant_shard_id);
-        match tokio::fs::read_to_string(on_disk_heatmap_path).await {
-            Ok(heatmap) => match serde_json::from_str::<HeatMapTenant>(&heatmap) {
-                Ok(heatmap) => Some((heatmap, std::time::Instant::now())),
-                Err(err) => {
-                    error!("Failed to deserialize old heatmap: {err}");
-                    None
-                }
-            },
-            Err(err) => match err.kind() {
-                std::io::ErrorKind::NotFound => None,
-                _ => {
-                    error!("Unexpected IO error reading old heatmap: {err}");
-                    None
-                }
-            },
-        }
     }
 
     ///
@@ -1827,10 +1758,8 @@ impl TenantShard {
             match index_part {
                 MaybeDeletedIndexPart::IndexPart(index_part) => {
                     timeline_ancestors.insert(timeline_id, index_part.metadata.clone());
-                    remote_index_and_client.insert(
-                        timeline_id,
-                        (index_part, preload.client, preload.previous_heatmap),
-                    );
+                    remote_index_and_client
+                        .insert(timeline_id, (index_part, preload.client));
                 }
                 MaybeDeletedIndexPart::Deleted(index_part) => {
                     info!(
@@ -1849,7 +1778,7 @@ impl TenantShard {
         // layer file.
         let sorted_timelines = tree_sort_timelines(timeline_ancestors, |m| m.ancestor_timeline())?;
         for (timeline_id, remote_metadata) in sorted_timelines {
-            let (index_part, remote_client, previous_heatmap) = remote_index_and_client
+            let (index_part, remote_client) = remote_index_and_client
                 .remove(&timeline_id)
                 .expect("just put it in above");
 
@@ -1869,7 +1798,6 @@ impl TenantShard {
                     timeline_id,
                     index_part,
                     remote_metadata,
-                    previous_heatmap,
                     self.get_timeline_resources_for(remote_client),
                     LoadTimelineCause::Attach,
                     ctx,
@@ -2062,7 +1990,6 @@ impl TenantShard {
         timeline_id: TimelineId,
         index_part: IndexPart,
         remote_metadata: TimelineMetadata,
-        previous_heatmap: Option<PreviousHeatmap>,
         resources: TimelineResources,
         cause: LoadTimelineCause,
         ctx: &RequestContext,
@@ -2092,7 +2019,6 @@ impl TenantShard {
             resources,
             index_part,
             remote_metadata,
-            previous_heatmap,
             ancestor,
             cause,
             ctx,
@@ -2104,30 +2030,15 @@ impl TenantShard {
         self: &Arc<TenantShard>,
         timeline_ids: HashSet<TimelineId>,
         remote_storage: &GenericRemoteStorage,
-        heatmap: Option<(HeatMapTenant, std::time::Instant)>,
         cancel: CancellationToken,
     ) -> anyhow::Result<HashMap<TimelineId, TimelinePreload>> {
-        let mut timeline_heatmaps = heatmap.map(|h| (h.0.into_timelines_index(), h.1));
-
         let mut part_downloads = JoinSet::new();
         for timeline_id in timeline_ids {
             let cancel_clone = cancel.clone();
 
-            let previous_timeline_heatmap = timeline_heatmaps.as_mut().and_then(|hs| {
-                hs.0.remove(&timeline_id).map(|h| PreviousHeatmap::Active {
-                    heatmap: h,
-                    read_at: hs.1,
-                    end_lsn: None,
-                })
-            });
             part_downloads.spawn(
-                self.load_timeline_metadata(
-                    timeline_id,
-                    remote_storage.clone(),
-                    previous_timeline_heatmap,
-                    cancel_clone,
-                )
-                .instrument(info_span!("download_index_part", %timeline_id)),
+                self.load_timeline_metadata(timeline_id, remote_storage.clone(), cancel_clone)
+                    .instrument(info_span!("download_index_part", %timeline_id)),
             );
         }
 
@@ -2175,7 +2086,6 @@ impl TenantShard {
         self: &Arc<TenantShard>,
         timeline_id: TimelineId,
         remote_storage: GenericRemoteStorage,
-        previous_heatmap: Option<PreviousHeatmap>,
         cancel: CancellationToken,
     ) -> impl Future<Output = TimelinePreload> + use<> {
         let client = self.build_timeline_client(timeline_id, remote_storage);
@@ -2191,7 +2101,6 @@ impl TenantShard {
                 client,
                 timeline_id,
                 index_part,
-                previous_heatmap,
             }
         }
     }
@@ -2303,12 +2212,7 @@ impl TenantShard {
             })?;
 
         let timeline_preload = self
-            .load_timeline_metadata(
-                timeline_id,
-                self.remote_storage.clone(),
-                None,
-                cancel.clone(),
-            )
+            .load_timeline_metadata(timeline_id, self.remote_storage.clone(), cancel.clone())
             .await;
 
         let index_part = match timeline_preload.index_part {
@@ -2342,7 +2246,6 @@ impl TenantShard {
             timeline_id,
             index_part,
             remote_metadata,
-            None,
             timeline_resources,
             LoadTimelineCause::Unoffload,
             &ctx,
@@ -4136,7 +4039,6 @@ impl TenantShard {
         &self,
         new_timeline_id: TimelineId,
         new_metadata: &TimelineMetadata,
-        previous_heatmap: Option<PreviousHeatmap>,
         ancestor: Option<Arc<Timeline>>,
         resources: TimelineResources,
         cause: CreateTimelineCause,
@@ -4164,7 +4066,6 @@ impl TenantShard {
             self.conf,
             Arc::clone(&self.tenant_conf),
             new_metadata,
-            previous_heatmap,
             ancestor,
             new_timeline_id,
             self.tenant_shard_id,
@@ -5280,7 +5181,6 @@ impl TenantShard {
             .create_timeline_struct(
                 new_timeline_id,
                 new_metadata,
-                None,
                 ancestor,
                 resources,
                 CreateTimelineCause::Load,

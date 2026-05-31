@@ -32,7 +32,7 @@ use utils::logging::{LogFormat, SecretString};
 use crate::tenant::storage_layer::inmemory_layer::IndexEntry;
 use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
 use crate::virtual_file::io_engine;
-use crate::{TENANT_HEATMAP_BASENAME, TENANT_LOCATION_CONFIG_NAME, virtual_file};
+use crate::{TENANT_LOCATION_CONFIG_NAME, virtual_file};
 
 /// Global state of pageserver.
 ///
@@ -177,14 +177,6 @@ pub struct PageServerConf {
     /// for use in major incidents.
     pub control_plane_emergency_mode: bool,
 
-    /// How many heatmap uploads may be done concurrency: lower values implicitly deprioritize
-    /// heatmap uploads vs. other remote storage operations.
-    pub heatmap_upload_concurrency: usize,
-
-    /// How many remote storage downloads may be done for secondary tenants concurrently.  Implicitly
-    /// deprioritises secondary downloads vs. remote storage operations for attached tenants.
-    pub secondary_download_concurrency: usize,
-
     /// Maximum number of WAL records to be ingested and committed at the same time
     pub ingest_batch_size: u64,
 
@@ -226,13 +218,6 @@ pub struct PageServerConf {
     /// Interpreted protocol feature: if enabled, validate that the logical WAL received from
     /// safekeepers does not have gaps.
     pub validate_wal_contiguity: bool,
-
-    /// When set, the previously written to disk heatmap is loaded on tenant attach and used
-    /// to avoid clobbering the heatmap from new, cold, attached locations.
-    pub load_previous_heatmap: bool,
-
-    /// When set, include visible layers in the next uploaded heatmaps of an unarchived timeline.
-    pub generate_unarchival_heatmap: bool,
 
     pub tracing: Option<pageserver_api::config::Tracing>,
 
@@ -331,11 +316,6 @@ impl PageServerConf {
             .join(TENANT_LOCATION_CONFIG_NAME)
     }
 
-    pub(crate) fn tenant_heatmap_path(&self, tenant_shard_id: &TenantShardId) -> Utf8PathBuf {
-        self.tenant_path(tenant_shard_id)
-            .join(TENANT_HEATMAP_BASENAME)
-    }
-
     pub fn timelines_path(&self, tenant_shard_id: &TenantShardId) -> Utf8PathBuf {
         self.tenant_path(tenant_shard_id)
             .join(TIMELINES_SEGMENT_NAME)
@@ -420,8 +400,8 @@ impl PageServerConf {
             import_pgdata_upcall_api,
             import_pgdata_upcall_api_token,
             import_pgdata_aws_endpoint_url,
-            heatmap_upload_concurrency,
-            secondary_download_concurrency,
+            heatmap_upload_concurrency: _,
+            secondary_download_concurrency: _,
             ingest_batch_size,
             max_vectored_read_bytes,
             max_get_vectored_keys,
@@ -439,8 +419,8 @@ impl PageServerConf {
             get_vectored_concurrent_io,
             enable_read_path_debugging,
             validate_wal_contiguity,
-            load_previous_heatmap,
-            generate_unarchival_heatmap,
+            load_previous_heatmap: _,
+            generate_unarchival_heatmap: _,
             tracing,
             enable_tls_page_service_api,
             dev_mode,
@@ -491,8 +471,6 @@ impl PageServerConf {
             control_plane_api: control_plane_api
                 .ok_or_else(|| anyhow::anyhow!("`control_plane_api` must be set"))?,
             control_plane_emergency_mode,
-            heatmap_upload_concurrency,
-            secondary_download_concurrency,
             ingest_batch_size,
             max_vectored_read_bytes,
             max_get_vectored_keys,
@@ -557,8 +535,6 @@ impl PageServerConf {
             no_sync: no_sync.unwrap_or(false),
             enable_read_path_debugging: enable_read_path_debugging.unwrap_or(false),
             validate_wal_contiguity: validate_wal_contiguity.unwrap_or(false),
-            load_previous_heatmap: load_previous_heatmap.unwrap_or(true),
-            generate_unarchival_heatmap: generate_unarchival_heatmap.unwrap_or(true),
             ssl_ca_certs: match ssl_ca_file {
                 Some(ssl_ca_file) => {
                     let buf = std::fs::read(ssl_ca_file)?;
@@ -661,8 +637,6 @@ impl PageServerConf {
             metric_collection_interval: Duration::from_secs(60),
             synthetic_size_calculation_interval: Duration::from_secs(60),
             background_task_maximum_delay: Duration::ZERO,
-            load_previous_heatmap: Some(true),
-            generate_unarchival_heatmap: Some(true),
             control_plane_api: Some(Url::parse("http://localhost:6666").unwrap()),
             ..Default::default()
         };

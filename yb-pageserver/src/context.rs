@@ -124,12 +124,6 @@ pub(crate) enum Scope {
     Global {
         io_size_metrics: &'static crate::metrics::StorageIoSizeMetrics,
     },
-    SecondaryTenant {
-        io_size_metrics: &'static crate::metrics::StorageIoSizeMetrics,
-    },
-    SecondaryTimeline {
-        io_size_metrics: crate::metrics::StorageIoSizeMetrics,
-    },
     Timeline {
         // We wrap the `Arc<TimelineMetrics>`s inside another Arc to avoid child
         // context creation contending for the ref counters of the Arc<TimelineMetrics>,
@@ -170,34 +164,6 @@ impl Scope {
     ) -> Self {
         Scope::Timeline {
             arc_arc: Arc::clone(&timeline_handle.metrics),
-        }
-    }
-    pub(crate) fn new_secondary_timeline(
-        tenant_shard_id: &TenantShardId,
-        timeline_id: &TimelineId,
-    ) -> Self {
-        // TODO(https://github.com/neondatabase/neon/issues/11156): secondary timelines have no infrastructure for metrics lifecycle.
-
-        let tenant_id = tenant_shard_id.tenant_id.to_string();
-        let shard_id = tenant_shard_id.shard_slug().to_string();
-        let timeline_id = timeline_id.to_string();
-
-        let io_size_metrics =
-            crate::metrics::StorageIoSizeMetrics::new(&tenant_id, &shard_id, &timeline_id);
-        Scope::SecondaryTimeline { io_size_metrics }
-    }
-    pub(crate) fn new_secondary_tenant(_tenant_shard_id: &TenantShardId) -> Self {
-        // Before propagating metrics via RequestContext, the labels were inferred from file path.
-        // The only user of VirtualFile at tenant scope is the heatmap download & read.
-        // The inferred labels for the path of the heatmap file on local disk were that of the global metric (*,*,*).
-        // Thus, we do the same here, and extend that for anything secondary-tenant scoped.
-        //
-        // If we want to have (tenant_id, shard_id, '*') labels for secondary tenants in the future,
-        // we will need to think about the metric lifecycle, i.e., remove them during secondary tenant shutdown,
-        // like we do for attached timelines. (We don't have attached-tenant-scoped usage of VirtualFile
-        // at this point, so, we were able to completely side-step tenant-scoped stuff there).
-        Scope::SecondaryTenant {
-            io_size_metrics: &GLOBAL_IO_SIZE_METRICS,
         }
     }
     #[cfg(test)]
@@ -473,22 +439,6 @@ impl RequestContext {
             .attached_child()
     }
 
-    pub fn with_scope_secondary_timeline(
-        &self,
-        tenant_shard_id: &TenantShardId,
-        timeline_id: &TimelineId,
-    ) -> Self {
-        RequestContextBuilder::from(self)
-            .scope(Scope::new_secondary_timeline(tenant_shard_id, timeline_id))
-            .attached_child()
-    }
-
-    pub fn with_scope_secondary_tenant(&self, tenant_shard_id: &TenantShardId) -> Self {
-        RequestContextBuilder::from(self)
-            .scope(Scope::new_secondary_tenant(tenant_shard_id))
-            .attached_child()
-    }
-
     #[cfg(test)]
     pub fn with_scope_unit_test(&self) -> Self {
         RequestContextBuilder::from(self)
@@ -551,8 +501,6 @@ impl RequestContext {
                 }
             }
             Scope::Timeline { arc_arc } => &arc_arc.storage_io_size,
-            Scope::SecondaryTimeline { io_size_metrics } => io_size_metrics,
-            Scope::SecondaryTenant { io_size_metrics } => io_size_metrics,
             #[cfg(test)]
             Scope::UnitTest { io_size_metrics } => io_size_metrics,
             Scope::DebugTools { io_size_metrics } => io_size_metrics,

@@ -236,7 +236,7 @@ use crate::tenant::upload_queue::{
     UploadQueueStoppedDeletable, UploadTask,
 };
 use crate::tenant::{TIMELINES_SEGMENT_NAME, debug_assert_current_span_has_tenant_and_timeline_id};
-use crate::{TENANT_HEATMAP_BASENAME, task_mgr};
+use crate::task_mgr;
 
 // Occasional network issues and such can cause remote operations to fail, and
 // that's expected. If a download fails, we log it at info-level, and retry.
@@ -2689,13 +2689,6 @@ pub fn remote_index_path(
         "tenants/{tenant_shard_id}/{TIMELINES_SEGMENT_NAME}/{timeline_id}/{0}{1}",
         IndexPart::FILE_NAME,
         generation.get_suffix()
-    ))
-    .expect("Failed to construct path")
-}
-
-pub(crate) fn remote_heatmap_path(tenant_shard_id: &TenantShardId) -> RemotePath {
-    RemotePath::from_string(&format!(
-        "tenants/{tenant_shard_id}/{TENANT_HEATMAP_BASENAME}"
     ))
     .expect("Failed to construct path")
 }
