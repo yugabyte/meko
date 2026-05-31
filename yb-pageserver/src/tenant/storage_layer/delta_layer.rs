@@ -57,7 +57,7 @@ use wal_decoder::models::value::Value;
 
 use super::errors::PutError;
 use super::{
-    AsLayerDesc, LayerName, OnDiskValue, OnDiskValueIo, PersistentLayerDesc, ResidentLayer,
+    AsLayerDesc, LayerName, PersistentLayerDesc, ResidentLayer,
     ValuesReconstructState,
 };
 use crate::config::PageServerConf;

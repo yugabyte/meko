@@ -82,218 +82,24 @@ impl ValueReconstructState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum ValueReconstructSituation {
-    Complete,
-    #[default]
-    Continue,
-}
 
-/// On disk representation of a value loaded in a buffer
-#[derive(Debug)]
-pub(crate) enum OnDiskValue {
-    /// Unencoded [`Value::Image`]
-    RawImage(Bytes),
-    /// Encoded [`Value`]. Can deserialize into an image or a WAL record
-    WalRecordOrImage(Bytes),
-}
 
-/// Reconstruct data accumulated for a single key during a vectored get
-#[derive(Debug, Default)]
-pub struct VectoredValueReconstructState {
-    pub(crate) on_disk_values: Vec<(Lsn, OnDiskValueIoWaiter)>,
 
-    pub(crate) situation: ValueReconstructSituation,
-}
 
-#[derive(Debug)]
-pub(crate) struct OnDiskValueIoWaiter {
-    rx: tokio::sync::oneshot::Receiver<OnDiskValueIoResult>,
-}
 
-#[derive(Debug)]
-#[must_use]
-pub(crate) enum OnDiskValueIo {
-    /// Traversal identified this IO as required to complete the vectored get.
-    Required {
-        num_active_ios: Arc<AtomicUsize>,
-        tx: tokio::sync::oneshot::Sender<OnDiskValueIoResult>,
-    },
-    /// Sparse keyspace reads always read all the values for a given key,
-    /// even though only the first value is needed.
-    ///
-    /// This variant represents the unnecessary IOs for those values at lower LSNs
-    /// that aren't needed, but are currently still being done.
-    ///
-    /// The execution of unnecessary IOs was a pre-existing behavior before concurrent IO.
-    /// We added this explicit representation here so that we can drop
-    /// unnecessary IO results immediately, instead of buffering them in
-    /// `oneshot` channels inside [`VectoredValueReconstructState`] until
-    /// [`VectoredValueReconstructState::collect_pending_ios`] gets called.
-    Unnecessary,
-}
 
-type OnDiskValueIoResult = Result<OnDiskValue, std::io::Error>;
 
-impl OnDiskValueIo {
-    pub(crate) fn complete(self, res: OnDiskValueIoResult) {
-        match self {
-            OnDiskValueIo::Required { num_active_ios, tx } => {
-                num_active_ios.fetch_sub(1, std::sync::atomic::Ordering::Release);
-                let _ = tx.send(res);
-            }
-            OnDiskValueIo::Unnecessary => {
-                // Nobody cared, see variant doc comment.
-            }
-        }
-    }
-}
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum WaitCompletionError {
-    #[error("OnDiskValueIo was dropped without completing, likely the sidecar task panicked")]
-    IoDropped,
-}
 
-impl OnDiskValueIoWaiter {
-    pub(crate) async fn wait_completion(self) -> Result<OnDiskValueIoResult, WaitCompletionError> {
-        // NB: for Unnecessary IOs, this method never gets called because we don't add them to `on_disk_values`.
-        self.rx.await.map_err(|_| WaitCompletionError::IoDropped)
-    }
-}
 
-impl VectoredValueReconstructState {
-    /// # Cancel-Safety
-    ///
-    /// Technically fine to stop polling this future, but, the IOs will still
-    /// be executed to completion by the sidecar task and hold on to / consume resources.
-    /// Better not do it to make reasonsing about the system easier.
-    pub(crate) async fn collect_pending_ios(
-        self,
-    ) -> Result<ValueReconstructState, PageReconstructError> {
-        use utils::bin_ser::BeSer;
-
-        let mut res = Ok(ValueReconstructState::default());
-
-        // We should try hard not to bail early, so that by the time we return from this
-        // function, all IO for this value is done. It's not required -- we could totally
-        // stop polling the IO futures in the sidecar task, they need to support that,
-        // but just stopping to poll doesn't reduce the IO load on the disk. It's easier
-        // to reason about the system if we just wait for all IO to complete, even if
-        // we're no longer interested in the result.
-        //
-        // Revisit this when IO futures are replaced with a more sophisticated IO system
-        // and an IO scheduler, where we know which IOs were submitted and which ones
-        // just queued. Cf the comment on IoConcurrency::spawn_io.
-        for (lsn, waiter) in self.on_disk_values {
-            let value_recv_res = waiter
-                .wait_completion()
-                // we rely on the caller to poll us to completion, so this is not a bail point
-                .await;
-            // Force not bailing early by wrapping the code into a closure.
-            #[allow(clippy::redundant_closure_call)]
-            let _: () = (|| {
-                match (&mut res, value_recv_res) {
-                    (Err(_), _) => {
-                        // We've already failed, no need to process more.
-                    }
-                    (Ok(_), Err(wait_err)) => {
-                        // This shouldn't happen - likely the sidecar task panicked.
-                        res = Err(PageReconstructError::Other(wait_err.into()));
-                    }
-                    (Ok(_), Ok(Err(err))) => {
-                        let err: std::io::Error = err;
-                        // TODO: returning IO error here will fail a compute query.
-                        // Probably not what we want, we're not doing `maybe_fatal_err`
-                        // in the IO futures.
-                        // But it's been like that for a long time, not changing it
-                        // as part of concurrent IO.
-                        // => https://github.com/neondatabase/neon/issues/10454
-                        res = Err(PageReconstructError::Other(err.into()));
-                    }
-                    (Ok(ok), Ok(Ok(OnDiskValue::RawImage(img)))) => {
-                        assert!(ok.img.is_none());
-                        ok.img = Some((lsn, img));
-                    }
-                    (Ok(ok), Ok(Ok(OnDiskValue::WalRecordOrImage(buf)))) => {
-                        match Value::des(&buf) {
-                            Ok(Value::WalRecord(rec)) => {
-                                ok.records.push((lsn, rec));
-                            }
-                            Ok(Value::Image(img)) => {
-                                assert!(ok.img.is_none());
-                                ok.img = Some((lsn, img));
-                            }
-                            Err(err) => {
-                                res = Err(PageReconstructError::Other(err.into()));
-                            }
-                        }
-                    }
-                }
-            })();
-        }
-
-        res
-    }
-
-    /// Benchmarking utility to await for the completion of all pending ios
-    ///
-    /// # Cancel-Safety
-    ///
-    /// Technically fine to stop polling this future, but, the IOs will still
-    /// be executed to completion by the sidecar task and hold on to / consume resources.
-    /// Better not do it to make reasonsing about the system easier.
-    #[cfg(feature = "benchmarking")]
-    pub async fn sink_pending_ios(self) -> Result<(), std::io::Error> {
-        let mut res = Ok(());
-
-        // We should try hard not to bail early, so that by the time we return from this
-        // function, all IO for this value is done. It's not required -- we could totally
-        // stop polling the IO futures in the sidecar task, they need to support that,
-        // but just stopping to poll doesn't reduce the IO load on the disk. It's easier
-        // to reason about the system if we just wait for all IO to complete, even if
-        // we're no longer interested in the result.
-        //
-        // Revisit this when IO futures are replaced with a more sophisticated IO system
-        // and an IO scheduler, where we know which IOs were submitted and which ones
-        // just queued. Cf the comment on IoConcurrency::spawn_io.
-        for (_lsn, waiter) in self.on_disk_values {
-            let value_recv_res = waiter
-                .wait_completion()
-                // we rely on the caller to poll us to completion, so this is not a bail point
-                .await;
-
-            match (&mut res, value_recv_res) {
-                (Err(_), _) => {
-                    // We've already failed, no need to process more.
-                }
-                (Ok(_), Err(_wait_err)) => {
-                    // This shouldn't happen - likely the sidecar task panicked.
-                    unreachable!();
-                }
-                (Ok(_), Ok(Err(err))) => {
-                    let err: std::io::Error = err;
-                    res = Err(err);
-                }
-                (Ok(_ok), Ok(Ok(OnDiskValue::RawImage(_img)))) => {}
-                (Ok(_ok), Ok(Ok(OnDiskValue::WalRecordOrImage(_buf)))) => {}
-            }
-        }
-
-        res
-    }
-}
-
-/// Bag of data accumulated during a vectored get..
+/// yb-mode: vestige. The legacy `get_vectored` traversal used this
+/// to accumulate per-key reconstruct buffers. yb-pageserver's
+/// `Timeline::get_vectored_impl` ignores it entirely (the row-store
+/// read path runs through `PageWriter::scan_range`); we keep the
+/// struct + the `IoConcurrency` carrier so external callers
+/// (basebackup, pgdatadir_mapping) can keep their existing signatures.
 pub struct ValuesReconstructState {
-    /// The keys will be removed after `get_vectored` completes. The caller outside `Timeline`
-    /// should not expect to get anything from this hashmap.
-    pub keys: HashMap<Key, VectoredValueReconstructState>,
-    /// The keys which are already retrieved
-    keys_done: KeySpaceRandomAccum,
-
     pub(crate) io_concurrency: IoConcurrency,
-    num_active_ios: Arc<AtomicUsize>,
 }
 
 /// The level of IO concurrency to be used on the read path
@@ -601,98 +407,10 @@ impl Clone for IoConcurrency {
     }
 }
 
-/// Make noise in case the [`ValuesReconstructState`] gets dropped while
-/// there are still IOs in flight.
-/// Refer to `collect_pending_ios` for why we prefer not to do that.
-//
-/// We log from here instead of from the sidecar task because the [`ValuesReconstructState`]
-/// gets dropped in a tracing span with more context.
-/// We repeat the sidecar tasks's `task_id` so we can correlate what we emit here with
-/// the logs / panic handler logs from the sidecar task, which also logs the `task_id`.
-impl Drop for ValuesReconstructState {
-    fn drop(&mut self) {
-        let num_active_ios = self
-            .num_active_ios
-            .load(std::sync::atomic::Ordering::Acquire);
-        if num_active_ios == 0 {
-            return;
-        }
-        let sidecar_task_id = match &self.io_concurrency {
-            IoConcurrency::Sequential => None,
-            IoConcurrency::SidecarTask { task_id, .. } => Some(*task_id),
-        };
-        tracing::warn!(
-            num_active_ios,
-            ?sidecar_task_id,
-            backtrace=%std::backtrace::Backtrace::force_capture(),
-            "dropping ValuesReconstructState while some IOs have not been completed",
-        );
-    }
-}
-
 impl ValuesReconstructState {
     pub fn new(io_concurrency: IoConcurrency) -> Self {
-        Self {
-            keys: HashMap::new(),
-            keys_done: KeySpaceRandomAccum::new(),
-            io_concurrency,
-            num_active_ios: Arc::new(AtomicUsize::new(0)),
-        }
+        Self { io_concurrency }
     }
-
-    /// Absolutely read [`IoConcurrency::spawn_io`] to learn about assumptions & pitfalls.
-    pub(crate) async fn spawn_io<F>(&mut self, fut: F)
-    where
-        F: std::future::Future<Output = ()> + Send + 'static,
-    {
-        self.io_concurrency.spawn_io(fut).await;
-    }
-
-    /// Update the state collected for a given key.
-    /// Returns true if this was the last value needed for the key and false otherwise.
-    ///
-    /// If the key is done after the update, mark it as such.
-    ///
-    /// If the key is in the sparse keyspace (i.e., aux files), we do not track them in
-    /// `key_done`.
-    // TODO: rename this method & update description.
-    pub(crate) fn update_key(&mut self, key: &Key, lsn: Lsn, completes: bool) -> OnDiskValueIo {
-        let state = self.keys.entry(*key).or_default();
-
-        let is_sparse_key = key.is_sparse();
-
-        let required_io = match state.situation {
-            ValueReconstructSituation::Complete => {
-                if is_sparse_key {
-                    // Sparse keyspace might be visited multiple times because
-                    // we don't track unmapped keyspaces.
-                    return OnDiskValueIo::Unnecessary;
-                } else {
-                    unreachable!()
-                }
-            }
-            ValueReconstructSituation::Continue => {
-                self.num_active_ios
-                    .fetch_add(1, std::sync::atomic::Ordering::Release);
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                state.on_disk_values.push((lsn, OnDiskValueIoWaiter { rx }));
-                OnDiskValueIo::Required {
-                    tx,
-                    num_active_ios: Arc::clone(&self.num_active_ios),
-                }
-            }
-        };
-
-        if completes && state.situation == ValueReconstructSituation::Continue {
-            state.situation = ValueReconstructSituation::Complete;
-            if !is_sparse_key {
-                self.keys_done.add_key(*key);
-            }
-        }
-
-        required_io
-    }
-
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]

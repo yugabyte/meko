@@ -34,7 +34,6 @@ use crate::context::{PageContentKind, RequestContext, RequestContextBuilder};
 // while being able to use std::fmt::Write's methods
 use crate::metrics::TIMELINE_EPHEMERAL_BYTES;
 use crate::tenant::ephemeral_file::EphemeralFile;
-use crate::tenant::storage_layer::{OnDiskValue, OnDiskValueIo};
 use crate::tenant::timeline::GetVectoredError;
 use crate::virtual_file::owned_buffers_io::io_buf_ext::IoBufExt;
 use crate::{l0_flush, page_cache};

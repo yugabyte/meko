@@ -55,7 +55,7 @@ use utils::lsn::Lsn;
 use super::errors::PutError;
 use super::layer_name::ImageLayerName;
 use super::{
-    AsLayerDesc, LayerName, OnDiskValue, OnDiskValueIo, PersistentLayerDesc, ResidentLayer,
+    AsLayerDesc, LayerName, PersistentLayerDesc, ResidentLayer,
     ValuesReconstructState,
 };
 use crate::config::PageServerConf;
