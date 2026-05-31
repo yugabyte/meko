@@ -150,22 +150,6 @@ where
         }
     }
 
-    /// Returns the number of bytes submitted to the background flush task.
-    pub fn bytes_submitted(&self) -> u64 {
-        self.bytes_submitted
-    }
-
-    /// Panics if used after any of the write paths returned an error
-    pub fn inspect_mutable(&self) -> Option<&B> {
-        self.mutable.as_ref()
-    }
-
-    /// Gets a reference to the maybe flushed read-only buffer.
-    /// Returns `None` if the writer has not submitted any flush request.
-    pub fn inspect_maybe_flushed(&self) -> Option<&FullSlice<Buf>> {
-        self.maybe_flushed.as_ref()
-    }
-
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub async fn shutdown(
         mut self,
