@@ -1898,29 +1898,6 @@ impl ResidentLayer {
         self.owner.metadata()
     }
 
-    /// Cast the layer to a delta, return an error if it is an image layer.
-    pub(crate) async fn get_as_delta(
-        &self,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<&delta_layer::DeltaLayerInner> {
-        use LayerKind::*;
-        match self.downloaded.get(&self.owner.0, ctx).await? {
-            Delta(d) => Ok(d),
-            Image(_) => Err(anyhow::anyhow!("image layer")),
-        }
-    }
-
-    /// Cast the layer to an image, return an error if it is a delta layer.
-    pub(crate) async fn get_as_image(
-        &self,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<&image_layer::ImageLayerInner> {
-        use LayerKind::*;
-        match self.downloaded.get(&self.owner.0, ctx).await? {
-            Image(d) => Ok(d),
-            Delta(_) => Err(anyhow::anyhow!("delta layer")),
-        }
-    }
 }
 
 impl AsLayerDesc for ResidentLayer {

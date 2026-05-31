@@ -238,9 +238,6 @@ pub struct DeltaLayerInner {
     file: Arc<VirtualFile>,
     file_id: FileId,
 
-    layer_key_range: Range<Key>,
-    layer_lsn_range: Range<Lsn>,
-
     max_vectored_read_bytes: Option<MaxVectoredReadBytes>,
 }
 
@@ -737,14 +734,6 @@ impl DeltaLayerWriter {
         self.inner.take().unwrap().finish(key_end, ctx).await
     }
 
-    pub(crate) fn num_keys(&self) -> usize {
-        self.inner.as_ref().unwrap().num_keys
-    }
-
-    pub(crate) fn estimated_size(&self) -> u64 {
-        let inner = self.inner.as_ref().unwrap();
-        inner.blob_writer.size() + inner.tree.borrow_writer().size() + PAGE_SZ as u64
-    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -795,14 +784,6 @@ impl DeltaLayer {
 }
 
 impl DeltaLayerInner {
-    pub(crate) fn key_range(&self) -> &Range<Key> {
-        &self.layer_key_range
-    }
-
-    pub(crate) fn lsn_range(&self) -> &Range<Lsn> {
-        &self.layer_lsn_range
-    }
-
     pub(super) async fn load(
         path: &Utf8Path,
         summary: Option<Summary>,
@@ -850,8 +831,6 @@ impl DeltaLayerInner {
             index_start_blk: actual_summary.index_start_blk,
             index_root_blk: actual_summary.index_root_blk,
             max_vectored_read_bytes,
-            layer_key_range: actual_summary.key_range,
-            layer_lsn_range: actual_summary.lsn_range,
         })
     }
 
