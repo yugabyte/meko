@@ -49,6 +49,21 @@ use crate::walredo::RedoAttemptType;
 /// the queue if walredo is slow.
 const BATCH_DRAIN_LIMIT: usize = 64;
 
+/// Maximum concurrent `redo_one` futures in flight within a single
+/// `materialize_batch`. Each future does an SQL `read_chain_durable`
+/// (against `internal_page_store` — its own connection), a CPU
+/// WAL-record decode, and a walredo subprocess RPC.
+///
+/// The walredo subprocess serialises its own apply phase via stdin /
+/// stdout mutexes — true CPU parallelism in walredo would need a
+/// subprocess pool, which is a separate change to `PostgresRedoManager`.
+/// But the SQL read and the WAL decode CAN run in parallel, and walredo
+/// pipelines stdin-write of req N+1 with stdout-read of req N inside
+/// the subprocess. So 8-way fan-out captures most of the win at low
+/// risk; raising further hits diminishing returns until walredo itself
+/// is parallelised.
+const REDO_CONCURRENCY: usize = 8;
+
 /// Background materialiser for one timeline.
 pub struct ImageMaterializer {
     tenant_id: TenantId,
@@ -152,13 +167,57 @@ impl ImageMaterializer {
     /// one bad chain shouldn't drop the whole batch. Errors from the
     /// INSERT itself propagate (caller logs + the next trigger
     /// retries).
+    ///
+    /// The redo phase runs up to `REDO_CONCURRENCY` `redo_one` futures
+    /// in parallel via `FuturesUnordered`. Each future reads its chain
+    /// from `internal_page_store` (own YSQL connection — no contention
+    /// with the walreceiver write path), decodes records, and calls
+    /// walredo. The SQL reads and WAL decodes parallelise cleanly;
+    /// walredo serialises its apply but pipelines IPC, so concurrent
+    /// callers amortise the stdin-write / stdout-read latency. Order
+    /// of completion is irrelevant since each result is independent
+    /// and they're all merged into `images` for the single bulk INSERT.
     async fn materialize_batch(&self, jobs: &[MaterializeJob]) -> Result<()> {
+        use futures::StreamExt;
+        use futures::future::{BoxFuture, FutureExt};
+        use futures::stream::FuturesUnordered;
+
         let t0 = std::time::Instant::now();
         let mut images: Vec<PageRow> = Vec::with_capacity(jobs.len());
         let mut total_chain_rows = 0usize;
         let mut total_records = 0usize;
-        for job in jobs {
-            match self.redo_one(job).await {
+
+        // Boxed futures so prime + refill calls produce the same
+        // FuturesUnordered item type. Each future borrows `self` and the
+        // `MaterializeJob` slice from `jobs` — both outlive the await.
+        type RedoFut<'a> = BoxFuture<
+            'a,
+            (
+                &'a MaterializeJob,
+                Result<Option<(PageRow, usize, usize)>>,
+            ),
+        >;
+        fn spawn_redo<'a>(me: &'a ImageMaterializer, job: &'a MaterializeJob) -> RedoFut<'a> {
+            async move {
+                let res = me.redo_one(job).await;
+                (job, res)
+            }
+            .boxed()
+        }
+
+        let mut in_flight: FuturesUnordered<RedoFut<'_>> = FuturesUnordered::new();
+        let mut iter = jobs.iter();
+        // Prime up to REDO_CONCURRENCY futures.
+        for _ in 0..REDO_CONCURRENCY {
+            if let Some(job) = iter.next() {
+                in_flight.push(spawn_redo(self, job));
+            } else {
+                break;
+            }
+        }
+        // As each completes, refill from the iterator until exhausted.
+        while let Some((job, res)) = in_flight.next().await {
+            match res {
                 Ok(Some((image_row, chain_len, n_records))) => {
                     total_chain_rows += chain_len;
                     total_records += n_records;
@@ -171,6 +230,9 @@ impl ImageMaterializer {
                     target_lsn = %job.target_lsn,
                     "skip job in batch: {e:#}"
                 ),
+            }
+            if let Some(next_job) = iter.next() {
+                in_flight.push(spawn_redo(self, next_job));
             }
         }
         if images.is_empty() {

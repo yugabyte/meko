@@ -446,7 +446,7 @@ impl PageWriter {
             let k = Key::from_slice(&key_bytes);
             out.entry(k).or_default().extend(chain);
         }
-        for (key, chain) in out.iter_mut() {
+        for chain in out.values_mut() {
             // Descending LSN; on ties prefer the image (see `read_chain`
             // for the rationale).
             chain.sort_by(|a, b| {
@@ -458,9 +458,6 @@ impl PageWriter {
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
             }
-            // Read-side materialisation trigger — see read_chain.
-            let key_bytes = key_to_bytes(*key);
-            self.maybe_enqueue_materialize_on_read(&key_bytes, target_lsn, chain);
         }
         let t_merge = t_merge_start.elapsed();
         let total = t0.elapsed();
@@ -491,7 +488,6 @@ impl PageWriter {
         {
             let s = self.state.read().await;
             if let Some(chain) = s.pages.lookup_chain_if_complete(&key_bytes, target_lsn) {
-                self.maybe_enqueue_materialize_on_read(&key_bytes, target_lsn, &chain);
                 return Ok(chain);
             }
         }
@@ -518,59 +514,7 @@ impl PageWriter {
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
         }
-        self.maybe_enqueue_materialize_on_read(&key_bytes, target_lsn, &merged);
         Ok(merged)
-    }
-
-    /// Read-side materialisation trigger.
-    ///
-    /// The write-side trigger in `put` only fires while WAL is flowing —
-    /// once ingest goes idle, no new event ever clears the historical
-    /// bloat from a burst (each per-key counter was reset after the
-    /// previous trigger fired, and the queue overflowed during the
-    /// burst so most triggers were dropped). This read-side trigger
-    /// closes that gap: whenever we serve a chain deeper than
-    /// `image_chain_limit`, we enqueue a materialise job for the same
-    /// key at the same LSN. The next read of that key lands on the
-    /// fast-path image-anchored CTE.
-    ///
-    /// Uses `try_send` (not blocking send) because:
-    ///   1. The read returned a correct page either way.
-    ///   2. Blocking reads on materialiser backpressure would put
-    ///      compute-facing latency at the mercy of walredo throughput.
-    ///   3. If the queue is genuinely full, the materialiser is
-    ///      already busy chewing through the backlog — the next read
-    ///      of this key re-evaluates depth and re-enqueues.
-    ///
-    /// `chain` is LSN-descending, truncated at the first will_init row.
-    /// `chain.first()` is the newest entry; if it's an image at or
-    /// past `target_lsn`, the read already hit the fast path and
-    /// re-materialising would be pure waste.
-    fn maybe_enqueue_materialize_on_read(
-        &self,
-        key_bytes: &Bytes,
-        target_lsn: Lsn,
-        chain: &[PageRow],
-    ) {
-        let Some(m) = self.materializer.as_ref() else {
-            return;
-        };
-        if m.count_limit == 0 {
-            return;
-        }
-        if let Some(head) = chain.first()
-            && head.is_image
-            && head.lsn >= target_lsn
-        {
-            return;
-        }
-        if (chain.len() as u32) < m.count_limit {
-            return;
-        }
-        let _ = m.tx.try_send(MaterializeJob {
-            key: key_bytes.clone(),
-            target_lsn,
-        });
     }
 
     /// Read the chain for `key` at `target_lsn`, using only durable
