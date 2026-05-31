@@ -37,7 +37,6 @@ use std::sync::atomic::AtomicU64;
 use anyhow::{Context, Result, bail, ensure};
 use camino::{Utf8Path, Utf8PathBuf};
 use futures::StreamExt;
-use itertools::Itertools;
 use pageserver_api::config::MaxVectoredReadBytes;
 use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::models::ImageCompressionAlgorithm;

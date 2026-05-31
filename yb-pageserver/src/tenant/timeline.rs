@@ -22,7 +22,6 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use fail::fail_point;
-use futures::{FutureExt, StreamExt};
 use handle::ShardTimelineId;
 use layer_manager::{
     LayerManagerLockHolder, LockedLayerManager,
@@ -1307,7 +1306,7 @@ impl Timeline {
                 TaskKind::WalReceiverManager
                 | TaskKind::WalReceiverConnectionHandler
                 | TaskKind::WalReceiverConnectionPoller => {
-                    let is_myself = match who_is_waiting {
+                    match who_is_waiting {
                         WaitLsnWaiter::Tenant
                         | WaitLsnWaiter::PageService
                         | WaitLsnWaiter::HttpEndpoint
@@ -1315,17 +1314,6 @@ impl Timeline {
                             "tenant or page_service context are not expected to have task kind {:?}",
                             ctx.task_kind()
                         ),
-                    };
-                    if is_myself {
-                        if let Err(current) = self.last_record_lsn.would_wait_for(lsn) {
-                            // walingest is the only one that can advance last_record_lsn; it should make sure to never reach here
-                            panic!(
-                                "this timeline's walingest task is calling wait_lsn({lsn}) but we only have last_record_lsn={current}; would deadlock"
-                            );
-                        }
-                    } else {
-                        // if another  timeline's  is waiting for us, there's no deadlock risk because
-                        // our walreceiver task can make progress independent of theirs
                     }
                 }
                 _ => {}

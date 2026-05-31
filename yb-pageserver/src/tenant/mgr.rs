@@ -2100,7 +2100,6 @@ impl TenantManager {
                             any_in_progress = Some(barrier.clone());
                             continue;
                         }
-                        _ => continue,
                     };
 
                     match selector {

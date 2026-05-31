@@ -100,7 +100,7 @@ impl MaterializerTask {
 }
 
 impl ImageMaterializer {
-    pub fn spawn(
+    pub(crate) fn spawn(
         tenant_id: TenantId,
         timeline_id: TimelineId,
         page_writer: Arc<PageWriter>,
