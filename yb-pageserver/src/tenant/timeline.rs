@@ -1920,54 +1920,22 @@ impl Timeline {
         })
     }
 
-    #[instrument(skip_all, fields(tenant_id = %self.tenant_shard_id.tenant_id, shard_id = %self.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id))]
     pub(crate) async fn download_layer(
         &self,
-        layer_file_name: &LayerName,
-        ctx: &RequestContext,
+        _layer_file_name: &LayerName,
+        _ctx: &RequestContext,
     ) -> Result<Option<bool>, super::storage_layer::layer::DownloadError> {
-        let Some(layer) = self
-            .find_layer(layer_file_name)
-            .await
-            .map_err(|e| match e {
-                layer_manager::Shutdown => {
-                    super::storage_layer::layer::DownloadError::TimelineShutdown
-                }
-            })?
-        else {
-            return Ok(None);
-        };
-
-        layer.download(ctx).await?;
-
-        Ok(Some(true))
+        // yb-mode: no layer files. The HTTP admin endpoint that calls
+        // this is effectively a no-op; return None ("not found").
+        Ok(None)
     }
 
-    /// Evict just one layer.
-    ///
-    /// Returns `Ok(None)` in the case where the layer could not be found by its `layer_file_name`.
+    /// yb-mode: no layer files to evict. Always returns Ok(None).
     pub(crate) async fn evict_layer(
         &self,
-        layer_file_name: &LayerName,
+        _layer_file_name: &LayerName,
     ) -> anyhow::Result<Option<bool>> {
-        let _gate = self
-            .gate
-            .enter()
-            .map_err(|_| anyhow::anyhow!("Shutting down"))?;
-
-        let Some(local_layer) = self.find_layer(layer_file_name).await? else {
-            return Ok(None);
-        };
-
-        // curl has this by default
-        let timeout = std::time::Duration::from_secs(120);
-
-        match local_layer.evict_and_wait(timeout).await {
-            Ok(()) => Ok(Some(true)),
-            Err(EvictionError::NotFound) => Ok(Some(false)),
-            Err(EvictionError::Downloaded) => Ok(Some(false)),
-            Err(EvictionError::Timeout) => Ok(Some(false)),
-        }
+        Ok(None)
     }
 
 
@@ -3108,43 +3076,6 @@ impl Timeline {
         self.last_record_lsn.advance(new_lsn);
     }
 
-    /// Update the index part with a fresh disk_consistent_lsn (and
-    /// optionally a list of layer files to upload alongside).
-    fn schedule_uploads(
-        &self,
-        disk_consistent_lsn: Lsn,
-        layers_to_upload: impl IntoIterator<Item = ResidentLayer>,
-    ) -> anyhow::Result<()> {
-        let RecordLsn {
-            last: last_record_lsn,
-            prev: prev_record_lsn,
-        } = self.last_record_lsn.load();
-        let ondisk_prev_record_lsn = if disk_consistent_lsn == last_record_lsn {
-            Some(prev_record_lsn)
-        } else {
-            None
-        };
-
-        let update = crate::tenant::metadata::MetadataUpdate::new(
-            disk_consistent_lsn,
-            ondisk_prev_record_lsn,
-            *self.applied_gc_cutoff_lsn.read(),
-        );
-
-        fail_point!("checkpoint-before-saving-metadata", |x| bail!(
-            "{}",
-            x.unwrap()
-        ));
-
-        for layer in layers_to_upload {
-            self.remote_client.schedule_layer_file_upload(layer)?;
-        }
-        self.remote_client
-            .schedule_index_upload_for_metadata_update(&update)?;
-
-        Ok(())
-    }
-
     pub(crate) async fn preserve_initdb_archive(&self) -> anyhow::Result<()> {
         self.remote_client
             .preserve_initdb_archive(
@@ -3560,104 +3491,13 @@ impl Timeline {
 
     async fn download_all_remote_layers(
         self: &Arc<Self>,
-        request: DownloadRemoteLayersTaskSpawnRequest,
-        ctx: &RequestContext,
+        _request: DownloadRemoteLayersTaskSpawnRequest,
+        _ctx: &RequestContext,
     ) {
         use pageserver_api::models::DownloadRemoteLayersTaskState;
-
-        let remaining = {
-            let guard = self
-                .layers
-                .read(LayerManagerLockHolder::GetLayerMapInfo)
-                .await;
-            let Ok(lm) = guard.layer_map() else {
-                // technically here we could look into iterating accessible layers, but downloading
-                // all layers of a shutdown timeline makes no sense regardless.
-                tracing::info!("attempted to download all layers of shutdown timeline");
-                return;
-            };
-            lm.iter_historic_layers()
-                .map(|desc| guard.get_from_desc(&desc))
-                .collect::<Vec<_>>()
-        };
-        let total_layer_count = remaining.len();
-
-        macro_rules! lock_status {
-            ($st:ident) => {
-                let mut st = self.download_all_remote_layers_task_info.write().unwrap();
-                let st = st
-                    .as_mut()
-                    .expect("this function is only called after the task has been spawned");
-                assert_eq!(
-                    st.task_id,
-                    format!(
-                        "{}",
-                        task_mgr::current_task_id().expect("we run inside a task_mgr task")
-                    )
-                );
-                let $st = st;
-            };
-        }
-
-        {
-            lock_status!(st);
-            st.total_layer_count = total_layer_count as u64;
-        }
-
-        let mut remaining = remaining.into_iter();
-        let mut have_remaining = true;
-        let mut js = tokio::task::JoinSet::new();
-
-        let cancel = task_mgr::shutdown_token();
-
-        let limit = request.max_concurrent_downloads;
-
-        loop {
-            while js.len() < limit.get() && have_remaining && !cancel.is_cancelled() {
-                let Some(next) = remaining.next() else {
-                    have_remaining = false;
-                    break;
-                };
-
-                let span = tracing::info_span!("download", layer = %next);
-
-                let ctx = ctx.attached_child();
-                js.spawn(
-                    async move {
-                        let res = next.download(&ctx).await;
-                        (next, res)
-                    }
-                    .instrument(span),
-                );
-            }
-
-            while let Some(res) = js.join_next().await {
-                match res {
-                    Ok((_, Ok(_))) => {
-                        lock_status!(st);
-                        st.successful_download_count += 1;
-                    }
-                    Ok((layer, Err(e))) => {
-                        tracing::error!(%layer, "download failed: {e:#}");
-                        lock_status!(st);
-                        st.failed_download_count += 1;
-                    }
-                    Err(je) if je.is_cancelled() => unreachable!("not used here"),
-                    Err(je) if je.is_panic() => {
-                        lock_status!(st);
-                        st.failed_download_count += 1;
-                    }
-                    Err(je) => tracing::warn!("unknown joinerror: {je:?}"),
-                }
-            }
-
-            if js.is_empty() && (!have_remaining || cancel.is_cancelled()) {
-                break;
-            }
-        }
-
-        {
-            lock_status!(st);
+        // yb-mode: no layer files to download. Mark immediately complete.
+        let mut st = self.download_all_remote_layers_task_info.write().unwrap();
+        if let Some(st) = st.as_mut() {
             st.state = DownloadRemoteLayersTaskState::Completed;
         }
     }

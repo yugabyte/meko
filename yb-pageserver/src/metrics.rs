@@ -4243,8 +4243,6 @@ pub fn preinitialize_metrics(
     // Tenant manager stats
     Lazy::force(&TENANT_MANAGER);
 
-    Lazy::force(&crate::tenant::storage_layer::layer::LAYER_IMPL_METRICS);
-
     for state_name in pageserver_api::models::TenantState::VARIANTS {
         // initialize the metric for all gauges, otherwise the time series might seemingly show
         // values from last restart.

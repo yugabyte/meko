@@ -1007,45 +1007,6 @@ impl RemoteTimelineClient {
         Ok(())
     }
 
-    /// Schedules uploading a new version of `index_part.json` with the given layers added,
-    /// detaching from ancestor and waits for it to complete.
-    ///
-    /// This is used with `Timeline::detach_ancestor` functionality.
-    pub(crate) async fn schedule_adding_existing_layers_to_index_detach_and_wait(
-        self: &Arc<Self>,
-        layers: &[Layer],
-        adopted: (TimelineId, Lsn),
-    ) -> anyhow::Result<()> {
-        let barrier = {
-            let mut guard = self.upload_queue.lock().unwrap();
-            let upload_queue = guard.initialized_mut()?;
-
-            if upload_queue.clean.0.lineage.detached_previous_ancestor() == Some(adopted) {
-                None
-            } else {
-                upload_queue.dirty.metadata.detach_from_ancestor(&adopted);
-                upload_queue.dirty.lineage.record_detaching(&adopted);
-
-                for layer in layers {
-                    let prev = upload_queue
-                        .dirty
-                        .layer_metadata
-                        .insert(layer.layer_desc().layer_name(), layer.metadata());
-                    assert!(prev.is_none(), "copied layer existed already {layer}");
-                }
-
-                self.schedule_index_upload(upload_queue);
-
-                Some(self.schedule_barrier0(upload_queue))
-            }
-        };
-
-        if let Some(barrier) = barrier {
-            Self::wait_completion0(barrier).await?;
-        }
-        Ok(())
-    }
-
     /// Adds a gc blocking reason for this timeline if one does not exist already.
     ///
     /// A retryable step of timeline detach ancestor.
@@ -1608,54 +1569,6 @@ impl RemoteTimelineClient {
         .ok_or_else(|| anyhow::Error::new(TimeoutOrCancel::Cancel))
         .and_then(|x| x)
         .context("upload a layer without adding it to latest files")
-    }
-
-    /// Copies the `adopted` remote existing layer to the remote path of `adopted_as`. The layer is
-    /// not added to be part of a future `index_part.json` upload.
-    pub(crate) async fn copy_timeline_layer(
-        self: &Arc<Self>,
-        adopted: &Layer,
-        adopted_as: &Layer,
-        cancel: &CancellationToken,
-    ) -> anyhow::Result<()> {
-        let source_remote_path = remote_layer_path(
-            &self.tenant_shard_id.tenant_id,
-            &adopted
-                .get_timeline_id()
-                .expect("Source timeline should be alive"),
-            adopted.metadata().shard,
-            &adopted.layer_desc().layer_name(),
-            adopted.metadata().generation,
-        );
-
-        let target_remote_path = remote_layer_path(
-            &self.tenant_shard_id.tenant_id,
-            &self.timeline_id,
-            adopted_as.metadata().shard,
-            &adopted_as.layer_desc().layer_name(),
-            adopted_as.metadata().generation,
-        );
-
-        backoff::retry(
-            || async {
-                upload::copy_timeline_layer(
-                    &self.storage_impl,
-                    &source_remote_path,
-                    &target_remote_path,
-                    cancel,
-                )
-                .await
-            },
-            TimeoutOrCancel::caused_by_cancel,
-            FAILED_UPLOAD_WARN_THRESHOLD,
-            FAILED_REMOTE_OP_RETRIES,
-            "copy timeline layer",
-            cancel,
-        )
-        .await
-        .ok_or_else(|| anyhow::Error::new(TimeoutOrCancel::Cancel))
-        .and_then(|x| x)
-        .context("remote copy timeline layer")
     }
 
     async fn flush_deletion_queue(&self) -> Result<(), DeletionQueueError> {
