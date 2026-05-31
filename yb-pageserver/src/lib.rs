@@ -9,7 +9,6 @@ pub mod context;
 pub mod controller_upcall_client;
 pub mod deletion_queue;
 
-pub mod feature_resolver;
 pub mod http;
 pub mod import_datadir;
 pub mod l0_flush;

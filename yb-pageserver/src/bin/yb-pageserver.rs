@@ -20,7 +20,6 @@ use yb_pageserver::basebackup_cache::BasebackupCache;
 use yb_pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
 use yb_pageserver::controller_upcall_client::StorageControllerUpcallClient;
 use yb_pageserver::deletion_queue::DeletionQueue;
-use yb_pageserver::feature_resolver::FeatureResolver;
 use yb_pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
 use yb_pageserver::page_service::GrpcPageServiceHandler;
 use yb_pageserver::task_mgr::{
@@ -537,12 +536,6 @@ fn start_pageserver(
         None
     };
 
-    let feature_resolver = create_feature_resolver(
-        conf,
-        shutdown_pageserver.clone(),
-        BACKGROUND_RUNTIME.handle(),
-    )?;
-
     // Set up deletion queue
     let (deletion_queue, deletion_workers) = DeletionQueue::new(
         remote_storage.clone(),
@@ -599,7 +592,6 @@ fn start_pageserver(
             deletion_queue_client,
             l0_flush_global_state,
             basebackup_cache: Arc::clone(&basebackup_cache),
-            feature_resolver: feature_resolver.clone(),
             compute_page_store: compute_page_store.clone(),
             internal_page_store: internal_page_store.clone(),
         },
@@ -711,7 +703,6 @@ fn start_pageserver(
                 remote_storage.clone(),
                 broker_client.clone(),
                 deletion_queue.new_client(),
-                feature_resolver.clone(),
             )
             .context("Failed to initialize router state")?,
         );
@@ -815,7 +806,6 @@ fn start_pageserver(
         } else {
             None
         },
-        feature_resolver.clone(),
     );
 
     // Spawn a Pageserver gRPC server task. It will spawn separate tasks for each request/stream.
@@ -862,14 +852,6 @@ fn start_pageserver(
         .await;
         unreachable!();
     })
-}
-
-fn create_feature_resolver(
-    conf: &'static PageServerConf,
-    shutdown_pageserver: CancellationToken,
-    handle: &tokio::runtime::Handle,
-) -> anyhow::Result<FeatureResolver> {
-    FeatureResolver::spawn(conf, shutdown_pageserver, handle)
 }
 
 /// Open a `PageStore` against the configured YB cluster with the

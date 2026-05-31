@@ -81,7 +81,6 @@ use crate::config::PageServerConf;
 use crate::context::{
     DownloadBehavior, RequestContext,
 };
-use crate::feature_resolver::TenantFeatureResolver;
 use crate::keyspace::{KeyPartitioning, KeySpace};
 use crate::l0_flush::{self, L0FlushGlobalState};
 use crate::metrics::{
@@ -162,7 +161,6 @@ pub struct TimelineResources {
     pub l0_compaction_trigger: Arc<Notify>,
     pub l0_flush_global_state: l0_flush::L0FlushGlobalState,
     pub basebackup_cache: Arc<BasebackupCache>,
-    pub feature_resolver: Arc<TenantFeatureResolver>,
     /// Compute-reads `PageStore` (see
     /// `TenantSharedResources::compute_page_store`). `Some` enables
     /// yb-pageserver mode for this timeline.
@@ -422,9 +420,6 @@ pub struct Timeline {
 
     /// A channel to send async requests to prepare a basebackup for the basebackup cache.
     basebackup_cache: Arc<BasebackupCache>,
-
-    #[expect(dead_code)]
-    feature_resolver: Arc<TenantFeatureResolver>,
 
     /// Basebackup will collect the count and store it here. Used for reldirv2 rollout.
     pub(crate) db_rel_count: ArcSwapOption<(usize, usize)>,
@@ -2872,8 +2867,6 @@ impl Timeline {
                 wait_lsn_log_slow: tokio::sync::Semaphore::new(1),
 
                 basebackup_cache: resources.basebackup_cache,
-
-                feature_resolver: resources.feature_resolver.clone(),
 
                 db_rel_count: ArcSwapOption::from_pointee(None),
             };

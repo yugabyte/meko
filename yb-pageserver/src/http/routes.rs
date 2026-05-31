@@ -46,7 +46,6 @@ use pageserver_api::shard::{ShardCount, TenantShardId};
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeTravelError};
 use scopeguard::defer;
-use serde_json::json;
 use tokio::time::Instant;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
@@ -60,7 +59,6 @@ use crate::config::PageServerConf;
 use crate::context;
 use crate::context::{DownloadBehavior, RequestContext, RequestContextBuilder};
 use crate::deletion_queue::DeletionQueueClient;
-use crate::feature_resolver::FeatureResolver;
 use crate::metrics::LOCAL_DATA_LOSS_SUSPECTED;
 use crate::pgdatadir_mapping::LsnForTimestamp;
 use crate::task_mgr::TaskKind;
@@ -104,7 +102,6 @@ pub struct State {
     broker_client: storage_broker::BrokerClientChannel,
     deletion_queue_client: DeletionQueueClient,
     latest_utilization: tokio::sync::Mutex<Option<(std::time::Instant, bytes::Bytes)>>,
-    feature_resolver: FeatureResolver,
 }
 
 impl State {
@@ -116,7 +113,6 @@ impl State {
         remote_storage: GenericRemoteStorage,
         broker_client: storage_broker::BrokerClientChannel,
         deletion_queue_client: DeletionQueueClient,
-        feature_resolver: FeatureResolver,
     ) -> anyhow::Result<Self> {
         let allowlist_routes = &[
             "/v1/status",
@@ -135,7 +131,6 @@ impl State {
             broker_client,
             deletion_queue_client,
             latest_utilization: Default::default(),
-            feature_resolver,
         })
     }
 }
@@ -2985,109 +2980,6 @@ async fn read_tar_eof(mut reader: (impl tokio::io::AsyncRead + Unpin)) -> anyhow
     Ok(())
 }
 
-async fn force_refresh_feature_flag(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-
-    let state = get_state(&request);
-    let tenant = state
-        .tenant_manager
-        .get_attached_tenant_shard(tenant_shard_id)?;
-    tenant
-        .feature_resolver
-        .refresh_properties_and_flags(&tenant);
-    json_response(StatusCode::OK, ())
-}
-
-async fn tenant_evaluate_feature_flag(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-
-    let flag: String = parse_request_param(&request, "flag_key")?;
-    let as_type: Option<String> = parse_query_param(&request, "as")?;
-
-    let state = get_state(&request);
-
-    async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_shard_id)?;
-        // TODO: the properties we get here might be stale right after it is collected. But such races are rare (updated every 10s)
-        // and we don't need to worry about it for now.
-        let properties = tenant.feature_resolver.collect_properties();
-        if as_type.as_deref() == Some("boolean") {
-            let result = tenant.feature_resolver.evaluate_boolean(&flag);
-            let result = result.map(|_| true).map_err(|e| e.to_string());
-            json_response(StatusCode::OK, json!({ "result": result, "properties": properties }))
-        } else if as_type.as_deref() == Some("multivariate") {
-            let result = tenant.feature_resolver.evaluate_multivariate(&flag).map_err(|e| e.to_string());
-            json_response(StatusCode::OK, json!({ "result": result, "properties": properties }))
-        } else {
-            // Auto infer the type of the feature flag.
-            let is_boolean = tenant.feature_resolver.is_feature_flag_boolean(&flag).map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?;
-            if is_boolean {
-                let result = tenant.feature_resolver.evaluate_boolean(&flag);
-                let result = result.map(|_| true).map_err(|e| e.to_string());
-                json_response(StatusCode::OK, json!({ "result": result, "properties": properties }))
-            } else {
-                let result = tenant.feature_resolver.evaluate_multivariate(&flag).map_err(|e| e.to_string());
-                json_response(StatusCode::OK, json!({ "result": result, "properties": properties }))
-            }
-        }
-    }
-    .instrument(info_span!("tenant_evaluate_feature_flag", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug()))
-    .await
-}
-
-async fn force_override_feature_flag_for_testing_put(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-
-    let flag: String = parse_request_param(&request, "flag_key")?;
-    let value: String = must_parse_query_param(&request, "value")?;
-    let state = get_state(&request);
-    state
-        .feature_resolver
-        .force_override_for_testing(&flag, Some(&value));
-    json_response(StatusCode::OK, ())
-}
-
-async fn force_override_feature_flag_for_testing_delete(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-
-    let flag: String = parse_request_param(&request, "flag_key")?;
-    let state = get_state(&request);
-    state
-        .feature_resolver
-        .force_override_for_testing(&flag, None);
-    json_response(StatusCode::OK, ())
-}
-
-async fn update_feature_flag_spec(
-    mut request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-    let body = json_request(&mut request).await?;
-    let state = get_state(&request);
-    state
-        .feature_resolver
-        .update(body)
-        .map_err(ApiError::InternalServerError)?;
-    json_response(StatusCode::OK, ())
-}
-
 /// Common functionality of all the HTTP API handlers.
 ///
 /// - Adds a tracing span to each request (by `request_span`)
@@ -3415,21 +3307,6 @@ pub fn make_router(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/activate_post_import",
             |r| api_handler(r, activate_post_import_handler),
         )
-        .get("/v1/tenant/:tenant_shard_id/feature_flag/:flag_key", |r| {
-            api_handler(r, tenant_evaluate_feature_flag)
-        })
-        .post("/v1/tenant/:tenant_shard_id/force_refresh_feature_flag", |r| {
-            api_handler(r, force_refresh_feature_flag)
-        })
-        .put("/v1/feature_flag/:flag_key", |r| {
-            testing_api_handler("force override feature flag - put", r, force_override_feature_flag_for_testing_put)
-        })
-        .delete("/v1/feature_flag/:flag_key", |r| {
-            testing_api_handler("force override feature flag - delete", r, force_override_feature_flag_for_testing_delete)
-        })
-        .post("/v1/feature_flag_spec", |r| {
-            api_handler(r, update_feature_flag_spec)
-        })
         .post("/hadron-internal/reset_alert_gauges", |r| {
             api_handler(r, hadron_reset_alert_gauges)
         })

@@ -69,7 +69,6 @@ use crate::config::PageServerConf;
 use crate::context::{
     DownloadBehavior, PerfInstrumentFutureExt, RequestContext, RequestContextBuilder,
 };
-use crate::feature_resolver::FeatureResolver;
 use crate::metrics::{
     self, COMPUTE_COMMANDS_COUNTERS, ComputeCommandKind, GetPageBatchBreakReason, LIVE_CONNECTIONS,
     MISROUTED_PAGESTREAM_REQUESTS, PAGESTREAM_HANDLER_RESULTS_TOTAL, SmgrOpTimer, TimelineMetrics,
@@ -141,7 +140,6 @@ pub fn spawn(
     perf_trace_dispatch: Option<Dispatch>,
     tcp_listener: tokio::net::TcpListener,
     tls_config: Option<Arc<rustls::ServerConfig>>,
-    feature_resolver: FeatureResolver,
 ) -> Listener {
     let cancel = CancellationToken::new();
     let libpq_ctx = RequestContext::todo_child(
@@ -163,7 +161,6 @@ pub fn spawn(
             conf.pg_auth_type,
             tls_config,
             conf.page_service_pipelining.clone(),
-            feature_resolver,
             libpq_ctx,
             cancel.clone(),
         )
@@ -222,7 +219,6 @@ pub async fn libpq_listener_main(
     auth_type: AuthType,
     tls_config: Option<Arc<rustls::ServerConfig>>,
     pipelining_config: PageServicePipeliningConfig,
-    feature_resolver: FeatureResolver,
     listener_ctx: RequestContext,
     listener_cancel: CancellationToken,
 ) -> Connections {
@@ -266,7 +262,6 @@ pub async fn libpq_listener_main(
                     auth_type,
                     tls_config.clone(),
                     pipelining_config.clone(),
-                    feature_resolver.clone(),
                     connection_ctx,
                     connections_cancel.child_token(),
                     gate_guard,
@@ -309,7 +304,6 @@ async fn page_service_conn_main(
     auth_type: AuthType,
     tls_config: Option<Arc<rustls::ServerConfig>>,
     pipelining_config: PageServicePipeliningConfig,
-    feature_resolver: FeatureResolver,
     connection_ctx: RequestContext,
     cancel: CancellationToken,
     gate_guard: GateGuard,
@@ -377,7 +371,6 @@ async fn page_service_conn_main(
         perf_span_fields,
         connection_ctx,
         cancel.clone(),
-        feature_resolver.clone(),
         gate_guard,
     );
     let pgbackend =
@@ -428,8 +421,6 @@ struct PageServerHandler {
 
     pipelining_config: PageServicePipeliningConfig,
     get_vectored_concurrent_io: GetVectoredConcurrentIo,
-
-    feature_resolver: FeatureResolver,
 
     gate_guard: GateGuard,
 }
@@ -920,7 +911,6 @@ impl PageServerHandler {
         perf_span_fields: ConnectionPerfSpanFields,
         connection_ctx: RequestContext,
         cancel: CancellationToken,
-        feature_resolver: FeatureResolver,
         gate_guard: GateGuard,
     ) -> Self {
         PageServerHandler {
@@ -932,7 +922,6 @@ impl PageServerHandler {
             cancel,
             pipelining_config,
             get_vectored_concurrent_io,
-            feature_resolver,
             gate_guard,
         }
     }
@@ -1836,23 +1825,10 @@ impl PageServerHandler {
             .take()
             .expect("implementation error: timeline_handles should not be locked");
 
-        // Evaluate the expensive feature resolver check once per pagestream subprotocol handling
-        // instead of once per GetPage request. This is shared between pipelined and serial paths.
-        let hold_gc_cutoff_guard = if cfg!(test) || cfg!(feature = "testing") {
-            HoldAppliedGcCutoffGuard::Yes
-        } else {
-            // Use the global feature resolver with the tenant ID directly, avoiding the need
-            // to get a timeline/shard which might not be available on this pageserver node.
-            let empty_properties = std::collections::HashMap::new();
-            match self.feature_resolver.evaluate_boolean(
-                "page-service-getpage-hold-applied-gc-cutoff-guard",
-                tenant_id,
-                &empty_properties,
-            ) {
-                Ok(()) => HoldAppliedGcCutoffGuard::Yes,
-                Err(_) => HoldAppliedGcCutoffGuard::No,
-            }
-        };
+        // yb-pageserver doesn't run GC (no on-disk layer files to evict).
+        // Always hold the gc-cutoff guard — the original toggle existed
+        // to escape a Neon-specific bottleneck that has no analogue here.
+        let hold_gc_cutoff_guard = HoldAppliedGcCutoffGuard::Yes;
         // record it in the span of handle_pagerequests so that both the request_span
         // and the pipeline implementation spans contains the field.
         Span::current().record(

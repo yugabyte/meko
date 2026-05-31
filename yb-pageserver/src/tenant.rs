@@ -79,7 +79,6 @@ use crate::context;
 use crate::context::RequestContextBuilder;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::deletion_queue::{DeletionQueueClient, DeletionQueueError};
-use crate::feature_resolver::{FeatureResolver, TenantFeatureResolver};
 use crate::l0_flush::L0FlushGlobalState;
 use crate::metrics::{
     BROKEN_TENANTS_SET, CONCURRENT_INITDBS,
@@ -154,7 +153,6 @@ pub struct TenantSharedResources {
     pub deletion_queue_client: DeletionQueueClient,
     pub l0_flush_global_state: L0FlushGlobalState,
     pub basebackup_cache: Arc<BasebackupCache>,
-    pub feature_resolver: FeatureResolver,
     /// Row-per-page YugabyteDB store dedicated to compute-facing
     /// reads (GetPage hot path: `PageWriter::scan_range` and
     /// `PageWriter::read_chain`). `Some` enables yb-pageserver mode;
@@ -369,8 +367,6 @@ pub struct TenantShard {
     pub(crate) gc_block: gc_block::GcBlock,
 
     l0_flush_global_state: L0FlushGlobalState,
-
-    pub(crate) feature_resolver: Arc<TenantFeatureResolver>,
 
     /// Compute-reads `PageStore` (see
     /// `TenantSharedResources::compute_page_store`).
@@ -1282,7 +1278,6 @@ impl TenantShard {
             deletion_queue_client,
             l0_flush_global_state,
             basebackup_cache,
-            feature_resolver,
             compute_page_store,
             internal_page_store,
         } = resources;
@@ -1301,7 +1296,6 @@ impl TenantShard {
             deletion_queue_client,
             l0_flush_global_state,
             basebackup_cache,
-            feature_resolver,
             compute_page_store,
             internal_page_store,
         ));
@@ -3016,8 +3010,6 @@ impl TenantShard {
             walredo_mgr.maybe_quiesce(WALREDO_IDLE_TIMEOUT);
         }
 
-        // Update the feature resolver with the latest tenant-spcific data.
-        self.feature_resolver.refresh_properties_and_flags(self);
     }
 
     pub fn timeline_has_no_attached_children(&self, timeline_id: TimelineId) -> bool {
@@ -4010,7 +4002,6 @@ impl TenantShard {
         deletion_queue_client: DeletionQueueClient,
         l0_flush_global_state: L0FlushGlobalState,
         basebackup_cache: Arc<BasebackupCache>,
-        feature_resolver: FeatureResolver,
         compute_page_store: Option<Arc<crate::page_store::PageStore>>,
         internal_page_store: Option<Arc<crate::page_store::PageStore>>,
     ) -> TenantShard {
@@ -4105,10 +4096,6 @@ impl TenantShard {
             gc_block: Default::default(),
             l0_flush_global_state,
             basebackup_cache,
-            feature_resolver: Arc::new(TenantFeatureResolver::new(
-                feature_resolver,
-                tenant_shard_id.tenant_id,
-            )),
             compute_page_store,
             internal_page_store,
         }
@@ -4996,7 +4983,6 @@ impl TenantShard {
             l0_compaction_trigger: self.l0_compaction_trigger.clone(),
             l0_flush_global_state: self.l0_flush_global_state.clone(),
             basebackup_cache: self.basebackup_cache.clone(),
-            feature_resolver: self.feature_resolver.clone(),
             compute_page_store: self.compute_page_store.clone(),
             internal_page_store: self.internal_page_store.clone(),
         }
