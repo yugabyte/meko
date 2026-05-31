@@ -19,7 +19,6 @@ use crate::config::PageServerConf;
 use crate::context::RequestContext;
 use crate::page_cache;
 use crate::tenant::storage_layer::inmemory_layer::GlobalResourceUnits;
-use crate::tenant::storage_layer::inmemory_layer::vectored_dio_read::File;
 use crate::virtual_file::owned_buffers_io::io_buf_aligned::IoBufAlignedMut;
 use crate::virtual_file::owned_buffers_io::slice::SliceMutExt;
 use crate::virtual_file::owned_buffers_io::write::{Buffer, FlushTaskError};
@@ -174,20 +173,6 @@ impl EphemeralFile {
         self.page_cache_file_id
     }
 
-    pub(crate) async fn load_to_io_buf(
-        &self,
-        ctx: &RequestContext,
-    ) -> Result<IoBufferMut, io::Error> {
-        let size = self.len().into_usize();
-        let buf = IoBufferMut::with_capacity(size);
-        let (slice, nread) = self.read_exact_at_eof_ok(0, buf.slice_full(), ctx).await?;
-        assert_eq!(nread, size);
-        let buf = slice.into_inner();
-        assert_eq!(buf.len(), nread);
-        assert_eq!(buf.capacity(), size, "we shouldn't be reallocating");
-        Ok(buf)
-    }
-
     /// Returns the offset at which the first byte of the input was written, for use
     /// in constructing indices over the written value.
     ///
@@ -239,170 +224,6 @@ impl EphemeralFile {
         let mut resource_units = self.resource_units.lock().unwrap();
         let len = self.bytes_written.load(Ordering::Relaxed);
         resource_units.publish_size(len)
-    }
-}
-
-impl super::storage_layer::inmemory_layer::vectored_dio_read::File for EphemeralFile {
-    async fn read_exact_at_eof_ok<B: IoBufAlignedMut + Send>(
-        &self,
-        start: u64,
-        mut dst: tokio_epoll_uring::Slice<B>,
-        ctx: &RequestContext,
-    ) -> std::io::Result<(tokio_epoll_uring::Slice<B>, usize)> {
-        // We will fill the slice in back to front. Hence, we need
-        // the slice to be fully initialized.
-        // TODO(vlad): Is there a nicer way of doing this?
-        dst.as_mut_rust_slice_full_zeroed();
-
-        let writer = self.buffered_writer.read().await;
-
-        // Read bytes written while under lock. This is a hack to deal with concurrent
-        // writes updating the number of bytes written. `bytes_written` is not DIO alligned
-        // but we may end the read there.
-        //
-        // TODO(vlad): Feels like there's a nicer path where we align the end if it
-        // shoots over the end of the file.
-        let bytes_written = self.bytes_written.load(Ordering::Acquire);
-
-        let dst_cap = dst.bytes_total().into_u64();
-        let end = {
-            // saturating_add is correct here because the max file size is u64::MAX, so,
-            // if start + dst.len() > u64::MAX, then we know it will be a short read
-            let mut end: u64 = start.saturating_add(dst_cap);
-            if end > bytes_written {
-                end = bytes_written;
-            }
-            end
-        };
-
-        let submitted_offset = writer.bytes_submitted();
-        let maybe_flushed = writer.inspect_maybe_flushed();
-
-        let mutable = match writer.inspect_mutable() {
-            Some(mutable) => &mutable[0..mutable.pending()],
-            None => {
-                // Timeline::cancel and hence buffered writer flush was cancelled.
-                // Remain read-available while timeline is shutting down.
-                &[]
-            }
-        };
-
-        // inclusive, exclusive
-        #[derive(Debug)]
-        struct Range<N>(N, N);
-        impl<N: Num + Clone + Copy + PartialOrd + Ord> Range<N> {
-            fn len(&self) -> N {
-                if self.0 > self.1 {
-                    N::zero()
-                } else {
-                    self.1 - self.0
-                }
-            }
-        }
-
-        let (written_range, maybe_flushed_range) = {
-            if maybe_flushed.is_some() {
-                // [       written       ][ maybe_flushed ][    mutable    ]
-                //                                         ^
-                //                                 `submitted_offset`
-                // <++++++ on disk +++++++????????????????>
-                (
-                    Range(
-                        start,
-                        std::cmp::min(end, submitted_offset.saturating_sub(TAIL_SZ as u64)),
-                    ),
-                    Range(
-                        std::cmp::max(start, submitted_offset.saturating_sub(TAIL_SZ as u64)),
-                        std::cmp::min(end, submitted_offset),
-                    ),
-                )
-            } else {
-                // [       written                        ][    mutable    ]
-                //                                         ^
-                //                                 `submitted_offset`
-                // <++++++ on disk +++++++++++++++++++++++>
-                (
-                    Range(start, std::cmp::min(end, submitted_offset)),
-                    // zero len
-                    Range(submitted_offset, u64::MIN),
-                )
-            }
-        };
-
-        let mutable_range = Range(std::cmp::max(start, submitted_offset), end);
-
-        // There are three sources from which we might have to read data:
-        // 1. The file itself
-        // 2. The buffer which contains changes currently being flushed
-        // 3. The buffer which contains chnages yet to be flushed
-        //
-        // For better concurrency, we do them in reverse order: perform the in-memory
-        // reads while holding the writer lock, drop the writer lock and read from the
-        // file if required.
-
-        let dst = if mutable_range.len() > 0 {
-            let offset_in_buffer = mutable_range
-                .0
-                .checked_sub(submitted_offset)
-                .unwrap()
-                .into_usize();
-            let to_copy =
-                &mutable[offset_in_buffer..(offset_in_buffer + mutable_range.len().into_usize())];
-            let bounds = dst.bounds();
-            let mut view = dst.slice({
-                let start =
-                    written_range.len().into_usize() + maybe_flushed_range.len().into_usize();
-                let end = start.checked_add(mutable_range.len().into_usize()).unwrap();
-                start..end
-            });
-            view.as_mut_rust_slice_full_zeroed()
-                .copy_from_slice(to_copy);
-            Slice::from_buf_bounds(Slice::into_inner(view), bounds)
-        } else {
-            dst
-        };
-
-        let dst = if maybe_flushed_range.len() > 0 {
-            let offset_in_buffer = maybe_flushed_range
-                .0
-                .checked_sub(submitted_offset.saturating_sub(TAIL_SZ as u64))
-                .unwrap()
-                .into_usize();
-            // Checked previously the buffer is Some.
-            let maybe_flushed = maybe_flushed.unwrap();
-            let to_copy = &maybe_flushed
-                [offset_in_buffer..(offset_in_buffer + maybe_flushed_range.len().into_usize())];
-            let bounds = dst.bounds();
-            let mut view = dst.slice({
-                let start = written_range.len().into_usize();
-                let end = start
-                    .checked_add(maybe_flushed_range.len().into_usize())
-                    .unwrap();
-                start..end
-            });
-            view.as_mut_rust_slice_full_zeroed()
-                .copy_from_slice(to_copy);
-            Slice::from_buf_bounds(Slice::into_inner(view), bounds)
-        } else {
-            dst
-        };
-
-        drop(writer);
-
-        let dst = if written_range.len() > 0 {
-            let bounds = dst.bounds();
-            let slice = self
-                .file
-                .read_exact_at(dst.slice(0..written_range.len().into_usize()), start, ctx)
-                .await?;
-            Slice::from_buf_bounds(Slice::into_inner(slice), bounds)
-        } else {
-            dst
-        };
-
-        // TODO: in debug mode, randomize the remaining bytes in `dst` to catch bugs
-
-        Ok((dst, (end - start).into_usize()))
     }
 }
 

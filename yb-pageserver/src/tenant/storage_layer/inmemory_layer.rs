@@ -38,7 +38,6 @@ use crate::tenant::timeline::GetVectoredError;
 use crate::virtual_file::owned_buffers_io::io_buf_ext::IoBufExt;
 use crate::{l0_flush, page_cache};
 
-pub(crate) mod vectored_dio_read;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub(crate) struct InMemoryLayerFileId(page_cache::FileId);
@@ -575,110 +574,5 @@ impl InMemoryLayer {
                 buf.into()
             })
             .expect("frozen_local_path_str set only once");
-
-        #[cfg(debug_assertions)]
-        {
-            let index = self.index.read().await;
-            for vec_map in index.values() {
-                for (lsn, _) in vec_map.as_slice() {
-                    assert!(*lsn < end_lsn);
-                }
-            }
-        }
-    }
-
-    /// Write this frozen in-memory layer to disk. If `key_range` is set, the delta
-    /// layer will only contain the key range the user specifies, and may return `None`
-    /// if there are no matching keys.
-    ///
-    /// Returns a new delta layer with all the same data as this in-memory layer
-    pub async fn write_to_disk(
-        &self,
-        ctx: &RequestContext,
-        key_range: Option<Range<Key>>,
-        l0_flush_global_state: &l0_flush::Inner,
-        gate: &utils::sync::gate::Gate,
-        cancel: CancellationToken,
-    ) -> Result<Option<(PersistentLayerDesc, Utf8PathBuf)>> {
-        let index = self.index.read().await;
-
-        use l0_flush::Inner;
-        let _concurrency_permit = match l0_flush_global_state {
-            Inner::Direct { semaphore, .. } => Some(semaphore.acquire().await),
-        };
-
-        let end_lsn = *self.end_lsn.get().unwrap();
-
-        let key_count = if let Some(key_range) = key_range {
-            let key_range = key_range.start.to_compact()..key_range.end.to_compact();
-
-            index.iter().filter(|(k, _)| key_range.contains(k)).count()
-        } else {
-            index.len()
-        };
-        if key_count == 0 {
-            return Ok(None);
-        }
-
-        let mut delta_layer_writer = DeltaLayerWriter::new(
-            self.conf,
-            self.timeline_id,
-            self.tenant_shard_id,
-            Key::MIN,
-            self.start_lsn..end_lsn,
-            gate,
-            cancel,
-            ctx,
-        )
-        .await?;
-
-        match l0_flush_global_state {
-            l0_flush::Inner::Direct { .. } => {
-                let file_contents = self.file.load_to_io_buf(ctx).await?;
-                let file_contents = file_contents.freeze();
-
-                for (key, vec_map) in index.iter() {
-                    // Write all page versions
-                    for (lsn, entry) in vec_map
-                        .as_slice()
-                        .iter()
-                        .map(|(lsn, entry)| (lsn, entry.unpack()))
-                    {
-                        let IndexEntryUnpacked {
-                            pos,
-                            len,
-                            will_init,
-                        } = entry;
-                        let buf = file_contents.slice(pos as usize..(pos + len) as usize);
-                        let (_buf, res) = delta_layer_writer
-                            .put_value_bytes(
-                                Key::from_compact(*key),
-                                *lsn,
-                                buf.slice_len(),
-                                will_init,
-                                ctx,
-                            )
-                            .await;
-                        res?;
-                    }
-                }
-            }
-        }
-
-        // MAX is used here because we identify L0 layers by full key range
-        let (desc, path) = delta_layer_writer.finish(Key::MAX, ctx).await?;
-
-        // Hold the permit until all the IO is done, including the fsync in `delta_layer_writer.finish()``.
-        //
-        // If we didn't and our caller drops this future, tokio-epoll-uring would extend the lifetime of
-        // the `file_contents: Vec<u8>` until the IO is done, but not the permit's lifetime.
-        // Thus, we'd have more concurrenct `Vec<u8>` in existence than the semaphore allows.
-        //
-        // We hold across the fsync so that on ext4 mounted with data=ordered, all the kernel page cache pages
-        // we dirtied when writing to the filesystem have been flushed and marked !dirty.
-        drop(_concurrency_permit);
-
-        Ok(Some((desc, path)))
     }
 }
-
