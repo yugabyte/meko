@@ -213,11 +213,18 @@ impl PageStore {
         // All DDL goes through `YsqlClient::execute` which transparently
         // retries on YB "Restart read required" transients (see
         // `YsqlClient::run_with_retries`).
+        //
+        // Each CREATE statement is wrapped in `Self::idempotent_create`
+        // which swallows YB's "type X already exists" — a quirk of
+        // YB's pg_type catalog that can outlive a DROP DATABASE if a
+        // prior process left an orphaned type entry behind. The actual
+        // CREATE TABLE IF NOT EXISTS already handles "relation
+        // exists"; we only need to also handle the type counterpart.
         let create_schema = format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", self.schema);
-        self.client
-            .execute(&create_schema, &[])
-            .await
-            .with_context(|| format!("creating schema {}", self.schema))?;
+        Self::idempotent_create(
+            self.client.execute(&create_schema, &[]).await,
+            "creating schema",
+        )?;
 
         let create_pages = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".pages (
@@ -237,10 +244,10 @@ impl PageStore {
             )",
             self.schema
         );
-        self.client
-            .execute(&create_pages, &[])
-            .await
-            .context("creating pages table")?;
+        Self::idempotent_create(
+            self.client.execute(&create_pages, &[]).await,
+            "creating pages table",
+        )?;
 
         let create_meta = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".meta (
@@ -253,10 +260,10 @@ impl PageStore {
             )",
             self.schema
         );
-        self.client
-            .execute(&create_meta, &[])
-            .await
-            .context("creating meta table")?;
+        Self::idempotent_create(
+            self.client.execute(&create_meta, &[]).await,
+            "creating meta table",
+        )?;
 
         let create_slru = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".slru_pages (
@@ -274,10 +281,10 @@ impl PageStore {
             )",
             self.schema
         );
-        self.client
-            .execute(&create_slru, &[])
-            .await
-            .context("creating slru_pages table")?;
+        Self::idempotent_create(
+            self.client.execute(&create_slru, &[]).await,
+            "creating slru_pages table",
+        )?;
 
         let create_timelines = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".timeline_state (
@@ -293,11 +300,33 @@ impl PageStore {
             )",
             self.schema
         );
-        self.client
-            .execute(&create_timelines, &[])
-            .await
-            .context("creating timeline_state table")?;
+        Self::idempotent_create(
+            self.client.execute(&create_timelines, &[]).await,
+            "creating timeline_state table",
+        )?;
         Ok(())
+    }
+
+    /// Treat YB's "type X already exists" error as a benign no-op when
+    /// running `CREATE SCHEMA / TABLE IF NOT EXISTS`. The IF NOT EXISTS
+    /// guard normally handles the "relation exists" race; YB additionally
+    /// tracks the implicit row type in `pg_type` and a CREATE on a stale
+    /// catalog snapshot can hit "type already exists" even when the
+    /// table is fully there. Same outcome — schema is present — so we
+    /// treat it the same as "relation exists".
+    fn idempotent_create(res: Result<u64>, ctx: &'static str) -> Result<()> {
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                if msg.contains("already exists") {
+                    tracing::debug!("{ctx}: object already exists (idempotent CREATE), continuing");
+                    Ok(())
+                } else {
+                    Err(e).context(ctx)
+                }
+            }
+        }
     }
 
     // ------------------- pages ---------------------------------------------

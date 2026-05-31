@@ -1328,9 +1328,16 @@ impl TenantShard {
 
                 if disk_consistent_lsn.is_valid() {
                     // Sanity check: a timeline should have some content.
-                    // Exception: importing timelines might not yet have any
+                    // Exception 1: importing timelines might not yet have any.
+                    // Exception 2: yb-pageserver mode — page data lives in
+                    // pageserver.pages/slru_pages/meta, never in layer
+                    // files. A timeline with no ancestor + no layer files
+                    // is the normal post-restart state when
+                    // `compute_page_store` is set.
+                    let yb_mode = self.compute_page_store.is_some();
                     anyhow::ensure!(
-                        ancestor.is_some()
+                        yb_mode
+                            || ancestor.is_some()
                             || timeline
                                 .layers
                                 .read(LayerManagerLockHolder::LoadLayerMap)
