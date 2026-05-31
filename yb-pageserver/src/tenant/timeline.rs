@@ -714,9 +714,6 @@ pub enum GetReadyAncestorError {
 #[derive(Clone, Copy)]
 pub enum LogicalSizeCalculationCause {
     Initial,
-    ConsumptionMetricsSyntheticSize,
-    EvictionTaskImitation,
-    TenantSizeHandler,
 }
 
 pub enum GetLogicalSizePriority {
@@ -3256,12 +3253,7 @@ impl Timeline {
             return Ok(size);
         }
         let storage_time_metrics = match cause {
-            LogicalSizeCalculationCause::Initial
-            | LogicalSizeCalculationCause::ConsumptionMetricsSyntheticSize
-            | LogicalSizeCalculationCause::TenantSizeHandler => &self.metrics.logical_size_histo,
-            LogicalSizeCalculationCause::EvictionTaskImitation => {
-                &self.metrics.imitate_logical_size_histo
-            }
+            LogicalSizeCalculationCause::Initial => &self.metrics.logical_size_histo,
         };
         let timer = storage_time_metrics.start_timer();
         let logical_size = self

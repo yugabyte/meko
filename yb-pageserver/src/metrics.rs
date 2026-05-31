@@ -59,9 +59,6 @@ pub(crate) enum StorageTimeOperation {
     #[strum(serialize = "logical size")]
     LogicalSize,
 
-    #[strum(serialize = "imitate logical size")]
-    ImitateLogicalSize,
-
     #[strum(serialize = "gc")]
     Gc,
 
@@ -3061,7 +3058,6 @@ pub(crate) struct TimelineMetrics {
     shard_id: String,
     timeline_id: String,
     pub logical_size_histo: StorageTimeMetrics,
-    pub imitate_logical_size_histo: StorageTimeMetrics,
     pub garbage_collect_histo: StorageTimeMetrics,
     pub find_gc_cutoffs_histo: StorageTimeMetrics,
     pub last_record_lsn_gauge: IntGauge,
@@ -3098,12 +3094,6 @@ impl TimelineMetrics {
         let timeline_id = timeline_id_raw.to_string();
         let logical_size_histo = StorageTimeMetrics::new(
             StorageTimeOperation::LogicalSize,
-            &tenant_id,
-            &shard_id,
-            &timeline_id,
-        );
-        let imitate_logical_size_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::ImitateLogicalSize,
             &tenant_id,
             &shard_id,
             &timeline_id,
@@ -3209,7 +3199,6 @@ impl TimelineMetrics {
             shard_id,
             timeline_id,
             logical_size_histo,
-            imitate_logical_size_histo,
             garbage_collect_histo,
             find_gc_cutoffs_histo,
             last_record_lsn_gauge,
