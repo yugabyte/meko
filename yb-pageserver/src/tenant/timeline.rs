@@ -3386,46 +3386,12 @@ impl VersionedKeySpaceQuery {
         }
     }
 
-    /// Remove any parts of the query (segments) which overlap with the provided
-    /// key space (also segments).
-    fn remove_overlapping_with(&mut self, to_remove: &KeySpace) -> KeySpace {
-        match self {
-            Self::Uniform { keyspace, .. } => keyspace.remove_overlapping_with(to_remove),
-            Self::Scattered { keyspaces_at_lsn } => {
-                let mut removed_accum = KeySpaceRandomAccum::new();
-                keyspaces_at_lsn.iter_mut().for_each(|(_lsn, keyspace)| {
-                    let removed = keyspace.remove_overlapping_with(to_remove);
-                    removed_accum.add_keyspace(removed);
-                });
-
-                removed_accum.to_keyspace()
-            }
-        }
-    }
-
     fn is_empty(&self) -> bool {
         match self {
             Self::Uniform { keyspace, .. } => keyspace.is_empty(),
             Self::Scattered { keyspaces_at_lsn } => keyspaces_at_lsn
                 .iter()
                 .all(|(_lsn, keyspace)| keyspace.is_empty()),
-        }
-    }
-
-    /// "Lower" the query on the LSN dimension
-    fn lower(&mut self, to: Lsn) {
-        match self {
-            Self::Uniform { lsn, .. } => {
-                // If the originally requested LSN is smaller than the starting
-                // LSN of the ancestor we are descending into, we need to respect that.
-                // Hence the min.
-                *lsn = std::cmp::min(*lsn, to);
-            }
-            Self::Scattered { keyspaces_at_lsn } => {
-                keyspaces_at_lsn.iter_mut().for_each(|(lsn, _keyspace)| {
-                    *lsn = std::cmp::min(*lsn, to);
-                });
-            }
         }
     }
 }
@@ -3450,69 +3416,6 @@ impl std::fmt::Display for VersionedKeySpaceQuery {
 }
 
 impl Timeline {
-    #[allow(clippy::doc_lazy_continuation)]
-    async fn get_ready_ancestor_timeline(
-        &self,
-        ancestor: &Arc<Timeline>,
-        ctx: &RequestContext,
-    ) -> Result<Arc<Timeline>, GetReadyAncestorError> {
-        // It's possible that the ancestor timeline isn't active yet, or
-        // is active but hasn't yet caught up to the branch point. Wait
-        // for it.
-        //
-        // This cannot happen while the pageserver is running normally,
-        // because you cannot create a branch from a point that isn't
-        // present in the pageserver yet. However, we don't wait for the
-        // branch point to be uploaded to cloud storage before creating
-        // a branch. I.e., the branch LSN need not be remote consistent
-        // for the branching operation to succeed.
-        //
-        // Hence, if we try to load a tenant in such a state where
-        // 1. the existence of the branch was persisted (in IndexPart and/or locally)
-        // 2. but the ancestor state is behind branch_lsn because it was not yet persisted
-        // then we will need to wait for the ancestor timeline to
-        // re-stream WAL up to branch_lsn before we access it.
-        //
-        // How can a tenant get in such a state?
-        // - ungraceful pageserver process exit
-        // - detach+attach => this is a bug, https://github.com/neondatabase/neon/issues/4219
-        //
-        // NB: this could be avoided by requiring
-        //   branch_lsn >= remote_consistent_lsn
-        // during branch creation.
-        match ancestor.wait_to_become_active(ctx).await {
-            Ok(()) => {}
-            Err(TimelineState::Stopping) => {
-                // If an ancestor is stopping, it means the tenant is stopping: handle this the same as if this timeline was stopping.
-                return Err(GetReadyAncestorError::Cancelled);
-            }
-            Err(state) => {
-                return Err(GetReadyAncestorError::BadState {
-                    timeline_id: ancestor.timeline_id,
-                    state,
-                });
-            }
-        }
-        ancestor
-            .wait_lsn(
-                self.ancestor_lsn,
-                WaitLsnWaiter::Timeline(self),
-                WaitLsnTimeout::Default,
-                ctx,
-            )
-            .await
-            .map_err(|e| match e {
-                e @ WaitLsnError::Timeout(_) => GetReadyAncestorError::AncestorLsnTimeout(e),
-                WaitLsnError::Shutdown => GetReadyAncestorError::Cancelled,
-                WaitLsnError::BadState(state) => GetReadyAncestorError::BadState {
-                    timeline_id: ancestor.timeline_id,
-                    state,
-                },
-            })?;
-
-        Ok(ancestor.clone())
-    }
-
     pub(crate) fn get_shard_identity(&self) -> &ShardIdentity {
         &self.shard_identity
     }
@@ -3533,19 +3436,6 @@ impl Timeline {
 
         self.metrics.last_record_lsn_gauge.set(new_lsn.0 as i64);
         self.last_record_lsn.advance(new_lsn);
-    }
-
-    fn set_disk_consistent_lsn(&self, new_value: Lsn) -> bool {
-        let old_value = self.disk_consistent_lsn.fetch_max(new_value);
-        assert!(
-            new_value >= old_value,
-            "disk_consistent_lsn must be growing monotonously at runtime; current {old_value}, offered {new_value}"
-        );
-
-        self.metrics
-            .disk_consistent_lsn_gauge
-            .set(new_value.0 as i64);
-        new_value != old_value
     }
 
     /// Update the index part with a fresh disk_consistent_lsn (and
