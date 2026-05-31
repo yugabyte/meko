@@ -44,11 +44,11 @@ use remote_timeline_client::index::GcCompactionState;
 use remote_timeline_client::manifest::{
     LATEST_TENANT_MANIFEST_VERSION, OffloadedTimelineManifest, TenantManifest,
 };
+use heatmap::{HeatMapTenant, HeatMapTimeline};
 use remote_timeline_client::{
     FAILED_REMOTE_OP_RETRIES, FAILED_UPLOAD_WARN_THRESHOLD, UploadQueueNotReadyError,
     download_tenant_manifest,
 };
-use secondary::heatmap::{HeatMapTenant, HeatMapTimeline};
 use storage_broker::BrokerClientChannel;
 use timeline::import_pgdata::ImportingTimeline;
 use timeline::layer_manager::LayerManagerLockHolder;
@@ -128,8 +128,8 @@ pub mod storage_layer;
 
 pub mod checks;
 pub mod config;
+pub mod heatmap;
 pub mod mgr;
-pub mod secondary;
 pub mod tasks;
 pub mod upload_queue;
 
@@ -223,16 +223,8 @@ impl AttachedTenantConf {
         conf: &'static PageServerConf,
         location_conf: LocationConf,
     ) -> anyhow::Result<Self> {
-        match &location_conf.mode {
-            LocationMode::Attached(attach_conf) => {
-                Ok(Self::new(conf, location_conf.tenant_conf, *attach_conf))
-            }
-            LocationMode::Secondary(_) => {
-                anyhow::bail!(
-                    "Attempted to construct AttachedTenantConf from a LocationConf in secondary mode"
-                )
-            }
-        }
+        let LocationMode::Attached(attach_conf) = &location_conf.mode;
+        Ok(Self::new(conf, location_conf.tenant_conf, *attach_conf))
     }
 
     fn is_gc_blocked_by_lsn_lease_deadline(&self) -> bool {

@@ -33,7 +33,6 @@ use utils::id::{TenantId, TimelineId};
 use utils::{backoff, completion, crashsafe};
 
 use super::remote_timeline_client::remote_tenant_path;
-use super::secondary::SecondaryTenant;
 use super::timeline::detach_ancestor::{self, PreparedTimelineDetach};
 use super::{GlobalShutDown, TenantSharedResources};
 use crate::config::PageServerConf;
@@ -46,7 +45,7 @@ use crate::http::routes::ACTIVE_TENANT_TIMEOUT;
 use crate::metrics::{LOCAL_DATA_LOSS_SUSPECTED, TENANT, TENANT_MANAGER as METRICS};
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind};
 use crate::tenant::config::{
-    AttachedLocationConfig, AttachmentMode, LocationConf, LocationMode, SecondaryLocationConfig,
+    AttachedLocationConfig, AttachmentMode, LocationConf, LocationMode,
 };
 use crate::tenant::span::debug_assert_current_span_has_tenant_id;
 use crate::tenant::storage_layer::inmemory_layer;
@@ -61,18 +60,11 @@ use crate::{InitializationOrder, TEMP_FILE_SUFFIX};
 /// For a tenant that appears in TenantsMap, it may either be
 /// - `Attached`: has a full Tenant object, is elegible to service
 ///   reads and ingest WAL.
-/// - `Secondary`: is only keeping a local cache warm.
-///
-/// Secondary is a totally distinct state rather than being a mode of a `Tenant`, because
-/// that way we avoid having to carefully switch a tenant's ingestion etc on and off during
-/// its lifetime, and we can preserve some important safety invariants like `Tenant` always
-/// having a properly acquired generation (Secondary doesn't need a generation)
+/// - `InProgress`: other administrative operations acting on the TenantId
+///   should block, or return a retry indicator equivalent to HTTP 503.
 #[derive(Clone)]
 pub(crate) enum TenantSlot {
     Attached(Arc<TenantShard>),
-    Secondary(Arc<SecondaryTenant>),
-    /// In this state, other administrative operations acting on the TenantId should
-    /// block, or return a retry indicator equivalent to HTTP 503.
     InProgress(utils::completion::Barrier),
 }
 
@@ -80,7 +72,6 @@ impl std::fmt::Debug for TenantSlot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Attached(tenant) => write!(f, "Attached({})", tenant.current_state()),
-            Self::Secondary(_) => write!(f, "Secondary"),
             Self::InProgress(_) => write!(f, "InProgress"),
         }
     }
@@ -91,7 +82,6 @@ impl TenantSlot {
     fn get_attached(&self) -> Option<&Arc<TenantShard>> {
         match self {
             Self::Attached(t) => Some(t),
-            Self::Secondary(_) => None,
             Self::InProgress(_) => None,
         }
     }
@@ -130,7 +120,6 @@ pub(crate) enum ShardSelector {
 /// This represents the subset of a LocationConfig that we receive during re-attach.
 pub(crate) enum TenantStartupMode {
     Attached((AttachmentMode, Generation, ShardStripeSize)),
-    Secondary,
 }
 
 impl TenantStartupMode {
@@ -142,7 +131,13 @@ impl TenantStartupMode {
     fn from_reattach_tenant(rart: ReAttachResponseTenant) -> Option<Self> {
         match (rart.mode, rart.r#gen) {
             (LocationConfigMode::Detached, _) => None,
-            (LocationConfigMode::Secondary, _) => Some(Self::Secondary),
+            (LocationConfigMode::Secondary, _) => {
+                tracing::warn!(
+                    "Ignoring Secondary mode for tenant {} (not supported in yb-pageserver)",
+                    rart.id
+                );
+                None
+            }
             (LocationConfigMode::AttachedMulti, Some(g)) => Some(Self::Attached((
                 AttachmentMode::Multi,
                 Generation::new(g),
@@ -322,16 +317,14 @@ fn emergency_generations(
                 Ok(lc) => lc,
                 Err(_) => return None,
             };
+            let LocationMode::Attached(alc) = &lc.mode;
             Some((
                 *tid,
-                match &lc.mode {
-                    LocationMode::Attached(alc) => TenantStartupMode::Attached((
-                        alc.attach_mode,
-                        alc.generation,
-                        lc.shard.stripe_size,
-                    )),
-                    LocationMode::Secondary(_) => TenantStartupMode::Secondary,
-                },
+                TenantStartupMode::Attached((
+                    alc.attach_mode,
+                    alc.generation,
+                    lc.shard.stripe_size,
+                )),
             ))
         })
         .collect()
@@ -372,12 +365,9 @@ async fn init_load_generations(
     // are processed, even though we don't block on recovery completing here.
     let attached_tenants = generations
         .iter()
-        .flat_map(|(id, start_mode)| {
-            match start_mode {
-                TenantStartupMode::Attached((_mode, generation, _stripe_size)) => Some(generation),
-                TenantStartupMode::Secondary => None,
-            }
-            .map(|gen_| (*id, *gen_))
+        .map(|(id, start_mode)| {
+            let TenantStartupMode::Attached((_mode, generation, _stripe_size)) = start_mode;
+            (*id, *generation)
         })
         .collect();
     resources.deletion_queue_client.recover(attached_tenants)?;
@@ -578,12 +568,6 @@ pub async fn init_tenant_mgr(
             }
         };
 
-        // FIXME: if we were attached, and get demoted to secondary on re-attach, we
-        // don't have a place to get a config.
-        // (https://github.com/neondatabase/neon/issues/5377)
-        const DEFAULT_SECONDARY_CONF: SecondaryLocationConfig =
-            SecondaryLocationConfig { warm: true };
-
         if let Some(tenant_modes) = &tenant_modes {
             // We have a generation map: treat it as the authority for whether
             // this tenant is really attached.
@@ -604,37 +588,19 @@ pub async fn init_tenant_mgr(
                     // We deleted local content: move on to next tenant, don't try and spawn this one.
                     continue;
                 }
-                Some(TenantStartupMode::Secondary) => {
-                    if !matches!(location_conf.mode, LocationMode::Secondary(_)) {
-                        location_conf.mode = LocationMode::Secondary(DEFAULT_SECONDARY_CONF);
-                    }
-                }
                 Some(TenantStartupMode::Attached((attach_mode, generation, stripe_size))) => {
-                    let old_gen_higher = match &location_conf.mode {
-                        LocationMode::Attached(AttachedLocationConfig {
-                            generation: old_generation,
-                            attach_mode: _attach_mode,
-                        }) => {
-                            if old_generation > generation {
-                                Some(old_generation)
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some(old_generation) = old_gen_higher {
+                    let LocationMode::Attached(AttachedLocationConfig {
+                        generation: old_generation,
+                        attach_mode: _attach_mode,
+                    }) = &location_conf.mode;
+                    if old_generation > generation {
                         tracing::error!(tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(),
-                            "Control plane gave decreasing generation ({generation:?}) in re-attach response for tenant that was attached in generation {:?}, demoting to secondary",
+                            "Control plane gave decreasing generation ({generation:?}) in re-attach response for tenant that was attached in generation {:?}; skipping",
                             old_generation
                         );
-
-                        // We cannot safely attach this tenant given a bogus generation number, but let's avoid throwing away
-                        // local disk content: demote to secondary rather than detaching.
-                        location_conf.mode = LocationMode::Secondary(DEFAULT_SECONDARY_CONF);
-                    } else {
-                        location_conf.attach_in_generation(*attach_mode, *generation, *stripe_size);
+                        continue;
                     }
+                    location_conf.attach_in_generation(*attach_mode, *generation, *stripe_size);
                 }
             }
         } else {
@@ -666,42 +632,28 @@ pub async fn init_tenant_mgr(
         "Spawning {} tenant shard locations...",
         config_write_results.len()
     );
-    // For those shards that have live configurations, construct `Tenant` or `SecondaryTenant` objects and start them running
+    // For those shards that have live configurations, construct `Tenant` objects and start them running
     for (tenant_shard_id, location_conf, config_write_result) in config_write_results {
         // Writing a config to local disk is foundational to startup up tenants: panic if we can't.
         config_write_result.fatal_err("write tenant shard config file");
 
         let tenant_dir_path = conf.tenant_path(&tenant_shard_id);
         let shard_identity = location_conf.shard;
-        let slot = match location_conf.mode {
-            LocationMode::Attached(attached_conf) => TenantSlot::Attached(
-                tenant_spawn(
-                    conf,
-                    tenant_shard_id,
-                    &tenant_dir_path,
-                    resources.clone(),
-                    AttachedTenantConf::new(conf, location_conf.tenant_conf, attached_conf),
-                    shard_identity,
-                    Some(init_order.clone()),
-                    SpawnMode::Lazy,
-                    &ctx,
-                )
-                .expect("global shutdown during init_tenant_mgr cannot happen"),
-            ),
-            LocationMode::Secondary(secondary_conf) => {
-                info!(
-                    tenant_id = %tenant_shard_id.tenant_id,
-                    shard_id = %tenant_shard_id.shard_slug(),
-                    "Starting secondary tenant"
-                );
-                TenantSlot::Secondary(SecondaryTenant::new(
-                    tenant_shard_id,
-                    shard_identity,
-                    location_conf.tenant_conf,
-                    &secondary_conf,
-                ))
-            }
-        };
+        let LocationMode::Attached(attached_conf) = location_conf.mode;
+        let slot = TenantSlot::Attached(
+            tenant_spawn(
+                conf,
+                tenant_shard_id,
+                &tenant_dir_path,
+                resources.clone(),
+                AttachedTenantConf::new(conf, location_conf.tenant_conf, attached_conf),
+                shard_identity,
+                Some(init_order.clone()),
+                SpawnMode::Lazy,
+                &ctx,
+            )
+            .expect("global shutdown during init_tenant_mgr cannot happen"),
+        );
 
         METRICS.slot_inserted(&slot);
         tenants.insert(tenant_shard_id, slot);
@@ -777,7 +729,7 @@ impl TenantManager {
         self.conf
     }
 
-    /// Gets the attached tenant from the in-memory data, erroring if it's absent, in secondary mode, or currently
+    /// Gets the attached tenant from the in-memory data, erroring if it's absent or currently
     /// undergoing a state change (i.e. slot is InProgress).
     ///
     /// The return TenantShard is not guaranteed to be active: check its status after obtaing it, or
@@ -793,25 +745,7 @@ impl TenantManager {
         match peek_slot {
             Some(TenantSlot::Attached(tenant)) => Ok(Arc::clone(tenant)),
             Some(TenantSlot::InProgress(_)) => Err(GetTenantError::NotActive(tenant_shard_id)),
-            None | Some(TenantSlot::Secondary(_)) => {
-                Err(GetTenantError::ShardNotFound(tenant_shard_id))
-            }
-        }
-    }
-
-    pub(crate) fn get_secondary_tenant_shard(
-        &self,
-        tenant_shard_id: TenantShardId,
-    ) -> Option<Arc<SecondaryTenant>> {
-        let locked = self.tenants.read().unwrap();
-
-        let peek_slot = tenant_map_peek_slot(&locked, &tenant_shard_id, TenantSlotPeekMode::Read)
-            .ok()
-            .flatten();
-
-        match peek_slot {
-            Some(TenantSlot::Secondary(s)) => Some(s.clone()),
-            _ => None,
+            None => Err(GetTenantError::ShardNotFound(tenant_shard_id)),
         }
     }
 
@@ -852,7 +786,6 @@ impl TenantManager {
 
         enum FastPathModified {
             Attached(Arc<TenantShard>),
-            Secondary(Arc<SecondaryTenant>),
         }
 
         // Special case fast-path for updates to existing slots: if our upsert is only updating configuration,
@@ -862,8 +795,9 @@ impl TenantManager {
             let locked = self.tenants.read().unwrap();
             let peek_slot =
                 tenant_map_peek_slot(&locked, &tenant_shard_id, TenantSlotPeekMode::Write)?;
-            match (&new_location_config.mode, peek_slot) {
-                (LocationMode::Attached(attach_conf), Some(TenantSlot::Attached(tenant))) => {
+            let LocationMode::Attached(attach_conf) = &new_location_config.mode;
+            match peek_slot {
+                Some(TenantSlot::Attached(tenant)) => {
                     match attach_conf.generation.cmp(&tenant.generation) {
                         Ordering::Equal => {
                             // A transition from Attached to Attached in the same generation, we may
@@ -891,14 +825,6 @@ impl TenantManager {
                             None
                         }
                     }
-                }
-                (
-                    LocationMode::Secondary(secondary_conf),
-                    Some(TenantSlot::Secondary(secondary_tenant)),
-                ) => {
-                    secondary_tenant.set_config(secondary_conf);
-                    secondary_tenant.set_tenant_conf(&new_location_config.tenant_conf);
-                    Some(FastPathModified::Secondary(secondary_tenant.clone()))
                 }
                 _ => {
                     // Not an Attached->Attached transition, fall through to general case
@@ -947,20 +873,6 @@ impl TenantManager {
                 }
 
                 return Ok(Some(tenant));
-            }
-            Some(FastPathModified::Secondary(secondary_tenant)) => {
-                secondary_tenant
-                    .shard_identity
-                    .assert_equal(new_location_config.shard);
-                TenantShard::persist_tenant_config(
-                    self.conf,
-                    &tenant_shard_id,
-                    &new_location_config,
-                )
-                .await
-                .fatal_err("write tenant shard config");
-
-                return Ok(None);
             }
             None => {
                 // Proceed with the general case procedure, where we will shutdown & remove any existing
@@ -1022,14 +934,6 @@ impl TenantManager {
                 // rather than assuming it to be empty.
                 spawn_mode = SpawnMode::Eager;
             }
-            Some(TenantSlot::Secondary(secondary_tenant)) => {
-                secondary_tenant
-                    .shard_identity
-                    .assert_equal(new_location_config.shard);
-
-                info!("Shutting down secondary tenant");
-                secondary_tenant.shutdown().await;
-            }
             Some(TenantSlot::InProgress(_)) => {
                 // This should never happen: acquire_slot should error out
                 // if the contents of a slot were InProgress.
@@ -1061,42 +965,31 @@ impl TenantManager {
             .await
             .fatal_err("write tenant shard config");
 
-        let new_slot = match &new_location_config.mode {
-            LocationMode::Secondary(secondary_config) => {
-                let shard_identity = new_location_config.shard;
-                TenantSlot::Secondary(SecondaryTenant::new(
-                    tenant_shard_id,
-                    shard_identity,
-                    new_location_config.tenant_conf,
-                    secondary_config,
-                ))
-            }
-            LocationMode::Attached(_attach_config) => {
-                let shard_identity = new_location_config.shard;
+        let new_slot = {
+            let shard_identity = new_location_config.shard;
 
-                // Testing hack: if we are configured with no control plane, then drop the generation
-                // from upserts.  This enables creating generation-less tenants even though neon_local
-                // always uses generations when calling the location conf API.
-                let attached_conf = AttachedTenantConf::try_from(self.conf, new_location_config)
-                    .map_err(UpsertLocationError::BadRequest)?;
+            // Testing hack: if we are configured with no control plane, then drop the generation
+            // from upserts.  This enables creating generation-less tenants even though neon_local
+            // always uses generations when calling the location conf API.
+            let attached_conf = AttachedTenantConf::try_from(self.conf, new_location_config)
+                .map_err(UpsertLocationError::BadRequest)?;
 
-                let tenant = tenant_spawn(
-                    self.conf,
-                    tenant_shard_id,
-                    &tenant_path,
-                    self.resources.clone(),
-                    attached_conf,
-                    shard_identity,
-                    None,
-                    spawn_mode,
-                    ctx,
-                )
-                .map_err(|_: GlobalShutDown| {
-                    UpsertLocationError::Unavailable(TenantMapError::ShuttingDown)
-                })?;
+            let tenant = tenant_spawn(
+                self.conf,
+                tenant_shard_id,
+                &tenant_path,
+                self.resources.clone(),
+                attached_conf,
+                shard_identity,
+                None,
+                spawn_mode,
+                ctx,
+            )
+            .map_err(|_: GlobalShutDown| {
+                UpsertLocationError::Unavailable(TenantMapError::ShuttingDown)
+            })?;
 
-                TenantSlot::Attached(tenant)
-            }
+            TenantSlot::Attached(tenant)
         };
 
         let attached_tenant = if let TenantSlot::Attached(tenant) = &new_slot {
@@ -1135,9 +1028,6 @@ impl TenantManager {
                                 barrier.wait().await;
                             }
                         }
-                    }
-                    TenantSlot::Secondary(secondary_tenant) => {
-                        secondary_tenant.shutdown().await;
                     }
                 }
 
@@ -1306,32 +1196,7 @@ impl TenantManager {
                 .collect(),
         }
     }
-    // Do some synchronous work for all tenant slots in Secondary state.  The provided
-    // callback should be small and fast, as it will be called inside the global
-    // TenantsMap lock.
-    pub(crate) fn foreach_secondary_tenants<F>(&self, mut func: F)
-    where
-        // TODO: let the callback return a hint to drop out of the loop early
-        F: FnMut(&TenantShardId, &Arc<SecondaryTenant>),
-    {
-        let locked = self.tenants.read().unwrap();
-
-        let map = match &*locked {
-            TenantsMap::Initializing | TenantsMap::ShuttingDown(_) => return,
-            TenantsMap::Open(m) => m,
-        };
-
-        for (tenant_id, slot) in map {
-            if let TenantSlot::Secondary(state) = slot {
-                // Only expose secondary tenants that are not currently shutting down
-                if !state.cancel.is_cancelled() {
-                    func(tenant_id, state)
-                }
-            }
-        }
-    }
-
-    /// Total list of all tenant slots: this includes attached, secondary, and InProgress.
+    /// Total list of all tenant slots: this includes attached and InProgress.
     pub(crate) fn list(&self) -> Vec<(TenantShardId, TenantSlot)> {
         let locked = self.tenants.read().unwrap();
         match &*locked {
@@ -1399,11 +1264,6 @@ impl TenantManager {
                         barrier.wait().await;
                     }
                 }
-                delete_local(self.conf, &self.background_purges, &tenant_shard_id).await?;
-            }
-            Some(TenantSlot::Secondary(secondary_tenant)) => {
-                secondary_tenant.shutdown().await;
-
                 delete_local(self.conf, &self.background_purges, &tenant_shard_id).await?;
             }
             Some(TenantSlot::InProgress(_)) => unreachable!(),
@@ -1546,7 +1406,6 @@ impl TenantManager {
             self.tenant_map_acquire_slot(&tenant_shard_id, TenantSlotAcquireMode::Any)?;
         let parent = match parent_slot_guard.get_old_value() {
             Some(TenantSlot::Attached(t)) => t,
-            Some(TenantSlot::Secondary(_)) => anyhow::bail!("Tenant location in secondary mode"),
             Some(TenantSlot::InProgress(_)) => {
                 // tenant_map_acquire_slot never returns InProgress, if a slot was InProgress
                 // it would return an error.
@@ -1906,16 +1765,6 @@ impl TenantManager {
 
                                 total_attached += 1;
                             }
-                            TenantSlot::Secondary(state) => {
-                                // We don't need to wait for this individually per-tenant: the
-                                // downloader task will be waited on eventually, this cancel
-                                // is just to encourage it to drop out if it is doing work
-                                // for this tenant right now.
-                                state.cancel.cancel();
-
-                                shutdown_state
-                                    .insert(tenant_shard_id, TenantSlot::Secondary(state));
-                            }
                             TenantSlot::InProgress(notify) => {
                                 // InProgress tenants are not visible in TenantsMap::ShuttingDown: we will
                                 // wait for their notifications to fire in this function.
@@ -2077,7 +1926,6 @@ impl TenantManager {
                 TenantSlot::Attached(tenant) => {
                     Some((*id, tenant.current_state(), tenant.generation()))
                 }
-                TenantSlot::Secondary(_) => None,
                 TenantSlot::InProgress(_) => None,
             })
             .collect())
@@ -2352,19 +2200,6 @@ impl TenantManager {
                 TenantSlot::Attached(tenant) => {
                     wanted_bytes += tenant.local_storage_wanted();
                 }
-                TenantSlot::Secondary(secondary) => {
-                    let progress = secondary.progress.lock().unwrap();
-                    wanted_bytes += if progress.heatmap_mtime.is_some() {
-                        // If we have heatmap info, then we will 'want' the sum
-                        // of the size of layers in the heatmap: this is how much space
-                        // we would use if not doing any eviction.
-                        progress.bytes_total
-                    } else {
-                        // In the absence of heatmap info, assume that the secondary location simply
-                        // needs as much space as it is currently using.
-                        secondary.resident_size_metric.get()
-                    }
-                }
             }
         }
 
@@ -2483,11 +2318,6 @@ impl TenantManager {
                     }
                 }
                 Some(tenant)
-            }
-            Some(TenantSlot::Secondary(secondary_state)) => {
-                tracing::info!("Shutting down in secondary mode");
-                secondary_state.shutdown().await;
-                None
             }
             Some(TenantSlot::InProgress(_)) => {
                 // Acquiring a slot guarantees its old value was not InProgress
@@ -2833,7 +2663,6 @@ impl<'a> SlotGuard<'a> {
     fn old_value_is_shutdown(&self) -> bool {
         match self.old_value.as_ref() {
             Some(TenantSlot::Attached(tenant)) => tenant.gate.close_complete(),
-            Some(TenantSlot::Secondary(secondary_tenant)) => secondary_tenant.gate.close_complete(),
             Some(TenantSlot::InProgress(_)) => {
                 // A SlotGuard cannot be constructed for a slot that was already InProgress
                 unreachable!()

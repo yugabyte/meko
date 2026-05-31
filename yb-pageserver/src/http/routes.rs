@@ -78,7 +78,6 @@ use crate::tenant::remote_timeline_client::index::GcCompactionState;
 use crate::tenant::remote_timeline_client::{
     download_index_part, download_tenant_manifest, list_remote_tenant_shards, list_remote_timelines,
 };
-use crate::tenant::secondary::SecondaryController;
 use crate::tenant::size::ModelInputs;
 use crate::tenant::storage_layer::ValuesReconstructState;
 use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerName};
@@ -113,7 +112,6 @@ pub struct State {
     remote_storage: GenericRemoteStorage,
     broker_client: storage_broker::BrokerClientChannel,
     deletion_queue_client: DeletionQueueClient,
-    secondary_controller: SecondaryController,
     latest_utilization: tokio::sync::Mutex<Option<(std::time::Instant, bytes::Bytes)>>,
     feature_resolver: FeatureResolver,
 }
@@ -127,7 +125,6 @@ impl State {
         remote_storage: GenericRemoteStorage,
         broker_client: storage_broker::BrokerClientChannel,
         deletion_queue_client: DeletionQueueClient,
-        secondary_controller: SecondaryController,
         feature_resolver: FeatureResolver,
     ) -> anyhow::Result<Self> {
         let allowlist_routes = &[
@@ -146,7 +143,6 @@ impl State {
             remote_storage,
             broker_client,
             deletion_queue_client,
-            secondary_controller,
             latest_utilization: Default::default(),
             feature_resolver,
         })
@@ -367,16 +363,6 @@ impl From<crate::tenant::mgr::DeleteTenantError> for ApiError {
             SlotError(e) => e.into(),
             Other(o) => ApiError::InternalServerError(o),
             Cancelled => ApiError::ShuttingDown,
-        }
-    }
-}
-
-impl From<crate::tenant::secondary::SecondaryTenantError> for ApiError {
-    fn from(ste: crate::tenant::secondary::SecondaryTenantError) -> ApiError {
-        use crate::tenant::secondary::SecondaryTenantError;
-        match ste {
-            SecondaryTenantError::GetTenant(gte) => gte.into(),
-            SecondaryTenantError::ShuttingDown => ApiError::ShuttingDown,
         }
     }
 }
@@ -1893,23 +1879,6 @@ async fn put_tenant_location_config_handler(
     let stripe_size = tenant.as_ref().map(|t| t.get_shard_stripe_size());
     let attached = tenant.is_some();
 
-    if let Some(_flush_ms) = flush {
-        match state
-            .secondary_controller
-            .upload_tenant(tenant_shard_id)
-            .await
-        {
-            Ok(()) => {
-                tracing::info!("Uploaded heatmap during flush");
-            }
-            Err(e) => {
-                tracing::warn!("Failed to flush heatmap: {e}");
-            }
-        }
-    } else {
-        tracing::info!("No flush requested when configuring");
-    }
-
     // This API returns a vector of pageservers where the tenant is attached: this is
     // primarily for use in the sharding service.  For compatibilty, we also return this
     // when called directly on a pageserver, but the payload is always zero or one shards.
@@ -1944,7 +1913,6 @@ async fn list_location_config_handler(
             .map(|(tenant_shard_id, slot)| {
                 let v = match slot {
                     TenantSlot::Attached(t) => Some(t.get_location_conf()),
-                    TenantSlot::Secondary(s) => Some(s.get_location_conf()),
                     TenantSlot::InProgress(_) => None,
                 };
                 (tenant_shard_id, v)
@@ -1970,7 +1938,6 @@ async fn get_location_config_handler(
 
     let result: Option<LocationConfig> = match slot {
         TenantSlot::Attached(t) => Some(t.get_location_conf()),
-        TenantSlot::Secondary(s) => Some(s.get_location_conf()),
         TenantSlot::InProgress(_) => None,
     };
 
@@ -2563,20 +2530,6 @@ async fn always_panic_handler(
     json_response(StatusCode::NO_CONTENT, ())
 }
 
-async fn secondary_upload_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let state = get_state(&request);
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    state
-        .secondary_controller
-        .upload_tenant(tenant_shard_id)
-        .await?;
-
-    json_response(StatusCode::OK, ())
-}
-
 async fn tenant_scan_remote_handler(
     request: Request<Body>,
     cancel: CancellationToken,
@@ -2662,58 +2615,6 @@ async fn tenant_scan_remote_handler(
     json_response(StatusCode::OK, response)
 }
 
-async fn secondary_download_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let state = get_state(&request);
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let wait = parse_query_param(&request, "wait_ms")?.map(Duration::from_millis);
-
-    // We don't need this to issue the download request, but:
-    // - it enables us to cleanly return 404 if we get a request for an absent shard
-    // - we will use this to provide status feedback in the response
-    let Some(secondary_tenant) = state
-        .tenant_manager
-        .get_secondary_tenant_shard(tenant_shard_id)
-    else {
-        return Err(ApiError::NotFound(
-            anyhow::anyhow!("Shard {} not found", tenant_shard_id).into(),
-        ));
-    };
-
-    let timeout = wait.unwrap_or(Duration::MAX);
-
-    let result = tokio::time::timeout(
-        timeout,
-        state.secondary_controller.download_tenant(tenant_shard_id),
-    )
-    .await;
-
-    let progress = secondary_tenant.progress.lock().unwrap().clone();
-
-    let status = match result {
-        Ok(Ok(())) => {
-            if progress.layers_downloaded >= progress.layers_total {
-                // Download job ran to completion
-                StatusCode::OK
-            } else {
-                // Download dropped out without errors because it ran out of time budget
-                StatusCode::ACCEPTED
-            }
-        }
-        // Edge case: downloads aren't usually fallible: things like a missing heatmap are considered
-        // okay.  We could get an error here in the unlikely edge case that the tenant
-        // was detached between our check above and executing the download job.
-        Ok(Err(e)) => return Err(e.into()),
-        // A timeout is not an error: we have started the download, we're just not done
-        // yet.  The caller will get a response body indicating status.
-        Err(_) => StatusCode::ACCEPTED,
-    };
-
-    json_response(status, progress)
-}
-
 async fn wait_lsn_handler(
     mut request: Request<Body>,
     cancel: CancellationToken,
@@ -2769,27 +2670,6 @@ async fn wait_lsn_handler(
     };
 
     json_response(status, ())
-}
-
-async fn secondary_status_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let state = get_state(&request);
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-
-    let Some(secondary_tenant) = state
-        .tenant_manager
-        .get_secondary_tenant_shard(tenant_shard_id)
-    else {
-        return Err(ApiError::NotFound(
-            anyhow::anyhow!("Shard {} not found", tenant_shard_id).into(),
-        ));
-    };
-
-    let progress = secondary_tenant.progress.lock().unwrap().clone();
-
-    json_response(StatusCode::OK, progress)
 }
 
 async fn handler_404(_: Request<Body>) -> Result<Response<Body>, ApiError> {
@@ -2920,7 +2800,7 @@ async fn list_tenant_visible_size_handler(
                 let visible_size = tenant.get_visible_size();
                 map.insert(tenant_shard_id, visible_size);
             }
-            TenantSlot::Secondary(_) | TenantSlot::InProgress(_) => {
+            TenantSlot::InProgress(_) => {
                 continue;
             }
         }
@@ -3041,7 +2921,7 @@ async fn post_top_tenants(
 
         let sizes = match tenant_slot {
             TenantSlot::Attached(tenant) => tenant.get_sizes(),
-            TenantSlot::Secondary(_) | TenantSlot::InProgress(_) => {
+            TenantSlot::InProgress(_) => {
                 continue;
             }
         };
@@ -3781,20 +3661,11 @@ pub fn make_router(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/page_trace",
             |r| api_handler(r, timeline_page_trace_handler),
         )
-        .post("/v1/tenant/:tenant_shard_id/heatmap_upload", |r| {
-            api_handler(r, secondary_upload_handler)
-        })
         .get("/v1/tenant/:tenant_id/scan_remote_storage", |r| {
             api_handler(r, tenant_scan_remote_handler)
         })
         .put("/v1/deletion_queue/flush", |r| {
             api_handler(r, deletion_queue_flush)
-        })
-        .get("/v1/tenant/:tenant_shard_id/secondary/status", |r| {
-            api_handler(r, secondary_status_handler)
-        })
-        .post("/v1/tenant/:tenant_shard_id/secondary/download", |r| {
-            api_handler(r, secondary_download_handler)
         })
         .post("/v1/tenant/:tenant_shard_id/wait_lsn", |r| {
             api_handler(r, wait_lsn_handler)

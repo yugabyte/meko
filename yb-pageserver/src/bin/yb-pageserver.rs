@@ -26,7 +26,7 @@ use yb_pageserver::page_service::GrpcPageServiceHandler;
 use yb_pageserver::task_mgr::{
     BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME, WALRECEIVER_RUNTIME,
 };
-use yb_pageserver::tenant::{TenantSharedResources, mgr, secondary};
+use yb_pageserver::tenant::{TenantSharedResources, mgr};
 use yb_pageserver::{
     CancellableTask, ConsumptionMetricsTasks, HttpEndpointListener, HttpsEndpointListener,
     MetricsCollectionTask, http, page_cache, page_service, task_mgr, virtual_file,
@@ -695,13 +695,6 @@ fn start_pageserver(
         }
     });
 
-    let (secondary_controller, secondary_controller_tasks) = secondary::spawn_tasks(
-        tenant_manager.clone(),
-        remote_storage.clone(),
-        background_jobs_barrier.clone(),
-        shutdown_pageserver.clone(),
-    );
-
     // Disk-usage eviction is gone (Phase 4d.2). yb-pageserver has no
     // local layer files to evict — all storage is in YB.
 
@@ -718,7 +711,6 @@ fn start_pageserver(
                 remote_storage.clone(),
                 broker_client.clone(),
                 deletion_queue.new_client(),
-                secondary_controller,
                 feature_resolver.clone(),
             )
             .context("Failed to initialize router state")?,
@@ -888,7 +880,6 @@ fn start_pageserver(
             &tenant_manager,
             background_purges,
             deletion_queue.clone(),
-            secondary_controller_tasks,
             0,
         )
         .await;

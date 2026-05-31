@@ -14,9 +14,9 @@ pub(crate) struct HeatMapTenant {
     /// Generation of the attached location that uploaded the heatmap: this is not required
     /// for correctness, but acts as a hint to secondary locations in order to detect thrashing
     /// in the unlikely event that two attached locations are both uploading conflicting heatmaps.
-    pub(super) generation: Generation,
+    pub(crate) generation: Generation,
 
-    pub(super) timelines: Vec<HeatMapTimeline>,
+    pub(crate) timelines: Vec<HeatMapTimeline>,
 
     /// Uploaders provide their own upload period in the heatmap, as a hint to downloaders
     /// of how frequently it is worthwhile to check for updates.
@@ -24,7 +24,7 @@ pub(crate) struct HeatMapTenant {
     /// This is optional for backward compat, and because we sometimes might upload
     /// a heatmap explicitly via API for a tenant that has no periodic upload configured.
     #[serde(default)]
-    pub(super) upload_period_ms: Option<u128>,
+    pub(crate) upload_period_ms: Option<u128>,
 }
 
 impl HeatMapTenant {
@@ -55,8 +55,7 @@ pub(crate) struct HeatMapLayer {
     pub(crate) access_time: SystemTime,
 
     #[serde(default)]
-    pub(crate) cold: bool, // TODO: an actual 'heat' score that would let secondary locations prioritize downloading
-                           // the hottest layers, rather than trying to simply mirror whatever layers are on-disk on the primary.
+    pub(crate) cold: bool,
 }
 
 impl HeatMapLayer {
@@ -93,44 +92,5 @@ impl HeatMapTimeline {
 
     pub(crate) fn all_layers(&self) -> impl Iterator<Item = &HeatMapLayer> {
         self.layers.iter()
-    }
-}
-
-pub(crate) struct HeatMapStats {
-    pub(crate) bytes: u64,
-    pub(crate) layers: usize,
-}
-
-impl HeatMapTenant {
-    pub(crate) fn get_stats(&self) -> HeatMapStats {
-        let mut stats = HeatMapStats {
-            bytes: 0,
-            layers: 0,
-        };
-        for timeline in &self.timelines {
-            for layer in timeline.hot_layers() {
-                stats.layers += 1;
-                stats.bytes += layer.metadata.file_size;
-            }
-        }
-
-        stats
-    }
-
-    pub(crate) fn strip_atimes(self) -> Self {
-        Self {
-            timelines: self
-                .timelines
-                .into_iter()
-                .map(|mut tl| {
-                    for layer in &mut tl.layers {
-                        layer.access_time = SystemTime::UNIX_EPOCH;
-                    }
-                    tl
-                })
-                .collect(),
-            generation: self.generation,
-            upload_period_ms: self.upload_period_ms,
-        }
     }
 }

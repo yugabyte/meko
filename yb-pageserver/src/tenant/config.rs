@@ -40,15 +40,8 @@ pub(crate) struct AttachedLocationConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct SecondaryLocationConfig {
-    /// If true, keep the local cache warm by polling remote storage
-    pub(crate) warm: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum LocationMode {
     Attached(AttachedLocationConfig),
-    Secondary(SecondaryLocationConfig),
 }
 
 /// Per-tenant, per-pageserver configuration.  All pageservers use the same TenantConf,
@@ -74,18 +67,12 @@ pub(crate) struct LocationConf {
 
 impl std::fmt::Debug for LocationConf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.mode {
-            LocationMode::Attached(conf) => {
-                write!(
-                    f,
-                    "Attached {:?}, gen={:?}",
-                    conf.attach_mode, conf.generation
-                )
-            }
-            LocationMode::Secondary(conf) => {
-                write!(f, "Secondary, warm={}", conf.warm)
-            }
-        }
+        let LocationMode::Attached(conf) = &self.mode;
+        write!(
+            f,
+            "Attached {:?}, gen={:?}",
+            conf.attach_mode, conf.generation
+        )
     }
 }
 
@@ -158,19 +145,9 @@ impl LocationConf {
         generation: Generation,
         stripe_size: ShardStripeSize,
     ) {
-        match &mut self.mode {
-            LocationMode::Attached(attach_conf) => {
-                attach_conf.generation = generation;
-                attach_conf.attach_mode = mode;
-            }
-            LocationMode::Secondary(_) => {
-                // We are promoted to attached by the control plane's re-attach response
-                self.mode = LocationMode::Attached(AttachedLocationConfig {
-                    generation,
-                    attach_mode: mode,
-                })
-            }
-        }
+        let LocationMode::Attached(attach_conf) = &mut self.mode;
+        attach_conf.generation = generation;
+        attach_conf.attach_mode = mode;
 
         // This should never happen.
         // TODO: turn this into a proper assertion.
@@ -214,14 +191,9 @@ impl LocationConf {
                 })
             }
             models::LocationConfigMode::Secondary => {
-                anyhow::ensure!(conf.generation.is_none());
-
-                let warm = conf
-                    .secondary_conf
-                    .as_ref()
-                    .map(|c| c.warm)
-                    .unwrap_or(false);
-                LocationMode::Secondary(SecondaryLocationConfig { warm })
+                return Err(anyhow::anyhow!(
+                    "Secondary mode is not supported in yb-pageserver"
+                ));
             }
             models::LocationConfigMode::Detached => {
                 // Should not have been called: API code should translate this mode

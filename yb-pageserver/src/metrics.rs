@@ -2388,7 +2388,6 @@ static REMOTE_TIMELINE_CLIENT_BYTES_FINISHED_COUNTER: Lazy<IntCounterVec> = Lazy
 
 pub(crate) struct TenantManagerMetrics {
     tenant_slots_attached: UIntGauge,
-    tenant_slots_secondary: UIntGauge,
     tenant_slots_inprogress: UIntGauge,
     pub(crate) tenant_slot_writes: IntCounter,
     pub(crate) unexpected_errors: IntCounter,
@@ -2402,9 +2401,6 @@ impl TenantManagerMetrics {
             TenantSlot::Attached(_) => {
                 self.tenant_slots_attached.inc();
             }
-            TenantSlot::Secondary(_) => {
-                self.tenant_slots_secondary.inc();
-            }
             TenantSlot::InProgress(_) => {
                 self.tenant_slots_inprogress.inc();
             }
@@ -2416,9 +2412,6 @@ impl TenantManagerMetrics {
             TenantSlot::Attached(_) => {
                 self.tenant_slots_attached.dec();
             }
-            TenantSlot::Secondary(_) => {
-                self.tenant_slots_secondary.dec();
-            }
             TenantSlot::InProgress(_) => {
                 self.tenant_slots_inprogress.dec();
             }
@@ -2427,9 +2420,7 @@ impl TenantManagerMetrics {
 
     #[cfg(all(debug_assertions, not(test)))]
     pub(crate) fn slots_total(&self) -> u64 {
-        self.tenant_slots_attached.get()
-            + self.tenant_slots_secondary.get()
-            + self.tenant_slots_inprogress.get()
+        self.tenant_slots_attached.get() + self.tenant_slots_inprogress.get()
     }
 }
 
@@ -2443,9 +2434,6 @@ pub(crate) static TENANT_MANAGER: Lazy<TenantManagerMetrics> = Lazy::new(|| {
     TenantManagerMetrics {
         tenant_slots_attached: tenant_slots
             .get_metric_with_label_values(&["attached"])
-            .unwrap(),
-        tenant_slots_secondary: tenant_slots
-            .get_metric_with_label_values(&["secondary"])
             .unwrap(),
         tenant_slots_inprogress: tenant_slots
             .get_metric_with_label_values(&["inprogress"])
@@ -2518,65 +2506,10 @@ pub(crate) static DELETION_QUEUE: Lazy<DeletionQueueMetrics> = Lazy::new(|| {
 }
 });
 
-pub(crate) struct SecondaryModeMetrics {
-    pub(crate) upload_heatmap: IntCounter,
-    pub(crate) upload_heatmap_errors: IntCounter,
-    pub(crate) upload_heatmap_duration: Histogram,
-    pub(crate) download_heatmap: IntCounter,
-    pub(crate) download_layer: IntCounter,
-}
-pub(crate) static SECONDARY_MODE: Lazy<SecondaryModeMetrics> = Lazy::new(|| {
-    SecondaryModeMetrics {
-    upload_heatmap: register_int_counter!(
-        "pageserver_secondary_upload_heatmap",
-        "Number of heatmaps written to remote storage by attached tenants"
-    )
-    .expect("failed to define a metric"),
-    upload_heatmap_errors: register_int_counter!(
-        "pageserver_secondary_upload_heatmap_errors",
-        "Failures writing heatmap to remote storage"
-    )
-    .expect("failed to define a metric"),
-    upload_heatmap_duration: register_histogram!(
-        "pageserver_secondary_upload_heatmap_duration",
-        "Time to build and upload a heatmap, including any waiting inside the remote storage client"
-    )
-    .expect("failed to define a metric"),
-    download_heatmap: register_int_counter!(
-        "pageserver_secondary_download_heatmap",
-        "Number of downloads of heatmaps by secondary mode locations, including when it hasn't changed"
-    )
-    .expect("failed to define a metric"),
-    download_layer: register_int_counter!(
-        "pageserver_secondary_download_layer",
-        "Number of downloads of layers by secondary mode locations"
-    )
-    .expect("failed to define a metric"),
-}
-});
-
-pub(crate) static SECONDARY_RESIDENT_PHYSICAL_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_secondary_resident_physical_size",
-        "The size of the layer files present in the pageserver's filesystem, for secondary locations.",
-        &["tenant_id", "shard_id"]
-    )
-    .expect("failed to define a metric")
-});
-
 pub(crate) static NODE_UTILIZATION_SCORE: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
         "pageserver_utilization_score",
         "The utilization score we report to the storage controller for scheduling, where 0 is empty, 1000000 is full, and anything above is considered overloaded",
-    )
-    .expect("failed to define a metric")
-});
-
-pub(crate) static SECONDARY_HEATMAP_TOTAL_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_secondary_heatmap_total_size",
-        "The total size in bytes of all layers in the most recently downloaded heatmap.",
-        &["tenant_id", "shard_id"]
     )
     .expect("failed to define a metric")
 });

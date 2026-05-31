@@ -329,12 +329,6 @@ pub enum TaskKind {
     // Tenant housekeeping (flush idle ephemeral layers, shut down idle walredo, etc.).
     TenantHousekeeping,
 
-    /// See [`crate::tenant::secondary`].
-    SecondaryDownloads,
-
-    /// See [`crate::tenant::secondary`].
-    SecondaryUploads,
-
     // Initial logical size calculation
     InitialLogicalSizeCalculation,
 
