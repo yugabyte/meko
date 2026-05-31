@@ -1679,22 +1679,6 @@ impl Timeline {
     /// triggers (`should_flush_*`) and a dedicated background flush.
     pub(super) async fn maybe_freeze_ephemeral_layer(&self) {}
 
-    /// Checks if the internal state of the timeline is consistent with it being able to be offloaded.
-    ///
-    /// This is neccessary but not sufficient for offloading of the timeline as it might have
-    /// child timelines that are not offloaded yet.
-    pub(crate) fn can_offload(&self) -> (bool, &'static str) {
-        if self.remote_client.is_archived() != Some(true) {
-            return (false, "the timeline is not archived");
-        }
-        if !self.remote_client.no_pending_work() {
-            // if the remote client is still processing some work, we can't offload
-            return (false, "the upload queue is not drained yet");
-        }
-
-        (true, "ok")
-    }
-
     /// Test-only no-op stub left after Phase 4d.2 deleted compaction.rs.
     /// Tests under tenant.rs still call `.compact()` to drive
     /// freeze+flush+compact sequences; with no layer files there's
@@ -1990,10 +1974,6 @@ impl Timeline {
         self.remote_client.is_archived()
     }
 
-    pub(crate) fn is_invisible(&self) -> Option<bool> {
-        self.remote_client.is_invisible()
-    }
-
     pub(crate) fn is_stopping(&self) -> bool {
         self.current_state() == TimelineState::Stopping
     }
@@ -2105,54 +2085,6 @@ impl Timeline {
         }
     }
 
-    fn should_roll(
-        &self,
-        layer_size: u64,
-        projected_layer_size: u64,
-        checkpoint_distance: u64,
-        projected_lsn: Lsn,
-        last_freeze_at: Lsn,
-        opened_at: Instant,
-    ) -> bool {
-        let distance = projected_lsn.widening_sub(last_freeze_at);
-
-        // Rolling the open layer can be triggered by:
-        // 1. The distance from the last LSN we rolled at. This bounds the amount of WAL that
-        //    the safekeepers need to store.  For sharded tenants, we multiply by shard count to
-        //    account for how writes are distributed across shards: we expect each node to consume
-        //    1/count of the LSN on average.
-        // 2. The size of the currently open layer.
-        // 3. The time since the last roll. It helps safekeepers to regard pageserver as caught
-        //    up and suspend activity.
-        if distance >= checkpoint_distance as i128 * self.shard_identity.count.count() as i128 {
-            info!(
-                "Will roll layer at {} with layer size {} due to LSN distance ({})",
-                projected_lsn, layer_size, distance
-            );
-
-            true
-        } else if projected_layer_size >= checkpoint_distance {
-            // NB: this check is relied upon by:
-            let _ = IndexEntry::validate_checkpoint_distance;
-            info!(
-                "Will roll layer at {} with layer size {} due to layer size ({})",
-                projected_lsn, layer_size, projected_layer_size
-            );
-
-            true
-        } else if distance > 0 && opened_at.elapsed() >= self.get_checkpoint_timeout() {
-            info!(
-                "Will roll layer at {} with layer size {} due to time since first write to the layer ({:?})",
-                projected_lsn,
-                layer_size,
-                opened_at.elapsed()
-            );
-
-            true
-        } else {
-            false
-        }
-    }
 
     pub(crate) fn is_basebackup_cache_enabled(&self) -> bool {
         let tenant_conf = self.tenant_conf.load();
