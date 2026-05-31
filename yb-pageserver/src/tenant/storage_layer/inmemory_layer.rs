@@ -121,64 +121,7 @@ impl IndexEntry {
     /// See also [`Self::validate_checkpoint_distance`].
     const MAX_SUPPORTED_POS: usize = (1 << Self::MAX_SUPPORTED_POS_BITS) - 1;
 
-    // Layout
-    const WILL_INIT_RANGE: Range<usize> = 0..1;
-    const LEN_RANGE: Range<usize> =
-        Self::WILL_INIT_RANGE.end..Self::WILL_INIT_RANGE.end + MAX_SUPPORTED_BLOB_LEN_BITS;
-    const POS_RANGE: Range<usize> =
-        Self::LEN_RANGE.end..Self::LEN_RANGE.end + Self::MAX_SUPPORTED_POS_BITS;
-    const _ASSERT: () = {
-        if Self::POS_RANGE.end != 64 {
-            panic!("we don't want undefined bits for our own sanity")
-        }
-    };
 
-    /// Fails if and only if the offset or length encoded in `arg` is too large to be represented by [`Self`].
-    ///
-    /// The only reason why that can happen in the system is if the [`InMemoryLayer`] grows too long.
-    /// The [`InMemoryLayer`] size is determined by the checkpoint distance, enforced by [`crate::tenant::Timeline::should_roll`].
-    ///
-    /// Thus, to avoid failure of this function, whenever we start up and/or change checkpoint distance,
-    /// call [`Self::validate_checkpoint_distance`] with the new checkpoint distance value.
-    ///
-    /// TODO: this check should happen ideally at config parsing time (and in the request handler when a change to checkpoint distance is requested)
-    /// When cleaning this up, also look into the s3 max file size check that is performed in delta layer writer.
-    #[inline(always)]
-    fn new(arg: IndexEntryNewArgs) -> anyhow::Result<Self> {
-        let IndexEntryNewArgs {
-            base_offset,
-            batch_offset,
-            len,
-            will_init,
-        } = arg;
-
-        let pos = base_offset
-            .checked_add(batch_offset)
-            .ok_or_else(|| anyhow::anyhow!("base_offset + batch_offset overflows u64: base_offset={base_offset} batch_offset={batch_offset}"))?;
-
-        if pos.into_usize() > Self::MAX_SUPPORTED_POS {
-            anyhow::bail!(
-                "base_offset+batch_offset exceeds the maximum supported value: base_offset={base_offset} batch_offset={batch_offset} (+)={pos} max={max}",
-                max = Self::MAX_SUPPORTED_POS
-            );
-        }
-
-        if len > MAX_SUPPORTED_BLOB_LEN {
-            anyhow::bail!(
-                "len exceeds the maximum supported length: len={len} max={MAX_SUPPORTED_BLOB_LEN}",
-            );
-        }
-
-        let mut data: u64 = 0;
-        use bit_field::BitField;
-        data.set_bits(Self::WILL_INIT_RANGE, if will_init { 1 } else { 0 });
-        data.set_bits(Self::LEN_RANGE, len.into_u64());
-        data.set_bits(Self::POS_RANGE, pos);
-
-        Ok(Self(data))
-    }
-
-    #[inline(always)]
 
     /// See [`Self::new`].
     pub(crate) const fn validate_checkpoint_distance(
@@ -209,15 +152,6 @@ impl IndexEntry {
     };
 }
 
-/// Args to [`IndexEntry::new`].
-#[derive(Clone, Copy)]
-struct IndexEntryNewArgs {
-    base_offset: u64,
-    batch_offset: u64,
-    len: usize,
-    will_init: bool,
-}
-
 
 /// State shared by all in-memory (ephemeral) layers.  Updated infrequently during background ticks in Timeline,
 /// to minimize contention.
@@ -234,99 +168,6 @@ pub(crate) struct GlobalResources {
     dirty_layers: AtomicUsize,
 }
 
-// Per-timeline RAII struct for its contribution to [`GlobalResources`]
-pub(crate) struct GlobalResourceUnits {
-    // How many dirty bytes have I added to the global dirty_bytes: this guard object is responsible
-    // for decrementing the global counter by this many bytes when dropped.
-    dirty_bytes: u64,
-}
-
-impl GlobalResourceUnits {
-    // Hint for the layer append path to update us when the layer size differs from the last
-    // call to update_size by this much.  If we don't reach this threshold, we'll still get
-    // updated when the Timeline "ticks" in the background.
-    const MAX_SIZE_DRIFT: u64 = 10 * 1024 * 1024;
-
-    pub(crate) fn new() -> Self {
-        GLOBAL_RESOURCES
-            .dirty_layers
-            .fetch_add(1, AtomicOrdering::Relaxed);
-        Self { dirty_bytes: 0 }
-    }
-
-    /// Do not call this frequently: all timelines will write to these same global atomics,
-    /// so this is a relatively expensive operation.  Wait at least a few seconds between calls.
-    ///
-    /// Returns the effective layer size limit that should be applied, if any, to keep
-    /// the total number of dirty bytes below the configured maximum.
-    pub(crate) fn publish_size(&mut self, size: u64) -> Option<u64> {
-        let new_global_dirty_bytes = match size.cmp(&self.dirty_bytes) {
-            Ordering::Equal => GLOBAL_RESOURCES.dirty_bytes.load(AtomicOrdering::Relaxed),
-            Ordering::Greater => {
-                let delta = size - self.dirty_bytes;
-                let old = GLOBAL_RESOURCES
-                    .dirty_bytes
-                    .fetch_add(delta, AtomicOrdering::Relaxed);
-                old + delta
-            }
-            Ordering::Less => {
-                let delta = self.dirty_bytes - size;
-                let old = GLOBAL_RESOURCES
-                    .dirty_bytes
-                    .fetch_sub(delta, AtomicOrdering::Relaxed);
-                old - delta
-            }
-        };
-
-        // This is a sloppy update: concurrent updates to the counter will race, and the exact
-        // value of the metric might not be the exact latest value of GLOBAL_RESOURCES::dirty_bytes.
-        // That's okay: as long as the metric contains some recent value, it doesn't have to always
-        // be literally the last update.
-        TIMELINE_EPHEMERAL_BYTES.set(new_global_dirty_bytes);
-
-        self.dirty_bytes = size;
-
-        let max_dirty_bytes = GLOBAL_RESOURCES
-            .max_dirty_bytes
-            .load(AtomicOrdering::Relaxed);
-        if max_dirty_bytes > 0 && new_global_dirty_bytes > max_dirty_bytes {
-            // Set the layer file limit to the average layer size: this implies that all above-average
-            // sized layers will be elegible for freezing.  They will be frozen in the order they
-            // next enter publish_size.
-            Some(
-                new_global_dirty_bytes
-                    / GLOBAL_RESOURCES.dirty_layers.load(AtomicOrdering::Relaxed) as u64,
-            )
-        } else {
-            None
-        }
-    }
-
-    // Call publish_size if the input size differs from last published size by more than
-    // the drift limit
-    pub(crate) fn maybe_publish_size(&mut self, size: u64) {
-        let publish = match size.cmp(&self.dirty_bytes) {
-            Ordering::Equal => false,
-            Ordering::Greater => size - self.dirty_bytes > Self::MAX_SIZE_DRIFT,
-            Ordering::Less => self.dirty_bytes - size > Self::MAX_SIZE_DRIFT,
-        };
-
-        if publish {
-            self.publish_size(size);
-        }
-    }
-}
-
-impl Drop for GlobalResourceUnits {
-    fn drop(&mut self) {
-        GLOBAL_RESOURCES
-            .dirty_layers
-            .fetch_sub(1, AtomicOrdering::Relaxed);
-
-        // Subtract our contribution to the global total dirty bytes
-        self.publish_size(0);
-    }
-}
 
 pub(crate) static GLOBAL_RESOURCES: GlobalResources = GlobalResources {
     max_dirty_bytes: AtomicU64::new(0),
@@ -336,9 +177,6 @@ pub(crate) static GLOBAL_RESOURCES: GlobalResources = GlobalResources {
 
 impl InMemoryLayer {
 
-    pub(crate) fn get_timeline_id(&self) -> TimelineId {
-        self.timeline_id
-    }
 
     pub(crate) fn info(&self) -> InMemoryLayerInfo {
         let lsn_start = self.start_lsn;
@@ -351,9 +189,6 @@ impl InMemoryLayer {
     }
 
 
-    pub(crate) fn assert_writable(&self) {
-        assert!(self.end_lsn.get().is_none());
-    }
 
     pub(crate) fn end_lsn_or_max(&self) -> Lsn {
         self.end_lsn.get().copied().unwrap_or(Lsn::MAX)
@@ -381,16 +216,6 @@ impl InMemoryLayer {
 
 fn inmem_layer_display(mut f: impl Write, start_lsn: Lsn, end_lsn: Lsn) -> std::fmt::Result {
     write!(f, "inmem-{:016X}-{:016X}", start_lsn.0, end_lsn.0)
-}
-
-fn inmem_layer_log_display(
-    mut f: impl Write,
-    timeline: TimelineId,
-    start_lsn: Lsn,
-    end_lsn: Lsn,
-) -> std::fmt::Result {
-    write!(f, "timeline {timeline} in-memory ")?;
-    inmem_layer_display(f, start_lsn, end_lsn)
 }
 
 impl std::fmt::Display for InMemoryLayer {
