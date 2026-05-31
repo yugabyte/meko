@@ -1110,36 +1110,6 @@ impl tokio_epoll_uring::IoFd for FileGuard {
     }
 }
 
-#[cfg(test)]
-impl VirtualFile {
-    pub(crate) async fn read_blk(
-        &self,
-        blknum: u32,
-        ctx: &RequestContext,
-    ) -> Result<crate::tenant::block_io::BlockLease<'_>, std::io::Error> {
-        self.inner.read_blk(blknum, ctx).await
-    }
-}
-
-#[cfg(test)]
-impl VirtualFileInner {
-    pub(crate) async fn read_blk(
-        &self,
-        blknum: u32,
-        ctx: &RequestContext,
-    ) -> Result<crate::tenant::block_io::BlockLease<'_>, std::io::Error> {
-        use crate::page_cache::PAGE_SZ;
-        let slice = IoBufferMut::with_capacity(PAGE_SZ).slice_full();
-        assert_eq!(slice.bytes_total(), PAGE_SZ);
-        let slice = self
-            .read_exact_at(slice, blknum as u64 * (PAGE_SZ as u64), ctx)
-            .await?;
-        Ok(crate::tenant::block_io::BlockLease::IoBufferMut(
-            slice.into_inner(),
-        ))
-    }
-}
-
 impl Drop for VirtualFileInner {
     /// If a VirtualFile is dropped, close the underlying file if it was open.
     fn drop(&mut self) {

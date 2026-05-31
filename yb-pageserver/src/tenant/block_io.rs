@@ -7,8 +7,6 @@ use std::ops::Deref;
 use super::storage_layer::delta_layer::{Adapter, DeltaLayerInner};
 use crate::context::RequestContext;
 use crate::page_cache::{self, FileId, PAGE_SZ, PageReadGuard, PageWriteGuard, ReadBufResult};
-#[cfg(test)]
-use crate::virtual_file::IoBufferMut;
 use crate::virtual_file::{IoBuffer, VirtualFile};
 
 /// This is implemented by anything that can read 8 kB (PAGE_SZ)
@@ -39,22 +37,11 @@ pub enum BlockLease<'a> {
     PageReadGuard(PageReadGuard<'static>),
     EphemeralFileMutableTail(&'a [u8; PAGE_SZ]),
     Slice(&'a [u8; PAGE_SZ]),
-    #[cfg(test)]
-    Arc(std::sync::Arc<[u8; PAGE_SZ]>),
-    #[cfg(test)]
-    IoBufferMut(IoBufferMut),
 }
 
 impl From<PageReadGuard<'static>> for BlockLease<'static> {
     fn from(value: PageReadGuard<'static>) -> BlockLease<'static> {
         BlockLease::PageReadGuard(value)
-    }
-}
-
-#[cfg(test)]
-impl From<std::sync::Arc<[u8; PAGE_SZ]>> for BlockLease<'_> {
-    fn from(value: std::sync::Arc<[u8; PAGE_SZ]>) -> Self {
-        BlockLease::Arc(value)
     }
 }
 
@@ -66,12 +53,6 @@ impl Deref for BlockLease<'_> {
             BlockLease::PageReadGuard(v) => v.deref(),
             BlockLease::EphemeralFileMutableTail(v) => v,
             BlockLease::Slice(v) => v,
-            #[cfg(test)]
-            BlockLease::Arc(v) => v.deref(),
-            #[cfg(test)]
-            BlockLease::IoBufferMut(v) => {
-                TryFrom::try_from(&v[..]).expect("caller must ensure that v has PAGE_SZ")
-            }
         }
     }
 }
@@ -83,10 +64,6 @@ impl Deref for BlockLease<'_> {
 pub(crate) enum BlockReaderRef<'a> {
     FileBlockReader(&'a FileBlockReader<'a>),
     Adapter(Adapter<&'a DeltaLayerInner>),
-    #[cfg(test)]
-    TestDisk(&'a super::disk_btree::tests::TestDisk),
-    #[cfg(test)]
-    VirtualFile(&'a VirtualFile),
 }
 
 impl BlockReaderRef<'_> {
@@ -100,10 +77,6 @@ impl BlockReaderRef<'_> {
         match self {
             FileBlockReader(r) => r.read_blk(blknum, ctx).await,
             Adapter(r) => r.read_blk(blknum, ctx).await,
-            #[cfg(test)]
-            TestDisk(r) => r.read_blk(blknum),
-            #[cfg(test)]
-            VirtualFile(r) => r.read_blk(blknum, ctx).await,
         }
     }
 }
