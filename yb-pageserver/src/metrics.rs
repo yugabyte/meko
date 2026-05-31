@@ -56,15 +56,6 @@ const CRITICAL_OP_BUCKETS: &[f64] = &[
 #[derive(Debug, VariantNames, IntoStaticStr)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StorageTimeOperation {
-    #[strum(serialize = "layer flush")]
-    LayerFlush,
-
-    #[strum(serialize = "layer flush delay")]
-    LayerFlushDelay,
-
-    #[strum(serialize = "create images")]
-    CreateImages,
-
     #[strum(serialize = "logical size")]
     LogicalSize,
 

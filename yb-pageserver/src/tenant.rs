@@ -826,14 +826,6 @@ impl Debug for SetStoppingError {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
-pub(crate) enum FinalizeTimelineImportError {
-    #[error("Import task not done yet")]
-    ImportTaskStillRunning,
-    #[error("Shutting down")]
-    ShuttingDown,
-}
-
 /// Arguments to [`TenantShard::create_timeline`].
 ///
 /// Not usable as an idempotency key for timeline creation because if [`CreateTimelineParamsBranch::ancestor_start_lsn`]
@@ -844,7 +836,6 @@ pub(crate) enum FinalizeTimelineImportError {
 pub(crate) enum CreateTimelineParams {
     Bootstrap(CreateTimelineParamsBootstrap),
     Branch(CreateTimelineParamsBranch),
-    ImportPgdata(CreateTimelineParamsImportPgdata),
 }
 
 #[derive(Debug)]
@@ -860,13 +851,6 @@ pub(crate) struct CreateTimelineParamsBranch {
     pub(crate) new_timeline_id: TimelineId,
     pub(crate) ancestor_timeline_id: TimelineId,
     pub(crate) ancestor_start_lsn: Option<Lsn>,
-}
-
-#[derive(Debug)]
-pub(crate) struct CreateTimelineParamsImportPgdata {
-    pub(crate) new_timeline_id: TimelineId,
-    pub(crate) location: import_pgdata::index_part_format::Location,
-    pub(crate) idempotency_key: import_pgdata::index_part_format::IdempotencyKey,
 }
 
 /// What is used to determine idempotency of a [`TenantShard::create_timeline`] call in  [`TenantShard::start_creating_timeline`] in  [`TenantShard::start_creating_timeline`].
@@ -2572,11 +2556,6 @@ impl TenantShard {
 
                 self.branch_timeline(&ancestor_timeline, new_timeline_id, ancestor_start_lsn, ctx)
                     .await?
-            }
-            CreateTimelineParams::ImportPgdata(_) => {
-                return Err(CreateTimelineError::Other(anyhow::anyhow!(
-                    "yb-pageserver: import-pgdata is not supported"
-                )));
             }
         };
 
