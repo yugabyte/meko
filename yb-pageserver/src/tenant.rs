@@ -522,37 +522,6 @@ impl Drop for OffloadedTimelineMetricsGuard {
 impl OffloadedTimeline {
     /// Obtains an offloaded timeline from a given timeline object.
     ///
-    /// Returns `None` if the `archived_at` flag couldn't be obtained, i.e.
-    /// the timeline is not in a stopped state.
-    /// Panics if the timeline is not archived.
-    fn from_timeline(timeline: &Timeline) -> Result<Self, UploadQueueNotReadyError> {
-        let (ancestor_retain_lsn, ancestor_timeline_id) =
-            if let Some(ancestor_timeline) = timeline.ancestor_timeline() {
-                let ancestor_lsn = timeline.get_ancestor_lsn();
-                let ancestor_timeline_id = ancestor_timeline.timeline_id;
-                let mut gc_info = ancestor_timeline.gc_info.write().unwrap();
-                gc_info.insert_child(timeline.timeline_id, ancestor_lsn, MaybeOffloaded::Yes);
-                (Some(ancestor_lsn), Some(ancestor_timeline_id))
-            } else {
-                (None, None)
-            };
-        let archived_at = timeline
-            .remote_client
-            .archived_at_stopped_queue()?
-            .expect("must be called on an archived timeline");
-        Ok(Self {
-            tenant_shard_id: timeline.tenant_shard_id,
-            timeline_id: timeline.timeline_id,
-            ancestor_timeline_id,
-            ancestor_retain_lsn,
-            archived_at,
-
-            delete_progress: timeline.delete_progress.clone(),
-            deleted_from_ancestor: AtomicBool::new(false),
-
-            _metrics_guard: OffloadedTimelineMetricsGuard::new(),
-        })
-    }
     fn from_manifest(tenant_shard_id: TenantShardId, manifest: &OffloadedTimelineManifest) -> Self {
         // We expect to reach this case in tenant loading, where the `retain_lsn` is populated in the parent's `gc_info`
         // by the `initialize_gc_info` function.
@@ -4261,28 +4230,6 @@ impl TenantShard {
     }
 
     /// Refreshes the Timeline::gc_info for all timelines, returning the
-    /// vector of timelines which have [`Timeline::get_last_record_lsn`] past
-    /// [`TenantShard::get_gc_horizon`].
-    ///
-    /// This is usually executed as part of periodic gc, but can now be triggered more often.
-    pub(crate) async fn refresh_gc_info(
-        &self,
-        cancel: &CancellationToken,
-        ctx: &RequestContext,
-    ) -> Result<Vec<Arc<Timeline>>, GcError> {
-        // since this method can now be called at different rates than the configured gc loop, it
-        // might be that these configuration values get applied faster than what it was previously,
-        // since these were only read from the gc task.
-        let horizon = self.get_gc_horizon();
-        let pitr = self.get_pitr_interval();
-
-        // refresh all timelines
-        let target_timeline_id = None;
-
-        self.refresh_gc_info_internal(target_timeline_id, horizon, pitr, cancel, ctx)
-            .await
-    }
-
     /// Populate all Timelines' `GcInfo` with information about their children.  We do not set the
     /// PITR cutoffs here, because that requires I/O: this is done later, before GC, by [`Self::refresh_gc_info_internal`]
     ///
