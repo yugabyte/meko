@@ -24,21 +24,12 @@ const LAYER_MANAGER_LOCK_READ_WARN_THRESHOLD: Duration = Duration::from_secs(30)
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum LayerManagerLockHolder {
     GetLayerMapInfo,
-    GetPage,
     Init,
     LoadLayerMap,
-    GetLayerForWrite,
-    TryFreezeLayer,
-    FlushFrozenLayer,
-    FlushLoop,
-    Compaction,
     GarbageCollection,
     Shutdown,
-    ImportPgData,
     DetachAncestor,
     ComputeImageConsistentLsn,
-    #[cfg(test)]
-    Testing,
 }
 
 /// Wrapper for the layer manager that tracks the amount of time during which
