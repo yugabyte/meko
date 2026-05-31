@@ -89,7 +89,6 @@ pub struct PageServerConf {
     pub superuser: String,
     pub locale: String,
 
-    pub page_cache_size: usize,
     pub max_file_descriptors: usize,
 
     // Repository directory, relative to current working directory.
@@ -373,7 +372,7 @@ impl PageServerConf {
             wal_redo_timeout,
             superuser,
             locale,
-            page_cache_size,
+            page_cache_size: _,
             max_file_descriptors,
             pg_distrib_dir,
             http_auth_type,
@@ -448,7 +447,6 @@ impl PageServerConf {
             wal_redo_timeout,
             superuser,
             locale,
-            page_cache_size,
             max_file_descriptors,
             http_auth_type,
             pg_auth_type,

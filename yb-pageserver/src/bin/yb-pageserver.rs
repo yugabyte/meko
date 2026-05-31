@@ -28,7 +28,7 @@ use yb_pageserver::task_mgr::{
 use yb_pageserver::tenant::{TenantSharedResources, mgr};
 use yb_pageserver::{
     CancellableTask, HttpEndpointListener, HttpsEndpointListener,
-    MetricsCollectionTask, http, page_cache, page_service, task_mgr, virtual_file,
+    MetricsCollectionTask, http, page_service, task_mgr, virtual_file,
 };
 use postgres_backend::AuthType;
 use remote_storage::GenericRemoteStorage;
@@ -213,9 +213,6 @@ fn main() -> anyhow::Result<()> {
             virtual_file::SyncMode::Sync
         },
     );
-    tracing::info!("Initializing page_cache...");
-    page_cache::init(conf.page_cache_size);
-
     start_pageserver(launch_ts, conf, ignored, otel_guard).context("Failed to start pageserver")?;
 
     scenario.teardown();

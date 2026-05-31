@@ -22,7 +22,6 @@ use tokio_util::sync::CancellationToken;
 mod assert_u64_eq_usize;
 pub mod aux_file;
 pub mod metrics;
-pub mod page_cache;
 pub mod page_service;
 pub mod page_store;
 pub mod page_writer;

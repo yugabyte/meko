@@ -110,7 +110,6 @@ use tracing::{Dispatch, Span};
 pub struct RequestContext {
     task_kind: TaskKind,
     download_behavior: DownloadBehavior,
-    page_content_kind: PageContentKind,
     scope: Scope,
     perf_span: Option<PerfSpan>,
     perf_span_dispatch: Option<Dispatch>,
@@ -177,19 +176,6 @@ impl Scope {
     }
 }
 
-/// The kind of access to the page cache.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, enum_map::Enum, strum_macros::IntoStaticStr)]
-pub enum PageContentKind {
-    Unknown,
-    DeltaLayerSummary,
-    DeltaLayerBtreeNode,
-    DeltaLayerValue,
-    ImageLayerSummary,
-    ImageLayerBtreeNode,
-    ImageLayerValue,
-    InMemoryLayer,
-}
-
 /// Desired behavior if the operation requires an on-demand download
 /// to proceed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -216,7 +202,6 @@ impl RequestContextBuilder {
             inner: RequestContext {
                 task_kind,
                 download_behavior: DownloadBehavior::Download,
-                page_content_kind: PageContentKind::Unknown,
                 scope: Scope::new_global(),
                 perf_span: None,
                 perf_span_dispatch: None,
@@ -239,11 +224,6 @@ impl RequestContextBuilder {
     /// download missing layers, and/or warn on the download.
     pub fn download_behavior(mut self, b: DownloadBehavior) -> Self {
         self.inner.download_behavior = b;
-        self
-    }
-
-    pub(crate) fn page_content_kind(mut self, k: PageContentKind) -> Self {
-        self.inner.page_content_kind = k;
         self
     }
 
@@ -311,7 +291,6 @@ impl RequestContext {
         Self {
             task_kind: self.task_kind,
             download_behavior: self.download_behavior,
-            page_content_kind: self.page_content_kind,
             scope: self.scope.clone(),
             perf_span: self.perf_span.clone(),
             perf_span_dispatch: self.perf_span_dispatch.clone(),
@@ -434,10 +413,6 @@ impl RequestContext {
 
     pub fn download_behavior(&self) -> DownloadBehavior {
         self.download_behavior
-    }
-
-    pub(crate) fn page_content_kind(&self) -> PageContentKind {
-        self.page_content_kind
     }
 
     pub(crate) fn io_size_metrics(&self) -> &StorageIoSizeMetrics {

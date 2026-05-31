@@ -22,7 +22,7 @@ use wal_decoder::models::record::NeonWalRecord;
 use self::no_leak_child::NoLeakChild;
 use crate::config::PageServerConf;
 use crate::metrics::{WAL_REDO_PROCESS_COUNTERS, WAL_REDO_RECORD_COUNTER, WalRedoKillCause};
-use crate::page_cache::PAGE_SZ;
+use crate::virtual_file::PAGE_SZ;
 use crate::span::debug_assert_current_span_has_tenant_id;
 
 pub struct WalRedoProcess {

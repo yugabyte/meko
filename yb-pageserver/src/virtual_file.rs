@@ -31,7 +31,10 @@ use tokio_epoll_uring::{BoundedBuf, IoBuf, IoBufMut, Slice};
 use crate::assert_u64_eq_usize::UsizeIsU64;
 use crate::context::RequestContext;
 use crate::metrics::{STORAGE_IO_TIME_METRIC, StorageIoOperation};
-use crate::page_cache::{PAGE_SZ, PageWriteGuard};
+/// Size of a Postgres page. yb-pageserver does not use the legacy
+/// page cache, but this constant still parameterises a few
+/// virtual-file alignment / capacity calls.
+pub const PAGE_SZ: usize = 8192;
 
 pub(crate) use api::IoMode;
 pub(crate) use io_engine::IoEngineKind;
@@ -157,15 +160,6 @@ impl VirtualFile {
         self.inner.read_exact_at(slice, offset, ctx).await
     }
 
-    pub async fn read_exact_at_page(
-        &self,
-        page: PageWriteGuard<'static>,
-        offset: u64,
-        ctx: &RequestContext,
-    ) -> Result<PageWriteGuard<'static>, Error> {
-        self.inner.read_exact_at_page(page, offset, ctx).await
-    }
-
     pub async fn write_all_at<Buf: IoBufAligned + Send>(
         &self,
         buf: FullSlice<Buf>,
@@ -272,38 +266,6 @@ struct SlotInner {
 
     /// the underlying file
     file: Option<OwnedFd>,
-}
-
-/// Impl of [`tokio_epoll_uring::IoBuf`] and [`tokio_epoll_uring::IoBufMut`] for [`PageWriteGuard`].
-struct PageWriteGuardBuf {
-    page: PageWriteGuard<'static>,
-}
-// Safety: the [`PageWriteGuard`] gives us exclusive ownership of the page cache slot,
-// and the location remains stable even if [`Self`] or the [`PageWriteGuard`] is moved.
-// Page cache pages are zero-initialized, so, wrt uninitialized memory we're good.
-// (Page cache tracks separately whether the contents are valid, see `PageWriteGuard::mark_valid`.)
-unsafe impl tokio_epoll_uring::IoBuf for PageWriteGuardBuf {
-    fn stable_ptr(&self) -> *const u8 {
-        self.page.as_ptr()
-    }
-    fn bytes_init(&self) -> usize {
-        self.page.len()
-    }
-    fn bytes_total(&self) -> usize {
-        self.page.len()
-    }
-}
-// Safety: see above, plus: the ownership of [`PageWriteGuard`] means exclusive access,
-// hence it's safe to hand out the `stable_mut_ptr()`.
-unsafe impl tokio_epoll_uring::IoBufMut for PageWriteGuardBuf {
-    fn stable_mut_ptr(&mut self) -> *mut u8 {
-        self.page.as_mut_ptr()
-    }
-
-    unsafe fn set_init(&mut self, pos: usize) {
-        // There shouldn't really be any reason to call this API since bytes_init() == bytes_total().
-        assert!(pos <= self.page.len());
-    }
 }
 
 impl OpenFiles {
@@ -691,20 +653,6 @@ impl VirtualFileInner {
         }
 
         res
-    }
-
-    /// Like [`Self::read_exact_at`] but for [`PageWriteGuard`].
-    pub async fn read_exact_at_page(
-        &self,
-        page: PageWriteGuard<'static>,
-        offset: u64,
-        ctx: &RequestContext,
-    ) -> Result<PageWriteGuard<'static>, Error> {
-        let buf = PageWriteGuardBuf { page }.slice_full();
-        debug_assert_eq!(buf.bytes_total(), PAGE_SZ);
-        self.read_exact_at(buf, offset, ctx)
-            .await
-            .map(|slice| slice.into_inner().page)
     }
 
     // Copied from https://doc.rust-lang.org/1.72.0/src/std/os/unix/fs.rs.html#219-235
