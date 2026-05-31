@@ -219,11 +219,5 @@ impl EphemeralFile {
 
         Ok((pos, control))
     }
-
-    pub(crate) fn tick(&self) -> Option<u64> {
-        let mut resource_units = self.resource_units.lock().unwrap();
-        let len = self.bytes_written.load(Ordering::Relaxed);
-        resource_units.publish_size(len)
-    }
 }
 
