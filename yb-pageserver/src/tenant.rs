@@ -141,9 +141,6 @@ mod gc_block;
 mod gc_result;
 pub(crate) mod throttle;
 
-#[cfg(test)]
-pub mod debug;
-
 pub(crate) use timeline::{LogicalSizeCalculationCause, PageReconstructError, Timeline};
 
 pub(crate) use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
