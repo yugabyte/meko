@@ -119,7 +119,6 @@ pub mod metadata;
 pub mod remote_timeline_client;
 pub mod storage_layer;
 
-pub mod checks;
 pub mod config;
 pub mod mgr;
 pub mod tasks;
