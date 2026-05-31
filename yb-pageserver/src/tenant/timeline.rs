@@ -1723,154 +1723,47 @@ impl Timeline {
         Ok(lease)
     }
 
-    /// Freeze the current open in-memory layer. It will be written to disk on next iteration.
-    /// Returns the flush request ID which can be awaited with wait_flush_completion().
+    /// yb-mode: equivalent to `freeze_and_flush` (drain `PageWriter`
+    /// row buffer into YB). The `u64` return is a legacy flush-token
+    /// from the Neon flush_loop machinery — always 0 in yb-mode.
     #[instrument(skip(self), fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id))]
     pub(crate) async fn freeze(&self) -> Result<u64, FlushLayerError> {
-        self.freeze0().await
+        self.freeze_and_flush0().await?;
+        Ok(0)
     }
 
     /// Freeze and flush the open in-memory layer, waiting for it to be written to disk.
     #[instrument(skip(self), fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id))]
+    /// yb-pageserver durability checkpoint: drain the `PageWriter`
+    /// row-INSERT buffer into YugabyteDB.
+    ///
+    /// Replaces the original Neon freeze-inmem-layer → flush-to-disk
+    /// pipeline (which produced delta + image layer files). In yb-mode
+    /// the equivalent of "make pending writes durable" is to flush the
+    /// pending row buffer; YB's Raft replication takes it from there.
+    /// No-op if there's no `PageWriter` (a yb-pageserver running with
+    /// no compute_page_store + internal_page_store wouldn't accept
+    /// writes in the first place).
     pub(crate) async fn freeze_and_flush(&self) -> Result<(), FlushLayerError> {
         self.freeze_and_flush0().await
     }
 
-    /// Freeze the current open in-memory layer. It will be written to disk on next iteration.
-    /// Returns the flush request ID which can be awaited with wait_flush_completion().
-    pub(crate) async fn freeze0(&self) -> Result<u64, FlushLayerError> {
-        let mut g = self.write_lock.lock().await;
-        let to_lsn = self.get_last_record_lsn();
-        self.freeze_inmem_layer_at(to_lsn, &mut g).await
-    }
-
-    // This exists to provide a non-span creating version of `freeze_and_flush` we can call without
-    // polluting the span hierarchy.
     pub(crate) async fn freeze_and_flush0(&self) -> Result<(), FlushLayerError> {
-        let token = self.freeze0().await?;
-        self.wait_flush_completion(token).await
+        if let Some(pw) = &self.page_writer {
+            pw.flush()
+                .await
+                .map_err(|e| FlushLayerError::Other(Arc::new(e)))?;
+        }
+        Ok(())
     }
 
-    // Check if an open ephemeral layer should be closed: this provides
-    // background enforcement of checkpoint interval if there is no active WAL receiver, to avoid keeping
-    // an ephemeral layer open forever when idle.  It also freezes layers if the global limit on
-    // ephemeral layer bytes has been breached.
-    pub(super) async fn maybe_freeze_ephemeral_layer(&self) {
-        debug_assert_current_span_has_tenant_and_timeline_id();
-
-        let Ok(mut write_guard) = self.write_lock.try_lock() else {
-            // If the write lock is held, there is an active wal receiver: rolling open layers
-            // is their responsibility while they hold this lock.
-            return;
-        };
-
-        // FIXME: why not early exit? because before #7927 the state would had been cleared every
-        // time, and this was missed.
-        // if write_guard.is_none() { return; }
-
-        let Ok(layers_guard) = self.layers.try_read(LayerManagerLockHolder::TryFreezeLayer) else {
-            // Don't block if the layer lock is busy
-            return;
-        };
-
-        let Ok(lm) = layers_guard.layer_map() else {
-            return;
-        };
-
-        let Some(open_layer) = &lm.open_layer else {
-            // If there is no open layer, we have no layer freezing to do.  However, we might need to generate
-            // some updates to disk_consistent_lsn and remote_consistent_lsn, in case we ingested some WAL regions
-            // that didn't result in writes to this shard.
-
-            // Must not hold the layers lock while waiting for a flush.
-            drop(layers_guard);
-
-            let last_record_lsn = self.get_last_record_lsn();
-            let disk_consistent_lsn = self.get_disk_consistent_lsn();
-            if last_record_lsn > disk_consistent_lsn {
-                // We have no open layer, but disk_consistent_lsn is behind the last record: this indicates
-                // we are a sharded tenant and have skipped some WAL
-                let last_freeze_ts = *self.last_freeze_ts.read().unwrap();
-                if last_freeze_ts.elapsed() >= self.get_checkpoint_timeout() {
-                    // Only do this if have been layer-less longer than get_checkpoint_timeout, so that a shard
-                    // without any data ingested (yet) doesn't write a remote index as soon as it
-                    // sees its LSN advance: we only do this if we've been layer-less
-                    // for some time.
-                    tracing::debug!(
-                        "Advancing disk_consistent_lsn past WAL ingest gap {} -> {}",
-                        disk_consistent_lsn,
-                        last_record_lsn
-                    );
-
-                    // The flush loop will update remote consistent LSN as well as disk consistent LSN.
-                    // We know there is no open layer, so we can request freezing without actually
-                    // freezing anything. This is true even if we have dropped the layers_guard, we
-                    // still hold the write_guard.
-                    let _ = async {
-                        let token = self
-                            .freeze_inmem_layer_at(last_record_lsn, &mut write_guard)
-                            .await?;
-                        self.wait_flush_completion(token).await
-                    }
-                    .await;
-                }
-            }
-
-            return;
-        };
-
-        let current_size = open_layer.len();
-
-        let current_lsn = self.get_last_record_lsn();
-
-        let checkpoint_distance_override = open_layer.tick();
-
-        if let Some(size_override) = checkpoint_distance_override {
-            if current_size > size_override {
-                // This is not harmful, but it only happens in relatively rare cases where
-                // time-based checkpoints are not happening fast enough to keep the amount of
-                // ephemeral data within configured limits.  It's a sign of stress on the system.
-                tracing::info!(
-                    "Early-rolling open layer at size {current_size} (limit {size_override}) due to dirty data pressure"
-                );
-            }
-        }
-
-        let checkpoint_distance =
-            checkpoint_distance_override.unwrap_or(self.get_checkpoint_distance());
-
-        if self.should_roll(
-            current_size,
-            current_size,
-            checkpoint_distance,
-            self.get_last_record_lsn(),
-            self.last_freeze_at.load(),
-            open_layer.get_opened_at(),
-        ) {
-            match open_layer.info() {
-                InMemoryLayerInfo::Frozen { lsn_start, lsn_end } => {
-                    // We may reach this point if the layer was already frozen by not yet flushed: flushing
-                    // happens asynchronously in the background.
-                    tracing::debug!(
-                        "Not freezing open layer, it's already frozen ({lsn_start}..{lsn_end})"
-                    );
-                }
-                InMemoryLayerInfo::Open { .. } => {
-                    // Upgrade to a write lock and freeze the layer
-                    drop(layers_guard);
-                    let res = self
-                        .freeze_inmem_layer_at(current_lsn, &mut write_guard)
-                        .await;
-
-                    if let Err(e) = res {
-                        tracing::info!(
-                            "failed to flush frozen layer after background freeze: {e:#}"
-                        );
-                    }
-                }
-            }
-        }
-    }
+    /// yb-mode: no-op. In Neon this background task closes open
+    /// ephemeral InMemoryLayers when idle / oversized. yb-pageserver
+    /// never opens an InMemoryLayer (writes go straight into
+    /// `PageWriter`'s row buffer and through to YB), so there is
+    /// nothing to roll. The `PageWriter` has its own size + age
+    /// triggers (`should_flush_*`) and a dedicated background flush.
+    pub(super) async fn maybe_freeze_ephemeral_layer(&self) {}
 
     /// Checks if the internal state of the timeline is consistent with it being able to be offloaded.
     ///
