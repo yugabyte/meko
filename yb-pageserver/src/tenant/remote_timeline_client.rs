@@ -215,14 +215,13 @@ use utils::shard::ShardNumber;
 use self::index::IndexPart;
 use super::config::AttachedLocationConfig;
 use super::metadata::MetadataUpdate;
-use super::storage_layer::{Layer, LayerName, ResidentLayer};
+use super::storage_layer::LayerName;
 use super::upload_queue::{NotInitialized, SetDeletedFlagProgress};
 use super::{DeleteTimelineError, Generation};
 use crate::config::PageServerConf;
-use crate::context::RequestContext;
 use crate::deletion_queue::{DeletionQueueClient, DeletionQueueError};
 use crate::metrics::{
-    MeasureRemoteOp, REMOTE_ONDEMAND_DOWNLOADED_BYTES, REMOTE_ONDEMAND_DOWNLOADED_LAYERS,
+    MeasureRemoteOp,
     RemoteOpFileKind, RemoteOpKind, RemoteTimelineClientMetrics,
     RemoteTimelineClientMetricsCallTrackSize,
 };

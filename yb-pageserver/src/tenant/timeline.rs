@@ -8,7 +8,6 @@ mod walreceiver;
 
 use hashlink::LruCache;
 use std::array;
-use std::cmp::min;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::{ControlFlow, Deref, Range};
@@ -20,7 +19,6 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use fail::fail_point;
 use handle::ShardTimelineId;
 use layer_manager::{
     LayerManagerLockHolder, LockedLayerManager,
@@ -49,7 +47,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::generation::Generation;
 use utils::id::TimelineId;
-use utils::logging::{MonitorSlowFutureCallback, log_slow, monitor_slow_future};
+use utils::logging::{MonitorSlowFutureCallback, monitor_slow_future};
 use utils::lsn::{AtomicLsn, Lsn, RecordLsn};
 use utils::postgres_client::PostgresClientProtocol;
 use utils::seqwait::SeqWait;
@@ -85,7 +83,7 @@ use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::storage_layer::{
-    EvictionError, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, ResidentLayer,
+    IoConcurrency, Layer, LayerAccessStatsReset, LayerName,
     ValueReconstructState, ValuesReconstructState,
 };
 use crate::tenant::tasks::BackgroundLoopKind;

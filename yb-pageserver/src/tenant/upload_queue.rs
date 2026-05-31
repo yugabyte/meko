@@ -9,10 +9,9 @@ use tracing::info;
 use utils::generation::Generation;
 use utils::lsn::{AtomicLsn, Lsn};
 
-use super::remote_timeline_client::is_same_remote_layer_path;
-use super::storage_layer::{AsLayerDesc as _, LayerName, ResidentLayer};
+use super::storage_layer::{AsLayerDesc as _, LayerName};
 use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::remote_timeline_client::index::{IndexPart, LayerFileMetadata};
+use crate::tenant::remote_timeline_client::index::IndexPart;
 
 /// Kill switch for upload queue reordering in case it causes problems.
 /// TODO: remove this once we have confidence in it.

@@ -1,19 +1,17 @@
 //! Helper functions to upload files to remote storage with a RemoteStorage
 
-use std::io::{ErrorKind, SeekFrom};
+use std::io::SeekFrom;
 use std::num::NonZeroU32;
 use std::time::SystemTime;
 
 use anyhow::{Context, bail};
 use bytes::Bytes;
-use camino::Utf8Path;
 use fail::fail_point;
 use pageserver_api::shard::TenantShardId;
-use remote_storage::{GenericRemoteStorage, RemotePath, TimeTravelError};
-use tokio::fs::{self, File};
+use remote_storage::{GenericRemoteStorage, TimeTravelError};
+use tokio::fs::File;
 use tokio::io::AsyncSeekExt;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
 use utils::id::{TenantId, TimelineId};
 use utils::{backoff, pausable_failpoint};
 
@@ -91,101 +89,6 @@ pub(crate) async fn upload_tenant_manifest(
         )
         .await
         .with_context(|| format!("upload tenant manifest for '{tenant_shard_id}'"))
-}
-
-/// Attempts to upload given layer files.
-/// No extra checks for overlapping files is made and any files that are already present remotely will be overwritten, if submitted during the upload.
-///
-/// On an error, bumps the retries count and reschedules the entire task.
-pub(super) async fn upload_timeline_layer<'a>(
-    storage: &'a GenericRemoteStorage,
-    local_path: &'a Utf8Path,
-    remote_path: &'a RemotePath,
-    metadata_size: u64,
-    cancel: &CancellationToken,
-) -> anyhow::Result<()> {
-    fail_point!("before-upload-layer", |_| {
-        bail!("failpoint before-upload-layer")
-    });
-
-    pausable_failpoint!("before-upload-layer-pausable");
-
-    let source_file_res = fs::File::open(&local_path).await;
-    let source_file = match source_file_res {
-        Ok(source_file) => source_file,
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            // If we encounter this arm, it wasn't intended, but it's also not
-            // a big problem, if it's because the file was deleted before an
-            // upload. However, a nonexistent file can also be indicative of
-            // something worse, like when a file is scheduled for upload before
-            // it has been written to disk yet.
-            //
-            // This is tested against `test_compaction_delete_before_upload`
-            info!(path = %local_path, "File to upload doesn't exist. Likely the file has been deleted and an upload is not required any more.");
-            return Ok(());
-        }
-        Err(e) => Err(e).with_context(|| format!("open a source file for layer {local_path:?}"))?,
-    };
-
-    let fs_size = source_file
-        .metadata()
-        .await
-        .with_context(|| format!("get the source file metadata for layer {local_path:?}"))?
-        .len();
-
-    if metadata_size != fs_size {
-        bail!(
-            "File {local_path:?} has its current FS size {fs_size} diferent from initially determined {metadata_size}"
-        );
-    }
-
-    let fs_size = usize::try_from(fs_size)
-        .with_context(|| format!("convert {local_path:?} size {fs_size} usize"))?;
-    /* BEGIN_HADRON */
-    let mut metadata = None;
-    match storage {
-        // Pass the file path as a storage metadata to minimize changes to neon.
-        // Otherwise, we need to change the upload interface.
-        GenericRemoteStorage::AzureBlob(s) => {
-            let block_size_mb = s.put_block_size_mb.unwrap_or(0);
-            if block_size_mb > 0 && fs_size > block_size_mb * 1024 * 1024 {
-                metadata = Some(remote_storage::StorageMetadata::from([(
-                    "databricks_azure_put_block",
-                    local_path.as_str(),
-                )]));
-            }
-        }
-        GenericRemoteStorage::LocalFs(_) => {}
-        GenericRemoteStorage::AwsS3(_) => {}
-        GenericRemoteStorage::Unreliable(_) => {}
-        GenericRemoteStorage::GCS(_) => {}
-        GenericRemoteStorage::YbStore(_) => {}
-    };
-    /* END_HADRON */
-    let reader = tokio_util::io::ReaderStream::with_capacity(source_file, super::BUFFER_SIZE);
-
-    storage
-        .upload(reader, fs_size, remote_path, metadata, cancel)
-        .await
-        .with_context(|| format!("upload layer from local path '{local_path}'"))
-}
-
-pub(super) async fn copy_timeline_layer(
-    storage: &GenericRemoteStorage,
-    source_path: &RemotePath,
-    target_path: &RemotePath,
-    cancel: &CancellationToken,
-) -> anyhow::Result<()> {
-    fail_point!("before-copy-layer", |_| {
-        bail!("failpoint before-copy-layer")
-    });
-
-    pausable_failpoint!("before-copy-layer-pausable");
-
-    storage
-        .copy_object(source_path, target_path, cancel)
-        .await
-        .with_context(|| format!("copy layer {source_path} to {target_path}"))
 }
 
 /// Uploads the given `initdb` data to the remote storage.
