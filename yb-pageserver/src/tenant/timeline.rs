@@ -85,15 +85,14 @@ use crate::metrics::{
 };
 use crate::page_service::TenantManagerTypes;
 use crate::pgdatadir_mapping::{
-    CalculateLogicalSizeError, CollectKeySpaceError, DirectoryKind, LsnForTimestamp, MetricsUpdate,
+    CalculateLogicalSizeError, DirectoryKind, LsnForTimestamp, MetricsUpdate,
 };
 use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::storage_layer::inmemory_layer::IndexEntry;
 use crate::tenant::storage_layer::{
-    EvictionError,
-    ImageLayerWriter, InMemoryLayer, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, ResidentLayer,
+    EvictionError, InMemoryLayer, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, ResidentLayer,
     ValueReconstructState, ValuesReconstructState,
 };
 use crate::tenant::tasks::BackgroundLoopKind;
@@ -112,35 +111,6 @@ pub(crate) enum FlushLoopState {
         initdb_optimization_count: usize,
     },
     Exited,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ImageLayerCreationMode {
-    /// Try to create image layers based on `time_for_new_image_layer`. Used in compaction code path.
-    Try,
-    /// Initial ingestion of the data, and no data should be dropped in this function. This
-    /// means that no metadata keys should be included in the partitions. Used in flush frozen layer
-    /// code path.
-    Initial,
-}
-
-#[derive(Clone, Debug, Default)]
-pub enum LastImageLayerCreationStatus {
-    Incomplete {
-        /// The last key of the partition (exclusive) that was processed in the last
-        /// image layer creation attempt. We will continue from this key in the next
-        /// attempt.
-        last_key: Key,
-    },
-    Complete,
-    #[default]
-    Initial,
-}
-
-impl std::fmt::Display for ImageLayerCreationMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
 }
 
 /// Temporary function for immutable storage state refactor, ensures we are dropping mutex guard instead of other things.
@@ -948,39 +918,6 @@ pub(crate) enum ShutdownMode {
     Reload,
     /// Shut down immediately, without waiting for any open layers to flush.
     Hard,
-}
-
-#[allow(clippy::large_enum_variant, reason = "TODO")]
-enum ImageLayerCreationOutcome {
-    /// We generated an image layer
-    Generated {
-        unfinished_image_layer: ImageLayerWriter,
-    },
-    /// The key range is empty
-    Empty,
-    /// (Only used in metadata image layer creation), after reading the metadata keys, we decide to skip
-    /// the image layer creation.
-    Skip,
-}
-
-enum RepartitionError {
-    Other(anyhow::Error),
-    CollectKeyspace(CollectKeySpaceError),
-}
-
-impl RepartitionError {
-    fn is_cancel(&self) -> bool {
-        match self {
-            RepartitionError::Other(_) => false,
-            RepartitionError::CollectKeyspace(e) => e.is_cancel(),
-        }
-    }
-    fn into_anyhow(self) -> anyhow::Error {
-        match self {
-            RepartitionError::Other(e) => e,
-            RepartitionError::CollectKeyspace(e) => e.into_anyhow(),
-        }
-    }
 }
 
 /// Public interface functions
