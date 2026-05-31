@@ -36,7 +36,7 @@ use wal_decoder::models::value::Value;
 use super::PageReconstructError;
 use super::layer_map::InMemoryLayerDesc;
 use crate::context::{
-    AccessStatsBehavior, PerfInstrumentFutureExt, RequestContext,
+    PerfInstrumentFutureExt, RequestContext,
 };
 
 pub fn range_overlaps<T>(a: &Range<T>, b: &Range<T>) -> bool
@@ -868,11 +868,7 @@ impl LayerAccessStats {
 
     /// Returns true if we modified the layer's visibility to set it to Visible implicitly
     /// as a result of this access
-    pub(crate) fn record_access(&self, ctx: &RequestContext) -> bool {
-        if ctx.access_stats_behavior() == AccessStatsBehavior::Skip {
-            return false;
-        }
-
+    pub(crate) fn record_access(&self, _ctx: &RequestContext) -> bool {
         self.record_access_at(SystemTime::now())
     }
 

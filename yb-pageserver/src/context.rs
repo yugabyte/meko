@@ -110,9 +110,7 @@ use tracing::{Dispatch, Span};
 pub struct RequestContext {
     task_kind: TaskKind,
     download_behavior: DownloadBehavior,
-    access_stats_behavior: AccessStatsBehavior,
     page_content_kind: PageContentKind,
-    read_path_debug: bool,
     scope: Scope,
     perf_span: Option<PerfSpan>,
     perf_span_dispatch: Option<Dispatch>,
@@ -207,20 +205,6 @@ pub enum DownloadBehavior {
     Error,
 }
 
-/// Whether this request should update access times used in LRU eviction
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum AccessStatsBehavior {
-    /// Update access times: this request's access to data should be taken
-    /// as a hint that the accessed layer is likely to be accessed again
-    Update,
-
-    /// Do not update access times: this request is accessing the layer
-    /// but does not want to indicate that the layer should be retained in cache,
-    /// perhaps because the requestor is a compaction routine that will soon cover
-    /// this layer with another.
-    Skip,
-}
-
 pub struct RequestContextBuilder {
     inner: RequestContext,
 }
@@ -232,9 +216,7 @@ impl RequestContextBuilder {
             inner: RequestContext {
                 task_kind,
                 download_behavior: DownloadBehavior::Download,
-                access_stats_behavior: AccessStatsBehavior::Update,
                 page_content_kind: PageContentKind::Unknown,
-                read_path_debug: false,
                 scope: Scope::new_global(),
                 perf_span: None,
                 perf_span_dispatch: None,
@@ -262,11 +244,6 @@ impl RequestContextBuilder {
 
     pub(crate) fn page_content_kind(mut self, k: PageContentKind) -> Self {
         self.inner.page_content_kind = k;
-        self
-    }
-
-    pub(crate) fn read_path_debug(mut self, b: bool) -> Self {
-        self.inner.read_path_debug = b;
         self
     }
 
@@ -334,9 +311,7 @@ impl RequestContext {
         Self {
             task_kind: self.task_kind,
             download_behavior: self.download_behavior,
-            access_stats_behavior: self.access_stats_behavior,
             page_content_kind: self.page_content_kind,
-            read_path_debug: self.read_path_debug,
             scope: self.scope.clone(),
             perf_span: self.perf_span.clone(),
             perf_span_dispatch: self.perf_span_dispatch.clone(),
@@ -461,16 +436,8 @@ impl RequestContext {
         self.download_behavior
     }
 
-    pub(crate) fn access_stats_behavior(&self) -> AccessStatsBehavior {
-        self.access_stats_behavior
-    }
-
     pub(crate) fn page_content_kind(&self) -> PageContentKind {
         self.page_content_kind
-    }
-
-    pub(crate) fn read_path_debug(&self) -> bool {
-        self.read_path_debug
     }
 
     pub(crate) fn io_size_metrics(&self) -> &StorageIoSizeMetrics {
