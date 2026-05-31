@@ -15,7 +15,6 @@ use utils::lsn::Lsn;
 use super::TimelineWriterState;
 use crate::config::PageServerConf;
 use crate::context::RequestContext;
-use crate::metrics::TimelineMetrics;
 use crate::tenant::layer_map::{BatchedUpdates, LayerMap};
 use crate::tenant::storage_layer::{
     AsLayerDesc, InMemoryLayer, Layer, PersistentLayerDesc,
@@ -363,82 +362,6 @@ impl OpenLayerManager {
         };
 
         Ok(layer)
-    }
-
-    /// Add image layers to the layer map, called from [`super::Timeline::create_image_layers`].
-    pub(crate) fn track_new_image_layers(
-        &mut self,
-        image_layers: &[ResidentLayer],
-        metrics: &TimelineMetrics,
-    ) {
-        let mut updates = self.layer_map.batch_update();
-        for layer in image_layers {
-            Self::insert_historic_layer(layer.as_ref().clone(), &mut updates, &mut self.layer_fmgr);
-
-            // record these here instead of Layer::finish_creating because otherwise partial
-            // failure with create_image_layers would balloon up the physical size gauge. downside
-            // is that all layers need to be created before metrics are updated.
-            metrics.record_new_file_metrics(layer.layer_desc().file_size);
-        }
-        updates.flush();
-    }
-
-    /// Called post-compaction when some previous generation image layers were trimmed.
-    pub fn rewrite_layers(
-        &mut self,
-        rewrite_layers: &[(Layer, ResidentLayer)],
-        drop_layers: &[Layer],
-        metrics: &TimelineMetrics,
-    ) {
-        self.rewrite_layers_inner(rewrite_layers, drop_layers, &[], metrics);
-    }
-
-    fn rewrite_layers_inner(
-        &mut self,
-        rewrite_layers: &[(Layer, ResidentLayer)],
-        drop_layers: &[Layer],
-        add_layers: &[ResidentLayer],
-        metrics: &TimelineMetrics,
-    ) {
-        let mut updates = self.layer_map.batch_update();
-        for (old_layer, new_layer) in rewrite_layers {
-            debug_assert_eq!(
-                old_layer.layer_desc().key_range,
-                new_layer.layer_desc().key_range
-            );
-            debug_assert_eq!(
-                old_layer.layer_desc().lsn_range,
-                new_layer.layer_desc().lsn_range
-            );
-
-            // Transfer visibility hint from old to new layer, since the new layer covers the same key space.  This is not guaranteed to
-            // be accurate (as the new layer may cover a different subset of the key range), but is a sensible default, and prevents
-            // always marking rewritten layers as visible.
-            new_layer.as_ref().set_visibility(old_layer.visibility());
-
-            // Safety: we may never rewrite the same file in-place.  Callers are responsible
-            // for ensuring that they only rewrite layers after something changes the path,
-            // such as an increment in the generation number.
-            assert_ne!(old_layer.local_path(), new_layer.local_path());
-
-            Self::delete_historic_layer(old_layer, &mut updates, &mut self.layer_fmgr);
-
-            Self::insert_historic_layer(
-                new_layer.as_ref().clone(),
-                &mut updates,
-                &mut self.layer_fmgr,
-            );
-
-            metrics.record_new_file_metrics(new_layer.layer_desc().file_size);
-        }
-        for l in drop_layers {
-            Self::delete_historic_layer(l, &mut updates, &mut self.layer_fmgr);
-        }
-        for l in add_layers {
-            Self::insert_historic_layer(l.as_ref().clone(), &mut updates, &mut self.layer_fmgr);
-            metrics.record_new_file_metrics(l.layer_desc().file_size);
-        }
-        updates.flush();
     }
 
     /// Called when garbage collect has selected the layers to be removed.
