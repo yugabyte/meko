@@ -638,24 +638,6 @@ pub(crate) enum FlushLayerError {
     Other(#[from] Arc<anyhow::Error>),
 }
 
-impl FlushLayerError {
-    // When crossing from generic anyhow errors to this error type, we explicitly check
-    // for timeline cancellation to avoid logging inoffensive shutdown errors as warn/err.
-    fn from_anyhow(timeline: &Timeline, err: anyhow::Error) -> Self {
-        let cancelled = timeline.cancel.is_cancelled()
-            // The upload queue might have been shut down before the official cancellation of the timeline.
-            || err
-                .downcast_ref::<NotInitialized>()
-                .map(NotInitialized::is_stopping)
-                .unwrap_or_default();
-        if cancelled {
-            Self::Cancelled
-        } else {
-            Self::Other(Arc::new(err))
-        }
-    }
-}
-
 impl From<layer_manager::Shutdown> for FlushLayerError {
     fn from(_: layer_manager::Shutdown) -> Self {
         FlushLayerError::Cancelled

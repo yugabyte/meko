@@ -117,19 +117,6 @@ impl LockedLayerManager {
         }
     }
 
-    pub(crate) fn try_read(
-        &self,
-        holder: LayerManagerLockHolder,
-    ) -> Result<LayerManagerReadGuard, tokio::sync::TryLockError> {
-        let guard = ManuallyDrop::new(self.locked.try_read()?);
-
-        Ok(LayerManagerReadGuard {
-            guard,
-            acquired_at: std::time::Instant::now(),
-            holder,
-        })
-    }
-
     pub(crate) async fn write(&self, holder: LayerManagerLockHolder) -> LayerManagerWriteGuard {
         let guard = ManuallyDrop::new(self.locked.write().await);
         LayerManagerWriteGuard {
@@ -299,16 +286,6 @@ impl OpenLayerManager {
         updates.flush()
     }
 
-
-    /// Helper function to insert a layer into the layer map and file manager.
-    fn insert_historic_layer(
-        layer: Layer,
-        updates: &mut BatchedUpdates<'_>,
-        mapping: &mut LayerFileManager<Layer>,
-    ) {
-        updates.insert_historic(layer.layer_desc().clone());
-        mapping.insert(layer);
-    }
 
     /// Removes the layer from local FS (if present) and from memory.
     /// Remote storage is not affected by this operation.
