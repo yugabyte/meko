@@ -1,30 +1,22 @@
 //! An in-memory layer stores recently received key-value pairs.
 //!
-//! The "in-memory" part of the name is a bit misleading: the actual page versions are
-//! held in an ephemeral file, not in memory. The metadata for each page version, i.e.
-//! its position in the file, is kept in memory, though.
-//!
-use std::collections::BTreeMap;
+//! In yb-pageserver the legacy ephemeral-file write path is gone:
+//! incoming WAL routes straight through PageWriter into the row store,
+//! and this module's only remaining purpose is to keep the
+//! `InMemoryLayer` type alive so `LayerMap`/`ReadableLayerWeak` still
+//! compile. The struct itself is no longer constructed at runtime.
 use std::fmt::Write;
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, AtomicUsize};
-use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
 
 use anyhow::Result;
-use pageserver_api::key::CompactKey;
 use pageserver_api::models::InMemoryLayerInfo;
-use pageserver_api::shard::TenantShardId;
-use tokio::sync::RwLock;
 use utils::id::TimelineId;
 use utils::lsn::Lsn;
-use utils::vec_map::VecMap;
 
 use crate::assert_u64_eq_usize::u64_to_usize;
-use crate::config::PageServerConf;
 use crate::context::RequestContext;
-// avoid binding to Write (conflicts with std::io::Write)
-// while being able to use std::fmt::Write's methods
 use crate::page_cache;
 
 
@@ -32,10 +24,7 @@ use crate::page_cache;
 pub(crate) struct InMemoryLayerFileId(page_cache::FileId);
 
 pub struct InMemoryLayer {
-    conf: &'static PageServerConf,
-    tenant_shard_id: TenantShardId,
     timeline_id: TimelineId,
-    file_id: InMemoryLayerFileId,
 
     /// This layer contains all the changes from 'start_lsn'. The
     /// start is inclusive.
@@ -44,27 +33,6 @@ pub struct InMemoryLayer {
     /// Frozen layers have an exclusive end LSN.
     /// Writes are only allowed when this is `None`.
     pub(crate) end_lsn: OnceLock<Lsn>,
-
-    /// Used for traversal path. Cached representation of the in-memory layer after frozen.
-    frozen_local_path_str: OnceLock<Arc<str>>,
-
-    opened_at: Instant,
-
-    /// All versions of all pages in the layer are kept here. Indexed
-    /// by block number and LSN. The [`IndexEntry`] is an offset into the
-    /// ephemeral file where the page version is stored.
-    ///
-    /// We use a separate lock for the index to reduce the critical section
-    /// during which reads cannot be planned.
-    ///
-    /// Note that the file backing [`InMemoryLayer::file`] is append-only,
-    /// so it is not necessary to hold a lock on the index while reading or writing from the file.
-    /// In particular:
-    /// 1. It is safe to read and release [`InMemoryLayer::index`] before reading from [`InMemoryLayer::file`].
-    /// 2. It is safe to write to [`InMemoryLayer::file`] before locking and updating [`InMemoryLayer::index`].
-    index: RwLock<BTreeMap<CompactKey, VecMap<Lsn, IndexEntry>>>,
-
-    estimated_in_mem_size: AtomicU64,
 }
 
 impl std::fmt::Debug for InMemoryLayer {
@@ -87,14 +55,9 @@ const MAX_SUPPORTED_BLOB_LEN_BITS: usize = {
     trailing_ones
 };
 
-/// See [`InMemoryLayer::index`].
-///
-/// For memory efficiency, the data is packed into a u64.
-///
-/// Layout:
-/// - 1 bit: `will_init`
-/// - [`MAX_SUPPORTED_BLOB_LEN_BITS`][]: `len`
-/// - [`MAX_SUPPORTED_POS_BITS`](IndexEntry::MAX_SUPPORTED_POS_BITS): `pos`
+/// Index-entry layout used by `validate_checkpoint_distance` callers
+/// (config validation). The runtime use of this packed encoding is gone
+/// in yb-mode, but the static check is still wired up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndexEntry(u64);
 
@@ -143,26 +106,17 @@ impl IndexEntry {
 }
 
 
-/// State shared by all in-memory (ephemeral) layers.  Updated infrequently during background ticks in Timeline,
-/// to minimize contention.
-///
-/// This global state is used to implement behaviors that require a global view of the system, e.g.
-/// rolling layers proactively to limit the total amount of dirty data.
+/// Global cap on how much dirty in-memory data is tolerated before
+/// freezing. yb-mode never opens an InMemoryLayer, but
+/// `tenant::mgr` still writes the configured cap into this static at
+/// startup; keep it as a no-op carrier.
 pub(crate) struct GlobalResources {
-    // Limit on how high dirty_bytes may grow before we start freezing layers to reduce it.
-    // Zero means unlimited.
     pub(crate) max_dirty_bytes: AtomicU64,
-    // How many bytes are in all EphemeralFile objects
-    dirty_bytes: AtomicU64,
-    // How many layers are contributing to dirty_bytes
-    dirty_layers: AtomicUsize,
 }
 
 
 pub(crate) static GLOBAL_RESOURCES: GlobalResources = GlobalResources {
     max_dirty_bytes: AtomicU64::new(0),
-    dirty_bytes: AtomicU64::new(0),
-    dirty_layers: AtomicUsize::new(0),
 };
 
 impl InMemoryLayer {
