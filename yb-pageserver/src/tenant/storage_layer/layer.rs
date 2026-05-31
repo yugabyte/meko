@@ -1870,29 +1870,6 @@ impl ResidentLayer {
         self.into()
     }
 
-    /// Loads all keys stored in the layer. Returns key, lsn and value size.
-    #[tracing::instrument(level = tracing::Level::DEBUG, skip_all, fields(layer=%self))]
-    pub(crate) async fn load_keys<'a>(
-        &'a self,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<Vec<pageserver_api::key::Key>> {
-        use LayerKind::*;
-
-        let owner = &self.owner.0;
-        let inner = self.downloaded.get(owner, ctx).await?;
-
-        // this is valid because the DownloadedLayer::kind is a OnceCell, not a
-        // Mutex<OnceCell>, so we cannot go and deinitialize the value with OnceCell::take
-        // while it's being held.
-        self.owner.record_access(ctx);
-
-        let res = match inner {
-            Delta(d) => delta_layer::DeltaLayerInner::load_keys(d, ctx).await,
-            Image(i) => image_layer::ImageLayerInner::load_keys(i, ctx).await,
-        };
-        res.with_context(|| format!("Layer index is corrupted for {self}"))
-    }
-
     /// Read all they keys in this layer which match the ShardIdentity, and write them all to
     /// the provided writer.  Return the number of keys written.
     #[tracing::instrument(level = tracing::Level::DEBUG, skip_all, fields(layer=%self))]

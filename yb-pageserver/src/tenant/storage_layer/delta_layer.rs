@@ -1462,15 +1462,6 @@ impl DeltaLayerInner {
         }
     }
 
-    /// NB: not super efficient, but not terrible either. Should prob be an iterator.
-    //
-    // We're reusing the index traversal logical in plan_reads; would be nice to
-    // factor that out.
-    pub(crate) async fn load_keys(&self, ctx: &RequestContext) -> anyhow::Result<Vec<Key>> {
-        self.index_entries(ctx)
-            .await
-            .map(|entries| entries.into_iter().map(|entry| entry.key).collect())
-    }
 }
 
 /// A set of data associated with a delta layer key and its value
