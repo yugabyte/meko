@@ -898,17 +898,14 @@ enum StartCreatingTimelineResult {
     Idempotent(Arc<Timeline>),
 }
 
-#[allow(clippy::large_enum_variant, reason = "TODO")]
 enum TimelineInitAndSyncResult {
     ReadyToActivate,
-    NeedsSpawnImportPgdata(TimelineInitAndSyncNeedsSpawnImportPgdata),
-}
-
-#[must_use]
-struct TimelineInitAndSyncNeedsSpawnImportPgdata {
-    timeline: Arc<Timeline>,
-    import_pgdata: import_pgdata::index_part_format::Root,
-    guard: TimelineCreateGuard,
+    /// yb-mode placeholder. The original Neon flow constructed an
+    /// import task from a `TimelineInitAndSyncNeedsSpawnImportPgdata`
+    /// payload (timeline + index-part fragment + create-guard); the
+    /// import flow itself is deleted, so we just stash the `Arc<Timeline>`
+    /// to log on the receiving side and let the create-guard drop.
+    NeedsSpawnImportPgdata { timeline: Arc<Timeline> },
 }
 
 /// What is returned by [`TenantShard::create_timeline`].
@@ -1139,13 +1136,8 @@ impl TenantShard {
                         .conf
                         .timeline_path(&timeline.tenant_shard_id, &timeline.timeline_id),
                 };
-                Ok(TimelineInitAndSyncResult::NeedsSpawnImportPgdata(
-                    TimelineInitAndSyncNeedsSpawnImportPgdata {
-                        timeline,
-                        import_pgdata,
-                        guard: timeline_create_guard,
-                    },
-                ))
+                let _ = (import_pgdata, timeline_create_guard);
+                Ok(TimelineInitAndSyncResult::NeedsSpawnImportPgdata { timeline })
             }
             Some(_) | None => {
                 {
@@ -1707,9 +1699,7 @@ impl TenantShard {
                 TimelineInitAndSyncResult::ReadyToActivate => {
                     // activation happens later, on Tenant::activate
                 }
-                TimelineInitAndSyncResult::NeedsSpawnImportPgdata(
-                    TimelineInitAndSyncNeedsSpawnImportPgdata { timeline, .. },
-                ) => {
+                TimelineInitAndSyncResult::NeedsSpawnImportPgdata { timeline } => {
                     // yb-mode: external pgdata-bucket import is unsupported
                     // (the flow.rs orchestrator was deleted in Phase 4d).
                     // An attaching tenant with an in-progress import is a
