@@ -1302,31 +1302,6 @@ impl RemoteTimelineClient {
         upload_queue.queued_operations.push_back(op);
     }
 
-    /// Launch a delete operation in the background.
-    ///
-    /// The operation does not modify local filesystem state.
-    ///
-    /// Note: This schedules an index file upload before the deletions.  The
-    /// deletion won't actually be performed, until all previously scheduled
-    /// upload operations, and the index file upload, have completed
-    /// successfully.
-    pub fn schedule_layer_file_deletion(
-        self: &Arc<Self>,
-        names: &[LayerName],
-    ) -> anyhow::Result<()> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-
-        let with_metadata =
-            self.schedule_unlinking_of_layers_from_index_part0(upload_queue, names.iter().cloned());
-
-        self.schedule_deletion_of_unlinked0(upload_queue, with_metadata);
-
-        // Launch the tasks immediately, if possible
-        self.launch_queued_tasks(upload_queue);
-        Ok(())
-    }
-
     /// Unlinks the layer files from `index_part.json` but does not yet schedule deletion for the
     /// layer files, leaving them dangling.
     ///
@@ -1494,29 +1469,6 @@ impl RemoteTimelineClient {
         upload_queue.queued_operations.push_back(op);
     }
 
-    /// Schedules a compaction update to the remote `index_part.json`.
-    ///
-    /// `compacted_from` represent the L0 names which have been `compacted_to` L1 layers.
-    pub(crate) fn schedule_compaction_update(
-        self: &Arc<Self>,
-        compacted_from: &[Layer],
-        compacted_to: &[ResidentLayer],
-    ) -> Result<(), NotInitialized> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-
-        for layer in compacted_to {
-            self.schedule_layer_file_upload0(upload_queue, layer.clone());
-        }
-
-        let names = compacted_from.iter().map(|x| x.layer_desc().layer_name());
-
-        self.schedule_unlinking_of_layers_from_index_part0(upload_queue, names);
-        self.launch_queued_tasks(upload_queue);
-
-        Ok(())
-    }
-
     /// Wait for all previously scheduled uploads/deletions to complete
     pub(crate) async fn wait_completion(self: &Arc<Self>) -> Result<(), WaitCompletionError> {
         let receiver = {
@@ -1537,13 +1489,6 @@ impl RemoteTimelineClient {
             return Err(WaitCompletionError::UploadQueueShutDownOrStopped);
         }
 
-        Ok(())
-    }
-
-    pub(crate) fn schedule_barrier(self: &Arc<Self>) -> anyhow::Result<()> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-        self.schedule_barrier0(upload_queue);
         Ok(())
     }
 
