@@ -122,6 +122,11 @@ pub struct VectoredBlob {
 }
 
 impl VectoredBlob {
+    /// Returns the raw blob including header.
+    pub(crate) fn raw_with_header<'a>(&self, buf: &BufView<'a>) -> BufView<'a> {
+        buf.view(self.header_start..self.end)
+    }
+
     /// Reads a decompressed view of the blob.
     pub(crate) async fn read<'a>(&self, buf: &BufView<'a>) -> Result<BufView<'a>, std::io::Error> {
         let view = buf.view(self.data_start..self.end);
@@ -150,10 +155,6 @@ impl VectoredBlob {
         }
     }
 
-    /// Returns the raw blob including header.
-    pub(crate) fn raw_with_header<'a>(&self, buf: &BufView<'a>) -> BufView<'a> {
-        buf.view(self.header_start..self.end)
-    }
 }
 
 impl std::fmt::Display for VectoredBlob {

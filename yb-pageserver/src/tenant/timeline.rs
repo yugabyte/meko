@@ -172,12 +172,6 @@ impl std::fmt::Display for ImageLayerCreationMode {
 
 /// Temporary function for immutable storage state refactor, ensures we are dropping mutex guard instead of other things.
 /// Can be removed after all refactors are done.
-fn drop_layer_manager_rlock(rlock: LayerManagerReadGuard<'_>) {
-    drop(rlock)
-}
-
-/// Temporary function for immutable storage state refactor, ensures we are dropping mutex guard instead of other things.
-/// Can be removed after all refactors are done.
 fn drop_layer_manager_wlock(rlock: LayerManagerWriteGuard<'_>) {
     drop(rlock)
 }

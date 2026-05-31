@@ -244,18 +244,6 @@ pub struct DeltaLayerInner {
     max_vectored_read_bytes: Option<MaxVectoredReadBytes>,
 }
 
-impl DeltaLayerInner {
-    pub(crate) fn layer_dbg_info(&self) -> String {
-        format!(
-            "delta {}..{} {}..{}",
-            self.key_range().start,
-            self.key_range().end,
-            self.lsn_range().start,
-            self.lsn_range().end
-        )
-    }
-}
-
 impl std::fmt::Debug for DeltaLayerInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeltaLayerInner")
@@ -1559,10 +1547,6 @@ pub struct DeltaLayerIterator<'a> {
 }
 
 impl DeltaLayerIterator<'_> {
-    pub(crate) fn layer_dbg_info(&self) -> String {
-        self.delta_layer.layer_dbg_info()
-    }
-
     /// Retrieve a batch of key-value pairs into the iterator buffer.
     async fn next_batch(&mut self) -> anyhow::Result<()> {
         assert!(self.key_values_batch.is_empty());

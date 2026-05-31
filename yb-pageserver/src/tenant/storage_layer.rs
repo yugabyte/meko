@@ -19,7 +19,7 @@ use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::PERF_TRACE_TARGET;
-pub use batch_split_writer::{BatchLayerWriter, SplitDeltaLayerWriter, SplitImageLayerWriter};
+pub use batch_split_writer::BatchLayerWriter;
 use bytes::Bytes;
 pub use delta_layer::{DeltaLayer, DeltaLayerWriter, ValueRef};
 use futures::StreamExt;
