@@ -1645,7 +1645,7 @@ impl Timeline {
     pub(crate) async fn writer(&self) -> TimelineWriter<'_> {
         TimelineWriter {
             tl: self,
-            write_guard: self.write_lock.lock().await,
+            _write_guard: self.write_lock.lock().await,
         }
     }
 
@@ -4318,7 +4318,7 @@ pub(crate) struct TimelineWriterState;
 // but will cause large code changes.
 pub(crate) struct TimelineWriter<'a> {
     tl: &'a Timeline,
-    write_guard: tokio::sync::MutexGuard<'a, Option<TimelineWriterState>>,
+    _write_guard: tokio::sync::MutexGuard<'a, Option<TimelineWriterState>>,
 }
 
 impl Deref for TimelineWriter<'_> {

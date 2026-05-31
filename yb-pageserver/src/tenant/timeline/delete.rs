@@ -198,8 +198,7 @@ impl DeleteTimelineFlow {
     ) -> Result<(), DeleteTimelineError> {
         super::debug_assert_current_span_has_tenant_and_timeline_id();
 
-        let (timeline, mut guard) =
-            make_timeline_delete_guard(tenant, timeline_id, TimelineDeleteGuardKind::Delete)?;
+        let (timeline, mut guard) = make_timeline_delete_guard(tenant, timeline_id)?;
 
         guard.mark_in_progress()?;
 
@@ -455,16 +454,9 @@ impl DeleteTimelineFlow {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub(super) enum TimelineDeleteGuardKind {
-    Offload,
-    Delete,
-}
-
 pub(super) fn make_timeline_delete_guard(
     tenant: &TenantShard,
     timeline_id: TimelineId,
-    guard_kind: TimelineDeleteGuardKind,
 ) -> Result<(TimelineOrOffloaded, DeletionGuard), DeleteTimelineError> {
     // Note the interaction between this guard and deletion guard.
     // Here we attempt to lock deletion guard when we're holding a lock on timelines.
@@ -494,11 +486,9 @@ pub(super) fn make_timeline_delete_guard(
     // Ensure that there are no child timelines, because we are about to remove files,
     // which will break child branches
     let mut children = Vec::new();
-    if guard_kind == TimelineDeleteGuardKind::Delete {
-        children.extend(timelines_offloaded.iter().filter_map(|(id, entry)| {
-            (entry.ancestor_timeline_id == Some(timeline_id)).then_some(*id)
-        }));
-    }
+    children.extend(timelines_offloaded.iter().filter_map(|(id, entry)| {
+        (entry.ancestor_timeline_id == Some(timeline_id)).then_some(*id)
+    }));
     children.extend(timelines.iter().filter_map(|(id, entry)| {
         (entry.get_ancestor_timeline_id() == Some(timeline_id)).then_some(*id)
     }));
@@ -524,10 +514,8 @@ pub(super) fn make_timeline_delete_guard(
         }
     };
 
-    if guard_kind == TimelineDeleteGuardKind::Delete {
-        if let TimelineOrOffloaded::Timeline(timeline) = &timeline {
-            timeline.set_state(TimelineState::Stopping);
-        }
+    if let TimelineOrOffloaded::Timeline(timeline) = &timeline {
+        timeline.set_state(TimelineState::Stopping);
     }
 
     Ok((timeline, delete_lock_guard))
