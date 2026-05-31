@@ -3000,13 +3000,6 @@ impl Drop for AlwaysRecordingStorageTimeMetricsTimer {
     }
 }
 
-impl AlwaysRecordingStorageTimeMetricsTimer {
-    /// Returns the elapsed duration of the timer.
-    pub fn elapsed(&self) -> Duration {
-        self.0.as_ref().expect("not dropped yet").elapsed()
-    }
-}
-
 /// Timing facilities for an globally histogrammed metric, which is supported by per tenant and
 /// timeline total sum and count.
 #[derive(Clone, Debug)]
