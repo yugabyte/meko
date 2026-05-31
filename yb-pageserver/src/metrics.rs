@@ -21,7 +21,6 @@ use pageserver_api::config::{
     PageServicePipeliningConfig, PageServicePipeliningConfigPipelined,
     PageServiceProtocolPipelinedBatchingStrategy, PageServiceProtocolPipelinedExecutionStrategy,
 };
-use pageserver_api::models::InMemoryLayerInfo;
 use pageserver_api::shard::TenantShardId;
 use postgres_backend::{QueryError, is_expected_io_error};
 use pq_proto::framed::ConnectionError;
@@ -36,7 +35,7 @@ use crate::pgdatadir_mapping::DatadirModificationStats;
 use crate::task_mgr::TaskKind;
 use crate::tenant::layer_map::LayerMap;
 use crate::tenant::mgr::TenantSlot;
-use crate::tenant::storage_layer::{InMemoryLayer, PersistentLayerDesc};
+use crate::tenant::storage_layer::PersistentLayerDesc;
 use crate::tenant::tasks::BackgroundLoopKind;
 use crate::tenant::throttle::ThrottleResult;
 
@@ -3132,9 +3131,6 @@ pub(crate) struct TimelineMetrics {
     tenant_id: String,
     shard_id: String,
     timeline_id: String,
-    pub flush_time_histo: StorageTimeMetrics,
-    pub flush_delay_histo: StorageTimeMetrics,
-    pub create_images_time_histo: StorageTimeMetrics,
     pub logical_size_histo: StorageTimeMetrics,
     pub imitate_logical_size_histo: StorageTimeMetrics,
     pub garbage_collect_histo: StorageTimeMetrics,
@@ -3143,7 +3139,6 @@ pub(crate) struct TimelineMetrics {
     pub disk_consistent_lsn_gauge: IntGauge,
     pub pitr_history_size: UIntGauge,
     pub archival_size: UIntGauge,
-    pub layers_per_read: Histogram,
     pub standby_horizon_gauge: IntGauge,
     pub resident_physical_size_gauge: UIntGauge,
     pub visible_physical_size_gauge: UIntGauge,
@@ -3172,24 +3167,6 @@ impl TimelineMetrics {
         let tenant_id = tenant_shard_id.tenant_id.to_string();
         let shard_id = format!("{}", tenant_shard_id.shard_slug());
         let timeline_id = timeline_id_raw.to_string();
-        let flush_time_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::LayerFlush,
-            &tenant_id,
-            &shard_id,
-            &timeline_id,
-        );
-        let flush_delay_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::LayerFlushDelay,
-            &tenant_id,
-            &shard_id,
-            &timeline_id,
-        );
-        let create_images_time_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::CreateImages,
-            &tenant_id,
-            &shard_id,
-            &timeline_id,
-        );
         let logical_size_histo = StorageTimeMetrics::new(
             StorageTimeOperation::LogicalSize,
             &tenant_id,
@@ -3227,10 +3204,6 @@ impl TimelineMetrics {
             .unwrap();
 
         let archival_size = TIMELINE_ARCHIVE_SIZE
-            .get_metric_with_label_values(&[&tenant_id, &shard_id, &timeline_id])
-            .unwrap();
-
-        let layers_per_read = LAYERS_PER_READ
             .get_metric_with_label_values(&[&tenant_id, &shard_id, &timeline_id])
             .unwrap();
 
@@ -3306,9 +3279,6 @@ impl TimelineMetrics {
             tenant_id,
             shard_id,
             timeline_id,
-            flush_time_histo,
-            flush_delay_histo,
-            create_images_time_histo,
             logical_size_histo,
             imitate_logical_size_histo,
             garbage_collect_histo,
@@ -3317,7 +3287,6 @@ impl TimelineMetrics {
             disk_consistent_lsn_gauge,
             pitr_history_size,
             archival_size,
-            layers_per_read,
             standby_horizon_gauge,
             resident_physical_size_gauge,
             visible_physical_size_gauge,
@@ -3336,10 +3305,6 @@ impl TimelineMetrics {
             wait_ondemand_download_time,
             shutdown: std::sync::atomic::AtomicBool::default(),
         }
-    }
-
-    pub(crate) fn record_new_file_metrics(&self, sz: u64) {
-        self.resident_physical_size_add(sz);
     }
 
     pub(crate) fn resident_physical_size_sub(&self, sz: u64) {
@@ -3373,47 +3338,6 @@ impl TimelineMetrics {
             level.into(),
             kind.into(),
         ]
-    }
-
-    /// Generates TIMELINE_LAYER labels for a frozen ephemeral layer.
-    fn make_frozen_layer_labels(&self, _layer: &InMemoryLayer) -> [&str; 5] {
-        [
-            &self.tenant_id,
-            &self.shard_id,
-            &self.timeline_id,
-            LayerLevel::Frozen.into(),
-            LayerKind::Delta.into(), // by definition
-        ]
-    }
-
-    /// Removes a frozen ephemeral layer to TIMELINE_LAYER metrics.
-    pub fn dec_frozen_layer(&self, layer: &InMemoryLayer) {
-        assert!(matches!(layer.info(), InMemoryLayerInfo::Frozen { .. }));
-        let labels = self.make_frozen_layer_labels(layer);
-        let size = layer.len();
-        TIMELINE_LAYER_COUNT
-            .get_metric_with_label_values(&labels)
-            .unwrap()
-            .dec();
-        TIMELINE_LAYER_SIZE
-            .get_metric_with_label_values(&labels)
-            .unwrap()
-            .sub(size);
-    }
-
-    /// Adds a frozen ephemeral layer to TIMELINE_LAYER metrics.
-    pub fn inc_frozen_layer(&self, layer: &InMemoryLayer) {
-        assert!(matches!(layer.info(), InMemoryLayerInfo::Frozen { .. }));
-        let labels = self.make_frozen_layer_labels(layer);
-        let size = layer.len();
-        TIMELINE_LAYER_COUNT
-            .get_metric_with_label_values(&labels)
-            .unwrap()
-            .inc();
-        TIMELINE_LAYER_SIZE
-            .get_metric_with_label_values(&labels)
-            .unwrap()
-            .add(size);
     }
 
     /// Removes a persistent layer from TIMELINE_LAYER metrics.
