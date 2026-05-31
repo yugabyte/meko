@@ -305,64 +305,6 @@ impl OpenLayerManager {
         self.layer_map.next_open_layer_at = Some(next_open_layer_at);
     }
 
-    /// Open a new writable layer to append data if there is no open layer, otherwise return the
-    /// current open layer, called within `get_layer_for_write`.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn get_layer_for_write(
-        &mut self,
-        lsn: Lsn,
-        conf: &'static PageServerConf,
-        timeline_id: TimelineId,
-        tenant_shard_id: TenantShardId,
-        gate: &utils::sync::gate::Gate,
-        cancel: &CancellationToken,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<Arc<InMemoryLayer>> {
-        ensure!(lsn.is_aligned());
-
-        // Do we have a layer open for writing already?
-        let layer = if let Some(open_layer) = &self.layer_map.open_layer {
-            if open_layer.get_lsn_range().start > lsn {
-                bail!(
-                    "unexpected open layer in the future: open layers starts at {}, write lsn {}",
-                    open_layer.get_lsn_range().start,
-                    lsn
-                );
-            }
-
-            Arc::clone(open_layer)
-        } else {
-            // No writeable layer yet. Create one.
-            let start_lsn = self
-                .layer_map
-                .next_open_layer_at
-                .context("No next open layer found")?;
-
-            trace!(
-                "creating in-memory layer at {}/{} for record at {}",
-                timeline_id, start_lsn, lsn
-            );
-
-            let new_layer = InMemoryLayer::create(
-                conf,
-                timeline_id,
-                tenant_shard_id,
-                start_lsn,
-                gate,
-                cancel,
-                ctx,
-            )
-            .await?;
-            let layer = Arc::new(new_layer);
-
-            self.layer_map.open_layer = Some(layer.clone());
-            self.layer_map.next_open_layer_at = None;
-
-            layer
-        };
-
-        Ok(layer)
-    }
 
     /// Called when garbage collect has selected the layers to be removed.
     pub(crate) fn finish_gc_timeline(&mut self, gc_layers: &[Layer]) {
@@ -373,12 +315,6 @@ impl OpenLayerManager {
         updates.flush()
     }
 
-    #[cfg(test)]
-    pub(crate) fn force_insert_layer(&mut self, layer: ResidentLayer) {
-        let mut updates = self.layer_map.batch_update();
-        Self::insert_historic_layer(layer.as_ref().clone(), &mut updates, &mut self.layer_fmgr);
-        updates.flush()
-    }
 
     /// Helper function to insert a layer into the layer map and file manager.
     fn insert_historic_layer(
@@ -410,24 +346,6 @@ impl OpenLayerManager {
         layer.delete_on_drop();
     }
 
-    #[cfg(test)]
-    pub(crate) fn force_insert_in_memory_layer(&mut self, layer: Arc<InMemoryLayer>) {
-        use pageserver_api::models::InMemoryLayerInfo;
-
-        match layer.info() {
-            InMemoryLayerInfo::Open { .. } => {
-                assert!(self.layer_map.open_layer.is_none());
-                self.layer_map.open_layer = Some(layer);
-            }
-            InMemoryLayerInfo::Frozen { lsn_start, .. } => {
-                if let Some(last) = self.layer_map.frozen_layers.back() {
-                    assert!(last.get_lsn_range().end <= lsn_start);
-                }
-
-                self.layer_map.frozen_layers.push_back(layer);
-            }
-        }
-    }
 }
 
 pub(crate) struct LayerFileManager<T>(HashMap<PersistentLayerKey, T>);
