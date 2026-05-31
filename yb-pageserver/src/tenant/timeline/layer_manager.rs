@@ -4,7 +4,6 @@ use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use anyhow::Context;
-use itertools::Itertools;
 use utils::lsn::Lsn;
 
 use super::TimelineWriterState;
@@ -26,10 +25,7 @@ pub(crate) enum LayerManagerLockHolder {
     GetLayerMapInfo,
     Init,
     LoadLayerMap,
-    GarbageCollection,
     Shutdown,
-    DetachAncestor,
-    ComputeImageConsistentLsn,
 }
 
 /// Wrapper for the layer manager that tracks the amount of time during which
@@ -235,14 +231,6 @@ impl LayerManager {
         self.layers().values().filter(|l| l.is_likely_resident())
     }
 
-    pub(crate) fn contains_key(&self, key: &PersistentLayerKey) -> bool {
-        self.layers().contains_key(key)
-    }
-
-    pub(crate) fn all_persistent_layers(&self) -> Vec<PersistentLayerKey> {
-        self.layers().keys().cloned().collect_vec()
-    }
-
     fn layers(&self) -> &HashMap<PersistentLayerKey, Layer> {
         use LayerManager::*;
         match self {
@@ -287,14 +275,3 @@ impl<T> Default for LayerFileManager<T> {
     }
 }
 
-impl<T: AsLayerDesc + Clone> LayerFileManager<T> {
-    pub(crate) fn remove(&mut self, layer: &T) {
-        let present = self.0.remove(&layer.layer_desc().key());
-        if present.is_none() && cfg!(debug_assertions) {
-            panic!(
-                "removing layer that is not present in layer mapping: {:?}",
-                layer.layer_desc()
-            )
-        }
-    }
-}
