@@ -179,32 +179,6 @@ impl VirtualFile {
         self.inner.write_all_at(buf, offset, ctx).await
     }
 
-    pub(crate) async fn read_to_string<P: AsRef<Utf8Path>>(
-        path: P,
-        ctx: &RequestContext,
-    ) -> std::io::Result<String> {
-        let file = VirtualFile::open(path, ctx).await?; // TODO: open_v2
-        let mut buf = Vec::new();
-        let mut tmp = vec![0; 128];
-        let mut pos: u64 = 0;
-        loop {
-            let slice = tmp.slice(..128);
-            let (slice, res) = file.inner.read_at(slice, pos, ctx).await;
-            match res {
-                Ok(0) => break,
-                Ok(n) => {
-                    pos += n as u64;
-                    buf.extend_from_slice(&slice[..n]);
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(e),
-            }
-            tmp = slice.into_inner();
-        }
-        String::from_utf8(buf).map_err(|_| {
-            std::io::Error::new(ErrorKind::InvalidData, "file contents are not valid UTF-8")
-        })
-    }
 }
 
 /// Indicates whether to enable fsync, fdatasync, or O_SYNC/O_DSYNC when writing

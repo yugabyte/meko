@@ -723,12 +723,6 @@ pub(crate) enum UpsertLocationError {
 }
 
 impl TenantManager {
-    /// Convenience function so that anyone with a TenantManager can get at the global configuration, without
-    /// having to pass it around everywhere as a separate object.
-    pub(crate) fn get_conf(&self) -> &'static PageServerConf {
-        self.conf
-    }
-
     /// Gets the attached tenant from the in-memory data, erroring if it's absent or currently
     /// undergoing a state change (i.e. slot is InProgress).
     ///
@@ -1183,19 +1177,6 @@ impl TenantManager {
         Ok(())
     }
 
-    pub(crate) fn get_attached_active_tenant_shards(&self) -> Vec<Arc<TenantShard>> {
-        let locked = self.tenants.read().unwrap();
-        match &*locked {
-            TenantsMap::Initializing => Vec::new(),
-            TenantsMap::Open(map) | TenantsMap::ShuttingDown(map) => map
-                .values()
-                .filter_map(|slot| {
-                    slot.get_attached()
-                        .and_then(|t| if t.is_active() { Some(t.clone()) } else { None })
-                })
-                .collect(),
-        }
-    }
     /// Total list of all tenant slots: this includes attached and InProgress.
     pub(crate) fn list(&self) -> Vec<(TenantShardId, TenantSlot)> {
         let locked = self.tenants.read().unwrap();
