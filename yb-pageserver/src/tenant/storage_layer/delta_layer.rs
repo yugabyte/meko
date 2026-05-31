@@ -1422,25 +1422,6 @@ impl DeltaLayerInner {
         offset
     }
 
-    pub fn iter_with_options<'a>(
-        &'a self,
-        ctx: &'a RequestContext,
-        max_read_size: u64,
-        max_batch_size: usize,
-    ) -> DeltaLayerIterator<'a> {
-        let block_reader = FileBlockReader::new(&self.file, self.file_id);
-        let tree_reader =
-            DiskBtreeReader::new(self.index_start_blk, self.index_root_blk, block_reader);
-        DeltaLayerIterator {
-            delta_layer: self,
-            ctx,
-            index_iter: tree_reader.iter(&[0; DELTA_KEY_SIZE], ctx),
-            key_values_batch: std::collections::VecDeque::new(),
-            is_end: false,
-            planner: StreamingVectoredReadPlanner::new(max_read_size, max_batch_size),
-        }
-    }
-
 }
 
 /// A set of data associated with a delta layer key and its value
@@ -1504,76 +1485,6 @@ impl<'a> pageserver_compaction::interface::CompactionDeltaEntry<'a, Key> for Del
     }
     fn size(&self) -> u64 {
         self.size
-    }
-}
-
-pub struct DeltaLayerIterator<'a> {
-    delta_layer: &'a DeltaLayerInner,
-    ctx: &'a RequestContext,
-    planner: StreamingVectoredReadPlanner,
-    index_iter: DiskBtreeIterator<'a>,
-    key_values_batch: VecDeque<(Key, Lsn, Value)>,
-    is_end: bool,
-}
-
-impl DeltaLayerIterator<'_> {
-    /// Retrieve a batch of key-value pairs into the iterator buffer.
-    async fn next_batch(&mut self) -> anyhow::Result<()> {
-        assert!(self.key_values_batch.is_empty());
-        assert!(!self.is_end);
-
-        let plan = loop {
-            if let Some(res) = self.index_iter.next().await {
-                let (raw_key, value) = res?;
-                let key = Key::from_slice(&raw_key[..KEY_SIZE]);
-                let lsn = DeltaKey::extract_lsn_from_buf(&raw_key);
-                let blob_ref = BlobRef(value);
-                let offset = blob_ref.pos();
-                if let Some(batch_plan) =
-                    self.planner.handle(key, lsn, offset, blob_ref.will_init())
-                {
-                    break batch_plan;
-                }
-            } else {
-                self.is_end = true;
-                let data_end_offset = self.delta_layer.index_start_offset();
-                if let Some(item) = self.planner.handle_range_end(data_end_offset) {
-                    break item;
-                } else {
-                    return Ok(()); // TODO: test empty iterator
-                }
-            }
-        };
-        let vectored_blob_reader = VectoredBlobReader::new(&self.delta_layer.file);
-        let mut next_batch = std::collections::VecDeque::new();
-        let buf_size = plan.size();
-        let buf = IoBufferMut::with_capacity(buf_size);
-        let blobs_buf = vectored_blob_reader
-            .read_blobs(&plan, buf, self.ctx)
-            .await?;
-        let view = BufView::new_slice(&blobs_buf.buf);
-        for meta in blobs_buf.blobs.iter() {
-            let blob_read = meta.read(&view).await?;
-            let value = Value::des(&blob_read)?;
-
-            next_batch.push_back((meta.meta.key, meta.meta.lsn, value));
-        }
-        self.key_values_batch = next_batch;
-        Ok(())
-    }
-
-    pub async fn next(&mut self) -> anyhow::Result<Option<(Key, Lsn, Value)>> {
-        if self.key_values_batch.is_empty() {
-            if self.is_end {
-                return Ok(None);
-            }
-            self.next_batch().await?;
-        }
-        Ok(Some(
-            self.key_values_batch
-                .pop_front()
-                .expect("should not be empty"),
-        ))
     }
 }
 
