@@ -97,14 +97,31 @@ pub struct PageWriter {
     state: RwLock<WriterState>,
     materializer: Option<MaterializerHandle>,
     /// Highest LSN successfully reported as durable to
-    /// `pageserver.timelines.disk_consistent_lsn`. Advances only after
-    /// `try_write_rows` succeeds AND the subsequent
-    /// `upsert_disk_consistent_lsn` succeeds. Initialised to 0 at
-    /// construction; Phase 5 attach-side will seed it from the
-    /// persisted row. The flush path issues the upsert only when
-    /// the flush's max LSN exceeds this value — that's the in-memory
-    /// guard the column-scoped UPSERT relies on.
+    /// `pageserver.timeline_state.disk_consistent_lsn`. Advances only
+    /// after `try_write_rows` succeeds AND the subsequent
+    /// `advance_disk_consistent_lsn` succeeds. Initialised to 0 at
+    /// construction; attach seeds it from the persisted row.
     dc_lsn_watermark: std::sync::atomic::AtomicU64,
+    /// Highest LSN actually durabilised in `pageserver.pages` /
+    /// `slru_pages` / `meta`. Advances on every successful flush,
+    /// even when the throttle skips the YB UPDATE on
+    /// `disk_consistent_lsn`. Used by `force_upsert_dc_lsn_if_advanced`
+    /// at shutdown to persist any tail the throttle deferred.
+    dc_lsn_observed: std::sync::atomic::AtomicU64,
+    /// Wall-clock timestamp of the most recent successful
+    /// `advance_disk_consistent_lsn`. Used to throttle the YB UPDATE
+    /// to one per `policy.max_age` window even if the size-based
+    /// flush trigger fires faster than that (a burst of rel-page
+    /// writes can flush every few hundred ms; persisting the row
+    /// that often would be wasted YB traffic — SK truncation is
+    /// driven by this value but bounded by `max_age` is plenty
+    /// fine-grained).
+    ///
+    /// `Mutex<Option<Instant>>` rather than atomic because the
+    /// contention is nil (only the flusher writes it) and `Instant`
+    /// isn't atomically representable. `None` means "no upsert yet";
+    /// the first flush always writes regardless of elapsed time.
+    last_dc_lsn_upsert_at: std::sync::Mutex<Option<Instant>>,
 }
 
 struct WriterState {
@@ -163,6 +180,8 @@ impl PageWriter {
             }),
             materializer: None,
             dc_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
+            dc_lsn_observed: std::sync::atomic::AtomicU64::new(0),
+            last_dc_lsn_upsert_at: std::sync::Mutex::new(None),
         }
     }
 
@@ -187,6 +206,29 @@ impl PageWriter {
     /// generation bump) on the same connection the flush path uses.
     pub fn internal_page_store(&self) -> &Arc<PageStore> {
         &self.internal_page_store
+    }
+
+    /// Bypass-throttle dc_lsn upsert for shutdown. The periodic flush
+    /// path throttles the YB UPDATE on the timeline row to one per
+    /// `policy.max_age`; on a clean shutdown we may have skipped the
+    /// last few flushes' worth of dc_lsn advances. Catch them up by
+    /// upserting `dc_lsn_observed` if it exceeds the watermark.
+    /// No-op if the watermark is already at or past the observed
+    /// value.
+    pub async fn force_upsert_dc_lsn_if_advanced(&self) -> Result<()> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let observed = self.dc_lsn_observed.load(Relaxed);
+        let watermark = self.dc_lsn_watermark.load(Relaxed);
+        if observed <= watermark {
+            return Ok(());
+        }
+        let lsn = utils::lsn::Lsn(observed);
+        self.internal_page_store
+            .advance_disk_consistent_lsn(self.tenant_id, self.timeline_id, lsn)
+            .await?;
+        self.dc_lsn_watermark.store(observed, Relaxed);
+        *self.last_dc_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
+        Ok(())
     }
 
     /// Install the image-materialiser handle. Counter logic in `put`
@@ -590,18 +632,35 @@ impl PageWriter {
                 }
             }
             // Outside the writer lock: persist the dc_lsn advance to
-            // `pageserver.timelines` if it actually moved. In-memory
-            // guard (only call when `new > prev`) is the only check —
-            // the SQL is a column-scoped UPDATE on a row that
-            // Phase 5b's `timeline_create` guarantees exists. Order
-            // matters: pages are already in YB by this point, so
-            // even if this UPDATE fails the on-disk state is safe
-            // (next flush retries; SK still has the WAL because the
-            // timeline row's persisted dc_lsn hasn't moved).
+            // `pageserver.timeline_state` if (a) it actually moved AND
+            // (b) at least `policy.max_age` has elapsed since the last
+            // upsert. The throttle decouples the YB UPDATE rate from
+            // the page-data flush rate — a burst of size-triggered
+            // flushes (every few hundred ms under load) only writes
+            // the row once per `max_age` window. Safe because the
+            // safekeeper's WAL truncation is bounded by the persisted
+            // value; falling at most `max_age` behind means SK keeps
+            // an extra `max_age` worth of WAL (5s by default — trivial).
+            // Order matters: pages are already in YB by this point, so
+            // a missed UPDATE just means the next flush retries; SK
+            // still has the WAL because the timeline row's persisted
+            // dc_lsn hasn't moved.
             if let Some(new_lsn) = max_flushed_lsn {
                 use std::sync::atomic::Ordering::Relaxed;
+                // Always advance `dc_lsn_observed` — that's the
+                // "max durable in YB pages/slru/meta" tracker. The
+                // throttle below only gates the YB UPDATE on the
+                // timeline row, not the underlying durability.
+                self.dc_lsn_observed.fetch_max(new_lsn, Relaxed);
                 let prev = self.dc_lsn_watermark.load(Relaxed);
-                if new_lsn > prev {
+                let elapsed_ok = {
+                    let guard = self.last_dc_lsn_upsert_at.lock().unwrap();
+                    match *guard {
+                        None => true, // first upsert always goes through
+                        Some(prev_at) => prev_at.elapsed() >= self.policy.max_age,
+                    }
+                };
+                if new_lsn > prev && elapsed_ok {
                     let lsn = utils::lsn::Lsn(new_lsn);
                     match self
                         .internal_page_store
@@ -610,6 +669,7 @@ impl PageWriter {
                     {
                         Ok(()) => {
                             self.dc_lsn_watermark.store(new_lsn, Relaxed);
+                            *self.last_dc_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
                         }
                         Err(e) => {
                             // Decoupled from page durability: pages are in
@@ -840,10 +900,20 @@ impl PageWriter {
                     tracing::warn!("PageWriter periodic flush failed: {e:?}");
                 }
             }
-            if let Some(w) = weak.upgrade()
-                && let Err(e) = w.flush().await
-            {
-                tracing::warn!("PageWriter final flush failed: {e:?}");
+            if let Some(w) = weak.upgrade() {
+                if let Err(e) = w.flush().await {
+                    tracing::warn!("PageWriter final flush failed: {e:?}");
+                }
+                // Force-persist any post-throttle dc_lsn the periodic
+                // flushes have been deferring. Without this, a clean
+                // shutdown could leave the persisted dc_lsn up to
+                // `policy.max_age` behind the actual durable LSN —
+                // safe for crash recovery (walreceiver re-applies the
+                // gap, idempotent INSERTs) but wasteful on restart
+                // and noisy in logs.
+                if let Err(e) = w.force_upsert_dc_lsn_if_advanced().await {
+                    tracing::warn!("PageWriter final dc_lsn upsert failed: {e:?}");
+                }
             }
         });
         FlushTask { handle, cancel }
