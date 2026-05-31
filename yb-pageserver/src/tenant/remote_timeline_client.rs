@@ -189,7 +189,7 @@ use anyhow::Context;
 use camino::Utf8Path;
 use chrono::{NaiveDateTime, Utc};
 pub(crate) use download::{
-    download_index_part, download_initdb_tar_zst, download_tenant_manifest, is_temp_download_file,
+    download_index_part, download_initdb_tar_zst, download_tenant_manifest,
     list_remote_tenant_shards, list_remote_timelines,
 };
 use index::GcCompactionState;

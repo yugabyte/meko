@@ -33,7 +33,6 @@ const LAYER_MANAGER_LOCK_READ_WARN_THRESHOLD: Duration = Duration::from_secs(30)
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum LayerManagerLockHolder {
     GetLayerMapInfo,
-    GenerateHeatmap,
     GetPage,
     Init,
     LoadLayerMap,
@@ -46,7 +45,6 @@ pub(crate) enum LayerManagerLockHolder {
     Shutdown,
     ImportPgData,
     DetachAncestor,
-    Eviction,
     ComputeImageConsistentLsn,
     #[cfg(test)]
     Testing,
@@ -281,12 +279,6 @@ impl LayerManager {
 
     pub(crate) fn likely_resident_layers(&self) -> impl Iterator<Item = &'_ Layer> + '_ {
         self.layers().values().filter(|l| l.is_likely_resident())
-    }
-
-    pub(crate) fn visible_layers(&self) -> impl Iterator<Item = &'_ Layer> + '_ {
-        self.layers()
-            .values()
-            .filter(|l| l.visibility() == LayerVisibilityHint::Visible)
     }
 
     pub(crate) fn contains_key(&self, key: &PersistentLayerKey) -> bool {

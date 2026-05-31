@@ -63,9 +63,6 @@ pub(crate) enum StorageTimeOperation {
     #[strum(serialize = "layer flush delay")]
     LayerFlushDelay,
 
-    #[strum(serialize = "compact")]
-    Compact,
-
     #[strum(serialize = "create images")]
     CreateImages,
 
@@ -74,9 +71,6 @@ pub(crate) enum StorageTimeOperation {
 
     #[strum(serialize = "imitate logical size")]
     ImitateLogicalSize,
-
-    #[strum(serialize = "load layer map")]
-    LoadLayerMap,
 
     #[strum(serialize = "gc")]
     Gc,

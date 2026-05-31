@@ -243,15 +243,6 @@ async fn download_object(
 
 const TEMP_DOWNLOAD_EXTENSION: &str = "temp_download";
 
-pub(crate) fn is_temp_download_file(path: &Utf8Path) -> bool {
-    let extension = path.extension();
-    match extension {
-        Some(TEMP_DOWNLOAD_EXTENSION) => true,
-        Some(_) => false,
-        None => false,
-    }
-}
-
 async fn list_identifiers<T>(
     storage: &GenericRemoteStorage,
     prefix: RemotePath,

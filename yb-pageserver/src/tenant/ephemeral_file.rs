@@ -406,12 +406,3 @@ impl super::storage_layer::inmemory_layer::vectored_dio_read::File for Ephemeral
     }
 }
 
-/// Does the given filename look like an ephemeral file?
-pub fn is_ephemeral_file(filename: &str) -> bool {
-    if let Some(rest) = filename.strip_prefix("ephemeral-") {
-        rest.parse::<u32>().is_ok()
-    } else {
-        false
-    }
-}
-

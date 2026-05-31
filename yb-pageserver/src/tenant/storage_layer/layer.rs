@@ -130,22 +130,6 @@ pub(crate) fn local_layer_path(
     }
 }
 
-pub(crate) enum LastEviction {
-    Never,
-    At(std::time::Instant),
-    Evicting,
-}
-
-impl LastEviction {
-    pub(crate) fn happened_after(&self, timepoint: std::time::Instant) -> bool {
-        match self {
-            LastEviction::Never => false,
-            LastEviction::At(evicted_at) => evicted_at > &timepoint,
-            LastEviction::Evicting => true,
-        }
-    }
-}
-
 impl Layer {
     /// Creates a layer value for a file we know to not be resident.
     pub(crate) fn for_evicted(
@@ -422,10 +406,6 @@ impl Layer {
         self.0.info(reset)
     }
 
-    pub(crate) fn latest_activity(&self) -> SystemTime {
-        self.0.access_stats.latest_activity()
-    }
-
     pub(crate) fn visibility(&self) -> LayerVisibilityHint {
         self.0.access_stats.visibility()
     }
@@ -436,17 +416,6 @@ impl Layer {
 
     pub(crate) fn metadata(&self) -> LayerFileMetadata {
         self.0.metadata()
-    }
-
-    pub(crate) fn last_evicted_at(&self) -> LastEviction {
-        match self.0.last_evicted_at.try_lock() {
-            Ok(lock) => match *lock {
-                None => LastEviction::Never,
-                Some(at) => LastEviction::At(at),
-            },
-            Err(std::sync::TryLockError::WouldBlock) => LastEviction::Evicting,
-            Err(std::sync::TryLockError::Poisoned(p)) => panic!("Lock poisoned: {p}"),
-        }
     }
 
     pub(crate) fn get_timeline_id(&self) -> Option<TimelineId> {

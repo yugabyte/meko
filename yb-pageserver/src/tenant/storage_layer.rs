@@ -1157,17 +1157,6 @@ impl LayerAccessStats {
         ret
     }
 
-    /// Get the latest access timestamp, falling back to latest residence event.  The latest residence event
-    /// will be this Layer's construction time, if its residence hasn't changed since then.
-    pub(crate) fn latest_activity(&self) -> SystemTime {
-        if let Some(t) = self.read_low_res_timestamp(Self::ATIME_SHIFT) {
-            t
-        } else {
-            self.read_low_res_timestamp(Self::RTIME_SHIFT)
-                .expect("Residence time is set on construction")
-        }
-    }
-
     /// Whether this layer has been accessed (excluding in [`AccessStatsBehavior::Skip`]).
     ///
     /// This indicates whether the layer has been used for some purpose that would motivate
