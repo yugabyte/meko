@@ -2418,61 +2418,6 @@ pub(crate) static TENANT_MANAGER: Lazy<TenantManagerMetrics> = Lazy::new(|| {
     }
 });
 
-pub(crate) struct DeletionQueueMetrics {
-    pub(crate) keys_submitted: IntCounter,
-    pub(crate) keys_dropped: IntCounter,
-    pub(crate) keys_executed: IntCounter,
-    pub(crate) keys_validated: IntCounter,
-    pub(crate) dropped_lsn_updates: IntCounter,
-    pub(crate) unexpected_errors: IntCounter,
-    pub(crate) remote_errors: IntCounterVec,
-}
-pub(crate) static DELETION_QUEUE: Lazy<DeletionQueueMetrics> = Lazy::new(|| {
-    DeletionQueueMetrics{
-
-    keys_submitted: register_int_counter!(
-        "pageserver_deletion_queue_submitted_total",
-        "Number of objects submitted for deletion"
-    )
-    .expect("failed to define a metric"),
-
-    keys_dropped: register_int_counter!(
-        "pageserver_deletion_queue_dropped_total",
-        "Number of object deletions dropped due to stale generation."
-    )
-    .expect("failed to define a metric"),
-
-    keys_executed: register_int_counter!(
-        "pageserver_deletion_queue_executed_total",
-        "Number of objects deleted. Only includes objects that we actually deleted, sum with pageserver_deletion_queue_dropped_total for the total number of keys processed to completion"
-    )
-    .expect("failed to define a metric"),
-
-    keys_validated: register_int_counter!(
-        "pageserver_deletion_queue_validated_total",
-        "Number of keys validated for deletion.  Sum with pageserver_deletion_queue_dropped_total for the total number of keys that have passed through the validation stage."
-    )
-    .expect("failed to define a metric"),
-
-    dropped_lsn_updates: register_int_counter!(
-        "pageserver_deletion_queue_dropped_lsn_updates_total",
-        "Updates to remote_consistent_lsn dropped due to stale generation number."
-    )
-    .expect("failed to define a metric"),
-    unexpected_errors: register_int_counter!(
-        "pageserver_deletion_queue_unexpected_errors_total",
-        "Number of unexpected condiions that may stall the queue: any value above zero is unexpected."
-    )
-    .expect("failed to define a metric"),
-    remote_errors: register_int_counter_vec!(
-        "pageserver_deletion_queue_remote_errors_total",
-        "Retryable remote I/O errors while executing deletions, for example 503 responses to DeleteObjects",
-        &["op_kind"],
-    )
-    .expect("failed to define a metric")
-}
-});
-
 pub(crate) static NODE_UTILIZATION_SCORE: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
         "pageserver_utilization_score",
@@ -4333,9 +4278,6 @@ pub fn preinitialize_metrics(
     .for_each(|c| {
         Lazy::force(c);
     });
-
-    // Deletion queue stats
-    Lazy::force(&DELETION_QUEUE);
 
     // Tenant stats
     Lazy::force(&TENANT);
