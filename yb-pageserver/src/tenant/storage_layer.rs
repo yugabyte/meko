@@ -3,13 +3,11 @@
 pub mod batch_split_writer;
 pub mod delta_layer;
 pub mod errors;
-pub mod filter_iterator;
 pub mod image_layer;
 pub mod inmemory_layer;
 pub(crate) mod layer;
 mod layer_desc;
 mod layer_name;
-pub mod merge_iterator;
 
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
