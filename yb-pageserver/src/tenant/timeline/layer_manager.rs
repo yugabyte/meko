@@ -8,7 +8,7 @@ use itertools::Itertools;
 use utils::lsn::Lsn;
 
 use super::TimelineWriterState;
-use crate::tenant::layer_map::{BatchedUpdates, LayerMap};
+use crate::tenant::layer_map::LayerMap;
 use crate::tenant::storage_layer::{
     AsLayerDesc, Layer, PersistentLayerDesc,
     PersistentLayerKey,
