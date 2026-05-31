@@ -36,11 +36,18 @@ the Postgres compute and YugabyteDB.
   of YB rows + an in-RAM `UnifiedPages` buffer; an image materialiser
   task compacts long delta chains into walredo-applied images in the
   background.
+- **Safekeeper**: **stateless, no consensus protocol**. Original Neon
+  safekeepers ran a Paxos quorum of 3 (or more) nodes with local disk
+  WAL + leader election to guarantee a single durable WAL stream. In
+  ybLight every WAL record is `INSERT`ed into a YugabyteDB row at the
+  moment it's received; durability is YB's Raft replication, not a
+  per-safekeeper Paxos. The safekeeper itself holds no persistent
+  state beyond its config — restart-from-scratch and it just resumes
+  by reading the next LSN out of YB. You can run one safekeeper or
+  ten; HA is provided by the YB cluster underneath either way.
 - **Remote storage**: `YbStore` writes blobs (basebackup tar, initdb)
   into a YugabyteDB table — same connection model as the page store.
   S3 / GCS / Azure backends are deleted.
-- **WAL archive**: safekeepers ship WAL into YugabyteDB rows via the
-  same `YsqlClient`. No object-store WAL.
 - **Concurrency model**: `YsqlClient` is a pooled, auto-reconnecting,
   prepared-statement-caching wrapper around `tokio_postgres`. Hot
   read paths run pool_size=4 (or more) so compute-side prefetches
@@ -82,8 +89,12 @@ A ybLight install is:
     chain reconstruction over `pageserver.pages`.
   - `internal_page_store` (single conn): walreceiver WAL ingestion +
     image materialiser writes.
-- **Safekeeper(s)**: WAL durability tier. WAL records land in a YB
-  table; the pageserver tails it via the same YB cluster.
+- **Safekeeper**: stateless WAL ingress. Receives the WAL stream from
+  the compute, `INSERT`s each record into a YB row, returns ack the
+  moment the row is durable. No local disk, no quorum, no leader
+  election. Run one for low-load deployments, run several behind a
+  load balancer for connection-spread on heavy workloads — but every
+  instance is independent and interchangeable. HA comes from YB.
 - **Storage controller**: tenant/timeline placement & generation
   management. Backs its own state in YB too.
 - **YugabyteDB cluster**: holds `pageserver.pages`, `pageserver.slru_pages`,
