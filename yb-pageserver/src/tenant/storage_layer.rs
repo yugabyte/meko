@@ -299,10 +299,6 @@ pub struct ValuesReconstructState {
     /// The keys covered by the image layers
     keys_with_image_coverage: Option<Range<Key>>,
 
-    // Statistics that are still accessible as a caller of `get_vectored_impl`.
-    layers_visited: u32,
-    delta_layers_visited: u32,
-
     pub(crate) enable_debug: bool,
     pub(crate) debug_state: ValueReconstructState,
 
@@ -650,8 +646,6 @@ impl ValuesReconstructState {
             keys: HashMap::new(),
             keys_done: KeySpaceRandomAccum::new(),
             keys_with_image_coverage: None,
-            layers_visited: 0,
-            delta_layers_visited: 0,
             io_concurrency,
             enable_debug: false,
             debug_state: ValueReconstructState::default(),
@@ -664,8 +658,6 @@ impl ValuesReconstructState {
             keys: HashMap::new(),
             keys_done: KeySpaceRandomAccum::new(),
             keys_with_image_coverage: None,
-            layers_visited: 0,
-            delta_layers_visited: 0,
             io_concurrency,
             enable_debug: true,
             debug_state: ValueReconstructState::default(),
@@ -685,23 +677,6 @@ impl ValuesReconstructState {
         if self.enable_debug {
             self.debug_state = debug_state.clone();
         }
-    }
-
-    pub(crate) fn on_layer_visited(&mut self, layer: &ReadableLayer) {
-        self.layers_visited += 1;
-        if let ReadableLayer::PersistentLayer(layer) = layer {
-            if layer.layer_desc().is_delta() {
-                self.delta_layers_visited += 1;
-            }
-        }
-    }
-
-    pub(crate) fn get_delta_layers_visited(&self) -> u32 {
-        self.delta_layers_visited
-    }
-
-    pub(crate) fn get_layers_visited(&self) -> u32 {
-        self.layers_visited
     }
 
     /// On hitting image layer, we can mark all keys in this range as done, because

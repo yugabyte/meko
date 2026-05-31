@@ -4747,12 +4747,14 @@ impl Timeline {
             }
             (new_data, total_kb_retrieved / 1024, total_keys_retrieved)
         };
-        let delta_files_accessed = reconstruct_state.get_delta_layers_visited();
         let elapsed = begin.elapsed();
 
-        let trigger_generation = delta_files_accessed as usize >= MAX_AUX_FILE_V2_DELTAS;
+        // yb-pageserver doesn't traverse layer files for reads, so no
+        // delta count is available. Honour Initial mode (force-generate)
+        // and short-circuit Try mode (the heuristic always said "no").
+        let trigger_generation = false;
         info!(
-            "metadata key compaction: trigger_generation={trigger_generation}, delta_files_accessed={delta_files_accessed}, total_kb_retrieved={total_kb_retrieved}, total_keys_retrieved={total_keys_retrieved}, read_time={}s",
+            "metadata key compaction: trigger_generation={trigger_generation}, total_kb_retrieved={total_kb_retrieved}, total_keys_retrieved={total_keys_retrieved}, read_time={}s",
             elapsed.as_secs_f64()
         );
 
