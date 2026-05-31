@@ -341,12 +341,6 @@ pub struct TenantShard {
     pub(crate) pagestream_throttle_metrics: Arc<crate::metrics::tenant_throttling::Pagestream>,
 
     /// An ongoing timeline detach concurrency limiter.
-    ///
-    /// As a tenant will likely be restarted as part of timeline detach ancestor it makes no sense
-    /// to have two running at the same time. A different one can be started if an earlier one
-    /// has failed for whatever reason.
-    ongoing_timeline_detach: std::sync::Mutex<Option<(TimelineId, utils::completion::Barrier)>>,
-
     /// `index_part.json` based gc blocking reason tracking.
     ///
     /// New gc iterations must start a new iteration by acquiring `GcBlock::start` before
@@ -3763,7 +3757,6 @@ impl TenantShard {
                 crate::metrics::tenant_throttling::Pagestream::new(&tenant_shard_id),
             ),
             tenant_conf: Arc::new(ArcSwap::from_pointee(attached_conf)),
-            ongoing_timeline_detach: std::sync::Mutex::default(),
             gc_block: Default::default(),
             basebackup_cache,
             compute_page_store,
