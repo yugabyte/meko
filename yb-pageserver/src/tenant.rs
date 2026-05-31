@@ -1238,13 +1238,6 @@ impl TenantShard {
 
         timeline.remote_client.init_upload_queue(&index_part)?;
 
-        timeline
-            .load_layer_map(disk_consistent_lsn, index_part)
-            .await
-            .with_context(|| {
-                format!("Failed to load layermap for timeline {tenant_id}/{timeline_id}")
-            })?;
-
         // When unarchiving, we've mostly likely lost the heatmap generated prior
         // to the archival operation. To allow warming this timeline up, generate
         // a previous heatmap which contains all visible layers in the layer map.
