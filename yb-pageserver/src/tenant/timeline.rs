@@ -2200,21 +2200,6 @@ impl Timeline {
     }
 
 
-    pub(crate) fn get_pitr_interval(&self) -> Duration {
-        let tenant_conf = &self.tenant_conf.load().tenant_conf;
-        tenant_conf
-            .pitr_interval
-            .unwrap_or(self.conf.default_tenant_conf.pitr_interval)
-    }
-
-
-    fn get_compaction_target_size(&self) -> u64 {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .compaction_target_size
-            .unwrap_or(self.conf.default_tenant_conf.compaction_target_size)
-    }
 
 
     /// Returns `true` if the rel_size_v2 config is enabled. NOTE: the write path and read path
@@ -2957,39 +2942,6 @@ impl Timeline {
             .expect("only this task sets it");
     }
 
-    pub(crate) fn spawn_ondemand_logical_size_calculation(
-        self: &Arc<Self>,
-        lsn: Lsn,
-        cause: LogicalSizeCalculationCause,
-        ctx: RequestContext,
-    ) -> oneshot::Receiver<Result<u64, CalculateLogicalSizeError>> {
-        let (sender, receiver) = oneshot::channel();
-        let self_clone = Arc::clone(self);
-        // XXX if our caller loses interest, i.e., ctx is cancelled,
-        // we should stop the size calculation work and return an error.
-        // That would require restructuring this function's API to
-        // return the result directly, instead of a Receiver for the result.
-        let ctx = ctx.detached_child(
-            TaskKind::OndemandLogicalSizeCalculation,
-            DownloadBehavior::Download,
-        );
-        task_mgr::spawn(
-            task_mgr::BACKGROUND_RUNTIME.handle(),
-            task_mgr::TaskKind::OndemandLogicalSizeCalculation,
-            self.tenant_shard_id,
-            Some(self.timeline_id),
-            "ondemand logical size calculation",
-            async move {
-                let res = self_clone
-                    .logical_size_calculation_task(lsn, cause, &ctx)
-                    .await;
-                let _ = sender.send(res).ok();
-                Ok(()) // Receiver is responsible for handling errors
-            }
-            .in_current_span(),
-        );
-        receiver
-    }
 
     #[instrument(skip_all)]
     async fn logical_size_calculation_task(
