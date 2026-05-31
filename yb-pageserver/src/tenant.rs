@@ -351,10 +351,6 @@ pub struct TenantShard {
     cached_logical_sizes: tokio::sync::Mutex<HashMap<(TimelineId, Lsn), u64>>,
     cached_synthetic_tenant_size: Arc<AtomicU64>,
 
-    /// Track repeated failures to compact, so that we can back off.
-    /// Overhead of mutex is acceptable because compaction is done with a multi-second period.
-    compaction_circuit_breaker: std::sync::Mutex<CircuitBreaker>,
-
     /// Signals the tenant compaction loop that there is L0 compaction work to be done.
     pub(crate) l0_compaction_trigger: Arc<Notify>,
 
@@ -4306,14 +4302,6 @@ impl TenantShard {
             state,
             cached_logical_sizes: tokio::sync::Mutex::new(HashMap::new()),
             cached_synthetic_tenant_size: Arc::new(AtomicU64::new(0)),
-            compaction_circuit_breaker: std::sync::Mutex::new(CircuitBreaker::new(
-                format!("compaction-{tenant_shard_id}"),
-                5,
-                // Compaction can be a very expensive operation, and might leak disk space.  It also ought
-                // to be infallible, as long as remote storage is available.  So if it repeatedly fails,
-                // use an extremely long backoff.
-                Some(Duration::from_secs(3600 * 24)),
-            )),
             l0_compaction_trigger: Arc::new(Notify::new()),
             activate_now_sem: tokio::sync::Semaphore::new(0),
             attach_wal_lag_cooldown: Arc::new(std::sync::OnceLock::new()),

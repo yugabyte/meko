@@ -342,8 +342,6 @@ pub struct Timeline {
     // garbage collecting data that is still needed by the child timelines.
     pub(crate) gc_info: std::sync::RwLock<GcInfo>,
 
-    pub(crate) last_image_layer_creation_status: ArcSwap<LastImageLayerCreationStatus>,
-
     // It may change across major versions so for simplicity
     // keep it after running initdb for a timeline.
     // It is needed in checks when we want to error on some operations
@@ -3452,10 +3450,6 @@ impl Timeline {
                 write_lock: tokio::sync::Mutex::new(None),
 
                 gc_info: std::sync::RwLock::new(GcInfo::default()),
-
-                last_image_layer_creation_status: ArcSwap::new(Arc::new(
-                    LastImageLayerCreationStatus::default(),
-                )),
 
                 applied_gc_cutoff_lsn: Rcu::new(metadata.latest_gc_cutoff_lsn()),
                 initdb_lsn: metadata.initdb_lsn(),
