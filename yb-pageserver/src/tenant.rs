@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::fs::File;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::{fmt, fs};
@@ -84,7 +84,7 @@ use crate::l0_flush::L0FlushGlobalState;
 use crate::metrics::{
     BROKEN_TENANTS_SET, CONCURRENT_INITDBS,
     INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME, TENANT, TENANT_OFFLOADED_TIMELINES,
-    TENANT_STATE_METRIC, TENANT_SYNTHETIC_SIZE_METRIC, TIMELINE_STATE_METRIC,
+    TENANT_STATE_METRIC, TIMELINE_STATE_METRIC,
     remove_tenant_metrics,
 };
 use crate::task_mgr::TaskKind;
@@ -128,13 +128,12 @@ pub mod upload_queue;
 
 pub(crate) mod timeline;
 
-pub mod size;
 
 mod gc_block;
 mod gc_result;
 pub(crate) mod throttle;
 
-pub(crate) use timeline::{LogicalSizeCalculationCause, PageReconstructError, Timeline};
+pub(crate) use timeline::{PageReconstructError, Timeline};
 
 pub(crate) use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
 // re-export for use in walreceiver
@@ -330,10 +329,6 @@ pub struct TenantShard {
 
     /// A channel to send async requests to prepare a basebackup for the basebackup cache.
     basebackup_cache: Arc<BasebackupCache>,
-
-    /// Cached logical sizes updated updated on each [`TenantShard::gather_size_inputs`].
-    cached_logical_sizes: tokio::sync::Mutex<HashMap<(TimelineId, Lsn), u64>>,
-    cached_synthetic_tenant_size: Arc<AtomicU64>,
 
     /// Signals the tenant compaction loop that there is L0 compaction work to be done.
     pub(crate) l0_compaction_trigger: Arc<Notify>,
@@ -4094,8 +4089,6 @@ impl TenantShard {
             remote_storage,
             deletion_queue_client,
             state,
-            cached_logical_sizes: tokio::sync::Mutex::new(HashMap::new()),
-            cached_synthetic_tenant_size: Arc::new(AtomicU64::new(0)),
             l0_compaction_trigger: Arc::new(Notify::new()),
             activate_now_sem: tokio::sync::Semaphore::new(0),
             attach_wal_lag_cooldown: Arc::new(std::sync::OnceLock::new()),
@@ -5125,86 +5118,6 @@ impl TenantShard {
         }
 
         Ok(create_guard)
-    }
-
-    /// Gathers inputs from all of the timelines to produce a sizing model input.
-    ///
-    /// Future is cancellation safe. Only one calculation can be running at once per tenant.
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug()))]
-    pub async fn gather_size_inputs(
-        &self,
-        // `max_retention_period` overrides the cutoff that is used to calculate the size
-        // (only if it is shorter than the real cutoff).
-        max_retention_period: Option<u64>,
-        cause: LogicalSizeCalculationCause,
-        cancel: &CancellationToken,
-        ctx: &RequestContext,
-    ) -> Result<size::ModelInputs, size::CalculateSyntheticSizeError> {
-        let logical_sizes_at_once = self
-            .conf
-            .concurrent_tenant_size_logical_size_queries
-            .inner();
-
-        // TODO: Having a single mutex block concurrent reads is not great for performance.
-        //
-        // But the only case where we need to run multiple of these at once is when we
-        // request a size for a tenant manually via API, while another background calculation
-        // is in progress (which is not a common case).
-        //
-        // See more for on the issue #2748 condenced out of the initial PR review.
-        let mut shared_cache = tokio::select! {
-            locked = self.cached_logical_sizes.lock() => locked,
-            _ = cancel.cancelled() => return Err(size::CalculateSyntheticSizeError::Cancelled),
-            _ = self.cancel.cancelled() => return Err(size::CalculateSyntheticSizeError::Cancelled),
-        };
-
-        size::gather_inputs(
-            self,
-            logical_sizes_at_once,
-            max_retention_period,
-            &mut shared_cache,
-            cause,
-            cancel,
-            ctx,
-        )
-        .await
-    }
-
-    /// Calculate synthetic tenant size and cache the result.
-    /// This is periodically called by background worker.
-    /// result is cached in tenant struct
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug()))]
-    pub async fn calculate_synthetic_size(
-        &self,
-        cause: LogicalSizeCalculationCause,
-        cancel: &CancellationToken,
-        ctx: &RequestContext,
-    ) -> Result<u64, size::CalculateSyntheticSizeError> {
-        let inputs = self.gather_size_inputs(None, cause, cancel, ctx).await?;
-
-        let size = inputs.calculate();
-
-        self.set_cached_synthetic_size(size);
-
-        Ok(size)
-    }
-
-    /// Cache given synthetic size and update the metric value
-    pub fn set_cached_synthetic_size(&self, size: u64) {
-        self.cached_synthetic_tenant_size
-            .store(size, Ordering::Relaxed);
-
-        // Only shard zero should be calculating synthetic sizes
-        debug_assert!(self.shard_identity.is_shard_zero());
-
-        TENANT_SYNTHETIC_SIZE_METRIC
-            .get_metric_with_label_values(&[&self.tenant_shard_id.tenant_id.to_string()])
-            .unwrap()
-            .set(size);
-    }
-
-    pub fn cached_synthetic_size(&self) -> u64 {
-        self.cached_synthetic_tenant_size.load(Ordering::Relaxed)
     }
 
     /// Flush any in-progress layers, schedule uploads, and wait for uploads to complete.

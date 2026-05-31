@@ -37,7 +37,7 @@ use pageserver_api::key::{
 };
 use pageserver_api::keyspace::{KeySpaceAccum, KeySpaceRandomAccum, SparseKeyPartitioning};
 use pageserver_api::models::{
-    DetachBehavior, DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, InMemoryLayerInfo, LayerMapInfo, LsnLease, PageTraceEvent, RelSizeMigration,
+    DetachBehavior, DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, LayerMapInfo, LsnLease, PageTraceEvent, RelSizeMigration,
     TimelineState,
 };
 use pageserver_api::reltag::{BlockNumber, RelTag};
@@ -89,8 +89,7 @@ use crate::metrics::{
 };
 use crate::page_service::TenantManagerTypes;
 use crate::pgdatadir_mapping::{
-    CalculateLogicalSizeError, CollectKeySpaceError, DirectoryKind, LsnForTimestamp,
-    MAX_AUX_FILE_V2_DELTAS, MetricsUpdate,
+    CalculateLogicalSizeError, CollectKeySpaceError, DirectoryKind, LsnForTimestamp, MetricsUpdate,
 };
 use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;

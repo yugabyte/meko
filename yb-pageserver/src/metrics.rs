@@ -1081,15 +1081,6 @@ pub(crate) static BROKEN_TENANTS_SET: Lazy<UIntGaugeVec> = Lazy::new(|| {
     .expect("Failed to register pageserver_tenant_states_count metric")
 });
 
-pub(crate) static TENANT_SYNTHETIC_SIZE_METRIC: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_tenant_synthetic_cached_size_bytes",
-        "Synthetic size of each tenant in bytes",
-        &["tenant_id"]
-    )
-    .expect("Failed to register pageserver_tenant_synthetic_cached_size_bytes metric")
-});
-
 pub(crate) static TENANT_OFFLOADED_TIMELINES: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_tenant_offloaded_timelines",
@@ -3603,10 +3594,6 @@ pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantShardId) {
     let tid = tenant_shard_id.tenant_id.to_string();
     let shard_id = tenant_shard_id.shard_slug().to_string();
 
-    // Only shard zero deals in synthetic sizes
-    if tenant_shard_id.is_shard_zero() {
-        let _ = TENANT_SYNTHETIC_SIZE_METRIC.remove_label_values(&[&tid]);
-    }
     let _ = TENANT_OFFLOADED_TIMELINES.remove_label_values(&[&tid, &shard_id]);
 
     tenant_throttling::remove_tenant_metrics(tenant_shard_id);

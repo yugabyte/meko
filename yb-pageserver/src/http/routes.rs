@@ -47,8 +47,6 @@ use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeTravelError};
 use scopeguard::defer;
 use serde_json::json;
-use tenant_size_model::svg::SvgBranchKind;
-use tenant_size_model::{SizeResult, StorageModel};
 use tokio::time::Instant;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
@@ -75,14 +73,13 @@ use crate::tenant::remote_timeline_client::index::GcCompactionState;
 use crate::tenant::remote_timeline_client::{
     download_index_part, download_tenant_manifest, list_remote_tenant_shards, list_remote_timelines,
 };
-use crate::tenant::size::ModelInputs;
 use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerName};
 use crate::tenant::timeline::{
     CompactFlags, MarkInvisibleRequest, Timeline, WaitLsnTimeout,
     WaitLsnWaiter, import_pgdata,
 };
 use crate::tenant::{
-    GetTimelineError, LogicalSizeCalculationCause, OffloadedTimeline, PageReconstructError,
+    GetTimelineError, OffloadedTimeline, PageReconstructError,
     remote_timeline_client,
 };
 use crate::{DEFAULT_PG_VERSION, tenant};
@@ -1290,99 +1287,6 @@ async fn tenant_delete_handler(
     json_response(StatusCode::OK, ())
 }
 
-/// HTTP endpoint to query the current tenant_size of a tenant.
-///
-/// Debug endpoint for tenant-size-model inputs. Requires `tenant_id` request parameter, supports
-/// `inputs_only=true|false` (default false) which supports debugging failure to calculate model
-/// values.
-///
-/// 'retention_period' query parameter overrides the cutoff that is used to calculate the size
-/// (only if it is shorter than the real cutoff).
-///
-/// Note: we don't update the cached size and prometheus metric here.
-/// The retention period might be different, and it's nice to have a method to just calculate it
-/// without modifying anything anyway.
-async fn tenant_size_handler(
-    request: Request<Body>,
-    cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-    let inputs_only: Option<bool> = parse_query_param(&request, "inputs_only")?;
-    let retention_period: Option<u64> = parse_query_param(&request, "retention_period")?;
-    let headers = request.headers();
-    let state = get_state(&request);
-
-    if !tenant_shard_id.is_shard_zero() {
-        return Err(ApiError::BadRequest(anyhow!(
-            "Size calculations are only available on shard zero"
-        )));
-    }
-
-    let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
-    let tenant = state
-        .tenant_manager
-        .get_attached_tenant_shard(tenant_shard_id)?;
-    tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
-
-    // this can be long operation
-    let inputs = tenant
-        .gather_size_inputs(
-            retention_period,
-            LogicalSizeCalculationCause::TenantSizeHandler,
-            &cancel,
-            &ctx,
-        )
-        .await
-        .map_err(|e| match e {
-            crate::tenant::size::CalculateSyntheticSizeError::Cancelled => ApiError::ShuttingDown,
-            other => ApiError::InternalServerError(anyhow::anyhow!(other)),
-        })?;
-
-    let mut sizes = None;
-    let accepts_html = headers
-        .get(header::ACCEPT)
-        .map(|v| v == "text/html")
-        .unwrap_or_default();
-    if !inputs_only.unwrap_or(false) {
-        let storage_model = inputs.calculate_model();
-        let size = storage_model.calculate();
-
-        // If request header expects html, return html
-        if accepts_html {
-            return synthetic_size_html_response(inputs, storage_model, size);
-        }
-        sizes = Some(size);
-    } else if accepts_html {
-        return Err(ApiError::BadRequest(anyhow!(
-            "inputs_only parameter is incompatible with html output request"
-        )));
-    }
-
-    /// The type resides in the pageserver not to expose `ModelInputs`.
-    #[derive(serde::Serialize)]
-    struct TenantHistorySize {
-        id: TenantId,
-        /// Size is a mixture of WAL and logical size, so the unit is bytes.
-        ///
-        /// Will be none if `?inputs_only=true` was given.
-        size: Option<u64>,
-        /// Size of each segment used in the model.
-        /// Will be null if `?inputs_only=true` was given.
-        segment_sizes: Option<Vec<tenant_size_model::SegmentSizeResult>>,
-        inputs: crate::tenant::size::ModelInputs,
-    }
-
-    json_response(
-        StatusCode::OK,
-        TenantHistorySize {
-            id: tenant_shard_id.tenant_id,
-            size: sizes.as_ref().map(|x| x.total_size),
-            segment_sizes: sizes.map(|x| x.segments),
-            inputs,
-        },
-    )
-}
 
 async fn tenant_shard_split_handler(
     mut request: Request<Body>,
@@ -1635,57 +1539,6 @@ async fn block_or_unblock_gc(
     json_response(StatusCode::OK, ())
 }
 
-/// Get tenant_size SVG graph along with the JSON data.
-fn synthetic_size_html_response(
-    inputs: ModelInputs,
-    storage_model: StorageModel,
-    sizes: SizeResult,
-) -> Result<Response<Body>, ApiError> {
-    let mut timeline_ids: Vec<String> = Vec::new();
-    let mut timeline_map: HashMap<TimelineId, usize> = HashMap::new();
-    for (index, ti) in inputs.timeline_inputs.iter().enumerate() {
-        timeline_map.insert(ti.timeline_id, index);
-        timeline_ids.push(ti.timeline_id.to_string());
-    }
-    let seg_to_branch: Vec<(usize, SvgBranchKind)> = inputs
-        .segments
-        .iter()
-        .map(|seg| {
-            (
-                *timeline_map.get(&seg.timeline_id).unwrap(),
-                seg.kind.into(),
-            )
-        })
-        .collect();
-
-    let svg =
-        tenant_size_model::svg::draw_svg(&storage_model, &timeline_ids, &seg_to_branch, &sizes)
-            .map_err(ApiError::InternalServerError)?;
-
-    let mut response = String::new();
-
-    use std::fmt::Write;
-    write!(response, "<html>\n<body>\n").unwrap();
-    write!(response, "<div>\n{svg}\n</div>").unwrap();
-    writeln!(response, "Project size: {}", sizes.total_size).unwrap();
-    writeln!(response, "<pre>").unwrap();
-    writeln!(
-        response,
-        "{}",
-        serde_json::to_string_pretty(&inputs).unwrap()
-    )
-    .unwrap();
-    writeln!(
-        response,
-        "{}",
-        serde_json::to_string_pretty(&sizes.segments).unwrap()
-    )
-    .unwrap();
-    writeln!(response, "</pre>").unwrap();
-    write!(response, "</body>\n</html>\n").unwrap();
-
-    html_response(StatusCode::OK, response)
-}
 
 pub fn html_response(status: StatusCode, data: String) -> Result<Response<Body>, ApiError> {
     let response = Response::builder()
@@ -3401,9 +3254,6 @@ pub fn make_router(
         })
         .delete("/v1/tenant/:tenant_shard_id", |r| {
             api_handler(r, tenant_delete_handler)
-        })
-        .get("/v1/tenant/:tenant_shard_id/synthetic_size", |r| {
-            api_handler(r, tenant_size_handler)
         })
         .patch("/v1/tenant/config", |r| {
             api_handler(r, patch_tenant_config_handler)

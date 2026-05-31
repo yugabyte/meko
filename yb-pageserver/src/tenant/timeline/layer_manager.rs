@@ -19,7 +19,7 @@ use crate::metrics::TimelineMetrics;
 use crate::tenant::layer_map::{BatchedUpdates, LayerMap};
 use crate::tenant::storage_layer::{
     AsLayerDesc, InMemoryLayer, Layer, PersistentLayerDesc,
-    PersistentLayerKey, ReadableLayerWeak, ResidentLayer,
+    PersistentLayerKey, ResidentLayer,
 };
 
 /// Warn if the lock was held for longer than this threshold.
