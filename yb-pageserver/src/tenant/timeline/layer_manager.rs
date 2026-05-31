@@ -289,10 +289,6 @@ impl LayerManager {
             .filter(|l| l.visibility() == LayerVisibilityHint::Visible)
     }
 
-    pub(crate) fn contains(&self, layer: &Layer) -> bool {
-        self.contains_key(&layer.layer_desc().key())
-    }
-
     pub(crate) fn contains_key(&self, key: &PersistentLayerKey) -> bool {
         self.layers().contains_key(key)
     }
@@ -359,18 +355,6 @@ impl std::fmt::Debug for OpenLayerManager {
 pub(crate) struct Shutdown;
 
 impl OpenLayerManager {
-    /// Called from `load_layer_map`. Initialize the layer manager with:
-    /// 1. all on-disk layers
-    /// 2. next open layer (with disk disk_consistent_lsn LSN)
-    pub(crate) fn initialize_local_layers(&mut self, layers: Vec<Layer>, next_open_layer_at: Lsn) {
-        let mut updates = self.layer_map.batch_update();
-        for layer in layers {
-            Self::insert_historic_layer(layer, &mut updates, &mut self.layer_fmgr);
-        }
-        updates.flush();
-        self.layer_map.next_open_layer_at = Some(next_open_layer_at);
-    }
-
     /// Initialize when creating a new timeline, called in `init_empty_layer_map`.
     pub(crate) fn initialize_empty(&mut self, next_open_layer_at: Lsn) {
         self.layer_map.next_open_layer_at = Some(next_open_layer_at);
@@ -526,54 +510,6 @@ impl OpenLayerManager {
             metrics.record_new_file_metrics(l.layer_desc().file_size);
             updates.flush();
         }
-    }
-
-    /// Called when compaction is completed.
-    pub(crate) fn finish_compact_l0(
-        &mut self,
-        compact_from: &[Layer],
-        compact_to: &[ResidentLayer],
-        metrics: &TimelineMetrics,
-    ) {
-        let mut updates = self.layer_map.batch_update();
-        for l in compact_to {
-            Self::insert_historic_layer(l.as_ref().clone(), &mut updates, &mut self.layer_fmgr);
-            metrics.record_new_file_metrics(l.layer_desc().file_size);
-        }
-        for l in compact_from {
-            Self::delete_historic_layer(l, &mut updates, &mut self.layer_fmgr);
-        }
-        updates.flush();
-    }
-
-    /// Called when a GC-compaction is completed.
-    pub(crate) fn finish_gc_compaction(
-        &mut self,
-        compact_from: &[Layer],
-        compact_to: &[ResidentLayer],
-        metrics: &TimelineMetrics,
-    ) {
-        // gc-compaction could contain layer rewrites. We need to delete the old layers and insert the new ones.
-
-        // Match the old layers with the new layers
-        let mut add_layers = HashMap::new();
-        let mut rewrite_layers = HashMap::new();
-        let mut drop_layers = HashMap::new();
-        for layer in compact_from {
-            drop_layers.insert(layer.layer_desc().key(), layer.clone());
-        }
-        for layer in compact_to {
-            if let Some(old_layer) = drop_layers.remove(&layer.layer_desc().key()) {
-                rewrite_layers.insert(layer.layer_desc().key(), (old_layer.clone(), layer.clone()));
-            } else {
-                add_layers.insert(layer.layer_desc().key(), layer.clone());
-            }
-        }
-        let add_layers = add_layers.values().cloned().collect::<Vec<_>>();
-        let drop_layers = drop_layers.values().cloned().collect::<Vec<_>>();
-        let rewrite_layers = rewrite_layers.values().cloned().collect::<Vec<_>>();
-
-        self.rewrite_layers_inner(&rewrite_layers, &drop_layers, &add_layers, metrics);
     }
 
     /// Called post-compaction when some previous generation image layers were trimmed.
