@@ -1,8 +1,5 @@
 //! Common traits and structs for layers
 
-pub mod delta_layer;
-pub mod errors;
-pub mod image_layer;
 pub mod inmemory_layer;
 pub(crate) mod layer;
 mod layer_desc;
@@ -15,10 +12,8 @@ use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-pub use delta_layer::{DeltaLayer, DeltaLayerWriter, ValueRef};
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-pub use image_layer::{ImageLayer, ImageLayerWriter};
 pub use inmemory_layer::InMemoryLayer;
 pub(crate) use layer::{EvictionError, Layer, ResidentLayer};
 pub use layer_desc::{PersistentLayerDesc, PersistentLayerKey};

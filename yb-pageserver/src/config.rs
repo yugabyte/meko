@@ -29,7 +29,6 @@ use storage_broker::Uri;
 use utils::id::{NodeId, TimelineId};
 use utils::logging::{LogFormat, SecretString};
 
-use crate::tenant::storage_layer::inmemory_layer::IndexEntry;
 use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
 use crate::virtual_file::io_engine;
 use crate::{TENANT_LOCATION_CONFIG_NAME, virtual_file};
@@ -593,15 +592,6 @@ impl PageServerConf {
                 )
             );
         }
-
-        IndexEntry::validate_checkpoint_distance(conf.default_tenant_conf.checkpoint_distance)
-            .map_err(anyhow::Error::msg)
-            .with_context(|| {
-                format!(
-                    "effective checkpoint distance is unsupported: {}",
-                    conf.default_tenant_conf.checkpoint_distance
-                )
-            })?;
 
         if let PageServicePipeliningConfig::Pipelined(PageServicePipeliningConfigPipelined {
             max_batch_size,

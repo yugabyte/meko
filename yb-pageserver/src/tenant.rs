@@ -92,7 +92,7 @@ pub use crate::tenant::remote_timeline_client::index::IndexPart;
 use crate::tenant::remote_timeline_client::{
     INITDB_PATH, MaybeDeletedIndexPart, remote_initdb_archive_path,
 };
-use crate::tenant::storage_layer::{DeltaLayer, ImageLayer};
+
 use crate::tenant::timeline::delete::DeleteTimelineFlow;
 use crate::tenant::timeline::uninit::cleanup_timeline_directory;
 use crate::virtual_file::VirtualFile;
@@ -106,11 +106,6 @@ use utils::generation::Generation;
 use utils::id::TimelineId;
 use utils::lsn::{Lsn, RecordLsn};
 
-pub mod blob_io;
-pub mod block_io;
-pub mod vectored_blob_io;
-
-pub mod disk_btree;
 pub mod layer_map;
 
 pub mod metadata;
@@ -1292,12 +1287,6 @@ impl TenantShard {
                         // The attach task owns the tenant state until activated.
                         state => panic!("invalid tenant state {state} during attach: {err:?}"),
                     });
-                }
-
-                // TODO: should also be rejecting tenant conf changes that violate this check.
-                if let Err(e) = crate::tenant::storage_layer::inmemory_layer::IndexEntry::validate_checkpoint_distance(tenant_clone.get_checkpoint_distance()) {
-                    make_broken_or_stopping(&tenant_clone, anyhow::anyhow!(e));
-                    return Ok(());
                 }
 
                 let mut init_order = init_order;
@@ -4975,34 +4964,4 @@ async fn run_initdb(
     res
 }
 
-/// Dump contents of a layer file to stdout.
-pub async fn dump_layerfile_from_path(
-    path: &Utf8Path,
-    verbose: bool,
-    ctx: &RequestContext,
-) -> anyhow::Result<()> {
-    use std::os::unix::fs::FileExt;
-
-    // All layer files start with a two-byte "magic" value, to identify the kind of
-    // file.
-    let file = File::open(path)?;
-    let mut header_buf = [0u8; 2];
-    file.read_exact_at(&mut header_buf, 0)?;
-
-    match u16::from_be_bytes(header_buf) {
-        crate::IMAGE_FILE_MAGIC => {
-            ImageLayer::new_for_path(path, file)?
-                .dump(verbose, ctx)
-                .await?
-        }
-        crate::DELTA_FILE_MAGIC => {
-            DeltaLayer::new_for_path(path, file)?
-                .dump(verbose, ctx)
-                .await?
-        }
-        magic => bail!("unrecognized magic identifier: {:?}", magic),
-    }
-
-    Ok(())
-}
 

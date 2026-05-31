@@ -733,16 +733,6 @@ impl From<PageReconstructError> for CreateImageLayersError {
     }
 }
 
-impl From<super::storage_layer::errors::PutError> for CreateImageLayersError {
-    fn from(e: super::storage_layer::errors::PutError) -> Self {
-        if e.is_cancel() {
-            CreateImageLayersError::Cancelled
-        } else {
-            CreateImageLayersError::Other(e.into_anyhow())
-        }
-    }
-}
-
 impl From<GetVectoredError> for CreateImageLayersError {
     fn from(e: GetVectoredError) -> Self {
         match e {
