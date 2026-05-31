@@ -170,10 +170,6 @@ impl<'t> UninitializedTimeline<'t> {
         }
     }
 
-    pub(crate) fn finish_creation_myself(&mut self) -> (Arc<Timeline>, TimelineCreateGuard) {
-        self.raw_timeline.take().expect("already checked")
-    }
-
     /// Prepares timeline data by loading it from the basebackup archive.
     pub(crate) async fn import_basebackup_from_tar(
         mut self,

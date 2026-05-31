@@ -318,13 +318,6 @@ impl<T> Default for LayerFileManager<T> {
 }
 
 impl<T: AsLayerDesc + Clone> LayerFileManager<T> {
-    pub(crate) fn insert(&mut self, layer: T) {
-        let present = self.0.insert(layer.layer_desc().key(), layer.clone());
-        if present.is_some() && cfg!(debug_assertions) {
-            panic!("overwriting a layer: {:?}", layer.layer_desc())
-        }
-    }
-
     pub(crate) fn remove(&mut self, layer: &T) {
         let present = self.0.remove(&layer.layer_desc().key());
         if present.is_none() && cfg!(debug_assertions) {
