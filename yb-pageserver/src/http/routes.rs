@@ -77,7 +77,6 @@ use crate::tenant::remote_timeline_client::{
 };
 use crate::tenant::size::ModelInputs;
 use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerName};
-use crate::tenant::timeline::offload::{OffloadError, offload_timeline};
 use crate::tenant::timeline::{
     CompactFlags, MarkInvisibleRequest, Timeline, WaitLsnTimeout,
     WaitLsnWaiter, import_pgdata,
@@ -2111,55 +2110,6 @@ async fn timeline_mark_invisible_handler(
     .await
 }
 
-// Run offload immediately on given timeline.
-async fn timeline_offload_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-
-    let state = get_state(&request);
-
-    async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_shard_id)?;
-
-        if tenant.get_offloaded_timeline(timeline_id).is_ok() {
-            return json_response(StatusCode::OK, ());
-        }
-        let timeline =
-            active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id)
-                .await?;
-
-        if !tenant.timeline_has_no_attached_children(timeline_id) {
-            return Err(ApiError::PreconditionFailed(
-                "timeline has attached children".into(),
-            ));
-        }
-        if let (false, reason) = timeline.can_offload() {
-            return Err(ApiError::PreconditionFailed(
-                format!("Timeline::can_offload() check failed: {reason}") .into(),
-            ));
-        }
-        offload_timeline(&tenant, &timeline)
-            .await
-            .map_err(|e| {
-                match e {
-                    OffloadError::Cancelled => ApiError::ResourceUnavailable("Timeline shutting down".into()),
-                    OffloadError::AlreadyInProgress => ApiError::Conflict("Timeline already being offloaded or deleted".into()),
-                    _ => ApiError::InternalServerError(anyhow!(e))
-                }
-            })?;
-
-        json_response(StatusCode::OK, ())
-    }
-    .instrument(info_span!("manual_timeline_offload", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
-    .await
-}
-
 // Run checkpoint immediately on given timeline.
 async fn timeline_checkpoint_handler(
     request: Request<Body>,
@@ -3523,10 +3473,6 @@ pub fn make_router(
         .put(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/do_gc",
             |r| api_handler(r, timeline_gc_handler),
-        )
-        .put(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/offload",
-            |r| testing_api_handler("attempt timeline offload", r, timeline_offload_handler),
         )
         .put(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/mark_invisible",

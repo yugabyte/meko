@@ -4,7 +4,6 @@ pub(crate) mod handle;
 pub(crate) mod import_pgdata;
 pub mod layer_manager;
 pub(crate) mod logical_size;
-pub mod offload;
 pub mod uninit;
 mod walreceiver;
 
