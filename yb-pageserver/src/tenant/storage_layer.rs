@@ -292,12 +292,6 @@ pub struct ValuesReconstructState {
     /// The keys which are already retrieved
     keys_done: KeySpaceRandomAccum,
 
-    /// The keys covered by the image layers
-    keys_with_image_coverage: Option<Range<Key>>,
-
-    pub(crate) enable_debug: bool,
-    pub(crate) debug_state: ValueReconstructState,
-
     pub(crate) io_concurrency: IoConcurrency,
     num_active_ios: Arc<AtomicUsize>,
 }
@@ -641,22 +635,7 @@ impl ValuesReconstructState {
         Self {
             keys: HashMap::new(),
             keys_done: KeySpaceRandomAccum::new(),
-            keys_with_image_coverage: None,
             io_concurrency,
-            enable_debug: false,
-            debug_state: ValueReconstructState::default(),
-            num_active_ios: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    pub(crate) fn new_with_debug(io_concurrency: IoConcurrency) -> Self {
-        Self {
-            keys: HashMap::new(),
-            keys_done: KeySpaceRandomAccum::new(),
-            keys_with_image_coverage: None,
-            io_concurrency,
-            enable_debug: true,
-            debug_state: ValueReconstructState::default(),
             num_active_ios: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -667,22 +646,6 @@ impl ValuesReconstructState {
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         self.io_concurrency.spawn_io(fut).await;
-    }
-
-    pub(crate) fn set_debug_state(&mut self, debug_state: &ValueReconstructState) {
-        if self.enable_debug {
-            self.debug_state = debug_state.clone();
-        }
-    }
-
-    /// On hitting image layer, we can mark all keys in this range as done, because
-    /// if the image layer does not contain a key, it is deleted/never added.
-    pub(crate) fn on_image_layer_visited(&mut self, key_range: &Range<Key>) {
-        let prev_val = self.keys_with_image_coverage.replace(key_range.clone());
-        assert_eq!(
-            prev_val, None,
-            "should consume the keyspace before the next iteration"
-        );
     }
 
     /// Update the state collected for a given key.
@@ -730,15 +693,6 @@ impl ValuesReconstructState {
         required_io
     }
 
-    /// Returns the key space describing the keys that have
-    /// been marked as completed since the last call to this function.
-    /// Returns individual keys done, and the image layer coverage.
-    pub(crate) fn consume_done_keys(&mut self) -> (KeySpace, Option<Range<Key>>) {
-        (
-            self.keys_done.consume_keyspace(),
-            self.keys_with_image_coverage.take(),
-        )
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
