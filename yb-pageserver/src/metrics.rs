@@ -30,7 +30,6 @@ use utils::id::TimelineId;
 
 use crate::config;
 use crate::config::PageServerConf;
-use crate::context::RequestContext;
 use crate::pgdatadir_mapping::DatadirModificationStats;
 use crate::task_mgr::TaskKind;
 use crate::tenant::mgr::TenantSlot;

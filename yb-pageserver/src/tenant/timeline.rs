@@ -20,9 +20,6 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use handle::ShardTimelineId;
-use layer_manager::{
-    LayerManagerLockHolder, LockedLayerManager,
-};
 
 use once_cell::sync::Lazy;
 use pageserver_api::config::tenant_conf_defaults::DEFAULT_PITR_INTERVAL;
@@ -129,25 +126,6 @@ pub struct Timeline {
     shard_identity: ShardIdentity,
 
     pub pg_version: PgMajorVersion,
-
-    /// The tuple has two elements.
-    /// 1. `LayerFileManager` keeps track of the various physical representations of the layer files (inmem, local, remote).
-    /// 2. `LayerMap`, the acceleration data structure for `get_reconstruct_data`.
-    ///
-    /// `LayerMap` maps out the `(PAGE,LSN) / (KEY,LSN)` space, which is composed of `(KeyRange, LsnRange)` rectangles.
-    /// We describe these rectangles through the `PersistentLayerDesc` struct.
-    ///
-    /// When we want to reconstruct a page, we first find the `PersistentLayerDesc`'s that we need for page reconstruction,
-    /// using `LayerMap`. Then, we use `LayerFileManager` to get the `PersistentLayer`'s that correspond to the
-    /// `PersistentLayerDesc`'s.
-    ///
-    /// Hence, it's important to keep things coherent. The `LayerFileManager` must always have an entry for all
-    /// `PersistentLayerDesc`'s in the `LayerMap`. If it doesn't, `LayerFileManager::get_from_desc` will panic at
-    /// runtime, e.g., during page reconstruction.
-    ///
-    /// In the future, we'll be able to split up the tuple of LayerMap and `LayerFileManager`,
-    /// so that e.g. on-demand-download/eviction, and layer spreading, can operate just on `LayerFileManager`.
-    pub(crate) layers: LockedLayerManager,
 
     pub(crate) standby_horizon: AtomicLsn,
 
@@ -1232,15 +1210,9 @@ impl Timeline {
         self.remote_client.remote_consistent_lsn_visible()
     }
 
-    /// The sum of the file size of all historic layers in the layer map.
-    /// This method makes no distinction between local and remote layers.
-    /// Hence, the result **does not represent local filesystem usage**.
+    /// yb-mode: no layer files exist, so the sum is always 0.
     pub(crate) async fn layer_size_sum(&self) -> u64 {
-        let guard = self
-            .layers
-            .read(LayerManagerLockHolder::GetLayerMapInfo)
-            .await;
-        guard.layer_size_sum()
+        0
     }
 
     pub(crate) fn get_directory_metrics(&self) -> [u64; DirectoryKind::KINDS_NUM] {
@@ -1646,33 +1618,11 @@ impl Timeline {
         }
 
         if let ShutdownMode::FreezeAndFlush = mode {
-            let do_flush = if let Some((open, frozen)) = self
-                .layers
-                .read(LayerManagerLockHolder::Shutdown)
-                .await
-                .layer_map()
-                .map(|lm| (lm.open_layer.is_some(), lm.frozen_layers.len()))
-                .ok()
-                .filter(|(open, frozen)| *open || *frozen > 0)
-            {
-                if self.remote_client.is_archived() == Some(true) {
-                    // No point flushing on shutdown for an archived timeline: it is not important
-                    // to have it nice and fresh after our restart, and trying to flush here might
-                    // race with trying to offload it (which also stops the flush loop)
-                    false
-                } else {
-                    tracing::info!(?open, frozen, "flushing and freezing on shutdown");
-                    true
-                }
-            } else {
-                // this is double-shutdown, it'll be a no-op
-                true
-            };
+            // yb-mode: no in-memory layers to inspect; always issue the
+            // freeze_and_flush call so PageWriter has a chance to flush
+            // its pending row buffer before shutdown.
+            let do_flush = self.remote_client.is_archived() != Some(true);
 
-            // we shut down walreceiver above, so, we won't add anything more
-            // to the InMemoryLayer; freeze it and wait for all frozen layers
-            // to reach the disk & upload queue, then shut the upload queue and
-            // wait for it to drain.
             if do_flush {
                 match self.freeze_and_flush().await {
                     Ok(_) => {
@@ -1744,13 +1694,9 @@ impl Timeline {
         task_mgr::shutdown_tasks(None, Some(self.tenant_shard_id), Some(self.timeline_id)).await;
 
         {
-            // Allow any remaining in-memory layers to do cleanup -- until that, they hold the gate
-            // open.
-            let mut write_guard = self.write_lock.lock().await;
-            self.layers
-                .write(LayerManagerLockHolder::Shutdown)
-                .await
-                .shutdown(&mut write_guard);
+            // yb-mode: no in-memory layers to drop. The write_lock is
+            // still held briefly to drain any in-flight writers.
+            let _write_guard = self.write_lock.lock().await;
         }
 
         // Finally wait until any gate-holders are complete.
@@ -1845,31 +1791,15 @@ impl Timeline {
         }
     }
 
+    /// yb-mode: no layer map exists. The HTTP layer-map endpoint
+    /// returns an empty inventory.
     pub(crate) async fn layer_map_info(
         &self,
-        reset: LayerAccessStatsReset,
+        _reset: LayerAccessStatsReset,
     ) -> Result<LayerMapInfo, layer_manager::Shutdown> {
-        let guard = self
-            .layers
-            .read(LayerManagerLockHolder::GetLayerMapInfo)
-            .await;
-        let layer_map = guard.layer_map()?;
-        let mut in_memory_layers = Vec::with_capacity(layer_map.frozen_layers.len() + 1);
-        if let Some(open_layer) = &layer_map.open_layer {
-            in_memory_layers.push(open_layer.info());
-        }
-        for frozen_layer in &layer_map.frozen_layers {
-            in_memory_layers.push(frozen_layer.info());
-        }
-
-        let historic_layers = layer_map
-            .iter_historic_layers()
-            .map(|desc| guard.get_from_desc(&desc).info(reset))
-            .collect();
-
         Ok(LayerMapInfo {
-            in_memory_layers,
-            historic_layers,
+            in_memory_layers: Vec::new(),
+            historic_layers: Vec::new(),
         })
     }
 
@@ -2257,7 +2187,6 @@ impl Timeline {
                 generation,
                 shard_identity,
                 pg_version,
-                layers: Default::default(),
 
                 walredo_mgr,
                 walreceiver: Mutex::new(None),
@@ -2436,16 +2365,8 @@ impl Timeline {
         ));
     }
 
-    /// Initialize with an empty layer map. Used when creating a new timeline.
-    pub(super) fn init_empty_layer_map(&self, start_lsn: Lsn) {
-        let mut layers = self.layers.try_write(LayerManagerLockHolder::Init).expect(
-            "in the context where we call this function, no other task has access to the object",
-        );
-        layers
-            .open_mut()
-            .expect("in this context the LayerManager must still be open")
-            .initialize_empty(Lsn(start_lsn.0));
-    }
+    /// yb-mode: no layer map to initialize.
+    pub(super) fn init_empty_layer_map(&self, _start_lsn: Lsn) {}
 
     /// Retrieve current logical size of the timeline.
     ///

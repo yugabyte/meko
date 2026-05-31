@@ -48,7 +48,6 @@ use remote_timeline_client::{
 };
 use storage_broker::BrokerClientChannel;
 use timeline::import_pgdata::ImportingTimeline;
-use timeline::layer_manager::LayerManagerLockHolder;
 use timeline::{ShutdownMode, import_pgdata};
 use tokio::io::BufReader;
 use tokio::sync::{Semaphore, watch};
@@ -1137,30 +1136,10 @@ impl TenantShard {
                 }
 
                 if disk_consistent_lsn.is_valid() {
-                    // Sanity check: a timeline should have some content.
-                    // Exception 1: importing timelines might not yet have any.
-                    // Exception 2: yb-pageserver mode — page data lives in
-                    // pageserver.pages/slru_pages/meta, never in layer
-                    // files. A timeline with no ancestor + no layer files
-                    // is the normal post-restart state when
-                    // `compute_page_store` is set.
-                    let yb_mode = self.compute_page_store.is_some();
-                    anyhow::ensure!(
-                        yb_mode
-                            || ancestor.is_some()
-                            || timeline
-                                .layers
-                                .read(LayerManagerLockHolder::LoadLayerMap)
-                                .await
-                                .layer_map()
-                                .expect(
-                                    "currently loading, layer manager cannot be shutdown already"
-                                )
-                                .iter_historic_layers()
-                                .next()
-                                .is_some(),
-                        "Timeline has no ancestor and no layer files"
-                    );
+                    // yb-pageserver: page data lives in pageserver.pages /
+                    // slru_pages / meta, never in layer files. A timeline
+                    // with no ancestor and no layer files is the normal
+                    // post-restart state.
                 }
 
                 Ok(TimelineInitAndSyncResult::ReadyToActivate)

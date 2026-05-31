@@ -49,7 +49,6 @@ use crate::tenant::config::{
 use crate::tenant::span::debug_assert_current_span_has_tenant_id;
 use crate::tenant::storage_layer::inmemory_layer;
 use crate::tenant::timeline::ShutdownMode;
-use crate::tenant::timeline::layer_manager::LayerManagerLockHolder;
 use crate::tenant::{
     AttachedTenantConf, GcError, LoadConfigError, SpawnMode, TenantShard, TenantState,
 };
@@ -1554,32 +1553,17 @@ impl TenantManager {
         debug_assert_current_span_has_tenant_id();
 
         let parent_path = self.conf.tenant_path(parent_shard.get_tenant_shard_id());
-        let (parent_timelines, parent_layers) = {
-            let mut parent_layers = Vec::new();
-            let timelines = parent_shard.timelines.lock().unwrap().clone();
-            let parent_timelines = timelines.keys().cloned().collect::<Vec<_>>();
-            for timeline in timelines.values() {
-                tracing::info!(timeline_id=%timeline.timeline_id, "Loading list of layers to hardlink");
-                let layers = timeline
-                    .layers
-                    .read(LayerManagerLockHolder::GetLayerMapInfo)
-                    .await;
-
-                for layer in layers.likely_resident_layers() {
-                    let relative_path = layer
-                        .local_path()
-                        .strip_prefix(&parent_path)
-                        .context("Removing prefix from parent layer path")?;
-                    parent_layers.push(relative_path.to_owned());
-                }
-            }
-
-            if parent_layers.is_empty() {
-                tracing::info!("Ancestor shard has no resident layer to hard link");
-            }
-
-            (parent_timelines, parent_layers)
-        };
+        // yb-mode: no layer files exist, so there's nothing to hard-link.
+        // We still create child directories so the rest of shard-split can
+        // proceed.
+        let parent_timelines: Vec<_> = parent_shard
+            .timelines
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        let parent_layers: Vec<camino::Utf8PathBuf> = Vec::new();
 
         let mut child_prefixes = Vec::new();
         let mut create_dirs = Vec::new();
@@ -2066,34 +2050,6 @@ impl TenantManager {
             .await;
         // FIXME: `gc_iteration` can return an error for multiple reasons; we should handle it
         // better once the types support it.
-
-        #[cfg(feature = "testing")]
-        {
-            // we need to synchronize with drop completion for python tests without polling for
-            // log messages
-            if let Ok(result) = result.as_mut() {
-                let mut js = tokio::task::JoinSet::new();
-                for layer in std::mem::take(&mut result.doomed_layers) {
-                    js.spawn(layer.wait_drop());
-                }
-                tracing::info!(
-                    total = js.len(),
-                    "starting to wait for the gc'd layers to be dropped"
-                );
-                while let Some(res) = js.join_next().await {
-                    res.expect("wait_drop should not panic");
-                }
-            }
-
-            let timeline = tenant.get_timeline(timeline_id, false).ok();
-            let rtc = timeline.as_ref().map(|x| &x.remote_client);
-
-            if let Some(rtc) = rtc {
-                // layer drops schedule actions on remote timeline client to actually do the
-                // deletions; don't care about the shutdown error, just exit fast
-                drop(rtc.wait_completion().await);
-            }
-        }
 
         result.map_err(|e| match e {
             GcError::TenantCancelled | GcError::TimelineCancelled => ApiError::ShuttingDown,
