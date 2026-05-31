@@ -3224,11 +3224,9 @@ pub(crate) struct TimelineMetrics {
     timeline_id: String,
     pub flush_time_histo: StorageTimeMetrics,
     pub flush_delay_histo: StorageTimeMetrics,
-    pub compact_time_histo: StorageTimeMetrics,
     pub create_images_time_histo: StorageTimeMetrics,
     pub logical_size_histo: StorageTimeMetrics,
     pub imitate_logical_size_histo: StorageTimeMetrics,
-    pub load_layer_map_histo: StorageTimeMetrics,
     pub garbage_collect_histo: StorageTimeMetrics,
     pub find_gc_cutoffs_histo: StorageTimeMetrics,
     pub last_record_lsn_gauge: IntGauge,
@@ -3276,12 +3274,6 @@ impl TimelineMetrics {
             &shard_id,
             &timeline_id,
         );
-        let compact_time_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::Compact,
-            &tenant_id,
-            &shard_id,
-            &timeline_id,
-        );
         let create_images_time_histo = StorageTimeMetrics::new(
             StorageTimeOperation::CreateImages,
             &tenant_id,
@@ -3296,12 +3288,6 @@ impl TimelineMetrics {
         );
         let imitate_logical_size_histo = StorageTimeMetrics::new(
             StorageTimeOperation::ImitateLogicalSize,
-            &tenant_id,
-            &shard_id,
-            &timeline_id,
-        );
-        let load_layer_map_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::LoadLayerMap,
             &tenant_id,
             &shard_id,
             &timeline_id,
@@ -3412,13 +3398,11 @@ impl TimelineMetrics {
             timeline_id,
             flush_time_histo,
             flush_delay_histo,
-            compact_time_histo,
             create_images_time_histo,
             logical_size_histo,
             imitate_logical_size_histo,
             garbage_collect_histo,
             find_gc_cutoffs_histo,
-            load_layer_map_histo,
             last_record_lsn_gauge,
             disk_consistent_lsn_gauge,
             pitr_history_size,
@@ -4410,76 +4394,6 @@ pub(crate) mod tenant_throttling {
     }
 }
 
-pub(crate) mod disk_usage_based_eviction {
-    use super::*;
-
-    pub(crate) struct Metrics {
-        pub(crate) tenant_collection_time: Histogram,
-        pub(crate) tenant_layer_count: Histogram,
-        pub(crate) layers_collected: IntCounter,
-        pub(crate) layers_selected: IntCounter,
-        pub(crate) layers_evicted: IntCounter,
-        /*BEGIN_HADRON */
-        pub(crate) bytes_evicted: IntCounter,
-        /*END_HADRON */
-    }
-
-    impl Default for Metrics {
-        fn default() -> Self {
-            let tenant_collection_time = register_histogram!(
-                "pageserver_disk_usage_based_eviction_tenant_collection_seconds",
-                "Time spent collecting layers from a tenant -- not normalized by collected layer amount",
-                vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]
-            )
-            .unwrap();
-
-            let tenant_layer_count = register_histogram!(
-                "pageserver_disk_usage_based_eviction_tenant_collected_layers",
-                "Amount of layers gathered from a tenant",
-                vec![5.0, 50.0, 500.0, 5000.0, 50000.0]
-            )
-            .unwrap();
-
-            let layers_collected = register_int_counter!(
-                "pageserver_disk_usage_based_eviction_collected_layers_total",
-                "Amount of layers collected"
-            )
-            .unwrap();
-
-            let layers_selected = register_int_counter!(
-                "pageserver_disk_usage_based_eviction_select_layers_total",
-                "Amount of layers selected"
-            )
-            .unwrap();
-
-            let layers_evicted = register_int_counter!(
-                "pageserver_disk_usage_based_eviction_evicted_layers_total",
-                "Amount of layers successfully evicted"
-            )
-            .unwrap();
-
-            /*BEGIN_HADRON */
-            let bytes_evicted = register_int_counter!(
-                "pageserver_disk_usage_based_eviction_evicted_bytes_total",
-                "Amount of bytes successfully evicted"
-            )
-            .unwrap();
-            /*END_HADRON */
-
-            Self {
-                tenant_collection_time,
-                tenant_layer_count,
-                layers_collected,
-                layers_selected,
-                layers_evicted,
-                bytes_evicted,
-            }
-        }
-    }
-
-    pub(crate) static METRICS: Lazy<Metrics> = Lazy::new(Metrics::default);
-}
-
 static TOKIO_EXECUTOR_THREAD_COUNT: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_tokio_executor_thread_configured_count",
@@ -4609,7 +4523,6 @@ pub fn preinitialize_metrics(
     Lazy::force(&TENANT_MANAGER);
 
     Lazy::force(&crate::tenant::storage_layer::layer::LAYER_IMPL_METRICS);
-    Lazy::force(&disk_usage_based_eviction::METRICS);
 
     for state_name in pageserver_api::models::TenantState::VARIANTS {
         // initialize the metric for all gauges, otherwise the time series might seemingly show
