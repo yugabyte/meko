@@ -229,7 +229,7 @@ async fn gc_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
                 kind: BackgroundLoopKind::Gc,
             };
             // Run gc
-            let IterationResult { output, elapsed: _ } = iteration
+            let IterationResult { output } = iteration
                 .run(tenant.gc_iteration(
                     None,
                     gc_horizon,
@@ -396,7 +396,6 @@ struct Iteration {
 
 struct IterationResult<O> {
     output: O,
-    elapsed: Duration,
 }
 
 impl Iteration {
@@ -415,7 +414,7 @@ impl Iteration {
         let elapsed = self.started_at.elapsed();
         warn_when_period_overrun(elapsed, self.period, self.kind);
 
-        IterationResult { output, elapsed }
+        IterationResult { output }
     }
 }
 

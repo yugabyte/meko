@@ -85,7 +85,7 @@ use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerNa
 use crate::tenant::timeline::layer_manager::LayerManagerLockHolder;
 use crate::tenant::timeline::offload::{OffloadError, offload_timeline};
 use crate::tenant::timeline::{
-    CompactFlags, CompactOptions, CompactRequest, MarkInvisibleRequest, Timeline, WaitLsnTimeout,
+    CompactFlags, MarkInvisibleRequest, Timeline, WaitLsnTimeout,
     WaitLsnWaiter, import_pgdata,
 };
 use crate::tenant::{

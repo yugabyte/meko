@@ -141,9 +141,6 @@ pub(crate) enum FlushLoopState {
 pub enum ImageLayerCreationMode {
     /// Try to create image layers based on `time_for_new_image_layer`. Used in compaction code path.
     Try,
-    /// Force creating the image layers if possible. For now, no image layers will be created
-    /// for metadata keys. Used in compaction code path with force flag enabled.
-    Force,
     /// Initial ingestion of the data, and no data should be dropped in this function. This
     /// means that no metadata keys should be included in the partitions. Used in flush frozen layer
     /// code path.
@@ -911,21 +908,6 @@ pub(crate) enum CompactFlags {
     /// an L0 compaction pass), and without `OnlyL0Compaction` (L0 compaction shouldn't yield for L0
     /// compaction).
     YieldForL0,
-}
-
-#[serde_with::serde_as]
-#[derive(Debug, Clone, serde::Deserialize)]
-pub(crate) struct CompactRequest {
-    pub compact_key_range: Option<CompactKeyRange>,
-    pub compact_lsn_range: Option<CompactLsnRange>,
-    /// Whether the compaction job should be scheduled.
-    #[serde(default)]
-    pub scheduled: bool,
-    /// Whether the compaction job should be split across key ranges.
-    #[serde(default)]
-    pub sub_compaction: bool,
-    /// Max job size for each subcompaction job.
-    pub sub_compaction_max_job_size_mb: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -5908,26 +5890,6 @@ impl Timeline {
                         .time_for_new_image_layer(partition, lsn, force_image_creation_lsn)
                         .await
                 {
-                    start = img_range.end;
-                    continue;
-                }
-            }
-            if let ImageLayerCreationMode::Force = mode {
-                // When forced to create image layers, we might try and create them where they already
-                // exist.  This mode is only used in tests/debug.
-                let layers = self.layers.read(LayerManagerLockHolder::Compaction).await;
-                if layers.contains_key(&PersistentLayerKey {
-                    key_range: img_range.clone(),
-                    lsn_range: PersistentLayerDesc::image_layer_lsn_range(lsn),
-                    is_delta: false,
-                }) {
-                    // TODO: this can be processed with the BatchLayerWriter::finish_with_discard
-                    // in the future.
-                    tracing::info!(
-                        "Skipping image layer at {lsn} {}..{}, already exists",
-                        img_range.start,
-                        img_range.end
-                    );
                     start = img_range.end;
                     continue;
                 }
