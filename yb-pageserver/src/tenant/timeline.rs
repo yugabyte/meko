@@ -159,10 +159,6 @@ pub struct Timeline {
     /// so that e.g. on-demand-download/eviction, and layer spreading, can operate just on `LayerFileManager`.
     pub(crate) layers: LockedLayerManager,
 
-    last_freeze_at: AtomicLsn,
-    // Atomic would be more appropriate here.
-    last_freeze_ts: RwLock<Instant>,
-
     pub(crate) standby_horizon: AtomicLsn,
 
     // WAL redo manager. `None` only for broken tenants.
@@ -2434,9 +2430,6 @@ impl Timeline {
                 disk_consistent_lsn: AtomicLsn::new(disk_consistent_lsn.0),
 
                 gc_compaction_state: ArcSwapOption::from_pointee(gc_compaction_state),
-
-                last_freeze_at: AtomicLsn::new(disk_consistent_lsn.0),
-                last_freeze_ts: RwLock::new(Instant::now()),
 
                 loaded_at: (disk_consistent_lsn, SystemTime::now()),
 
