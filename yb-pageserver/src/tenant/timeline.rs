@@ -25,7 +25,7 @@ use fail::fail_point;
 use futures::{FutureExt, StreamExt};
 use handle::ShardTimelineId;
 use layer_manager::{
-    LayerManagerLockHolder, LayerManagerWriteGuard, LockedLayerManager,
+    LayerManagerLockHolder, LockedLayerManager,
 };
 
 use once_cell::sync::Lazy;
@@ -33,7 +33,7 @@ use pageserver_api::config::tenant_conf_defaults::DEFAULT_PITR_INTERVAL;
 use pageserver_api::key::{
     Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX,
 };
-use pageserver_api::keyspace::{KeySpaceRandomAccum, SparseKeyPartitioning};
+use pageserver_api::keyspace::SparseKeyPartitioning;
 use pageserver_api::models::{
     DetachBehavior, DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, LayerMapInfo, LsnLease, PageTraceEvent, RelSizeMigration,
     TimelineState,
@@ -90,9 +90,8 @@ use crate::pgdatadir_mapping::{
 use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
 use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::storage_layer::inmemory_layer::IndexEntry;
 use crate::tenant::storage_layer::{
-    EvictionError, InMemoryLayer, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, ResidentLayer,
+    EvictionError, IoConcurrency, Layer, LayerAccessStatsReset, LayerName, ResidentLayer,
     ValueReconstructState, ValuesReconstructState,
 };
 use crate::tenant::tasks::BackgroundLoopKind;
@@ -3626,7 +3625,6 @@ mod compaction_error {
     use utils::sync::gate::GateError;
 
     use crate::{
-        pgdatadir_mapping::CollectKeySpaceError,
         tenant::{PageReconstructError, blob_io::WriteBlobError, upload_queue::NotInitialized},
         virtual_file::owned_buffers_io::write::FlushTaskError,
     };

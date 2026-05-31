@@ -27,7 +27,6 @@
 //! "values" part.  The actual page images and WAL records are stored in the
 //! "values" part.
 //!
-use std::collections::HashMap;
 use std::fs::File;
 use std::ops::Range;
 use std::os::unix::fs::FileExt;
@@ -40,8 +39,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use futures::StreamExt;
 use itertools::Itertools;
 use pageserver_api::config::MaxVectoredReadBytes;
-use pageserver_api::key::{DBDIR_KEY, KEY_SIZE, Key};
-use pageserver_api::keyspace::KeySpace;
+use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::models::ImageCompressionAlgorithm;
 use pageserver_api::shard::TenantShardId;
 use serde::{Deserialize, Serialize};
@@ -57,8 +55,7 @@ use wal_decoder::models::value::Value;
 
 use super::errors::PutError;
 use super::{
-    AsLayerDesc, LayerName, PersistentLayerDesc, ResidentLayer,
-    ValuesReconstructState,
+    AsLayerDesc, LayerName, PersistentLayerDesc,
 };
 use crate::config::PageServerConf;
 use crate::context::{PageContentKind, RequestContext, RequestContextBuilder};
@@ -68,10 +65,8 @@ use crate::tenant::block_io::{BlockBuf, BlockCursor, BlockLease, BlockReader, Fi
 use crate::tenant::disk_btree::{
     DiskBtreeBuilder, DiskBtreeReader, VisitDirection,
 };
-use crate::tenant::timeline::GetVectoredError;
 use crate::tenant::vectored_blob_io::{
-    BlobFlag, BufView, VectoredBlobReader, VectoredRead,
-    VectoredReadPlanner,
+    BufView, VectoredBlobReader,
 };
 use crate::virtual_file::TempVirtualFile;
 use crate::virtual_file::owned_buffers_io::io_buf_ext::{FullSlice, IoBufExt};

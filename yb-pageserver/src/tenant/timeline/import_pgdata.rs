@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 use utils::sync::gate::Gate;
 
 use super::{Timeline, TimelineDeleteProgress};
-use crate::context::RequestContext;
 
 pub(crate) mod index_part_format;
 
@@ -38,15 +36,3 @@ impl ImportingTimeline {
     }
 }
 
-/// yb-mode: external pgdata import via S3 is not supported.
-pub async fn doit(
-    _timeline: &Arc<Timeline>,
-    _index_part: index_part_format::Root,
-    _ctx: &RequestContext,
-    _cancel: CancellationToken,
-) -> anyhow::Result<()> {
-    anyhow::bail!(
-        "yb-pageserver: import-from-pgdata-bucket is not supported. \
-         Bootstrap a ybLight tenant via initdb + WAL ingestion instead."
-    )
-}

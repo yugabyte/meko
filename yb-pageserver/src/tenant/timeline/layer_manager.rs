@@ -1,24 +1,17 @@
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, bail, ensure};
+use anyhow::Context;
 use itertools::Itertools;
-use pageserver_api::shard::TenantShardId;
-use tokio_util::sync::CancellationToken;
-use tracing::trace;
-use utils::id::TimelineId;
 use utils::lsn::Lsn;
 
 use super::TimelineWriterState;
-use crate::config::PageServerConf;
-use crate::context::RequestContext;
 use crate::tenant::layer_map::{BatchedUpdates, LayerMap};
 use crate::tenant::storage_layer::{
-    AsLayerDesc, InMemoryLayer, Layer, PersistentLayerDesc,
-    PersistentLayerKey, ResidentLayer,
+    AsLayerDesc, Layer, PersistentLayerDesc,
+    PersistentLayerKey,
 };
 
 /// Warn if the lock was held for longer than this threshold.

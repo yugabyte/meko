@@ -216,7 +216,6 @@ use self::index::IndexPart;
 use super::config::AttachedLocationConfig;
 use super::metadata::MetadataUpdate;
 use super::storage_layer::{Layer, LayerName, ResidentLayer};
-use super::timeline::import_pgdata;
 use super::upload_queue::{NotInitialized, SetDeletedFlagProgress};
 use super::{DeleteTimelineError, Generation};
 use crate::config::PageServerConf;

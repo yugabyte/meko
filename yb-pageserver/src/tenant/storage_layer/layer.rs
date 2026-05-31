@@ -1,4 +1,3 @@
-use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime};
@@ -7,7 +6,6 @@ use crate::PERF_TRACE_TARGET;
 use crate::metrics::{ONDEMAND_DOWNLOAD_BYTES, ONDEMAND_DOWNLOAD_COUNT};
 use anyhow::Context;
 use camino::{Utf8Path, Utf8PathBuf};
-use pageserver_api::keyspace::KeySpace;
 use pageserver_api::models::HistoricLayerInfo;
 use pageserver_api::shard::{ShardIndex, TenantShardId};
 use tracing::{Instrument, info_span};
@@ -20,15 +18,13 @@ use super::delta_layer::{self};
 use super::image_layer::{self};
 use super::{
     AsLayerDesc, LayerAccessStats, LayerAccessStatsReset, LayerName,
-    LayerVisibilityHint, PerfInstrumentFutureExt, PersistentLayerDesc, ValuesReconstructState,
+    LayerVisibilityHint, PerfInstrumentFutureExt, PersistentLayerDesc,
 };
 use crate::config::PageServerConf;
 use crate::context::{RequestContext, RequestContextBuilder};
 use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
-use crate::task_mgr::TaskKind;
 use crate::tenant::Timeline;
 use crate::tenant::remote_timeline_client::LayerFileMetadata;
-use crate::tenant::timeline::GetVectoredError;
 
 /// A Layer contains all data in a "rectangle" consisting of a range of keys and
 /// range of LSNs.

@@ -8,7 +8,6 @@ pub(crate) mod layer;
 mod layer_desc;
 mod layer_name;
 
-use std::collections::HashMap;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -25,19 +24,13 @@ pub(crate) use layer::{EvictionError, Layer, ResidentLayer};
 pub use layer_desc::{PersistentLayerDesc, PersistentLayerKey};
 pub use layer_name::{DeltaLayerName, ImageLayerName, LayerName};
 use pageserver_api::config::GetVectoredConcurrentIo;
-use pageserver_api::key::Key;
-use pageserver_api::keyspace::{KeySpace, KeySpaceRandomAccum};
 use tracing::{Instrument, trace};
 use utils::lsn::Lsn;
 use utils::sync::gate::GateGuard;
 use wal_decoder::models::record::NeonWalRecord;
-use wal_decoder::models::value::Value;
 
-use super::PageReconstructError;
 use super::layer_map::InMemoryLayerDesc;
-use crate::context::{
-    PerfInstrumentFutureExt, RequestContext,
-};
+use crate::context::PerfInstrumentFutureExt;
 
 pub fn range_overlaps<T>(a: &Range<T>, b: &Range<T>) -> bool
 where

@@ -25,7 +25,6 @@
 //! layer, and offsets to the other parts. The "index" is a B-tree,
 //! mapping from Key to an offset in the "values" part.  The
 //! actual page images are stored in the "values" part.
-use std::collections::HashMap;
 use std::fs::File;
 use std::ops::Range;
 use std::os::unix::prelude::FileExt;
@@ -39,9 +38,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use hex;
 use itertools::Itertools;
 use pageserver_api::config::MaxVectoredReadBytes;
-use pageserver_api::key::{DBDIR_KEY, KEY_SIZE, Key};
-use pageserver_api::keyspace::KeySpace;
-use pageserver_api::shard::{ShardIdentity, TenantShardId};
+use pageserver_api::key::{KEY_SIZE, Key};
+use pageserver_api::shard::TenantShardId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 use tokio_stream::StreamExt;
@@ -55,21 +53,15 @@ use utils::lsn::Lsn;
 use super::errors::PutError;
 use super::layer_name::ImageLayerName;
 use super::{
-    AsLayerDesc, LayerName, PersistentLayerDesc, ResidentLayer,
-    ValuesReconstructState,
+    AsLayerDesc, LayerName, PersistentLayerDesc,
 };
 use crate::config::PageServerConf;
-use crate::context::{PageContentKind, RequestContext, RequestContextBuilder};
+use crate::context::RequestContext;
 use crate::page_cache::{self, FileId, PAGE_SZ};
 use crate::tenant::blob_io::BlobWriter;
 use crate::tenant::block_io::{BlockBuf, FileBlockReader};
 use crate::tenant::disk_btree::{
     DiskBtreeBuilder, DiskBtreeReader, VisitDirection,
-};
-use crate::tenant::timeline::GetVectoredError;
-use crate::tenant::vectored_blob_io::{
-    BlobFlag, BufView, VectoredBlobReader, VectoredRead,
-    VectoredReadPlanner,
 };
 use crate::virtual_file::TempVirtualFile;
 use crate::virtual_file::owned_buffers_io::io_buf_ext::IoBufExt;
