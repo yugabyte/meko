@@ -144,6 +144,21 @@ impl<'t> UninitializedTimeline<'t> {
             .await
             .context("Phase 5b: write timeline row at creation")?;
 
+        // Hand the upload-queue's `visible_remote_consistent_lsn` slot
+        // to PageWriter so its flush success path can advance the
+        // safekeeper-truncation bound directly. The upload queue is
+        // already initialized at this point (init_upload_queue_for_empty_remote
+        // ran in prepare_new_timeline), so the slot is materialized.
+        {
+            let tl = &self.raw_timeline.as_ref().expect("checked above").0;
+            if let (Some(pw), Some(slot)) = (
+                tl.page_writer.as_ref(),
+                tl.remote_client.remote_consistent_lsn_slot(),
+            ) {
+                pw.set_remote_consistent_lsn_slot(slot);
+            }
+        }
+
         let mut timelines = self.owning_tenant.timelines.lock().unwrap();
         match timelines.entry(timeline_id) {
             Entry::Occupied(_) => {

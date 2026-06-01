@@ -840,6 +840,11 @@ fn start_pageserver(
         let signal_token = CancellationToken::new();
         let signal_cancel = signal_token.child_token();
 
+        // Publish the signal token so any background task (e.g. the
+        // generation-fence detector in PageWriter::flush) can request
+        // an orderly shutdown via task_mgr::request_global_shutdown.
+        pageserver::task_mgr::init_global_shutdown_token(signal_token.clone());
+
         tokio::spawn(utils::signals::signal_handler(signal_token));
 
         // Wait for cancellation signal and shut down the pageserver.

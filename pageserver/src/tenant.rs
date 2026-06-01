@@ -1022,6 +1022,19 @@ impl TenantShard {
 
         timeline.remote_client.init_upload_queue(&index_part)?;
 
+        // Hand the upload-queue's `visible_remote_consistent_lsn`
+        // slot to PageWriter so its flush success path can bump the
+        // safekeeper-truncation bound directly. Must run after
+        // init_upload_queue (which creates the slot) and before
+        // anyone calls walreceiver_connection::send_feedback (which
+        // reads it).
+        if let (Some(pw), Some(slot)) = (
+            timeline.page_writer.as_ref(),
+            timeline.remote_client.remote_consistent_lsn_slot(),
+        ) {
+            pw.set_remote_consistent_lsn_slot(slot);
+        }
+
         let _ = cause;
 
         {

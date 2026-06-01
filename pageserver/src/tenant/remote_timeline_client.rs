@@ -499,6 +499,24 @@ impl RemoteTimelineClient {
         }
     }
 
+    /// Return a clone of the `Arc<AtomicLsn>` slot the walreceiver
+    /// forwards to the safekeeper as
+    /// `PageserverFeedback.remote_consistent_lsn`. Available only
+    /// after `init_upload_queue` / `init_upload_queue_for_empty_remote`
+    /// has populated the upload queue; returns `None` if not yet
+    /// initialized or the queue is stopped. PageWriter installs this
+    /// slot via `set_remote_consistent_lsn_slot` so its flush success
+    /// path can advance the truncation bound directly, without
+    /// round-tripping through an IndexPart upload.
+    pub(crate) fn remote_consistent_lsn_slot(&self) -> Option<Arc<utils::lsn::AtomicLsn>> {
+        self.upload_queue
+            .lock()
+            .unwrap()
+            .initialized_mut()
+            .ok()
+            .map(|q| q.visible_remote_consistent_lsn.clone())
+    }
+
     /// Returns true if this timeline was previously detached at this Lsn and the remote timeline
     /// client is currently initialized.
     pub(crate) fn is_previous_ancestor_lsn(&self, lsn: Lsn) -> bool {

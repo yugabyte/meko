@@ -626,6 +626,67 @@ pub fn shutdown_token() -> CancellationToken {
     }
 }
 
+/// Global "I want the whole pageserver to exit cleanly" trigger.
+/// Mirrors the cancellation that the SIGTERM/SIGINT signal handler
+/// arms in `bin/yb-pageserver.rs`. Populated once at startup by
+/// `init_global_shutdown_token` before any task that might call
+/// `request_global_shutdown` is spawned.
+static GLOBAL_SHUTDOWN_TOKEN: std::sync::OnceLock<CancellationToken> =
+    std::sync::OnceLock::new();
+
+/// Register the global shutdown token. Must be called exactly once at
+/// startup before any caller can `request_global_shutdown`.
+pub fn init_global_shutdown_token(token: CancellationToken) {
+    GLOBAL_SHUTDOWN_TOKEN
+        .set(token)
+        .expect("init_global_shutdown_token called twice");
+}
+
+/// Trigger an orderly pageserver shutdown from anywhere. Equivalent
+/// to receiving SIGTERM: the main loop's wait on the signal token
+/// returns and the standard shutdown path runs. Safe to call multiple
+/// times — cancellation is idempotent.
+///
+/// Prefer one of the named-reason wrappers below (e.g.
+/// [`shutdown_for_stale_generation`]) so call sites are
+/// self-documenting and so the per-reason log line / metric lives in
+/// one place rather than being duplicated at each call site.
+pub fn request_global_shutdown() {
+    if let Some(token) = GLOBAL_SHUTDOWN_TOKEN.get() {
+        token.cancel();
+    } else if !cfg!(test) {
+        warn!(
+            "request_global_shutdown called before init_global_shutdown_token — \
+             pageserver will continue running"
+        );
+    }
+}
+
+/// Trigger an orderly shutdown because this pageserver lost the
+/// generation race: a YB-side gen-fenced UPDATE (or future write
+/// fence) saw `current_generation` ahead of ours, meaning the storage
+/// controller has handed the timeline to another pageserver. We can't
+/// make forward progress and the live owner has every right to
+/// reject our writes from here on.
+///
+/// Logs at error level with the diagnostic detail then delegates to
+/// [`request_global_shutdown`]. Idempotent.
+pub fn shutdown_for_stale_generation(
+    tenant: utils::id::TenantId,
+    timeline: utils::id::TimelineId,
+    our_generation: utils::generation::Generation,
+    live_generation: u32,
+) {
+    tracing::error!(
+        %tenant,
+        %timeline,
+        ?our_generation,
+        live_generation,
+        "stale generation detected during durability commit — shutting down pageserver"
+    );
+    request_global_shutdown();
+}
+
 /// Has the current task been requested to shut down?
 pub fn is_shutdown_requested() -> bool {
     if let Ok(true_or_false) = SHUTDOWN_TOKEN.try_with(|t| t.is_cancelled()) {

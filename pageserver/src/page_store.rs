@@ -124,6 +124,17 @@ pub struct TimelineRow {
 
 pub const DEFAULT_SCHEMA: &str = "pageserver";
 
+/// Result of `PageStore::advance_disk_consistent_lsn`. Distinguishes a
+/// successful UPDATE from generation-fence failure, the latter being
+/// fatal: a higher-generation pageserver has taken over and this one
+/// must shut down (its in-flight YB INSERTs will start being rejected
+/// by the same generation check, so it can't make forward progress).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdvanceDcLsnOutcome {
+    Updated,
+    StaleGeneration { live_generation: u32 },
+}
+
 #[derive(Debug, Clone)]
 pub struct PageStoreConfig {
     pub yb: YbStoreConfig,
@@ -1237,18 +1248,28 @@ impl PageStore {
     /// Scoped to one column → safe to run concurrently with
     /// `bump_generation` / `advance_gc_cutoff_lsn` /
     /// `upsert_timeline`. Each touches disjoint columns.
+    ///
+    /// **Generation-fenced**: the UPDATE's WHERE clause checks
+    /// `current_generation = $4`. A stale-generation pageserver's
+    /// attempt to record durability returns
+    /// [`AdvanceDcLsnOutcome::StaleGeneration`] (no rows updated,
+    /// no second round-trip needed). Callers treat that as fatal —
+    /// see `PageWriter::flush`.
     pub async fn advance_disk_consistent_lsn(
         &self,
         tenant: TenantId,
         timeline: TimelineId,
+        generation: utils::generation::Generation,
         new_dc_lsn: Lsn,
-    ) -> Result<()> {
+    ) -> Result<AdvanceDcLsnOutcome> {
         let sql = format!(
             "UPDATE \"{}\".timeline_state \
              SET disk_consistent_lsn = $3 \
-             WHERE tenant_id = $1 AND timeline_id = $2",
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND current_generation = $4",
             self.schema
         );
+        let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let n = self
             .client
             .execute(
@@ -1257,17 +1278,43 @@ impl PageStore {
                     &tenant.to_string(),
                     &timeline.to_string(),
                     &(new_dc_lsn.0 as i64),
+                    &gen_i32,
                 ],
             )
             .await
             .context("advance_disk_consistent_lsn")?;
         if n == 0 {
-            anyhow::bail!(
-                "no timeline row for {tenant}/{timeline} — \
-                 advance_disk_consistent_lsn called before timeline_create wrote the row"
+            // Distinguish "row missing entirely" (init bug) from
+            // "generation moved on" (we got fenced). One extra single-row
+            // SELECT to disambiguate. Only runs on the unhappy path.
+            let probe_sql = format!(
+                "SELECT current_generation FROM \"{}\".timeline_state \
+                 WHERE tenant_id = $1 AND timeline_id = $2",
+                self.schema
             );
+            let row = self
+                .client
+                .query_opt(
+                    &probe_sql,
+                    &[&tenant.to_string(), &timeline.to_string()],
+                )
+                .await
+                .context("advance_disk_consistent_lsn probe")?;
+            match row {
+                None => anyhow::bail!(
+                    "no timeline row for {tenant}/{timeline} — \
+                     advance_disk_consistent_lsn called before timeline_create wrote the row"
+                ),
+                Some(r) => {
+                    let live_gen: i32 = r.get(0);
+                    Ok(AdvanceDcLsnOutcome::StaleGeneration {
+                        live_generation: live_gen as u32,
+                    })
+                }
+            }
+        } else {
+            Ok(AdvanceDcLsnOutcome::Updated)
         }
-        Ok(())
     }
 
     pub async fn bump_generation(
@@ -1906,6 +1953,51 @@ mod tests {
         store.upsert_timeline(&row).await.unwrap();
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
         assert_eq!(got, row);
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn advance_disk_consistent_lsn_gen_gate() {
+        use utils::generation::Generation;
+        use utils::lsn::Lsn;
+
+        let (store, schema) = make_store("dc_gate").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let mut row = sample_timeline_row(tenant, timeline);
+        row.current_generation = 5;
+        row.disk_consistent_lsn = Lsn(0x1000);
+        store.upsert_timeline(&row).await.unwrap();
+
+        // Matching generation → Updated, persisted value advances.
+        let res = store
+            .advance_disk_consistent_lsn(tenant, timeline, Generation::new(5), Lsn(0x2000))
+            .await
+            .unwrap();
+        assert_eq!(res, AdvanceDcLsnOutcome::Updated);
+        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        assert_eq!(got.disk_consistent_lsn, Lsn(0x2000));
+
+        // Stale generation → StaleGeneration { live = 5 }, value unchanged.
+        let res = store
+            .advance_disk_consistent_lsn(tenant, timeline, Generation::new(4), Lsn(0x3000))
+            .await
+            .unwrap();
+        assert_eq!(res, AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 });
+        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        assert_eq!(got.disk_consistent_lsn, Lsn(0x2000), "stale-gen UPDATE must not advance");
+
+        // Generation ahead of persisted (we bumped in-memory but the
+        // row hasn't been UPSERT'd yet) → also stale: persisted row is
+        // the source of truth.
+        let res = store
+            .advance_disk_consistent_lsn(tenant, timeline, Generation::new(6), Lsn(0x4000))
+            .await
+            .unwrap();
+        assert_eq!(res, AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 });
+        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        assert_eq!(got.disk_consistent_lsn, Lsn(0x2000));
+
         drop_schema(&store, &schema).await;
     }
 

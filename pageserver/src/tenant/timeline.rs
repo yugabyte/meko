@@ -2048,6 +2048,7 @@ impl Timeline {
                     let mut writer = crate::page_writer::PageWriter::new(
                         tenant_shard_id.tenant_id,
                         timeline_id,
+                        generation,
                         compute_ps.clone(),
                         internal_ps.clone(),
                         crate::page_writer::FlushPolicy {

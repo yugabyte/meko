@@ -373,6 +373,19 @@ name + every delete is gen-checked" machinery into one column.
 
 ## Implementation status
 
+> ⚠️ **Test debt** — the phases below were largely landed without
+> per-phase regression tests on the new code paths. Particularly thin
+> coverage: the `disk_consistent_lsn` UPDATE path, the
+> `visible_remote_consistent_lsn` slot publish, the safekeeper-side
+> WAL truncation feedback loop, the image materialiser's
+> `read_chain_durable` cache-miss path, the basebackup-cache
+> invalidation on LSN advance, and the generation-fence shutdown.
+> Each merged commit should be revisited and a tight regression test
+> added before the next phase. **Next session: backfill tests for
+> phases 5a–5d and 4g–4i.**
+> &nbsp;&nbsp;Where new tests have been added this session, the phase
+> entry calls them out by name.
+
 Tracked phases:
 
 | Phase | Status | Description |
