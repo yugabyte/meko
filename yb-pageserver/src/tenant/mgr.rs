@@ -47,7 +47,6 @@ use crate::tenant::config::{
     AttachedLocationConfig, AttachmentMode, LocationConf, LocationMode,
 };
 use crate::tenant::span::debug_assert_current_span_has_tenant_id;
-use crate::tenant::storage_layer::inmemory_layer;
 use crate::tenant::timeline::ShutdownMode;
 use crate::tenant::{
     AttachedTenantConf, GcError, LoadConfigError, SpawnMode, TenantShard, TenantState,
@@ -507,19 +506,7 @@ pub async fn init_tenant_mgr(
     let cancel = &tenant_manager.cancel;
     let background_purges = &tenant_manager.background_purges;
 
-    // Initialize dynamic limits that depend on system resources
-    let system_memory =
-        sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new().with_memory())
-            .total_memory();
-    let max_ephemeral_layer_bytes =
-        conf.ephemeral_bytes_per_memory_kb as u64 * (system_memory / 1024);
-    tracing::info!(
-        "Initialized ephemeral layer size limit to {max_ephemeral_layer_bytes}, for {system_memory} bytes of memory"
-    );
-    inmemory_layer::GLOBAL_RESOURCES.max_dirty_bytes.store(
-        max_ephemeral_layer_bytes,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    // yb-mode: no ephemeral layers, no dirty-byte budget to wire up.
 
     // Scan local filesystem for attached tenants
     let tenant_configs = init_load_tenant_configs(conf).await;

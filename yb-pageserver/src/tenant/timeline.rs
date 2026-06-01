@@ -1,7 +1,6 @@
 pub mod delete;
 pub(crate) mod handle;
 pub(crate) mod import_pgdata;
-pub mod layer_manager;
 pub(crate) mod logical_size;
 pub mod uninit;
 mod walreceiver;
@@ -446,22 +445,10 @@ impl From<utils::bin_ser::DeserializeError> for PageReconstructError {
     }
 }
 
-impl From<layer_manager::Shutdown> for PageReconstructError {
-    fn from(_: layer_manager::Shutdown) -> Self {
-        PageReconstructError::Cancelled
-    }
-}
-
 impl GetVectoredError {
     #[cfg(test)]
     pub(crate) fn is_missing_key_error(&self) -> bool {
         matches!(self, Self::MissingKey(_))
-    }
-}
-
-impl From<layer_manager::Shutdown> for GetVectoredError {
-    fn from(_: layer_manager::Shutdown) -> Self {
-        GetVectoredError::Cancelled
     }
 }
 
@@ -521,12 +508,6 @@ pub(crate) enum CreateImageLayersError {
     Other(anyhow::Error),
 }
 
-impl From<layer_manager::Shutdown> for CreateImageLayersError {
-    fn from(_: layer_manager::Shutdown) -> Self {
-        CreateImageLayersError::Cancelled
-    }
-}
-
 #[derive(thiserror::Error, Debug, Clone)]
 pub(crate) enum FlushLayerError {
     /// Timeline cancellation token was cancelled
@@ -540,12 +521,6 @@ pub(crate) enum FlushLayerError {
 
     #[error("other (shared)")]
     Other(#[from] Arc<anyhow::Error>),
-}
-
-impl From<layer_manager::Shutdown> for FlushLayerError {
-    fn from(_: layer_manager::Shutdown) -> Self {
-        FlushLayerError::Cancelled
-    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -1793,14 +1768,11 @@ impl Timeline {
 
     /// yb-mode: no layer map exists. The HTTP layer-map endpoint
     /// returns an empty inventory.
-    pub(crate) async fn layer_map_info(
-        &self,
-        _reset: LayerAccessStatsReset,
-    ) -> Result<LayerMapInfo, layer_manager::Shutdown> {
-        Ok(LayerMapInfo {
+    pub(crate) async fn layer_map_info(&self, _reset: LayerAccessStatsReset) -> LayerMapInfo {
+        LayerMapInfo {
             in_memory_layers: Vec::new(),
             historic_layers: Vec::new(),
-        })
+        }
     }
 
     pub(crate) async fn download_layer(

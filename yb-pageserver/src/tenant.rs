@@ -104,7 +104,6 @@ use utils::generation::Generation;
 use utils::id::TimelineId;
 use utils::lsn::{Lsn, RecordLsn};
 
-pub mod layer_map;
 
 pub mod metadata;
 pub mod remote_timeline_client;
@@ -999,12 +998,6 @@ impl From<NotInitialized> for GcError {
             NotInitialized::Uninitialized => GcError::Remote(value.into()),
             NotInitialized::Stopped | NotInitialized::ShuttingDown => GcError::TimelineCancelled,
         }
-    }
-}
-
-impl From<timeline::layer_manager::Shutdown> for GcError {
-    fn from(_: timeline::layer_manager::Shutdown) -> Self {
-        GcError::TimelineCancelled
     }
 }
 

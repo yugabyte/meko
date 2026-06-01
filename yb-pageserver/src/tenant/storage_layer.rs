@@ -1,29 +1,23 @@
-//! Common traits and structs for layers.
+//! Common types referenced by yb-pageserver's surviving signatures.
 //!
-//! In yb-pageserver mode this module is mostly vestigial — there are
-//! no on-disk layer files and no LayerMap to populate. We keep just
-//! enough scaffolding for the surviving signatures (basebackup,
-//! pgdatadir_mapping, walredo, layer_map) to compile.
+//! Most of the layer-file machinery is gone in yb-mode. What remains
+//! is the `LayerName` parsing surface used by `index_part.json` and
+//! the HTTP layer-admin endpoints, plus a few vestigial markers
+//! (`IoConcurrency`, `ValuesReconstructState`) kept so external
+//! call-sites don't have to churn.
 
-pub mod inmemory_layer;
-pub(crate) mod layer;
 mod layer_desc;
 mod layer_name;
 
 use std::ops::Range;
-use std::sync::Arc;
 
 use bytes::Bytes;
-pub use inmemory_layer::InMemoryLayer;
-pub(crate) use layer::Layer;
-pub use layer_desc::{PersistentLayerDesc, PersistentLayerKey};
+pub use layer_desc::PersistentLayerDesc;
 pub use layer_name::{DeltaLayerName, ImageLayerName, LayerName};
 use pageserver_api::config::GetVectoredConcurrentIo;
 use utils::lsn::Lsn;
 use utils::sync::gate::GateGuard;
 use wal_decoder::models::record::NeonWalRecord;
-
-use super::layer_map::InMemoryLayerDesc;
 
 pub fn range_overlaps<T>(a: &Range<T>, b: &Range<T>) -> bool
 where
@@ -74,10 +68,6 @@ pub enum IoConcurrency {
     Sequential,
 }
 
-pub(crate) enum SelectedIoConcurrency {
-    Sequential,
-}
-
 impl IoConcurrency {
     pub(crate) fn sequential() -> Self {
         Self::Sequential
@@ -87,10 +77,6 @@ impl IoConcurrency {
         _conf: GetVectoredConcurrentIo,
         _gate_guard: GateGuard,
     ) -> IoConcurrency {
-        IoConcurrency::Sequential
-    }
-
-    pub(crate) fn spawn(_io_concurrency: SelectedIoConcurrency) -> Self {
         IoConcurrency::Sequential
     }
 
@@ -110,21 +96,6 @@ impl IoConcurrency {
         }
         Wrapper(IoConcurrency::Sequential)
     }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub enum ReadableLayerWeak {
-    PersistentLayer(Arc<PersistentLayerDesc>),
-    InMemoryLayer(InMemoryLayerDesc),
-}
-
-/// Visibility hint for layers. In yb-mode there are no layers so the
-/// hint is effectively dead, but it still appears in `LayerMap`
-/// signatures.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LayerVisibilityHint {
-    Visible,
-    Covered,
 }
 
 #[derive(Clone, Copy, strum_macros::EnumString)]
