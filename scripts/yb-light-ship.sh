@@ -24,6 +24,17 @@ cargo build --release \
     -p endpoint_storage
 
 echo
+echo ">>> Building compute extensions (pgxn/neon/*.so for v17)..."
+# `neon.so` + walredo/test/utils extensions are loaded by the compute's
+# postgres at startup. The walproposer wire protocol with the
+# safekeeper has to match these binaries; shipping the server binaries
+# without a matching `pg_install/` is exactly the version-skew that
+# breaks compute init on a wipe-restart. We always rebuild here even
+# if pg_install/v17 looks fresh, because the C extensions link against
+# the Rust walproposer-lib whose source rolls with every commit.
+PG_INSTALL_CACHED=1 make neon-pg-ext-v17 >/dev/null
+
+echo
 echo ">>> Staging bundle at ${BUNDLE}"
 rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/lib"
@@ -38,6 +49,16 @@ done
 for lib in libssl.so.1.1 libcrypto.so.1.1 libicui18n.so.60 libicuuc.so.60 libicudata.so.60; do
     cp -v "/usr/lib64/${lib}" "${BUNDLE}/lib/${lib}"
 done
+
+# pg_install/v17/ — postgres binaries the compute spawns, plus the
+# neon extension .so files. Without this, the compute on the target
+# loads an older neon.so that's wire-incompatible with this bundle's
+# safekeeper. Use rsync inside the script so we get incremental
+# behavior locally (the tree is ~370 MB, mostly unchanging postgres).
+echo
+echo ">>> Staging pg_install/v17/ ($(du -sh pg_install/v17 | awk '{print $1}'))..."
+mkdir -p "${BUNDLE}/pg_install"
+rsync -a pg_install/v17 "${BUNDLE}/pg_install/"
 
 cat > "${BUNDLE}/REVISION.txt" <<TXT
 Build host: $(hostname)

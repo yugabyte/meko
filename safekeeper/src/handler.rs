@@ -201,23 +201,37 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                     }
                 }
 
-                // yb-light only speaks the Interpreted protocol
-                // (Vanilla was retired in lane N). Shard params are
-                // required.
-                let PostgresClientProtocol::Interpreted { .. } = self.protocol();
-                match (shard_count, shard_number, shard_stripe_size) {
-                    (Some(count), Some(number), Some(stripe_size)) => {
-                        let params = ShardParameters {
-                            count: ShardCount(count),
-                            stripe_size: ShardStripeSize(stripe_size),
-                        };
-                        self.shard =
-                            Some(ShardIdentity::from_params(ShardNumber(number), params));
-                    }
-                    _ => {
-                        return Err(QueryError::Other(anyhow::anyhow!(
-                            "Shard params were not specified"
-                        )));
+                // yb-light only speaks the Interpreted protocol on
+                // the SK→PS pull side. Shard params + `protocol=...`
+                // are required there but are meaningless for the
+                // compute→SK push side (walproposer connects with
+                // neither and issues START_WAL_PUSH).
+                //
+                // We can't tell which command will follow at startup
+                // time, so validate conditionally: if shard params
+                // were supplied, parse them; if not, leave
+                // `self.shard = None` and let the START_REPLICATION
+                // path enforce the requirement when it actually
+                // needs the shard identity to filter records.
+                // START_WAL_PUSH never reads `self.shard`.
+                if shard_count.is_some()
+                    || shard_number.is_some()
+                    || shard_stripe_size.is_some()
+                {
+                    match (shard_count, shard_number, shard_stripe_size) {
+                        (Some(count), Some(number), Some(stripe_size)) => {
+                            let params = ShardParameters {
+                                count: ShardCount(count),
+                                stripe_size: ShardStripeSize(stripe_size),
+                            };
+                            self.shard =
+                                Some(ShardIdentity::from_params(ShardNumber(number), params));
+                        }
+                        _ => {
+                            return Err(QueryError::Other(anyhow::anyhow!(
+                                "Partial shard params: count/number/stripe_size must all be set or all be absent"
+                            )));
+                        }
                     }
                 }
             }
@@ -330,6 +344,16 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                         .await
                 }
                 SafekeeperPostgresCommand::StartReplication { start_lsn, term } => {
+                    // SK→PS pull direction: the Interpreted protocol
+                    // needs shard identity to filter records server-
+                    // side. The startup() path deferred this check
+                    // because START_WAL_PUSH (compute→SK) doesn't
+                    // need shards. Enforce here.
+                    if self.shard.is_none() {
+                        return Err(QueryError::Other(anyhow::anyhow!(
+                            "START_REPLICATION requires shard_count / shard_number / shard_stripe_size in connection options"
+                        )));
+                    }
                     self.handle_start_replication(pgb, start_lsn, term)
                         .instrument(info_span!("WAL sender"))
                         .await
