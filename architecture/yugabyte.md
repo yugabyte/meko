@@ -11,7 +11,7 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | Schema | Tables | Owner | Provisioned by |
 |---|---|---|---|
 | `public` | `blobs`, `wals`, `blob_namespace` ENUM | yugabyte | `neon_local` (auto) |
-| `pageserver` | `pages`, `timelines` (used by `yb-pageserver`) | yugabyte | `neon_local` (auto) |
+| `pageserver` | `pages`, `slru_pages`, `meta`, `timeline_state` | yugabyte | `neon_local` (auto) |
 | `storage_controller` | 11 Diesel-managed tables (`tenant_shards`, `nodes`, `timelines`, …) | yugabyte | `neon_local` creates the schema; the controller binary runs migrations on first start |
 
 `neon_local` auto-provisions everything on first start: it connects to
@@ -179,11 +179,11 @@ ORDER BY segno;
 
 ## `pageserver` schema
 
-Used by `yb-pageserver` (a fork of the upstream `pageserver` that
-replaces the layer-file machinery with row-per-version storage). The
-upstream `pageserver` does NOT touch this schema — it uses `blobs`
-only. Provisioned alongside `public.blobs` / `public.wals` by
-`neon_local` on first start.
+Holds the page store that replaces the upstream layer-file machinery
+with row-per-version storage; see
+[`yb-pageserver.md`](yb-pageserver.md) for the design. Provisioned
+alongside `public.blobs` / `public.wals` by `neon_local` on first
+start.
 
 ### `pageserver.pages`
 

@@ -1,36 +1,37 @@
 # yb-pageserver
 
-`yb-pageserver` is a fork of `pageserver/` that stores **one YB row per page
-version** instead of building delta/image layer files. It exists alongside
-the upstream `pageserver` so the two can be benchmarked head-to-head.
+The pageserver in this repo stores **one YB row per page version**
+instead of building delta/image layer files. It started as a fork of
+upstream Neon's `pageserver/` so the two could be benchmarked
+head-to-head; the upstream source has since been removed (lane H,
+2026-06-01) and the row-per-page implementation is now the canonical
+`pageserver/` crate. The shipped binary keeps the `yb-pageserver`
+name to make the storage backend obvious in `ps`, logs, and
+deployments.
 
 This document is the design and roadmap. The corresponding upstream
 component is documented in [`pageserver.md`](pageserver.md); read that
 first for the parts that are inherited unchanged (Key encoding, walredo,
 WAL ingest, getpage RPC, sharding, generation handshake).
 
-## Why a separate crate
+## What was kept from upstream
 
-The refactor deletes the entire layer-file machinery (~25 K lines:
+The refactor deleted the entire layer-file machinery (~25 K lines:
 `storage_layer/`, `layer_map/`, `disk_btree`, `compaction.rs`,
 `inmemory_layer`, `remote_timeline_client`, `secondary*`, `heatmap*`,
-`eviction_task*`). Doing that destructively on the live `pageserver/`
-would forfeit our ability to run head-to-head perf tests. So
-`yb-pageserver/` starts as a verbatim copy and the refactor lands inside
-it.
-
-The fork shares everything that isn't storage-implementation-specific:
+`eviction_task*`). What stayed — because it isn't
+storage-implementation-specific — is:
 - `pageserver_api` (Key, Lsn, configs, shard identity, controller
   protocol)
 - `pageserver_compaction`, `pageserver_client`, `pageserver_client_grpc`,
-  `pageserver_page_api` (subcrates under `pageserver/`)
+  `pageserver_page_api` (sibling crates now living at `pageserver/{compaction,client,client_grpc,page_api}/`)
 - `wal_decoder` (Value, NeonWalRecord)
 - `remote_storage::YsqlClient` (reconnecting YB Postgres-protocol
   wrapper)
 - `walredo` (Postgres-binary subprocess for WAL replay)
 
 The binary name is `yb-pageserver`. Builds with
-`cargo build -p yb_pageserver --bin yb-pageserver`.
+`cargo build -p pageserver --bin yb-pageserver`.
 
 ## What replaces what
 
@@ -376,11 +377,11 @@ Tracked phases:
 
 | Phase | Status | Description |
 |---|---|---|
-| 0 | ✅ done | Fork `pageserver/` → `yb-pageserver/`, rename crate + binary. |
-| 1 | ✅ done | `pageserver.pages` + `pageserver.timeline_state` schema, `PageStore` Rust module (`yb-pageserver/src/page_store.rs`) with full CRUD + generation helpers and 15 integration tests against a real YB. |
-| 2a | ✅ done | `ImageRule` 10-delta enforcement logic (`yb-pageserver/src/image_rule.rs`) with 12 unit tests. Pure logic, no walredo or DB dep. |
-| 2b | ✅ done | `PageWriter` (`yb-pageserver/src/page_writer.rs`): buffered write path that applies `ImageRule`, calls a `Materializer` trait on `ForceImage`, blends buffered + persisted rows on read (`read_chain`), and flushes on a size/age trigger (defaults 100 MiB / 5 s). 12 integration tests including a long-workload property test that scans every LSN to confirm the LIMIT-10 invariant holds. |
-| 3a | ✅ done | `Materializer` trait refactored: now takes `(key, target_lsn, prior_chain, current)` so production wrappers don't need a back-reference to `PageWriter`. `WalRedoMaterializer` (`yb-pageserver/src/page_materializer.rs`) is the production impl — converts chain rows back into `(base_img, records)` and calls `walredo::PostgresRedoManager::request_redo`. 5 tests cover the pure decode helper. Walredo-driven end-to-end test deferred to Phase 3b wiring (needs a real PG subprocess). |
+| 0 | ✅ done | Fork `pageserver/` → `pageserver/`, rename crate + binary. |
+| 1 | ✅ done | `pageserver.pages` + `pageserver.timeline_state` schema, `PageStore` Rust module (`pageserver/src/page_store.rs`) with full CRUD + generation helpers and 15 integration tests against a real YB. |
+| 2a | ✅ done | `ImageRule` 10-delta enforcement logic (`pageserver/src/image_rule.rs`) with 12 unit tests. Pure logic, no walredo or DB dep. |
+| 2b | ✅ done | `PageWriter` (`pageserver/src/page_writer.rs`): buffered write path that applies `ImageRule`, calls a `Materializer` trait on `ForceImage`, blends buffered + persisted rows on read (`read_chain`), and flushes on a size/age trigger (defaults 100 MiB / 5 s). 12 integration tests including a long-workload property test that scans every LSN to confirm the LIMIT-10 invariant holds. |
+| 3a | ✅ done | `Materializer` trait refactored: now takes `(key, target_lsn, prior_chain, current)` so production wrappers don't need a back-reference to `PageWriter`. `WalRedoMaterializer` (`pageserver/src/page_materializer.rs`) is the production impl — converts chain rows back into `(base_img, records)` and calls `walredo::PostgresRedoManager::request_redo`. 5 tests cover the pure decode helper. Walredo-driven end-to-end test deferred to Phase 3b wiring (needs a real PG subprocess). |
 | 3a+ | ✅ done | Two more primitives that Phase 3b will reach for: `PageWriter::spawn_flusher(tick)` returns a `FlushTask` (JoinHandle + CancellationToken) for the per-timeline background flusher, doing a final `flush()` on cancel; `extract_triples(SerializedValueBatch)` decodes a walingest batch into the `(Key, Lsn, Value)` triples `PageWriter::put` consumes. Both with tests. |
 | 3b | ✅ done | Tenant/Timeline plumbing: `TenantSharedResources` carries `Option<Arc<PageStore>>`, `Tenant` stashes it, `TimelineResources` passes through, `Timeline` builds `PageWriter` + spawns `FlushTask` when both `page_store` and `walredo_mgr` are present. `TimelineWriter::put_batch` runs `extract_triples` and forwards to `page_writer.put` before the layer-file write (so a YB failure aborts the whole batch and walingest retries). `Timeline::shutdown` drains the FlushTask + does a final `page_writer.flush()`. **Reads still go through the layer stack** — Phase 3c is the read-flip. |
 | 3c | ✅ done | `Timeline::get_vectored_impl` branches on `self.page_writer`: when yb-pageserver mode is active, reads go through `get_vectored_via_page_writer` — per-key parallel `PageWriter::read_chain` → `chain_to_value_reconstruct_state` (image-anchor → img, deltas → records) → `Timeline::reconstruct_value` (walredo). The LayerMap walk is bypassed entirely. Upstream pageserver behaviour preserved when `page_writer` is None. Layer-file path is now dead code from the read perspective; still populated by 3b dual-write, both removed by Phase 4. |
@@ -403,7 +404,7 @@ Tracked phases:
 | 5 | ✅ done | **Pageserver restart survives off `pageserver.timeline_state`** — runtime hookup of the per-timeline state row that replaces the index_part.json blob. Four sub-phases. **5a**: `PageWriter` keeps an in-RAM `dc_lsn_watermark`; flush success path issues a column-scoped `UPDATE timeline_state SET disk_consistent_lsn = $1 WHERE pk` on the internal conn when the flush's max LSN exceeds the watermark. In-memory monotonicity guard, no server-side conditional. **5b**: `UninitializedTimeline::finish_creation` calls `Timeline::write_timeline_row_to_yb` (full-row upsert via `internal_page_store` + `seed_dc_lsn_watermark`) BEFORE taking the timelines mutex and before `maybe_spawn_flush_loop`. The row is guaranteed to exist by the time the flusher starts hitting it, so Phase 5a's UPDATE always lands. **5c**: when `attach`'s `index_part.json` fetch returns `NotFound`, the `compute_page_store` path queries `get_timeline(tenant, timeline)` and synthesises an `IndexPart::empty(metadata)` with `TimelineMetadata` built from the row's columns. `last_record_lsn`/`initdb_lsn` aren't persisted (re-derived on walreceiver resume / stub-set to `disk_consistent_lsn`). **5d**: `timeline_init_and_sync`'s "no ancestor + no layer files" sanity check skips in yb-mode (that *is* the normal post-restart state); `ensure_schema` swallows YB's "type X already exists" so a stale orphan `pg_type` entry after `DROP DATABASE WITH (FORCE)` doesn't break startup. End-to-end smoke: cluster up → create tenant → INSERT 5k rows → flush → `dc_lsn` 22283440→23216088 in `pageserver.timeline_state` → stop+start pageserver → `Phase 5c: synthesising IndexPart` fires → attach completes (activated_timelines=1) → reads return correct values. Schema simplified: `last_record_lsn` column removed from `pageserver.timeline_state` (re-derived on resume); table renamed `pageserver.timelines` → `pageserver.timeline_state` to avoid YB type-name collision with `storage_controller.timelines`. |
 | 6 | ⏳ pending | **Startup perf.** Cold-start time-to-first-getPage is dominated by sequential setup the layer-stack design baked in but yb-mode no longer needs. Items to investigate: (a) drop the `list_remote_timelines` blob-prefix scan entirely in yb-mode and source the timeline list from `pageserver.timeline_state` (one indexed query vs N blob LIST + GET round-trips); (b) parallelise per-timeline attach (`load_remote_timeline` is already async but is called serially in `sorted_timelines` loop); (c) skip the local-disk dentry-purge in yb-mode (no layer files to reconcile); (d) shorten the walreceiver catch-up from `disk_consistent_lsn` — currently a tenant restart re-applies the entire post-flush window even though most of it is cache-resident on the previous pageserver; could be near-instant after Phase 4f's per-key LRU lands. Target: sub-second time-to-first-getPage on a clean restart for a tenant with one timeline + a few hundred MB of recent writes. |
 | 7 | ⏳ deferred | GC: cron that prunes old `pages` rows. User said "figure out separately later". |
-| 8 | ⏳ pending | **Page-service "going-away" frame on graceful shutdown.** Today when the PS exits cleanly its libpq listener closes per-connection TCP sockets via the standard `Connections::shutdown` path (`yb-pageserver/src/lib.rs:201`), delivering a normal FIN. The compute-side `libpagestore.c` reconnect path is gated on `pageserver_response_disconnect_timeout` (default 150 s), so an in-flight GetPage hangs in `BufferIo`/getpage-wait for up to that long before the compute gives up and reconnects — the backend is in a kernel poll on the (now half-closed) socket and ignores client disconnect, so `pgbench` kill doesn't free it and operators end up bouncing the postmaster to recover. Add a typed "going-away" frame to the page_service wire protocol: on graceful shutdown, before closing each socket, the PS sends `GoingAway { reason }` and the compute treats receipt as "abandon all in-flight requests on this connection and immediately reconnect" (vs the 150 s safety-net timeout). Symmetric change on the compute-side `communicator.c` / `libpagestore.c`. Recovery from a graceful PS restart drops from ~150 s to <1 s. The 150 s timer stays as the safety net for the non-graceful case (PS panic, kernel OOM, network partition). |
+| 8 | ⏳ pending | **Page-service "going-away" frame on graceful shutdown.** Today when the PS exits cleanly its libpq listener closes per-connection TCP sockets via the standard `Connections::shutdown` path (`pageserver/src/lib.rs:201`), delivering a normal FIN. The compute-side `libpagestore.c` reconnect path is gated on `pageserver_response_disconnect_timeout` (default 150 s), so an in-flight GetPage hangs in `BufferIo`/getpage-wait for up to that long before the compute gives up and reconnects — the backend is in a kernel poll on the (now half-closed) socket and ignores client disconnect, so `pgbench` kill doesn't free it and operators end up bouncing the postmaster to recover. Add a typed "going-away" frame to the page_service wire protocol: on graceful shutdown, before closing each socket, the PS sends `GoingAway { reason }` and the compute treats receipt as "abandon all in-flight requests on this connection and immediately reconnect" (vs the 150 s safety-net timeout). Symmetric change on the compute-side `communicator.c` / `libpagestore.c`. Recovery from a graceful PS restart drops from ~150 s to <1 s. The 150 s timer stays as the safety net for the non-graceful case (PS panic, kernel OOM, network partition). |
 
 ## Testing dual-write (Phase 3b verification)
 
@@ -487,12 +488,12 @@ both climb steadily.
 
 ## Code anchors
 
-- `yb-pageserver/src/page_store.rs` — `PageStore` row store; the
+- `pageserver/src/page_store.rs` — `PageStore` row store; the
   image-anchored `read_chain` CTE + `scan_range`.
-- `yb-pageserver/src/page_writer.rs` — `PageWriter` buffered write path;
+- `pageserver/src/page_writer.rs` — `PageWriter` buffered write path;
   pure passthrough (no walredo at write time); `read_chain` /
   `scan_range` blend in-RAM buffer + PageStore.
-- `yb-pageserver/src/tenant/timeline.rs` — `get_vectored_via_page_writer`
+- `pageserver/src/tenant/timeline.rs` — `get_vectored_via_page_writer`
   drives the row-store read path; `chain_to_value_reconstruct_state`
   converts a chain into walredo inputs.
 - `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
