@@ -9,7 +9,7 @@ use tracing::info;
 use utils::generation::Generation;
 use utils::lsn::{AtomicLsn, Lsn};
 
-use super::storage_layer::{AsLayerDesc as _, LayerName};
+use super::storage_layer::LayerName;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::remote_timeline_client::index::IndexPart;
 

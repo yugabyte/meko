@@ -6,13 +6,11 @@
 //! (`IoConcurrency`, `ValuesReconstructState`) kept so external
 //! call-sites don't have to churn.
 
-mod layer_desc;
 mod layer_name;
 
 use std::ops::Range;
 
 use bytes::Bytes;
-pub use layer_desc::PersistentLayerDesc;
 pub use layer_name::{DeltaLayerName, ImageLayerName, LayerName};
 use pageserver_api::config::GetVectoredConcurrentIo;
 use utils::lsn::Lsn;
@@ -104,13 +102,8 @@ pub(crate) enum LayerAccessStatsReset {
     AllStats,
 }
 
-/// Get a layer descriptor from a layer.
-pub(crate) trait AsLayerDesc {
-    fn layer_desc(&self) -> &PersistentLayerDesc;
-}
-
 /// Range wrapping newtype, which uses display to render Debug.
-pub(crate) struct RangeDisplayDebug<'a, T: std::fmt::Display>(pub(crate) &'a Range<T>);
+pub(super) struct RangeDisplayDebug<'a, T: std::fmt::Display>(pub(super) &'a Range<T>);
 
 impl<T: std::fmt::Display> std::fmt::Debug for RangeDisplayDebug<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

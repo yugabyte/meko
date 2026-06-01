@@ -9,7 +9,6 @@ use std::str::FromStr;
 use pageserver_api::key::Key;
 use utils::lsn::Lsn;
 
-use super::PersistentLayerDesc;
 
 // Note: Timeline::load_layer_map() relies on this sort order
 #[derive(PartialEq, Eq, Clone, Hash)]
@@ -161,8 +160,7 @@ impl Ord for ImageLayerName {
 
 impl ImageLayerName {
     pub fn lsn_as_range(&self) -> Range<Lsn> {
-        // Saves from having to copypaste this all over
-        PersistentLayerDesc::image_layer_lsn_range(self.lsn)
+        self.lsn..(self.lsn + 1)
     }
 }
 

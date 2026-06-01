@@ -226,7 +226,6 @@ use crate::metrics::{
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind, shutdown_token};
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::remote_timeline_client::download::download_retry;
-use crate::tenant::storage_layer::AsLayerDesc;
 use crate::tenant::upload_queue::{
     UploadOp, UploadQueue, UploadQueueInitialized, UploadQueueStopped,
     UploadQueueStoppedDeletable, UploadTask,
