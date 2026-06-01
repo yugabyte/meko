@@ -34,13 +34,12 @@ use pageserver_api::models::{
     LsnLeaseRequest, OffloadedTimelineInfo, PageTraceEvent, ShardParameters, StatusResponse,
     TenantConfigPatchRequest, TenantConfigRequest, TenantDetails, TenantInfo,
     TenantLocationConfigRequest, TenantLocationConfigResponse, TenantScanRemoteStorageResponse,
-    TenantScanRemoteStorageShard, TenantShardLocation, TenantShardSplitRequest,
-    TenantShardSplitResponse, TenantSorting, TenantState, TenantWaitLsnRequest,
+    TenantScanRemoteStorageShard, TenantShardLocation, TenantSorting, TenantState, TenantWaitLsnRequest,
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateRequestMode, TimelineGcRequest, TimelineInfo,
     TimelinePatchIndexPartRequest, TimelineVisibilityState, TimelinesInfoAndOffloaded,
     TopTenantShardItem, TopTenantShardsRequest, TopTenantShardsResponse,
 };
-use pageserver_api::shard::{ShardCount, TenantShardId};
+use pageserver_api::shard::TenantShardId;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeTravelError};
 use scopeguard::defer;
@@ -1240,32 +1239,15 @@ async fn tenant_delete_handler(
 
 
 async fn tenant_shard_split_handler(
-    mut request: Request<Body>,
+    _request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let req: TenantShardSplitRequest = json_request(&mut request).await?;
-
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let state = get_state(&request);
-    let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Warn);
-
-    let tenant = state
-        .tenant_manager
-        .get_attached_tenant_shard(tenant_shard_id)?;
-    tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
-
-    let new_shards = state
-        .tenant_manager
-        .shard_split(
-            tenant,
-            ShardCount::new(req.new_shard_count),
-            req.new_stripe_size,
-            &ctx,
-        )
-        .await
-        .map_err(ApiError::InternalServerError)?;
-
-    json_response(StatusCode::OK, TenantShardSplitResponse { new_shards })
+    // yb-pageserver: shard splitting is YugabyteDB's job. The
+    // pageserver runs as a single shard against the row store and
+    // never reshards itself.
+    Err(ApiError::BadRequest(anyhow::anyhow!(
+        "shard_split is not supported in yb-pageserver mode"
+    )))
 }
 
 async fn layer_map_info_handler(

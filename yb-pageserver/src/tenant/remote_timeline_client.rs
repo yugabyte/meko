@@ -805,26 +805,6 @@ impl RemoteTimelineClient {
         Ok(())
     }
 
-    ///
-    /// Launch an index-file upload operation in the background, if necessary.
-    ///
-    /// Use this function to schedule the update of the index file after
-    /// scheduling file uploads or deletions. If no file uploads or deletions
-    /// have been scheduled since the last index file upload, this does
-    /// nothing.
-    ///
-    /// Like schedule_index_upload_for_metadata_update(), this merely adds
-    /// the upload to the upload queue and returns quickly.
-    pub fn schedule_index_upload_for_file_changes(self: &Arc<Self>) -> Result<(), NotInitialized> {
-        let mut guard = self.upload_queue.lock().unwrap();
-        let upload_queue = guard.initialized_mut()?;
-
-        if upload_queue.latest_files_changes_since_metadata_upload_scheduled > 0 {
-            self.schedule_index_upload(upload_queue);
-        }
-
-        Ok(())
-    }
 
     /// Only used in the `patch_index_part` HTTP API to force trigger an index upload.
     pub fn force_schedule_index_upload(self: &Arc<Self>) -> Result<(), NotInitialized> {
