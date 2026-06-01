@@ -320,12 +320,6 @@ pub enum TaskKind {
     // Garbage collection worker. One per tenant
     GarbageCollector,
 
-    // Compaction. One per tenant.
-    Compaction,
-
-    // Eviction. One per timeline.
-    Eviction,
-
     // Tenant housekeeping (flush idle ephemeral layers, shut down idle walredo, etc.).
     TenantHousekeeping,
 
@@ -333,9 +327,6 @@ pub enum TaskKind {
     InitialLogicalSizeCalculation,
 
     OndemandLogicalSizeCalculation,
-
-    // Task that flushes frozen in-memory layers to disk
-    LayerFlushTask,
 
     // Task that uploads a file to remote storage
     RemoteUploadTask,
@@ -362,14 +353,8 @@ pub enum TaskKind {
 
     DebugTool,
 
-    EphemeralFilePreWarmPageCache,
-
-    LayerDownload,
-
     #[cfg(test)]
     UnitTest,
-
-    DetachAncestor,
 
     ImportPgdata,
 

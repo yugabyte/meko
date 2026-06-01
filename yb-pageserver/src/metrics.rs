@@ -202,7 +202,7 @@ pub(crate) struct ScanLatency {
 impl GetVectoredLatency {
     // Only these task types perform vectored gets. Filter all other tasks out to reduce total
     // cardinality of the metric.
-    const TRACKED_TASK_KINDS: [TaskKind; 2] = [TaskKind::Compaction, TaskKind::PageRequestHandler];
+    const TRACKED_TASK_KINDS: [TaskKind; 1] = [TaskKind::PageRequestHandler];
 
     pub(crate) fn for_task_kind(&self, task_kind: TaskKind) -> Option<&Histogram> {
         self.map[task_kind].as_ref()

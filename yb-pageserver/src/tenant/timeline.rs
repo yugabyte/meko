@@ -976,12 +976,7 @@ impl Timeline {
                  compute_page_store and internal_page_store to be configured"
             )));
         };
-        let redo_attempt_type = if ctx.task_kind() == TaskKind::Compaction {
-            RedoAttemptType::LegacyCompaction
-        } else {
-            RedoAttemptType::ReadPage
-        };
-        self.get_vectored_via_page_writer(page_writer, query, redo_attempt_type, ctx)
+        self.get_vectored_via_page_writer(page_writer, query, RedoAttemptType::ReadPage, ctx)
             .await
     }
 
@@ -1526,12 +1521,8 @@ impl Timeline {
     /// ones that aren't mentioned here):
     /// - [`TaskKind::TimelineDeletionWorker`]
     ///    - NB: also used for tenant deletion
-    /// - [`TaskKind::RemoteUploadTask`]`
+    /// - [`TaskKind::RemoteUploadTask`]
     /// - [`TaskKind::InitialLogicalSizeCalculation`]
-    /// - [`TaskKind::DownloadAllRemoteLayers`] (can we get rid of it?)
-    // Inventory of timeline-scoped task_mgr tasks that use spawn but aren't sensitive:
-    /// - [`TaskKind::Eviction`]
-    /// - [`TaskKind::LayerFlushTask`]
     /// - [`TaskKind::OndemandLogicalSizeCalculation`]
     /// - [`TaskKind::GarbageCollector`] (immediate_gc is timeline-scoped)
     pub(crate) async fn shutdown(&self, mode: ShutdownMode) {
