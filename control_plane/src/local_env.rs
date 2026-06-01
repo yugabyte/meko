@@ -500,14 +500,8 @@ impl LocalEnv {
     }
 
     pub fn pageserver_bin(&self) -> PathBuf {
-        // Default to the yb-pageserver fork (row-per-page YB storage).
-        // Override with `NEON_PAGESERVER_BIN=<path-to-pageserver>` to
-        // run the upstream layer-file pageserver — useful for A/B
-        // benchmarking. The env var wins over the default whichever
-        // binary is named.
-        if let Ok(custom) = std::env::var("NEON_PAGESERVER_BIN") {
-            return PathBuf::from(custom);
-        }
+        // The pageserver binary is `yb-pageserver` (process names
+        // carry the yb- prefix; folder + crate are bare `pageserver`).
         self.neon_distrib_dir.join("yb-pageserver")
     }
 

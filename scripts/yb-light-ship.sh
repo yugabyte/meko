@@ -4,11 +4,6 @@
 # Builds the release-mode binaries needed by the yb-pageserver deployment,
 # stages them into a versioned bundle directory under /tmp, and prints
 # the rsync command for shipping to the deployment host.
-#
-# The legacy upstream `pageserver` binary is NOT built or shipped:
-# `control_plane/src/local_env.rs::pageserver_bin()` makes yb-pageserver
-# the default; the legacy binary is only invoked when a developer sets
-# `NEON_PAGESERVER_BIN=<path>` for A/B benchmarking.
 set -euo pipefail
 
 # protoc comes from `protoc-bin-vendored` via pageserver/page_api/build.rs;
@@ -33,8 +28,7 @@ echo ">>> Staging bundle at ${BUNDLE}"
 rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/lib"
 
-# Binaries actually launched by neon_local in yb-mode (see local_env.rs).
-# The legacy `pageserver` binary is intentionally NOT included.
+# Binaries actually launched by neon_local (see local_env.rs).
 for bin in yb-pageserver neon_local safekeeper storage_broker storage_controller compute_ctl endpoint_storage; do
     cp -v "target/release/${bin}" "${BUNDLE}/${bin}"
 done
@@ -51,9 +45,7 @@ Build date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 Commit:     $(git rev-parse HEAD)
 Subject:    $(git log -1 --pretty=%s)
 
-Bundle excludes the legacy upstream pageserver binary
-(neon_local defaults to yb-pageserver; the legacy one is only
-reachable via NEON_PAGESERVER_BIN=<path> for A/B benchmarking).
+neon_local launches yb-pageserver (see local_env.rs::pageserver_bin).
 TXT
 
 echo

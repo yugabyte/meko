@@ -231,30 +231,29 @@ impl YsqlClient {
     /// etc.) get cache hits; callers that build SQL with per-call-unique
     /// inputs (such as bulk INSERTs whose VALUES list scales with the
     /// chunk size) get one cache entry per shape — bounded in practice.
-    async fn get_or_prepare_at(
+    /// Atomically resolve `(client, stmt)` for `sql` on the given slot.
+    /// Both are guaranteed to be from the same client incarnation —
+    /// holding the slot lock across the prepare prevents the race
+    /// where a concurrent `force_reconnect_at` swaps the slot's client
+    /// during our prepare, leaving the cache with a `Statement` bound
+    /// to a dropped client and subsequent `execute()` calls failing
+    /// with "prepared statement sN does not exist".
+    ///
+    /// Serializes same-slot prepares, but each SQL is only prepared
+    /// once per connection lifetime, so this is cheap in steady state.
+    async fn get_client_and_stmt_at(
         &self,
         slot: usize,
-        client: &tokio_postgres::Client,
         sql: &str,
-    ) -> Result<Statement, tokio_postgres::Error> {
-        {
-            let guard = self.pool[slot].lock().await;
-            if let Some(stmt) = guard.prepared.get(sql) {
-                return Ok(stmt.clone());
-            }
-        }
-        let stmt = client.prepare(sql).await?;
+    ) -> Result<(Arc<tokio_postgres::Client>, Statement), tokio_postgres::Error> {
         let mut guard = self.pool[slot].lock().await;
-        // Another task may have prepared the same SQL on this slot
-        // while we were awaiting `client.prepare()`; keep whichever
-        // entry is already there (statements are interchangeable for a
-        // given SQL on a given Client) and drop ours.
-        let cached = guard
-            .prepared
-            .entry(sql.to_string())
-            .or_insert_with(|| stmt.clone())
-            .clone();
-        Ok(cached)
+        let client = guard.client.clone();
+        if let Some(stmt) = guard.prepared.get(sql) {
+            return Ok((client, stmt.clone()));
+        }
+        let stmt = guard.client.prepare(sql).await?;
+        guard.prepared.insert(sql.to_string(), stmt.clone());
+        Ok((client, stmt))
     }
 
     pub async fn execute(
@@ -323,70 +322,75 @@ impl YsqlClient {
         F: Fn(Arc<tokio_postgres::Client>, Statement) -> Fut,
         Fut: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
     {
+        // Treat any error message containing one of these as a
+        // connection-drop signal. `is_closed()` doesn't always race
+        // ahead of the user-visible op: tokio-postgres can surface
+        // "connection closed" from the response channel before the
+        // Client's internal task has marked itself closed. The
+        // message check is the safety net.
+        fn looks_like_dropped_connection(msg: &str) -> bool {
+            msg.contains("connection closed")
+                || msg.contains("connection reset")
+                || msg.contains("connection unexpectedly closed")
+        }
+
         let slot = self.pick_slot();
         let mut delay = std::time::Duration::from_millis(200);
         for attempt in 1..=5u32 {
-            let mut client = self.current_client_at(slot).await?;
-            let stmt = match self.get_or_prepare_at(slot, &client, sql).await {
-                Ok(s) => s,
+            // Ensure the slot's current client is live before fetching
+            // its (client, stmt) pair atomically.
+            let _ = self.current_client_at(slot).await?;
+            let (client, stmt) = match self.get_client_and_stmt_at(slot, sql).await {
+                Ok(pair) => pair,
                 Err(e) => {
-                    // prepare() failed — same retry classification as a
-                    // failed op below. Connection-drop path reconnects
-                    // and retries; transient YB errors backoff.
-                    if client.is_closed() {
-                        client = self.force_reconnect_at(slot).await?;
-                        match self.get_or_prepare_at(slot, &client, sql).await {
-                            Ok(s) => s,
-                            Err(e2) => {
-                                return Err(anyhow::Error::from(e2)).with_context(|| {
-                                    format!(
-                                        "YsqlClient: {op_label} prepare after reconnect ({e})"
-                                    )
-                                });
-                            }
-                        }
-                    } else {
-                        let msg = e.to_string();
-                        if attempt < 5 && msg.contains("Restart read required") {
-                            tokio::time::sleep(delay).await;
-                            delay = delay.saturating_mul(2);
+                    // prepare() failed. If the connection looks dead,
+                    // reconnect and loop. Otherwise classify as either
+                    // a transient "Restart read required" (backoff +
+                    // continue) or a hard error (return).
+                    let msg = e.to_string();
+                    let live = self.current_client_at(slot).await?;
+                    if live.is_closed() || looks_like_dropped_connection(&msg) {
+                        let _ = self.force_reconnect_at(slot).await?;
+                        if attempt < 5 {
                             continue;
                         }
-                        return Err(anyhow::Error::from(e));
+                        return Err(anyhow::Error::from(e)).with_context(|| {
+                            format!("YsqlClient: {op_label} prepare exhausted retries")
+                        });
                     }
+                    if attempt < 5 && msg.contains("Restart read required") {
+                        tokio::time::sleep(delay).await;
+                        delay = delay.saturating_mul(2);
+                        continue;
+                    }
+                    return Err(anyhow::Error::from(e));
                 }
             };
             match f(client.clone(), stmt).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    // (1) connection drop: reconnect once and retry inside
-                    // this same iteration. If the retry also fails, fall
-                    // through to the transient classifier below.
-                    let e = if client.is_closed() {
-                        let fresh = self.force_reconnect_at(slot).await?;
-                        // Re-prepare on the fresh connection.
-                        let stmt = self
-                            .get_or_prepare_at(slot, &fresh, sql)
-                            .await
-                            .map_err(anyhow::Error::from)
-                            .with_context(|| {
-                                format!("YsqlClient: {op_label} re-prepare after reconnect")
-                            })?;
-                        match f(fresh, stmt).await {
-                            Ok(v) => return Ok(v),
-                            Err(e2) => {
-                                return Err(anyhow::Error::from(e2)).with_context(|| {
-                                    format!("YsqlClient: {op_label} after reconnect ({e})")
-                                });
-                            }
+                    let msg = e.to_string();
+
+                    // (1) connection drop — reconnect, then `continue`
+                    // the outer loop so we get up to 5 attempts total
+                    // (each with fresh client + re-prepared stmt).
+                    if client.is_closed() || looks_like_dropped_connection(&msg) {
+                        let _ = self.force_reconnect_at(slot).await?;
+                        if attempt < 5 {
+                            tracing::info!(
+                                attempt,
+                                "YsqlClient: {op_label} reconnect+retry after dropped connection ({msg})"
+                            );
+                            continue;
                         }
-                    } else {
-                        e
-                    };
+                        return Err(anyhow::Error::from(e)).with_context(|| {
+                            format!("YsqlClient: {op_label} after reconnect retries exhausted")
+                        });
+                    }
+
                     // (2) YB "Restart read required" — match by message
                     // because tokio-postgres does not surface a stable
                     // SQLSTATE for this. Cheap string contain check.
-                    let msg = e.to_string();
                     if attempt < 5 && msg.contains("Restart read required") {
                         tracing::info!(
                             attempt,

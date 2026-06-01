@@ -211,9 +211,8 @@ yb-light-bundle/
   start.sh / stop.sh
 ```
 
-`bin/yb-pageserver` is the binary name `neon_local` looks for by
-default — override with `NEON_PAGESERVER_BIN` if running against an
-upstream Neon pageserver for A/B comparison.
+`bin/yb-pageserver` is the binary name `neon_local` launches; it lives
+under `neon_distrib_dir` (set in `~/.neon/config`).
 
 ## Tests
 
