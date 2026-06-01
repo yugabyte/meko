@@ -1,30 +1,17 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
 use chrono::NaiveDateTime;
-use once_cell::sync::Lazy;
 use tracing::info;
 use utils::lsn::{AtomicLsn, Lsn};
 
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::remote_timeline_client::index::IndexPart;
 
-/// Kill switch for upload queue reordering in case it causes problems.
-/// TODO: remove this once we have confidence in it.
-static DISABLE_UPLOAD_QUEUE_REORDERING: Lazy<bool> =
-    Lazy::new(|| std::env::var("DISABLE_UPLOAD_QUEUE_REORDERING").as_deref() == Ok("true"));
-
-/// Kill switch for index upload coalescing in case it causes problems.
-/// TODO: remove this once we have confidence in it.
-static DISABLE_UPLOAD_QUEUE_INDEX_COALESCING: Lazy<bool> =
-    Lazy::new(|| std::env::var("DISABLE_UPLOAD_QUEUE_INDEX_COALESCING").as_deref() == Ok("true"));
-
-// clippy warns that Uninitialized is much smaller than Initialized, which wastes
-// memory for Uninitialized variants. Doesn't matter in practice, there are not
-// that many upload queues in a running pageserver, and most of them are initialized
-// anyway.
+// Uninitialized is much smaller than Initialized, but this is harmless
+// in practice: only one upload queue exists per timeline.
 #[allow(clippy::large_enum_variant)]
 pub enum UploadQueue {
     Uninitialized,
@@ -42,72 +29,58 @@ impl UploadQueue {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub enum OpType {
-    MayReorder,
-    FlushDeletion,
-}
-
-/// This keeps track of queued and in-progress tasks.
+/// Queued and in-progress upload operations.
+///
+/// yb-pageserver only uploads index parts (no layer files, no per-file
+/// deletes), so the queue is highly degenerate: at most one operation
+/// is ever in flight, and Barrier / Shutdown / UploadMetadata all
+/// fully block each other. We keep the queue shape (FIFO of ops + a
+/// slot for the in-flight task) to preserve barrier / shutdown
+/// semantics, but the prior reordering / `can_bypass` machinery is
+/// gone.
 pub struct UploadQueueInitialized {
-    /// Maximum number of inprogress tasks to schedule. 0 is no limit.
-    pub(crate) inprogress_limit: usize,
-
-    /// Counter to assign task IDs
-    pub(crate) task_counter: u64,
-
-    /// The next uploaded index_part.json; assumed to be dirty.
+    /// The next uploaded `index_part.json`; assumed to be dirty.
     ///
-    /// Should not be read, directly except for layer file updates. Instead you should add a
-    /// projected field.
+    /// Don't read this directly except for layer-metadata updates —
+    /// add a projected field instead.
     pub(crate) dirty: IndexPart,
 
-    /// The latest remote persisted IndexPart.
+    /// The latest remote-persisted `IndexPart`.
     ///
-    /// Each completed metadata upload will update this. The second item is the task_id which last
-    /// updated the value, used to ensure we never store an older value over a newer one.
+    /// Each completed metadata upload updates this. The second item
+    /// is the task ID that last wrote it, so we never overwrite a
+    /// newer value with an older one.
     pub(crate) clean: (IndexPart, Option<u64>),
 
-    /// How many file uploads or deletions been scheduled, since the
-    /// last (scheduling of) metadata index upload?
-    pub(crate) latest_files_changes_since_metadata_upload_scheduled: u64,
-
-    /// The Lsn is only updated after our generation has been validated with
-    /// the control plane (unlesss a timeline's generation is None, in which case
-    /// we skip validation)
+    /// Only updated after the generation has been validated with the
+    /// control plane (skipped when the timeline's generation is None).
     pub(crate) visible_remote_consistent_lsn: Arc<AtomicLsn>,
 
-    /// Tasks that are currently in-progress. In-progress means that a tokio Task
-    /// has been launched for it. An in-progress task can be busy uploading, but it can
-    /// also be waiting on the `concurrency_limiter` Semaphore in S3Bucket, or it can
-    /// be waiting for retry in `exponential_backoff`.
-    pub inprogress_tasks: HashMap<u64, Arc<UploadTask>>,
+    /// Monotonic ID assigned to each spawned task. Used for tracing
+    /// and for clean-update ordering above.
+    pub(crate) task_counter: u64,
 
-    /// Queued operations that have not been launched yet. They might depend on previous
-    /// tasks to finish. For example, metadata upload cannot be performed before all
-    /// preceding layer file uploads have completed.
+    /// Currently in-progress upload task. At most one exists because
+    /// every `UploadOp` blocks every other one.
+    pub inprogress_task: Option<Arc<UploadTask>>,
+
+    /// Operations queued for later execution.
     pub queued_operations: VecDeque<UploadOp>,
 
-    /// Files which have been unlinked but not yet had scheduled a deletion for. Only kept around
-    /// for error logging.
-    ///
-    /// Putting this behind a testing feature to catch problems in tests, but assuming we could have a
-    /// bug causing leaks, then it's better to not leave this enabled for production builds.
-    #[cfg(feature = "testing")]
-    pub(crate) dangling_files: HashMap<LayerName, Generation>,
-
-    /// Set to true when we have inserted the `UploadOp::Shutdown` into the `inprogress_tasks`.
+    /// Set to true once `UploadOp::Shutdown` has been observed at the
+    /// head of the queue.
     pub(crate) shutting_down: bool,
 
-    /// Permitless semaphore on which any number of `RemoteTimelineClient::shutdown` futures can
-    /// wait on until one of them stops the queue. The semaphore is closed when
-    /// `RemoteTimelineClient::launch_queued_tasks` encounters `UploadOp::Shutdown`.
+    /// Permitless semaphore on which any number of
+    /// `RemoteTimelineClient::shutdown` futures can park until one of
+    /// them stops the queue. Closed by `launch_queued_tasks` when it
+    /// encounters `UploadOp::Shutdown`.
     pub(crate) shutdown_ready: Arc<tokio::sync::Semaphore>,
 }
 
 impl UploadQueueInitialized {
     pub(super) fn no_pending_work(&self) -> bool {
-        self.inprogress_tasks.is_empty() && self.queued_operations.is_empty()
+        self.inprogress_task.is_none() && self.queued_operations.is_empty()
     }
 
     pub(super) fn get_last_remote_consistent_lsn_visible(&self) -> Lsn {
@@ -119,148 +92,36 @@ impl UploadQueueInitialized {
         self.clean.1.map(|_| lsn)
     }
 
-    /// Returns and removes the next ready operation from the queue, if any. This isn't necessarily
-    /// the first operation in the queue, to avoid head-of-line blocking -- an operation can jump
-    /// the queue if it doesn't conflict with operations ahead of it.
+    /// Pop the next ready op from the queue, plus any back-to-back
+    /// `UploadMetadata` operations to coalesce with it.
     ///
-    /// Also returns any operations that were coalesced into this one, e.g. multiple index uploads.
-    ///
-    /// None may be returned even if the queue isn't empty, if no operations are ready yet.
-    ///
-    /// NB: this is quadratic, but queues are expected to be small, and bounded by inprogress_limit.
+    /// Returns `None` when the queue is empty, a task is already in
+    /// flight, or the head is `Shutdown` (which is left at the head
+    /// to block everything; `shutdown_ready` is closed as a signal).
     pub fn next_ready(&mut self) -> Option<(UploadOp, Vec<UploadOp>)> {
-        // If inprogress_tasks is already at limit, don't schedule anything more.
-        if self.inprogress_limit > 0 && self.inprogress_tasks.len() >= self.inprogress_limit {
+        if self.inprogress_task.is_some() {
+            return None;
+        }
+        let head = self.queued_operations.front()?;
+        if matches!(head, UploadOp::Shutdown) {
+            self.shutdown_ready.close();
             return None;
         }
 
-        for (i, candidate) in self.queued_operations.iter().enumerate() {
-            // If this candidate is ready, go for it. Otherwise, try the next one.
-            if self.is_ready(i) {
-                // Shutdown operations are left at the head of the queue, to prevent further
-                // operations from starting. Signal that we're ready to shut down.
-                if matches!(candidate, UploadOp::Shutdown) {
-                    assert!(self.inprogress_tasks.is_empty(), "shutdown with tasks");
-                    assert_eq!(i, 0, "shutdown not at head of queue");
-                    self.shutdown_ready.close();
-                    return None;
-                }
-
-                let mut op = self.queued_operations.remove(i).expect("i can't disappear");
-
-                // Coalesce any back-to-back index uploads by only uploading the newest one that's
-                // ready. This typically happens with layer/index/layer/index/... sequences, where
-                // the layers bypass the indexes, leaving the indexes queued.
-                //
-                // If other operations are interleaved between index uploads we don't try to
-                // coalesce them, since we may as well update the index concurrently with them.
-                // This keeps the index fresh and avoids starvation.
-                //
-                // NB: we assume that all uploaded indexes have the same remote path. This
-                // is true at the time of writing: the path only depends on the tenant,
-                // timeline and generation, all of which are static for a timeline instance.
-                // Otherwise, we must be careful not to coalesce different paths.
-                let mut coalesced_ops = Vec::new();
-                if matches!(op, UploadOp::UploadMetadata { .. }) {
-                    while let Some(UploadOp::UploadMetadata { .. }) = self.queued_operations.get(i)
-                    {
-                        if *DISABLE_UPLOAD_QUEUE_INDEX_COALESCING {
-                            break;
-                        }
-                        if !self.is_ready(i) {
-                            break;
-                        }
-                        coalesced_ops.push(op);
-                        op = self.queued_operations.remove(i).expect("i can't disappear");
-                    }
-                }
-
-                return Some((op, coalesced_ops));
-            }
-
-            // Nothing can bypass a barrier or shutdown. If it wasn't scheduled above, give up.
-            if matches!(candidate, UploadOp::Barrier(_) | UploadOp::Shutdown) {
-                return None;
-            }
-
-            // If upload queue reordering is disabled, bail out after the first operation.
-            if *DISABLE_UPLOAD_QUEUE_REORDERING {
-                return None;
+        let mut op = self.queued_operations.pop_front().expect("checked above");
+        let mut coalesced_ops = Vec::new();
+        if matches!(op, UploadOp::UploadMetadata { .. }) {
+            while let Some(UploadOp::UploadMetadata { .. }) = self.queued_operations.front() {
+                coalesced_ops.push(op);
+                op = self
+                    .queued_operations
+                    .pop_front()
+                    .expect("checked via front()");
             }
         }
-        None
+        Some((op, coalesced_ops))
     }
 
-    /// Returns true if the queued operation at the given position is ready to be uploaded, i.e. if
-    /// it doesn't conflict with any in-progress or queued operations ahead of it. Operations are
-    /// allowed to skip the queue when it's safe to do so, to increase parallelism.
-    ///
-    /// The position must be valid for the queue size.
-    fn is_ready(&self, pos: usize) -> bool {
-        let candidate = self.queued_operations.get(pos).expect("invalid position");
-        self
-            // Look at in-progress operations, in random order.
-            .inprogress_tasks
-            .values()
-            .map(|task| &task.op)
-            // Then queued operations ahead of the candidate, front-to-back.
-            .chain(self.queued_operations.iter().take(pos))
-            // Keep track of the active index ahead of each operation. This is used to ensure that
-            // an upload doesn't skip the queue too far, such that it modifies a layer that's
-            // referenced by an active index.
-            //
-            // It's okay that in-progress operations are emitted in random order above, since at
-            // most one of them can be an index upload (enforced by can_bypass).
-            .scan(&self.clean.0, |next_active_index, op| {
-                let active_index = *next_active_index;
-                if let UploadOp::UploadMetadata { uploaded } = op {
-                    *next_active_index = uploaded; // stash index for next operation after this
-                }
-                Some((op, active_index))
-            })
-            // Check if the candidate can bypass all of them.
-            .all(|(op, active_index)| candidate.can_bypass(op, active_index))
-    }
-
-    /// Test helper that schedules all ready operations into inprogress_tasks, and returns
-    /// references to them.
-    ///
-    /// TODO: the corresponding production logic should be moved from RemoteTimelineClient into
-    /// UploadQueue, so we can use the same code path.
-    #[cfg(test)]
-    fn schedule_ready(&mut self) -> Vec<Arc<UploadTask>> {
-        let mut tasks = Vec::new();
-        // NB: schedule operations one by one, to handle conflicts with inprogress_tasks.
-        while let Some((op, coalesced_ops)) = self.next_ready() {
-            self.task_counter += 1;
-            let task = Arc::new(UploadTask {
-                task_id: self.task_counter,
-                op,
-                coalesced_ops,
-                retries: 0.into(),
-            });
-            self.inprogress_tasks.insert(task.task_id, task.clone());
-            tasks.push(task);
-        }
-        tasks
-    }
-
-    /// Test helper that marks an operation as completed, removing it from inprogress_tasks.
-    ///
-    /// TODO: the corresponding production logic should be moved from RemoteTimelineClient into
-    /// UploadQueue, so we can use the same code path.
-    #[cfg(test)]
-    fn complete(&mut self, task_id: u64) {
-        let Some(task) = self.inprogress_tasks.remove(&task_id) else {
-            return;
-        };
-        // Update the clean index on uploads.
-        if let UploadOp::UploadMetadata { ref uploaded } = task.op {
-            if task.task_id > self.clean.1.unwrap_or_default() {
-                self.clean = (*uploaded.clone(), Some(task.task_id));
-            }
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -306,7 +167,6 @@ impl UploadQueue {
     pub fn initialize_empty_remote(
         &mut self,
         metadata: &TimelineMetadata,
-        inprogress_limit: usize,
     ) -> anyhow::Result<&mut UploadQueueInitialized> {
         match self {
             UploadQueue::Uninitialized => (),
@@ -320,17 +180,12 @@ impl UploadQueue {
         let index_part = IndexPart::empty(metadata.clone());
 
         let state = UploadQueueInitialized {
-            inprogress_limit,
             dirty: index_part.clone(),
             clean: (index_part, None),
-            latest_files_changes_since_metadata_upload_scheduled: 0,
             visible_remote_consistent_lsn: Arc::new(AtomicLsn::new(0)),
-            // what follows are boring default initializations
             task_counter: 0,
-            inprogress_tasks: HashMap::new(),
+            inprogress_task: None,
             queued_operations: VecDeque::new(),
-            #[cfg(feature = "testing")]
-            dangling_files: HashMap::new(),
             shutting_down: false,
             shutdown_ready: Arc::new(tokio::sync::Semaphore::new(0)),
         };
@@ -342,7 +197,6 @@ impl UploadQueue {
     pub fn initialize_with_current_remote_index_part(
         &mut self,
         index_part: &IndexPart,
-        inprogress_limit: usize,
     ) -> anyhow::Result<&mut UploadQueueInitialized> {
         match self {
             UploadQueue::Uninitialized => (),
@@ -357,19 +211,14 @@ impl UploadQueue {
         );
 
         let state = UploadQueueInitialized {
-            inprogress_limit,
             dirty: index_part.clone(),
             clean: (index_part.clone(), None),
-            latest_files_changes_since_metadata_upload_scheduled: 0,
             visible_remote_consistent_lsn: Arc::new(
                 index_part.metadata.disk_consistent_lsn().into(),
             ),
-            // what follows are boring default initializations
             task_counter: 0,
-            inprogress_tasks: HashMap::new(),
+            inprogress_task: None,
             queued_operations: VecDeque::new(),
-            #[cfg(feature = "testing")]
-            dangling_files: HashMap::new(),
             shutting_down: false,
             shutdown_ready: Arc::new(tokio::sync::Semaphore::new(0)),
         };
@@ -406,33 +255,35 @@ impl UploadQueue {
     }
 }
 
-/// An in-progress upload or delete task.
+/// An in-progress upload task.
 #[derive(Debug)]
 pub struct UploadTask {
-    /// Unique ID of this task. Used as the key in `inprogress_tasks` above.
+    /// Unique ID. Mirrors `UploadQueueInitialized::task_counter`.
     pub task_id: u64,
-    /// Number of task retries.
+    /// Number of retries attempted by `perform_upload_task`.
     pub retries: AtomicU32,
     /// The upload operation.
     pub op: UploadOp,
-    /// Any upload operations that were coalesced into this operation. This typically happens with
-    /// back-to-back index uploads, see `UploadQueueInitialized::next_ready()`.
+    /// Back-to-back `UploadMetadata`s that were coalesced into this
+    /// task at scheduling time (see
+    /// [`UploadQueueInitialized::next_ready`]).
     pub coalesced_ops: Vec<UploadOp>,
 }
 
 #[derive(Clone, Debug)]
 pub enum UploadOp {
-    /// Upload a index_part.json file
+    /// Upload an `index_part.json` file.
     UploadMetadata {
-        /// The next [`UploadQueueInitialized::clean`] after this upload succeeds.
+        /// The next [`UploadQueueInitialized::clean`] after this
+        /// upload succeeds.
         uploaded: Box<IndexPart>,
     },
 
-    /// Barrier. When the barrier operation is reached, the channel is closed.
+    /// Barrier. The channel is closed once the barrier is reached.
     Barrier(tokio::sync::watch::Sender<()>),
 
-    /// Shutdown; upon encountering this operation no new operations will be spawned, otherwise
-    /// this is the same as a Barrier.
+    /// Shutdown: blocks every subsequent operation. Otherwise the
+    /// same as a Barrier.
     Shutdown,
 }
 
@@ -451,17 +302,3 @@ impl std::fmt::Display for UploadOp {
         }
     }
 }
-
-impl UploadOp {
-    /// In yb-mode the upload queue only carries index uploads, barriers,
-    /// and shutdowns. Indexes can never bypass each other; barriers and
-    /// shutdowns block everything.
-    pub fn can_bypass(&self, other: &UploadOp, _index: &IndexPart) -> bool {
-        match (self, other) {
-            (UploadOp::Barrier(_), _) | (_, UploadOp::Barrier(_)) => false,
-            (UploadOp::Shutdown, _) | (_, UploadOp::Shutdown) => false,
-            (UploadOp::UploadMetadata { .. }, UploadOp::UploadMetadata { .. }) => false,
-        }
-    }
-}
-

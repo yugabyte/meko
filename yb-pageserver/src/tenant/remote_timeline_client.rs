@@ -179,7 +179,7 @@ pub mod index;
 pub mod manifest;
 pub(crate) mod upload;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -216,7 +216,6 @@ use super::config::AttachedLocationConfig;
 use super::storage_layer::LayerName;
 use super::upload_queue::{NotInitialized, SetDeletedFlagProgress};
 use super::{DeleteTimelineError, Generation};
-use crate::config::PageServerConf;
 use crate::deletion_queue::{DeletionQueueClient, DeletionQueueError};
 use crate::metrics::{
     MeasureRemoteOp,
@@ -341,8 +340,6 @@ impl From<&AttachedLocationConfig> for RemoteTimelineClientConfig {
 ///
 /// Downloads are not queued, they are performed immediately.
 pub(crate) struct RemoteTimelineClient {
-    conf: &'static PageServerConf,
-
     runtime: tokio::runtime::Handle,
 
     tenant_shard_id: TenantShardId,
@@ -379,14 +376,12 @@ impl RemoteTimelineClient {
     pub(crate) fn new(
         remote_storage: GenericRemoteStorage,
         deletion_queue_client: DeletionQueueClient,
-        conf: &'static PageServerConf,
         tenant_shard_id: TenantShardId,
         timeline_id: TimelineId,
         generation: Generation,
         location_conf: &AttachedLocationConfig,
     ) -> RemoteTimelineClient {
         RemoteTimelineClient {
-            conf,
             runtime: if cfg!(test) {
                 // remote_timeline_client.rs tests rely on current-thread runtime
                 tokio::runtime::Handle::current()
@@ -412,20 +407,10 @@ impl RemoteTimelineClient {
     /// an index file upload, i.e., it's not empty.
     /// The given `index_part` must be the one on the remote.
     pub fn init_upload_queue(&self, index_part: &IndexPart) -> anyhow::Result<()> {
-        // Set the maximum number of inprogress tasks to the remote storage concurrency. There's
-        // certainly no point in starting more upload tasks than this.
-        let inprogress_limit = self
-            .conf
-            .remote_storage_config
-            .as_ref()
-            .map_or(0, |r| r.concurrency_limit());
         let mut upload_queue = self.upload_queue.lock().unwrap();
-        upload_queue.initialize_with_current_remote_index_part(index_part, inprogress_limit)?;
+        upload_queue.initialize_with_current_remote_index_part(index_part)?;
         self.update_remote_physical_size_gauge(Some(index_part));
-        info!(
-            "initialized upload queue from remote index with {} layer files",
-            index_part.layer_metadata.len()
-        );
+        info!("initialized upload queue from remote index");
         Ok(())
     }
 
@@ -440,16 +425,8 @@ impl RemoteTimelineClient {
         rel_size_v2_migration: Option<RelSizeMigration>,
         rel_size_migrated_at: Option<Lsn>,
     ) -> anyhow::Result<()> {
-        // Set the maximum number of inprogress tasks to the remote storage concurrency. There's
-        // certainly no point in starting more upload tasks than this.
-        let inprogress_limit = self
-            .conf
-            .remote_storage_config
-            .as_ref()
-            .map_or(0, |r| r.concurrency_limit());
         let mut upload_queue = self.upload_queue.lock().unwrap();
-        let initialized_queue =
-            upload_queue.initialize_empty_remote(local_metadata, inprogress_limit)?;
+        let initialized_queue = upload_queue.initialize_empty_remote(local_metadata)?;
         initialized_queue.dirty.rel_size_migration = rel_size_v2_migration;
         initialized_queue.dirty.rel_size_migrated_at = rel_size_migrated_at;
         self.update_remote_physical_size_gauge(None);
@@ -467,14 +444,9 @@ impl RemoteTimelineClient {
         let deleted_at = index_part.deleted_at.ok_or(anyhow::anyhow!(
             "bug: it is responsibility of the caller to provide index part from MaybeDeletedIndexPart::Deleted"
         ))?;
-        let inprogress_limit = self
-            .conf
-            .remote_storage_config
-            .as_ref()
-            .map_or(0, |r| r.concurrency_limit());
 
         let mut upload_queue = self.upload_queue.lock().unwrap();
-        upload_queue.initialize_with_current_remote_index_part(index_part, inprogress_limit)?;
+        upload_queue.initialize_with_current_remote_index_part(index_part)?;
         self.update_remote_physical_size_gauge(Some(index_part));
         self.stop_impl(&mut upload_queue);
 
@@ -822,18 +794,13 @@ impl RemoteTimelineClient {
 
         let index_part = &upload_queue.dirty;
 
-        info!(
-            "scheduling metadata upload up to consistent LSN {disk_consistent_lsn} with {} files ({} changed)",
-            index_part.layer_metadata.len(),
-            upload_queue.latest_files_changes_since_metadata_upload_scheduled,
-        );
+        info!("scheduling metadata upload up to consistent LSN {disk_consistent_lsn}");
 
         let op = UploadOp::UploadMetadata {
             uploaded: Box::new(index_part.clone()),
         };
         self.metric_begin(&op);
         upload_queue.queued_operations.push_back(op);
-        upload_queue.latest_files_changes_since_metadata_upload_scheduled = 0;
 
         // Launch the task immediately, if possible
         self.launch_queued_tasks(upload_queue);
@@ -1365,14 +1332,14 @@ impl RemoteTimelineClient {
     }
 
     /// Pick next tasks from the queue, and start as many of them as possible without violating
-    /// the ordering constraints.
-    ///
-    /// The number of inprogress tasks is limited by `Self::inprogress_tasks`, see `next_ready`.
+    /// At most one task runs at a time — every `UploadOp` variant
+    /// blocks every other one — so the loop body runs zero or one
+    /// iterations per call. We still loop to drain trailing barriers
+    /// (which complete inline without spawning a task).
     fn launch_queued_tasks(self: &Arc<Self>, upload_queue: &mut UploadQueueInitialized) {
         while let Some((mut next_op, coalesced_ops)) = upload_queue.next_ready() {
             debug!("starting op: {next_op}");
 
-            // Prepare upload.
             match &mut next_op {
                 UploadOp::UploadMetadata { .. } => {}
                 UploadOp::Barrier(sender) => {
@@ -1382,22 +1349,20 @@ impl RemoteTimelineClient {
                 UploadOp::Shutdown => unreachable!("shutdown is intentionally never popped off"),
             };
 
-            // Assign unique ID to this task
             upload_queue.task_counter += 1;
             let upload_task_id = upload_queue.task_counter;
 
-            // Add it to the in-progress map
             let task = Arc::new(UploadTask {
                 task_id: upload_task_id,
                 op: next_op,
                 coalesced_ops,
                 retries: AtomicU32::new(0),
             });
-            upload_queue
-                .inprogress_tasks
-                .insert(task.task_id, Arc::clone(&task));
+            assert!(
+                upload_queue.inprogress_task.replace(Arc::clone(&task)).is_none(),
+                "next_ready returned a task while one was already in flight"
+            );
 
-            // Spawn task to perform the task
             let self_rc = Arc::clone(self);
             let tenant_shard_id = self.tenant_shard_id;
             let timeline_id = self.timeline_id;
@@ -1413,8 +1378,6 @@ impl RemoteTimelineClient {
                 }
                 .instrument(info_span!(parent: None, "remote_upload", tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(), %timeline_id, %upload_task_id)),
             );
-
-            // Loop back to process next task
         }
     }
 
@@ -1562,7 +1525,11 @@ impl RemoteTimelineClient {
                 }
             };
 
-            upload_queue.inprogress_tasks.remove(&task.task_id);
+            let cleared = upload_queue.inprogress_task.take();
+            debug_assert!(
+                cleared.as_ref().is_some_and(|t| t.task_id == task.task_id),
+                "perform_upload_task completing a task not held in inprogress_task",
+            );
 
             let lsn_update = match task.op {
                 UploadOp::UploadMetadata { ref uploaded } => {
@@ -1695,18 +1662,14 @@ impl RemoteTimelineClient {
                     // but for this use case it doesnt really makes sense to bring unsafe code only for this usage point.
                     // Deletion is not really perf sensitive so there shouldnt be any problems with cloning a fraction of it.
                     let upload_queue_for_deletion = UploadQueueInitialized {
-                        inprogress_limit: initialized.inprogress_limit,
                         task_counter: 0,
                         dirty: initialized.dirty.clone(),
                         clean: initialized.clean.clone(),
-                        latest_files_changes_since_metadata_upload_scheduled: 0,
                         visible_remote_consistent_lsn: initialized
                             .visible_remote_consistent_lsn
                             .clone(),
-                        inprogress_tasks: HashMap::default(),
+                        inprogress_task: None,
                         queued_operations: VecDeque::default(),
-                        #[cfg(feature = "testing")]
-                        dangling_files: HashMap::default(),
                         shutting_down: false,
                         shutdown_ready: Arc::new(tokio::sync::Semaphore::new(0)),
                     };
@@ -1727,10 +1690,9 @@ impl RemoteTimelineClient {
                     }
                 };
 
-                // We don't need to do anything here for in-progress tasks. They will finish
-                // on their own, decrement the unfinished-task counter themselves, and observe
-                // that the queue is Stopped.
-                drop(qi.inprogress_tasks);
+                // We don't need to do anything here for the in-progress task — it will
+                // finish on its own and observe that the queue is Stopped.
+                drop(qi.inprogress_task);
 
                 // Tear down queued ops
                 for op in qi.queued_operations.into_iter() {

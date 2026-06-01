@@ -1777,7 +1777,6 @@ impl TenantShard {
         RemoteTimelineClient::new(
             remote_storage.clone(),
             self.deletion_queue_client.clone(),
-            self.conf,
             self.tenant_shard_id,
             timeline_id,
             self.generation,
@@ -4313,7 +4312,6 @@ impl TenantShard {
         RemoteTimelineClient::new(
             self.remote_storage.clone(),
             self.deletion_queue_client.clone(),
-            self.conf,
             self.tenant_shard_id,
             timeline_id,
             self.generation,
