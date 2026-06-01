@@ -16,17 +16,17 @@ use http_utils::tls_certs::ReloadingCertificateResolver;
 use metrics::launch_timestamp::{LaunchTimestamp, set_launch_timestamp_metric};
 use metrics::set_build_info_metric;
 use nix::sys::socket::{setsockopt, sockopt};
-use yb_pageserver::basebackup_cache::BasebackupCache;
-use yb_pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
-use yb_pageserver::controller_upcall_client::StorageControllerUpcallClient;
-use yb_pageserver::deletion_queue::DeletionQueue;
-use yb_pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
-use yb_pageserver::page_service::GrpcPageServiceHandler;
-use yb_pageserver::task_mgr::{
+use pageserver::basebackup_cache::BasebackupCache;
+use pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
+use pageserver::controller_upcall_client::StorageControllerUpcallClient;
+use pageserver::deletion_queue::DeletionQueue;
+use pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
+use pageserver::page_service::GrpcPageServiceHandler;
+use pageserver::task_mgr::{
     BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME, WALRECEIVER_RUNTIME,
 };
-use yb_pageserver::tenant::{TenantSharedResources, mgr};
-use yb_pageserver::{
+use pageserver::tenant::{TenantSharedResources, mgr};
+use pageserver::{
     CancellableTask, HttpEndpointListener, HttpsEndpointListener,
     MetricsCollectionTask, http, page_service, task_mgr, virtual_file,
 };
@@ -288,7 +288,7 @@ fn initialize_config(
             .context("parse original config as toml document")?;
         let parsed_toml = toml_edit::ser::to_document(&config_toml)
             .context("re-serialize config to toml document")?;
-        yb_pageserver::config::ignored_fields::find(ondisk_toml, parsed_toml)
+        pageserver::config::ignored_fields::find(ondisk_toml, parsed_toml)
     };
 
     // Construct the runtime god object (it's called PageServerConf but actually is just global shared state).
@@ -372,14 +372,14 @@ fn start_pageserver(
     #[cfg(target_os = "linux")]
     metrics::register_internal(Box::new(metrics::more_process_metrics::Collector::new())).unwrap();
     metrics::register_internal(Box::new(
-        yb_pageserver::metrics::tokio_epoll_uring::Collector::new(),
+        pageserver::metrics::tokio_epoll_uring::Collector::new(),
     ))
     .unwrap();
     metrics::register_internal(Box::new(
-        yb_pageserver::metrics::jemalloc_stats::JemallocCollector::new(),
+        pageserver::metrics::jemalloc_stats::JemallocCollector::new(),
     ))
     .unwrap();
-    yb_pageserver::preinitialize_metrics(conf, ignored);
+    pageserver::preinitialize_metrics(conf, ignored);
 
     // If any failpoints were set from FAILPOINTS environment variable,
     // print them to the log for debugging purposes
@@ -523,7 +523,7 @@ fn start_pageserver(
     match var("NEON_AUTH_TOKEN") {
         Ok(v) => {
             info!("Loaded JWT token for authentication with Safekeeper");
-            yb_pageserver::config::SAFEKEEPER_AUTH_TOKEN
+            pageserver::config::SAFEKEEPER_AUTH_TOKEN
                 .set(Arc::new(v))
                 .map_err(|_| anyhow!("Could not initialize SAFEKEEPER_AUTH_TOKEN"))?;
         }
@@ -581,7 +581,7 @@ fn start_pageserver(
 
     let (background_jobs_can_start, background_jobs_barrier) = utils::completion::channel();
 
-    let order = yb_pageserver::InitializationOrder {
+    let order = pageserver::InitializationOrder {
         initial_tenant_load_remote: Some(init_done_tx),
         initial_tenant_load: Some(init_remote_done_tx),
         background_jobs_can_start: background_jobs_barrier.clone(),
@@ -849,7 +849,7 @@ fn start_pageserver(
         signal_cancel.cancelled().await;
 
         shutdown_pageserver.cancel();
-        yb_pageserver::shutdown_pageserver(
+        pageserver::shutdown_pageserver(
             http_endpoint_listener,
             https_endpoint_listener,
             page_service,
@@ -873,7 +873,7 @@ async fn create_page_store_with_app_name(
     conf: &'static PageServerConf,
     application_name: &str,
     pool_size: usize,
-) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
+) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
     use remote_storage::RemoteStorageKind;
     let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
         return Ok(None);
@@ -882,8 +882,8 @@ async fn create_page_store_with_app_name(
         RemoteStorageKind::YbStore(cfg) => cfg.clone(),
         _ => return Ok(None),
     };
-    let ps_cfg = yb_pageserver::page_store::PageStoreConfig::new(yb_cfg);
-    let store = yb_pageserver::page_store::PageStore::connect_pooled(
+    let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg);
+    let store = pageserver::page_store::PageStore::connect_pooled(
         ps_cfg,
         application_name,
         pool_size,
@@ -907,7 +907,7 @@ async fn create_page_store_with_app_name(
 /// prefetches overlap on YB instead of queueing.
 async fn create_compute_page_store(
     conf: &'static PageServerConf,
-) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
+) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
     const COMPUTE_POOL_SIZE: usize = 4;
     let Some(store) =
         create_page_store_with_app_name(conf, "yb-pageserver:compute_reads", COMPUTE_POOL_SIZE)
@@ -934,7 +934,7 @@ async fn create_compute_page_store(
 /// extra connections.
 async fn create_internal_page_store(
     conf: &'static PageServerConf,
-) -> anyhow::Result<Option<Arc<yb_pageserver::page_store::PageStore>>> {
+) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
     let Some(store) = create_page_store_with_app_name(conf, "yb-pageserver:internal", 1).await?
     else {
         return Ok(None);

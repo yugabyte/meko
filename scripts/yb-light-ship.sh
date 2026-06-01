@@ -21,7 +21,7 @@ BUNDLE=${BUNDLE_DIR:-/tmp/yb-light-${DATE}-${SHA}}
 
 echo ">>> Building release binaries (yb-pageserver + supporting bins)..."
 cargo build --release \
-    -p yb_pageserver \
+    -p pageserver \
     -p control_plane \
     -p safekeeper \
     -p storage_broker \

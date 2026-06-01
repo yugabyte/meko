@@ -4,11 +4,11 @@ members = [
     "compute_tools",
     "control_plane",
     "control_plane/storcon_cli",
-    "yb-pageserver",
-    "yb-pageserver/client",
-    "yb-pageserver/client_grpc",
-    "yb-pageserver/page_api",
-    "yb-pageserver/pagebench",
+    "pageserver",
+    "pageserver/client",
+    "pageserver/client_grpc",
+    "pageserver/page_api",
+    "pageserver/pagebench",
     "safekeeper",
     "safekeeper/client",
     "storage_broker",
@@ -258,11 +258,10 @@ endpoint_storage = { version = "0.0.1", path = "./endpoint_storage/" }
 http-utils = { version = "0.1", path = "./libs/http-utils/" }
 metrics = { version = "0.1", path = "./libs/metrics/" }
 neon-shmem = { version = "0.1", path = "./libs/neon-shmem/" }
-yb_pageserver = { path = "./yb-pageserver" }
 pageserver_api = { version = "0.1", path = "./libs/pageserver_api/" }
-pageserver_client = { path = "./yb-pageserver/client" }
-pageserver_client_grpc = { path = "./yb-pageserver/client_grpc" }
-pageserver_page_api = { path = "./yb-pageserver/page_api" }
+pageserver_client = { path = "./pageserver/client" }
+pageserver_client_grpc = { path = "./pageserver/client_grpc" }
+pageserver_page_api = { path = "./pageserver/page_api" }
 postgres_backend = { version = "0.1", path = "./libs/postgres_backend/" }
 postgres_connection = { version = "0.1", path = "./libs/postgres_connection/" }
 postgres_ffi = { version = "0.1", path = "./libs/postgres_ffi/" }
