@@ -2998,42 +2998,14 @@ impl Timeline {
             };
             Ok(time_cutoff)
         } else {
-            // Shards other than shard zero cannot do timestamp->lsn lookups, and must instead learn their GC cutoff
-            // from shard zero's index.  The index doesn't explicitly tell us the time cutoff, but we may assume that
-            // the point up to which shard zero's last_gc_cutoff has advanced will either be the time cutoff, or a
-            // space cutoff that we would also have respected ourselves.
-            match self
-                .remote_client
-                .download_foreign_index(ShardNumber(0), cancel)
-                .await
-            {
-                Ok((index_part, index_generation, _index_mtime)) => {
-                    tracing::info!(
-                        "GC loaded shard zero metadata (gen {index_generation:?}): latest_gc_cutoff_lsn: {}",
-                        index_part.metadata.latest_gc_cutoff_lsn()
-                    );
-                    Ok(Some(index_part.metadata.latest_gc_cutoff_lsn()))
-                }
-                Err(DownloadError::NotFound) => {
-                    // This is unexpected, because during timeline creations shard zero persists to remote
-                    // storage before other shards are called, and during timeline deletion non-zeroth shards are
-                    // deleted before the zeroth one.  However, it should be harmless: if we somehow end up in this
-                    // state, then shard zero should _eventually_ write an index when it GCs.
-                    tracing::warn!("GC couldn't find shard zero's index for timeline");
-                    Ok(None)
-                }
-                Err(e) => {
-                    // TODO: this function should return a different error type than page reconstruct error
-                    Err(PageReconstructError::Other(anyhow::anyhow!(e)))
-                }
-            }
-
-            // TODO: after reading shard zero's GC cutoff, we should validate its generation with the storage
-            // controller.  Otherwise, it is possible that we see the GC cutoff go backwards while shard zero
-            // is going through a migration if we read the old location's index and it has GC'd ahead of the
-            // new location.  This is legal in principle, but problematic in practice because it might result
-            // in a timeline creation succeeding on shard zero ('s new location) but then failing on other shards
-            // because they have GC'd past the branch point.
+            // yb-mode is single-shard (all timelines run on shard 0);
+            // the non-shard-zero branch that used `download_foreign_index`
+            // to learn shard zero's GC cutoff is unreachable. Sharding
+            // is on the roadmap (see architecture/yb-pageserver.md
+            // "Time travel and branching"); when it lands, restore the
+            // shard-zero-index lookup or replace with a YB-native
+            // cross-shard read.
+            unreachable!("yb-mode is single-shard; shard_identity.is_shard_zero() always true")
         }
     }
 

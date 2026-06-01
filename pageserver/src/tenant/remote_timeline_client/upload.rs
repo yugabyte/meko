@@ -1,19 +1,17 @@
 //! Helper functions to upload files to remote storage with a RemoteStorage
 
 use std::io::SeekFrom;
-use std::num::NonZeroU32;
-use std::time::SystemTime;
 
 use anyhow::{Context, bail};
 use bytes::Bytes;
 use fail::fail_point;
 use pageserver_api::shard::TenantShardId;
-use remote_storage::{GenericRemoteStorage, TimeTravelError};
+use remote_storage::GenericRemoteStorage;
 use tokio::fs::File;
 use tokio::io::AsyncSeekExt;
 use tokio_util::sync::CancellationToken;
 use utils::id::{TenantId, TimelineId};
-use utils::{backoff, pausable_failpoint};
+use utils::pausable_failpoint;
 
 use super::Generation;
 use super::index::IndexPart;
@@ -128,60 +126,9 @@ pub(crate) async fn preserve_initdb_archive(
         .with_context(|| format!("backing up initdb archive for '{tenant_id} / {timeline_id}'"))
 }
 
-pub(crate) async fn time_travel_recover_tenant(
-    storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantShardId,
-    timestamp: SystemTime,
-    done_if_after: SystemTime,
-    cancel: &CancellationToken,
-) -> Result<(), TimeTravelError> {
-    let warn_after = 3;
-    let max_attempts = 10;
-    let mut prefixes = Vec::with_capacity(2);
-    if tenant_shard_id.is_shard_zero() {
-        // Also recover the unsharded prefix for a shard of zero:
-        // - if the tenant is totally unsharded, the unsharded prefix contains all the data
-        // - if the tenant is sharded, we still want to recover the initdb data, but we only
-        //   want to do it once, so let's do it on the 0 shard
-        let timelines_path_unsharded =
-            super::remote_timelines_path_unsharded(&tenant_shard_id.tenant_id);
-        prefixes.push(timelines_path_unsharded);
-    }
-    if !tenant_shard_id.is_unsharded() {
-        // If the tenant is sharded, we need to recover the sharded prefix
-        let timelines_path = super::remote_timelines_path(tenant_shard_id);
-        prefixes.push(timelines_path);
-    }
-
-    // Limit the number of versions deletions, mostly so that we don't
-    // keep requesting forever if the list is too long, as we'd put the
-    // list in RAM.
-    // Building a list of 100k entries that reaches the limit roughly takes
-    // 40 seconds, and roughly corresponds to tenants of 2 TiB physical size.
-    const COMPLEXITY_LIMIT: Option<NonZeroU32> = NonZeroU32::new(100_000);
-
-    for prefix in &prefixes {
-        backoff::retry(
-            || async {
-                storage
-                    .time_travel_recover(
-                        Some(prefix),
-                        timestamp,
-                        done_if_after,
-                        cancel,
-                        COMPLEXITY_LIMIT,
-                    )
-                    .await
-            },
-            |e| !matches!(e, TimeTravelError::Other(_)),
-            warn_after,
-            max_attempts,
-            "time travel recovery of tenant prefix",
-            cancel,
-        )
-        .await
-        .ok_or_else(|| TimeTravelError::Cancelled)
-        .and_then(|x| x)?;
-    }
-    Ok(())
-}
+// The upstream `time_travel_recover_tenant` walked an S3 bucket's
+// versioned objects to roll a tenant back to a timestamp. S3 is gone
+// (lane E), and the YB-native time-travel design lives on
+// `pageserver.pages` + `pageserver.timeline_state` row history rather
+// than blob versions. See architecture/yb-pageserver.md "Time travel
+// and branching" for the planned shape.

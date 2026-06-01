@@ -370,6 +370,22 @@ name + every delete is gen-checked" machinery into one column.
   prunes `pageserver.pages` rows older than `applied_gc_cutoff_lsn`
   per key, retaining at least one image per chain. Until that lands,
   rows accumulate indefinitely.
+- **S3 object-versioning time-travel recovery** — the upstream
+  `time_travel_recover_tenant` path that walked an S3 bucket's
+  versioned objects to roll a tenant back to a wall-clock timestamp
+  is gone (along with S3 itself in lane E, 2026-06-01). **Time
+  travel and branching are still on the roadmap** — we want both —
+  but they need a YB-native implementation built on the row-per-LSN
+  layout of `pageserver.pages` + `pageserver.timeline_state`. The
+  shape: a tenant-level "recover to timestamp T" command resolves
+  T → LSN via the existing `find_lsn_for_timestamp` helper (still
+  intact), then creates a fresh timeline branched at that LSN. Branch
+  creation is already wired in yb-mode (see `tenant.rs::branch_timeline`
+  and the `ancestor_timeline_id` / `ancestor_lsn` columns on
+  `pageserver.timeline_state`). What's missing is the operator-facing
+  command + the GC story for the source timeline's `pageserver.pages`
+  rows that the branch depends on. **Planned phase, not yet
+  numbered.**
 
 ## Implementation status
 

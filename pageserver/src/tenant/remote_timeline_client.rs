@@ -197,7 +197,7 @@ use pageserver_api::models::{RelSizeMigration, TimelineArchivalState, TimelineVi
 use pageserver_api::shard::{ShardIndex, TenantShardId};
 use regex::Regex;
 use remote_storage::{
-    DownloadError, GenericRemoteStorage, ListingMode, RemotePath, TimeoutOrCancel,
+    DownloadError, GenericRemoteStorage, RemotePath, TimeoutOrCancel,
 };
 use scopeguard::ScopeGuard;
 use tokio_util::sync::CancellationToken;
@@ -209,21 +209,19 @@ use utils::backoff::{
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::pausable_failpoint;
-use utils::shard::ShardNumber;
 
 use self::index::IndexPart;
 use super::config::AttachedLocationConfig;
 use super::storage_layer::LayerName;
 use super::upload_queue::{NotInitialized, SetDeletedFlagProgress};
 use super::{DeleteTimelineError, Generation};
-use crate::deletion_queue::{DeletionQueueClient, DeletionQueueError};
+use crate::deletion_queue::DeletionQueueClient;
 use crate::metrics::{
     MeasureRemoteOp,
     RemoteOpFileKind, RemoteOpKind, RemoteTimelineClientMetrics,
 };
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind, shutdown_token};
 use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::remote_timeline_client::download::download_retry;
 use crate::tenant::upload_queue::{
     UploadOp, UploadQueue, UploadQueueInitialized, UploadQueueStopped,
     UploadQueueStoppedDeletable, UploadTask,
@@ -1161,163 +1159,25 @@ impl RemoteTimelineClient {
     }
 
 
-    async fn flush_deletion_queue(&self) -> Result<(), DeletionQueueError> {
-        match tokio::time::timeout(
-            DELETION_QUEUE_FLUSH_TIMEOUT,
-            self.deletion_queue_client.flush_immediate(),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_timeout) => {
-                // Flushing remote deletions is not mandatory: we flush here to make the system easier to test, and
-                // to ensure that _usually_ objects are really gone after a DELETE is acked.  However, in case of deletion
-                // queue issues (https://github.com/neondatabase/neon/issues/6440), we don't want to wait indefinitely here.
-                tracing::warn!(
-                    "Timed out waiting for deletion queue flush, acking deletion anyway"
-                );
-                Ok(())
-            }
-        }
-    }
-
-    /// Prerequisites: UploadQueue should be in stopped state and deleted_at should be successfuly set.
-    /// The function deletes layer files one by one, then lists the prefix to see if we leaked something
-    /// deletes leaked files if any and proceeds with deletion of index file at the end.
+    /// Prerequisite: the upload queue has been stopped and `deleted_at`
+    /// is set. In yb-mode this is a near-no-op because there are no
+    /// layer files to delete and the deletion queue itself is stubbed.
+    /// Real per-row cleanup of `pageserver.pages` / `slru_pages` /
+    /// `meta` / `timeline_state` is the responsibility of a separate
+    /// timeline-delete path (see architecture/yb-pageserver.md "GC"
+    /// entry — not yet implemented).
     pub(crate) async fn delete_all(self: &Arc<Self>) -> Result<(), DeleteTimelineError> {
         debug_assert_current_span_has_tenant_and_timeline_id();
 
-        let layers: Vec<RemotePath> = {
+        {
             let mut locked = self.upload_queue.lock().unwrap();
             let stopped = locked.stopped_mut().map_err(DeleteTimelineError::Other)?;
-
             if !matches!(stopped.deleted_at, SetDeletedFlagProgress::Successful(_)) {
                 return Err(DeleteTimelineError::Other(anyhow::anyhow!(
                     "deleted_at is not set"
                 )));
             }
-
             debug_assert!(stopped.upload_queue_for_deletion.no_pending_work());
-
-            stopped
-                .upload_queue_for_deletion
-                .dirty
-                .layer_metadata
-                .drain()
-                .filter(|(_file_name, meta)| {
-                    // Filter out layers that belonged to an ancestor shard.  Since we are deleting the whole timeline from
-                    // all shards anyway, we _could_ delete these, but
-                    // - it creates a potential race if other shards are still
-                    //   using the layers while this shard deletes them.
-                    // - it means that if we rolled back the shard split, the ancestor shards would be in a state where
-                    //   these timelines are present but corrupt (their index exists but some layers don't)
-                    //
-                    // These layers will eventually be cleaned up by the scrubber when it does physical GC.
-                    meta.shard.shard_number == self.tenant_shard_id.shard_number
-                        && meta.shard.shard_count == self.tenant_shard_id.shard_count
-                })
-                .map(|(file_name, meta)| {
-                    remote_layer_path(
-                        &self.tenant_shard_id.tenant_id,
-                        &self.timeline_id,
-                        meta.shard,
-                        &file_name,
-                        meta.generation,
-                    )
-                })
-                .collect()
-        };
-
-        let layer_deletion_count = layers.len();
-        self.deletion_queue_client
-            .push_immediate(layers)
-            .await
-            .map_err(|_| DeleteTimelineError::Cancelled)?;
-
-        // Delete the initdb.tar.zst, which is not always present, but deletion attempts of
-        // inexistant objects are not considered errors.
-        let initdb_path =
-            remote_initdb_archive_path(&self.tenant_shard_id.tenant_id, &self.timeline_id);
-        self.deletion_queue_client
-            .push_immediate(vec![initdb_path])
-            .await
-            .map_err(|_| DeleteTimelineError::Cancelled)?;
-
-        // Do not delete index part yet, it is needed for possible retry. If we remove it first
-        // and retry will arrive to different pageserver there wont be any traces of it on remote storage
-        let timeline_storage_path = remote_timeline_path(&self.tenant_shard_id, &self.timeline_id);
-
-        // Execute all pending deletions, so that when we proceed to do a listing below, we aren't
-        // taking the burden of listing all the layers that we already know we should delete.
-        self.flush_deletion_queue()
-            .await
-            .map_err(|_| DeleteTimelineError::Cancelled)?;
-
-        let cancel = shutdown_token();
-
-        let remaining = download_retry(
-            || async {
-                self.storage_impl
-                    .list(
-                        Some(&timeline_storage_path),
-                        ListingMode::NoDelimiter,
-                        None,
-                        &cancel,
-                    )
-                    .await
-            },
-            "list remaining files",
-            &cancel,
-        )
-        .await
-        .context("list files remaining files")?
-        .keys;
-
-        // We will delete the current index_part object last, since it acts as a deletion
-        // marker via its deleted_at attribute
-        let latest_index = remaining
-            .iter()
-            .filter(|o| {
-                o.key
-                    .object_name()
-                    .map(|n| n.starts_with(IndexPart::FILE_NAME))
-                    .unwrap_or(false)
-            })
-            .filter_map(|o| {
-                parse_remote_index_path(o.key.clone()).map(|gen_| (o.key.clone(), gen_))
-            })
-            .max_by_key(|i| i.1)
-            .map(|i| i.0.clone())
-            .unwrap_or(
-                // No generation-suffixed indices, assume we are dealing with
-                // a legacy index.
-                remote_index_path(&self.tenant_shard_id, &self.timeline_id, Generation::none()),
-            );
-
-        let remaining_layers: Vec<RemotePath> = remaining
-            .into_iter()
-            .filter_map(|o| {
-                if o.key == latest_index || o.key.object_name() == Some(INITDB_PRESERVED_PATH) {
-                    None
-                } else {
-                    Some(o.key)
-                }
-            })
-            .inspect(|path| {
-                if let Some(name) = path.object_name() {
-                    info!(%name, "deleting a file not referenced from index_part.json");
-                } else {
-                    warn!(%path, "deleting a nameless or non-utf8 object not referenced from index_part.json");
-                }
-            })
-            .collect();
-
-        let not_referenced_count = remaining_layers.len();
-        if !remaining_layers.is_empty() {
-            self.deletion_queue_client
-                .push_immediate(remaining_layers)
-                .await
-                .map_err(|_| DeleteTimelineError::Cancelled)?;
         }
 
         fail::fail_point!("timeline-delete-before-index-delete", |_| {
@@ -1325,27 +1185,13 @@ impl RemoteTimelineClient {
                 "failpoint: timeline-delete-before-index-delete"
             )))?
         });
-
-        debug!("enqueuing index part deletion");
-        self.deletion_queue_client
-            .push_immediate([latest_index].to_vec())
-            .await
-            .map_err(|_| DeleteTimelineError::Cancelled)?;
-
-        // Timeline deletion is rare and we have probably emitted a reasonably number of objects: wait
-        // for a flush to a persistent deletion list so that we may be sure deletion will occur.
-        self.flush_deletion_queue()
-            .await
-            .map_err(|_| DeleteTimelineError::Cancelled)?;
-
         fail::fail_point!("timeline-delete-after-index-delete", |_| {
             Err(DeleteTimelineError::Other(anyhow::anyhow!(
                 "failpoint: timeline-delete-after-index-delete"
             )))?
         });
 
-        info!(prefix=%timeline_storage_path, referenced=layer_deletion_count, not_referenced=%not_referenced_count, "done deleting in timeline prefix, including index_part.json");
-
+        info!("delete_all: yb-mode no-op (timeline-row + page-row deletion is a separate path)");
         Ok(())
     }
 
@@ -1735,27 +1581,6 @@ impl RemoteTimelineClient {
         }
     }
 
-    /// 'foreign' in the sense that it does not belong to this tenant shard.  This method
-    /// is used during GC for other shards to get the index of shard zero.
-    pub(crate) async fn download_foreign_index(
-        &self,
-        shard_number: ShardNumber,
-        cancel: &CancellationToken,
-    ) -> Result<(IndexPart, Generation, std::time::SystemTime), DownloadError> {
-        let foreign_shard_id = TenantShardId {
-            shard_number,
-            shard_count: self.tenant_shard_id.shard_count,
-            tenant_id: self.tenant_shard_id.tenant_id,
-        };
-        download_index_part(
-            &self.storage_impl,
-            &foreign_shard_id,
-            &self.timeline_id,
-            Generation::MAX,
-            cancel,
-        )
-        .await
-    }
 }
 
 pub fn remote_tenant_path(tenant_shard_id: &TenantShardId) -> RemotePath {
