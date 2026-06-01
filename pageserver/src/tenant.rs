@@ -1035,6 +1035,19 @@ impl TenantShard {
             pw.set_remote_consistent_lsn_slot(slot);
         }
 
+        // Eager push of the controller-issued generation to YB. The
+        // storage controller bumps `tenant_shards.generation` on
+        // every attach (including re-attach to the same PS after a
+        // restart) but doesn't propagate the new value to YB itself
+        // — this is where it lands. The flush path's
+        // `WHERE current_generation = $our_gen` fence is strict, so
+        // the invariant "YB column == our_gen at all times after
+        // attach" must hold from the first flush onwards. This call
+        // establishes that invariant. If a newer pageserver has
+        // already bumped past us, the CAS errors out and the attach
+        // is refused.
+        timeline.bump_generation_on_attach().await?;
+
         let _ = cause;
 
         {

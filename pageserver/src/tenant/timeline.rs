@@ -1157,6 +1157,53 @@ impl Timeline {
         Ok(())
     }
 
+    /// Eager attach-time push of our controller-issued generation
+    /// into `pageserver.timeline_state.current_generation`. The flush
+    /// path's `WHERE current_generation = $our_gen` predicate is
+    /// strict, so the invariant "YB column == our_gen at all times
+    /// after attach" must hold from the first flush onwards. The
+    /// controller bumps its `tenant_shards.generation` on every
+    /// attach but doesn't propagate to YB; this CAS is where the new
+    /// value lands.
+    ///
+    /// Returns Err on stale-gen (another PS has bumped past us), and
+    /// the caller (attach path) should refuse the attach. Returns Err
+    /// on the wiring-bug "row missing" case. Returns Ok on Bumped or
+    /// AlreadyAtOurGen.
+    ///
+    /// No-op when `page_writer` is None (upstream pageserver mode).
+    pub(crate) async fn bump_generation_on_attach(&self) -> anyhow::Result<()> {
+        let Some(pw) = self.page_writer.as_ref() else {
+            return Ok(());
+        };
+        match pw
+            .internal_page_store()
+            .cas_bump_generation_on_attach(
+                self.tenant_shard_id.tenant_id,
+                self.timeline_id,
+                self.generation,
+            )
+            .await?
+        {
+            crate::page_store::CasBumpOutcome::Bumped
+            | crate::page_store::CasBumpOutcome::AlreadyAtOurGen => Ok(()),
+            crate::page_store::CasBumpOutcome::StaleGeneration { live_generation } => {
+                // A newer pageserver has already attached and bumped
+                // the column past ours. Refuse the attach so the
+                // caller can surface the error to the storage
+                // controller; that path then drives the standard
+                // shutdown via stale_gen detection on the live PS.
+                anyhow::bail!(
+                    "attach refused: timeline {tenant}/{timeline} has live generation {live} > our generation {ours:?}",
+                    tenant = self.tenant_shard_id.tenant_id,
+                    timeline = self.timeline_id,
+                    live = live_generation,
+                    ours = self.generation,
+                )
+            }
+        }
+    }
+
     /// remote_consistent_lsn from the perspective of the tenant's current generation,
     /// not validated with control plane yet.
     /// See [`Self::get_remote_consistent_lsn_visible`].

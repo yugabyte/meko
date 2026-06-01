@@ -135,6 +135,21 @@ pub enum AdvanceDcLsnOutcome {
     StaleGeneration { live_generation: u32 },
 }
 
+/// Result of `PageStore::cas_bump_generation_on_attach`. Called once
+/// per attach to push the controller-issued generation through to the
+/// YB column before any flushes run, so the flush path's
+/// `current_generation <= $our` invariant holds even on re-attach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CasBumpOutcome {
+    /// Stored gen was strictly less than ours; we bumped it.
+    Bumped,
+    /// Stored gen already equals ours (idempotent re-attach).
+    AlreadyAtOurGen,
+    /// Stored gen is strictly greater than ours — a newer pageserver
+    /// has taken over. Caller should refuse the attach + shut down.
+    StaleGeneration { live_generation: u32 },
+}
+
 #[derive(Debug, Clone)]
 pub struct PageStoreConfig {
     pub yb: YbStoreConfig,
@@ -1249,12 +1264,97 @@ impl PageStore {
     /// `bump_generation` / `advance_gc_cutoff_lsn` /
     /// `upsert_timeline`. Each touches disjoint columns.
     ///
+    /// Eager attach-time bump of `current_generation`. Called once
+    /// per attach, before any flush. Pushes the controller-issued
+    /// generation through to the YB column so the flush path's
+    /// `current_generation <= $our` predicate matches on the first
+    /// try (without this, the flush self-heals on its own — see
+    /// [`Self::advance_disk_consistent_lsn`] — but a stale PS could
+    /// briefly write redundant rows in the gap between attach and
+    /// first flush).
+    ///
+    /// `WHERE current_generation < $3` is the CAS predicate. If 0
+    /// rows updated, probe the stored value to disambiguate:
+    /// - stored `== ours` → idempotent re-attach, return
+    ///   [`CasBumpOutcome::AlreadyAtOurGen`].
+    /// - stored `> ours` → another pageserver bumped past us
+    ///   already, return [`CasBumpOutcome::StaleGeneration`].
+    /// - row missing → bail (the row is supposed to be created at
+    ///   timeline creation; arriving here without it is a wiring bug).
+    pub async fn cas_bump_generation_on_attach(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+        generation: utils::generation::Generation,
+    ) -> Result<CasBumpOutcome> {
+        let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
+        let sql = format!(
+            "UPDATE \"{}\".timeline_state \
+             SET current_generation = $3 \
+             WHERE tenant_id = $1 AND timeline_id = $2 \
+               AND current_generation < $3",
+            self.schema
+        );
+        let n = self
+            .client
+            .execute(
+                &sql,
+                &[&tenant.to_string(), &timeline.to_string(), &gen_i32],
+            )
+            .await
+            .context("cas_bump_generation_on_attach")?;
+        if n == 1 {
+            return Ok(CasBumpOutcome::Bumped);
+        }
+        // n == 0 — probe.
+        let probe_sql = format!(
+            "SELECT current_generation FROM \"{}\".timeline_state \
+             WHERE tenant_id = $1 AND timeline_id = $2",
+            self.schema
+        );
+        let row = self
+            .client
+            .query_opt(&probe_sql, &[&tenant.to_string(), &timeline.to_string()])
+            .await
+            .context("cas_bump_generation_on_attach probe")?;
+        match row {
+            None => anyhow::bail!(
+                "no timeline row for {tenant}/{timeline} — \
+                 cas_bump_generation_on_attach ran before timeline_create wrote the row"
+            ),
+            Some(r) => {
+                let stored: i32 = r.get(0);
+                let stored_u32 = stored as u32;
+                if stored_u32 == gen_i32 as u32 {
+                    Ok(CasBumpOutcome::AlreadyAtOurGen)
+                } else {
+                    Ok(CasBumpOutcome::StaleGeneration {
+                        live_generation: stored_u32,
+                    })
+                }
+            }
+        }
+    }
+
     /// **Generation-fenced**: the UPDATE's WHERE clause checks
-    /// `current_generation = $4`. A stale-generation pageserver's
-    /// attempt to record durability returns
-    /// [`AdvanceDcLsnOutcome::StaleGeneration`] (no rows updated,
-    /// no second round-trip needed). Callers treat that as fatal —
-    /// see `PageWriter::flush`.
+    /// `current_generation = $4`. The invariant `YB.current_generation
+    /// == our_gen` is established once at attach time by
+    /// [`Self::cas_bump_generation_on_attach`] (called from
+    /// `Timeline::bump_generation_on_attach`) and held for the
+    /// lifetime of the attached PS: only attach paths write the
+    /// column, and they only move it forward. So a stale PS's flush
+    /// finds `YB.current_generation > our_gen` → zero rows → probe
+    /// → [`AdvanceDcLsnOutcome::StaleGeneration`] → fatal shutdown.
+    ///
+    /// History: an earlier draft of this predicate paired with
+    /// nothing in the attach path; a controller re-attach bumped the
+    /// PS's gen but the YB column lagged, and the strict `=` check
+    /// mis-fired as "stale" on every restart. We considered making
+    /// the predicate self-healing (`<=` + SET current_generation),
+    /// but the eager attach-time CAS is sufficient and the strict
+    /// `=` here is a sharper fence (it fails the moment a newer PS
+    /// bumps past us, no race window where a stale PS could still
+    /// write redundant rows).
     pub async fn advance_disk_consistent_lsn(
         &self,
         tenant: TenantId,
@@ -1968,6 +2068,82 @@ mod tests {
         store.upsert_timeline(&row).await.unwrap();
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
         assert_eq!(got, row);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `cas_bump_generation_on_attach` covers the four outcomes:
+    /// Bumped (stored < ours), AlreadyAtOurGen (stored == ours),
+    /// StaleGeneration (stored > ours), and the wiring-bug error
+    /// path (row missing). Regression for the symptom that hit prod
+    /// where every PS restart shut itself down as "stale" because
+    /// the controller bumped its gen but nothing pushed the new
+    /// value to the YB column.
+    #[tokio::test]
+    async fn cas_bump_generation_on_attach_outcomes() {
+        use utils::generation::Generation;
+        use utils::lsn::Lsn;
+
+        let (store, schema) = make_store("gen_cas").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let mut row = sample_timeline_row(tenant, timeline);
+        row.current_generation = 1;
+        row.disk_consistent_lsn = Lsn(0x1000);
+        store.upsert_timeline(&row).await.unwrap();
+
+        // Bumped: stored gen=1, attach at gen=2 → succeeds, YB now 2.
+        let res = store
+            .cas_bump_generation_on_attach(tenant, timeline, Generation::new(2))
+            .await
+            .unwrap();
+        assert_eq!(res, CasBumpOutcome::Bumped);
+        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        assert_eq!(got.current_generation, 2);
+
+        // AlreadyAtOurGen: stored gen=2, attach at gen=2 → no-op.
+        let res = store
+            .cas_bump_generation_on_attach(tenant, timeline, Generation::new(2))
+            .await
+            .unwrap();
+        assert_eq!(res, CasBumpOutcome::AlreadyAtOurGen);
+        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        assert_eq!(got.current_generation, 2);
+
+        // Bumped again: stored gen=2, attach at gen=5 → succeeds, YB now 5.
+        // (Mirrors the user's report: SC's tenant_shards.generation
+        // moved 1→2→3 over restarts; this is the third restart
+        // arriving at the PS, which must heal the lagging YB column.)
+        let res = store
+            .cas_bump_generation_on_attach(tenant, timeline, Generation::new(5))
+            .await
+            .unwrap();
+        assert_eq!(res, CasBumpOutcome::Bumped);
+        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        assert_eq!(got.current_generation, 5);
+
+        // StaleGeneration: stored gen=5, attach at gen=4 → another
+        // PS bumped past us, return live=5 so caller can refuse.
+        let res = store
+            .cas_bump_generation_on_attach(tenant, timeline, Generation::new(4))
+            .await
+            .unwrap();
+        assert_eq!(res, CasBumpOutcome::StaleGeneration { live_generation: 5 });
+        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        assert_eq!(got.current_generation, 5, "stale CAS must not regress");
+
+        // Row missing: attach against a tenant/timeline pair that
+        // doesn't exist → error (wiring bug, not a stale-gen case).
+        let other_tenant = rand_tenant();
+        let other_timeline = rand_timeline();
+        let err = store
+            .cas_bump_generation_on_attach(other_tenant, other_timeline, Generation::new(1))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no timeline row"),
+            "expected 'no timeline row' err, got: {err}"
+        );
+
         drop_schema(&store, &schema).await;
     }
 
