@@ -4,21 +4,16 @@ members = [
     "compute_tools",
     "control_plane",
     "control_plane/storcon_cli",
-    "pageserver",
     "pageserver/compaction",
-    "pageserver/ctl",
     "pageserver/client",
     "pageserver/client_grpc",
-    "pageserver/pagebench",
     "pageserver/page_api",
     "yb-pageserver",
-    "proxy",
     "safekeeper",
     "safekeeper/client",
     "storage_broker",
     "storage_controller",
     "storage_controller/client",
-    "storage_scrubber",
     "workspace_hack",
     "libs/compute_api",
     "libs/http-utils",
@@ -263,7 +258,6 @@ endpoint_storage = { version = "0.0.1", path = "./endpoint_storage/" }
 http-utils = { version = "0.1", path = "./libs/http-utils/" }
 metrics = { version = "0.1", path = "./libs/metrics/" }
 neon-shmem = { version = "0.1", path = "./libs/neon-shmem/" }
-pageserver = { path = "./pageserver" }
 yb_pageserver = { path = "./yb-pageserver" }
 pageserver_api = { version = "0.1", path = "./libs/pageserver_api/" }
 pageserver_client = { path = "./pageserver/client" }
