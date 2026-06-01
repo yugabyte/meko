@@ -17,7 +17,6 @@ use super::is_same_remote_layer_path;
 use crate::tenant::Generation;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::storage_layer::LayerName;
-use crate::tenant::timeline::import_pgdata;
 
 /// In-memory representation of an `index_part.json` file
 ///
@@ -38,13 +37,6 @@ pub struct IndexPart {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<NaiveDateTime>,
-
-    /// This field supports import-from-pgdata ("fast imports" platform feature).
-    /// We don't currently use fast imports, so, this field is None for all production timelines.
-    /// See <https://github.com/neondatabase/neon/pull/9218> for more information.
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub import_pgdata: Option<import_pgdata::index_part_format::Root>,
 
     /// Layer filenames and metadata. For an index persisted in remote storage, all layers must
     /// exist in remote storage.
@@ -167,7 +159,6 @@ impl IndexPart {
             lineage: Default::default(),
             gc_blocking: None,
             last_aux_file_policy: None,
-            import_pgdata: None,
             rel_size_migration: None,
             l2_lsn: None,
             gc_compaction: None,
@@ -213,8 +204,7 @@ impl IndexPart {
     /// Check for invariants in the index: this is useful when uploading an index to ensure that if
     /// we encounter a bug, we do not persist buggy metadata.
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.import_pgdata.is_none()
-            && self.metadata.ancestor_timeline().is_none()
+        if self.metadata.ancestor_timeline().is_none()
             && self.layer_metadata.is_empty()
         {
             // Unless we're in the middle of a raw pgdata import, or this is a child timeline,the index must

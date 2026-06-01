@@ -1989,27 +1989,6 @@ static REMOTE_TIMELINE_CLIENT_CALLS: Lazy<IntCounterPairVec> = Lazy::new(|| {
     .unwrap()
 });
 
-static REMOTE_TIMELINE_CLIENT_BYTES_STARTED_COUNTER: Lazy<IntCounterVec> =
-    Lazy::new(|| {
-        register_int_counter_vec!(
-        "pageserver_remote_timeline_client_bytes_started",
-        "Incremented by the number of bytes associated with a remote timeline client operation. \
-         The increment happens when the operation is scheduled.",
-        &["tenant_id", "shard_id", "timeline_id", "file_kind", "op_kind"],
-    )
-        .expect("failed to define a metric")
-    });
-
-static REMOTE_TIMELINE_CLIENT_BYTES_FINISHED_COUNTER: Lazy<IntCounterVec> = Lazy::new(|| {
-    register_int_counter_vec!(
-        "pageserver_remote_timeline_client_bytes_finished",
-        "Incremented by the number of bytes associated with a remote timeline client operation. \
-         The increment happens when the operation finishes (regardless of success/failure/shutdown).",
-        &["tenant_id", "shard_id", "timeline_id", "file_kind", "op_kind"],
-    )
-    .expect("failed to define a metric")
-});
-
 pub(crate) struct TenantManagerMetrics {
     tenant_slots_attached: UIntGauge,
     tenant_slots_inprogress: UIntGauge,
@@ -3039,8 +3018,6 @@ pub(crate) struct RemoteTimelineClientMetrics {
     timeline_id: String,
     pub(crate) remote_physical_size_gauge: PerTimelineRemotePhysicalSizeGauge,
     calls: Mutex<HashMap<(&'static str, &'static str), IntCounterPair>>,
-    bytes_started_counter: Mutex<HashMap<(&'static str, &'static str), IntCounter>>,
-    bytes_finished_counter: Mutex<HashMap<(&'static str, &'static str), IntCounter>>,
     pub(crate) projected_remote_consistent_lsn_gauge: UIntGauge,
 }
 
@@ -3065,8 +3042,6 @@ impl RemoteTimelineClientMetrics {
             shard_id: shard_id_str,
             timeline_id: timeline_id_str,
             calls: Mutex::new(HashMap::default()),
-            bytes_started_counter: Mutex::new(HashMap::default()),
-            bytes_finished_counter: Mutex::new(HashMap::default()),
             remote_physical_size_gauge,
             projected_remote_consistent_lsn_gauge,
         }
@@ -3110,70 +3085,6 @@ impl RemoteTimelineClientMetrics {
         metric.clone()
     }
 
-    fn bytes_started_counter(
-        &self,
-        file_kind: &RemoteOpFileKind,
-        op_kind: &RemoteOpKind,
-    ) -> IntCounter {
-        let mut guard = self.bytes_started_counter.lock().unwrap();
-        let key = (file_kind.as_str(), op_kind.as_str());
-        let metric = guard.entry(key).or_insert_with(move || {
-            REMOTE_TIMELINE_CLIENT_BYTES_STARTED_COUNTER
-                .get_metric_with_label_values(&[
-                    &self.tenant_id,
-                    &self.shard_id,
-                    &self.timeline_id,
-                    key.0,
-                    key.1,
-                ])
-                .unwrap()
-        });
-        metric.clone()
-    }
-
-    fn bytes_finished_counter(
-        &self,
-        file_kind: &RemoteOpFileKind,
-        op_kind: &RemoteOpKind,
-    ) -> IntCounter {
-        let mut guard = self.bytes_finished_counter.lock().unwrap();
-        let key = (file_kind.as_str(), op_kind.as_str());
-        let metric = guard.entry(key).or_insert_with(move || {
-            REMOTE_TIMELINE_CLIENT_BYTES_FINISHED_COUNTER
-                .get_metric_with_label_values(&[
-                    &self.tenant_id,
-                    &self.shard_id,
-                    &self.timeline_id,
-                    key.0,
-                    key.1,
-                ])
-                .unwrap()
-        });
-        metric.clone()
-    }
-}
-
-#[cfg(test)]
-impl RemoteTimelineClientMetrics {
-    pub fn get_bytes_started_counter_value(
-        &self,
-        file_kind: &RemoteOpFileKind,
-        op_kind: &RemoteOpKind,
-    ) -> Option<u64> {
-        let guard = self.bytes_started_counter.lock().unwrap();
-        let key = (file_kind.as_str(), op_kind.as_str());
-        guard.get(&key).map(|counter| counter.get())
-    }
-
-    pub fn get_bytes_finished_counter_value(
-        &self,
-        file_kind: &RemoteOpFileKind,
-        op_kind: &RemoteOpKind,
-    ) -> Option<u64> {
-        let guard = self.bytes_finished_counter.lock().unwrap();
-        let key = (file_kind.as_str(), op_kind.as_str());
-        guard.get(&key).map(|counter| counter.get())
-    }
 }
 
 /// See [`RemoteTimelineClientMetrics::call_begin`].
@@ -3181,99 +3092,48 @@ impl RemoteTimelineClientMetrics {
 pub(crate) struct RemoteTimelineClientCallMetricGuard {
     /// Decremented on drop.
     calls_counter_pair: Option<IntCounterPair>,
-    /// If Some(), this references the bytes_finished metric, and we increment it by the given `u64` on drop.
-    bytes_finished: Option<(IntCounter, u64)>,
 }
 
 impl RemoteTimelineClientCallMetricGuard {
     /// Consume this guard object without performing the metric updates it would do on `drop()`.
     /// The caller vouches to do the metric updates manually.
     pub fn will_decrement_manually(mut self) {
-        let RemoteTimelineClientCallMetricGuard {
-            calls_counter_pair,
-            bytes_finished,
-        } = &mut self;
-        calls_counter_pair.take();
-        bytes_finished.take();
+        self.calls_counter_pair.take();
     }
 }
 
 impl Drop for RemoteTimelineClientCallMetricGuard {
     fn drop(&mut self) {
-        let RemoteTimelineClientCallMetricGuard {
-            calls_counter_pair,
-            bytes_finished,
-        } = self;
-        if let Some(guard) = calls_counter_pair.take() {
+        if let Some(guard) = self.calls_counter_pair.take() {
             guard.dec();
         }
-        if let Some((bytes_finished_metric, value)) = bytes_finished {
-            bytes_finished_metric.inc_by(*value);
-        }
     }
-}
-
-/// The enum variants communicate to the [`RemoteTimelineClientMetrics`] whether to
-/// track the byte size of this call in applicable metric(s).
-pub(crate) enum RemoteTimelineClientMetricsCallTrackSize {
-    /// Do not account for this call's byte size in any metrics.
-    /// The `reason` field is there to make the call sites self-documenting
-    /// about why they don't need the metric.
-    DontTrackSize { reason: &'static str },
-    /// Track the byte size of the call in applicable metric(s).
-    Bytes(u64),
 }
 
 impl RemoteTimelineClientMetrics {
     /// Update the metrics that change when a call to the remote timeline client instance starts.
     ///
-    /// Drop the returned guard object once the operation is finished to updates corresponding metrics that track completions.
-    /// Or, use [`RemoteTimelineClientCallMetricGuard::will_decrement_manually`] and [`call_end`](Self::call_end) if that
-    /// is more suitable.
-    /// Never do both.
+    /// Drop the returned guard object once the operation is finished to update the corresponding
+    /// metrics that track completions. Or, use
+    /// [`RemoteTimelineClientCallMetricGuard::will_decrement_manually`] and [`call_end`](Self::call_end)
+    /// if that is more suitable. Never do both.
     pub(crate) fn call_begin(
         &self,
         file_kind: &RemoteOpFileKind,
         op_kind: &RemoteOpKind,
-        size: RemoteTimelineClientMetricsCallTrackSize,
     ) -> RemoteTimelineClientCallMetricGuard {
         let calls_counter_pair = self.calls_counter_pair(file_kind, op_kind);
         calls_counter_pair.inc();
-
-        let bytes_finished = match size {
-            RemoteTimelineClientMetricsCallTrackSize::DontTrackSize { reason: _reason } => {
-                // nothing to do
-                None
-            }
-            RemoteTimelineClientMetricsCallTrackSize::Bytes(size) => {
-                self.bytes_started_counter(file_kind, op_kind).inc_by(size);
-                let finished_counter = self.bytes_finished_counter(file_kind, op_kind);
-                Some((finished_counter, size))
-            }
-        };
         RemoteTimelineClientCallMetricGuard {
             calls_counter_pair: Some(calls_counter_pair),
-            bytes_finished,
         }
     }
 
-    /// Manually udpate the metrics that track completions, instead of using the guard object.
+    /// Manually update the metrics that track completions, instead of using the guard object.
     /// Using the guard object is generally preferable.
     /// See [`call_begin`](Self::call_begin) for more context.
-    pub(crate) fn call_end(
-        &self,
-        file_kind: &RemoteOpFileKind,
-        op_kind: &RemoteOpKind,
-        size: RemoteTimelineClientMetricsCallTrackSize,
-    ) {
-        let calls_counter_pair = self.calls_counter_pair(file_kind, op_kind);
-        calls_counter_pair.dec();
-        match size {
-            RemoteTimelineClientMetricsCallTrackSize::DontTrackSize { reason: _reason } => {}
-            RemoteTimelineClientMetricsCallTrackSize::Bytes(size) => {
-                self.bytes_finished_counter(file_kind, op_kind).inc_by(size);
-            }
-        }
+    pub(crate) fn call_end(&self, file_kind: &RemoteOpFileKind, op_kind: &RemoteOpKind) {
+        self.calls_counter_pair(file_kind, op_kind).dec();
     }
 }
 
@@ -3285,8 +3145,6 @@ impl Drop for RemoteTimelineClientMetrics {
             timeline_id,
             remote_physical_size_gauge,
             calls,
-            bytes_started_counter,
-            bytes_finished_counter,
             projected_remote_consistent_lsn_gauge,
         } = self;
         for ((a, b), _) in calls.get_mut().unwrap().drain() {
@@ -3294,24 +3152,6 @@ impl Drop for RemoteTimelineClientMetrics {
             REMOTE_TIMELINE_CLIENT_CALLS
                 .remove_label_values(&mut res, &[tenant_id, shard_id, timeline_id, a, b]);
             // don't care about results
-        }
-        for ((a, b), _) in bytes_started_counter.get_mut().unwrap().drain() {
-            let _ = REMOTE_TIMELINE_CLIENT_BYTES_STARTED_COUNTER.remove_label_values(&[
-                tenant_id,
-                shard_id,
-                timeline_id,
-                a,
-                b,
-            ]);
-        }
-        for ((a, b), _) in bytes_finished_counter.get_mut().unwrap().drain() {
-            let _ = REMOTE_TIMELINE_CLIENT_BYTES_FINISHED_COUNTER.remove_label_values(&[
-                tenant_id,
-                shard_id,
-                timeline_id,
-                a,
-                b,
-            ]);
         }
         {
             let _ = remote_physical_size_gauge; // use to avoid 'unused' warning in desctructuring above

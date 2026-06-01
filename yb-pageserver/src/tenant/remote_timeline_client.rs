@@ -221,7 +221,6 @@ use crate::deletion_queue::{DeletionQueueClient, DeletionQueueError};
 use crate::metrics::{
     MeasureRemoteOp,
     RemoteOpFileKind, RemoteOpKind, RemoteTimelineClientMetrics,
-    RemoteTimelineClientMetricsCallTrackSize,
 };
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind, shutdown_token};
 use crate::tenant::metadata::TimelineMetadata;
@@ -589,13 +588,9 @@ impl RemoteTimelineClient {
         &self,
         cancel: &CancellationToken,
     ) -> Result<MaybeDeletedIndexPart, DownloadError> {
-        let _unfinished_gauge_guard = self.metrics.call_begin(
-            &RemoteOpFileKind::Index,
-            &RemoteOpKind::Download,
-            crate::metrics::RemoteTimelineClientMetricsCallTrackSize::DontTrackSize {
-                reason: "no need for a downloads gauge",
-            },
-        );
+        let _unfinished_gauge_guard = self
+            .metrics
+            .call_begin(&RemoteOpFileKind::Index, &RemoteOpKind::Download);
 
         let (index_part, index_generation, index_last_modified) = download::download_index_part(
             &self.storage_impl,
@@ -1637,46 +1632,31 @@ impl RemoteTimelineClient {
         }
     }
 
-    fn metric_impl(
-        &self,
-        op: &UploadOp,
-    ) -> Option<(
-        RemoteOpFileKind,
-        RemoteOpKind,
-        RemoteTimelineClientMetricsCallTrackSize,
-    )> {
-        use RemoteTimelineClientMetricsCallTrackSize::DontTrackSize;
-        let res = match op {
-            UploadOp::UploadMetadata { .. } => (
-                RemoteOpFileKind::Index,
-                RemoteOpKind::Upload,
-                DontTrackSize {
-                    reason: "metadata uploads are tiny",
-                },
-            ),
+    fn metric_kinds(&self, op: &UploadOp) -> Option<(RemoteOpFileKind, RemoteOpKind)> {
+        match op {
+            UploadOp::UploadMetadata { .. } => {
+                Some((RemoteOpFileKind::Index, RemoteOpKind::Upload))
+            }
             UploadOp::Barrier(..) | UploadOp::Shutdown => {
                 // we do not account these
-                return None;
+                None
             }
-        };
-        Some(res)
+        }
     }
 
     fn metric_begin(&self, op: &UploadOp) {
-        let (file_kind, op_kind, track_bytes) = match self.metric_impl(op) {
-            Some(x) => x,
-            None => return,
+        let Some((file_kind, op_kind)) = self.metric_kinds(op) else {
+            return;
         };
-        let guard = self.metrics.call_begin(&file_kind, &op_kind, track_bytes);
+        let guard = self.metrics.call_begin(&file_kind, &op_kind);
         guard.will_decrement_manually(); // in metric_end(), see right below
     }
 
     fn metric_end(&self, op: &UploadOp) {
-        let (file_kind, op_kind, track_bytes) = match self.metric_impl(op) {
-            Some(x) => x,
-            None => return,
+        let Some((file_kind, op_kind)) = self.metric_kinds(op) else {
+            return;
         };
-        self.metrics.call_end(&file_kind, &op_kind, track_bytes);
+        self.metrics.call_end(&file_kind, &op_kind);
     }
 
     /// Close the upload queue for new operations and cancel queued operations.

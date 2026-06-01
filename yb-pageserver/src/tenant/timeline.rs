@@ -1,6 +1,5 @@
 pub mod delete;
 pub(crate) mod handle;
-pub(crate) mod import_pgdata;
 pub(crate) mod logical_size;
 pub mod uninit;
 mod walreceiver;

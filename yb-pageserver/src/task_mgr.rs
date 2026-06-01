@@ -356,8 +356,6 @@ pub enum TaskKind {
     #[cfg(test)]
     UnitTest,
 
-    ImportPgdata,
-
     /// Background task of [`crate::basebackup_cache::BasebackupCache`].
     /// Prepares basebackups and clears outdated entries.
     BasebackupCache,

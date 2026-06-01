@@ -47,8 +47,6 @@ use remote_timeline_client::{
     download_tenant_manifest,
 };
 use storage_broker::BrokerClientChannel;
-use timeline::import_pgdata::ImportingTimeline;
-use timeline::import_pgdata;
 use tokio::io::BufReader;
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
@@ -274,19 +272,6 @@ pub struct TenantShard {
     /// Possibly offloaded and archived timelines
     /// **Lock order**: if acquiring all (or a subset), acquire them in order `timelines`, `timelines_offloaded`, `timelines_creating`
     timelines_offloaded: Mutex<HashMap<TimelineId, Arc<OffloadedTimeline>>>,
-
-    /// Tracks the timelines that are currently importing into this tenant shard.
-    ///
-    /// Note that importing timelines are also present in [`Self::timelines_creating`].
-    /// Keep this in mind when ordering lock acquisition.
-    ///
-    /// Lifetime:
-    /// * An imported timeline is created while scanning the bucket on tenant attach
-    ///   if the index part contains an `import_pgdata` entry and said field marks the import
-    ///   as in progress.
-    /// * Imported timelines are removed when the storage controller calls the post timeline
-    ///   import activation endpoint.
-    timelines_importing: std::sync::Mutex<HashMap<TimelineId, Arc<ImportingTimeline>>>,
 
     /// The last tenant manifest known to be in remote storage. None if the manifest has not yet
     /// been either downloaded or uploaded. Always Some after tenant attach.
@@ -595,7 +580,6 @@ pub enum MaybeOffloaded {
 pub enum TimelineOrOffloaded {
     Timeline(Arc<Timeline>),
     Offloaded(Arc<OffloadedTimeline>),
-    Importing(Arc<ImportingTimeline>),
 }
 
 impl TimelineOrOffloaded {
@@ -606,9 +590,6 @@ impl TimelineOrOffloaded {
             }
             TimelineOrOffloaded::Offloaded(offloaded) => {
                 TimelineOrOffloadedArcRef::Offloaded(offloaded)
-            }
-            TimelineOrOffloaded::Importing(importing) => {
-                TimelineOrOffloadedArcRef::Importing(importing)
             }
         }
     }
@@ -622,16 +603,12 @@ impl TimelineOrOffloaded {
         match self {
             TimelineOrOffloaded::Timeline(timeline) => &timeline.delete_progress,
             TimelineOrOffloaded::Offloaded(offloaded) => &offloaded.delete_progress,
-            TimelineOrOffloaded::Importing(importing) => &importing.delete_progress,
         }
     }
     fn maybe_remote_client(&self) -> Option<Arc<RemoteTimelineClient>> {
         match self {
             TimelineOrOffloaded::Timeline(timeline) => Some(timeline.remote_client.clone()),
             TimelineOrOffloaded::Offloaded(_offloaded) => None,
-            TimelineOrOffloaded::Importing(importing) => {
-                Some(importing.timeline.remote_client.clone())
-            }
         }
     }
 }
@@ -639,7 +616,6 @@ impl TimelineOrOffloaded {
 pub enum TimelineOrOffloadedArcRef<'a> {
     Timeline(&'a Arc<Timeline>),
     Offloaded(&'a Arc<OffloadedTimeline>),
-    Importing(&'a Arc<ImportingTimeline>),
 }
 
 impl TimelineOrOffloadedArcRef<'_> {
@@ -647,14 +623,12 @@ impl TimelineOrOffloadedArcRef<'_> {
         match self {
             TimelineOrOffloadedArcRef::Timeline(timeline) => timeline.tenant_shard_id,
             TimelineOrOffloadedArcRef::Offloaded(offloaded) => offloaded.tenant_shard_id,
-            TimelineOrOffloadedArcRef::Importing(importing) => importing.timeline.tenant_shard_id,
         }
     }
     pub fn timeline_id(&self) -> TimelineId {
         match self {
             TimelineOrOffloadedArcRef::Timeline(timeline) => timeline.timeline_id,
             TimelineOrOffloadedArcRef::Offloaded(offloaded) => offloaded.timeline_id,
-            TimelineOrOffloadedArcRef::Importing(importing) => importing.timeline.timeline_id,
         }
     }
 }
@@ -668,12 +642,6 @@ impl<'a> From<&'a Arc<Timeline>> for TimelineOrOffloadedArcRef<'a> {
 impl<'a> From<&'a Arc<OffloadedTimeline>> for TimelineOrOffloadedArcRef<'a> {
     fn from(timeline: &'a Arc<OffloadedTimeline>) -> Self {
         Self::Offloaded(timeline)
-    }
-}
-
-impl<'a> From<&'a Arc<ImportingTimeline>> for TimelineOrOffloadedArcRef<'a> {
-    fn from(timeline: &'a Arc<ImportingTimeline>) -> Self {
-        Self::Importing(timeline)
     }
 }
 
@@ -861,12 +829,6 @@ pub(crate) enum CreateTimelineIdempotency {
         ancestor_timeline_id: TimelineId,
         ancestor_start_lsn: Lsn,
     },
-    ImportPgdata(CreatingTimelineIdempotencyImportPgdata),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CreatingTimelineIdempotencyImportPgdata {
-    idempotency_key: import_pgdata::index_part_format::IdempotencyKey,
 }
 
 /// What is returned by [`TenantShard::start_creating_timeline`].
@@ -878,12 +840,6 @@ enum StartCreatingTimelineResult {
 
 enum TimelineInitAndSyncResult {
     ReadyToActivate,
-    /// yb-mode placeholder. The original Neon flow constructed an
-    /// import task from a `TimelineInitAndSyncNeedsSpawnImportPgdata`
-    /// payload (timeline + index-part fragment + create-guard); the
-    /// import flow itself is deleted, so we just stash the `Arc<Timeline>`
-    /// to log on the receiving side and let the create-guard drop.
-    NeedsSpawnImportPgdata { timeline: Arc<Timeline> },
 }
 
 /// What is returned by [`TenantShard::create_timeline`].
@@ -1029,24 +985,14 @@ impl TenantShard {
     ) -> anyhow::Result<TimelineInitAndSyncResult> {
         let tenant_id = self.tenant_shard_id;
 
-        let import_pgdata = index_part.import_pgdata.clone();
-        let idempotency = match &import_pgdata {
-            Some(import_pgdata) => {
-                CreateTimelineIdempotency::ImportPgdata(CreatingTimelineIdempotencyImportPgdata {
-                    idempotency_key: import_pgdata.idempotency_key().clone(),
-                })
+        let idempotency = if metadata.ancestor_timeline().is_none() {
+            CreateTimelineIdempotency::Bootstrap {
+                pg_version: metadata.pg_version(),
             }
-            None => {
-                if metadata.ancestor_timeline().is_none() {
-                    CreateTimelineIdempotency::Bootstrap {
-                        pg_version: metadata.pg_version(),
-                    }
-                } else {
-                    CreateTimelineIdempotency::Branch {
-                        ancestor_timeline_id: metadata.ancestor_timeline().unwrap(),
-                        ancestor_start_lsn: metadata.ancestor_lsn(),
-                    }
-                }
+        } else {
+            CreateTimelineIdempotency::Branch {
+                ancestor_timeline_id: metadata.ancestor_timeline().unwrap(),
+                ancestor_start_lsn: metadata.ancestor_lsn(),
             }
         };
 
@@ -1065,16 +1011,7 @@ impl TenantShard {
         let disk_consistent_lsn = timeline.get_disk_consistent_lsn();
 
         if !disk_consistent_lsn.is_valid() {
-            // As opposed to normal timelines which get initialised with a disk consitent LSN
-            // via initdb, imported timelines start from 0. If the import task stops before
-            // it advances disk consitent LSN, allow it to resume.
-            let in_progress_import = import_pgdata
-                .as_ref()
-                .map(|import| !import.is_done())
-                .unwrap_or(false);
-            if !in_progress_import {
-                anyhow::bail!("Timeline {tenant_id}/{timeline_id} has invalid disk_consistent_lsn");
-            }
+            anyhow::bail!("Timeline {tenant_id}/{timeline_id} has invalid disk_consistent_lsn");
         }
 
         assert_eq!(
@@ -1087,53 +1024,28 @@ impl TenantShard {
 
         let _ = cause;
 
-        match import_pgdata {
-            Some(import_pgdata) if !import_pgdata.is_done() => {
-                let mut guard = self.timelines_creating.lock().unwrap();
-                if !guard.insert(timeline_id) {
-                    // We should never try and load the same timeline twice during startup
-                    unreachable!("Timeline {tenant_id}/{timeline_id} is already being created")
+        {
+            let mut timelines_accessor = self.timelines.lock().unwrap();
+            match timelines_accessor.entry(timeline_id) {
+                // We should never try and load the same timeline twice during startup
+                Entry::Occupied(_) => {
+                    unreachable!(
+                        "Timeline {tenant_id}/{timeline_id} already exists in the tenant map"
+                    );
                 }
-                let timeline_create_guard = TimelineCreateGuard {
-                    _tenant_gate_guard: self.gate.enter()?,
-                    owning_tenant: self.clone(),
-                    timeline_id,
-                    idempotency,
-                    // The users of this specific return value don't need the timline_path in there.
-                    timeline_path: timeline
-                        .conf
-                        .timeline_path(&timeline.tenant_shard_id, &timeline.timeline_id),
-                };
-                let _ = (import_pgdata, timeline_create_guard);
-                Ok(TimelineInitAndSyncResult::NeedsSpawnImportPgdata { timeline })
-            }
-            Some(_) | None => {
-                {
-                    let mut timelines_accessor = self.timelines.lock().unwrap();
-                    match timelines_accessor.entry(timeline_id) {
-                        // We should never try and load the same timeline twice during startup
-                        Entry::Occupied(_) => {
-                            unreachable!(
-                                "Timeline {tenant_id}/{timeline_id} already exists in the tenant map"
-                            );
-                        }
-                        Entry::Vacant(v) => {
-                            v.insert(Arc::clone(&timeline));
-                            timeline.maybe_spawn_flush_loop();
-                        }
-                    }
+                Entry::Vacant(v) => {
+                    v.insert(Arc::clone(&timeline));
+                    timeline.maybe_spawn_flush_loop();
                 }
-
-                if disk_consistent_lsn.is_valid() {
-                    // yb-pageserver: page data lives in pageserver.pages /
-                    // slru_pages / meta, never in layer files. A timeline
-                    // with no ancestor and no layer files is the normal
-                    // post-restart state.
-                }
-
-                Ok(TimelineInitAndSyncResult::ReadyToActivate)
             }
         }
+
+        // yb-pageserver: page data lives in pageserver.pages /
+        // slru_pages / meta, never in layer files. A timeline with
+        // no ancestor and no layer files is the normal post-restart
+        // state.
+
+        Ok(TimelineInitAndSyncResult::ReadyToActivate)
     }
 
     /// Attach a tenant that's available in cloud storage.
@@ -1635,22 +1547,8 @@ impl TenantShard {
                     )
                 })?;
 
-            match effect {
-                TimelineInitAndSyncResult::ReadyToActivate => {
-                    // activation happens later, on Tenant::activate
-                }
-                TimelineInitAndSyncResult::NeedsSpawnImportPgdata { timeline } => {
-                    // yb-mode: external pgdata-bucket import is unsupported
-                    // (the flow.rs orchestrator was deleted in Phase 4d).
-                    // An attaching tenant with an in-progress import is a
-                    // stale state from before the migration; surface it as
-                    // a warning and skip.
-                    warn!(
-                        timeline_id = %timeline.timeline_id,
-                        "skipping in-progress import-pgdata timeline — yb-mode does not support pgdata-bucket import"
-                    );
-                }
-            }
+            let TimelineInitAndSyncResult::ReadyToActivate = effect;
+            // activation happens later, on Tenant::activate
         }
 
         // At this point we've initialized all timelines and are tracking them.
@@ -2834,15 +2732,6 @@ impl TenantShard {
                 timeline.defuse_for_tenant_drop();
             });
         }
-        {
-            let mut timelines_importing = self.timelines_importing.lock().unwrap();
-            timelines_importing
-                .drain()
-                .for_each(|(timeline_id, importing_timeline)| {
-                    let span = tracing::info_span!("importing_timeline_shutdown", %timeline_id);
-                    js.spawn(async move { importing_timeline.shutdown().instrument(span).await });
-                });
-        }
         // test_long_timeline_create_then_tenant_delete is leaning on this message
         tracing::info!("Waiting for timelines...");
         while let Some(res) = js.join_next().await {
@@ -3571,7 +3460,6 @@ impl TenantShard {
             timelines: Mutex::new(HashMap::new()),
             timelines_creating: Mutex::new(HashSet::new()),
             timelines_offloaded: Mutex::new(HashMap::new()),
-            timelines_importing: Mutex::new(HashMap::new()),
             remote_tenant_manifest: Default::default(),
             gc_cs: tokio::sync::Mutex::new(()),
             walredo_mgr,
@@ -4175,14 +4063,6 @@ impl TenantShard {
             }) => {
                 info!("timeline already exists but is offloaded");
                 Err(CreateTimelineError::Conflict)
-            }
-            Err(TimelineExclusionError::AlreadyExists {
-                existing: TimelineOrOffloaded::Importing(_existing),
-                ..
-            }) => {
-                // If there's a timeline already importing, then we would hit
-                // the [`TimelineExclusionError::AlreadyCreating`] branch above.
-                unreachable!("Importing timelines hold the creation guard")
             }
             Err(TimelineExclusionError::AlreadyExists {
                 existing: TimelineOrOffloaded::Timeline(existing),

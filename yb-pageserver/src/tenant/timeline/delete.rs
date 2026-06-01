@@ -121,7 +121,6 @@ async fn remove_maybe_offloaded_timeline_from_tenant(
     // This observes the locking order between timelines and timelines_offloaded
     let mut timelines = tenant.timelines.lock().unwrap();
     let mut timelines_offloaded = tenant.timelines_offloaded.lock().unwrap();
-    let mut timelines_importing = tenant.timelines_importing.lock().unwrap();
     let offloaded_children_exist = timelines_offloaded
         .iter()
         .any(|(_, entry)| entry.ancestor_timeline_id == Some(timeline.timeline_id()));
@@ -147,12 +146,8 @@ async fn remove_maybe_offloaded_timeline_from_tenant(
                 .expect("timeline that we were deleting was concurrently removed from 'timelines_offloaded' map");
             offloaded_timeline.delete_from_ancestor_with_timelines(&timelines);
         }
-        TimelineOrOffloaded::Importing(importing) => {
-            timelines_importing.remove(&importing.timeline.timeline_id);
-        }
     }
 
-    drop(timelines_importing);
     drop(timelines_offloaded);
     drop(timelines);
 
@@ -207,9 +202,6 @@ impl DeleteTimelineFlow {
         match &timeline {
             TimelineOrOffloaded::Timeline(timeline) => {
                 timeline.shutdown(super::ShutdownMode::Hard).await;
-            }
-            TimelineOrOffloaded::Importing(importing) => {
-                importing.shutdown().await;
             }
             TimelineOrOffloaded::Offloaded(_offloaded) => {
                 // Nothing to shut down in this case
@@ -411,10 +403,6 @@ impl DeleteTimelineFlow {
             TimelineOrOffloaded::Timeline(timeline) => {
                 delete_local_timeline_directory(conf, tenant.tenant_shard_id, timeline).await;
             }
-            TimelineOrOffloaded::Importing(importing) => {
-                delete_local_timeline_directory(conf, tenant.tenant_shard_id, &importing.timeline)
-                    .await;
-            }
             TimelineOrOffloaded::Offloaded(_offloaded) => {
                 // Offloaded timelines have no local state
                 // TODO: once we persist offloaded information, delete the timeline from there, too
@@ -467,16 +455,12 @@ pub(super) fn make_timeline_delete_guard(
     // For more context see this discussion: `https://github.com/neondatabase/neon/pull/4552#discussion_r1253437346`
     let timelines = tenant.timelines.lock().unwrap();
     let timelines_offloaded = tenant.timelines_offloaded.lock().unwrap();
-    let timelines_importing = tenant.timelines_importing.lock().unwrap();
 
     let timeline = match timelines.get(&timeline_id) {
         Some(t) => TimelineOrOffloaded::Timeline(Arc::clone(t)),
         None => match timelines_offloaded.get(&timeline_id) {
             Some(t) => TimelineOrOffloaded::Offloaded(Arc::clone(t)),
-            None => match timelines_importing.get(&timeline_id) {
-                Some(t) => TimelineOrOffloaded::Importing(Arc::clone(t)),
-                None => return Err(DeleteTimelineError::NotFound),
-            },
+            None => return Err(DeleteTimelineError::NotFound),
         },
     };
 
