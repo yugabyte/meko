@@ -239,12 +239,28 @@ impl ImageMaterializer {
                 break;
             }
         }
+        // Bytes held in `images` across the batch — released after the
+        // bulk INSERT lands (or on early-return / error). Add to the
+        // global gauge incrementally so it captures the growing pool
+        // during walredo; the scopeguard drains it on every exit path.
+        // AtomicU64 (not Cell) so the enclosing future stays Send for
+        // tokio::spawn.
+        let held_image_bytes = std::sync::atomic::AtomicU64::new(0);
+        let _images_guard = scopeguard::guard(&held_image_bytes, |a| {
+            let b = a.load(std::sync::atomic::Ordering::Relaxed);
+            if b > 0 {
+                crate::metrics::MATERIALIZER_INFLIGHT_BYTES.sub(b);
+            }
+        });
         // As each completes, refill from the iterator until exhausted.
         while let Some((job, res)) = in_flight.next().await {
             match res {
                 Ok(Some((image_row, chain_len, n_records))) => {
                     total_chain_rows += chain_len;
                     total_records += n_records;
+                    let b = image_row.payload.len() as u64;
+                    crate::metrics::MATERIALIZER_INFLIGHT_BYTES.add(b);
+                    held_image_bytes.fetch_add(b, std::sync::atomic::Ordering::Relaxed);
                     images.push(image_row);
                 }
                 Ok(None) => {} // nothing-to-do (no chain / already image-anchored)
@@ -340,6 +356,16 @@ impl ImageMaterializer {
             return Ok(None);
         }
 
+        // Track chain bytes held in RAM for the duration of walredo.
+        // The MATERIALIZER_INFLIGHT_BYTES gauge sums these across the
+        // REDO_CONCURRENCY in-flight chains so an operator can see the
+        // transient pool that `read_cache_bytes` does NOT cap.
+        let chain_bytes: u64 = chain.iter().map(|r| r.payload.len() as u64).sum();
+        crate::metrics::MATERIALIZER_INFLIGHT_BYTES.add(chain_bytes);
+        let chain_guard = scopeguard::guard(chain_bytes, |b| {
+            crate::metrics::MATERIALIZER_INFLIGHT_BYTES.sub(b);
+        });
+
         let (base_img, records) = parse_chain(&chain)?;
         if records.is_empty() && base_img.is_none() {
             return Ok(None);
@@ -366,6 +392,7 @@ impl ImageMaterializer {
                 .await
                 .context("request_redo")?
         };
+        drop(chain_guard);
         Ok(Some((
             PageRow {
                 key: job.key.clone(),

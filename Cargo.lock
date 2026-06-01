@@ -9419,6 +9419,7 @@ dependencies = [
  "sysinfo",
  "tenant_size_model",
  "thiserror 1.0.69",
+ "tikv-jemalloc-ctl",
  "tikv-jemallocator",
  "tokio",
  "tokio-epoll-uring",

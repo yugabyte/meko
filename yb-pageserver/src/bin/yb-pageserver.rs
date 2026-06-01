@@ -49,12 +49,27 @@ project_build_tag!(BUILD_TAG);
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-/// Configure jemalloc to profile heap allocations by sampling stack traces every 2 MB (1 << 21).
-/// This adds roughly 3% overhead for allocations on average, which is acceptable considering
-/// performance-sensitive code will avoid allocations as far as possible anyway.
+/// Configure jemalloc:
+///
+/// - `prof:true,prof_active:true,lg_prof_sample:21` — heap-profile by
+///   sampling stack traces every 2 MiB. ~3% allocator overhead;
+///   acceptable since perf-sensitive code avoids allocs anyway.
+/// - `background_thread:true` — spawn jemalloc's purge thread so
+///   dirty/muzzy decay runs even when the application is quiescent.
+///   With this off (the default) we observed 60+ GiB `VmData` /
+///   ~40 GiB `VmRSS` lingering for ~20 min after TPCC waves drained
+///   because no allocator activity = no decay opportunity.
+/// - `dirty_decay_ms:1000` — release dirty (recently-freed but
+///   resident) pages back to the OS after 1 s of inactivity (jemalloc
+///   default 10 s). Pages stay in the muzzy state for the next stage.
+/// - `muzzy_decay_ms:0` — purge muzzy pages (madvise MADV_FREE'd,
+///   reclaimable by OS) immediately. Combined with the background
+///   thread, RSS shrinks within seconds of load drop instead of
+///   minutes.
 #[allow(non_upper_case_globals)]
 #[unsafe(export_name = "malloc_conf")]
-pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:21\0";
+pub static malloc_conf: &[u8] =
+    b"prof:true,prof_active:true,lg_prof_sample:21,background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:0\0";
 
 const PID_FILE_NAME: &str = "pageserver.pid";
 
@@ -358,6 +373,10 @@ fn start_pageserver(
     metrics::register_internal(Box::new(metrics::more_process_metrics::Collector::new())).unwrap();
     metrics::register_internal(Box::new(
         yb_pageserver::metrics::tokio_epoll_uring::Collector::new(),
+    ))
+    .unwrap();
+    metrics::register_internal(Box::new(
+        yb_pageserver::metrics::jemalloc_stats::JemallocCollector::new(),
     ))
     .unwrap();
     yb_pageserver::preinitialize_metrics(conf, ignored);

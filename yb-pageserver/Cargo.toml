@@ -91,6 +91,7 @@ sysinfo.workspace = true
 tenant_size_model.workspace = true
 thiserror.workspace = true
 tikv-jemallocator.workspace = true
+tikv-jemalloc-ctl.workspace = true
 tokio = { workspace = true, features = ["process", "sync", "fs", "rt", "io-util", "time"] }
 tokio-epoll-uring.workspace = true
 tokio-io-timeout.workspace = true

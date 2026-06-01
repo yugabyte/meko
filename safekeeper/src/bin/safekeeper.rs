@@ -52,12 +52,21 @@ use std::sync::atomic::Ordering;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-/// Configure jemalloc to profile heap allocations by sampling stack traces every 2 MB (1 << 21).
-/// This adds roughly 3% overhead for allocations on average, which is acceptable considering
-/// performance-sensitive code will avoid allocations as far as possible anyway.
+/// Configure jemalloc — same tuning as `yb-pageserver`:
+///
+/// - `prof:true,prof_active:true,lg_prof_sample:21` — heap profile,
+///   sample every 2 MiB (~3% allocator overhead).
+/// - `background_thread:true` — spawn jemalloc's purge thread so
+///   dirty/muzzy decay runs even when the application is quiescent.
+///   Default-off; safekeeper does mostly bounded buffering but during
+///   long quiet stretches between WAL bursts it still benefits from
+///   returning arena slack to the OS.
+/// - `dirty_decay_ms:1000`, `muzzy_decay_ms:0` — aggressive decay so
+///   RSS tracks load instead of high-water-marking after each spike.
 #[allow(non_upper_case_globals)]
 #[unsafe(export_name = "malloc_conf")]
-pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:21\0";
+pub static malloc_conf: &[u8] =
+    b"prof:true,prof_active:true,lg_prof_sample:21,background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:0\0";
 
 const PID_FILE_NAME: &str = "safekeeper.pid";
 

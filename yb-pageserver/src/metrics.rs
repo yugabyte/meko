@@ -217,6 +217,32 @@ pub(crate) static MATERIALIZER_QUEUE_DEPTH: Lazy<UIntGauge> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+/// Sum of chain-payload bytes + freshly-redone image bytes held by an
+/// in-progress `materialize_batch_inner`. Driven by `redo_one` futures
+/// inside the materialiser; cleared when the batch's bulk INSERT
+/// completes. Captures the **transient** allocation the
+/// `read_chain_durable → walredo → put_pages` pipeline holds for
+/// `REDO_CONCURRENCY` × batch-size keys at a time. Unlike the
+/// post-flush `UnifiedPages.durable_fifo`, this pool is **not** capped
+/// by `read_cache_bytes` — it's bounded only by chain depth × batch
+/// width. Watch this when investigating RSS spikes that don't line up
+/// with [`PAGEWRITER_UNFLUSHED_BYTES`].
+pub(crate) static MATERIALIZER_INFLIGHT_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
+    register_uint_gauge!(
+        "pageserver_yb_materializer_inflight_bytes",
+        "Bytes held by an in-progress image-materialiser batch (chain payloads + redone images)",
+    )
+    .expect("failed to define a metric")
+});
+
+// Per-process memory gauges (VmRSS, VmData, RssAnon, RssFile, RssShmem)
+// are emitted as `libmetrics_process_status_*_bytes` by the
+// `more_process_metrics::Collector` registered in `bin/yb-pageserver.rs`;
+// see `libs/metrics/src/more_process_metrics.rs`.
+//
+// jemalloc-specific gauges (allocated/active/resident/mapped/dirty/muzzy)
+// come from `jemalloc_stats::Collector` further below.
+
 pub(crate) static INITDB_SEMAPHORE_ACQUISITION_TIME: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "pageserver_initdb_semaphore_seconds_global",
@@ -3190,6 +3216,132 @@ pub(crate) trait MeasureRemoteOp<O, E>: Sized + Future<Output = Result<O, E>> {
 }
 
 impl<Fut, O, E> MeasureRemoteOp<O, E> for Fut where Fut: Sized + Future<Output = Result<O, E>> {}
+
+/// jemalloc stats exposed as Prometheus gauges. Registered alongside
+/// the libmetrics process collector in `bin/yb-pageserver.rs` so each
+/// scrape pulls fresh values from the allocator.
+///
+/// The values come from the `tikv-jemalloc-ctl::stats::*` mibs. They
+/// need a refresh epoch advance to update; `collect()` does that
+/// before reading.
+pub mod jemalloc_stats {
+    use metrics::UIntGauge;
+    use metrics::prometheus::core::{Collector, Desc};
+    use metrics::prometheus::proto::MetricFamily;
+
+    pub struct JemallocCollector {
+        descs: Vec<Desc>,
+        allocated: UIntGauge,
+        active: UIntGauge,
+        resident: UIntGauge,
+        mapped: UIntGauge,
+        retained: UIntGauge,
+        metadata: UIntGauge,
+    }
+
+    impl JemallocCollector {
+        pub fn new() -> Self {
+            fn g(name: &str, help: &str, descs: &mut Vec<Desc>) -> UIntGauge {
+                let g = UIntGauge::new(name, help).unwrap();
+                descs.extend(
+                    metrics::prometheus::core::Collector::desc(&g)
+                        .into_iter()
+                        .cloned(),
+                );
+                g
+            }
+            let mut descs = Vec::new();
+            let allocated = g(
+                "pageserver_jemalloc_allocated_bytes",
+                "Bytes allocated and not yet freed by the application (live heap)",
+                &mut descs,
+            );
+            let active = g(
+                "pageserver_jemalloc_active_bytes",
+                "Bytes in active pages (allocated + immediate slack)",
+                &mut descs,
+            );
+            let resident = g(
+                "pageserver_jemalloc_resident_bytes",
+                "Bytes in physically-resident pages held by jemalloc (active + dirty)",
+                &mut descs,
+            );
+            let mapped = g(
+                "pageserver_jemalloc_mapped_bytes",
+                "Bytes mapped by jemalloc (active + dirty + muzzy)",
+                &mut descs,
+            );
+            let retained = g(
+                "pageserver_jemalloc_retained_bytes",
+                "Bytes retained for future allocation (madvise'd away, may not be resident)",
+                &mut descs,
+            );
+            let metadata = g(
+                "pageserver_jemalloc_metadata_bytes",
+                "Bytes used by jemalloc internal metadata",
+                &mut descs,
+            );
+            Self {
+                descs,
+                allocated,
+                active,
+                resident,
+                mapped,
+                retained,
+                metadata,
+            }
+        }
+    }
+
+    impl Default for JemallocCollector {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Collector for JemallocCollector {
+        fn desc(&self) -> Vec<&Desc> {
+            self.descs.iter().collect()
+        }
+
+        fn collect(&self) -> Vec<MetricFamily> {
+            use tikv_jemalloc_ctl::{epoch, stats};
+
+            // jemalloc stats are cached; epoch.advance() forces a
+            // refresh of the per-thread counters before we read them.
+            if epoch::advance().is_err() {
+                return vec![];
+            }
+
+            let mut mfs = Vec::with_capacity(6);
+            if let Ok(v) = stats::allocated::read() {
+                self.allocated.set(v as u64);
+                mfs.extend(self.allocated.collect());
+            }
+            if let Ok(v) = stats::active::read() {
+                self.active.set(v as u64);
+                mfs.extend(self.active.collect());
+            }
+            if let Ok(v) = stats::resident::read() {
+                self.resident.set(v as u64);
+                mfs.extend(self.resident.collect());
+            }
+            if let Ok(v) = stats::mapped::read() {
+                self.mapped.set(v as u64);
+                mfs.extend(self.mapped.collect());
+            }
+            if let Ok(v) = stats::retained::read() {
+                self.retained.set(v as u64);
+                mfs.extend(self.retained.collect());
+            }
+            if let Ok(v) = stats::metadata::read() {
+                self.metadata.set(v as u64);
+                mfs.extend(self.metadata.collect());
+            }
+            mfs
+        }
+    }
+}
 
 pub mod tokio_epoll_uring {
     use std::collections::HashMap;
