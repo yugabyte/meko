@@ -11,9 +11,8 @@
 # `NEON_PAGESERVER_BIN=<path>` for A/B benchmarking.
 set -euo pipefail
 
-# Use the vendored protoc; the system protoc on dev-server-hsunder is too old.
-PROTOC=${PROTOC:-/opt/yb-build/thirdparty/yugabyte-db-thirdparty-v20260504074854-17fb8ba725-almalinux8-x86_64-clang21/installed/uninstrumented/bin/protoc}
-export PROTOC
+# protoc comes from `protoc-bin-vendored` via pageserver/page_api/build.rs;
+# no PROTOC env required.
 
 SHA=$(git rev-parse --short HEAD)
 DATE=$(date -u +%Y-%m-%d)
