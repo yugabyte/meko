@@ -2610,6 +2610,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdrhistogram"
+version = "7.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "765c9198f173dd59ce26ff9f95ef0aafd0a0fe01fb9d72841bc5066a4c06511d"
+dependencies = [
+ "base64 0.21.7",
+ "byteorder",
+ "crossbeam-channel",
+ "flate2",
+ "nom",
+ "num-traits",
+]
+
+[[package]]
 name = "headers"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4136,6 +4150,38 @@ dependencies = [
  "elliptic-curve 0.13.8",
  "primeorder",
  "sha2",
+]
+
+[[package]]
+name = "pagebench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "camino",
+ "clap",
+ "futures",
+ "hdrhistogram",
+ "humantime",
+ "humantime-serde",
+ "pageserver_api",
+ "pageserver_client",
+ "pageserver_client_grpc",
+ "pageserver_page_api",
+ "pprof",
+ "rand 0.9.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tracing",
+ "url",
+ "utils",
+ "workspace_hack",
 ]
 
 [[package]]

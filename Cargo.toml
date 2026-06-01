@@ -8,6 +8,7 @@ members = [
     "yb-pageserver/client",
     "yb-pageserver/client_grpc",
     "yb-pageserver/page_api",
+    "yb-pageserver/pagebench",
     "safekeeper",
     "safekeeper/client",
     "storage_broker",
