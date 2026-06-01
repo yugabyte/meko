@@ -47,8 +47,12 @@ impl<C> DeletionQueueWorkers<C>
 where
     C: StorageControllerUpcallApi + Send + Sync + 'static,
 {
-    pub fn spawn_with(self, _runtime: &tokio::runtime::Handle) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async {})
+    pub fn spawn_with(self, runtime: &tokio::runtime::Handle) -> tokio::task::JoinHandle<()> {
+        // yb-mode has no background workers, but the caller invokes
+        // us from a sync startup context, so `tokio::spawn` (which
+        // requires being inside an active reactor) would panic.
+        // Spawn into the explicit runtime Handle instead.
+        runtime.spawn(async {})
     }
 }
 
