@@ -63,15 +63,6 @@ flate2 = "1.0.26"
 assert-json-diff = "2"
 async-stream = "0.3"
 async-trait = "0.1"
-aws-config = { version = "1.5", default-features = false, features=["rustls", "sso"] }
-aws-sdk-s3 = "1.52"
-aws-sdk-iam = "1.46.0"
-aws-sdk-kms = "1.47.0"
-aws-smithy-async = { version = "1.2.1", default-features = false, features=["rt-tokio"] }
-aws-smithy-types = "1.2"
-aws-credential-types = "1.2.0"
-aws-sigv4 = { version = "1.2", features = ["sign-http"] }
-aws-types = "1.3"
 axum = { version = "0.8.1", features = ["ws"] }
 axum-extra = { version = "0.10.0", features = ["typed-header", "query"] }
 base64 = "0.22"
@@ -245,10 +236,6 @@ postgres-types = { git = "https://github.com/neondatabase/rust-postgres.git", br
 tokio-postgres = { git = "https://github.com/neondatabase/rust-postgres.git", branch = "neon" }
 
 ## Azure SDK crates
-azure_core = { git = "https://github.com/neondatabase/azure-sdk-for-rust.git", branch = "neon", default-features = false, features = ["enable_reqwest_rustls", "hmac_rust"] }
-azure_identity = { git = "https://github.com/neondatabase/azure-sdk-for-rust.git", branch = "neon", default-features = false, features = ["enable_reqwest_rustls"] }
-azure_storage = { git = "https://github.com/neondatabase/azure-sdk-for-rust.git", branch = "neon", default-features = false, features = ["enable_reqwest_rustls"] }
-azure_storage_blobs = { git = "https://github.com/neondatabase/azure-sdk-for-rust.git", branch = "neon", default-features = false, features = ["enable_reqwest_rustls"] }
 
 ## Local libraries
 compute_api = { version = "0.1", path = "./libs/compute_api/" }

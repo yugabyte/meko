@@ -280,21 +280,11 @@ fn fill_rust_env_vars(cmd: &mut Command) -> &mut Command {
     filled_cmd
 }
 
-fn fill_remote_storage_secrets_vars(mut cmd: &mut Command) -> &mut Command {
-    for env_key in [
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_PROFILE",
-        // HOME is needed in combination with `AWS_PROFILE` to pick up the SSO sessions.
-        "HOME",
-        "AZURE_STORAGE_ACCOUNT",
-        "AZURE_STORAGE_ACCESS_KEY",
-    ] {
-        if let Ok(value) = std::env::var(env_key) {
-            cmd = cmd.env(env_key, value);
-        }
-    }
+fn fill_remote_storage_secrets_vars(cmd: &mut Command) -> &mut Command {
+    // Lane E removed the cloud-storage backends (S3, Azure, GCS) and
+    // their SDK dependencies. The only remote_storage backends left
+    // are LocalFs (no credentials) and YbStore (credentials flow
+    // through NEON_YB_PASSWORD via fill_env_vars_prefixed_neon below).
     cmd
 }
 

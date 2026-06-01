@@ -220,35 +220,12 @@ mod tests {
 
     async fn proxy() -> (Storage, Option<camino_tempfile::Utf8TempDir>) {
         let cancel = CancellationToken::new();
-        let (dir, storage) = if var(REAL_S3_ENV).is_err() {
-            // tests execute in parallel and we need a new directory for each of them
-            let dir = camino_tempfile::tempdir().unwrap();
-            let fs =
-                remote_storage::LocalFs::new(dir.path().into(), Duration::from_secs(5)).unwrap();
-            (Some(dir), GenericRemoteStorage::LocalFs(fs))
-        } else {
-            // test_real_s3::create_s3_client is hard to reference, reimplementing here
-            let millis = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            use rand::Rng;
-            let random = rand::rng().random::<u32>();
-
-            let s3_config = remote_storage::S3Config {
-                bucket_name: var(REAL_S3_BUCKET).unwrap(),
-                bucket_region: var(REAL_S3_REGION).unwrap(),
-                prefix_in_bucket: Some(format!("test_{millis}_{random:08x}/")),
-                endpoint: None,
-                concurrency_limit: std::num::NonZeroUsize::new(100).unwrap(),
-                max_keys_per_list_response: None,
-                upload_storage_class: None,
-            };
-            let bucket = remote_storage::S3Bucket::new(&s3_config, Duration::from_secs(1))
-                .await
-                .unwrap();
-            (None, GenericRemoteStorage::AwsS3(Arc::new(bucket)))
-        };
+        // Tests use a per-test LocalFs root; the cloud (S3/Azure/GCS)
+        // backends and their REAL_S3_* env-gated branches were removed
+        // in lane E along with the SDK deps.
+        let dir = camino_tempfile::tempdir().unwrap();
+        let fs = remote_storage::LocalFs::new(dir.path().into(), Duration::from_secs(5)).unwrap();
+        let storage = GenericRemoteStorage::LocalFs(fs);
 
         let proxy = Storage {
             auth: endpoint_storage::JwtAuth::new(TEST_PUB_KEY_ED25519).unwrap(),
@@ -259,7 +236,7 @@ mod tests {
         check_storage_permissions(&proxy.storage, cancel)
             .await
             .unwrap();
-        (proxy, dir)
+        (proxy, Some(dir))
     }
 
     // see libs/utils/src/auth.rs

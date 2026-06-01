@@ -56,14 +56,12 @@ impl UnreliableWrapper {
     ) -> Self {
         assert!(attempts_to_fail > 0);
         let inner = match inner {
-            GenericRemoteStorage::AwsS3(s) => GenericRemoteStorage::AwsS3(s),
-            GenericRemoteStorage::AzureBlob(s) => GenericRemoteStorage::AzureBlob(s),
             GenericRemoteStorage::LocalFs(s) => GenericRemoteStorage::LocalFs(s),
-            // We could also make this a no-op, as in, extract the inner of the passed generic remote storage
+            // We could also make this a no-op, as in, extract the
+            // inner of the passed generic remote storage.
             GenericRemoteStorage::Unreliable(_s) => {
                 panic!("Can't wrap unreliable wrapper unreliably")
             }
-            GenericRemoteStorage::GCS(s) => GenericRemoteStorage::GCS(s),
             GenericRemoteStorage::YbStore(s) => GenericRemoteStorage::YbStore(s),
         };
         let actual_attempt_failure_probability = cmp::min(attempt_failure_probability, 100);

@@ -54,7 +54,7 @@ impl LocalFs {
         })
     }
 
-    // mirrors S3Bucket::s3_object_to_relative_path
+    // Strip the local-fs storage root prefix from an absolute path.
     fn local_file_to_relative_path(&self, key: Utf8PathBuf) -> RemotePath {
         let relative_path = key
             .strip_prefix(&self.storage_root)
@@ -582,7 +582,9 @@ impl RemoteStorage for LocalFs {
     }
 
     fn max_keys_per_delete(&self) -> usize {
-        super::MAX_KEYS_PER_DELETE_S3
+        // LocalFs has no API-level batch cap; pick a sensible default
+        // matching the legacy S3 ceiling.
+        1000
     }
 
     async fn copy(

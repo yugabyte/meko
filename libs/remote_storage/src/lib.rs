@@ -1,21 +1,22 @@
 //! A set of generic storage abstractions for the page server to use when backing up and restoring its state from the external storage.
 //! No other modules from this tree are supposed to be used directly by the external code.
 //!
-//! [`RemoteStorage`] trait a CRUD-like generic abstraction to use for adapting external storages with a few implementations:
-//!   * [`local_fs`] allows to use local file system as an external storage
-//!   * [`s3_bucket`] uses AWS S3 bucket as an external storage
-//!   * [`azure_blob`] allows to use Azure Blob storage as an external storage
+//! [`RemoteStorage`] trait a CRUD-like generic abstraction over external storages:
+//!   * [`local_fs`] uses the local file system (dev / single-box setups)
+//!   * [`yb_store`] uses a YugabyteDB table over the Postgres wire protocol
+//!     (the production backend for yb-pageserver)
+//!
+//! Cloud-storage backends (S3, Azure Blob, GCS) were removed in lane E
+//! along with their integration tests and SDK dependencies — yb-light
+//! never reads or writes to a cloud object store.
 //!
 #![deny(unsafe_code)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
-mod azure_blob;
 mod config;
 mod error;
-mod gcs_bucket;
 mod local_fs;
 mod metrics;
-mod s3_bucket;
 mod simulate_failures;
 mod support;
 mod yb_store;
@@ -32,8 +33,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::Context;
-/// Azure SDK's ETag type is a simple String wrapper: we use this internally instead of repeating it here.
-pub use azure_core::Etag;
 use bytes::Bytes;
 use camino::{Utf8Path, Utf8PathBuf};
 pub use config::TypedRemoteStorageKind;
@@ -41,60 +40,60 @@ pub use error::{DownloadError, TimeTravelError, TimeoutOrCancel};
 use futures::StreamExt;
 use futures::stream::Stream;
 use itertools::Itertools as _;
-use s3_bucket::RequestKind;
+use metrics::RequestKind;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-pub use self::azure_blob::AzureBlobStorage;
-pub use self::gcs_bucket::GCSBucket;
 pub use self::local_fs::LocalFs;
-pub use self::s3_bucket::S3Bucket;
 pub use self::simulate_failures::UnreliableWrapper;
 pub use self::yb_store::YbStore;
-pub use crate::config::{
-    AzureConfig, GCSConfig, RemoteStorageConfig, RemoteStorageKind, S3Config, YbStoreConfig,
-};
+pub use crate::config::{RemoteStorageConfig, RemoteStorageKind, YbStoreConfig};
 
-/// Default concurrency limit for S3 operations
+/// Entity tag — opaque string identifying a particular object
+/// version, returned with downloads and head responses. We used to
+/// re-export `azure_core::Etag` here; that was the only consumer of
+/// the azure_core dependency. After lane E we own the type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Etag(pub String);
+
+impl From<String> for Etag {
+    fn from(s: String) -> Self {
+        Etag(s)
+    }
+}
+
+impl From<&str> for Etag {
+    fn from(s: &str) -> Self {
+        Etag(s.to_string())
+    }
+}
+
+impl std::fmt::Display for Etag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl AsRef<str> for Etag {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Concurrency cap for the LocalFs backend.
 ///
-/// Currently, sync happens with AWS S3, that has two limits on requests per second:
-/// ~200 RPS for IAM services
-/// <https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/UsingWithRDS.IAMDBAuth.html>
-/// ~3500 PUT/COPY/POST/DELETE or 5500 GET/HEAD S3 requests
-/// <https://aws.amazon.com/premiumsupport/knowledge-center/s3-request-limit-avoid-throttling/>
-pub const DEFAULT_REMOTE_STORAGE_S3_CONCURRENCY_LIMIT: usize = 100;
-/// Set this limit analogously to the S3 limit
-///
-/// Here, a limit of max 20k concurrent connections was noted.
-/// <https://learn.microsoft.com/en-us/answers/questions/1301863/is-there-any-limitation-to-concurrent-connections>
-pub const DEFAULT_REMOTE_STORAGE_AZURE_CONCURRENCY_LIMIT: usize = 100;
-/// Set this limit analogously to the S3 limit.
-///
-/// The local filesystem backend doesn't enforce a concurrency limit itself, but this also bounds
-/// the upload queue concurrency. Some tests create thousands of uploads, which slows down the
-/// quadratic scheduling of the upload queue, and there is no point spawning so many Tokio tasks.
+/// LocalFs doesn't enforce a concurrency limit itself, but this also
+/// bounds the upload queue concurrency. Some tests create thousands of
+/// uploads, which slows down the quadratic scheduling of the upload
+/// queue, and there's no point spawning so many Tokio tasks.
 pub const DEFAULT_REMOTE_STORAGE_LOCALFS_CONCURRENCY_LIMIT: usize = 100;
-/// No limits on the client side, which currenltly means 1000 for AWS S3.
-/// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html#API_ListObjectsV2_RequestSyntax>
+
+/// No client-side limit by default.
 pub const DEFAULT_MAX_KEYS_PER_LIST_RESPONSE: Option<i32> = None;
 
-/// As defined in S3 docs
-///
-/// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html>
-pub const MAX_KEYS_PER_DELETE_S3: usize = 1000;
-
-/// As defined in Azure docs
-///
-/// <https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch>
-pub const MAX_KEYS_PER_DELETE_AZURE: usize = 256;
-
-pub const MAX_KEYS_PER_DELETE_GCS: usize = 1000;
-
 const REMOTE_STORAGE_PREFIX_SEPARATOR: char = '/';
-
-const GCS_SCOPES: &[&str] = &["https://www.googleapis.com/auth/cloud-platform"];
 
 /// Path on the remote storage, relative to some inner prefix.
 /// The prefix is an implementation detail, that allows representing local paths
@@ -527,16 +526,15 @@ impl Debug for Download {
     }
 }
 
-/// Every storage, currently supported.
-/// Serves as a simple way to pass around the [`RemoteStorage`] without dealing with generics.
-// Require Clone for `Other` due to https://github.com/rust-lang/rust/issues/26925
+/// Every storage backend that yb-light supports.
+/// Serves as a simple way to pass around the [`RemoteStorage`] without
+/// dealing with generics. Post lane E only LocalFs (dev) + YbStore
+/// (production) + Unreliable (test wrapper) survive — the cloud
+/// backends and their SDK dependencies were deleted.
 #[derive(Clone)]
 pub enum GenericRemoteStorage<Other: Clone = Arc<UnreliableWrapper>> {
     LocalFs(LocalFs),
-    AwsS3(Arc<S3Bucket>),
-    AzureBlob(Arc<AzureBlobStorage>),
     Unreliable(Other),
-    GCS(Arc<GCSBucket>),
     YbStore(Arc<YbStore>),
 }
 
@@ -551,10 +549,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> Result<Listing, DownloadError> {
         match self {
             Self::LocalFs(s) => s.list(prefix, mode, max_keys, cancel).await,
-            Self::AwsS3(s) => s.list(prefix, mode, max_keys, cancel).await,
-            Self::AzureBlob(s) => s.list(prefix, mode, max_keys, cancel).await,
             Self::Unreliable(s) => s.list(prefix, mode, max_keys, cancel).await,
-            Self::GCS(s) => s.list(prefix, mode, max_keys, cancel).await,
             Self::YbStore(s) => s.list(prefix, mode, max_keys, cancel).await,
         }
     }
@@ -570,10 +565,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         match self {
             Self::LocalFs(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel))
                 as Pin<Box<dyn Stream<Item = Result<Listing, DownloadError>> + Send>>,
-            Self::AwsS3(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
-            Self::AzureBlob(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
             Self::Unreliable(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
-            Self::GCS(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
             Self::YbStore(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
         }
     }
@@ -588,10 +580,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> Result<VersionListing, DownloadError> {
         match self {
             Self::LocalFs(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
-            Self::AwsS3(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
-            Self::AzureBlob(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
             Self::Unreliable(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
-            Self::GCS(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
             Self::YbStore(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
         }
     }
@@ -604,10 +593,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> Result<ListingObject, DownloadError> {
         match self {
             Self::LocalFs(s) => s.head_object(key, cancel).await,
-            Self::AwsS3(s) => s.head_object(key, cancel).await,
-            Self::AzureBlob(s) => s.head_object(key, cancel).await,
             Self::Unreliable(s) => s.head_object(key, cancel).await,
-            Self::GCS(s) => s.head_object(key, cancel).await,
             Self::YbStore(s) => s.head_object(key, cancel).await,
         }
     }
@@ -623,10 +609,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> anyhow::Result<()> {
         match self {
             Self::LocalFs(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
-            Self::AwsS3(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
-            Self::AzureBlob(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
             Self::Unreliable(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
-            Self::GCS(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
             Self::YbStore(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
         }
     }
@@ -640,10 +623,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> Result<Download, DownloadError> {
         match self {
             Self::LocalFs(s) => s.download(from, opts, cancel).await,
-            Self::AwsS3(s) => s.download(from, opts, cancel).await,
-            Self::AzureBlob(s) => s.download(from, opts, cancel).await,
             Self::Unreliable(s) => s.download(from, opts, cancel).await,
-            Self::GCS(s) => s.download(from, opts, cancel).await,
             Self::YbStore(s) => s.download(from, opts, cancel).await,
         }
     }
@@ -656,10 +636,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> anyhow::Result<()> {
         match self {
             Self::LocalFs(s) => s.delete(path, cancel).await,
-            Self::AwsS3(s) => s.delete(path, cancel).await,
-            Self::AzureBlob(s) => s.delete(path, cancel).await,
             Self::Unreliable(s) => s.delete(path, cancel).await,
-            Self::GCS(s) => s.delete(path, cancel).await,
             Self::YbStore(s) => s.delete(path, cancel).await,
         }
     }
@@ -672,10 +649,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> anyhow::Result<()> {
         match self {
             Self::LocalFs(s) => s.delete_objects(paths, cancel).await,
-            Self::AwsS3(s) => s.delete_objects(paths, cancel).await,
-            Self::AzureBlob(s) => s.delete_objects(paths, cancel).await,
             Self::Unreliable(s) => s.delete_objects(paths, cancel).await,
-            Self::GCS(s) => s.delete_objects(paths, cancel).await,
             Self::YbStore(s) => s.delete_objects(paths, cancel).await,
         }
     }
@@ -684,10 +658,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     pub fn max_keys_per_delete(&self) -> usize {
         match self {
             Self::LocalFs(s) => s.max_keys_per_delete(),
-            Self::AwsS3(s) => s.max_keys_per_delete(),
-            Self::AzureBlob(s) => s.max_keys_per_delete(),
             Self::Unreliable(s) => s.max_keys_per_delete(),
-            Self::GCS(s) => s.max_keys_per_delete(),
             Self::YbStore(s) => s.max_keys_per_delete(),
         }
     }
@@ -700,10 +671,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> anyhow::Result<()> {
         match self {
             Self::LocalFs(s) => s.delete_prefix(prefix, cancel).await,
-            Self::AwsS3(s) => s.delete_prefix(prefix, cancel).await,
-            Self::AzureBlob(s) => s.delete_prefix(prefix, cancel).await,
             Self::Unreliable(s) => s.delete_prefix(prefix, cancel).await,
-            Self::GCS(s) => s.delete_prefix(prefix, cancel).await,
             Self::YbStore(s) => s.delete_prefix(prefix, cancel).await,
         }
     }
@@ -717,10 +685,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     ) -> anyhow::Result<()> {
         match self {
             Self::LocalFs(s) => s.copy(from, to, cancel).await,
-            Self::AwsS3(s) => s.copy(from, to, cancel).await,
-            Self::AzureBlob(s) => s.copy(from, to, cancel).await,
             Self::Unreliable(s) => s.copy(from, to, cancel).await,
-            Self::GCS(s) => s.copy(from, to, cancel).await,
             Self::YbStore(s) => s.copy(from, to, cancel).await,
         }
     }
@@ -739,19 +704,7 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
                 s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
                     .await
             }
-            Self::AwsS3(s) => {
-                s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
-                    .await
-            }
-            Self::AzureBlob(s) => {
-                s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
-                    .await
-            }
             Self::Unreliable(s) => {
-                s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
-                    .await
-            }
-            Self::GCS(s) => {
                 s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
                     .await
             }
@@ -786,52 +739,11 @@ impl GenericRemoteStorage {
             storage_config.storage
         );
 
+        let _ = small_timeout; // reserved; the cloud backends used it
         Ok(match &storage_config.storage {
             RemoteStorageKind::LocalFs { local_path: path } => {
                 info!("Using fs root '{path}' as a remote storage");
                 Self::LocalFs(LocalFs::new(path.clone(), timeout)?)
-            }
-            RemoteStorageKind::AwsS3(s3_config) => {
-                // The profile and access key id are only printed here for debugging purposes,
-                // their values don't indicate the eventually taken choice for auth.
-                let profile = std::env::var("AWS_PROFILE").unwrap_or_else(|_| "<none>".into());
-                let access_key_id =
-                    std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_else(|_| "<none>".into());
-                info!(
-                    "Using s3 bucket '{}' in region '{}' as a remote storage, prefix in bucket: '{:?}', bucket endpoint: '{:?}', profile: {profile}, access_key_id: {access_key_id}",
-                    s3_config.bucket_name,
-                    s3_config.bucket_region,
-                    s3_config.prefix_in_bucket,
-                    s3_config.endpoint
-                );
-                Self::AwsS3(Arc::new(S3Bucket::new(s3_config, timeout).await?))
-            }
-            RemoteStorageKind::AzureContainer(azure_config) => {
-                let storage_account = azure_config
-                    .storage_account
-                    .as_deref()
-                    .unwrap_or("<AZURE_STORAGE_ACCOUNT>");
-                info!(
-                    "Using azure container '{}' in account '{storage_account}' in region '{}' as a remote storage, prefix in container: '{:?}'",
-                    azure_config.container_name,
-                    azure_config.container_region,
-                    azure_config.prefix_in_container
-                );
-                Self::AzureBlob(Arc::new(AzureBlobStorage::new(
-                    azure_config,
-                    timeout,
-                    small_timeout,
-                )?))
-            }
-            RemoteStorageKind::GCS(gcs_config) => {
-                let google_application_credentials =
-                    std::env::var("GOOGLE_APPLICATION_CREDENTIALS")
-                        .unwrap_or_else(|_| "<none>".into());
-                info!(
-                    "Using gcs bucket '{}' as a remote storage, prefix in bucket: '{:?}', GOOGLE_APPLICATION_CREDENTIALS: {google_application_credentials }",
-                    gcs_config.bucket_name, gcs_config.prefix_in_bucket
-                );
-                Self::GCS(Arc::new(GCSBucket::new(gcs_config, timeout).await?))
             }
             RemoteStorageKind::YbStore(yb_config) => {
                 info!(
@@ -872,10 +784,7 @@ impl GenericRemoteStorage {
     pub fn bucket_name(&self) -> Option<&str> {
         match self {
             Self::LocalFs(_s) => None,
-            Self::AwsS3(s) => Some(s.bucket_name()),
-            Self::AzureBlob(s) => Some(s.container_name()),
             Self::Unreliable(_s) => None,
-            Self::GCS(s) => Some(s.bucket_name()),
             Self::YbStore(s) => Some(s.table_name()),
         }
     }
