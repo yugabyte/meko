@@ -42,6 +42,13 @@ use crate::page_store::{MetaRow, PageRow, PageStore, SlruPageRow};
 pub struct FlushPolicy {
     pub max_age: Duration,
     pub max_bytes: usize,
+    /// Hard ceiling on `unflushed_bytes + bytes_in_aux_buffers` before
+    /// `put()` blocks waiting on a flush. 0 disables backpressure —
+    /// `put()` always returns immediately and the buffer can grow
+    /// without bound when YB falls behind. Set above `max_bytes` so
+    /// the size-based flush trigger fires first; recommended ≥ 2×
+    /// `max_bytes`.
+    pub backpressure_bytes: usize,
 }
 
 impl Default for FlushPolicy {
@@ -49,6 +56,7 @@ impl Default for FlushPolicy {
         Self {
             max_age: Duration::from_secs(5),
             max_bytes: 25 * 1024 * 1024,
+            backpressure_bytes: 50 * 1024 * 1024,
         }
     }
 }
@@ -158,6 +166,14 @@ pub struct PageWriter {
     /// isn't atomically representable. `None` means "no upsert yet";
     /// the first flush always writes regardless of elapsed time.
     last_dc_lsn_upsert_at: std::sync::Mutex<Option<Instant>>,
+    /// Pulsed by `notify_waiters()` at the end of every successful
+    /// `flush()`. `put()` blocks on this when the buffer exceeds
+    /// `policy.backpressure_bytes`.
+    flush_completed: tokio::sync::Notify,
+    /// Total puts that had to wait at least once on `flush_completed`
+    /// because the buffer was at `policy.backpressure_bytes`. Exposed
+    /// for telemetry / smoke tests.
+    backpressure_waits: std::sync::atomic::AtomicU64,
 }
 
 struct WriterState {
@@ -218,6 +234,8 @@ impl PageWriter {
             dc_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
             dc_lsn_observed: std::sync::atomic::AtomicU64::new(0),
             last_dc_lsn_upsert_at: std::sync::Mutex::new(None),
+            flush_completed: tokio::sync::Notify::new(),
+            backpressure_waits: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -296,6 +314,50 @@ impl PageWriter {
         if entries.is_empty() {
             return Ok(());
         }
+
+        // Backpressure: if the buffer is already at or above the
+        // configured hard cap, block until a flush drains it below
+        // the cap. The walreceiver is the only producer that hits
+        // this path, so stalling it here pushes the slowdown all the
+        // way up to safekeeper ack — which is exactly what we want
+        // when YB INSERTs can't keep up. Without this, the buffer
+        // grows unboundedly under CPU pressure (pre-flush rows are
+        // pinned in `UnifiedPages` and `evict_to_capacity` can't
+        // touch them).
+        //
+        // `notified()` is registered before the size check (via
+        // `enable()`) to close the race where a flush completes
+        // between our check and our wait.
+        if self.policy.backpressure_bytes > 0 {
+            let mut waited = false;
+            loop {
+                let notified = self.flush_completed.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+
+                {
+                    let s = self.state.read().await;
+                    let pending = s.pages.unflushed_bytes() + s.bytes_in_aux_buffers;
+                    if pending < self.policy.backpressure_bytes {
+                        break;
+                    }
+                }
+                if !waited {
+                    waited = true;
+                    self.backpressure_waits
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    crate::metrics::PAGEWRITER_BACKPRESSURE_WAITS
+                        .with_label_values(&["flush"])
+                        .inc();
+                    tracing::debug!(
+                        backpressure_bytes = self.policy.backpressure_bytes,
+                        "PageWriter::put backpressuring on flush",
+                    );
+                }
+                notified.await;
+            }
+        }
+
         let mut rel_rows = Vec::with_capacity(entries.len());
         let mut slru_rows = Vec::new();
         let mut meta_rows = Vec::new();
@@ -395,6 +457,9 @@ impl PageWriter {
                 // a later restart's trigger isn't blocked.
                 if !waited_for_capacity && m.tx.capacity() == 0 {
                     waited_for_capacity = true;
+                    crate::metrics::PAGEWRITER_BACKPRESSURE_WAITS
+                        .with_label_values(&["materializer"])
+                        .inc();
                 }
                 let key_for_rollback = job.key.clone();
                 if let Err(e) = m.tx.send(job).await {
@@ -405,6 +470,11 @@ impl PageWriter {
                     break;
                 }
             }
+            // Sample queue depth gauge after dispatch. Captures the
+            // post-burst level; reads between bursts will tail toward
+            // 0 as the materialiser drains.
+            crate::metrics::MATERIALIZER_QUEUE_DEPTH
+                .set(m.tx.max_capacity().saturating_sub(m.tx.capacity()) as u64);
             let queue_remaining_after = m.tx.capacity();
             if waited_for_capacity || queue_remaining_after < queue_cap / 2 {
                 info!(
@@ -700,6 +770,11 @@ impl PageWriter {
                     s.opened_at = None;
                 }
             }
+            // Wake any `put()` callers blocked on backpressure. Done
+            // after the state lock is released so the woken tasks can
+            // re-take it immediately.
+            self.flush_completed.notify_waiters();
+
             // Outside the writer lock: persist the dc_lsn advance to
             // `pageserver.timeline_state` if (a) it actually moved AND
             // (b) at least `policy.max_age` has elapsed since the last
@@ -805,13 +880,26 @@ impl PageWriter {
 
     pub async fn stats(&self) -> WriterStats {
         let s = self.state.read().await;
+        let bytes_in_buffer = s.pages.unflushed_bytes() + s.bytes_in_aux_buffers;
+        // Side-effect: refresh the global unflushed-bytes gauge so a
+        // periodic Prometheus scrape reflects the current depth. We
+        // do this in `stats()` rather than at every put/flush to keep
+        // the gauge update off the hot ingest path.
+        crate::metrics::PAGEWRITER_UNFLUSHED_BYTES.set(bytes_in_buffer as u64);
         WriterStats {
             rows_written: s.rows_written,
-            bytes_in_buffer: s.pages.unflushed_bytes() + s.bytes_in_aux_buffers,
+            bytes_in_buffer,
             buffered_rows: s.pages.unflushed_count(),
             buffered_slru_rows: s.slru_buffer.len(),
             buffered_meta_rows: s.meta_buffer.len(),
         }
+    }
+
+    /// Total `put()` calls that had to wait on backpressure since
+    /// startup. Telemetry only.
+    pub fn backpressure_wait_count(&self) -> u64 {
+        self.backpressure_waits
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Read the latest meta value for `key` at LSN ≤ `target_lsn`,
@@ -963,6 +1051,11 @@ impl PageWriter {
                     _ = tokio::time::sleep(tick) => {}
                 }
                 let Some(w) = weak.upgrade() else { break };
+                // `stats()` refreshes the unflushed-bytes Prometheus
+                // gauge as a side-effect. Done every tick so a
+                // /metrics scrape reflects the current buffer depth
+                // even when there's nothing to flush.
+                let _ = w.stats().await;
                 if w.should_flush().await
                     && let Err(e) = w.flush().await
                 {
@@ -1454,6 +1547,7 @@ mod tests {
         let policy = FlushPolicy {
             max_age: Duration::from_secs(3600),
             max_bytes: 200,
+            backpressure_bytes: 0,
         };
         let (w, _t, _tl) = writer(store.clone(), policy);
         assert!(!w.should_flush().await);
@@ -1470,6 +1564,7 @@ mod tests {
         let policy = FlushPolicy {
             max_age: Duration::from_millis(100),
             max_bytes: 1_000_000_000,
+            backpressure_bytes: 0,
         };
         let (w, _t, _tl) = writer(store.clone(), policy);
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
@@ -1541,6 +1636,7 @@ mod tests {
         let policy = FlushPolicy {
             max_age: Duration::from_millis(40),
             max_bytes: 1 << 30,
+            backpressure_bytes: 0,
         };
         let w = Arc::new(PageWriter::new(t, tl, store.clone(), store.clone(), policy, 64 * 1024 * 1024));
         let task = w.spawn_flusher(Duration::from_millis(15));
@@ -1565,6 +1661,7 @@ mod tests {
         let policy = FlushPolicy {
             max_age: Duration::from_secs(3600),
             max_bytes: 1 << 30,
+            backpressure_bytes: 0,
         };
         let w = Arc::new(PageWriter::new(t, tl, store.clone(), store.clone(), policy, 64 * 1024 * 1024));
         let task = w.spawn_flusher(Duration::from_millis(15));

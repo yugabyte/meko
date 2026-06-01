@@ -232,9 +232,66 @@ Default knobs (configurable via `pageserver.toml` under the
 | `flush_interval` | 5 s | Time-based flush trigger |
 | `flush_size_bytes` | 25 MiB | Size-based flush trigger |
 | `flush_poll_interval` | 500 ms | How often the background flusher checks the triggers |
-| `image_chain_limit` | 10 | Deltas-since-anchor before a key is queued for materialisation (0 disables) |
-| `materialize_queue_capacity` | 1024 | Bounded mpsc depth; `try_send` drops on overflow |
+| `backpressure_bytes` | 50 MiB | Hard ceiling on the pre-flush buffer. `PageWriter::put` blocks until a flush drains below it. `0` disables (legacy unbounded growth) |
+| `image_chain_limit` | 20 | Deltas-since-anchor before a key is queued for materialisation (`0` disables count trigger) |
+| `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for materialisation (`0` disables size trigger) |
+| `materialize_queue_capacity` | 5000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
 | `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Durable entries are evicted FIFO when crossed; pre-flush entries are pinned regardless |
+
+## Backpressure
+
+The walreceiver has no built-in throttle: it ingests as fast as the
+safekeeper sends. Two places in `PageWriter::put` block the walreceiver
+when a downstream consumer is the bottleneck. Both keep heap usage
+bounded under sustained CPU/IO pressure that would otherwise grow the
+in-RAM buffer without limit.
+
+**Flush-side backpressure.** If `unflushed_bytes + bytes_in_aux_buffers`
+exceeds `FlushPolicy::backpressure_bytes` (operator knob
+`backpressure_bytes`, default 50 MiB), `put` awaits a Tokio `Notify`
+pulsed at the end of every successful `flush()`. The size-based flush
+trigger (`max_bytes`, default 25 MiB) fires well before the
+backpressure cap is reached, so under steady state the wait path is
+not exercised — it only kicks in when YB INSERTs against
+`pageserver.pages` / `slru_pages` / `meta` slow down (CPU contention,
+network spikes, tablet split). Pre-flush rows are **pinned** in
+`UnifiedPages` until durable, so without this cap the buffer would
+grow linearly with the YB backlog — we've observed multi-GiB RSS
+growth on co-located deployments under CPU pressure.
+
+Set `backpressure_bytes = 0` to opt out (legacy unbounded growth).
+
+**Materialiser-side backpressure.** The write-time materialisation
+trigger does a **blocking** `mpsc::send` into the materialiser channel
+(capacity `materialize_queue_capacity`, default 5000). When the
+materialiser can't drain — usually because its own `read_chain_durable`
++ walredo + `put_pages` chain is bottlenecked on the dedicated YSQL
+connection — the channel fills and the walreceiver blocks at the
+send. This bounds in-flight materialisation work to ~5000 keys ×
+(chain payload + image), keeping walredo memory under control even
+when materialisation lags badly.
+
+The read-side materialisation trigger uses `try_send` instead: a
+GetPage that just walredo'd a long chain is allowed to enqueue an
+image materialisation hint, but if the channel is full the hint is
+silently dropped — the next read of the same hot key will re-trigger.
+GetPage latency must not depend on materialiser progress.
+
+### Observability
+
+Three Prometheus metrics expose the backpressure state:
+
+| Metric | Type | What to watch for |
+|---|---|---|
+| `pageserver_yb_pagewriter_backpressure_waits_total{kind="flush"}` | counter | sustained non-zero rate ⇒ YB INSERT throughput is below ingest. Either raise `backpressure_bytes` (delays the symptom, doesn't fix it), scale YB, or shed load |
+| `pageserver_yb_pagewriter_backpressure_waits_total{kind="materializer"}` | counter | sustained non-zero rate ⇒ materialiser is the bottleneck. Either raise `materialize_queue_capacity` (only if memory permits) or relax `image_chain_limit` / `image_chain_payload_bytes_limit` to dispatch less aggressively |
+| `pageserver_yb_pagewriter_unflushed_bytes` | gauge | should hover well below `backpressure_bytes`; persistent climb toward the cap = flush is lagging |
+| `pageserver_yb_materializer_queue_depth` | gauge | should hover well below `materialize_queue_capacity`; climb toward the cap = materialiser is lagging |
+
+When both `flush` and `materializer` counters are active, the flush path is
+almost always the root cause: a slow `put_pages` blocks the
+materialiser's own writes, which holds materialiser slots, which fills
+the channel.
 
 ## Background image materialiser
 

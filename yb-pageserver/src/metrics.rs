@@ -172,6 +172,54 @@ pub(crate) static CONCURRENT_INITDBS: Lazy<UIntGauge> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+/// Counter of `PageWriter::put` calls that blocked waiting for downstream
+/// to drain. Labelled by the source of the stall:
+///
+/// - `flush` — the in-RAM buffer reached `FlushPolicy::backpressure_bytes`
+///   and `put` awaited the next successful flush. Bounds heap growth
+///   when YB INSERTs (own `pageserver.pages`) can't keep up with the
+///   walreceiver's ingest rate.
+/// - `materializer` — the image-materialiser channel was full
+///   (`materialize_queue_capacity` jobs in flight) and `put` had to
+///   await a slot. Bounds outstanding walredo work when the
+///   materialiser can't keep up.
+///
+/// Either signal is a fast canary for "PageWriter is the slow side";
+/// non-zero rate sustained over minutes means you need to either raise
+/// the relevant cap, scale YB, or shed load upstream.
+pub(crate) static PAGEWRITER_BACKPRESSURE_WAITS: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "pageserver_yb_pagewriter_backpressure_waits_total",
+        "PageWriter::put calls that had to await downstream drain, by source",
+        &["kind"],
+    )
+    .expect("failed to define a metric")
+});
+
+/// Current bytes pending durable flush (rel-page UnifiedPages.unflushed +
+/// SLRU/meta aux buffers). Sampled by `PageWriter::stats()` when callers
+/// emit the gauge. Hits `FlushPolicy::backpressure_bytes` (50 MiB default)
+/// before triggering wait. Spikes well above the size-based flush trigger
+/// (`max_bytes`, 25 MiB default) indicate YB is the bottleneck.
+pub(crate) static PAGEWRITER_UNFLUSHED_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
+    register_uint_gauge!(
+        "pageserver_yb_pagewriter_unflushed_bytes",
+        "Bytes in PageWriter awaiting INSERT into pageserver.pages / slru_pages / meta",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Current materialiser-queue slot usage out of `materialize_queue_capacity`.
+/// Approaching capacity = walreceiver is about to backpressure on
+/// `materializer` (see [`PAGEWRITER_BACKPRESSURE_WAITS`] above).
+pub(crate) static MATERIALIZER_QUEUE_DEPTH: Lazy<UIntGauge> = Lazy::new(|| {
+    register_uint_gauge!(
+        "pageserver_yb_materializer_queue_depth",
+        "Image-materialiser mpsc jobs currently queued (not yet processed)",
+    )
+    .expect("failed to define a metric")
+});
+
 pub(crate) static INITDB_SEMAPHORE_ACQUISITION_TIME: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "pageserver_initdb_semaphore_seconds_global",

@@ -2072,6 +2072,7 @@ impl Timeline {
                         crate::page_writer::FlushPolicy {
                             max_age: pw_cfg.flush_interval,
                             max_bytes: pw_cfg.flush_size_bytes,
+                            backpressure_bytes: pw_cfg.backpressure_bytes,
                         },
                         pw_cfg.read_cache_bytes,
                     );

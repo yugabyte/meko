@@ -347,6 +347,16 @@ pub struct YbPageWriterConfig {
     /// regardless, so the cache can transiently exceed this when the
     /// walreceiver is way ahead of the consumer. Default 1 GiB.
     pub read_cache_bytes: usize,
+
+    /// Hard ceiling on `unflushed_bytes + bytes_in_aux_buffers` before
+    /// `PageWriter::put` blocks waiting on a flush. Bounds RSS growth
+    /// when YB INSERTs fall behind the walreceiver: ingest stalls
+    /// here, the safekeeper holds the WAL, and the pageserver heap
+    /// stays small. 0 disables backpressure (legacy unbounded
+    /// growth). Should be ≥ `flush_size_bytes` so the size-based
+    /// flush trigger fires first; recommended 2× `flush_size_bytes`.
+    /// Default 50 MiB.
+    pub backpressure_bytes: usize,
 }
 
 impl Default for YbPageWriterConfig {
@@ -359,6 +369,7 @@ impl Default for YbPageWriterConfig {
             image_chain_payload_bytes_limit: 4096,
             materialize_queue_capacity: 5000,
             read_cache_bytes: 1024 * 1024 * 1024,
+            backpressure_bytes: 50 * 1024 * 1024,
         }
     }
 }

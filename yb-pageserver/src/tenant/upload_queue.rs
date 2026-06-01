@@ -227,24 +227,6 @@ impl UploadQueueInitialized {
             .all(|(op, active_index)| candidate.can_bypass(op, active_index))
     }
 
-    /// Returns the number of in-progress deletion operations.
-    #[cfg(test)]
-    pub(crate) fn num_inprogress_deletions(&self) -> usize {
-        self.inprogress_tasks
-            .iter()
-            .filter(|(_, t)| matches!(t.op, UploadOp::Delete(_)))
-            .count()
-    }
-
-    /// Returns the number of in-progress layer uploads.
-    #[cfg(test)]
-    pub(crate) fn num_inprogress_layer_uploads(&self) -> usize {
-        self.inprogress_tasks
-            .iter()
-            .filter(|(_, t)| matches!(t.op, UploadOp::UploadLayer(_, _, _)))
-            .count()
-    }
-
     /// Test helper that schedules all ready operations into inprogress_tasks, and returns
     /// references to them.
     ///
