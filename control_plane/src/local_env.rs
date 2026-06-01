@@ -159,6 +159,15 @@ pub struct NeonLocalInitConf {
 #[serde(default)]
 pub struct EndpointStorageConf {
     pub listen_addr: SocketAddr,
+    /// If `Some`, written verbatim as the `storage_kind` block of
+    /// `endpoint_storage.json` instead of the default `LocalFs`. Value
+    /// must be a JSON object including the `type` discriminator, e.g.
+    /// `{"type": "YbStore", "host": "...", "user": "...", ...}`. Mirrors
+    /// the way [`NeonLocalInitPageserverConf::remote_storage`] feeds the
+    /// pageserver's TOML inline table — opaque to neon_local, parsed
+    /// by `TypedRemoteStorageKind` in the target service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_storage_json: Option<String>,
 }
 
 /// Broker config for cluster internal communication.
@@ -268,6 +277,7 @@ impl Default for EndpointStorageConf {
     fn default() -> Self {
         Self {
             listen_addr: ENDPOINT_STORAGE_DEFAULT_ADDR,
+            remote_storage_json: None,
         }
     }
 }

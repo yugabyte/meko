@@ -99,12 +99,14 @@ pub enum RemoteStorageKind {
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
-/// Version of RemoteStorageKind which deserializes with type: LocalFs | AwsS3 | AzureContainer
-/// Needed for endpoint storage service
+/// Version of `RemoteStorageKind` that deserializes via an external
+/// `type:` tag. Used by services (endpoint_storage) that load their
+/// storage backend from a JSON config file at startup.
 pub enum TypedRemoteStorageKind {
     LocalFs { local_path: Utf8PathBuf },
     AwsS3(S3Config),
     AzureContainer(AzureConfig),
+    YbStore(YbStoreConfig),
 }
 
 impl From<TypedRemoteStorageKind> for RemoteStorageKind {
@@ -115,6 +117,7 @@ impl From<TypedRemoteStorageKind> for RemoteStorageKind {
             }
             TypedRemoteStorageKind::AwsS3(v) => RemoteStorageKind::AwsS3(v),
             TypedRemoteStorageKind::AzureContainer(v) => RemoteStorageKind::AzureContainer(v),
+            TypedRemoteStorageKind::YbStore(v) => RemoteStorageKind::YbStore(v),
         }
     }
 }

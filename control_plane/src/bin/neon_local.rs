@@ -1038,6 +1038,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 .collect(),
             endpoint_storage: EndpointStorageConf {
                 listen_addr: ENDPOINT_STORAGE_DEFAULT_ADDR,
+                remote_storage_json: None,
             },
             pg_distrib_dir: None,
             neon_distrib_dir: None,

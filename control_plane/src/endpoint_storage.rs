@@ -16,6 +16,9 @@ pub struct EndpointStorage {
     pub data_dir: Utf8PathBuf,
     pub pemfile: Utf8PathBuf,
     pub addr: SocketAddr,
+    /// Verbatim JSON object for the `storage_kind` block. None → fall
+    /// back to the `LocalFs` directory under the neon state dir.
+    pub remote_storage_json: Option<String>,
 }
 
 impl EndpointStorage {
@@ -25,6 +28,7 @@ impl EndpointStorage {
             data_dir: Utf8PathBuf::from_path_buf(env.endpoint_storage_data_dir()).unwrap(),
             pemfile: Utf8PathBuf::from_path_buf(env.public_key_path.clone()).unwrap(),
             addr: env.endpoint_storage.listen_addr,
+            remote_storage_json: env.endpoint_storage.remote_storage_json.clone(),
         }
     }
 
@@ -40,22 +44,39 @@ impl EndpointStorage {
         println!("Initializing object storage in {:?}", self.data_dir);
         let parent = self.data_dir.parent().unwrap();
 
-        #[derive(serde::Serialize)]
-        struct Cfg {
-            listen: Utf8PathBuf,
-            pemfile: Utf8PathBuf,
-            local_path: Utf8PathBuf,
-            r#type: String,
-        }
-        let cfg = Cfg {
-            listen: self.listen_addr(),
-            pemfile: parent.join(self.pemfile.clone()),
-            local_path: parent.join(ENDPOINT_STORAGE_REMOTE_STORAGE_DIR),
-            r#type: "LocalFs".to_string(),
+        // The endpoint_storage service deserializes the top-level config
+        // via `#[serde(flatten)] storage_kind: TypedRemoteStorageKind`,
+        // so we just inline the JSON object the user supplied (or the
+        // default LocalFs block) into the outer config.
+        let storage_kind = match &self.remote_storage_json {
+            Some(json) => json.clone(),
+            None => {
+                let local_path = parent.join(ENDPOINT_STORAGE_REMOTE_STORAGE_DIR);
+                serde_json::to_string(&serde_json::json!({
+                    "type": "LocalFs",
+                    "local_path": local_path,
+                }))?
+            }
         };
+
+        let cfg = serde_json::json!({
+            "listen": self.listen_addr(),
+            "pemfile": parent.join(self.pemfile.clone()),
+        });
+        let cfg_obj = cfg.as_object().unwrap().clone();
+        let storage_obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            &storage_kind,
+        )
+        .context("parsing remote_storage_json: must be a JSON object with a `type` field")?;
+        let mut merged: serde_json::Map<String, serde_json::Value> = cfg_obj;
+        merged.extend(storage_obj);
+
         std::fs::create_dir_all(self.config_path().parent().unwrap())?;
-        std::fs::write(self.config_path(), serde_json::to_string(&cfg)?)
-            .context("write object storage config")?;
+        std::fs::write(
+            self.config_path(),
+            serde_json::to_string(&serde_json::Value::Object(merged))?,
+        )
+        .context("write object storage config")?;
         Ok(())
     }
 
