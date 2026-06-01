@@ -1460,35 +1460,50 @@ mod tests {
         }
     }
 
-    async fn make_store(suffix: &str) -> (PageStore, String) {
-        let schema = format!("pageserver_test_{suffix}");
-        {
-            let cfg = PageStoreConfig {
-                yb: test_yb_config(),
-                schema: schema.clone(),
-            };
-            let pre = PageStore::connect(cfg, "page_store_test_setup")
-                .await
-                .expect("connect to local YB");
-            let _ = pre
-                .test_only_execute(&format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"))
-                .await;
-        }
-        let cfg = PageStoreConfig {
-            yb: test_yb_config(),
-            schema: schema.clone(),
-        };
-        let store = PageStore::connect(cfg, "page_store_test")
+    /// All tests share one schema, initialized once per test-binary
+    /// invocation. Per-test isolation comes from `rand_tenant()` /
+    /// `rand_timeline()` — every test writes to a distinct
+    /// `(tenant_id, timeline_id)` namespace, so concurrent tests don't
+    /// observe each other's data. Cleanup happens lazily: the next
+    /// test run's init drops + recreates the schema, so a single
+    /// run's leftover data never bleeds into the next.
+    ///
+    /// Why share: per-test CREATE+DROP SCHEMA in YB costs ~5–10 s
+    /// (tablet coordination on DDL). With ~44 integration tests in
+    /// this binary, that floors the suite at multiple minutes. Sharing
+    /// amortizes the DDL down to a single ~10 s setup.
+    static SHARED_STORE: tokio::sync::OnceCell<PageStore> = tokio::sync::OnceCell::const_new();
+    const SHARED_SCHEMA: &str = "pageserver_test_shared";
+
+    async fn make_store(_suffix: &str) -> (PageStore, String) {
+        let store = SHARED_STORE
+            .get_or_init(|| async {
+                let cfg = PageStoreConfig {
+                    yb: test_yb_config(),
+                    schema: SHARED_SCHEMA.to_string(),
+                };
+                let pre = PageStore::connect(cfg.clone(), "page_store_test_setup")
+                    .await
+                    .expect("connect to local YB");
+                let _ = pre
+                    .test_only_execute(&format!(
+                        "DROP SCHEMA IF EXISTS \"{SHARED_SCHEMA}\" CASCADE"
+                    ))
+                    .await;
+                let store = PageStore::connect(cfg, "page_store_test")
+                    .await
+                    .expect("connect to local YB");
+                store.ensure_schema().await.expect("ensure_schema");
+                store
+            })
             .await
-            .expect("connect to local YB");
-        store.ensure_schema().await.expect("ensure_schema");
-        (store, schema)
+            .clone();
+        (store, SHARED_SCHEMA.to_string())
     }
 
-    async fn drop_schema(store: &PageStore, schema: &str) {
-        let _ = store
-            .test_only_execute(&format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"))
-            .await;
+    async fn drop_schema(_store: &PageStore, _schema: &str) {
+        // No-op: the schema is shared across tests; cleanup happens
+        // via the next test run's DROP-IF-EXISTS during init.
     }
 
     fn rand_tenant() -> TenantId {

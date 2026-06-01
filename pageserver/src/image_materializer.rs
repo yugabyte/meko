@@ -131,12 +131,21 @@ impl ImageMaterializer {
             timeline_id = %timeline_id,
         );
         let handle = tokio::spawn(async move {
+            // Helper: refresh the queue-depth gauge from the receiver's
+            // current state. Called after every recv/try_recv and after
+            // each batch completes so the gauge reflects live drain
+            // rather than the last write-side dispatch snapshot.
+            let sample_queue_depth = |rx: &tokio::sync::mpsc::Receiver<MaterializeJob>| {
+                crate::metrics::MATERIALIZER_QUEUE_DEPTH
+                    .set(rx.len() as u64);
+            };
             loop {
                 tokio::select! {
                     biased;
                     _ = cancel_for_task.cancelled() => break,
                     first = rx.recv() => {
                         let Some(first) = first else { break }; // PageWriter dropped
+                        sample_queue_depth(&rx);
                         // Drain up to BATCH_DRAIN_LIMIT-1 more jobs
                         // non-blockingly so we can fold them into one
                         // walredo loop + one COPY round-trip.
@@ -148,6 +157,7 @@ impl ImageMaterializer {
                                 Err(_) => break,
                             }
                         }
+                        sample_queue_depth(&rx);
                         if let Err(e) = me.materialize_batch(&batch).await {
                             warn!(
                                 tenant_id = %me.tenant_id,
@@ -156,9 +166,13 @@ impl ImageMaterializer {
                                 "image materialisation batch failed: {e:#}"
                             );
                         }
+                        sample_queue_depth(&rx);
                     }
                 }
             }
+            // Best-effort reset on exit so a dead task doesn't leave
+            // the gauge frozen at a stale value.
+            crate::metrics::MATERIALIZER_QUEUE_DEPTH.set(0);
             info!(
                 tenant_id = %me.tenant_id,
                 timeline_id = %me.timeline_id,

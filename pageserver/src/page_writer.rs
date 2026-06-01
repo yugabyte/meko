@@ -602,7 +602,7 @@ impl PageWriter {
             let k = Key::from_slice(&key_bytes);
             out.entry(k).or_default().extend(chain);
         }
-        for chain in out.values_mut() {
+        for (key, chain) in out.iter_mut() {
             // Descending LSN; on ties prefer the image (see `read_chain`
             // for the rationale).
             chain.sort_by(|a, b| {
@@ -614,6 +614,12 @@ impl PageWriter {
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
             }
+            // Per-key read-side trigger: a chain longer than
+            // count_limit means the write trigger lost a job (PS
+            // crash, queue overflow). Enqueue a fresh materialise so
+            // the next read of the same key is fast.
+            let key_bytes = key_to_bytes(*key);
+            self.maybe_dispatch_read_side_materialize(&key_bytes, target_lsn, chain.len());
         }
         let t_merge = t_merge_start.elapsed();
         let total = t0.elapsed();
@@ -635,6 +641,33 @@ impl PageWriter {
 
     /// Read the chain for `key` at `target_lsn`, blending UnifiedPages
     /// (pre-flush + post-flush cache) with PageStore.
+    /// Read-side fallback for the write-trigger gap. When a read returns
+    /// a chain longer than the write-side `count_limit`, the page either
+    /// never got an image written (PS crash dropped the queued job, or
+    /// a long-ago dispatch's image got stranded behind subsequent
+    /// deltas faster than the materialiser could catch up). Enqueue a
+    /// fresh materialise job here so the slow read self-heals.
+    fn maybe_dispatch_read_side_materialize(
+        &self,
+        key_bytes: &bytes::Bytes,
+        target_lsn: Lsn,
+        chain_len: usize,
+    ) {
+        let Some(m) = self.materializer.as_ref() else {
+            return;
+        };
+        if try_dispatch_read_side(
+            key_bytes,
+            target_lsn,
+            chain_len,
+            m.count_limit,
+            &m.in_flight,
+            &m.tx,
+        ) {
+            crate::metrics::MATERIALIZER_READ_SIDE_DISPATCHES.inc();
+        }
+    }
+
     pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<PageRow>> {
         let key_bytes = key_to_bytes(key);
         // Cache-only fast path: if the cache holds a complete chain
@@ -670,6 +703,7 @@ impl PageWriter {
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
         }
+        self.maybe_dispatch_read_side_materialize(&key_bytes, target_lsn, merged.len());
         Ok(merged)
     }
 
@@ -1290,6 +1324,51 @@ fn meta_row_size(r: &MetaRow) -> usize {
     r.payload.len() + r.key.len() + 16
 }
 
+/// Pure decision for read-side materialise dispatch. Returns `true` if
+/// a `MaterializeJob` was successfully enqueued (and the caller should
+/// bump the dispatch counter).
+///
+/// Encapsulated as a free function so it can be unit-tested with a
+/// synthetic channel + HashSet, no PageWriter / YB setup needed.
+///
+/// Invariants:
+///   - `count_limit == 0` ⇒ no dispatch (materialiser disabled).
+///   - `chain_len <= count_limit` ⇒ no dispatch (short enough; write
+///     trigger will handle it).
+///   - Key already in `in_flight` ⇒ no dispatch (a materialise job for
+///     this key is already enqueued or being processed).
+///   - `try_send` failure (queue full or receiver dropped) ⇒ the
+///     `in_flight` reservation is rolled back so a later trigger can
+///     retry — otherwise the key would be permanently blocked from
+///     re-dispatch.
+fn try_dispatch_read_side(
+    key_bytes: &bytes::Bytes,
+    target_lsn: Lsn,
+    chain_len: usize,
+    count_limit: u32,
+    in_flight: &std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>,
+    tx: &tokio::sync::mpsc::Sender<MaterializeJob>,
+) -> bool {
+    if count_limit == 0 || chain_len <= count_limit as usize {
+        return false;
+    }
+    let inserted = in_flight.lock().unwrap().insert(key_bytes.clone());
+    if !inserted {
+        return false;
+    }
+    if tx
+        .try_send(MaterializeJob {
+            key: key_bytes.clone(),
+            target_lsn,
+        })
+        .is_err()
+    {
+        in_flight.lock().unwrap().remove(key_bytes);
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1319,34 +1398,43 @@ mod tests {
         }
     }
 
-    async fn make_store(suffix: &str) -> (Arc<PageStore>, String) {
-        let schema = format!("pw_test_{suffix}");
-        let cfg_for_drop = PageStoreConfig {
-            yb: test_yb_config(),
-            schema: schema.clone(),
-        };
-        let pre = PageStore::connect(cfg_for_drop, "pw_test_setup")
+    /// Shared-schema test scaffolding — see the matching comment in
+    /// `page_store.rs::tests::SHARED_STORE`. All tests in this binary
+    /// share one schema, isolated by `rand_tenant()`/`rand_timeline()`.
+    /// Per-test schema DDL was costing 5–10 s of YB tablet
+    /// coordination apiece; sharing amortizes that to once per binary.
+    static SHARED_STORE: tokio::sync::OnceCell<Arc<PageStore>> = tokio::sync::OnceCell::const_new();
+    const SHARED_SCHEMA: &str = "pw_test_shared";
+
+    async fn make_store(_suffix: &str) -> (Arc<PageStore>, String) {
+        let store = SHARED_STORE
+            .get_or_init(|| async {
+                let cfg = PageStoreConfig {
+                    yb: test_yb_config(),
+                    schema: SHARED_SCHEMA.to_string(),
+                };
+                let pre = PageStore::connect(cfg.clone(), "pw_test_setup")
+                    .await
+                    .expect("connect to local YB");
+                let _ = pre
+                    .test_only_execute(&format!(
+                        "DROP SCHEMA IF EXISTS \"{SHARED_SCHEMA}\" CASCADE"
+                    ))
+                    .await;
+                let store = PageStore::connect(cfg, "pw_test")
+                    .await
+                    .expect("connect to local YB");
+                store.ensure_schema().await.expect("ensure_schema");
+                Arc::new(store)
+            })
             .await
-            .expect("connect to local YB");
-        let drop_sql = format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE");
-        let _ = pre.test_only_execute(&drop_sql).await;
-        let store = PageStore::connect(
-            PageStoreConfig {
-                yb: test_yb_config(),
-                schema: schema.clone(),
-            },
-            "pw_test",
-        )
-        .await
-        .expect("connect to local YB");
-        store.ensure_schema().await.expect("ensure_schema");
-        (Arc::new(store), schema)
+            .clone();
+        (store, SHARED_SCHEMA.to_string())
     }
 
-    async fn drop_schema(store: &PageStore, schema: &str) {
-        let _ = store
-            .test_only_execute(&format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"))
-            .await;
+    async fn drop_schema(_store: &PageStore, _schema: &str) {
+        // No-op: shared schema; cleanup happens at the start of the
+        // next test-binary invocation via the OnceCell init.
     }
 
     fn k(n: u32) -> Key {
@@ -2147,4 +2235,96 @@ mod tests {
     // ingest WAL, advance dc_lsn on PS, verify safekeeper deletes wals
     // rows ≤ that LSN. Needs a multi-binary harness; tracked as
     // follow-up to phase 5d.
+
+    // Unit tests for the read-side dispatch decision. No YB, no
+    // PageWriter — just the pure free function `try_dispatch_read_side`
+    // exercised against a synthetic channel + HashSet. Sub-millisecond.
+    mod read_side_dispatch {
+        use super::*;
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+
+        fn setup() -> (
+            Mutex<HashSet<bytes::Bytes>>,
+            tokio::sync::mpsc::Sender<MaterializeJob>,
+            tokio::sync::mpsc::Receiver<MaterializeJob>,
+        ) {
+            let (tx, rx) = tokio::sync::mpsc::channel::<MaterializeJob>(8);
+            (Mutex::new(HashSet::new()), tx, rx)
+        }
+
+        fn kb() -> bytes::Bytes {
+            key_to_bytes(k(1))
+        }
+
+        #[test]
+        fn dispatches_when_chain_exceeds_count_limit() {
+            let (in_flight, tx, mut rx) = setup();
+            let dispatched =
+                try_dispatch_read_side(&kb(), Lsn(100), 21, 20, &in_flight, &tx);
+            assert!(dispatched);
+            let job = rx.try_recv().unwrap();
+            assert_eq!(job.key, kb());
+            assert_eq!(job.target_lsn, Lsn(100));
+            assert!(in_flight.lock().unwrap().contains(&kb()));
+        }
+
+        #[test]
+        fn skips_when_chain_at_or_below_limit() {
+            let (in_flight, tx, mut rx) = setup();
+            for chain_len in 0..=20 {
+                assert!(!try_dispatch_read_side(
+                    &kb(), Lsn(100), chain_len, 20, &in_flight, &tx
+                ));
+            }
+            assert!(rx.try_recv().is_err());
+            assert!(in_flight.lock().unwrap().is_empty());
+        }
+
+        #[test]
+        fn skips_when_count_limit_zero_disabled() {
+            let (in_flight, tx, mut rx) = setup();
+            assert!(!try_dispatch_read_side(
+                &kb(), Lsn(100), 9999, 0, &in_flight, &tx
+            ));
+            assert!(rx.try_recv().is_err());
+            assert!(in_flight.lock().unwrap().is_empty());
+        }
+
+        #[test]
+        fn skips_when_key_already_in_flight() {
+            let (in_flight, tx, mut rx) = setup();
+            in_flight.lock().unwrap().insert(kb());
+            assert!(!try_dispatch_read_side(
+                &kb(), Lsn(100), 50, 20, &in_flight, &tx
+            ));
+            assert!(rx.try_recv().is_err());
+            // Pre-existing in_flight entry must remain.
+            assert!(in_flight.lock().unwrap().contains(&kb()));
+        }
+
+        #[test]
+        fn rolls_back_in_flight_when_queue_full() {
+            // Channel capacity 1, fill it, then try to dispatch.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<MaterializeJob>(1);
+            tx.try_send(MaterializeJob {
+                key: key_to_bytes(k(99)),
+                target_lsn: Lsn(1),
+            })
+            .unwrap();
+            let in_flight = Mutex::new(HashSet::new());
+            // Dispatch should fail and NOT leave the key in in_flight.
+            assert!(!try_dispatch_read_side(
+                &kb(), Lsn(100), 50, 20, &in_flight, &tx
+            ));
+            assert!(
+                !in_flight.lock().unwrap().contains(&kb()),
+                "in_flight must be rolled back so a later read can retry"
+            );
+            // The pre-filled job is still there; only it should drain.
+            let pre = rx.try_recv().unwrap();
+            assert_eq!(pre.key, key_to_bytes(k(99)));
+            assert!(rx.try_recv().is_err());
+        }
+    }
 }

@@ -209,10 +209,32 @@ pub(crate) static PAGEWRITER_UNFLUSHED_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
 /// Current materialiser-queue slot usage out of `materialize_queue_capacity`.
 /// Approaching capacity = walreceiver is about to backpressure on
 /// `materializer` (see [`PAGEWRITER_BACKPRESSURE_WAITS`] above).
+///
+/// Sampled in two places so the value stays fresh whether the system
+/// is active or idle: (a) the materialiser task updates it on every
+/// `rx.recv` / `try_recv`, capturing the drain edge, and (b)
+/// `PageWriter` updates it after each dispatch burst. Previously only
+/// the dispatch path sampled, so the gauge could appear frozen at the
+/// last burst's value for the entire quiescent window between bursts.
 pub(crate) static MATERIALIZER_QUEUE_DEPTH: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
         "pageserver_yb_materializer_queue_depth",
         "Image-materialiser mpsc jobs currently queued (not yet processed)",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Counter of read-path materialise-job dispatches. Fires when
+/// `PageWriter::read_chain` / `scan_range` returns a chain longer
+/// than `count_limit` — the write-side trigger should have fired but
+/// didn't (PS crash dropped the queued job, or the post-image
+/// catch-up window grew). A non-zero rate here is the self-healing
+/// path closing the gap; sustained high rate suggests the write
+/// trigger needs tuning.
+pub(crate) static MATERIALIZER_READ_SIDE_DISPATCHES: Lazy<metrics::IntCounter> = Lazy::new(|| {
+    metrics::register_int_counter!(
+        "pageserver_yb_materializer_read_side_dispatches_total",
+        "Materialise jobs enqueued by the read path because the returned chain exceeded count_limit",
     )
     .expect("failed to define a metric")
 });
