@@ -20,12 +20,22 @@ pub enum Compression {
     Zstd { level: i8 },
 }
 
+/// The wire protocol the pageserver uses to ingest WAL from the
+/// safekeeper.
+///
+/// Upstream Neon also defined a `Vanilla` variant — raw Postgres
+/// physical replication that arrived as `XLogData` blocks and was
+/// decoded on the pageserver. That variant was disabled upstream
+/// ("Vanilla WAL receiver protocol is no longer supported for
+/// ingest") and removed entirely in lane N; yb-light always speaks
+/// `Interpreted`, where the safekeeper decodes records once and
+/// streams `(Key, Lsn, Value)` tuples directly. Kept as a
+/// single-variant enum so the on-the-wire `protocol={"type":"interpreted",...}`
+/// JSON shape doesn't change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "args")]
 #[serde(rename_all = "kebab-case")]
 pub enum PostgresClientProtocol {
-    /// Usual Postgres replication protocol
-    Vanilla,
     /// Custom shard-aware protocol that replicates interpreted records.
     /// Used to send wal from safekeeper to pageserver.
     Interpreted {

@@ -351,8 +351,18 @@ async fn recovery_stream(
     conf: &SafeKeeperConf,
 ) -> anyhow::Result<String> {
     // TODO: pass auth token
+    //
+    // SK-to-SK recovery is dead code in single-safekeeper yb-light;
+    // the protocol choice here doesn't matter at runtime but must
+    // satisfy the type system. Use Interpreted with no shard params —
+    // if peer_recovery_enabled were ever flipped on in a multi-SK
+    // future, this recovery loop's raw-WAL replay logic needs a
+    // separate rewrite (tracked as a follow-up to lane N).
     let connection_conf_args = ConnectionConfigArgs {
-        protocol: PostgresClientProtocol::Vanilla,
+        protocol: PostgresClientProtocol::Interpreted {
+            format: utils::postgres_client::InterpretedFormat::Protobuf,
+            compression: None,
+        },
         ttid: tli.ttid,
         shard_number: None,
         shard_count: None,

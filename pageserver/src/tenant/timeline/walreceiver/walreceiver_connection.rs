@@ -282,17 +282,10 @@ pub(super) async fn handle_walreceiver_connection(
             _ => WalReceiverError::Other(e.into()),
         })?;
 
-    let (format, compression) = match protocol {
-        PostgresClientProtocol::Interpreted {
-            format,
-            compression,
-        } => (format, compression),
-        PostgresClientProtocol::Vanilla => {
-            return Err(WalReceiverError::Other(anyhow!(
-                "Vanilla WAL receiver protocol is no longer supported for ingest"
-            )));
-        }
-    };
+    let PostgresClientProtocol::Interpreted {
+        format,
+        compression,
+    } = protocol;
 
     let mut expected_wal_start = startpoint;
     while let Some(replication_message) = {

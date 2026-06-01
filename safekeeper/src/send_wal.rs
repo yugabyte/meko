@@ -126,10 +126,7 @@ impl WalSenders {
         }
 
         let slot = state.get_slot_mut(id);
-        let slot_state = match slot {
-            WalSenderState::Interpreted(s) => s,
-            WalSenderState::Vanilla(_) => unreachable!(),
-        };
+        let WalSenderState::Interpreted(slot_state) = slot;
 
         let selected_or_new = match selected_interpreted_reader {
             Some(selected) => {
@@ -152,9 +149,6 @@ impl WalSenders {
             .iter()
             .flatten()
             .map(|state| match state {
-                WalSenderState::Vanilla(s) => {
-                    safekeeper_api::models::WalSenderState::Vanilla(s.clone())
-                }
                 WalSenderState::Interpreted(s) => {
                     safekeeper_api::models::WalSenderState::Interpreted(s.public_state.clone())
                 }
@@ -186,7 +180,6 @@ impl WalSenders {
             .iter()
             .filter_map(|ss| match ss {
                 Some(WalSenderState::Interpreted(int)) => int.interpreted_wal_reader.as_ref(),
-                Some(WalSenderState::Vanilla(_)) => None,
                 None => None,
             })
             .unique_by(|reader| Arc::as_ptr(reader))
@@ -289,17 +282,17 @@ struct WalSendersShared {
     slots: Vec<Option<WalSenderState>>,
 }
 
-/// Safekeeper internal definitions of wal sender state
+/// Safekeeper internal definitions of wal sender state.
 ///
-/// As opposed to [`safekeeper_api::models::WalSenderState`] these struct may
-/// include state that we don not wish to expose to the public api.
+/// As opposed to [`safekeeper_api::models::WalSenderState`] this enum
+/// may include state we don't expose on the public API. Single-variant
+/// since lane N removed the Vanilla protocol; kept as an enum so
+/// future variants (e.g. a future Interpreted-V2 wire format) can
+/// land without retyping every match site.
 #[derive(Debug, Clone)]
 pub(crate) enum WalSenderState {
-    Vanilla(VanillaWalSenderInternalState),
     Interpreted(InterpretedWalSenderInternalState),
 }
-
-type VanillaWalSenderInternalState = safekeeper_api::models::VanillaWalSenderState;
 
 #[derive(Debug, Clone)]
 pub(crate) struct InterpretedWalSenderInternalState {
@@ -310,21 +303,18 @@ pub(crate) struct InterpretedWalSenderInternalState {
 impl WalSenderState {
     fn get_addr(&self) -> &SocketAddr {
         match self {
-            WalSenderState::Vanilla(state) => &state.addr,
             WalSenderState::Interpreted(state) => &state.public_state.addr,
         }
     }
 
     fn get_feedback(&self) -> &ReplicationFeedback {
         match self {
-            WalSenderState::Vanilla(state) => &state.feedback,
             WalSenderState::Interpreted(state) => &state.public_state.feedback,
         }
     }
 
     fn get_mut_feedback(&mut self) -> &mut ReplicationFeedback {
         match self {
-            WalSenderState::Vanilla(state) => &mut state.feedback,
             WalSenderState::Interpreted(state) => &mut state.public_state.feedback,
         }
     }
@@ -485,15 +475,6 @@ impl SafekeeperPostgresHandler {
 
         // Use a guard object to remove our entry from the timeline when we are done.
         let ws_guard = match self.protocol() {
-            PostgresClientProtocol::Vanilla => Arc::new(tli.get_walsenders().register(
-                WalSenderState::Vanilla(VanillaWalSenderInternalState {
-                    ttid: self.ttid,
-                    addr: *pgb.get_peer_addr(),
-                    conn_id: self.conn_id,
-                    appname: self.appname.clone(),
-                    feedback: ReplicationFeedback::Pageserver(PageserverFeedback::empty()),
-                }),
-            )),
             PostgresClientProtocol::Interpreted { .. } => Arc::new(tli.get_walsenders().register(
                 WalSenderState::Interpreted(InterpretedWalSenderInternalState {
                     public_state: safekeeper_api::models::InterpretedWalSenderState {
@@ -548,23 +529,6 @@ impl SafekeeperPostgresHandler {
         let reader = pgb.split().context("START_REPLICATION split")?;
 
         let send_fut = match self.protocol() {
-            PostgresClientProtocol::Vanilla => {
-                let sender = WalSender {
-                    pgb,
-                    // should succeed since we're already holding another guard
-                    tli: tli.wal_residence_guard().await?,
-                    appname: appname.clone(),
-                    start_pos,
-                    end_pos,
-                    term,
-                    end_watch,
-                    ws_guard: ws_guard.clone(),
-                    wal_reader,
-                    send_buf: vec![0u8; MAX_SEND_SIZE],
-                };
-
-                FutureExt::boxed(sender.run())
-            }
             PostgresClientProtocol::Interpreted {
                 format,
                 compression,
@@ -1065,13 +1029,18 @@ mod tests {
 
     // add to wss specified feedback setting other fields to dummy values
     fn push_feedback(wss: &mut WalSendersShared, feedback: ReplicationFeedback) {
-        let walsender_state = WalSenderState::Vanilla(VanillaWalSenderInternalState {
-            ttid: mock_ttid(),
-            addr: mock_addr(),
-            conn_id: 1,
-            appname: None,
-            feedback,
-        });
+        let walsender_state =
+            WalSenderState::Interpreted(InterpretedWalSenderInternalState {
+                public_state: safekeeper_api::models::InterpretedWalSenderState {
+                    ttid: mock_ttid(),
+                    shard: pageserver_api::shard::ShardIdentity::unsharded(),
+                    addr: mock_addr(),
+                    conn_id: 1,
+                    appname: None,
+                    feedback,
+                },
+                interpreted_wal_reader: None,
+            });
         wss.slots.push(Some(walsender_state))
     }
 

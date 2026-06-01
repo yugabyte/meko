@@ -146,21 +146,15 @@ pub enum ReplicationFeedback {
 /// observability.
 pub type ConnectionId = u32;
 
-/// Serialize is used only for json'ing in API response. Also used internally.
+/// Per-WAL-sender state, serialized in admin API responses.
+///
+/// Upstream Neon had a parallel `Vanilla` variant for the now-removed
+/// libpq physical-replication ingest path (see PostgresClientProtocol).
+/// After lane N only `Interpreted` remains; kept as a single-variant
+/// enum to preserve the JSON shape API consumers expect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WalSenderState {
-    Vanilla(VanillaWalSenderState),
     Interpreted(InterpretedWalSenderState),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VanillaWalSenderState {
-    pub ttid: TenantTimelineId,
-    pub addr: SocketAddr,
-    pub conn_id: ConnectionId,
-    // postgres application_name
-    pub appname: Option<String>,
-    pub feedback: ReplicationFeedback,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

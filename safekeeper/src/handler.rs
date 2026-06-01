@@ -201,33 +201,23 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                     }
                 }
 
-                match self.protocol() {
-                    PostgresClientProtocol::Vanilla => {
-                        if shard_count.is_some()
-                            || shard_number.is_some()
-                            || shard_stripe_size.is_some()
-                        {
-                            return Err(QueryError::Other(anyhow::anyhow!(
-                                "Shard params specified for vanilla protocol"
-                            )));
-                        }
+                // yb-light only speaks the Interpreted protocol
+                // (Vanilla was retired in lane N). Shard params are
+                // required.
+                let PostgresClientProtocol::Interpreted { .. } = self.protocol();
+                match (shard_count, shard_number, shard_stripe_size) {
+                    (Some(count), Some(number), Some(stripe_size)) => {
+                        let params = ShardParameters {
+                            count: ShardCount(count),
+                            stripe_size: ShardStripeSize(stripe_size),
+                        };
+                        self.shard =
+                            Some(ShardIdentity::from_params(ShardNumber(number), params));
                     }
-                    PostgresClientProtocol::Interpreted { .. } => {
-                        match (shard_count, shard_number, shard_stripe_size) {
-                            (Some(count), Some(number), Some(stripe_size)) => {
-                                let params = ShardParameters {
-                                    count: ShardCount(count),
-                                    stripe_size: ShardStripeSize(stripe_size),
-                                };
-                                self.shard =
-                                    Some(ShardIdentity::from_params(ShardNumber(number), params));
-                            }
-                            _ => {
-                                return Err(QueryError::Other(anyhow::anyhow!(
-                                    "Shard params were not specified"
-                                )));
-                            }
-                        }
+                    _ => {
+                        return Err(QueryError::Other(anyhow::anyhow!(
+                            "Shard params were not specified"
+                        )));
                     }
                 }
             }
@@ -376,7 +366,13 @@ impl SafekeeperPostgresHandler {
     }
 
     pub fn protocol(&self) -> PostgresClientProtocol {
-        self.protocol.unwrap_or(PostgresClientProtocol::Vanilla)
+        // yb-light only supports the Interpreted protocol; default if
+        // the client didn't specify one (older clients that used to
+        // default to Vanilla now get Interpreted instead).
+        self.protocol.unwrap_or(PostgresClientProtocol::Interpreted {
+            format: utils::postgres_client::InterpretedFormat::Protobuf,
+            compression: None,
+        })
     }
 
     // when accessing management api supply None as an argument
