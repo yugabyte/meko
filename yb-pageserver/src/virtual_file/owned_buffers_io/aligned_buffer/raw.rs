@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use core::slice;
 use std::alloc::{self, Layout};
 use std::cmp;

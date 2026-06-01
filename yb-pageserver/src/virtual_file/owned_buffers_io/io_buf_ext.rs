@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! See [`FullSlice`].
 
 use std::ops::{Deref, Range};

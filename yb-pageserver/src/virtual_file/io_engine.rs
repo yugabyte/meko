@@ -280,6 +280,7 @@ impl IoEngine {
     /// This method helps avoid such a regression.
     ///
     /// Panics if the `spawn_blocking` fails, see [`tokio::task::JoinError`] for reasons why that can happen.
+    #[allow(dead_code)]
     pub(crate) async fn spawn_blocking_and_block_on_if_std<Fut, R>(&self, work: Fut) -> R
     where
         Fut: 'static + Send + std::future::Future<Output = R>,

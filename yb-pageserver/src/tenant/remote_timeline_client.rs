@@ -179,7 +179,7 @@ pub mod index;
 pub mod manifest;
 pub(crate) mod upload;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -1749,7 +1749,6 @@ impl RemoteTimelineClient {
                         dangling_files: HashMap::default(),
                         shutting_down: false,
                         shutdown_ready: Arc::new(tokio::sync::Semaphore::new(0)),
-                        recently_deleted: HashSet::new(),
                     };
 
                     let upload_queue = std::mem::replace(

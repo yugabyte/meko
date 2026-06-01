@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
@@ -6,10 +6,8 @@ use std::sync::atomic::AtomicU32;
 use chrono::NaiveDateTime;
 use once_cell::sync::Lazy;
 use tracing::info;
-use utils::generation::Generation;
 use utils::lsn::{AtomicLsn, Lsn};
 
-use super::storage_layer::LayerName;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::remote_timeline_client::index::IndexPart;
 
@@ -97,9 +95,6 @@ pub struct UploadQueueInitialized {
     /// bug causing leaks, then it's better to not leave this enabled for production builds.
     #[cfg(feature = "testing")]
     pub(crate) dangling_files: HashMap<LayerName, Generation>,
-
-    /// Ensure we order file operations correctly.
-    pub(crate) recently_deleted: HashSet<(LayerName, Generation)>,
 
     /// Set to true when we have inserted the `UploadOp::Shutdown` into the `inprogress_tasks`.
     pub(crate) shutting_down: bool,
@@ -336,7 +331,6 @@ impl UploadQueue {
             queued_operations: VecDeque::new(),
             #[cfg(feature = "testing")]
             dangling_files: HashMap::new(),
-            recently_deleted: HashSet::new(),
             shutting_down: false,
             shutdown_ready: Arc::new(tokio::sync::Semaphore::new(0)),
         };
@@ -376,7 +370,6 @@ impl UploadQueue {
             queued_operations: VecDeque::new(),
             #[cfg(feature = "testing")]
             dangling_files: HashMap::new(),
-            recently_deleted: HashSet::new(),
             shutting_down: false,
             shutdown_ready: Arc::new(tokio::sync::Semaphore::new(0)),
         };

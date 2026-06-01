@@ -11,7 +11,6 @@ pub mod deletion_queue;
 
 pub mod http;
 pub mod import_datadir;
-pub mod l0_flush;
 
 extern crate hyper0 as hyper;
 

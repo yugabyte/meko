@@ -48,7 +48,7 @@ use remote_timeline_client::{
 };
 use storage_broker::BrokerClientChannel;
 use timeline::import_pgdata::ImportingTimeline;
-use timeline::{ShutdownMode, import_pgdata};
+use timeline::import_pgdata;
 use tokio::io::BufReader;
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
@@ -965,10 +965,6 @@ pub(crate) enum GcError {
     // The tenant is in a state inelegible to run GC
     #[error("not active")]
     NotActive,
-
-    // A requested GC cutoff LSN was invalid, for example it tried to move backwards
-    #[error("not active")]
-    BadLsn { why: String },
 
     // A remote storage error while scheduling updates after compaction
     #[error(transparent)]
@@ -2855,18 +2851,6 @@ impl TenantShard {
                 Err(je) if je.is_cancelled() => unreachable!("no cancelling used"),
                 Err(je) if je.is_panic() => { /* logged already */ }
                 Err(je) => warn!("unexpected JoinError: {je:?}"),
-            }
-        }
-
-        if let ShutdownMode::Reload = shutdown_mode {
-            tracing::info!("Flushing deletion queue");
-            if let Err(e) = self.deletion_queue_client.flush().await {
-                match e {
-                    DeletionQueueError::ShuttingDown => {
-                        // This is the only error we expect for now. In the future, if more error
-                        // variants are added, we should handle them here.
-                    }
-                }
             }
         }
 

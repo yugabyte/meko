@@ -449,9 +449,6 @@ impl DeleteTimelineFlow {
         Ok(())
     }
 
-    pub(crate) fn is_not_started(&self) -> bool {
-        matches!(self, Self::NotStarted)
-    }
 }
 
 pub(super) fn make_timeline_delete_guard(

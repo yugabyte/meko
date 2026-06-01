@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::ops::{Deref, Range, RangeBounds};
 use std::sync::Arc;
 

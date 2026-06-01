@@ -56,9 +56,6 @@ pub(crate) enum StorageTimeOperation {
     #[strum(serialize = "logical size")]
     LogicalSize,
 
-    #[strum(serialize = "gc")]
-    Gc,
-
     #[strum(serialize = "find gc cutoffs")]
     FindGcCutoffs,
 }
@@ -366,100 +363,6 @@ pub(crate) static WAIT_LSN_IN_PROGRESS_GLOBAL_MICROS: Lazy<IntCounter> = Lazy::n
     )
     .expect("failed to define a metric")
 });
-
-pub(crate) mod wait_ondemand_download_time {
-    use super::*;
-    const WAIT_ONDEMAND_DOWNLOAD_TIME_BUCKETS: &[f64] = &[
-        0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, // 10 ms - 100ms
-        0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, // 100ms to 1s
-        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, // 1s to 10s
-        10.0, 20.0, 30.0, 40.0, 50.0, 60.0, // 10s to 1m
-    ];
-
-    /// The task kinds for which we want to track wait times for on-demand downloads.
-    /// Other task kinds' wait times are accumulated in label value `unknown`.
-    pub(crate) const WAIT_ONDEMAND_DOWNLOAD_METRIC_TASK_KINDS: [TaskKind; 2] = [
-        TaskKind::PageRequestHandler,
-        TaskKind::WalReceiverConnectionHandler,
-    ];
-
-    pub(crate) static WAIT_ONDEMAND_DOWNLOAD_TIME_GLOBAL: Lazy<Vec<Histogram>> = Lazy::new(|| {
-        let histo = register_histogram_vec!(
-            "pageserver_wait_ondemand_download_seconds_global",
-            "Observations are individual tasks' wait times for on-demand downloads. \
-         If N tasks coalesce on an on-demand download, and it takes 10s, than we observe N * 10s.",
-            &["task_kind"],
-            WAIT_ONDEMAND_DOWNLOAD_TIME_BUCKETS.into(),
-        )
-        .expect("failed to define a metric");
-        WAIT_ONDEMAND_DOWNLOAD_METRIC_TASK_KINDS
-            .iter()
-            .map(|task_kind| histo.with_label_values(&[task_kind.into()]))
-            .collect::<Vec<_>>()
-    });
-
-    pub(crate) static WAIT_ONDEMAND_DOWNLOAD_TIME_SUM: Lazy<CounterVec> = Lazy::new(|| {
-        register_counter_vec!(
-            // use a name that _could_ be evolved into a per-timeline histogram later
-            "pageserver_wait_ondemand_download_seconds_sum",
-            "Like `pageserver_wait_ondemand_download_seconds_global` but per timeline",
-            &["tenant_id", "shard_id", "timeline_id", "task_kind"],
-        )
-        .unwrap()
-    });
-
-    pub struct WaitOndemandDownloadTimeSum {
-        counters: [Counter; WAIT_ONDEMAND_DOWNLOAD_METRIC_TASK_KINDS.len()],
-    }
-
-    impl WaitOndemandDownloadTimeSum {
-        pub(crate) fn new(tenant_id: &str, shard_id: &str, timeline_id: &str) -> Self {
-            let counters = WAIT_ONDEMAND_DOWNLOAD_METRIC_TASK_KINDS
-                .iter()
-                .map(|task_kind| {
-                    WAIT_ONDEMAND_DOWNLOAD_TIME_SUM
-                        .get_metric_with_label_values(&[
-                            tenant_id,
-                            shard_id,
-                            timeline_id,
-                            task_kind.into(),
-                        ])
-                        .unwrap()
-                })
-                .collect::<Vec<_>>();
-            Self {
-                counters: counters.try_into().unwrap(),
-            }
-        }
-        pub(crate) fn observe(&self, task_kind: TaskKind, duration: Duration) {
-            let maybe = WAIT_ONDEMAND_DOWNLOAD_METRIC_TASK_KINDS
-                .iter()
-                .enumerate()
-                .find(|(_, kind)| **kind == task_kind);
-            let Some((idx, _)) = maybe else {
-                return;
-            };
-            WAIT_ONDEMAND_DOWNLOAD_TIME_GLOBAL[idx].observe(duration.as_secs_f64());
-            let counter = &self.counters[idx];
-            counter.inc_by(duration.as_secs_f64());
-        }
-    }
-
-    pub(crate) fn shutdown_timeline(tenant_id: &str, shard_id: &str, timeline_id: &str) {
-        for task_kind in WAIT_ONDEMAND_DOWNLOAD_METRIC_TASK_KINDS {
-            let _ = WAIT_ONDEMAND_DOWNLOAD_TIME_SUM.remove_label_values(&[
-                tenant_id,
-                shard_id,
-                timeline_id,
-                task_kind.into(),
-            ]);
-        }
-    }
-
-    pub(crate) fn preinitialize_global_metrics() {
-        Lazy::force(&WAIT_ONDEMAND_DOWNLOAD_TIME_GLOBAL);
-    }
-}
 
 static LAST_RECORD_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
@@ -852,15 +755,6 @@ pub(crate) static TENANT_OFFLOADED_TIMELINES: Lazy<UIntGaugeVec> = Lazy::new(|| 
     .expect("Failed to register pageserver_tenant_offloaded_timelines metric")
 });
 
-static EVICTIONS: Lazy<IntCounterVec> = Lazy::new(|| {
-    register_int_counter_vec!(
-        "pageserver_evictions",
-        "Number of layers evicted from the pageserver",
-        &["tenant_id", "shard_id", "timeline_id"]
-    )
-    .expect("failed to define a metric")
-});
-
 static EVICTIONS_WITH_LOW_RESIDENCE_DURATION: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "pageserver_evictions_with_low_residence_duration",
@@ -996,15 +890,6 @@ impl EvictionsWithLowResidenceDurationBuilder {
 impl EvictionsWithLowResidenceDuration {
     fn threshold_label_value(threshold: Duration) -> String {
         format!("{}", threshold.as_secs())
-    }
-
-    pub fn observe(&self, observed_value: Duration) {
-        if observed_value < self.threshold {
-            self.counter
-                .as_ref()
-                .expect("nobody calls this function after `remove_from_vec`")
-                .inc();
-        }
     }
 
     pub fn change_threshold(
@@ -2833,7 +2718,6 @@ pub(crate) struct TimelineMetrics {
     shard_id: String,
     timeline_id: String,
     pub logical_size_histo: StorageTimeMetrics,
-    pub garbage_collect_histo: StorageTimeMetrics,
     pub find_gc_cutoffs_histo: StorageTimeMetrics,
     pub last_record_lsn_gauge: IntGauge,
     pub pitr_history_size: UIntGauge,
@@ -2845,7 +2729,6 @@ pub(crate) struct TimelineMetrics {
     pub current_logical_size_gauge: UIntGauge,
     pub aux_file_size_gauge: IntGauge,
     pub directory_entries_count_gauge: Lazy<UIntGauge, Box<dyn Send + Fn() -> UIntGauge>>,
-    pub evictions: IntCounter,
     pub evictions_with_low_residence_duration: std::sync::RwLock<EvictionsWithLowResidenceDuration>,
     /// Number of valid LSN leases.
     pub valid_lsn_lease_count_gauge: UIntGauge,
@@ -2853,7 +2736,6 @@ pub(crate) struct TimelineMetrics {
     pub storage_io_size: StorageIoSizeMetrics,
     pub wait_lsn_in_progress_micros: GlobalAndPerTenantIntCounter,
     pub wait_lsn_start_finish_counterpair: IntCounterPair,
-    pub wait_ondemand_download_time: wait_ondemand_download_time::WaitOndemandDownloadTimeSum,
     shutdown: std::sync::atomic::AtomicBool,
 }
 
@@ -2868,12 +2750,6 @@ impl TimelineMetrics {
         let timeline_id = timeline_id_raw.to_string();
         let logical_size_histo = StorageTimeMetrics::new(
             StorageTimeOperation::LogicalSize,
-            &tenant_id,
-            &shard_id,
-            &timeline_id,
-        );
-        let garbage_collect_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::Gc,
             &tenant_id,
             &shard_id,
             &timeline_id,
@@ -2928,9 +2804,6 @@ impl TimelineMetrics {
         };
         let directory_entries_count_gauge: Lazy<UIntGauge, Box<dyn Send + Fn() -> UIntGauge>> =
             Lazy::new(Box::new(directory_entries_count_gauge_closure));
-        let evictions = EVICTIONS
-            .get_metric_with_label_values(&[&tenant_id, &shard_id, &timeline_id])
-            .unwrap();
         let evictions_with_low_residence_duration = evictions_with_low_residence_duration_builder
             .build(&tenant_id, &shard_id, &timeline_id);
 
@@ -2955,13 +2828,6 @@ impl TimelineMetrics {
             .get_metric_with_label_values(&[&tenant_id, &shard_id, &timeline_id])
             .unwrap();
 
-        let wait_ondemand_download_time =
-            wait_ondemand_download_time::WaitOndemandDownloadTimeSum::new(
-                &tenant_id,
-                &shard_id,
-                &timeline_id,
-            );
-
         TIMELINE_STATE_METRIC.with_label_values(&["active"]).inc();
 
         TimelineMetrics {
@@ -2969,7 +2835,6 @@ impl TimelineMetrics {
             shard_id,
             timeline_id,
             logical_size_histo,
-            garbage_collect_histo,
             find_gc_cutoffs_histo,
             last_record_lsn_gauge,
             pitr_history_size,
@@ -2980,7 +2845,6 @@ impl TimelineMetrics {
             current_logical_size_gauge,
             aux_file_size_gauge,
             directory_entries_count_gauge,
-            evictions,
             evictions_with_low_residence_duration: std::sync::RwLock::new(
                 evictions_with_low_residence_duration,
             ),
@@ -2989,7 +2853,6 @@ impl TimelineMetrics {
             wal_records_received,
             wait_lsn_in_progress_micros,
             wait_lsn_start_finish_counterpair,
-            wait_ondemand_download_time,
             shutdown: std::sync::atomic::AtomicBool::default(),
         }
     }
@@ -3032,7 +2895,6 @@ impl TimelineMetrics {
 
         let _ = LAYERS_PER_READ.remove_label_values(&[tenant_id, shard_id, timeline_id]);
 
-        let _ = EVICTIONS.remove_label_values(&[tenant_id, shard_id, timeline_id]);
         let _ = AUX_FILE_SIZE.remove_label_values(&[tenant_id, shard_id, timeline_id]);
         let _ = VALID_LSN_LEASE_COUNT.remove_label_values(&[tenant_id, shard_id, timeline_id]);
 
@@ -3082,7 +2944,6 @@ impl TimelineMetrics {
                 .remove_label_values(&mut res, &[tenant_id, shard_id, timeline_id]);
         }
 
-        wait_ondemand_download_time::shutdown_timeline(tenant_id, shard_id, timeline_id);
 
         let _ = SMGR_QUERY_STARTED_PER_TENANT_TIMELINE.remove_label_values(&[
             SmgrQueryType::GetPageAtLsn.into(),
@@ -4015,5 +3876,4 @@ pub fn preinitialize_metrics(
     Lazy::force(&tokio_epoll_uring::THREAD_LOCAL_METRICS_STORAGE);
 
     tenant_throttling::preinitialize_global_metrics();
-    wait_ondemand_download_time::preinitialize_global_metrics();
 }

@@ -1126,8 +1126,11 @@ pub(crate) const fn get_io_buffer_alignment() -> usize {
     DEFAULT_IO_BUFFER_ALIGNMENT
 }
 
+#[allow(dead_code)]
 pub(crate) type IoBufferMut = AlignedBufferMut<ConstAlign<{ get_io_buffer_alignment() }>>;
+#[allow(dead_code)]
 pub(crate) type IoBuffer = AlignedBuffer<ConstAlign<{ get_io_buffer_alignment() }>>;
+#[allow(dead_code)]
 pub(crate) type IoPageSlice<'a> =
     AlignedSlice<'a, PAGE_SZ, ConstAlign<{ get_io_buffer_alignment() }>>;
 

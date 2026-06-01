@@ -503,9 +503,6 @@ pub(crate) enum CreateImageLayersError {
 
     #[error("reconstruction failed")]
     PageReconstructError(#[source] PageReconstructError),
-
-    #[error(transparent)]
-    Other(anyhow::Error),
 }
 
 #[derive(thiserror::Error, Debug, Clone)]
@@ -718,11 +715,6 @@ pub(crate) enum ShutdownMode {
     /// While we are flushing, we continue to accept read I/O for LSNs ingested before
     /// the call to [`Timeline::shutdown`].
     FreezeAndFlush,
-    /// Only flush the layers to the remote storage without freezing any open layers. Flush the deletion
-    /// queue. This is the mode used by ancestor detach and any other operations that reloads a tenant
-    /// but not increasing the generation number. Note that this mode cannot be used at tenant shutdown,
-    /// as flushing the deletion queue at that time will cause shutdown-in-progress errors.
-    Reload,
     /// Shut down immediately, without waiting for any open layers to flush.
     Hard,
 }
@@ -1621,16 +1613,6 @@ impl Timeline {
                         "still have pending work in remote upload queue, but continuing shutting down anyways"
                     );
                 }
-            }
-        }
-
-        if let ShutdownMode::Reload = mode {
-            // drain the upload queue
-            self.remote_client.shutdown().await;
-            if !self.remote_client.no_pending_work() {
-                warn!(
-                    "still have pending work in remote upload queue, but continuing shutting down anyways"
-                );
             }
         }
 

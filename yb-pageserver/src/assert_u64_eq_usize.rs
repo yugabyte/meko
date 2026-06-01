@@ -21,8 +21,3 @@ impl UsizeIsU64 for usize {
     }
 }
 
-pub const fn u64_to_usize(x: u64) -> usize {
-    #[allow(clippy::let_unit_value)]
-    let _ = _ASSERT_U64_EQ_USIZE;
-    x as usize
-}

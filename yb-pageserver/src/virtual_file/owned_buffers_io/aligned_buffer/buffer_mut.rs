@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 

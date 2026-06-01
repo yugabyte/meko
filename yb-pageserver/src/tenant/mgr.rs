@@ -21,7 +21,6 @@ use pageserver_api::upcall_api::ReAttachResponseTenant;
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use remote_storage::TimeoutOrCancel;
-use sysinfo::SystemExt;
 use tokio::fs;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
