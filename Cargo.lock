@@ -4217,29 +4217,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pageserver_compaction"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "clap",
- "criterion",
- "futures",
- "hex-literal",
- "itertools 0.10.5",
- "once_cell",
- "pageserver_api",
- "pin-project-lite",
- "rand 0.9.1",
- "svg_fmt",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "utils",
- "workspace_hack",
-]
-
-[[package]]
 name = "pageserver_page_api"
 version = "0.1.0"
 dependencies = [
@@ -6480,12 +6457,6 @@ name = "subzero-core"
 version = "3.0.1"
 
 [[package]]
-name = "svg_fmt"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20e16a0f46cf5fd675563ef54f26e83e20f2366bcf027bcb3cc3ed2b98aaf2ca"
-
-[[package]]
 name = "symbolic-common"
 version = "12.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8283,7 +8254,6 @@ dependencies = [
  "once_cell",
  "pageserver_api",
  "pageserver_client",
- "pageserver_compaction",
  "pageserver_page_api",
  "pem",
  "pin-project-lite",
