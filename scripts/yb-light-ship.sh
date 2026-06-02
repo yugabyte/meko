@@ -11,7 +11,12 @@ set -euo pipefail
 
 SHA=$(git rev-parse --short HEAD)
 DATE=$(date -u +%Y-%m-%d)
-BUNDLE=${BUNDLE_DIR:-/tmp/yb-light-${DATE}-${SHA}}
+# Single bundle dir, reused across builds — `rm -rf` below wipes it
+# each run so the dev box doesn't accumulate 1.4 GB per build. The
+# remote ship still names the destination dir per commit so AWS
+# keeps the per-build history. Override via $BUNDLE_DIR if you need
+# multiple local bundles side-by-side.
+BUNDLE=${BUNDLE_DIR:-/tmp/yb-light-bundle}
 
 echo ">>> Building release binaries (yb-pageserver + supporting bins)..."
 cargo build --release \
@@ -75,4 +80,4 @@ ls -la "${BUNDLE}/"
 echo
 echo ">>> To ship to ec2-user@<host>:"
 echo "    rsync -avzh -e 'ssh -i ~/.yugabyte/yb-15-aws-portal-1-key.pem' \\"
-echo "        ${BUNDLE}/ ec2-user@<host>:~/yb-light/builds/${DATE}-$(basename "${BUNDLE}" | sed "s/yb-light-${DATE}-//")/"
+echo "        ${BUNDLE}/ ec2-user@<host>:~/yb-light/builds/${DATE}-${SHA}/"
