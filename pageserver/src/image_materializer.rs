@@ -32,7 +32,7 @@ use pageserver_api::key::Key;
 use postgres_ffi::PgMajorVersion;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, info, info_span, warn};
+use tracing::{Instrument, debug, info, info_span};
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use wal_decoder::models::record::NeonWalRecord;
@@ -215,11 +215,15 @@ impl ImageMaterializer {
                         let outcome = match me.redo_phase(&batch).await {
                             Ok(o) => o,
                             Err(e) => {
-                                warn!(
+                                crate::metrics::CORRECTNESS_ERRORS
+                                    .with_label_values(&["materializer_setup"])
+                                    .inc();
+                                tracing::error!(
                                     tenant_id = %me.tenant_id,
                                     timeline_id = %me.timeline_id,
                                     batch_size = batch.len(),
-                                    "image materialisation redo failed: {e:#}"
+                                    "MATERIALIZER REDO-PHASE SETUP ERROR — \
+                                     entire batch un-materialised: {e:#}"
                                 );
                                 // Release in_flight for these keys so
                                 // the write trigger can re-dispatch
@@ -344,12 +348,25 @@ impl ImageMaterializer {
                     images.push(image_row);
                 }
                 Ok(None) => {} // nothing-to-do (no chain / already image-anchored)
-                Err(e) => warn!(
-                    tenant_id = %self.tenant_id,
-                    timeline_id = %self.timeline_id,
-                    target_lsn = %job.target_lsn,
-                    "skip job in batch: {e:#}"
-                ),
+                Err(e) => {
+                    // Correctness-fatal: dropping this job leaves the
+                    // page un-materialised, and the underlying error
+                    // (deserialise / walredo PANIC / read failure)
+                    // points at silently-corrupted source data.
+                    // Skipping it was the prior bug that turned a
+                    // recoverable redo error into persistent zero pages.
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["materializer_redo"])
+                        .inc();
+                    tracing::error!(
+                        tenant_id = %self.tenant_id,
+                        timeline_id = %self.timeline_id,
+                        target_lsn = %job.target_lsn,
+                        key = ?bytes::Bytes::copy_from_slice(&job.key),
+                        "MATERIALIZER REDO ERROR — page will be un-materialised; \
+                         monitor `pageserver_yb_correctness_errors_total{{kind=\"materializer_redo\"}}`: {e:#}"
+                    );
+                }
             }
             if let Some(next_job) = iter.next() {
                 in_flight.push(spawn_redo(self, next_job));
@@ -402,11 +419,16 @@ impl ImageMaterializer {
             }
         }
         if let Err(e) = result {
-            warn!(
+            crate::metrics::CORRECTNESS_ERRORS
+                .with_label_values(&["materializer_commit"])
+                .inc();
+            tracing::error!(
                 tenant_id = %self.tenant_id,
                 timeline_id = %self.timeline_id,
                 batch_size = batch.len(),
-                "image materialisation commit failed: {e:#}"
+                "MATERIALIZER COMMIT ERROR — batch images NOT written to YB; \
+                 those keys stay un-trimmed in cache and may build deep chains \
+                 until the next successful materialisation: {e:#}"
             );
         }
     }
@@ -584,8 +606,23 @@ fn parse_chain(chain: &[PageRow]) -> Result<(Option<(Lsn, Bytes)>, Vec<(Lsn, Neo
 
     let mut records = Vec::with_capacity(records_slice.len());
     for row in records_slice {
-        let rec = NeonWalRecord::des(&row.payload)
-            .with_context(|| format!("decode NeonWalRecord at lsn={}", row.lsn))?;
+        let rec = NeonWalRecord::des(&row.payload).with_context(|| {
+            // Include payload length + a short hex prefix so on-disk
+            // corruption is diagnosable from the log alone (the
+            // bincode error message itself often just says
+            // "io error: ... unexpected end of file" or similar).
+            let prefix = row
+                .payload
+                .iter()
+                .take(16)
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            format!(
+                "decode NeonWalRecord at lsn={} (payload_len={}, prefix={prefix}..)",
+                row.lsn,
+                row.payload.len(),
+            )
+        })?;
         records.push((row.lsn, rec));
     }
     // `chain` came in LSN-descending; walredo applies records in

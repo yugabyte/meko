@@ -239,6 +239,39 @@ pub(crate) static MATERIALIZER_READ_SIDE_DISPATCHES: Lazy<metrics::IntCounter> =
     .expect("failed to define a metric")
 });
 
+/// Count of correctness-fatal errors observed across the pageserver
+/// hot path, broken down by `kind`. **Any non-zero value is a
+/// corruption signal**; this metric exists specifically so paging
+/// alerts catch what the prior code's `warn! + drop the job` pattern
+/// hid. Labels:
+///
+/// - `materializer_redo` — `redo_one` returned Err (chain
+///   deserialise, walredo PANIC, INSERT failure).
+/// - `materializer_setup` — `redo_phase` setup failed before any
+///   per-job work ran (typically a YB read of a chain).
+/// - `materializer_commit` — `commit_phase` `put_pages` failed.
+/// - `set_yb_upsert_mode` — `SET yb_enable_upsert_mode = true` was
+///   rejected. Every subsequent INSERT on the affected connection
+///   runs in non-upsert mode and may silently fail retries with
+///   duplicate-key.
+/// - `write_path_roundtrip` — `NeonWalRecord` failed to deserialise
+///   its own freshly-serialised bytes (see
+///   `build_page_row` round-trip check). If this is non-zero our
+///   serializer is at fault; if zero while reads still see
+///   deserialise errors, corruption is between us and YB.
+/// - `pagewriter_flush` — `PageWriter::flush` returned Err on a
+///   periodic or shutdown tick; rows may not have made it to YB.
+/// - `tenant_task_panic` — a tenant background task ended via
+///   panic (`JoinError::is_panic()`).
+pub(crate) static CORRECTNESS_ERRORS: Lazy<metrics::IntCounterVec> = Lazy::new(|| {
+    metrics::register_int_counter_vec!(
+        "pageserver_yb_correctness_errors_total",
+        "Correctness-fatal errors that the old code silently warn-and-dropped",
+        &["kind"],
+    )
+    .expect("failed to define a metric")
+});
+
 /// Sum of chain-payload bytes + freshly-redone image bytes held by an
 /// in-progress `materialize_batch_inner`. Driven by `redo_one` futures
 /// inside the materialiser; cleared when the batch's bulk INSERT

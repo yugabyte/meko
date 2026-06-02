@@ -777,6 +777,31 @@ pub fn build_yb_rustls_connector(
     ))
 }
 
+/// Enable upsert mode on a freshly-opened YsqlClient connection. Plain
+/// INSERT then skips the read-before-write check (and our chunk-retry
+/// flow can re-issue INSERTs without PK conflict).
+///
+/// Any failure here is `error!`-logged and bumps the
+/// `yb_set_upsert_mode_failed_total` counter — the previous
+/// `let _ = … .await` was the kind of hidden GUC drift that bites
+/// under load. We treat *every* SQLSTATE the same (no benign
+/// 42704 special case): in production we only ever talk to YB, so
+/// any failure here means the connection won't upsert and chunk
+/// retries can later fail with duplicate-key.
+async fn set_yb_upsert_mode(client: &tokio_postgres::Client) {
+    if let Err(e) = client
+        .execute("SET yb_enable_upsert_mode = true", &[])
+        .await
+    {
+        crate::metrics::YB_SET_UPSERT_MODE_FAILED.inc();
+        tracing::error!(
+            "YsqlClient: failed to SET yb_enable_upsert_mode=true: {e}. \
+             Plain INSERT will not upsert; chunk retries may fail with \
+             duplicate-key on this connection's lifetime."
+        );
+    }
+}
+
 async fn open_no_tls(config: &tokio_postgres::Config) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tokio_postgres::NoTls)
@@ -787,11 +812,7 @@ async fn open_no_tls(config: &tokio_postgres::Config) -> Result<tokio_postgres::
             tracing::warn!("YsqlClient connection (NoTls) ended: {e}");
         }
     });
-    // Enable upsert mode so plain INSERT skips the read-before-write check.
-    // Harmless against non-YB Postgres (unknown GUC → SET fails silently here).
-    let _ = client
-        .execute("SET yb_enable_upsert_mode = true", &[])
-        .await;
+    set_yb_upsert_mode(&client).await;
     Ok(client)
 }
 

@@ -25,6 +25,20 @@ pub static YB_CLIENT_ERRORS: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("register yb_client_errors_total")
 });
 
+/// Counts cases where setting the `yb_enable_upsert_mode = true`
+/// session GUC failed on a freshly-opened YsqlClient connection (the
+/// `42704 undefined_object` case is benign and *not* counted here —
+/// it just means we're talking to vanilla Postgres in a test).
+/// Anything else means subsequent INSERTs on that connection's
+/// lifetime won't upsert and chunk retries can hit duplicate-key.
+pub static YB_SET_UPSERT_MODE_FAILED: Lazy<metrics::IntCounter> = Lazy::new(|| {
+    metrics::register_int_counter!(
+        "yb_set_upsert_mode_failed_total",
+        "SET yb_enable_upsert_mode = true rejected with a non-undefined-GUC error",
+    )
+    .expect("register yb_set_upsert_mode_failed_total")
+});
+
 /// Counts cases where `YsqlClient` exhausted a retry budget and had to
 /// surface the error to the caller. Label `reason`: `connection_drop`
 /// (reconnect budget) or `transient` (transient-retry budget).

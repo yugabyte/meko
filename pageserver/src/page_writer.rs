@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use utils::bin_ser::BeSer;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
+use wal_decoder::models::record::NeonWalRecord;
 use wal_decoder::models::value::Value;
 use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
@@ -1220,12 +1221,25 @@ impl PageWriter {
                 if w.should_flush().await
                     && let Err(e) = w.flush().await
                 {
-                    tracing::warn!("PageWriter periodic flush failed: {e:?}");
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["pagewriter_flush"])
+                        .inc();
+                    tracing::error!(
+                        "PAGEWRITER PERIODIC FLUSH FAILED — rows may not have \
+                         reached YB; walreceiver will retry on resume but \
+                         disk_consistent_lsn may stall: {e:?}"
+                    );
                 }
             }
             if let Some(w) = weak.upgrade() {
                 if let Err(e) = w.flush().await {
-                    tracing::warn!("PageWriter final flush failed: {e:?}");
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["pagewriter_flush"])
+                        .inc();
+                    tracing::error!(
+                        "PAGEWRITER FINAL FLUSH FAILED — last unflushed window \
+                         lost: {e:?}"
+                    );
                 }
                 // Force-persist any post-throttle dc_lsn the periodic
                 // flushes have been deferring. Without this, a clean
@@ -1235,7 +1249,14 @@ impl PageWriter {
                 // gap, idempotent INSERTs) but wasteful on restart
                 // and noisy in logs.
                 if let Err(e) = w.force_upsert_dc_lsn_if_advanced().await {
-                    tracing::warn!("PageWriter final dc_lsn upsert failed: {e:?}");
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["pagewriter_flush"])
+                        .inc();
+                    tracing::error!(
+                        "PAGEWRITER FINAL DC_LSN UPSERT FAILED — persisted \
+                         disk_consistent_lsn is stale on disk; next attach \
+                         will redo extra WAL: {e:?}"
+                    );
                 }
             }
         });
@@ -1289,6 +1310,29 @@ fn key_to_bytes(key: Key) -> Bytes {
     Bytes::from(buf)
 }
 
+/// Write-side round-trip check on every freshly-serialised
+/// `NeonWalRecord`. Off by default; flip the env var
+/// `YB_PS_VERIFY_WAL_ROUNDTRIP=1` to enable.
+///
+/// When on, the moment after `rec.ser()` produces bytes we call
+/// `NeonWalRecord::des(&bytes)` and compare back to the original. If
+/// they don't match, the serializer is at fault — corruption happens
+/// before the bytes ever leave the process. If this check stays clean
+/// while reads in YB still see `deserialize error`, the corruption is
+/// downstream (network, YB BYTEA storage, or read-path decode).
+///
+/// Kept behind an env flag so the hot-path cost (a second bincode
+/// pass + an Eq compare per WAL record) is only paid during
+/// investigations.
+fn verify_walrecord_roundtrip_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("YB_PS_VERIFY_WAL_ROUNDTRIP")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    })
+}
+
 /// Translate a walingest `Value` into a `PageRow`. Images become
 /// `is_image=TRUE, will_init=TRUE`. WAL records become `is_image=FALSE`
 /// and carry the record's own `will_init` flag — that's the only signal
@@ -1299,6 +1343,39 @@ fn build_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<PageRow> {
         Value::WalRecord(rec) => {
             let will_init = rec.will_init();
             let bytes = Bytes::from(rec.ser()?);
+            if verify_walrecord_roundtrip_enabled() {
+                match NeonWalRecord::des(&bytes) {
+                    Ok(decoded) if &decoded == rec => {}
+                    Ok(decoded) => {
+                        crate::metrics::CORRECTNESS_ERRORS
+                            .with_label_values(&["write_path_roundtrip"])
+                            .inc();
+                        tracing::error!(
+                            key = %key,
+                            %lsn,
+                            payload_len = bytes.len(),
+                            "WRITE-PATH ROUNDTRIP MISMATCH: ser→des decoded to \
+                             a different NeonWalRecord. Serializer is the \
+                             corruption source. orig={:?} decoded={:?}",
+                            rec,
+                            decoded,
+                        );
+                    }
+                    Err(e) => {
+                        crate::metrics::CORRECTNESS_ERRORS
+                            .with_label_values(&["write_path_roundtrip"])
+                            .inc();
+                        tracing::error!(
+                            key = %key,
+                            %lsn,
+                            payload_len = bytes.len(),
+                            "WRITE-PATH ROUNDTRIP DECODE FAILED on freshly \
+                             serialised bytes — bincode mismatch in our own \
+                             code: {e:#}"
+                        );
+                    }
+                }
+            }
             (false, will_init, bytes)
         }
     };

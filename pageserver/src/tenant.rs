@@ -2757,8 +2757,22 @@ impl TenantShard {
             match res {
                 Ok(()) => {}
                 Err(je) if je.is_cancelled() => unreachable!("no cancelling used"),
-                Err(je) if je.is_panic() => { /* logged already */ }
-                Err(je) => warn!("unexpected JoinError: {je:?}"),
+                Err(je) if je.is_panic() => {
+                    // The panic itself was logged by the runtime's
+                    // panic hook; count it so a flatline alert catches
+                    // task deaths even if the log line was missed.
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["tenant_task_panic"])
+                        .inc();
+                }
+                Err(je) => {
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["tenant_task_panic"])
+                        .inc();
+                    tracing::error!(
+                        "TENANT TASK ENDED WITH UNEXPECTED JoinError: {je:?}"
+                    );
+                }
             }
         }
 
