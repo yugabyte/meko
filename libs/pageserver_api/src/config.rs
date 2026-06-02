@@ -337,8 +337,20 @@ pub struct YbPageWriterConfig {
     /// can't keep up — preferred over silent drops, which leak deep
     /// chains into the steady state). The read-side trigger uses
     /// `try_send` (drop OK — the next read of the same key re-evaluates).
-    /// At ~100 B per slot (job + mpsc overhead), 1000 ≈ 100 KB total.
-    /// Default 1000.
+    ///
+    /// Each slot now carries a captured durable chain (see
+    /// `MaterializeJob.chain` in `page_writer.rs`), so per-slot RAM is
+    /// ~11 KB rather than ~100 B — but payload `Bytes` are
+    /// refcount-shared with `UnifiedPages`, so marginal heap is
+    /// dominated by chain entries the cache evicts while the job
+    /// is in flight (small-MB scale).
+    ///
+    /// Sized for **burst absorption**, not sustained overload: at the
+    /// materialiser's ~150 K rows/s INSERT-side drain rate (pool=4 +
+    /// `MAX_INFLIGHT_INSERTS=4`), 2000 slots drain in ~13 ms. So
+    /// 2000 only matters if the walreceiver enqueues >1000 jobs in
+    /// <7 ms — the steady-state bottleneck (if any) is walredo or
+    /// pool-slot contention, not the queue depth. Default 2000.
     pub materialize_queue_capacity: usize,
 
     /// Soft cap on the in-RAM `UnifiedPages` cache (pre-flush buffer +
@@ -367,7 +379,7 @@ impl Default for YbPageWriterConfig {
             flush_poll_interval: Duration::from_millis(500),
             image_chain_limit: 20,
             image_chain_payload_bytes_limit: 4096,
-            materialize_queue_capacity: 1000,
+            materialize_queue_capacity: 2000,
             read_cache_bytes: 1024 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
         }
