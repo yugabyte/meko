@@ -115,6 +115,15 @@ impl UnifiedPages {
         self.unflushed_fifo.len()
     }
 
+    /// Number of distinct keys tracked in `by_key`. The map covers
+    /// both pre-flush rows and post-flush durable-cached rows;
+    /// `total_bytes` is the byte-side cap, this is the entry-side
+    /// view used by the `pageserver_yb_unified_pages_by_key_entries`
+    /// gauge.
+    pub fn by_key_entries(&self) -> usize {
+        self.by_key.len()
+    }
+
     /// Append a row as unflushed. Same-`(key, lsn)` overwrites the
     /// existing entry's payload and adjusts the byte counters.
     pub fn push(&mut self, row: PageRow) {

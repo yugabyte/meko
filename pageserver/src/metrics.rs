@@ -257,6 +257,54 @@ pub(crate) static MATERIALIZER_INFLIGHT_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+/// Entries in `WriterState::delta_counts` — per-key delta tally that
+/// accumulates from each `put_page` and only drains when a key's
+/// chain crosses `image_chain_limit` (or its accumulated payload
+/// crosses `image_chain_payload_bytes_limit`). At a steady working
+/// set this should track the number of distinct keys recently
+/// touched; sustained growth above that ceiling means the
+/// materialiser isn't keeping up with chain accumulation.
+pub(crate) static PAGEWRITER_DELTA_COUNTS_ENTRIES: Lazy<UIntGauge> = Lazy::new(|| {
+    register_uint_gauge!(
+        "pageserver_yb_pagewriter_delta_counts_entries",
+        "Entries in PageWriter's per-key delta_counts HashMap",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Approximate bytes held by `delta_counts`. Rough rule:
+/// `entries × DELTA_COUNTS_BYTES_PER_ENTRY` (80 B per entry covers the
+/// 8 B `DeltaTally` payload + HashMap overhead + the 32 B `Bytes`
+/// header + a typical ~16 B serialized key). Use against
+/// `process_resident_memory_bytes` to attribute RSS that doesn't
+/// match any other capped consumer.
+pub(crate) static PAGEWRITER_DELTA_COUNTS_APPROX_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
+    register_uint_gauge!(
+        "pageserver_yb_pagewriter_delta_counts_approx_bytes",
+        "Approximate bytes held by PageWriter's delta_counts HashMap (entries × 80)",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Per-entry byte estimate for `delta_counts`. Update both this and
+/// the metric doc together if the `DeltaTally` shape or key
+/// representation changes.
+pub(crate) const DELTA_COUNTS_BYTES_PER_ENTRY: u64 = 80;
+
+/// Entries in `UnifiedPages::by_key` — the master per-key map that
+/// indexes both the pre-flush write buffer and the post-flush
+/// durable cache. Bounded *by bytes* via `read_cache_bytes`, but the
+/// entry count itself is not capped; comparing this against
+/// `delta_counts_entries` tells you whether unflushed traffic or the
+/// durable cache is driving the working-set cardinality.
+pub(crate) static UNIFIED_PAGES_BY_KEY_ENTRIES: Lazy<UIntGauge> = Lazy::new(|| {
+    register_uint_gauge!(
+        "pageserver_yb_unified_pages_by_key_entries",
+        "Entries in UnifiedPages.by_key (per-key index over write buffer + durable cache)",
+    )
+    .expect("failed to define a metric")
+});
+
 // Per-process memory gauges (VmRSS, VmData, RssAnon, RssFile, RssShmem)
 // are emitted as `libmetrics_process_status_*_bytes` by the
 // `more_process_metrics::Collector` registered in `bin/yb-pageserver.rs`;

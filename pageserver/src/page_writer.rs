@@ -1005,11 +1005,18 @@ impl PageWriter {
     pub async fn stats(&self) -> WriterStats {
         let s = self.state.read().await;
         let bytes_in_buffer = s.pages.unflushed_bytes() + s.bytes_in_aux_buffers;
-        // Side-effect: refresh the global unflushed-bytes gauge so a
-        // periodic Prometheus scrape reflects the current depth. We
-        // do this in `stats()` rather than at every put/flush to keep
-        // the gauge update off the hot ingest path.
+        // Side-effect: refresh the global gauges so a periodic
+        // Prometheus scrape reflects the current depth. We sample
+        // here rather than at every put/flush to keep the update off
+        // the hot ingest path; the next scrape after a flush picks
+        // up the change.
+        let delta_counts_entries = s.delta_counts.len() as u64;
+        let by_key_entries = s.pages.by_key_entries() as u64;
         crate::metrics::PAGEWRITER_UNFLUSHED_BYTES.set(bytes_in_buffer as u64);
+        crate::metrics::PAGEWRITER_DELTA_COUNTS_ENTRIES.set(delta_counts_entries);
+        crate::metrics::PAGEWRITER_DELTA_COUNTS_APPROX_BYTES
+            .set(delta_counts_entries * crate::metrics::DELTA_COUNTS_BYTES_PER_ENTRY);
+        crate::metrics::UNIFIED_PAGES_BY_KEY_ENTRIES.set(by_key_entries);
         WriterStats {
             rows_written: s.rows_written,
             bytes_in_buffer,
