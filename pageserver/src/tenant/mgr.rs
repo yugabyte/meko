@@ -726,17 +726,6 @@ impl TenantManager {
         }
     }
 
-    /// Whether the `TenantManager` is responsible for the tenant shard
-    pub(crate) fn manages_tenant_shard(&self, tenant_shard_id: TenantShardId) -> bool {
-        let locked = self.tenants.read().unwrap();
-
-        let peek_slot = tenant_map_peek_slot(&locked, &tenant_shard_id, TenantSlotPeekMode::Read)
-            .ok()
-            .flatten();
-
-        peek_slot.is_some()
-    }
-
     /// Returns whether a local shard exists that's a child of the given tenant shard. Note that
     /// this just checks for any shard with a larger shard count, and it may not be a direct child
     /// of the given shard (their keyspace may not overlap).

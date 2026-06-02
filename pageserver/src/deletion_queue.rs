@@ -20,10 +20,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pageserver_api::shard::TenantShardId;
-use remote_storage::{GenericRemoteStorage, RemotePath};
+use remote_storage::GenericRemoteStorage;
 use thiserror::Error;
-use tokio_util::sync::CancellationToken;
-use tracing::warn;
 use utils::generation::Generation;
 use utils::id::TimelineId;
 use utils::lsn::{AtomicLsn, Lsn};
@@ -57,9 +55,7 @@ where
 }
 
 #[derive(Clone)]
-pub struct DeletionQueueClient {
-    storage: GenericRemoteStorage,
-}
+pub struct DeletionQueueClient {}
 
 #[derive(Error, Debug)]
 pub enum DeletionQueueError {
@@ -106,27 +102,6 @@ impl DeletionQueueClient {
     pub(crate) async fn flush_execute(&self) -> Result<(), DeletionQueueError> {
         Ok(())
     }
-
-    /// Synchronous-immediate variant used by timeline deletion. The
-    /// caller has already decided the listed objects are unreachable;
-    /// just delete them.
-    pub(crate) async fn push_immediate(
-        &self,
-        objects: Vec<RemotePath>,
-    ) -> Result<(), DeletionQueueError> {
-        let cancel = CancellationToken::new();
-        for path in objects {
-            if let Err(e) = self.storage.delete(&path, &cancel).await {
-                warn!("deletion_queue.push_immediate: failed to delete {path}: {e:#}");
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn flush_immediate(&self) -> Result<(), DeletionQueueError> {
-        // push_immediate is itself synchronous; nothing left to flush.
-        Ok(())
-    }
 }
 
 impl DeletionQueue {
@@ -135,16 +110,14 @@ impl DeletionQueue {
     }
 
     pub fn new<C>(
-        remote_storage: GenericRemoteStorage,
+        _remote_storage: GenericRemoteStorage,
         _controller_upcall_client: C,
         _conf: &'static PageServerConf,
     ) -> (Self, DeletionQueueWorkers<C>)
     where
         C: StorageControllerUpcallApi + Send + Sync,
     {
-        let client = DeletionQueueClient {
-            storage: remote_storage,
-        };
+        let client = DeletionQueueClient {};
         (
             Self { client },
             DeletionQueueWorkers {

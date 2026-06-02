@@ -248,10 +248,6 @@ pub(crate) const INITDB_PRESERVED_PATH: &str = "initdb-preserved.tar.zst";
 /// Default buffer size when interfacing with [`tokio::fs::File`].
 pub(crate) const BUFFER_SIZE: usize = 32 * 1024;
 
-/// Doing non-essential flushes of deletion queue is subject to this timeout, after
-/// which we warn and skip.
-const DELETION_QUEUE_FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
-
 pub enum MaybeDeletedIndexPart {
     IndexPart(IndexPart),
     Deleted(IndexPart),
@@ -1607,11 +1603,6 @@ pub fn remote_tenant_manifest_prefix(tenant_shard_id: &TenantShardId) -> RemoteP
 
 pub fn remote_timelines_path(tenant_shard_id: &TenantShardId) -> RemotePath {
     let path = format!("tenants/{tenant_shard_id}/{TIMELINES_SEGMENT_NAME}");
-    RemotePath::from_string(&path).expect("Failed to construct path")
-}
-
-fn remote_timelines_path_unsharded(tenant_id: &TenantId) -> RemotePath {
-    let path = format!("tenants/{tenant_id}/{TIMELINES_SEGMENT_NAME}");
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 

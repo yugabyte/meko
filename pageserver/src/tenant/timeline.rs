@@ -34,7 +34,6 @@ use postgres_connection::PgConnectionConfig;
 use postgres_ffi::v14::xlog_utils;
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE, to_pg_timestamp};
 use rand::Rng;
-use remote_storage::DownloadError;
 use storage_broker::BrokerClientChannel;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;

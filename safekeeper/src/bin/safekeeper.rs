@@ -1,14 +1,13 @@
 //
 // Main entry point for the safekeeper executable
 //
-use std::fs::{self, File};
-use std::io::{ErrorKind, Write};
+use std::fs::File;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
-use camino::{Utf8Path, Utf8PathBuf};
+use anyhow::{Context, Result};
+use camino::Utf8PathBuf;
 use clap::{ArgAction, Parser};
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
