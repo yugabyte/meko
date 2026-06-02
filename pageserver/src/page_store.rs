@@ -1748,6 +1748,60 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// Image at LSN 10, deltas above, then an init-delta at LSN 25, then
+    /// more deltas to LSN 30. The merged `read_chain` SQL returns rows
+    /// from the image's anchor (LSN 10) forward; the client-side trim
+    /// must stop at the init-delta at LSN 25 — the chain past that point
+    /// is what the image-then-deltas walredo needs, but the deltas
+    /// between the image and the init-delta are superseded by the
+    /// init-delta and must NOT be returned (applying them on the
+    /// post-init page state would corrupt walredo).
+    ///
+    /// Regression for commit `0cd9085dd` (read_chain SQL collapse): the
+    /// old fast path returned the wider `[image..target]` window
+    /// silently in this shape; the new merged-SQL + unconditional trim
+    /// must shorten the chain to `[init-delta..target]`.
+    #[tokio::test]
+    async fn read_chain_trims_at_init_delta_above_image_anchor() {
+        let (store, schema) = make_store("trim_init_above_image").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let k = page_key(1663, 5, 16384, 0, 3);
+
+        store
+            .put_pages(
+                tenant,
+                timeline,
+                &[
+                    page_row(k.clone(), 10, true, true, b"img"),
+                    page_row(k.clone(), 15, false, false, b"d15"),
+                    page_row(k.clone(), 20, false, false, b"d20"),
+                    page_row(k.clone(), 25, false, true, b"init-delta-25"),
+                    page_row(k.clone(), 28, false, false, b"d28"),
+                    page_row(k.clone(), 30, false, false, b"d30"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let got = store
+            .read_chain(tenant, timeline, &k, Lsn(30))
+            .await
+            .unwrap();
+        let lsns: Vec<u64> = got.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(
+            lsns,
+            vec![30, 28, 25],
+            "chain must stop at the LSN-25 init-delta; image at LSN 10 and \
+             pre-init deltas at LSNs 15/20 are shadowed"
+        );
+        assert!(
+            got.last().unwrap().will_init,
+            "anchor returned to caller must be a will_init row"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
     #[tokio::test]
     async fn scan_range_within_one_fork() {
         let (store, schema) = make_store("scan_fork").await;

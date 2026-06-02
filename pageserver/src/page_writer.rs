@@ -2044,6 +2044,96 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// Write-side trigger captures the durable chain at dispatch time
+    /// when the chain has a durable anchor.
+    ///
+    /// Regression for commit `e50423234` (captured chain at materialiser
+    /// trigger): the materialiser used to re-read the chain via
+    /// `read_chain_durable`, which forced a YB round-trip whenever the
+    /// cache fast path bailed on `evicted_below`. Now the trigger
+    /// snapshots the durable chain under the writer lock (where it is
+    /// by construction complete) and embeds it in `MaterializeJob.chain`.
+    #[tokio::test]
+    async fn trigger_captures_durable_chain_with_anchor() {
+        let (store, schema) = make_store("mat_capture_chain").await;
+        const LIMIT: u32 = 10;
+        let (w, _t, _tl, mut rx, _in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // Anchor + 9 deltas, then flush so all become durable.
+        w.put(&[(k(1), Lsn(10), delta_will_init())]).await.unwrap();
+        for i in 0..(LIMIT - 1) {
+            w.put(&[(k(1), Lsn(20 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        w.flush().await.unwrap();
+
+        // The LIMIT-th post-anchor delta fires the trigger. At this
+        // point the new delta is unflushed but the anchor + the
+        // earlier 9 deltas are durable. The captured chain should hold
+        // those 10 durable rows.
+        w.put(&[(k(1), Lsn(100), delta_non_init())]).await.unwrap();
+        let job = rx.try_recv().expect("dispatched on hitting threshold");
+        let chain = job
+            .chain
+            .as_ref()
+            .expect("captured chain populated when anchor is durable");
+
+        // LSN-descending; the will_init anchor is at the end.
+        let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
+        let lowest = *lsns.last().expect("non-empty chain");
+        assert_eq!(lowest, 10, "anchor at lsn 10 must be in the captured chain");
+        assert!(
+            chain.last().unwrap().will_init,
+            "the lowest captured row must be a will_init anchor"
+        );
+        // The just-pushed (unflushed) row must NOT appear in the
+        // durable snapshot, even though target_lsn covers it.
+        assert!(
+            !lsns.contains(&100),
+            "the pre-flush row pushed at trigger time must be excluded \
+             from the durable snapshot — captured chain is durable-only"
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Write-side trigger captures `chain: None` when the durable chain
+    /// has no `will_init` anchor at trigger time — the materialiser
+    /// can't act on an anchorless captured chain, and forcing it to
+    /// would cost a snapshot allocation for nothing. Materialiser
+    /// falls back to `read_chain_durable` in this case.
+    ///
+    /// Same regression as `trigger_captures_durable_chain_with_anchor`,
+    /// covering the no-durable-anchor branch of the `chain_with_anchor`
+    /// filter.
+    #[tokio::test]
+    async fn trigger_captures_none_when_anchor_still_pre_flush() {
+        let (store, schema) = make_store("mat_capture_none").await;
+        const LIMIT: u32 = 10;
+        let (w, _t, _tl, mut rx, _in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // Anchor + 10 non-init deltas, no flush in between — every
+        // row including the anchor stays in the pre-flush buffer.
+        w.put(&[(k(1), Lsn(10), delta_will_init())]).await.unwrap();
+        for i in 0..LIMIT {
+            w.put(&[(k(1), Lsn(20 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+
+        let job = rx.try_recv().expect("dispatched on hitting threshold");
+        assert!(
+            job.chain.is_none(),
+            "captured chain must be None when the will_init anchor is \
+             still unflushed at trigger time"
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
     /// An image row resets the per-key counter — the chain is anchored
     /// again, so post-image deltas count from zero.
     #[tokio::test]
