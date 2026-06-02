@@ -247,7 +247,7 @@ impl LayerFileMetadata {
 /// A timeline can have more than 1 earlier ancestor, in the rare case that it was repeatedly
 /// reparented by having an later timeline be detached from it's ancestor.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct Lineage {
+pub struct Lineage {
     /// Has the `reparenting_history` been truncated to [`Lineage::REMEMBER_AT_MOST`].
     #[serde(skip_serializing_if = "is_false", default)]
     reparenting_history_truncated: bool,

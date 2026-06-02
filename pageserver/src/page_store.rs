@@ -48,7 +48,10 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use futures::stream::{StreamExt, TryStreamExt};
 use pageserver_api::key::{KEY_SIZE, Key};
+use pageserver_api::models::RelSizeMigration;
 use pageserver_api::reltag::SlruKind;
+
+use crate::tenant::remote_timeline_client::index::Lineage;
 use remote_storage::{YbStoreConfig, YsqlClient};
 // We talk to YugabyteDB through the YB smart-driver fork of
 // tokio-postgres; alias it so the type names below (`tokio_postgres::Row`,
@@ -127,6 +130,39 @@ pub struct TimelineRow {
     pub ancestor_lsn: Option<Lsn>,
     pub current_generation: i32,
     pub pg_version: u32,
+
+    // Fields that used to live in `index_part.json` and now ride on
+    // the row directly. All optional / default-able so a freshly
+    // created row only has to fill the load-bearing columns above.
+    /// Last LSN at which initdb-tar-style import seeded this timeline.
+    /// Re-derived on attach by Phase 5c, persisted here once we have
+    /// it so subsequent restarts skip the synthesis.
+    pub initdb_lsn: Option<Lsn>,
+    /// The walredo "previous record LSN" pointer (`xlog.c`'s
+    /// `XLogCtl->Insert.PrevBytePos` viewpoint). Re-derived on
+    /// walreceiver resume, persisted so cold restarts can verify it.
+    pub prev_record_lsn: Option<Lsn>,
+    /// `Some(ts)` when the timeline is archived (compute denied);
+    /// `None` while live. Surfaced via the HTTP archive endpoint.
+    pub archived_at: Option<chrono::NaiveDateTime>,
+    /// `Some(ts)` when the timeline is mid-delete; the deletion
+    /// pipeline keys off this so a crash-restart can resume the
+    /// teardown instead of leaving the timeline half-deleted.
+    pub deleted_at: Option<chrono::NaiveDateTime>,
+    /// Rel-size schema migration state (Legacy / Migrating /
+    /// Migrated). `None` is treated as `Legacy` per the upstream
+    /// convention. Read path branches on this; walingest writes here
+    /// when migration progresses.
+    pub rel_size_migration: Option<RelSizeMigration>,
+    /// LSN at which the rel-size migration started; pairs with
+    /// `rel_size_migration` for read-path correctness around the
+    /// migration boundary.
+    pub rel_size_migrated_at: Option<Lsn>,
+    /// Ancestor-detach history. Kept as JSON for forward-compat;
+    /// always `Default` in yb-mode today (detach_ancestor is
+    /// unsupported) but the column is wired up for when the feature
+    /// lands.
+    pub lineage: Lineage,
 }
 
 pub const DEFAULT_SCHEMA: &str = "pageserver";
@@ -322,6 +358,13 @@ impl PageStore {
             "creating slru_pages table",
         )?;
 
+        // The row absorbs every load-bearing field that used to live in
+        // `index_part.json`: archive / delete flags, the rel-size schema
+        // migration state, plus a JSON `lineage` column for future
+        // ancestor-detach support (the field is always `Default` in
+        // yb-mode today — detach_ancestor is not yet supported — but
+        // persisting it keeps the wire format ready). Fresh installs
+        // only; no migration from older shapes.
         let create_timelines = format!(
             "CREATE TABLE IF NOT EXISTS \"{}\".timeline_state (
                 tenant_id              TEXT    NOT NULL,
@@ -332,6 +375,13 @@ impl PageStore {
                 ancestor_lsn           BIGINT,
                 current_generation     INT     NOT NULL,
                 pg_version             INT     NOT NULL,
+                initdb_lsn             BIGINT,
+                prev_record_lsn        BIGINT,
+                archived_at            TIMESTAMP,
+                deleted_at             TIMESTAMP,
+                rel_size_migration     TEXT,
+                rel_size_migrated_at   BIGINT,
+                lineage                JSONB,
                 PRIMARY KEY ((tenant_id) HASH, timeline_id)
             )",
             self.schema
@@ -1150,17 +1200,38 @@ impl PageStore {
             "INSERT INTO \"{}\".timeline_state \
              (tenant_id, timeline_id, disk_consistent_lsn, \
               applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
-              current_generation, pg_version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+              current_generation, pg_version, initdb_lsn, prev_record_lsn, \
+              archived_at, deleted_at, rel_size_migration, \
+              rel_size_migrated_at, lineage) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
              ON CONFLICT (tenant_id, timeline_id) DO UPDATE SET \
                 disk_consistent_lsn   = EXCLUDED.disk_consistent_lsn, \
                 applied_gc_cutoff_lsn = EXCLUDED.applied_gc_cutoff_lsn, \
                 ancestor_timeline_id  = EXCLUDED.ancestor_timeline_id, \
                 ancestor_lsn          = EXCLUDED.ancestor_lsn, \
                 current_generation    = EXCLUDED.current_generation, \
-                pg_version            = EXCLUDED.pg_version",
+                pg_version            = EXCLUDED.pg_version, \
+                initdb_lsn            = EXCLUDED.initdb_lsn, \
+                prev_record_lsn       = EXCLUDED.prev_record_lsn, \
+                archived_at           = EXCLUDED.archived_at, \
+                deleted_at            = EXCLUDED.deleted_at, \
+                rel_size_migration    = EXCLUDED.rel_size_migration, \
+                rel_size_migrated_at  = EXCLUDED.rel_size_migrated_at, \
+                lineage               = EXCLUDED.lineage",
             self.schema
         );
+        // Serialise the rel-size enum via serde so the storage form
+        // matches what the upstream `index_part.json` carried — keeps
+        // the read path's match-on-camelCase variants working when we
+        // round-trip through `RelSizeMigration::from_str`.
+        let rel_size_migration_text = row
+            .rel_size_migration
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .context("serialising rel_size_migration")?;
+        let lineage_json = serde_json::to_value(&row.lineage)
+            .context("serialising lineage")?;
         self.client
             .execute(
                 &sql,
@@ -1173,6 +1244,13 @@ impl PageStore {
                     &row.ancestor_lsn.map(|l| l.0 as i64),
                     &row.current_generation,
                     &(row.pg_version as i32),
+                    &row.initdb_lsn.map(|l| l.0 as i64),
+                    &row.prev_record_lsn.map(|l| l.0 as i64),
+                    &row.archived_at,
+                    &row.deleted_at,
+                    &rel_size_migration_text,
+                    &row.rel_size_migrated_at.map(|l| l.0 as i64),
+                    &lineage_json,
                 ],
             )
             .await
@@ -1186,11 +1264,9 @@ impl PageStore {
         timeline: TimelineId,
     ) -> Result<Option<TimelineRow>> {
         let sql = format!(
-            "SELECT tenant_id, timeline_id, disk_consistent_lsn, \
-                    applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
-                    current_generation, pg_version \
-             FROM \"{}\".timeline_state \
+            "SELECT {} FROM \"{}\".timeline_state \
              WHERE tenant_id = $1 AND timeline_id = $2",
+            TIMELINE_ROW_COLUMNS,
             self.schema
         );
         let row = self
@@ -1203,11 +1279,9 @@ impl PageStore {
 
     pub async fn list_timelines(&self, tenant: TenantId) -> Result<Vec<TimelineRow>> {
         let sql = format!(
-            "SELECT tenant_id, timeline_id, disk_consistent_lsn, \
-                    applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
-                    current_generation, pg_version \
-             FROM \"{}\".timeline_state \
+            "SELECT {} FROM \"{}\".timeline_state \
              WHERE tenant_id = $1",
+            TIMELINE_ROW_COLUMNS,
             self.schema
         );
         let rows = self
@@ -1500,6 +1574,15 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
     })
 }
 
+/// Column list shared by every `SELECT … FROM timeline_state` so the
+/// query layout stays in sync with `row_to_timeline`'s positional
+/// `try_get` indices.
+const TIMELINE_ROW_COLUMNS: &str = "tenant_id, timeline_id, disk_consistent_lsn, \
+     applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
+     current_generation, pg_version, initdb_lsn, prev_record_lsn, \
+     archived_at, deleted_at, rel_size_migration, \
+     rel_size_migrated_at, lineage";
+
 fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
     let tenant_s: String = r.try_get(0)?;
     let timeline_s: String = r.try_get(1)?;
@@ -1509,6 +1592,25 @@ fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
     let ancestor_lsn: Option<i64> = r.try_get(5)?;
     let current_generation: i32 = r.try_get(6)?;
     let pg_version: i32 = r.try_get(7)?;
+    let initdb_lsn: Option<i64> = r.try_get(8)?;
+    let prev_record_lsn: Option<i64> = r.try_get(9)?;
+    let archived_at: Option<chrono::NaiveDateTime> = r.try_get(10)?;
+    let deleted_at: Option<chrono::NaiveDateTime> = r.try_get(11)?;
+    let rel_size_migration_text: Option<String> = r.try_get(12)?;
+    let rel_size_migrated_at: Option<i64> = r.try_get(13)?;
+    let lineage_json: Option<serde_json::Value> = r.try_get(14)?;
+
+    let rel_size_migration = rel_size_migration_text
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .context("parsing rel_size_migration")?;
+    let lineage = lineage_json
+        .map(serde_json::from_value)
+        .transpose()
+        .context("parsing lineage")?
+        .unwrap_or_default();
+
     Ok(TimelineRow {
         tenant_id: tenant_s.parse().context("parsing tenant_id")?,
         timeline_id: timeline_s.parse().context("parsing timeline_id")?,
@@ -1521,6 +1623,13 @@ fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
         ancestor_lsn: ancestor_lsn.map(|l| Lsn(l as u64)),
         current_generation,
         pg_version: pg_version as u32,
+        initdb_lsn: initdb_lsn.map(|l| Lsn(l as u64)),
+        prev_record_lsn: prev_record_lsn.map(|l| Lsn(l as u64)),
+        archived_at,
+        deleted_at,
+        rel_size_migration,
+        rel_size_migrated_at: rel_size_migrated_at.map(|l| Lsn(l as u64)),
+        lineage,
     })
 }
 
@@ -2096,6 +2205,13 @@ mod tests {
             ancestor_lsn: None,
             current_generation: 1,
             pg_version: 17,
+            initdb_lsn: None,
+            prev_record_lsn: None,
+            archived_at: None,
+            deleted_at: None,
+            rel_size_migration: None,
+            rel_size_migrated_at: None,
+            lineage: Default::default(),
         }
     }
 

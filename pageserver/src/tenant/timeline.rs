@@ -1123,6 +1123,16 @@ impl Timeline {
             // storage controller's most recent attach.
             current_generation: self.generation.into().unwrap_or(0) as i32,
             pg_version: self.pg_version.major_version_num(),
+            // index_part.json-derived state — all default at creation
+            // time. archived/deleted/rel-size-migration get set by
+            // the corresponding write paths later.
+            initdb_lsn: Some(self.initdb_lsn),
+            prev_record_lsn: None,
+            archived_at: None,
+            deleted_at: None,
+            rel_size_migration: None,
+            rel_size_migrated_at: None,
+            lineage: Default::default(),
         };
         pw.internal_page_store()
             .upsert_timeline(&row)

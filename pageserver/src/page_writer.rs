@@ -2443,6 +2443,13 @@ mod tests {
                 ancestor_lsn: None,
                 current_generation: 1,
                 pg_version: 17,
+                initdb_lsn: None,
+                prev_record_lsn: None,
+                archived_at: None,
+                deleted_at: None,
+                rel_size_migration: None,
+                rel_size_migrated_at: None,
+                lineage: Default::default(),
             })
             .await
             .unwrap();
