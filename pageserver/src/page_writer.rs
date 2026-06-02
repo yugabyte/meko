@@ -1547,16 +1547,36 @@ mod tests {
         tokio::sync::mpsc::Receiver<MaterializeJob>,
         Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
     ) {
+        // Default fixture: count-only trigger (payload-bytes disabled)
+        // so existing tests stay deterministic on count-based thresholds.
+        writer_with_materializer_thresholds(store, policy, limit, 0)
+    }
+
+    /// Like `writer_with_materializer` but lets tests configure both
+    /// `count_limit` and `payload_bytes_limit` independently. Use this
+    /// when exercising the payload-bytes trigger branch or the
+    /// either-fires-first ("hybrid") semantics from Phase 4i (commit
+    /// `895b7eca5`).
+    fn writer_with_materializer_thresholds(
+        store: Arc<PageStore>,
+        policy: FlushPolicy,
+        count_limit: u32,
+        payload_bytes_limit: u32,
+    ) -> (
+        PageWriter,
+        TenantId,
+        TimelineId,
+        tokio::sync::mpsc::Receiver<MaterializeJob>,
+        Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
+    ) {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
         let mut w = PageWriter::new(t, tl, utils::generation::Generation::new(1), store.clone(), store, policy, 64 * 1024 * 1024);
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let in_flight = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-        // Tests pass a count limit; payload-bytes limit disabled
-        // (0) so tests stay deterministic on count-based thresholds.
         w.set_materializer(MaterializerHandle {
-            count_limit: limit,
-            payload_bytes_limit: 0,
+            count_limit,
+            payload_bytes_limit,
             tx,
             in_flight: in_flight.clone(),
         });
@@ -2163,6 +2183,162 @@ mod tests {
         w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
         let job = rx.try_recv().expect("dispatch after 10 post-image deltas");
         assert_eq!(job.target_lsn, Lsn(200));
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Hybrid materialiser threshold — payload-bytes branch.
+    ///
+    /// Regression for commit `895b7eca5` (Phase 4i: count OR payload
+    /// bytes). The existing threshold tests all set
+    /// `payload_bytes_limit = 0` (disabled) and only exercise the
+    /// count branch. This pins the bytes branch:
+    ///
+    /// - With count disabled (`count_limit = 0`) and
+    ///   `payload_bytes_limit` set to exactly 3 deltas' worth of
+    ///   payload, exactly 3 non-init deltas must dispatch.
+    /// - Fewer-than-3 must not dispatch; the 3rd is the one that fires.
+    /// - After the in-flight slot clears the counter resets to 0 —
+    ///   accumulating another 3 deltas re-fires.
+    #[tokio::test]
+    async fn payload_bytes_threshold_dispatches_on_byte_budget() {
+        let (store, schema) = make_store("mat_bytes_threshold").await;
+
+        // Measure the serialised size of a single non-init delta —
+        // can't hardcode it because the wire format is internal.
+        let one_delta_bytes = match delta_non_init() {
+            Value::WalRecord(rec) => rec.ser().expect("ser delta").len() as u32,
+            _ => panic!("delta_non_init must be a WalRecord"),
+        };
+        let limit = one_delta_bytes * 3; // exactly 3 deltas trigger.
+
+        let (w, _t, _tl, mut rx, in_flight) =
+            writer_with_materializer_thresholds(store.clone(), FlushPolicy::default(), 0, limit);
+
+        w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();
+        w.put(&[(k(1), Lsn(20), delta_non_init())]).await.unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "must not dispatch before payload-bytes threshold is reached"
+        );
+        // 3rd delta puts cumulative bytes at exactly the limit.
+        w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
+        let job = rx
+            .try_recv()
+            .expect("dispatched on hitting payload-bytes threshold");
+        assert_eq!(job.target_lsn, Lsn(30));
+
+        // Simulate materialiser finishing so the next threshold can re-fire.
+        in_flight.lock().unwrap().remove(&job.key);
+
+        // Counter reset on dispatch — another 2 deltas must NOT
+        // dispatch even though cumulative-since-creation is now 5
+        // deltas (well past 3).
+        w.put(&[(k(1), Lsn(40), delta_non_init())]).await.unwrap();
+        w.put(&[(k(1), Lsn(50), delta_non_init())]).await.unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "counter must reset after dispatch; tally restarts at 0"
+        );
+        // 3rd delta past the previous trigger re-fires.
+        w.put(&[(k(1), Lsn(60), delta_non_init())]).await.unwrap();
+        let _ = rx
+            .try_recv()
+            .expect("dispatch on second payload-bytes threshold");
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Hybrid materialiser threshold — whichever lands first dispatches.
+    ///
+    /// Regression for commit `895b7eca5`: with BOTH `count_limit` and
+    /// `payload_bytes_limit` set, the trigger that fills first wins.
+    /// Here the bytes budget is generous (10 deltas' worth) but the
+    /// count is tight (3); count must win.
+    #[tokio::test]
+    async fn hybrid_threshold_count_wins_when_count_fills_first() {
+        let (store, schema) = make_store("mat_hybrid_count_wins").await;
+
+        let one_delta_bytes = match delta_non_init() {
+            Value::WalRecord(rec) => rec.ser().expect("ser delta").len() as u32,
+            _ => panic!("delta_non_init must be a WalRecord"),
+        };
+        // count=3 hits before bytes=10*one_delta.
+        let (w, _t, _tl, mut rx, _in_flight) = writer_with_materializer_thresholds(
+            store.clone(),
+            FlushPolicy::default(),
+            3,
+            one_delta_bytes * 10,
+        );
+
+        w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();
+        w.put(&[(k(1), Lsn(20), delta_non_init())]).await.unwrap();
+        assert!(rx.try_recv().is_err());
+        w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
+        let _ = rx.try_recv().expect("count threshold fires first");
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Write-side trigger respects the `in_flight` dedup: while the
+    /// materialiser is still processing a key's job, additional
+    /// threshold-crossings for that key MUST NOT enqueue duplicates,
+    /// and the counter must stay at-or-above threshold so the first
+    /// post-completion delta immediately re-fires (at the current
+    /// LSN, not stale intermediate ones).
+    ///
+    /// Regression for commit `2f6544321` (in-flight dedup, no
+    /// stale-LSN duplicates from write-side triggers). The read-side
+    /// dedup has its own coverage in `try_dispatch_read_side`'s tests;
+    /// this is the matching write-side coverage.
+    #[tokio::test]
+    async fn write_side_dedup_blocks_redispatch_while_in_flight() {
+        let (store, schema) = make_store("mat_write_dedup").await;
+        const LIMIT: u32 = 5;
+        let (w, _t, _tl, mut rx, in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // First threshold: dispatch.
+        for i in 0..LIMIT {
+            w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        let first = rx.try_recv().expect("first threshold dispatches");
+        assert_eq!(first.target_lsn, Lsn(10 + (LIMIT - 1) as u64));
+        assert!(
+            in_flight.lock().unwrap().contains(&first.key),
+            "in_flight must hold the key while the job is outstanding"
+        );
+
+        // While the key is in_flight, additional threshold-crossings
+        // for it must not enqueue duplicates. Push a generous run of
+        // deltas — many multiples of LIMIT — and confirm no new
+        // dispatch lands.
+        for i in 0..(LIMIT * 3) {
+            w.put(&[(k(1), Lsn(100 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "no duplicate dispatch while key is in_flight"
+        );
+
+        // Materialiser completes — remove the in_flight reservation.
+        // The next delta must re-fire immediately at the *current* LSN,
+        // because the counter has been left at-or-above threshold since
+        // the dedup-blocked dispatch.
+        in_flight.lock().unwrap().remove(&first.key);
+        w.put(&[(k(1), Lsn(500), delta_non_init())]).await.unwrap();
+        let second = rx
+            .try_recv()
+            .expect("first delta after in_flight release immediately re-fires");
+        assert_eq!(
+            second.target_lsn,
+            Lsn(500),
+            "re-dispatch must target the *current* LSN, not a stale intermediate one"
+        );
 
         drop_schema(&store, &schema).await;
     }
