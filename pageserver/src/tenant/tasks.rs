@@ -50,28 +50,17 @@ static CONCURRENT_BACKGROUND_TASKS: Lazy<Semaphore> = Lazy::new(|| {
     Semaphore::new(permits)
 });
 
-/// Semaphore limiting concurrent L0 compaction tasks (across all tenants). This is only used if
-/// both `compaction_l0_semaphore` and `compaction_l0_first` are enabled.
-///
-/// This is a separate semaphore from background tasks, because L0 compaction needs to be responsive
-/// to avoid high read amp during heavy write workloads. Regular image/GC compaction is less
-/// important (e.g. due to page images in delta layers) and can wait for other background tasks.
-///
-/// We use 3/4 Tokio threads, to avoid blocking all threads in case we do any CPU-heavy work. Note
-/// that this runs on the same Tokio runtime as `CONCURRENT_BACKGROUND_TASKS`, and shares the same
-/// thread pool.
-static CONCURRENT_L0_COMPACTION_TASKS: Lazy<Semaphore> = Lazy::new(|| {
-    let total_threads = TOKIO_WORKER_THREADS.get();
-    let permits = max(1, (total_threads * 3).checked_div(4).unwrap_or(0));
-    assert_ne!(permits, 0, "we will not be adding in permits later");
-    assert!(permits < total_threads, "need threads for other work");
-    Semaphore::new(permits)
-});
-
 /// Background jobs.
 ///
 /// NB: not all of these acquire a CONCURRENT_BACKGROUND_TASKS semaphore permit, only the ones that
 /// do any significant IO or CPU work.
+///
+/// yb-mode only acquires `Gc`, `TenantHouseKeeping`, and
+/// `InitialLogicalSizeCalculation`; the layer-stack-era variants
+/// (`L0Compaction`, `Compaction`, `Eviction`, `HeatmapUpload`,
+/// `SecondaryDownload`) and the upstream consumption-metrics workers
+/// (`ConsumptionMetricsCollectMetrics`,
+/// `ConsumptionMetricsSyntheticSizeWorker`) are gone with their loops.
 #[derive(
     Debug,
     PartialEq,
@@ -84,18 +73,9 @@ static CONCURRENT_L0_COMPACTION_TASKS: Lazy<Semaphore> = Lazy::new(|| {
 )]
 #[strum(serialize_all = "snake_case")]
 pub(crate) enum BackgroundLoopKind {
-    /// L0Compaction runs as a separate pass within the Compaction loop, not a separate loop. It is
-    /// used to request the `CONCURRENT_L0_COMPACTION_TASKS` semaphore and associated metrics.
-    L0Compaction,
-    Compaction,
     Gc,
-    Eviction,
     TenantHouseKeeping,
-    ConsumptionMetricsCollectMetrics,
-    ConsumptionMetricsSyntheticSizeWorker,
     InitialLogicalSizeCalculation,
-    HeatmapUpload,
-    SecondaryDownload,
 }
 
 pub struct BackgroundLoopSemaphorePermit<'a> {
@@ -115,11 +95,10 @@ pub(crate) async fn acquire_concurrency_permit(
     }
 
     // TODO: assert that we run on BACKGROUND_RUNTIME; requires tokio_unstable Handle::id();
-    let semaphore = match loop_kind {
-        BackgroundLoopKind::L0Compaction => &CONCURRENT_L0_COMPACTION_TASKS,
-        _ => &CONCURRENT_BACKGROUND_TASKS,
-    };
-    let permit = semaphore.acquire().await.expect("should never close");
+    let permit = CONCURRENT_BACKGROUND_TASKS
+        .acquire()
+        .await
+        .expect("should never close");
 
     recorder.acquired();
 
