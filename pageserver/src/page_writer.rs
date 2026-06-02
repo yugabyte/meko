@@ -494,17 +494,20 @@ impl PageWriter {
                         if inserted {
                             s.delta_counts.remove(&key);
                             // Snapshot the durable chain while the
-                            // writer lock is still held — no evictor
-                            // or other put can race here, so the chain
-                            // is by-construction complete. Lets the
-                            // materialiser skip its cache fast path and
-                            // (when an anchor is present) the YB
-                            // fallback. `lookup_chain_durable` clones
-                            // PageRows; payload Bytes refcount-bump
-                            // rather than duplicate. See `MaterializeJob`
-                            // for when this is `None`.
-                            let chain = s.pages.lookup_chain_durable(&key, lsn);
-                            let chain = chain_with_anchor(chain);
+                            // writer lock is still held. Use the
+                            // completeness-checked lookup so a
+                            // mid-chain eviction (per-row FIFO can
+                            // drop a delta between the anchor and
+                            // `target_lsn` for a hot key) surfaces as
+                            // `None` and the materialiser falls back
+                            // to `read_chain_durable` (cache + YB
+                            // merge). Skipping the check is what
+                            // produced the AWS-side walredo PANIC on
+                            // 2026-06-02; see `tasks/4.f`. PageRows
+                            // are cloned but payload Bytes refcount-
+                            // bump rather than duplicate.
+                            let chain =
+                                s.pages.lookup_chain_durable_if_complete(&key, lsn);
                             to_materialize.push(MaterializeJob {
                                 key,
                                 target_lsn: lsn,
@@ -1290,20 +1293,6 @@ pub fn extract_triples(batch: &SerializedValueBatch) -> Result<Vec<(Key, Lsn, Va
     Ok(out)
 }
 
-/// Truncate the LSN-descending chain at the LATEST `will_init` row
-/// (image or init-delta) and return the prefix, or `None` if no
-/// anchor exists. Used at write-side trigger time so the captured
-/// snapshot matches the shape `parse_chain` expects: exactly one
-/// anchor at the tail, with only deltas above it. Without truncation
-/// an older image sitting beneath a newer anchor would be fed to
-/// `NeonWalRecord::des` and surface as a "deserialize error" at
-/// materialisation time.
-fn chain_with_anchor(mut chain: Vec<PageRow>) -> Option<Vec<PageRow>> {
-    let idx = chain.iter().position(|r| r.will_init)?;
-    chain.truncate(idx + 1);
-    Some(chain)
-}
-
 fn key_to_bytes(key: Key) -> Bytes {
     let mut buf = vec![0u8; KEY_SIZE];
     key.write_to_byte_slice(&mut buf);
@@ -1347,32 +1336,31 @@ fn build_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<PageRow> {
                 match NeonWalRecord::des(&bytes) {
                     Ok(decoded) if &decoded == rec => {}
                     Ok(decoded) => {
+                        // Our own serializer is wrong — writing this
+                        // byte sequence to YB persists input that the
+                        // read path will mis-decode. Abort before the
+                        // bytes leave the process.
                         crate::metrics::CORRECTNESS_ERRORS
                             .with_label_values(&["write_path_roundtrip"])
                             .inc();
-                        tracing::error!(
-                            key = %key,
-                            %lsn,
-                            payload_len = bytes.len(),
-                            "WRITE-PATH ROUNDTRIP MISMATCH: ser→des decoded to \
-                             a different NeonWalRecord. Serializer is the \
-                             corruption source. orig={:?} decoded={:?}",
-                            rec,
-                            decoded,
-                        );
+                        utils::abort::fatal_abort(format_args!(
+                            "WRITE-PATH ROUNDTRIP MISMATCH key={} lsn={} \
+                             payload_len={}: orig={:?} decoded={:?}",
+                            key, lsn, bytes.len(), rec, decoded,
+                        ));
                     }
                     Err(e) => {
+                        // A roundtrip failure on bytes we just produced
+                        // means the serializer can write values it
+                        // cannot read. Abort.
                         crate::metrics::CORRECTNESS_ERRORS
                             .with_label_values(&["write_path_roundtrip"])
                             .inc();
-                        tracing::error!(
-                            key = %key,
-                            %lsn,
-                            payload_len = bytes.len(),
-                            "WRITE-PATH ROUNDTRIP DECODE FAILED on freshly \
-                             serialised bytes — bincode mismatch in our own \
-                             code: {e:#}"
-                        );
+                        utils::abort::fatal_abort(format_args!(
+                            "WRITE-PATH ROUNDTRIP DECODE FAILED key={} lsn={} \
+                             payload_len={}: {:#}",
+                            key, lsn, bytes.len(), e,
+                        ));
                     }
                 }
             }
@@ -1677,45 +1665,6 @@ mod tests {
             will_init: true,
             rec: Bytes::from_static(b"init-rec"),
         })
-    }
-
-    fn row(lsn: u64, is_image: bool, will_init: bool) -> PageRow {
-        PageRow {
-            key: key_to_bytes(k(1)),
-            lsn: Lsn(lsn),
-            is_image,
-            will_init,
-            payload: Bytes::from_static(b"dummy"),
-        }
-    }
-
-    /// `chain_with_anchor` must truncate at the LATEST `will_init` row so
-    /// `parse_chain` only ever sees one anchor at the tail. Regression for
-    /// the corruption-repro on 2026-06-02 where an older image sitting
-    /// beneath a newer image in a captured chain reached `parse_chain` and
-    /// was fed to `NeonWalRecord::des` as if it were a delta.
-    #[test]
-    fn chain_with_anchor_truncates_at_latest_will_init() {
-        // LSN-desc, two anchors: keep the newest, drop everything below it.
-        let chain = vec![
-            row(500, false, false),
-            row(400, true, true),   // newest anchor (post-truncation tail)
-            row(300, false, false),
-            row(200, true, true),   // older anchor — must not leak through
-            row(100, false, false),
-        ];
-        let truncated = chain_with_anchor(chain).expect("anchor present");
-        assert_eq!(
-            truncated.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
-            vec![500, 400],
-        );
-        assert!(truncated.last().unwrap().will_init);
-    }
-
-    #[test]
-    fn chain_with_anchor_none_when_no_anchor() {
-        let chain = vec![row(500, false, false), row(400, false, false)];
-        assert!(chain_with_anchor(chain).is_none());
     }
 
     #[test]
@@ -2242,8 +2191,9 @@ mod tests {
     /// falls back to `read_chain_durable` in this case.
     ///
     /// Same regression as `trigger_captures_durable_chain_with_anchor`,
-    /// covering the no-durable-anchor branch of the `chain_with_anchor`
-    /// filter.
+    /// covering the no-durable-anchor branch of
+    /// `lookup_chain_durable_if_complete` (returns `None` when the
+    /// cache has no `will_init` anchor at or below `target_lsn`).
     #[tokio::test]
     async fn trigger_captures_none_when_anchor_still_pre_flush() {
         let (store, schema) = make_store("mat_capture_none").await;

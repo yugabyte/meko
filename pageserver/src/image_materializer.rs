@@ -349,23 +349,25 @@ impl ImageMaterializer {
                 }
                 Ok(None) => {} // nothing-to-do (no chain / already image-anchored)
                 Err(e) => {
-                    // Correctness-fatal: dropping this job leaves the
-                    // page un-materialised, and the underlying error
-                    // (deserialise / walredo PANIC / read failure)
-                    // points at silently-corrupted source data.
-                    // Skipping it was the prior bug that turned a
-                    // recoverable redo error into persistent zero pages.
+                    // A walredo failure means the chain we assembled
+                    // does not legally produce a page (PG's walredo
+                    // PANIC'd, or the chain has missing/extra deltas
+                    // relative to the base image). Continuing risks
+                    // silently persisting a bad image; abort instead
+                    // so the operator sees the corruption signal
+                    // immediately.
                     crate::metrics::CORRECTNESS_ERRORS
                         .with_label_values(&["materializer_redo"])
                         .inc();
-                    tracing::error!(
-                        tenant_id = %self.tenant_id,
-                        timeline_id = %self.timeline_id,
-                        target_lsn = %job.target_lsn,
-                        key = ?bytes::Bytes::copy_from_slice(&job.key),
-                        "MATERIALIZER REDO ERROR — page will be un-materialised; \
-                         monitor `pageserver_yb_correctness_errors_total{{kind=\"materializer_redo\"}}`: {e:#}"
-                    );
+                    utils::abort::fatal_abort(format_args!(
+                        "MATERIALIZER REDO ERROR tenant={} timeline={} \
+                         target_lsn={} key={:?}: {:#}",
+                        self.tenant_id,
+                        self.timeline_id,
+                        job.target_lsn,
+                        bytes::Bytes::copy_from_slice(&job.key),
+                        e,
+                    ));
                 }
             }
             if let Some(next_job) = iter.next() {
