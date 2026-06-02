@@ -1295,18 +1295,6 @@ impl RemoteTimelineClient {
 
             let upload_result: anyhow::Result<()> = match &task.op {
                 UploadOp::UploadMetadata { uploaded } => {
-                    // yb-mode: instead of PUTting `index_part.json` to
-                    // the blob store, persist the same fields via a
-                    // gen-fenced UPDATE on `pageserver.timeline_state`.
-                    // The row is guaranteed to exist by Phase 5b's
-                    // `insert_timeline_at_creation`; the UPDATE's
-                    // `WHERE current_generation = $caller_gen` clause
-                    // is the gen-fence — a stale pageserver gets 0
-                    // rows updated and we log+skip (the eventual
-                    // shutdown-for-stale-generation path on the next
-                    // flush takes care of bringing this process down).
-                    // Reads on attach go through Phase 5c's row-based
-                    // synthesis path; nothing else reads the blob now.
                     let res = if let Some(store) = &self.internal_page_store {
                         let row = index_part_to_timeline_row(
                             uploaded,
@@ -1321,21 +1309,12 @@ impl RemoteTimelineClient {
                         {
                             Ok(UpdateTimelineStateOutcome::Updated) => Ok(()),
                             Ok(UpdateTimelineStateOutcome::StaleGeneration) => {
-                                tracing::warn!(
-                                    tenant_shard_id = %self.tenant_shard_id,
-                                    timeline_id = %self.timeline_id,
-                                    generation = ?self.generation,
-                                    "UploadMetadata skipped: stale generation \
-                                     (next flush will shut this process down)"
-                                );
+                                tracing::warn!("UploadMetadata skipped: stale generation");
                                 Ok(())
                             }
                             Err(e) => Err(e),
                         }
                     } else {
-                        // No PageStore wired (unit-test fixtures). Treat
-                        // the upload as a no-op so the upload-queue can
-                        // make forward progress in tests.
                         Ok(())
                     };
                     if res.is_ok() {
