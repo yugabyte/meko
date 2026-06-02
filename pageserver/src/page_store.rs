@@ -178,6 +178,24 @@ pub enum AdvanceDcLsnOutcome {
     StaleGeneration { live_generation: u32 },
 }
 
+/// Result of [`PageStore::update_timeline_state`]. The UPDATE's WHERE
+/// clause enforces `current_generation = $caller_gen`, so a stale
+/// pageserver — one whose generation has been bumped past since
+/// attach — gets `StaleGeneration`. The caller logs the skip; the
+/// next flush's `advance_disk_consistent_lsn` is what actually trips
+/// the shutdown-for-stale-generation path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateTimelineStateOutcome {
+    /// Row was found at our generation; UPDATE landed.
+    Updated,
+    /// Either the row is missing (wiring bug — `insert_timeline_at_creation`
+    /// is supposed to have run) or the live generation is no longer
+    /// ours. In practice the latter dominates; we can't disambiguate
+    /// without a follow-up SELECT, and the caller doesn't need to —
+    /// either way the right move is "log and proceed".
+    StaleGeneration,
+}
+
 /// Result of `PageStore::cas_bump_generation_on_attach`. Called once
 /// per attach to push the controller-issued generation through to the
 /// YB column before any flushes run, so the flush path's
@@ -1195,7 +1213,21 @@ impl PageStore {
 
     // ------------------- timelines ----------------------------------------
 
-    pub async fn upsert_timeline(&self, row: &TimelineRow) -> Result<()> {
+    /// One-shot INSERT used at timeline creation by Phase 5b's
+    /// `Timeline::write_timeline_row_to_yb`. Tries to create the row;
+    /// if a row at the same `(tenant, timeline)` already exists this
+    /// is a no-op (the existing state is the source of truth — a
+    /// just-created timeline raced with an attach-time replay or
+    /// similar; either way we shouldn't clobber the live row).
+    ///
+    /// **Not for incremental updates.** Per-flush UPDATEs of
+    /// `disk_consistent_lsn` go through [`Self::advance_disk_consistent_lsn`];
+    /// per-`UploadMetadata` UPDATEs from RTC go through
+    /// [`Self::update_timeline_state`]. Both of those are gen-fenced;
+    /// this one isn't, because at creation the row by definition
+    /// doesn't exist yet (or — race — exists in a state we shouldn't
+    /// touch).
+    pub async fn insert_timeline_at_creation(&self, row: &TimelineRow) -> Result<()> {
         let sql = format!(
             "INSERT INTO \"{}\".timeline_state \
              (tenant_id, timeline_id, disk_consistent_lsn, \
@@ -1204,34 +1236,10 @@ impl PageStore {
               archived_at, deleted_at, rel_size_migration, \
               rel_size_migrated_at, lineage) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-             ON CONFLICT (tenant_id, timeline_id) DO UPDATE SET \
-                disk_consistent_lsn   = EXCLUDED.disk_consistent_lsn, \
-                applied_gc_cutoff_lsn = EXCLUDED.applied_gc_cutoff_lsn, \
-                ancestor_timeline_id  = EXCLUDED.ancestor_timeline_id, \
-                ancestor_lsn          = EXCLUDED.ancestor_lsn, \
-                current_generation    = EXCLUDED.current_generation, \
-                pg_version            = EXCLUDED.pg_version, \
-                initdb_lsn            = EXCLUDED.initdb_lsn, \
-                prev_record_lsn       = EXCLUDED.prev_record_lsn, \
-                archived_at           = EXCLUDED.archived_at, \
-                deleted_at            = EXCLUDED.deleted_at, \
-                rel_size_migration    = EXCLUDED.rel_size_migration, \
-                rel_size_migrated_at  = EXCLUDED.rel_size_migrated_at, \
-                lineage               = EXCLUDED.lineage",
+             ON CONFLICT (tenant_id, timeline_id) DO NOTHING",
             self.schema
         );
-        // Serialise the rel-size enum via serde so the storage form
-        // matches what the upstream `index_part.json` carried — keeps
-        // the read path's match-on-camelCase variants working when we
-        // round-trip through `RelSizeMigration::from_str`.
-        let rel_size_migration_text = row
-            .rel_size_migration
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .context("serialising rel_size_migration")?;
-        let lineage_json = serde_json::to_value(&row.lineage)
-            .context("serialising lineage")?;
+        let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
         self.client
             .execute(
                 &sql,
@@ -1254,8 +1262,81 @@ impl PageStore {
                 ],
             )
             .await
-            .context("upsert_timeline")?;
+            .context("insert_timeline_at_creation")?;
         Ok(())
+    }
+
+    /// Gen-fenced UPDATE of the index_part.json-derived fields on the
+    /// row. Called from RTC's `perform_upload_task`
+    /// (`UploadOp::UploadMetadata`) and from
+    /// `persist_index_part_with_deleted_flag`.
+    ///
+    /// The WHERE clause requires `current_generation = $caller_gen`:
+    /// stale pageservers — those whose generation no longer matches
+    /// the live row — get 0 rows updated, returning
+    /// [`UpdateTimelineStateOutcome::StaleGeneration`]. Caller should
+    /// log and proceed (matching the pattern in
+    /// [`Self::advance_disk_consistent_lsn`]); the eventual
+    /// `task_mgr::shutdown_for_stale_generation` path on the next
+    /// flush takes care of shutting the stale process down.
+    ///
+    /// Does not touch `tenant_id`, `timeline_id`, `current_generation`
+    /// (owned by `cas_bump_generation_on_attach`), or `pg_version`
+    /// (immutable per timeline). Other fields are full-overwrite from
+    /// the caller's row.
+    pub async fn update_timeline_state(
+        &self,
+        row: &TimelineRow,
+        generation: utils::generation::Generation,
+    ) -> Result<UpdateTimelineStateOutcome> {
+        let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
+        let sql = format!(
+            "UPDATE \"{}\".timeline_state SET \
+                disk_consistent_lsn   = $3, \
+                applied_gc_cutoff_lsn = $4, \
+                ancestor_timeline_id  = $5, \
+                ancestor_lsn          = $6, \
+                initdb_lsn            = $7, \
+                prev_record_lsn       = $8, \
+                archived_at           = $9, \
+                deleted_at            = $10, \
+                rel_size_migration    = $11, \
+                rel_size_migrated_at  = $12, \
+                lineage               = $13 \
+             WHERE tenant_id          = $1 \
+               AND timeline_id        = $2 \
+               AND current_generation = $14",
+            self.schema
+        );
+        let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
+        let n = self
+            .client
+            .execute(
+                &sql,
+                &[
+                    &row.tenant_id.to_string(),
+                    &row.timeline_id.to_string(),
+                    &(row.disk_consistent_lsn.0 as i64),
+                    &(row.applied_gc_cutoff_lsn.0 as i64),
+                    &row.ancestor_timeline_id.map(|id| id.to_string()),
+                    &row.ancestor_lsn.map(|l| l.0 as i64),
+                    &row.initdb_lsn.map(|l| l.0 as i64),
+                    &row.prev_record_lsn.map(|l| l.0 as i64),
+                    &row.archived_at,
+                    &row.deleted_at,
+                    &rel_size_migration_text,
+                    &row.rel_size_migrated_at.map(|l| l.0 as i64),
+                    &lineage_json,
+                    &gen_i32,
+                ],
+            )
+            .await
+            .context("update_timeline_state")?;
+        if n == 0 {
+            Ok(UpdateTimelineStateOutcome::StaleGeneration)
+        } else {
+            Ok(UpdateTimelineStateOutcome::Updated)
+        }
     }
 
     pub async fn get_timeline(
@@ -1582,6 +1663,25 @@ const TIMELINE_ROW_COLUMNS: &str = "tenant_id, timeline_id, disk_consistent_lsn,
      current_generation, pg_version, initdb_lsn, prev_record_lsn, \
      archived_at, deleted_at, rel_size_migration, \
      rel_size_migrated_at, lineage";
+
+/// Convert the two awkwardly-typed `TimelineRow` fields (the
+/// `RelSizeMigration` enum, persisted as serde-JSON text to match
+/// the upstream `index_part.json` wire shape; and `lineage`,
+/// persisted as a JSONB blob for forward-compat) into the values
+/// the `tokio_postgres::Client::execute` parameter list expects.
+/// Shared by `insert_timeline_at_creation` and
+/// `update_timeline_state` so the serialisation stays in lockstep.
+fn serialize_row_aux(row: &TimelineRow) -> Result<(Option<String>, serde_json::Value)> {
+    let rel_size_migration_text = row
+        .rel_size_migration
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .context("serialising rel_size_migration")?;
+    let lineage_json =
+        serde_json::to_value(&row.lineage).context("serialising lineage")?;
+    Ok((rel_size_migration_text, lineage_json))
+}
 
 fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
     let tenant_s: String = r.try_get(0)?;
@@ -2221,7 +2321,7 @@ mod tests {
         let tenant = rand_tenant();
         let timeline = rand_timeline();
         let row = sample_timeline_row(tenant, timeline);
-        store.upsert_timeline(&row).await.unwrap();
+        store.insert_timeline_at_creation(&row).await.unwrap();
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
         assert_eq!(got, row);
         drop_schema(&store, &schema).await;
@@ -2245,7 +2345,7 @@ mod tests {
         let mut row = sample_timeline_row(tenant, timeline);
         row.current_generation = 1;
         row.disk_consistent_lsn = Lsn(0x1000);
-        store.upsert_timeline(&row).await.unwrap();
+        store.insert_timeline_at_creation(&row).await.unwrap();
 
         // Bumped: stored gen=1, attach at gen=2 → succeeds, YB now 2.
         let res = store
@@ -2314,7 +2414,7 @@ mod tests {
         let mut row = sample_timeline_row(tenant, timeline);
         row.current_generation = 5;
         row.disk_consistent_lsn = Lsn(0x1000);
-        store.upsert_timeline(&row).await.unwrap();
+        store.insert_timeline_at_creation(&row).await.unwrap();
 
         // Matching generation → Updated, persisted value advances.
         let res = store
@@ -2354,7 +2454,7 @@ mod tests {
         let tenant = rand_tenant();
         let timeline = rand_timeline();
         store
-            .upsert_timeline(&sample_timeline_row(tenant, timeline))
+            .insert_timeline_at_creation(&sample_timeline_row(tenant, timeline))
             .await
             .unwrap();
         for expected in 2..=5 {

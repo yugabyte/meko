@@ -3,20 +3,15 @@
 //! Able to restore itself from the storage index parts, that are located in every timeline's remote directory and contain all data about
 //! remote timeline layers and its metadata.
 
-use std::collections::HashMap;
 
 use chrono::NaiveDateTime;
 use pageserver_api::models::AuxFilePolicy;
 use pageserver_api::models::RelSizeMigration;
-use pageserver_api::shard::ShardIndex;
 use serde::{Deserialize, Serialize};
 use utils::id::TimelineId;
 use utils::lsn::Lsn;
 
-use super::is_same_remote_layer_path;
-use crate::tenant::Generation;
 use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::storage_layer::LayerName;
 
 /// In-memory representation of an `index_part.json` file
 ///
@@ -37,10 +32,6 @@ pub struct IndexPart {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<NaiveDateTime>,
-
-    /// Layer filenames and metadata. For an index persisted in remote storage, all layers must
-    /// exist in remote storage.
-    pub layer_metadata: HashMap<LayerName, LayerFileMetadata>,
 
     /// Because of the trouble of eyeballing the legacy "metadata" field, we copied the
     /// "disk_consistent_lsn" out. After version 7 this is no longer needed, but the name cannot be
@@ -151,7 +142,6 @@ impl IndexPart {
     pub fn empty(metadata: TimelineMetadata) -> Self {
         IndexPart {
             version: Self::LATEST_VERSION,
-            layer_metadata: Default::default(),
             disk_consistent_lsn: metadata.disk_consistent_lsn(),
             metadata,
             deleted_at: None,
@@ -185,61 +175,7 @@ impl IndexPart {
         serde_json::to_vec(self)
     }
 
-    /// Returns true if the index contains a reference to the given layer (i.e. file path).
-    ///
-    /// TODO: there should be a variant of LayerName for the physical remote path that contains
-    /// information about the shard and generation, to avoid passing in metadata.
-    pub fn references(&self, name: &LayerName, metadata: &LayerFileMetadata) -> bool {
-        let Some(index_metadata) = self.layer_metadata.get(name) else {
-            return false;
-        };
-        is_same_remote_layer_path(name, metadata, name, index_metadata)
-    }
 
-    /// Check for invariants in the index: this is useful when uploading an index to ensure that if
-    /// we encounter a bug, we do not persist buggy metadata.
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.metadata.ancestor_timeline().is_none()
-            && self.layer_metadata.is_empty()
-        {
-            // Unless we're in the middle of a raw pgdata import, or this is a child timeline,the index must
-            // always have at least one layer.
-            return Err("Index has no ancestor and no layers".to_string());
-        }
-
-        Ok(())
-    }
-}
-
-/// Metadata gathered for each of the layer files.
-///
-/// Fields have to be `Option`s because remote [`IndexPart`]'s can be from different version, which
-/// might have less or more metadata depending if upgrading or rolling back an upgrade.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct LayerFileMetadata {
-    pub file_size: u64,
-
-    #[serde(default = "Generation::none")]
-    #[serde(skip_serializing_if = "Generation::is_none")]
-    pub generation: Generation,
-
-    #[serde(default = "ShardIndex::unsharded")]
-    #[serde(skip_serializing_if = "ShardIndex::is_unsharded")]
-    pub shard: ShardIndex,
-}
-
-impl LayerFileMetadata {
-    pub fn new(file_size: u64, generation: Generation, shard: ShardIndex) -> Self {
-        LayerFileMetadata {
-            file_size,
-            generation,
-            shard,
-        }
-    }
-    /// Helper to get both generation and file size in a tuple
-    pub fn generation_file_size(&self) -> (Generation, u64) {
-        (self.generation, self.file_size)
-    }
 }
 
 /// Limited history of earlier ancestors.

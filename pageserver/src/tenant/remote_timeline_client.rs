@@ -192,9 +192,8 @@ pub(crate) use download::{
     download_index_part, download_initdb_tar_zst, download_tenant_manifest,
     list_remote_tenant_shards, list_remote_timelines,
 };
-pub(crate) use index::LayerFileMetadata;
 use pageserver_api::models::{RelSizeMigration, TimelineArchivalState, TimelineVisibilityState};
-use pageserver_api::shard::{ShardIndex, TenantShardId};
+use pageserver_api::shard::TenantShardId;
 use regex::Regex;
 use remote_storage::{
     DownloadError, GenericRemoteStorage, RemotePath, TimeoutOrCancel,
@@ -212,7 +211,6 @@ use utils::pausable_failpoint;
 
 use self::index::IndexPart;
 use super::config::AttachedLocationConfig;
-use super::storage_layer::LayerName;
 use super::upload_queue::{NotInitialized, SetDeletedFlagProgress};
 use super::{DeleteTimelineError, Generation};
 use crate::deletion_queue::DeletionQueueClient;
@@ -348,6 +346,15 @@ pub(crate) struct RemoteTimelineClient {
 
     deletion_queue_client: DeletionQueueClient,
 
+    /// yb-mode: the `index_part.json` blob upload has been retired in
+    /// favor of column-scoped UPDATEs on `pageserver.timeline_state`.
+    /// `UploadOp::UploadMetadata` now lands here as an `upsert_timeline`
+    /// call instead of an S3-style PUT (see `perform_upload_task`).
+    /// Always `Some` in yb-mode; the type stays `Option` only because
+    /// the test fixtures in this file build an `RemoteTimelineClient`
+    /// without a real `PageStore`.
+    pub(crate) internal_page_store: Option<Arc<crate::page_store::PageStore>>,
+
     /// Subset of tenant configuration used to control upload behaviors during migrations
     config: std::sync::RwLock<RemoteTimelineClientConfig>,
 
@@ -370,6 +377,7 @@ impl RemoteTimelineClient {
     pub(crate) fn new(
         remote_storage: GenericRemoteStorage,
         deletion_queue_client: DeletionQueueClient,
+        internal_page_store: Option<Arc<crate::page_store::PageStore>>,
         tenant_shard_id: TenantShardId,
         timeline_id: TimelineId,
         generation: Generation,
@@ -387,6 +395,7 @@ impl RemoteTimelineClient {
             generation,
             storage_impl: remote_storage,
             deletion_queue_client,
+            internal_page_store,
             upload_queue: Mutex::new(UploadQueue::Uninitialized),
             metrics: Arc::new(RemoteTimelineClientMetrics::new(
                 &tenant_shard_id,
@@ -543,17 +552,9 @@ impl RemoteTimelineClient {
             .ok()
     }
 
-    fn update_remote_physical_size_gauge(&self, current_remote_index_part: Option<&IndexPart>) {
-        let size: u64 = if let Some(current_remote_index_part) = current_remote_index_part {
-            current_remote_index_part
-                .layer_metadata
-                .values()
-                .map(|ilmd| ilmd.file_size)
-                .sum()
-        } else {
-            0
-        };
-        self.metrics.remote_physical_size_gauge.set(size);
+    fn update_remote_physical_size_gauge(&self, _current_remote_index_part: Option<&IndexPart>) {
+        // yb-mode: no layer files → remote physical size is always 0.
+        self.metrics.remote_physical_size_gauge.set(0);
     }
 
     pub fn get_remote_physical_size(&self) -> u64 {
@@ -1084,15 +1085,36 @@ impl RemoteTimelineClient {
         pausable_failpoint!("persist_deleted_index_part");
 
         backoff::retry(
-            || {
-                upload::upload_index_part(
-                    &self.storage_impl,
-                    &self.tenant_shard_id,
-                    &self.timeline_id,
-                    self.generation,
-                    &index_part_with_deleted_at,
-                    &self.cancel,
-                )
+            || async {
+                // yb-mode: write the deleted_at flag via the row store.
+                // Gen-fenced UPDATE: a stale pageserver's attempt to
+                // mark the timeline deleted hits 0 rows and we treat
+                // it as success — the live pageserver owns the
+                // deletion sequence.
+                if let Some(store) = &self.internal_page_store {
+                    let row = index_part_to_timeline_row(
+                        &index_part_with_deleted_at,
+                        self.tenant_shard_id.tenant_id,
+                        self.timeline_id,
+                        self.generation,
+                    );
+                    use crate::page_store::UpdateTimelineStateOutcome;
+                    match store
+                        .update_timeline_state(&row, self.generation)
+                        .await
+                    {
+                        Ok(UpdateTimelineStateOutcome::Updated) => Ok(()),
+                        Ok(UpdateTimelineStateOutcome::StaleGeneration) => {
+                            tracing::warn!(
+                                "persist_deleted_flag skipped: stale generation"
+                            );
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Ok(())
+                }
             },
             |_e| false,
             1,
@@ -1273,38 +1295,51 @@ impl RemoteTimelineClient {
 
             let upload_result: anyhow::Result<()> = match &task.op {
                 UploadOp::UploadMetadata { uploaded } => {
-                    let res = upload::upload_index_part(
-                        &self.storage_impl,
-                        &self.tenant_shard_id,
-                        &self.timeline_id,
-                        self.generation,
-                        uploaded,
-                        &self.cancel,
-                    )
-                    .measure_remote_op(
-                        Some(TaskKind::RemoteUploadTask),
-                        RemoteOpFileKind::Index,
-                        RemoteOpKind::Upload,
-                        Arc::clone(&self.metrics),
-                    )
-                    .await;
+                    // yb-mode: instead of PUTting `index_part.json` to
+                    // the blob store, persist the same fields via a
+                    // gen-fenced UPDATE on `pageserver.timeline_state`.
+                    // The row is guaranteed to exist by Phase 5b's
+                    // `insert_timeline_at_creation`; the UPDATE's
+                    // `WHERE current_generation = $caller_gen` clause
+                    // is the gen-fence — a stale pageserver gets 0
+                    // rows updated and we log+skip (the eventual
+                    // shutdown-for-stale-generation path on the next
+                    // flush takes care of bringing this process down).
+                    // Reads on attach go through Phase 5c's row-based
+                    // synthesis path; nothing else reads the blob now.
+                    let res = if let Some(store) = &self.internal_page_store {
+                        let row = index_part_to_timeline_row(
+                            uploaded,
+                            self.tenant_shard_id.tenant_id,
+                            self.timeline_id,
+                            self.generation,
+                        );
+                        use crate::page_store::UpdateTimelineStateOutcome;
+                        match store
+                            .update_timeline_state(&row, self.generation)
+                            .await
+                        {
+                            Ok(UpdateTimelineStateOutcome::Updated) => Ok(()),
+                            Ok(UpdateTimelineStateOutcome::StaleGeneration) => {
+                                tracing::warn!(
+                                    tenant_shard_id = %self.tenant_shard_id,
+                                    timeline_id = %self.timeline_id,
+                                    generation = ?self.generation,
+                                    "UploadMetadata skipped: stale generation \
+                                     (next flush will shut this process down)"
+                                );
+                                Ok(())
+                            }
+                            Err(e) => Err(e),
+                        }
+                    } else {
+                        // No PageStore wired (unit-test fixtures). Treat
+                        // the upload as a no-op so the upload-queue can
+                        // make forward progress in tests.
+                        Ok(())
+                    };
                     if res.is_ok() {
                         self.update_remote_physical_size_gauge(Some(uploaded));
-                        let mention_having_future_layers = if cfg!(feature = "testing") {
-                            uploaded
-                                .layer_metadata
-                                .keys()
-                                .any(|x| x.is_in_future(uploaded.metadata.disk_consistent_lsn()))
-                        } else {
-                            false
-                        };
-                        if mention_having_future_layers {
-                            // find rationale near crate::tenant::timeline::init::cleanup_future_layer
-                            tracing::info!(
-                                disk_consistent_lsn = %uploaded.metadata.disk_consistent_lsn(),
-                                "uploaded an index_part.json with future layers -- this is ok! if shutdown now, expect future layer cleanup"
-                            );
-                        }
                     }
                     res
                 }
@@ -1595,6 +1630,46 @@ pub fn remote_tenant_manifest_path(
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 
+/// Project the in-memory `IndexPart` (RTC's dirty/clean state) onto a
+/// `TimelineRow` for upsert into `pageserver.timeline_state`. Fields
+/// that used to live in `IndexPart` and have a column in
+/// `timeline_state` are copied 1:1; everything else (compaction state,
+/// synthetic-size invisibility, dead `last_aux_file_policy`, etc.) is
+/// dropped — these are vestigial in yb-mode (see `IndexPart`'s
+/// per-field doc comments).
+pub(crate) fn index_part_to_timeline_row(
+    ip: &index::IndexPart,
+    tenant_id: TenantId,
+    timeline_id: TimelineId,
+    generation: Generation,
+) -> crate::page_store::TimelineRow {
+    let metadata = &ip.metadata;
+    crate::page_store::TimelineRow {
+        tenant_id,
+        timeline_id,
+        disk_consistent_lsn: metadata.disk_consistent_lsn(),
+        applied_gc_cutoff_lsn: metadata.latest_gc_cutoff_lsn(),
+        ancestor_timeline_id: metadata.ancestor_timeline(),
+        ancestor_lsn: if metadata.ancestor_timeline().is_some() {
+            Some(metadata.ancestor_lsn())
+        } else {
+            None
+        },
+        // `Generation::into()` is `None` for the bootstrap Generation;
+        // RTC is only constructed in attached state so a Valid value
+        // is expected — fall back to 0 to keep the column NOT NULL.
+        current_generation: generation.into().unwrap_or(0) as i32,
+        pg_version: metadata.pg_version().major_version_num(),
+        initdb_lsn: Some(metadata.initdb_lsn()),
+        prev_record_lsn: metadata.prev_record_lsn(),
+        archived_at: ip.archived_at,
+        deleted_at: ip.deleted_at,
+        rel_size_migration: ip.rel_size_migration.clone(),
+        rel_size_migrated_at: ip.rel_size_migrated_at,
+        lineage: ip.lineage.clone(),
+    }
+}
+
 /// Prefix to all generations' manifest objects in a tenant shard
 pub fn remote_tenant_manifest_prefix(tenant_shard_id: &TenantShardId) -> RemotePath {
     let path = format!("tenants/{tenant_shard_id}/tenant-manifest",);
@@ -1615,42 +1690,6 @@ pub fn remote_timeline_path(
 
 /// Obtains the path of the given Layer in the remote
 ///
-/// Note that the shard component of a remote layer path is _not_ always the same
-/// as in the TenantShardId of the caller: tenants may reference layers from a different
-/// ShardIndex.  Use the ShardIndex from the layer's metadata.
-pub fn remote_layer_path(
-    tenant_id: &TenantId,
-    timeline_id: &TimelineId,
-    shard: ShardIndex,
-    layer_file_name: &LayerName,
-    generation: Generation,
-) -> RemotePath {
-    // Generation-aware key format
-    let path = format!(
-        "tenants/{tenant_id}{0}/{TIMELINES_SEGMENT_NAME}/{timeline_id}/{1}{2}",
-        shard.get_suffix(),
-        layer_file_name,
-        generation.get_suffix()
-    );
-
-    RemotePath::from_string(&path).expect("Failed to construct path")
-}
-
-/// Returns true if a and b have the same layer path within a tenant/timeline. This is essentially
-/// remote_layer_path(a) == remote_layer_path(b) without the string allocations.
-///
-/// TODO: there should be a variant of LayerName for the physical path that contains information
-/// about the shard and generation, such that this could be replaced by a simple comparison.
-pub fn is_same_remote_layer_path(
-    aname: &LayerName,
-    ameta: &LayerFileMetadata,
-    bname: &LayerName,
-    bmeta: &LayerFileMetadata,
-) -> bool {
-    // NB: don't assert remote_layer_path(a) == remote_layer_path(b); too expensive even for debug.
-    aname == bname && ameta.shard == bmeta.shard && ameta.generation == bmeta.generation
-}
-
 pub fn remote_initdb_archive_path(tenant_id: &TenantId, timeline_id: &TimelineId) -> RemotePath {
     RemotePath::from_string(&format!(
         "tenants/{tenant_id}/{TIMELINES_SEGMENT_NAME}/{timeline_id}/{INITDB_PATH}"

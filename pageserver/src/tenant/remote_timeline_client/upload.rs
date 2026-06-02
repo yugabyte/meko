@@ -14,50 +14,11 @@ use utils::id::{TenantId, TimelineId};
 use utils::pausable_failpoint;
 
 use super::Generation;
-use super::index::IndexPart;
 use super::manifest::TenantManifest;
 use crate::tenant::remote_timeline_client::{
-    remote_index_path, remote_initdb_archive_path, remote_initdb_preserved_archive_path,
+    remote_initdb_archive_path, remote_initdb_preserved_archive_path,
     remote_tenant_manifest_path,
 };
-
-/// Serializes and uploads the given index part data to the remote storage.
-pub(crate) async fn upload_index_part(
-    storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantShardId,
-    timeline_id: &TimelineId,
-    generation: Generation,
-    index_part: &IndexPart,
-    cancel: &CancellationToken,
-) -> anyhow::Result<()> {
-    tracing::trace!("uploading new index part");
-
-    fail_point!("before-upload-index", |_| {
-        bail!("failpoint before-upload-index")
-    });
-    pausable_failpoint!("before-upload-index-pausable");
-
-    // Safety: refuse to persist invalid index metadata, to mitigate the impact of any bug that produces this
-    // (this should never happen)
-    index_part.validate().map_err(|e| anyhow::anyhow!(e))?;
-
-    // FIXME: this error comes too late
-    let serialized = index_part.to_json_bytes()?;
-    let serialized = Bytes::from(serialized);
-
-    let index_part_size = serialized.len();
-
-    let remote_path = remote_index_path(tenant_shard_id, timeline_id, generation);
-    storage
-        .upload_storage_object(
-            futures::stream::once(futures::future::ready(Ok(serialized))),
-            index_part_size,
-            &remote_path,
-            cancel,
-        )
-        .await
-        .with_context(|| format!("upload index part for '{tenant_shard_id} / {timeline_id}'"))
-}
 
 /// Serializes and uploads the given tenant manifest data to the remote storage.
 pub(crate) async fn upload_tenant_manifest(

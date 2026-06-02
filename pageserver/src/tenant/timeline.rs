@@ -1135,9 +1135,9 @@ impl Timeline {
             lineage: Default::default(),
         };
         pw.internal_page_store()
-            .upsert_timeline(&row)
+            .insert_timeline_at_creation(&row)
             .await
-            .context("upsert_timeline at creation")?;
+            .context("insert_timeline_at_creation")?;
         pw.seed_dc_lsn_watermark(dc_lsn);
         Ok(())
     }

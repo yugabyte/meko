@@ -2434,7 +2434,7 @@ mod tests {
         timeline: TimelineId,
     ) {
         store
-            .upsert_timeline(&crate::page_store::TimelineRow {
+            .insert_timeline_at_creation(&crate::page_store::TimelineRow {
                 tenant_id: tenant,
                 timeline_id: timeline,
                 disk_consistent_lsn: Lsn(0),
