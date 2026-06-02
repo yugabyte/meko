@@ -694,4 +694,96 @@ mod tests {
         assert!(u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100)).is_empty());
         assert!(!u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100)).is_empty());
     }
+
+    /// Range-scan: confirm the half-open `[start, end)` filter and that
+    /// each per-key Vec comes back LSN-descending.
+    #[test]
+    fn lookup_range_filters_and_orders_descending() {
+        let mut u = UnifiedPages::new(4096);
+        u.push(mk(b"a", 10, false, b"x"));
+        u.push(mk(b"b", 20, true, b"y"));
+        u.push(mk(b"b", 30, false, b"z"));
+        u.push(mk(b"c", 40, true, b"w"));
+        let out = u.lookup_range(
+            &Bytes::from_static(b"b"),
+            &Bytes::from_static(b"c"),
+            Lsn(100),
+        );
+        assert_eq!(out.len(), 1, "only 'b' falls in [b, c)");
+        let b_chain = &out[&Bytes::from_static(b"b")];
+        let lsns: Vec<u64> = b_chain.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns, vec![30, 20], "per-key chain is LSN-desc");
+    }
+
+    /// Regression: every key in the cache is pinned (unflushed) →
+    /// `evict_to_capacity` must terminate without making progress
+    /// rather than spinning forever rotating pins to the back.
+    #[test]
+    fn evict_all_pinned_terminates_as_noop() {
+        let mut u = UnifiedPages::new(8);
+        for i in 0u32..5 {
+            u.push(mk(&i.to_be_bytes(), i as u64, true, &[0u8; 32]));
+        }
+        let before = u.total_bytes;
+        u.evict_to_capacity();
+        assert_eq!(
+            u.total_bytes, before,
+            "all pinned ⇒ no eviction; total_bytes unchanged",
+        );
+        assert_eq!(u.by_key_entries(), 5, "all keys still resident");
+    }
+
+    /// A `push_durable` overwrite of an unflushed entry must keep the
+    /// counters consistent: the unflushed slot disappears, the durable
+    /// row replaces it, and a subsequent `mark_first_n_flushed` doesn't
+    /// double-decrement (the stale fifo ref is recognised and skipped).
+    #[test]
+    fn push_durable_overwrites_unflushed_without_breaking_mark_flushed() {
+        let mut u = UnifiedPages::new(4096);
+        u.push(mk(b"k", 10, false, b"unflushed"));
+        let unflushed_before = u.unflushed_bytes;
+        // Materialiser races and installs a durable row at the same lsn.
+        u.push_durable(mk(b"k", 10, true, b"image-replacement"));
+        // The unflushed counter must have dropped to zero — the old
+        // (key,10) entry is no longer unflushed.
+        assert_eq!(
+            u.unflushed_bytes, 0,
+            "overwrite by push_durable promotes the entry; \
+             unflushed_bytes should drain even though unflushed_fifo \
+             still holds the stale ref",
+        );
+        // mark_first_n_flushed must NOT count the stale ref as a flush
+        // (it's already durable; it shouldn't decrement unflushed below 0).
+        u.mark_first_n_flushed(1);
+        assert_eq!(u.unflushed_bytes, 0);
+        // Sanity: the durable row is still there.
+        let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
+        assert_eq!(chain.len(), 1);
+        assert!(chain[0].is_image);
+        // And it shouldn't have looked anything like the original.
+        assert_ne!(unflushed_before, 0);
+    }
+
+    /// Materialiser install at LSN N MUST drop every durable row with
+    /// LSN ≤ N for that key so we can't fall into the "old image plus
+    /// new delta" trap described in task 11 / the AWS PANIC. The
+    /// install path goes via `trim_key_up_to` + `push_durable`; this
+    /// test exercises the combination from the materialiser's
+    /// perspective.
+    #[test]
+    fn install_drops_all_older_durable_rows() {
+        let mut u = UnifiedPages::new(4096);
+        u.push(mk(b"k", 10, true, b"old-image"));
+        u.push(mk(b"k", 20, false, b"d20"));
+        u.push(mk(b"k", 30, false, b"d30"));
+        u.mark_first_n_flushed(3);
+        // Install fresh image at lsn 25.
+        u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(25));
+        u.push_durable(mk(b"k", 25, true, b"materialised"));
+        let chain = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
+        let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
+        // The deltas/image ≤ 25 are gone; d30 stays because it's above
+        // the new image.
+        assert_eq!(lsns, vec![30, 25]);
+    }
 }
