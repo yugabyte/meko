@@ -47,7 +47,16 @@ use crate::walredo::RedoAttemptType;
 /// Sized to keep the COPY round-trip dominated by network/disk and
 /// not by per-row PG parameter overhead; capped to avoid stalling
 /// the queue if walredo is slow.
-const BATCH_DRAIN_LIMIT: usize = 32;
+///
+/// Raised once write-side triggers started carrying their durable
+/// chain inline (see `MaterializeJob.chain`): redo no longer blocks on
+/// a YB `read_chain_durable` round-trip per job, so a batch of N is
+/// CPU + walproposer-lib bound at `REDO_CONCURRENCY` parallelism and
+/// can clear in tens to hundreds of ms even at the upper end. Larger
+/// batches amortise the per-row PG protocol overhead and (with
+/// `MAX_INFLIGHT_INSERTS = 2`) let batch N's INSERT overlap fully
+/// with batch N+1's redo.
+const BATCH_DRAIN_LIMIT: usize = 500;
 
 /// Maximum number of pipelined INSERT futures that can be in flight
 /// concurrently on the materialiser task. The redo phase of batch N+1
