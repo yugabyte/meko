@@ -1,10 +1,9 @@
 //! Common types referenced by yb-pageserver's surviving signatures.
 //!
 //! Most of the layer-file machinery is gone in yb-mode. What remains
-//! is the `LayerName` parsing surface used by `index_part.json` and
-//! the HTTP layer-admin endpoints, plus a few vestigial markers
-//! (`IoConcurrency`, `ValuesReconstructState`) kept so external
-//! call-sites don't have to churn.
+//! is the `LayerName` parsing surface used by `index_part.json`,
+//! plus the walredo `ValueReconstructState` accumulator the read path
+//! still feeds into walredo.
 
 mod layer_name;
 
@@ -12,9 +11,7 @@ use std::ops::Range;
 
 use bytes::Bytes;
 pub use layer_name::{DeltaLayerName, ImageLayerName, LayerName};
-use pageserver_api::config::GetVectoredConcurrentIo;
 use utils::lsn::Lsn;
-use utils::sync::gate::GateGuard;
 use wal_decoder::models::record::NeonWalRecord;
 
 /// Walredo reconstruction state — the accumulator for image + WAL
@@ -32,41 +29,6 @@ impl ValueReconstructState {
             None => self.records.len() - 1,
         }
     }
-}
-
-/// yb-mode: vestige. The legacy `get_vectored` traversal used this to
-/// accumulate per-key reconstruct buffers. `Timeline::get_vectored_impl`
-/// ignores it entirely — the row-store read path runs through
-/// `PageWriter::scan_range`. Kept as a unit type so external callers
-/// (basebackup, pgdatadir_mapping) can keep their existing signatures.
-pub struct ValuesReconstructState;
-
-impl ValuesReconstructState {
-    pub fn new(_io_concurrency: IoConcurrency) -> Self {
-        Self
-    }
-}
-
-/// yb-mode: vestige. The legacy parallel-IO sidecar task is gone —
-/// layer-file reads are gone. `IoConcurrency` is now a no-op marker
-/// passed through `get_vectored`-style entry points.
-#[derive(Debug, Clone)]
-pub enum IoConcurrency {
-    Sequential,
-}
-
-impl IoConcurrency {
-    pub(crate) fn sequential() -> Self {
-        Self::Sequential
-    }
-
-    pub fn spawn_from_conf(
-        _conf: GetVectoredConcurrentIo,
-        _gate_guard: GateGuard,
-    ) -> IoConcurrency {
-        IoConcurrency::Sequential
-    }
-
 }
 
 /// Range wrapping newtype, which uses display to render Debug.

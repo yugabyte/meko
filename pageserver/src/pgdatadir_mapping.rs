@@ -53,7 +53,6 @@ use crate::span::{
     debug_assert_current_span_has_tenant_and_timeline_id,
     debug_assert_current_span_has_tenant_and_timeline_id_no_shard_id,
 };
-use crate::tenant::storage_layer::IoConcurrency;
 use crate::tenant::timeline::{GetVectoredError, VersionedKeySpaceQuery};
 
 /// Max delta records appended to the AUX_FILES_KEY (for aux v1). The write path will write a full image once this threshold is reached.
@@ -244,7 +243,6 @@ impl Timeline {
         blknum: BlockNumber,
         version: Version<'_>,
         ctx: &RequestContext,
-        io_concurrency: IoConcurrency,
     ) -> Result<Bytes, PageReconstructError> {
         match version {
             Version::LsnRange(lsns) => {
@@ -254,7 +252,6 @@ impl Timeline {
                         pages
                             .iter()
                             .map(|(tag, blknum)| (tag, blknum, lsns, ctx.attached_child())),
-                        io_concurrency.clone(),
                         ctx,
                     )
                     .await;
@@ -296,7 +293,6 @@ impl Timeline {
     pub(crate) async fn get_rel_page_at_lsn_batched(
         &self,
         pages: impl ExactSizeIterator<Item = (&RelTag, &BlockNumber, LsnRange, RequestContext)>,
-        io_concurrency: IoConcurrency,
         ctx: &RequestContext,
     ) -> Vec<Result<Bytes, PageReconstructError>> {
         debug_assert_current_span_has_tenant_and_timeline_id();
@@ -388,7 +384,7 @@ impl Timeline {
 
         let query = VersionedKeySpaceQuery::scattered(query);
         let res = self
-            .get_vectored(query, io_concurrency, ctx)
+            .get_vectored(query, ctx)
             .maybe_perf_instrument(ctx, |current_perf_span| current_perf_span.clone())
             .await;
 
@@ -747,19 +743,8 @@ impl Timeline {
         ctx: &RequestContext,
     ) -> Result<HashSet<RelTag>, PageReconstructError> {
         let key_range = rel_tag_sparse_key_range(spcnode, dbnode);
-        let io_concurrency = IoConcurrency::spawn_from_conf(
-            self.conf.get_vectored_concurrent_io,
-            self.gate
-                .enter()
-                .map_err(|_| PageReconstructError::Cancelled)?,
-        );
         let results = self
-            .scan(
-                KeySpace::single(key_range),
-                version.get_lsn(),
-                ctx,
-                io_concurrency,
-            )
+            .scan(KeySpace::single(key_range), version.get_lsn(), ctx)
             .await?;
         let mut rels = HashSet::new();
         for (key, val) in results {
@@ -882,19 +867,10 @@ impl Timeline {
             BLCKSZ as u64,
         );
 
-        let io_concurrency = IoConcurrency::spawn_from_conf(
-            self.conf.get_vectored_concurrent_io,
-            self.gate
-                .enter()
-                .map_err(|_| PageReconstructError::Cancelled)?,
-        );
-
         let mut segment = BytesMut::with_capacity(n_blocks as usize * BLCKSZ as usize);
         for batch in batches.parts {
             let query = VersionedKeySpaceQuery::uniform(batch, lsn);
-            let blocks = self
-                .get_vectored(query, io_concurrency.clone(), ctx)
-                .await?;
+            let blocks = self.get_vectored(query, ctx).await?;
 
             for (_key, block) in blocks {
                 let block = block?;
@@ -1124,18 +1100,9 @@ impl Timeline {
                 BLCKSZ as u64,
             );
 
-            let io_concurrency = IoConcurrency::spawn_from_conf(
-                self.conf.get_vectored_concurrent_io,
-                self.gate
-                    .enter()
-                    .map_err(|_| PageReconstructError::Cancelled)?,
-            );
-
             for batch in batches.parts.into_iter().rev() {
                 let query = VersionedKeySpaceQuery::uniform(batch, probe_lsn);
-                let blocks = self
-                    .get_vectored(query, io_concurrency.clone(), ctx)
-                    .await?;
+                let blocks = self.get_vectored(query, ctx).await?;
 
                 for (_key, clog_page) in blocks.into_iter().rev() {
                     let clog_page = clog_page?;
@@ -1271,15 +1238,9 @@ impl Timeline {
         &self,
         lsn: Lsn,
         ctx: &RequestContext,
-        io_concurrency: IoConcurrency,
     ) -> Result<HashMap<String, Bytes>, PageReconstructError> {
         let kv = self
-            .scan(
-                KeySpace::single(Key::metadata_aux_key_range()),
-                lsn,
-                ctx,
-                io_concurrency,
-            )
+            .scan(KeySpace::single(Key::metadata_aux_key_range()), lsn, ctx)
             .await?;
         let mut result = HashMap::new();
         let mut sz = 0;
@@ -1302,9 +1263,8 @@ impl Timeline {
         &self,
         lsn: Lsn,
         ctx: &RequestContext,
-        io_concurrency: IoConcurrency,
     ) -> Result<(), PageReconstructError> {
-        self.list_aux_files_v2(lsn, ctx, io_concurrency).await?;
+        self.list_aux_files_v2(lsn, ctx).await?;
         Ok(())
     }
 
@@ -1312,24 +1272,17 @@ impl Timeline {
         &self,
         lsn: Lsn,
         ctx: &RequestContext,
-        io_concurrency: IoConcurrency,
     ) -> Result<HashMap<String, Bytes>, PageReconstructError> {
-        self.list_aux_files_v2(lsn, ctx, io_concurrency).await
+        self.list_aux_files_v2(lsn, ctx).await
     }
 
     pub(crate) async fn get_replorigins(
         &self,
         lsn: Lsn,
         ctx: &RequestContext,
-        io_concurrency: IoConcurrency,
     ) -> Result<HashMap<RepOriginId, Lsn>, PageReconstructError> {
         let kv = self
-            .scan(
-                KeySpace::single(repl_origin_key_range()),
-                lsn,
-                ctx,
-                io_concurrency,
-            )
+            .scan(KeySpace::single(repl_origin_key_range()), lsn, ctx)
             .await?;
         let mut result = HashMap::new();
         for (k, v) in kv {

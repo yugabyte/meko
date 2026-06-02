@@ -34,7 +34,6 @@ use utils::lsn::Lsn;
 
 use crate::context::RequestContext;
 use crate::pgdatadir_mapping::Version;
-use crate::tenant::storage_layer::IoConcurrency;
 use crate::tenant::timeline::{GetVectoredError, VersionedKeySpaceQuery};
 use crate::tenant::{PageReconstructError, Timeline};
 
@@ -163,14 +162,6 @@ where
     );
     let span = info_span!("send_tarball", backup_lsn=%lsn);
 
-    let io_concurrency = IoConcurrency::spawn_from_conf(
-        timeline.conf.get_vectored_concurrent_io,
-        timeline
-            .gate
-            .enter()
-            .map_err(|_| BasebackupError::Shutdown)?,
-    );
-
     if let Some(gzip_level) = gzip_level {
         let mut encoder = GzipEncoder::with_quality(write, gzip_level);
         Basebackup {
@@ -181,7 +172,6 @@ where
             full_backup,
             replica,
             ctx,
-            io_concurrency,
         }
         .send_tarball()
         .instrument(span)
@@ -199,7 +189,6 @@ where
             full_backup,
             replica,
             ctx,
-            io_concurrency,
         }
         .send_tarball()
         .instrument(span)
@@ -223,7 +212,6 @@ where
     full_backup: bool,
     replica: bool,
     ctx: &'a RequestContext,
-    io_concurrency: IoConcurrency,
 }
 
 /// A sink that accepts SLRU blocks ordered by key and forwards
@@ -407,10 +395,7 @@ where
 
             for part in slru_partitions.parts {
                 let query = VersionedKeySpaceQuery::uniform(part, self.lsn);
-                let blocks = self
-                    .timeline
-                    .get_vectored(query, self.io_concurrency.clone(), self.ctx)
-                    .await?;
+                let blocks = self.timeline.get_vectored(query, self.ctx).await?;
 
                 for (key, block) in blocks {
                     let block = block?;
@@ -468,7 +453,7 @@ where
         let start_time = Instant::now();
         let aux_files = self
             .timeline
-            .list_aux_files(self.lsn, self.ctx, self.io_concurrency.clone())
+            .list_aux_files(self.lsn, self.ctx)
             .await?;
         let aux_scan_time = start_time.elapsed();
         let aux_estimated_size = aux_files
@@ -534,7 +519,7 @@ where
         }
         let repl_origins = self
             .timeline
-            .get_replorigins(self.lsn, self.ctx, self.io_concurrency.clone())
+            .get_replorigins(self.lsn, self.ctx)
             .await?;
         let n_origins = repl_origins.len();
         if n_origins != 0 {

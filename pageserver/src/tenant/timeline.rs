@@ -75,10 +75,7 @@ use crate::pgdatadir_mapping::{
 use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
 use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::storage_layer::{
-    IoConcurrency,
-    ValueReconstructState, ValuesReconstructState,
-};
+use crate::tenant::storage_layer::ValueReconstructState;
 use crate::tenant::tasks::BackgroundLoopKind;
 use crate::tenant::timeline::logical_size::CurrentLogicalSize;
 use crate::walingest::WalLagCooldown;
@@ -786,13 +783,9 @@ impl Timeline {
         // page_service.
         debug_assert!(!self.shard_identity.is_key_disposable(&key));
 
-        let mut reconstruct_state = ValuesReconstructState::new(IoConcurrency::sequential());
-
         let query = VersionedKeySpaceQuery::uniform(KeySpace::single(key..key.next()), lsn);
 
-        let vectored_res = self
-            .get_vectored_impl(query, &mut reconstruct_state, ctx)
-            .await;
+        let vectored_res = self.get_vectored_impl(query, ctx).await;
 
         let key_value = vectored_res?.pop_first();
         match key_value {
@@ -832,7 +825,6 @@ impl Timeline {
     pub(crate) async fn get_vectored(
         &self,
         query: VersionedKeySpaceQuery,
-        io_concurrency: super::storage_layer::IoConcurrency,
         ctx: &RequestContext,
     ) -> Result<BTreeMap<Key, Result<Bytes, PageReconstructError>>, GetVectoredError> {
         let total_keyspace = query.total_keyspace();
@@ -863,9 +855,7 @@ impl Timeline {
             .for_task_kind(ctx.task_kind())
             .map(|metric| (metric, Instant::now()));
 
-        let res = self
-            .get_vectored_impl(query, &mut ValuesReconstructState::new(io_concurrency), ctx)
-            .await;
+        let res = self.get_vectored_impl(query, ctx).await;
 
         if let Some((metric, start)) = start {
             let elapsed = start.elapsed();
@@ -887,7 +877,6 @@ impl Timeline {
         keyspace: KeySpace,
         lsn: Lsn,
         ctx: &RequestContext,
-        io_concurrency: super::storage_layer::IoConcurrency,
     ) -> Result<BTreeMap<Key, Result<Bytes, PageReconstructError>>, GetVectoredError> {
         if !lsn.is_valid() {
             return Err(GetVectoredError::InvalidLsn(lsn));
@@ -917,9 +906,7 @@ impl Timeline {
 
         let query = VersionedKeySpaceQuery::uniform(keyspace, lsn);
 
-        let vectored_res = self
-            .get_vectored_impl(query, &mut ValuesReconstructState::new(io_concurrency), ctx)
-            .await;
+        let vectored_res = self.get_vectored_impl(query, ctx).await;
 
         if let Some(recording) = start {
             recording.observe();
@@ -931,7 +918,6 @@ impl Timeline {
     pub(super) async fn get_vectored_impl(
         &self,
         query: VersionedKeySpaceQuery,
-        _reconstruct_state: &mut ValuesReconstructState,
         ctx: &RequestContext,
     ) -> Result<BTreeMap<Key, Result<Bytes, PageReconstructError>>, GetVectoredError> {
         if query.is_empty() {
@@ -2503,14 +2489,6 @@ impl Timeline {
                     crate::metrics::initial_logical_size::START_CALCULATION.retry(circumstances)
                 };
 
-                let io_concurrency = IoConcurrency::spawn_from_conf(
-                    self_ref.conf.get_vectored_concurrent_io,
-                    self_ref
-                        .gate
-                        .enter()
-                        .map_err(|_| CalculateLogicalSizeError::Cancelled)?,
-                );
-
                 let calculated_size = self_ref
                     .logical_size_calculation_task(
                         initial_part_end,
@@ -2520,11 +2498,7 @@ impl Timeline {
                     .await?;
 
                 self_ref
-                    .trigger_aux_file_size_computation(
-                        initial_part_end,
-                        background_ctx,
-                        io_concurrency,
-                    )
+                    .trigger_aux_file_size_computation(initial_part_end, background_ctx)
                     .await?;
 
                 // TODO: add aux file size to logical size

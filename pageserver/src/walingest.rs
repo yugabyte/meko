@@ -592,7 +592,6 @@ impl WalIngest {
                         blknum,
                         Version::Modified(modification),
                         ctx,
-                        crate::tenant::storage_layer::IoConcurrency::sequential(),
                     )
                     .await?;
                 modification.put_rel_page_image(dst_rel, blknum, content)?;

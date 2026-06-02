@@ -67,7 +67,6 @@ use crate::tenant::mgr::{
 use crate::tenant::remote_timeline_client::{
     download_index_part, download_tenant_manifest, list_remote_tenant_shards, list_remote_timelines,
 };
-use crate::tenant::storage_layer::IoConcurrency;
 use crate::tenant::timeline::{
     MarkInvisibleRequest, Timeline, WaitLsnTimeout,
     WaitLsnWaiter,
@@ -2177,16 +2176,9 @@ async fn list_aux_files(
         active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id)
             .await?;
 
-    let io_concurrency = IoConcurrency::spawn_from_conf(
-        state.conf.get_vectored_concurrent_io,
-        timeline.gate.enter().map_err(|_| ApiError::Cancelled)?,
-    );
-
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
-    let files = timeline
-        .list_aux_files(body.lsn, &ctx, io_concurrency)
-        .await?;
+    let files = timeline.list_aux_files(body.lsn, &ctx).await?;
     json_response(StatusCode::OK, files)
 }
 

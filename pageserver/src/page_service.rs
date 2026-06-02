@@ -22,7 +22,7 @@ use itertools::Itertools;
 use jsonwebtoken::TokenData;
 use once_cell::sync::OnceCell;
 use pageserver_api::config::{
-    GetVectoredConcurrentIo, PageServicePipeliningConfig, PageServicePipeliningConfigPipelined,
+    PageServicePipeliningConfig, PageServicePipeliningConfigPipelined,
     PageServiceProtocolPipelinedBatchingStrategy, PageServiceProtocolPipelinedExecutionStrategy,
 };
 use pageserver_api::key::rel_block_to_key;
@@ -82,7 +82,6 @@ use crate::task_mgr::{self, COMPUTE_REQUEST_RUNTIME, TaskKind};
 use crate::tenant::mgr::{
     GetActiveTenantError, GetTenantError, ShardResolveResult, ShardSelector, TenantManager,
 };
-use crate::tenant::storage_layer::IoConcurrency;
 use crate::tenant::timeline::handle::{Handle, HandleUpgradeError, WeakHandle};
 use crate::tenant::timeline::{self, WaitLsnError, WaitLsnTimeout, WaitLsnWaiter};
 use crate::tenant::{GetTimelineError, PageReconstructError, Timeline};
@@ -153,7 +152,6 @@ pub fn spawn(
     let task = COMPUTE_REQUEST_RUNTIME.spawn(task_mgr::exit_on_panic_or_error(
         "libpq listener",
         libpq_listener_main(
-            conf,
             tenant_manager,
             pg_auth,
             perf_trace_dispatch,
@@ -211,7 +209,6 @@ impl Connections {
 ///
 #[allow(clippy::too_many_arguments)]
 pub async fn libpq_listener_main(
-    conf: &'static PageServerConf,
     tenant_manager: Arc<TenantManager>,
     auth: Option<Arc<SwappableJwtAuth>>,
     perf_trace_dispatch: Option<Dispatch>,
@@ -255,7 +252,6 @@ pub async fn libpq_listener_main(
                     .detached_child();
 
                 connection_handler_tasks.spawn(page_service_conn_main(
-                    conf,
                     tenant_manager.clone(),
                     local_auth,
                     socket,
@@ -297,7 +293,6 @@ struct ConnectionPerfSpanFields {
 #[instrument(skip_all, fields(peer_addr, application_name, compute_mode))]
 #[allow(clippy::too_many_arguments)]
 async fn page_service_conn_main(
-    conf: &'static PageServerConf,
     tenant_manager: Arc<TenantManager>,
     auth: Option<Arc<SwappableJwtAuth>>,
     socket: tokio::net::TcpStream,
@@ -306,7 +301,8 @@ async fn page_service_conn_main(
     pipelining_config: PageServicePipeliningConfig,
     connection_ctx: RequestContext,
     cancel: CancellationToken,
-    gate_guard: GateGuard,
+    // Holds the connections-gate slot open for this task's lifetime.
+    _gate_guard: GateGuard,
 ) -> ConnectionHandlerResult {
     let _guard = LIVE_CONNECTIONS
         .with_label_values(&["page_service"])
@@ -367,11 +363,9 @@ async fn page_service_conn_main(
         tenant_manager,
         auth,
         pipelining_config,
-        conf.get_vectored_concurrent_io,
         perf_span_fields,
         connection_ctx,
         cancel.clone(),
-        gate_guard,
     );
     let pgbackend =
         PostgresBackend::new_from_io(socket_fd, socket, peer_addr, auth_type, tls_config)?;
@@ -420,9 +414,6 @@ struct PageServerHandler {
     timeline_handles: Option<TimelineHandles>,
 
     pipelining_config: PageServicePipeliningConfig,
-    get_vectored_concurrent_io: GetVectoredConcurrentIo,
-
-    gate_guard: GateGuard,
 }
 
 struct TimelineHandles {
@@ -907,11 +898,9 @@ impl PageServerHandler {
         tenant_manager: Arc<TenantManager>,
         auth: Option<Arc<SwappableJwtAuth>>,
         pipelining_config: PageServicePipeliningConfig,
-        get_vectored_concurrent_io: GetVectoredConcurrentIo,
         perf_span_fields: ConnectionPerfSpanFields,
         connection_ctx: RequestContext,
         cancel: CancellationToken,
-        gate_guard: GateGuard,
     ) -> Self {
         PageServerHandler {
             auth,
@@ -921,8 +910,6 @@ impl PageServerHandler {
             timeline_handles: Some(TimelineHandles::new(tenant_manager)),
             cancel,
             pipelining_config,
-            get_vectored_concurrent_io,
-            gate_guard,
         }
     }
 
@@ -1386,7 +1373,6 @@ impl PageServerHandler {
         &mut self,
         pgb_writer: &mut PostgresBackend<IO>,
         batch: BatchedFeMessage,
-        io_concurrency: IoConcurrency,
         cancel: &CancellationToken,
         protocol_version: PagestreamProtocolVersion,
         ctx: &RequestContext,
@@ -1408,7 +1394,6 @@ impl PageServerHandler {
             // won't fit on the stack.
             let mut boxpinned = Box::pin(Self::pagestream_dispatch_batched_message(
                 batch,
-                io_concurrency,
                 ctx,
             ));
             log_slow(
@@ -1612,7 +1597,6 @@ impl PageServerHandler {
     /// Returns a vec of results, along with the extracted trace span.
     async fn pagestream_dispatch_batched_message(
         batch: BatchedFeMessage,
-        io_concurrency: IoConcurrency,
         ctx: &RequestContext,
     ) -> Result<
         (
@@ -1685,7 +1669,6 @@ impl PageServerHandler {
                         let res = Self::handle_get_page_at_lsn_request_batched(
                             &shard,
                             pages,
-                            io_concurrency,
                             batch_break_reason,
                             &ctx,
                         )
@@ -1800,17 +1783,6 @@ impl PageServerHandler {
             }
         }
 
-        let io_concurrency = IoConcurrency::spawn_from_conf(
-            self.get_vectored_concurrent_io,
-            match self.gate_guard.try_clone() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    info!("shutdown request received in page handler");
-                    return Err(QueryError::Shutdown);
-                }
-            },
-        );
-
         let pgb_reader = pgb
             .split()
             .context("implementation error: split pgb into reader and writer")?;
@@ -1843,7 +1815,6 @@ impl PageServerHandler {
                     request_span,
                     pipelining_config,
                     protocol_version,
-                    io_concurrency,
                     hold_gc_cutoff_guard,
                     &ctx,
                 )
@@ -1858,7 +1829,6 @@ impl PageServerHandler {
                     timeline_handles,
                     request_span,
                     protocol_version,
-                    io_concurrency,
                     hold_gc_cutoff_guard,
                     &ctx,
                 )
@@ -1887,7 +1857,6 @@ impl PageServerHandler {
         mut timeline_handles: TimelineHandles,
         request_span: Span,
         protocol_version: PagestreamProtocolVersion,
-        io_concurrency: IoConcurrency,
         hold_gc_cutoff_guard: HoldAppliedGcCutoffGuard,
         ctx: &RequestContext,
     ) -> (
@@ -1929,7 +1898,6 @@ impl PageServerHandler {
                 .pagestream_handle_batched_message(
                     pgb_writer,
                     msg,
-                    io_concurrency.clone(),
                     &cancel,
                     protocol_version,
                     ctx,
@@ -1957,7 +1925,6 @@ impl PageServerHandler {
         request_span: Span,
         pipelining_config: PageServicePipeliningConfigPipelined,
         protocol_version: PagestreamProtocolVersion,
-        io_concurrency: IoConcurrency,
         hold_gc_cutoff_guard: HoldAppliedGcCutoffGuard,
         ctx: &RequestContext,
     ) -> (
@@ -2121,7 +2088,6 @@ impl PageServerHandler {
                     self.pagestream_handle_batched_message(
                         pgb_writer,
                         batch,
-                        io_concurrency.clone(),
                         &cancel,
                         protocol_version,
                         &ctx,
@@ -2425,7 +2391,6 @@ impl PageServerHandler {
     async fn handle_get_page_at_lsn_request_batched(
         timeline: &Timeline,
         requests: SmallVec<[BatchedGetPageRequest; 1]>,
-        io_concurrency: IoConcurrency,
         batch_break_reason: GetPageBatchBreakReason,
         ctx: &RequestContext,
     ) -> Vec<Result<(PagestreamBeMessage, SmgrOpTimer, RequestContext), BatchedPageStreamError>>
@@ -2517,7 +2482,6 @@ impl PageServerHandler {
                         p.ctx.attached_child(),
                     )
                 }),
-                io_concurrency,
                 &ctx,
             )
             .await;
@@ -3279,9 +3243,6 @@ pub struct GrpcPageServiceHandler {
     /// Any tasks we spawn ourselves should clone this gate guard, so that we can wait for them to
     /// complete during shutdown. Request handlers implicitly hold this guard already.
     gate_guard: GateGuard,
-
-    /// `get_vectored` concurrency setting.
-    get_vectored_concurrent_io: GetVectoredConcurrentIo,
 }
 
 impl GrpcPageServiceHandler {
@@ -3296,7 +3257,6 @@ impl GrpcPageServiceHandler {
         tenant_manager: Arc<TenantManager>,
         auth: Option<Arc<SwappableJwtAuth>>,
         perf_trace_dispatch: Option<Dispatch>,
-        get_vectored_concurrent_io: GetVectoredConcurrentIo,
         listener: std::net::TcpListener,
     ) -> anyhow::Result<CancellableTask> {
         // Set up a cancellation token for shutting down the server, and a gate to wait for all
@@ -3340,7 +3300,6 @@ impl GrpcPageServiceHandler {
             ctx,
             cancel: cancel.clone(),
             gate_guard: gate.enter().expect("gate was just created"),
-            get_vectored_concurrent_io,
         };
 
         let observability_layer = ObservabilityLayer;
@@ -3515,7 +3474,6 @@ impl GrpcPageServiceHandler {
         ctx: &RequestContext,
         timeline: Handle<TenantManagerTypes>,
         req: page_api::GetPageRequest,
-        io_concurrency: IoConcurrency,
         received_at: Instant,
     ) -> Result<page_api::GetPageResponse, tonic::Status> {
         let ctx = ctx.with_scope_page_service_pagestream(&timeline);
@@ -3578,7 +3536,6 @@ impl GrpcPageServiceHandler {
         let results = PageServerHandler::handle_get_page_at_lsn_request_batched(
             &timeline,
             batch,
-            io_concurrency,
             GetPageBatchBreakReason::BatchFull, // TODO: not relevant for gRPC batches
             &ctx,
         )
@@ -3635,7 +3592,6 @@ impl GrpcPageServiceHandler {
         timeline_id: TimelineId,
         parent: ShardIndex,
         req: page_api::GetPageRequest,
-        io_concurrency: IoConcurrency,
         received_at: Instant,
     ) -> Result<page_api::GetPageResponse, tonic::Status> {
         // Check the first page to see if we have any child shards at all. Otherwise, the compute is
@@ -3661,7 +3617,7 @@ impl GrpcPageServiceHandler {
             // We got the shard ID from the first page, so these must be equal.
             assert_eq!(shard_index.shard_number, shard_id.number);
             assert_eq!(shard_index.shard_count, shard_id.count);
-            return Self::get_page(ctx, timeline, req, io_concurrency, received_at).await;
+            return Self::get_page(ctx, timeline, req, received_at).await;
         }
 
         // The request spans multiple shards; split it and dispatch parallel requests. All pages
@@ -3678,7 +3634,6 @@ impl GrpcPageServiceHandler {
                 ctx,
                 timeline,
                 shard_req,
-                io_concurrency.clone(),
                 received_at,
             )
             .map(move |result| result.map(|resp| (shard_index, resp)));
@@ -3893,14 +3848,6 @@ impl proto::PageService for GrpcPageServiceHandler {
             Err(err) => return Err(err.into()),
         };
 
-        // Spawn an IoConcurrency sidecar, if enabled.
-        let gate_guard = self
-            .gate_guard
-            .try_clone()
-            .map_err(|_| tonic::Status::unavailable("shutting down"))?;
-        let io_concurrency =
-            IoConcurrency::spawn_from_conf(self.get_vectored_concurrent_io, gate_guard);
-
         // Construct the GetPageRequest stream handler.
         let span = Span::current();
         let ctx = self.ctx.attached_child();
@@ -3933,7 +3880,7 @@ impl proto::PageService for GrpcPageServiceHandler {
 
                     // Fast path: use the pre-acquired timeline handle.
                     if let Some(Ok(timeline)) = timeline.as_ref().map(|t| t.upgrade()) {
-                        return Self::get_page(&ctx, timeline, req, io_concurrency.clone(), received_at)
+                        return Self::get_page(&ctx, timeline, req, received_at)
                             .instrument(span.clone()) // propagate request span
                             .await
                     }
@@ -3948,7 +3895,6 @@ impl proto::PageService for GrpcPageServiceHandler {
                         timeline_id,
                         shard_index,
                         req,
-                        io_concurrency.clone(),
                         received_at,
                     )
                     .instrument(span.clone()) // propagate request span
