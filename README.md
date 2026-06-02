@@ -105,6 +105,15 @@ A ybLight install is:
   `pageserver.meta`, the safekeeper WAL rows, the storage_controller
   schema, and the blob table. This is the durable storage tier.
 
+> **YB query contract**: every SQL statement issued through
+> `YsqlClient` must be idempotent. The client retries connection drops
+> internally and may replay an in-flight write whose commit status is
+> unknown. Use `INSERT ... ON CONFLICT` (or upsert mode), absolute
+> updates, and generation-fenced writes — never bare INSERTs or
+> relative `SET col = col + 1`. See
+> [`architecture/yugabyte.md`](architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent)
+> for the full contract.
+
 ## AI assistants
 
 AI coding agents working in this repo should read [`AGENTS.md`](AGENTS.md)

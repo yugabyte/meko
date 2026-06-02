@@ -321,6 +321,76 @@ and continue), so the same code path works in mixed environments.
 Set on the dev cluster (`/tmp/yb-bench`). Required for the storage
 controller's transactional updates to behave as expected.
 
+## Client-side retry contract — every YB query must be idempotent
+
+`YsqlClient::run_with_retries` (the wrapper every component goes
+through — `PageStore`, `YbStore`, safekeeper WAL backup,
+storage_controller metadata DB) retries three classes of failure
+internally before surfacing anything to the caller:
+
+- **Connection drops**: TCP socket closed mid-statement (YB tserver
+  restart, YBA rolling upgrade, network blip). Reconnect, re-prepare,
+  replay. Up to 5 reconnects per call.
+- **SQLSTATE-confirmed transients**: `40001` serialization failure,
+  `40P01` deadlock detected, `25P03` idle-in-txn timeout. Statement is
+  guaranteed by the server not to have committed — replay is safe even
+  for non-idempotent SQL.
+- **YB `XX000` allowlist**: tablet leader change during async write,
+  tablet peer shutting down (split/move/restart), schema version
+  mismatch, queue-deadline overload, `WaitForAsyncWrite RPC` timeout,
+  `Restart read required`. Documented as transient by YB.
+
+Total budget per call: 10 attempts, 50 ms initial backoff doubling
+to 1 s cap with 0–25% jitter. Surfacing only happens once the budget
+is fully spent.
+
+**The catch**: the connection-drop arm reconnects without any way to
+know whether the pre-drop statement actually committed before the
+socket died. The reconnect arm replays anyway. **This is only safe if
+the statement is idempotent — re-executing it must produce the same
+end state whether the first attempt applied, half-applied, or did
+nothing.**
+
+Every YB-talking call site in this codebase satisfies that
+contract today:
+
+- **All reads** — `SELECT`, `query_opt`, `query_raw` — are
+  intrinsically idempotent.
+- **All writes** are one of: `INSERT ... ON CONFLICT (...) DO NOTHING`
+  / `DO UPDATE` (`pageserver.pages`, `slru_pages`, `meta`, `wals`,
+  `yb_storage.blobs` chunks), plain `INSERT` running under
+  [`yb_enable_upsert_mode = true`](#yb_enable_upsert_mode) (same
+  semantics — the conflict path is a no-op upsert), or
+  generation-fenced `UPDATE pageserver.timeline_state SET ... WHERE
+  generation = $expected_gen` (replay sees the same gen, applies the
+  same row state).
+- **DELETEs** are `WHERE` -keyed deletes (`DELETE FROM ... WHERE id =
+  $1`); replay against an already-deleted row is a no-op.
+
+**New code touching YB must keep this invariant.** Concrete rules for
+contributors:
+
+- Don't write a bare `INSERT` that needs to fail on a duplicate row.
+  Add `ON CONFLICT DO NOTHING` (or `DO UPDATE ... RETURNING` if you
+  need to detect the apply / replay distinction).
+- Don't issue an `UPDATE foo SET counter = counter + 1`. Replay
+  double-counts. Make the update absolute (`SET counter = $new`)
+  with whatever read-modify-write happens in the application.
+- Don't depend on a `SELECT ... FOR UPDATE` lock surviving a retry —
+  reconnect drops the implicit txn.
+- If you genuinely need a non-idempotent write through YsqlClient,
+  add a new code path that doesn't retry `ConnectionDrop` (the
+  Transient + Fatal branches stay safe — those are server-confirmed
+  no-ops). Right now nothing needs it.
+
+The two Prometheus counters
+`yb_client_errors_total{op,class,sqlstate}` and
+`yb_client_retries_exhausted_total{reason}` (exposed on both
+pageserver and safekeeper `/metrics`) let you observe the retry mix
+in production. A sudden spike in `class="transient"` is usually a
+tablet event; a sustained rate of `retries_exhausted{reason="..."}` is
+the signal that something is wrong upstream of the client.
+
 ## Provisioning DDL — full reference
 
 `neon_local` runs this DDL itself on first start (see

@@ -82,6 +82,13 @@ Code anchors:
   rot.
 - **Architecture changes go in `architecture/*.md`.** Code change without
   doc change usually means the doc is stale.
+- **Every YB query must be idempotent.** `YsqlClient` retries
+  connection drops internally and can replay an in-flight write whose
+  commit status is unknown. New write paths must use `INSERT ... ON
+  CONFLICT` (or `yb_enable_upsert_mode`), absolute `UPDATE`s (no `SET
+  col = col + 1`), generation-fenced `UPDATE`s, or `WHERE`-keyed
+  `DELETE`s. See
+  [`architecture/yugabyte.md`](architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent).
 
 ## Build notes
 
