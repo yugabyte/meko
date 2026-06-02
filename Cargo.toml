@@ -243,19 +243,15 @@ tokio-postgres = { git = "https://github.com/neondatabase/rust-postgres.git", br
 ## itself; we just enable it via `load_balance=only-primary` in the
 ## connection options.
 yb-tokio-postgres = "0.7.10-yb-1-beta.3"
-yb-postgres-openssl = "0.5.0-yb-1-beta.3"
-# `vendored` builds openssl from source via `openssl-src` and
-# statically links it into our binaries. The deploy box is RHEL 9
-# (system openssl 3.x, no `libssl.so.1.1` rpm) — we were shipping
-# `lib/libssl.so.1.1` and loading it via `LD_LIBRARY_PATH`, but the
-# dynamically-loaded 1.1 failed the YB TLS handshake while a
-# statically-linked variant worked. Vendoring side-steps the
-# cross-host openssl ABI surface entirely — the Rust binaries no
-# longer depend on any host-side openssl. The pg_install/v17/postgres
-# binaries still need `libssl.so.1.1` at runtime; the ship script
-# keeps shipping it for them, but yb-pageserver / safekeeper /
-# control_plane et al. are self-contained after this.
-openssl = { version = "0.10", features = ["vendored"] }
+# Note: the YB fork's openssl TLS sibling
+# (`yb-postgres-openssl 0.5.0-yb-1-beta.3`) is **not** used —
+# it fails the TLS handshake against YB tservers under both
+# dynamic-openssl-1.1 and statically-vendored-openssl-3.6.2 builds.
+# TLS goes through `tokio-postgres-rustls` instead via the
+# `libs/remote_storage/src/yb_rustls.rs` adapter, which wraps
+# `MakeRustlsConnect` to satisfy the YB fork's `MakeTlsConnect`
+# trait (the two trait definitions are identical in shape but
+# live in different crates).
 
 ## Azure SDK crates
 
