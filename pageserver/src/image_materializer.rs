@@ -49,6 +49,22 @@ use crate::walredo::RedoAttemptType;
 /// the queue if walredo is slow.
 const BATCH_DRAIN_LIMIT: usize = 64;
 
+/// Maximum number of pipelined INSERT futures that can be in flight
+/// concurrently on the materialiser task. The redo phase of batch N+1
+/// runs on the main task while a previously-redone batch's INSERT
+/// drains in a spawned future; this cap bounds how many spawned
+/// INSERT futures can be outstanding at once.
+///
+/// At 2: while one INSERT is talking to YB, the main task can drain
+/// the queue, run redo for the next batch, and queue *one* further
+/// INSERT before having to await the oldest INSERT to finish. That
+/// covers the common case where INSERT and redo take comparable wall
+/// time. Going higher would queue more dirty images in RAM (each
+/// holds its `Vec<PageRow>` until the INSERT lands) without much
+/// throughput gain — YB-side write contention from concurrent
+/// `put_pages` is what would dominate.
+const MAX_INFLIGHT_INSERTS: usize = 2;
+
 /// Maximum concurrent `redo_one` futures in flight within a single
 /// `materialize_batch`. Each future does an SQL `read_chain_durable`
 /// (against `internal_page_store` — its own connection), a CPU
@@ -63,6 +79,21 @@ const BATCH_DRAIN_LIMIT: usize = 64;
 /// risk; raising further hits diminishing returns until walredo itself
 /// is parallelised.
 const REDO_CONCURRENCY: usize = 8;
+
+/// Output of [`ImageMaterializer::redo_phase`] — everything
+/// [`ImageMaterializer::commit_phase`] needs to bulk-INSERT a batch's
+/// rebuilt images into YB and install them into the in-RAM cache.
+struct RedoOutcome {
+    images: Vec<PageRow>,
+    /// Bytes already added to `MATERIALIZER_INFLIGHT_BYTES` during
+    /// redo. `commit_phase` is responsible for decrementing this on
+    /// every exit path — the gauge then reflects bytes-still-held
+    /// through the whole commit, not just the redo phase.
+    held_image_bytes: u64,
+    t_redo: std::time::Duration,
+    total_chain_rows: usize,
+    total_records: usize,
+}
 
 /// Background materialiser for one timeline.
 pub struct ImageMaterializer {
@@ -139,6 +170,14 @@ impl ImageMaterializer {
                 crate::metrics::MATERIALIZER_QUEUE_DEPTH
                     .set(rx.len() as u64);
             };
+            // In-flight INSERT futures, oldest at the front. Bounded
+            // to MAX_INFLIGHT_INSERTS — when full, await the front
+            // before spawning a new one. Lets batch N+1's redo run
+            // concurrently with batch N's INSERT round-trip while
+            // keeping YB-side write fan-out bounded.
+            let mut inflight_inserts: std::collections::VecDeque<
+                tokio::task::JoinHandle<()>,
+            > = std::collections::VecDeque::with_capacity(MAX_INFLIGHT_INSERTS);
             loop {
                 tokio::select! {
                     biased;
@@ -158,17 +197,58 @@ impl ImageMaterializer {
                             }
                         }
                         sample_queue_depth(&rx);
-                        if let Err(e) = me.materialize_batch(&batch).await {
-                            warn!(
-                                tenant_id = %me.tenant_id,
-                                timeline_id = %me.timeline_id,
-                                batch_size = batch.len(),
-                                "image materialisation batch failed: {e:#}"
-                            );
+                        // Phase 1 (synchronous on this task): drive the
+                        // batch's chain reads + walredo. Errors only
+                        // come from setup; per-job redo errors are
+                        // logged + skipped inside.
+                        let outcome = match me.redo_phase(&batch).await {
+                            Ok(o) => o,
+                            Err(e) => {
+                                warn!(
+                                    tenant_id = %me.tenant_id,
+                                    timeline_id = %me.timeline_id,
+                                    batch_size = batch.len(),
+                                    "image materialisation redo failed: {e:#}"
+                                );
+                                // Release in_flight for these keys so
+                                // the write trigger can re-dispatch
+                                // them on the next delta.
+                                let mut guard = me.in_flight.lock().unwrap();
+                                for job in &batch {
+                                    guard.remove(&job.key);
+                                }
+                                continue;
+                            }
+                        };
+                        // Phase 2 (pipelined): hand off the INSERT +
+                        // cache install + in_flight release to a
+                        // spawned future. The next iteration's redo
+                        // starts immediately. If we're already at
+                        // MAX_INFLIGHT_INSERTS, await the oldest first.
+                        while inflight_inserts.len() >= MAX_INFLIGHT_INSERTS {
+                            if let Some(h) = inflight_inserts.pop_front() {
+                                let _ = h.await;
+                            }
                         }
+                        let me_for_commit = Arc::clone(&me);
+                        let h = tokio::spawn(
+                            async move {
+                                me_for_commit.commit_phase(batch, outcome).await;
+                            }
+                            .in_current_span(),
+                        );
+                        inflight_inserts.push_back(h);
                         sample_queue_depth(&rx);
                     }
                 }
+            }
+            // Best-effort: drain any still-running INSERTs so the
+            // last MAX_INFLIGHT_INSERTS - 1 batches' images make it
+            // to YB before the task exits. Without this, a clean
+            // shutdown could leave a redone-but-not-INSERTed batch
+            // in RAM that disappears when the task drops.
+            while let Some(h) = inflight_inserts.pop_front() {
+                let _ = h.await;
             }
             // Best-effort reset on exit so a dead task doesn't leave
             // the gauge frozen at a stale value.
@@ -182,40 +262,25 @@ impl ImageMaterializer {
         MaterializerTask { handle, cancel }
     }
 
-    /// Materialise a batch of jobs end-to-end: read every chain,
-    /// walredo each, INSERT all resulting images in one round-trip on
-    /// the dedicated connection, then install each into the in-RAM
-    /// cache. Always clears the per-key in_flight entries at the end
-    /// (success OR failure) so the write trigger can re-fire on the
-    /// next delta past the threshold.
-    async fn materialize_batch(&self, jobs: &[MaterializeJob]) -> Result<()> {
-        let result = self.materialize_batch_inner(jobs).await;
-        // Unblock future write triggers for these keys regardless of
-        // success or failure. On failure the next trigger will re-fire
-        // after the per-key counter accumulates another threshold; on
-        // success the trigger fires immediately on the next delta (the
-        // counter was held at >= threshold during the in-flight stall).
-        let mut in_flight = self.in_flight.lock().unwrap();
-        for job in jobs {
-            in_flight.remove(&job.key);
-        }
-        result
-    }
-
-    /// Errors from individual jobs are logged and skipped — one bad
-    /// chain shouldn't drop the whole batch. Errors from the INSERT
-    /// itself propagate (caller logs + the next trigger retries).
+    /// Phase 1 of the pipelined materialise step: run chain reads
+    /// + walredo for every job in the batch. Returns a [`RedoOutcome`]
+    /// ready to be handed to [`commit_phase`], which runs the bulk
+    /// INSERT + cache install asynchronously.
     ///
-    /// The redo phase runs up to `REDO_CONCURRENCY` `redo_one` futures
-    /// in parallel via `FuturesUnordered`. Each future reads its chain
+    /// Per-job redo errors are logged and skipped — one bad chain
+    /// shouldn't drop the whole batch. The function itself currently
+    /// can't fail (the inner loop only logs); the `Result` is kept so
+    /// the call site can grow setup-time errors without changing the
+    /// signature.
+    ///
+    /// Redo runs up to `REDO_CONCURRENCY` `redo_one` futures in
+    /// parallel via `FuturesUnordered`. Each future reads its chain
     /// from `internal_page_store` (own YSQL connection — no contention
     /// with the walreceiver write path), decodes records, and calls
     /// walredo. The SQL reads and WAL decodes parallelise cleanly;
     /// walredo serialises its apply but pipelines IPC, so concurrent
-    /// callers amortise the stdin-write / stdout-read latency. Order
-    /// of completion is irrelevant since each result is independent
-    /// and they're all merged into `images` for the single bulk INSERT.
-    async fn materialize_batch_inner(&self, jobs: &[MaterializeJob]) -> Result<()> {
+    /// callers amortise the stdin-write / stdout-read latency.
+    async fn redo_phase(&self, jobs: &[MaterializeJob]) -> Result<RedoOutcome> {
         use futures::StreamExt;
         use futures::future::{BoxFuture, FutureExt};
         use futures::stream::FuturesUnordered;
@@ -224,6 +289,11 @@ impl ImageMaterializer {
         let mut images: Vec<PageRow> = Vec::with_capacity(jobs.len());
         let mut total_chain_rows = 0usize;
         let mut total_records = 0usize;
+        // Bytes held in `images` so far. Owned by the resulting
+        // `RedoOutcome` so `commit_phase` can decrement the gauge
+        // exactly when the bytes are actually freed (after the INSERT
+        // future completes, not when this fn returns).
+        let mut held_image_bytes: u64 = 0;
 
         // Boxed futures so prime + refill calls produce the same
         // FuturesUnordered item type. Each future borrows `self` and the
@@ -245,7 +315,6 @@ impl ImageMaterializer {
 
         let mut in_flight: FuturesUnordered<RedoFut<'_>> = FuturesUnordered::new();
         let mut iter = jobs.iter();
-        // Prime up to REDO_CONCURRENCY futures.
         for _ in 0..REDO_CONCURRENCY {
             if let Some(job) = iter.next() {
                 in_flight.push(spawn_redo(self, job));
@@ -253,20 +322,6 @@ impl ImageMaterializer {
                 break;
             }
         }
-        // Bytes held in `images` across the batch — released after the
-        // bulk INSERT lands (or on early-return / error). Add to the
-        // global gauge incrementally so it captures the growing pool
-        // during walredo; the scopeguard drains it on every exit path.
-        // AtomicU64 (not Cell) so the enclosing future stays Send for
-        // tokio::spawn.
-        let held_image_bytes = std::sync::atomic::AtomicU64::new(0);
-        let _images_guard = scopeguard::guard(&held_image_bytes, |a| {
-            let b = a.load(std::sync::atomic::Ordering::Relaxed);
-            if b > 0 {
-                crate::metrics::MATERIALIZER_INFLIGHT_BYTES.sub(b);
-            }
-        });
-        // As each completes, refill from the iterator until exhausted.
         while let Some((job, res)) = in_flight.next().await {
             match res {
                 Ok(Some((image_row, chain_len, n_records))) => {
@@ -274,7 +329,7 @@ impl ImageMaterializer {
                     total_records += n_records;
                     let b = image_row.payload.len() as u64;
                     crate::metrics::MATERIALIZER_INFLIGHT_BYTES.add(b);
-                    held_image_bytes.fetch_add(b, std::sync::atomic::Ordering::Relaxed);
+                    held_image_bytes += b;
                     images.push(image_row);
                 }
                 Ok(None) => {} // nothing-to-do (no chain / already image-anchored)
@@ -289,11 +344,77 @@ impl ImageMaterializer {
                 in_flight.push(spawn_redo(self, next_job));
             }
         }
+        Ok(RedoOutcome {
+            images,
+            held_image_bytes,
+            t_redo: t0.elapsed(),
+            total_chain_rows,
+            total_records,
+        })
+    }
+
+    /// Phase 2 of the pipelined materialise step: bulk INSERT the
+    /// images + install each into the in-RAM cache + release the
+    /// per-key `in_flight` guards + decrement the inflight-bytes gauge.
+    ///
+    /// Spawned by the materialiser's outer loop so that the next
+    /// batch's [`redo_phase`] can run concurrently with this INSERT.
+    /// At most `MAX_INFLIGHT_INSERTS` instances of this future are
+    /// alive at once.
+    ///
+    /// `in_flight` and the gauge are always released, regardless of
+    /// success or failure of `put_pages`, so a transient YB error
+    /// doesn't leak the per-key trigger guard or the byte count.
+    async fn commit_phase(self: Arc<Self>, batch: Vec<MaterializeJob>, outcome: RedoOutcome) {
+        // Release the inflight-bytes gauge on every exit path. The
+        // bytes themselves are genuinely freed when `outcome.images`
+        // drops at the end of this fn (or in `commit_phase_inner`'s
+        // drop on error). The scopeguard fires whether or not the
+        // INSERT succeeded.
+        let held = outcome.held_image_bytes;
+        let _bytes_guard = scopeguard::guard((), |_| {
+            if held > 0 {
+                crate::metrics::MATERIALIZER_INFLIGHT_BYTES.sub(held);
+            }
+        });
+        let result = self.commit_phase_inner(&batch, outcome).await;
+        // Release per-key in_flight regardless of success/failure so
+        // the write trigger can re-fire on the next delta. On failure
+        // the next trigger will re-fire after the per-key counter
+        // accumulates another threshold's worth of deltas; on success
+        // the trigger fires immediately on the next delta (the counter
+        // sat ≥ threshold during the in-flight stall).
+        {
+            let mut guard = self.in_flight.lock().unwrap();
+            for job in &batch {
+                guard.remove(&job.key);
+            }
+        }
+        if let Err(e) = result {
+            warn!(
+                tenant_id = %self.tenant_id,
+                timeline_id = %self.timeline_id,
+                batch_size = batch.len(),
+                "image materialisation commit failed: {e:#}"
+            );
+        }
+    }
+
+    async fn commit_phase_inner(
+        &self,
+        batch: &[MaterializeJob],
+        outcome: RedoOutcome,
+    ) -> Result<()> {
+        let RedoOutcome {
+            images,
+            held_image_bytes: _,
+            t_redo,
+            total_chain_rows,
+            total_records,
+        } = outcome;
         if images.is_empty() {
             return Ok(());
         }
-        let t_redo = t0.elapsed();
-
         // Parameterised batched INSERT, parallel chunks, same path
         // the walreceiver flush uses. With ≤64 image rows per batch
         // the whole thing typically lands in a single chunk; if it
@@ -306,7 +427,7 @@ impl ImageMaterializer {
             .context("put_pages")?;
         let t_insert = t_insert_start.elapsed();
 
-        // 2) Install each image into the cache (one writer lock per
+        // Install each image into the cache (one writer lock per
         // image — short and bounded; we don't merge them into one
         // critical section because that would block reads for the
         // whole batch's worth of trim/push work).
@@ -318,7 +439,7 @@ impl ImageMaterializer {
         }
         let t_install = t_install_start.elapsed();
 
-        let total = t0.elapsed();
+        let total = t_redo + t_insert + t_install;
         if total.as_millis() >= 5 {
             info!(
                 tag = "materialise_batch",
@@ -326,7 +447,7 @@ impl ImageMaterializer {
                 redo_ms = t_redo.as_millis() as u64,
                 insert_ms = t_insert.as_millis() as u64,
                 install_ms = t_install.as_millis() as u64,
-                batch_size = jobs.len(),
+                batch_size = batch.len(),
                 images = images.len(),
                 chain_rows = total_chain_rows,
                 records = total_records,
@@ -336,7 +457,7 @@ impl ImageMaterializer {
         debug!(
             tenant_id = %self.tenant_id,
             timeline_id = %self.timeline_id,
-            batch_size = jobs.len(),
+            batch_size = batch.len(),
             images = images.len(),
             "materialised image batch",
         );
