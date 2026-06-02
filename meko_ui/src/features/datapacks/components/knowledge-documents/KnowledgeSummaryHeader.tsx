@@ -117,7 +117,7 @@ function StatsTile({
   // Relative-time string for the Last Activity cell. Falls back to
   // "—" when nothing has happened in this KB yet.
   const lastActivityLabel = lastActivityIso
-    ? formatRelativeTime(lastActivityIso, nowMs, true)
+    ? formatRelativeTime(lastActivityIso, nowMs)
     : loading
       ? "…"
       : "—";

@@ -6,6 +6,8 @@ export const KNOWLEDGE_UPLOAD_STATUS = {
   PENDING: "pending",
   UPLOADING: "uploading",
   DONE: "done",
+  /** Identical content already present server-side; no upload performed. */
+  SKIPPED: "skipped",
   ERROR: "error",
 } as const;
 

@@ -659,7 +659,12 @@ type KnowledgeBaseDocument struct {
 	DocumentChecksum *string `json:"document_checksum,omitempty"`
 	ChunksProcessed  *int64  `json:"chunks_processed,omitempty"`
 	CompletedAt      *string `json:"completed_at,omitempty"`
-	Status           string  `json:"status"`
+	// UploadedAt is the S3 LastModified time stored in
+	// document_details->'meko'->>'uploaded_at'. It reflects when the
+	// object actually landed in S3, as opposed to when the RAG pipeline
+	// started/completed. This is what the UI shows under "Uploaded".
+	UploadedAt *string `json:"uploaded_at,omitempty"`
+	Status     string  `json:"status"`
 	// Per-file provenance from document_details->meko->{user_id,size}.
 	UploadedByUserID *string `json:"uploaded_by_user_id,omitempty"`
 	UploadedByEmail  *string `json:"uploaded_by_email,omitempty"`
@@ -807,9 +812,10 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 		        lpd.pipeline_completed_at,
 		        lpd.chunks_processed,
 		        lpd.status,
-		        NULLIF(d.document_details->'meko'->>'user_id', '') AS uploaded_by_user_id,
-		        (d.document_details->'meko'->>'size')::bigint      AS size_bytes,
-		        COUNT(*) OVER()                                    AS total_count
+		        NULLIF(d.document_details->'meko'->>'user_id', '')        AS uploaded_by_user_id,
+		        (d.document_details->'meko'->>'size')::bigint             AS size_bytes,
+		        NULLIF(d.document_details->'meko'->>'uploaded_at', '')    AS uploaded_at,
+		        COUNT(*) OVER()                                           AS total_count
 		 FROM   latest_per_document lpd
 		 LEFT JOIN dist_rag.documents d
 		   ON   d.document_id = lpd.document_id
@@ -844,11 +850,12 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 			chunks         sql.NullInt64
 			uploaderUserID sql.NullString
 			sizeBytes      sql.NullInt64
+			uploadedAt     sql.NullString
 			totalCount     sql.NullInt64
 		)
 		if err := rows.Scan(
 			&d.ID, &name, &uri, &docType, &checksum, &completedAt, &chunks, &d.Status,
-			&uploaderUserID, &sizeBytes, &totalCount,
+			&uploaderUserID, &sizeBytes, &uploadedAt, &totalCount,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan document row: %w", err)
 		}
@@ -884,6 +891,10 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 		if sizeBytes.Valid {
 			n := sizeBytes.Int64
 			d.SizeBytes = &n
+		}
+		if uploadedAt.Valid {
+			s := uploadedAt.String
+			d.UploadedAt = &s
 		}
 		if totalCount.Valid {
 			total = totalCount.Int64
@@ -1172,8 +1183,8 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 //
 //  1. systemDB: gather this datapack's rag_source_id values (`GetSourceIDs`).
 //  2. dataDB:  pipeline rows filtered by `source_id = ANY($1::uuid[])`.
-//             Drops the previous `LEFT JOIN meko_system.users` —
-//             uploader_user_id is selected raw from `document_details`.
+//     Drops the previous `LEFT JOIN meko_system.users` —
+//     uploader_user_id is selected raw from `document_details`.
 //  3. systemDB: batch-resolve user_id → user_email (`lookupUserEmails`).
 //  4. Go:      merge the email back into each row.
 //
@@ -1200,8 +1211,19 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 		   SELECT DISTINCT ON (document_id)
 		          document_id, document_name, document_type, document_details,
 		          chunks_processed,
-		          COALESCE(pipeline_completed_at, pipeline_last_started_at, pipeline_created_at)               AS display_ts,
-		          COALESCE(pipeline_completed_at, pipeline_last_started_at, pipeline_created_at, 'epoch'::timestamptz) AS sort_ts
+		          COALESCE(
+		            NULLIF(document_details->'meko'->>'uploaded_at', '')::timestamptz,
+		            pipeline_completed_at,
+		            pipeline_last_started_at,
+		            pipeline_created_at
+		          ) AS display_ts,
+		          COALESCE(
+		            NULLIF(document_details->'meko'->>'uploaded_at', '')::timestamptz,
+		            pipeline_completed_at,
+		            pipeline_last_started_at,
+		            pipeline_created_at,
+		            'epoch'::timestamptz
+		          ) AS sort_ts
 		   FROM   dist_rag.vector_index_pipeline_details
 		   WHERE  source_id = ANY($1::uuid[])
 		     AND  schema_name = $2
@@ -1249,14 +1271,14 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 	uploaderIDs := []string{}
 	for rows.Next() {
 		var (
-			displayTs        sql.NullTime
-			sortTs           time.Time // never NULL — backed by COALESCE(..., 'epoch')
-			docID            sql.NullString
-			docName          sql.NullString
-			docType          sql.NullString
-			chunks           sql.NullInt64
-			sizeBytes        sql.NullInt64
-			uploaderUserID   sql.NullString
+			displayTs      sql.NullTime
+			sortTs         time.Time // never NULL — backed by COALESCE(..., 'epoch')
+			docID          sql.NullString
+			docName        sql.NullString
+			docType        sql.NullString
+			chunks         sql.NullInt64
+			sizeBytes      sql.NullInt64
+			uploaderUserID sql.NullString
 		)
 		if err := rows.Scan(&displayTs, &sortTs, &docID, &docName, &docType, &chunks, &sizeBytes, &uploaderUserID); err != nil {
 			return nil, fmt.Errorf("scan file upload row: %w", err)

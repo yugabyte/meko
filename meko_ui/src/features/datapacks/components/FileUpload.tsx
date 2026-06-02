@@ -8,6 +8,7 @@ import {
   confirmUpload,
   createKnowledgeBase,
   getKBStatus,
+  sha256Hex,
   type PipelineDetail,
   type SourceStatus,
 } from "@/lib/mekoApi";
@@ -16,9 +17,9 @@ import {
   KNOWLEDGE_UPLOAD_MAX_BATCH,
   KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
   filterFilesForKnowledgeUploadBatch,
-  filterDuplicateKnowledgeFileNames,
 } from "@/lib/knowledgeFileUploadRules";
 import { formatFileSize } from "@/lib/fileSize";
+import { uploadFileToS3 } from "@/lib/uploadFileToS3";
 import { KNOWLEDGE_UPLOAD_STATUS, type KnowledgeUploadStatus } from "@/lib/knowledgeUploadStatus";
 
 type FileEntry = {
@@ -26,7 +27,22 @@ type FileEntry = {
   status: KnowledgeUploadStatus;
   progress: number;
   error?: string;
+  /** Set when the upload was skipped because identical content already existed. */
+  note?: string;
 };
+
+/** Message shown when a content-hash dedup skips the actual upload. */
+function dedupNote(uploadedName: string, existingName?: string): string {
+  if (existingName && existingName !== uploadedName) {
+    return `Identical content already in this knowledge base as "${existingName}" — skipped re-upload.`;
+  }
+  return "Already in this knowledge base (identical content) — skipped re-upload.";
+}
+
+function pipelineDocumentDisplayName(documentName: string): string {
+  const filename = documentName.split("/").pop() ?? documentName;
+  return filename.replace(/^\d+_/, "");
+}
 
 type Props = {
   datapackName: string;
@@ -88,17 +104,13 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
   const addFiles = useCallback((incoming: FileList | File[]) => {
     const all = Array.from(incoming);
     setFiles((prev) => {
-      const { unique, duplicateCount } = filterDuplicateKnowledgeFileNames(
-        all,
-        prev.map((e) => e.file.name),
-      );
+      // No filename/metadata dedupe here: same-name, different-content files
+      // must reach the upload flow. True duplicates are caught server-side by
+      // content hash, which reports already-uploaded back to the UI.
       const currentBatch = prev.filter(
         (f) => f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING || f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
       ).length;
-      const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(unique, currentBatch);
-      if (duplicateCount > 0) {
-        warningParts.unshift(`${duplicateCount} skipped (already in queue)`);
-      }
+      const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(all, currentBatch);
       if (warningParts.length > 0) showWarning(warningParts.join(". "));
       if (accepted.length === 0) return prev;
       return [
@@ -123,32 +135,10 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
     [addFiles],
   );
 
-  const uploadFileToS3 = (url: string, file: File, index: number): Promise<void> => {
-    const UPLOAD_TIMEOUT_MS = 30000;
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.timeout = UPLOAD_TIMEOUT_MS;
-      xhr.open("PUT", url);
-      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          setFiles((prev) =>
-            prev.map((f, idx) => (idx === index ? { ...f, progress: pct } : f)),
-          );
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) resolve();
-        else reject(new Error(`${xhr.status} ${xhr.statusText}: ${xhr.responseText}`));
-      };
-      xhr.onerror = () => reject(new Error(`Network error (status=${xhr.status})`));
-      xhr.ontimeout = () => reject(new Error(`Request timed out after ${UPLOAD_TIMEOUT_MS / 1000}s`));
-      xhr.send(file);
-    });
-  };
+  const uploadFile = (url: string, file: File, index: number): Promise<void> =>
+    uploadFileToS3(url, file, (pct) =>
+      setFiles((prev) => prev.map((f, idx) => (idx === index ? { ...f, progress: pct } : f))),
+    );
 
   const handleUpload = async () => {
     if (files.length === 0) return;
@@ -164,20 +154,38 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
       );
 
       try {
-        const { url, key } = await requestUploadURL(
+        const contentHash = await sha256Hex(entry.file);
+        const { url, key, already_uploaded, existing_filename } = await requestUploadURL(
           datapackName,
           entry.file.name,
           entry.file.type || "application/octet-stream",
           entry.file.size,
+          contentHash,
           { datapackId },
         );
 
-        await uploadFileToS3(url, entry.file, i);
+        if (already_uploaded) {
+          // Identical content already exists server-side: nothing is uploaded
+          // or added. Mark it skipped (not "uploaded") and let the user remove
+          // the row to continue with other files.
+          const note = dedupNote(entry.file.name, existing_filename);
+          showWarning(note);
+          setFiles((prev) =>
+            prev.map((f, idx) =>
+              idx === i ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.SKIPPED, progress: 0, note } : f,
+            ),
+          );
+          continue;
+        }
+
+        await uploadFile(url, entry.file, i);
         await confirmUpload(datapackName, key, entry.file.name, entry.file.size, { datapackId });
 
         uploaded++;
         setFiles((prev) =>
-          prev.map((f, idx) => (idx === i ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.DONE, progress: 100 } : f)),
+          prev.map((f, idx) =>
+            idx === i ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.DONE, progress: 100 } : f,
+          ),
         );
       } catch (err) {
         setFiles((prev) =>
@@ -438,6 +446,9 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE && (
                       <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
                     )}
+                    {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && (
+                      <span className="text-xs font-medium text-muted-foreground">Skipped</span>
+                    )}
                     {/* Status-only indicator on the right side — the
                         actual error message moves to a new line below
                         so a long string can't fight the filename for
@@ -446,9 +457,11 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                       <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400" aria-label="Upload failed" />
                     )}
                     {(entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+                      entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED ||
                       entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR) && (
                         <button
                           type="button"
+                          aria-label="Remove file"
                           className="text-muted-foreground hover:text-foreground transition-colors"
                           onClick={() => removeFile(i)}
                         >
@@ -460,6 +473,11 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && entry.error ? (
                   <p className="mt-1.5 break-words text-xs text-red-700 dark:text-red-400">
                     {entry.error}
+                  </p>
+                ) : null}
+                {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && entry.note ? (
+                  <p className="mt-1.5 break-words text-xs text-blue-700 dark:text-blue-400">
+                    {entry.note}
                   </p>
                 ) : null}
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
@@ -569,11 +587,13 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                     </span>
                   </div>
                 ))}
-              {pipelineDetails.map((d, i) => {
-                const filename = d.document_name.split("/").pop() ?? d.document_name;
-                const displayName = filename.replace(/^\d+_/, "");
+              {pipelineDetails.map((d) => {
+                const displayName = pipelineDocumentDisplayName(d.document_name);
                 return (
-                  <div key={i} className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2">
+                  <div
+                    key={d.document_name}
+                    className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2"
+                  >
                     <div className="flex items-center gap-2 min-w-0">
                       {/*
                         Tailwind `-400` shades are tuned for dark

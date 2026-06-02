@@ -142,7 +142,7 @@ function ActivityRow({ item }: { item: KBActivityLogItem }) {
     const rawName = item.document_name ?? "";
     const basename = rawName.split("/").pop() ?? rawName;
     const displayName = basename.replace(/^\d+_/, "") || "—";
-    const relTime = formatRelativeTime(item.timestamp, now, true);
+    const relTime = formatRelativeTime(item.timestamp, now);
 
     const meta: string[] = [];
     if (item.chunks_processed != null) meta.push(`${item.chunks_processed} chunks generated`);

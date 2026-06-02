@@ -30,63 +30,26 @@ import {
   getDatapack,
   getDatapackProvisionStatus,
   requestUploadURL,
+  sha256Hex,
   updateDatapack,
   type CurrentUser,
   type ProvisionStatus,
 } from "@/lib/mekoApi";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
-  filterDuplicateKnowledgeFileNames,
   filterFilesForKnowledgeUploadBatch,
 } from "@/lib/knowledgeFileUploadRules";
 import { startKnowledgeBaseImport } from "@/lib/knowledgeBaseImportJob";
+import { uploadFileToS3 } from "@/lib/uploadFileToS3";
 import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
 import { toast } from "@/hooks/use-toast";
 
-const UPLOAD_TIMEOUT_MS = 30000;
 const PERSISTED_KNOWLEDGE_FILES_PREFIX = "meko:configure-wizard:knowledge-files:v1:";
 
 type PersistedKnowledgeFile = {
   label: string;
   sizeBytes: number;
 };
-
-function uploadFileToS3(
-  url: string,
-  file: File,
-  onProgress: (pct: number) => void,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.timeout = UPLOAD_TIMEOUT_MS;
-    xhr.open("PUT", url);
-    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        onProgress(pct);
-      }
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error(`${xhr.status} ${xhr.statusText}: ${xhr.responseText}`));
-    };
-    xhr.onerror = () => reject(new Error(`Network error (status=${xhr.status})`));
-    xhr.ontimeout = () => reject(new Error(`Request timed out after ${UPLOAD_TIMEOUT_MS / 1000}s`));
-    xhr.send(file);
-  });
-}
-
-function isDuplicateUploadError(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("duplicate_file") ||
-    normalized.includes("same name") ||
-    normalized.includes("already exists")
-  );
-}
 
 type DatapackConfigureWizardPageProps = {
   currentUser: CurrentUser | null;
@@ -271,20 +234,15 @@ export default function DatapackConfigureWizardPage({
     setKnowledgeItems((prev) => {
       const staging = prev.filter((it) => it.kind === "file" && it.uploadStatus !== KNOWLEDGE_UPLOAD_STATUS.DONE)
         .length;
+      // No filename/metadata dedupe here: same-name, different-content files
+      // must reach the upload flow. True duplicates are caught server-side by
+      // content hash, which reports already-uploaded back to the UI.
       const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(Array.from(files), staging);
-      const existingNames = prev.filter((it) => it.kind === "file").map((it) => it.label);
-      const { unique, duplicateCount } = filterDuplicateKnowledgeFileNames(accepted, existingNames);
-      const warnings = [...warningParts];
-      if (duplicateCount > 0) {
-        warnings.push(
-          `${duplicateCount} skipped (same filename already in the list or duplicated in this selection)`,
-        );
+      if (warningParts.length > 0) {
+        setTimeout(() => showSyncWarning(warningParts.join(". ")), 0);
       }
-      if (warnings.length > 0) {
-        setTimeout(() => showSyncWarning(warnings.join(". ")), 0);
-      }
-      if (unique.length === 0) return prev;
-      return [...prev, ...unique.map((f) => fileEntry(f, true))];
+      if (accepted.length === 0) return prev;
+      return [...prev, ...accepted.map((f) => fileEntry(f, true))];
     });
   };
 
@@ -330,12 +288,32 @@ export default function DatapackConfigureWizardPage({
           ),
         );
         try {
-          const { url, key } = await requestUploadURL(
+          const contentHash = await sha256Hex(file);
+          const { url, key, already_uploaded, existing_filename } = await requestUploadURL(
             pack,
             file.name,
             file.type || "application/octet-stream",
             file.size,
+            contentHash,
           );
+          if (already_uploaded) {
+            // Identical content already exists server-side: nothing uploaded or
+            // added. Mark it skipped (not "uploaded"); the user can remove the
+            // row. It still counts as settled so the import gate isn't blocked.
+            const uploadNote =
+              existing_filename && existing_filename !== file.name
+                ? `Identical content already exists as "${existing_filename}" — skipped re-upload.`
+                : "Already exists (identical content) — skipped re-upload.";
+            setKnowledgeItems((prev) =>
+              prev.map((x) =>
+                x.id === item.id
+                  ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.SKIPPED, uploadProgress: 0, uploadNote }
+                  : x,
+              ),
+            );
+            continue;
+          }
+
           await uploadFileToS3(url, file, (pct) => {
             setKnowledgeItems((prev) =>
               prev.map((x) => (x.id === item.id ? { ...x, uploadProgress: pct } : x)),
@@ -344,26 +322,13 @@ export default function DatapackConfigureWizardPage({
           await confirmUpload(pack, key, file.name, file.size);
           setKnowledgeItems((prev) =>
             prev.map((x) =>
-              x.id === item.id ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE, uploadProgress: 100 } : x,
+              x.id === item.id
+                ? { ...x, uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE, uploadProgress: 100 }
+                : x,
             ),
           );
         } catch (err) {
           const message = getApiErrorMessage(err, "Upload failed.");
-          if (isDuplicateUploadError(message)) {
-            setKnowledgeItems((prev) =>
-              prev.map((x) =>
-                x.id === item.id
-                  ? {
-                    ...x,
-                    uploadStatus: KNOWLEDGE_UPLOAD_STATUS.DONE,
-                    uploadProgress: 100,
-                    uploadError: undefined,
-                  }
-                  : x,
-              ),
-            );
-            continue;
-          }
           setKnowledgeItems((prev) =>
             prev.map((x) =>
               x.id === item.id
@@ -385,7 +350,12 @@ export default function DatapackConfigureWizardPage({
 
   const syncAllKnowledgeUploaded =
     knowledgeItems.length > 0 &&
-    knowledgeItems.every((it) => it.kind === "file" && it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE);
+    knowledgeItems.every(
+      (it) =>
+        it.kind === "file" &&
+        (it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.DONE ||
+          it.uploadStatus === KNOWLEDGE_UPLOAD_STATUS.SKIPPED),
+    );
 
   const handleConfigureStepNext = useCallback(async () => {
     const trimmed = configureDraftName.trim();

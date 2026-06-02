@@ -61,27 +61,3 @@ export function filterFilesForKnowledgeUploadBatch(
   return { accepted, warningParts };
 }
 
-/**
- * Drops files whose name already exists in the list or appears twice in `incoming`
- * (case-insensitive basename match).
- */
-export function filterDuplicateKnowledgeFileNames(
-  incoming: File[],
-  existingFileLabels: string[],
-): { unique: File[]; duplicateCount: number } {
-  const taken = new Set(existingFileLabels.map((n) => n.trim().toLowerCase()));
-  const unique: File[] = [];
-  let duplicateCount = 0;
-  const seenIncoming = new Set<string>();
-  for (const f of incoming) {
-    const key = f.name.trim().toLowerCase();
-    if (taken.has(key) || seenIncoming.has(key)) {
-      duplicateCount++;
-      continue;
-    }
-    seenIncoming.add(key);
-    taken.add(key);
-    unique.push(f);
-  }
-  return { unique, duplicateCount };
-}

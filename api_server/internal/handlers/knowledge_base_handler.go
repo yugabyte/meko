@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -22,24 +23,32 @@ import (
 //
 // Shape:
 //
-//	{"meko": {"user_id": "<uploader>", "size": <bytes>}}
+//		{"meko": {"user_id": "<uploader>", "size": <bytes>, "uploaded_at": "<RFC3339>"}}
 //
-//   - user_id      authenticated uploader (NOT the datapack owner — multiple
-//     collaborators can upload to the same shared datapack, and we
-//     want per-file uploader provenance).
-//   - size         bytes from S3 Contents.Size; 0 means "unknown" rather
-//     than "empty file" (S3 occasionally omits Size on certain
-//     listing edge cases).
+//	  - user_id      authenticated uploader (NOT the datapack owner — multiple
+//	    collaborators can upload to the same shared datapack, and we
+//	    want per-file uploader provenance).
+//	  - size         bytes from S3 Contents.Size; 0 means "unknown" rather
+//	    than "empty file" (S3 occasionally omits Size on certain
+//	    listing edge cases).
+//	  - uploaded_at  S3 LastModified timestamp (RFC3339 UTC) — the moment
+//	    the object was written to the bucket. This is the canonical
+//	    "uploaded" time shown in the UI. Zero time is omitted so
+//	    legacy rows without it degrade gracefully.
 //
 // Output is wire-ready JSONB. Returns nil only on json.Marshal failure
 // — caller logs + falls back to "{}" so the upsert never fails because
 // of details encoding.
-func buildMekoDocDetails(uploaderUserID string, size int64) []byte {
+func buildMekoDocDetails(uploaderUserID string, size int64, uploadedAt time.Time) []byte {
+	meko := map[string]any{
+		"user_id": uploaderUserID,
+		"size":    size,
+	}
+	if !uploadedAt.IsZero() {
+		meko["uploaded_at"] = uploadedAt.UTC().Format(time.RFC3339)
+	}
 	payload := map[string]any{
-		"meko": map[string]any{
-			"user_id": uploaderUserID,
-			"size":    size,
-		},
+		"meko": meko,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -188,6 +197,11 @@ type uploadURLRequest struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	Size        int64  `json:"size"`
+	// ContentHash is the hex-encoded SHA-256 of the file bytes, computed by
+	// the client before requesting the presigned URL. It is used as the S3
+	// sub-directory so that (a) the same filename with different content gets
+	// a unique path, and (b) re-uploading identical bytes is idempotent.
+	ContentHash string `json:"content_hash"`
 }
 
 var allowedExtensions = map[string]bool{
@@ -196,6 +210,22 @@ var allowedExtensions = map[string]bool{
 	".md":   true,
 	".json": true,
 	".mp4":  true,
+}
+
+// isHexSHA256 reports whether s is exactly 64 hexadecimal characters, i.e. a
+// valid hex-encoded SHA-256 digest. Used to gate the client-supplied
+// content_hash before it becomes an S3 key segment.
+func isHexSHA256(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !isHex {
+			return false
+		}
+	}
+	return true
 }
 
 const maxFileSizeBytes = 5 * 1024 * 1024 // 5 MB
@@ -235,6 +265,18 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "filename is required")
 	}
+	req.ContentHash = strings.ToLower(strings.TrimSpace(req.ContentHash))
+	if req.ContentHash == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "content_hash is required")
+	}
+	// Must be a 64-char hex SHA-256. Reject anything else: the hash is used
+	// verbatim as an S3 key segment, so a non-hex value (e.g. one containing
+	// "../" or other path separators) could escape the per-user namespace.
+	if !isHexSHA256(req.ContentHash) {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "content_hash must be a 64-character hex SHA-256")
+	}
 	ext := strings.ToLower(filepath.Ext(req.Filename))
 	if !allowedExtensions[ext] {
 		return apiError(c, http.StatusBadRequest,
@@ -256,12 +298,9 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 		dp.ID,
 		req.Filename,
 		req.ContentType,
+		req.ContentHash,
 	)
 	if err != nil {
-		if errors.Is(err, service.ErrDuplicateFile) {
-			return apiError(c, http.StatusConflict,
-				"DUPLICATE_FILE", err.Error())
-		}
 		slog.Error("failed to generate presigned upload URL",
 			"user_id", dp.UserID,
 			"datapack_id", dp.ID,
@@ -412,25 +451,28 @@ func canDeleteKBDocument(
 //
 //  1. Lookup the document (validates it belongs to this datapack and
 //     returns its uploader_user_id + s3 URI in one query).
+//
 //  2. Permission check (see canDeleteKBDocument).
+//
 //  3. Delete chunks + dist_rag rows in a single transaction (repo).
+//
 //  4. Best-effort S3 delete — failures are logged but do not unwind
 //     the DB delete (the orphan storage cost is small, a sweeper can
 //     reconcile later).
 //
-//	@Summary	Delete one knowledge-base file
-//	@Tags		knowledge-bases
-//	@Produce	json
-//	@Param		name		path	string	true	"Datapack name"
-//	@Param		document_id	path	string	true	"dist_rag document UUID"
-//	@Success	200		{object}	APIResponse
-//	@Failure	400		{object}	APIResponse
-//	@Failure	401		{object}	APIResponse
-//	@Failure	403		{object}	APIResponse
-//	@Failure	404		{object}	APIResponse
-//	@Failure	500		{object}	APIResponse
-//	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/documents/{document_id} [delete]
+//     @Summary	Delete one knowledge-base file
+//     @Tags		knowledge-bases
+//     @Produce	json
+//     @Param		name		path	string	true	"Datapack name"
+//     @Param		document_id	path	string	true	"dist_rag document UUID"
+//     @Success	200		{object}	APIResponse
+//     @Failure	400		{object}	APIResponse
+//     @Failure	401		{object}	APIResponse
+//     @Failure	403		{object}	APIResponse
+//     @Failure	404		{object}	APIResponse
+//     @Failure	500		{object}	APIResponse
+//     @Security	BearerAuth
+//     @Router		/datapacks/{name}/knowledge-bases/documents/{document_id} [delete]
 func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -769,7 +811,7 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 			// uploaded it (resolved above) + the byte size observed
 			// in S3. The downstream documents-list endpoint resolves
 			// user_id -> email at read time via meko_system.users.
-			details := buildMekoDocDetails(uploaderUserID, obj.Size)
+			details := buildMekoDocDetails(uploaderUserID, obj.Size, obj.UploadedAt)
 			if err := h.ragSvc.InsertDocument(
 				sourceID, obj.Key, docURI, obj.ETag, obj.ContentType, details,
 			); err != nil {
@@ -946,26 +988,31 @@ func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 // of dist_rag documents for the datapack.
 //
 // Query params:
+//
 //   - page        int    (default 1)
+//
 //   - page_size   int    (default 50, max 200)
+//
 //   - q           string filename substring search (ILIKE)
+//
 //   - type_filter string file-extension suffix filter, e.g. ".md"
+//
 //   - indexed_only "true" restrict to COMPLETED documents
 //
-//	@Summary	List uploaded documents for a datapack (paginated)
-//	@Tags		knowledge-bases
-//	@Produce	json
-//	@Param		name		path	string	true	"Datapack name"
-//	@Param		page		query	int		false	"Page number (default 1)"
-//	@Param		page_size	query	int		false	"Page size (default 50, max 200)"
-//	@Param		q			query	string	false	"Filename substring search"
-//	@Param		type_filter	query	string	false	"File extension suffix, e.g. .md"
-//	@Param		indexed_only query	bool	false	"Restrict to fully indexed documents"
-//	@Success	200			{object}	APIResponse
-//	@Failure	401			{object}	APIResponse
-//	@Failure	500			{object}	APIResponse
-//	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/documents [get]
+//     @Summary	List uploaded documents for a datapack (paginated)
+//     @Tags		knowledge-bases
+//     @Produce	json
+//     @Param		name		path	string	true	"Datapack name"
+//     @Param		page		query	int		false	"Page number (default 1)"
+//     @Param		page_size	query	int		false	"Page size (default 50, max 200)"
+//     @Param		q			query	string	false	"Filename substring search"
+//     @Param		type_filter	query	string	false	"File extension suffix, e.g. .md"
+//     @Param		indexed_only query	bool	false	"Restrict to fully indexed documents"
+//     @Success	200			{object}	APIResponse
+//     @Failure	401			{object}	APIResponse
+//     @Failure	500			{object}	APIResponse
+//     @Security	BearerAuth
+//     @Router		/datapacks/{name}/knowledge-bases/documents [get]
 func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {

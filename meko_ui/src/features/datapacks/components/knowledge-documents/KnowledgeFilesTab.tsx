@@ -33,6 +33,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -344,14 +345,27 @@ function SummaryCard({
             <p className="mt-1 text-sm leading-relaxed text-foreground/80">{heaviest}</p>
           ) : null}
         </div>
-        <Button
-          type="button"
-          onClick={onUploadClick}
-          className="shrink-0 gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
-        >
-          <Upload className="h-3.5 w-3.5" aria-hidden />
-          {uploadOpen ? "Hide upload" : "Upload file"}
-        </Button>
+        {uploadOpen ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onUploadClick}
+            className="shrink-0 gap-1.5"
+            aria-label="Close upload panel"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+            Close
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            onClick={onUploadClick}
+            className="shrink-0 gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
+          >
+            <Upload className="h-3.5 w-3.5" aria-hidden />
+            Upload file
+          </Button>
+        )}
       </div>
     </section>
   );
@@ -547,7 +561,9 @@ const FileRow = memo(function FileRow({
   const fullName = doc.document_name?.trim() || "—";
   const displayName = documentNameLastSegment(fullName).replace(/^\d+_/, "");
   const chunks = doc.chunks_processed;
-  const uploadedRel = doc.completed_at ? formatRelativeTime(doc.completed_at, now, true) : "—";
+  // Prefer S3 upload time; fall back to pipeline completion for legacy docs.
+  const uploadTimestamp = doc.uploaded_at ?? doc.completed_at;
+  const uploadedRel = uploadTimestamp ? formatRelativeTime(uploadTimestamp, now) : "—";
   const rawChecksum = doc.document_checksum?.replace(/^"+|"+$/g, "") ?? "";
   const md5 = rawChecksum
     ? `${rawChecksum.slice(0, 8)}…${rawChecksum.slice(-4)}`
@@ -595,7 +611,7 @@ const FileRow = memo(function FileRow({
         </span>
         <span
           className="self-center truncate text-sm text-muted-foreground"
-          title={doc.completed_at ?? undefined}
+          title={uploadTimestamp ?? undefined}
         >
           {uploadedRel}
         </span>

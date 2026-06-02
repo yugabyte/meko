@@ -113,25 +113,50 @@ func (s *S3Service) Bucket() string {
 type PresignedUpload struct {
 	URL string `json:"url"`
 	Key string `json:"key"`
+	// AlreadyUploaded is true when identical content already exists in this
+	// datapack (matched by content hash, regardless of filename). The
+	// presigned URL is empty in that case — the client should skip the PUT
+	// and proceed directly to ConfirmUpload so the document gets indexed.
+	AlreadyUploaded bool `json:"already_uploaded"`
+	// ExistingFilename is the name the deduplicated content was first stored
+	// under, set only when AlreadyUploaded is true. The client uses it to tell
+	// the user whether the skipped file was the same name or just same bytes.
+	ExistingFilename string `json:"existing_filename,omitempty"`
 }
 
 // GenerateUploadURL builds a presigned PUT URL for uploading a file to
 // the per-user, per-datapack S3 prefix. The resulting key is
-// "<userID>/<datapackID>/<filename>" so each user owns a top-level S3
-// namespace and each datapack a sub-folder underneath it.
+// "<userID>/<datapackID>/<sha256>/<filename>" where sha256 is the
+// hex-encoded SHA-256 of the file bytes supplied by the client.
+//
+// The content hash is the file's identity; the filename is metadata.
+// Deduplication therefore matches on the "<userID>/<datapackID>/<sha256>/"
+// prefix, NOT the full hash+filename key:
+//   - Same content under any filename → an object already exists under the
+//     hash prefix → AlreadyUploaded=true, pointing at the first-stored key,
+//     and the client skips the redundant PUT.
+//   - Different content → different hash → different prefix → uploads
+//     independently.
 func (s *S3Service) GenerateUploadURL(
 	ctx context.Context,
-	userID, datapackID, filename, contentType string,
+	userID, datapackID, filename, contentType, contentHash string,
 ) (*PresignedUpload, error) {
-	key := fmt.Sprintf("%s/%s/%s", userID, datapackID, sanitizeFilename(filename))
+	hashPrefix := fmt.Sprintf("%s/%s/%s/", userID, datapackID, contentHash)
 
-	exists, err := s.ObjectExists(ctx, key)
+	existingKey, err := s.firstObjectKeyUnderPrefix(ctx, hashPrefix)
 	if err != nil {
-		return nil, fmt.Errorf("check duplicate: %w", err)
+		return nil, fmt.Errorf("check existing upload: %w", err)
 	}
-	if exists {
-		return nil, ErrDuplicateFile
+	if existingKey != "" {
+		// Identical content already stored (under existingKey's filename).
+		return &PresignedUpload{
+			Key:              existingKey,
+			AlreadyUploaded:  true,
+			ExistingFilename: path.Base(existingKey),
+		}, nil
 	}
+
+	key := hashPrefix + sanitizeFilename(filename)
 
 	input := &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
@@ -194,9 +219,6 @@ func (s *S3Service) GenerateDownloadURL(
 	}, nil
 }
 
-// ErrDuplicateFile is returned when a file with the same name already exists.
-var ErrDuplicateFile = fmt.Errorf("file with the same name already exists")
-
 // DeleteObject removes a single object from the bucket. Used by the
 // per-file DELETE handler after the database-side cleanup succeeds.
 // S3 DeleteObject is idempotent: deleting a missing key returns
@@ -210,6 +232,25 @@ func (s *S3Service) DeleteObject(ctx context.Context, key string) error {
 		return fmt.Errorf("delete object %s: %w", key, err)
 	}
 	return nil
+}
+
+// firstObjectKeyUnderPrefix returns the key of any one object under prefix, or
+// "" if none exist. It requests at most one key (MaxKeys=1), which is all the
+// content-hash dedup check needs: it only cares whether an object with this
+// hash already exists, not how many or their metadata.
+func (s *S3Service) firstObjectKeyUnderPrefix(ctx context.Context, prefix string) (string, error) {
+	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(s.bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(1),
+	})
+	if err != nil {
+		return "", fmt.Errorf("list objects prefix=%s: %w", prefix, err)
+	}
+	if len(out.Contents) == 0 {
+		return "", nil
+	}
+	return aws.ToString(out.Contents[0].Key), nil
 }
 
 // ObjectExists checks whether an object with the given key exists in the bucket.
@@ -237,6 +278,10 @@ type S3Object struct {
 	// Zero on the rare paths where S3 doesn't return a size; callers
 	// should treat 0 as "unknown" rather than "empty file".
 	Size int64
+	// UploadedAt is the S3 LastModified timestamp — the moment the object
+	// was written to the bucket. Zero value when S3 omits it (shouldn't
+	// happen in practice).
+	UploadedAt time.Time
 }
 
 // mimeTypeByExtension maps common file extensions to MIME types supported by
@@ -288,11 +333,16 @@ func (s *S3Service) ListObjects(ctx context.Context, prefix string) ([]S3Object,
 			if obj.Size != nil {
 				size = *obj.Size
 			}
+			var uploadedAt time.Time
+			if obj.LastModified != nil {
+				uploadedAt = *obj.LastModified
+			}
 			objects = append(objects, S3Object{
 				Key:         key,
 				ETag:        etag,
 				ContentType: mimeTypeFromKey(key),
 				Size:        size,
+				UploadedAt:  uploadedAt,
 			})
 		}
 	}

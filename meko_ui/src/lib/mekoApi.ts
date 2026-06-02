@@ -1155,20 +1155,23 @@ export async function getDatapackProvisionStatus(
 
 // --- Knowledge Base file upload & RAG APIs ---
 
+export { sha256Hex, canUseWebCryptoSha256, isNonSecureHttpOrigin } from "./sha256File";
+
 export async function requestUploadURL(
   datapackName: string,
   filename: string,
   contentType: string,
   size: number,
+  contentHash: string,
   options: DatapackRouteOptions = {},
 ) {
-  return request<{ url: string; key: string }>(
+  return request<{ url: string; key: string; already_uploaded: boolean; existing_filename?: string }>(
     withDatapackID(
       `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/upload-url`,
       options.datapackId,
     ),
     "POST",
-    { filename, content_type: contentType, size },
+    { filename, content_type: contentType, size, content_hash: contentHash },
     options,
   );
 }
@@ -1247,8 +1250,10 @@ export async function getKBStatus(datapackName: string, options: DatapackRouteOp
  *
  *  The repo's SQL deduplicates per `document_uri` and joins
  *  `dist_rag.vector_index_pipeline_details` for `chunks_processed` +
- *  the most recent `document_status`. `completed_at` is shown as
- *  "Uploaded" in the SharedKnowledge files table.
+ *  the most recent `document_status`. `uploaded_at` is the S3
+ *  LastModified timestamp stored in `document_details->meko->uploaded_at`
+ *  and is shown as "Uploaded" in the files table. `completed_at` is the
+ *  RAG pipeline completion time.
  *
  *  Embedding model + dimensions are deliberately NOT on this row —
  *  they're properties of the vector index, and Meko has one global
@@ -1267,6 +1272,10 @@ export type KnowledgeBaseDocument = {
   document_checksum?: string | null;
   chunks_processed?: number | null;
   completed_at?: string | null;
+  /** S3 LastModified — the actual moment the file was written to the
+   *  bucket. Null for legacy documents uploaded before this field was
+   *  added; the UI falls back to `completed_at` in that case. */
+  uploaded_at?: string | null;
   status: string;
   /** Per-file provenance from `dist_rag.documents.document_details->meko`.
    *  - `uploaded_by_user_id`: authenticated uploader at CreateKB time.

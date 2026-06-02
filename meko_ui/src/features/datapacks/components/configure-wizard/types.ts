@@ -15,6 +15,8 @@ export type ListedSource = {
   uploadStatus?: KnowledgeUploadStatus;
   uploadProgress?: number;
   uploadError?: string;
+  /** Set when the upload was skipped because identical content already existed. */
+  uploadNote?: string;
 };
 
 export type SyncSectionId = "knowledge" | "conversations" | "skills";
