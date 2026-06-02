@@ -25,7 +25,7 @@ use pageserver_api::key::{
     Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX,
 };
 use pageserver_api::models::{
-    DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, LayerMapInfo, LsnLease, PageTraceEvent, RelSizeMigration,
+    DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, LsnLease, PageTraceEvent, RelSizeMigration,
     TimelineState,
 };
 use pageserver_api::reltag::{BlockNumber, RelTag};
@@ -77,7 +77,7 @@ use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
 use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::storage_layer::{
-    IoConcurrency, LayerAccessStatsReset, LayerName,
+    IoConcurrency,
     ValueReconstructState, ValuesReconstructState,
 };
 use crate::tenant::tasks::BackgroundLoopKind;
@@ -1776,34 +1776,6 @@ impl Timeline {
             }
         }
     }
-
-    /// yb-mode: no layer map exists. The HTTP layer-map endpoint
-    /// returns an empty inventory.
-    pub(crate) async fn layer_map_info(&self, _reset: LayerAccessStatsReset) -> LayerMapInfo {
-        LayerMapInfo {
-            in_memory_layers: Vec::new(),
-            historic_layers: Vec::new(),
-        }
-    }
-
-    pub(crate) async fn download_layer(
-        &self,
-        _layer_file_name: &LayerName,
-        _ctx: &RequestContext,
-    ) -> anyhow::Result<Option<bool>> {
-        // yb-mode: no layer files. The HTTP admin endpoint that calls
-        // this is effectively a no-op; return None ("not found").
-        Ok(None)
-    }
-
-    /// yb-mode: no layer files to evict. Always returns Ok(None).
-    pub(crate) async fn evict_layer(
-        &self,
-        _layer_file_name: &LayerName,
-    ) -> anyhow::Result<Option<bool>> {
-        Ok(None)
-    }
-
 
     pub(crate) fn is_basebackup_cache_enabled(&self) -> bool {
         let tenant_conf = self.tenant_conf.load();

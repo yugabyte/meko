@@ -20,7 +20,7 @@ use http_utils::error::{ApiError, HttpErrorBody};
 use http_utils::failpoints::failpoints_handler;
 use http_utils::json::{json_request, json_request_maybe, json_response};
 use http_utils::request::{
-    get_request_param, must_get_query_param, must_parse_query_param, parse_query_param,
+    must_get_query_param, must_parse_query_param, parse_query_param,
     parse_request_param,
 };
 use http_utils::{RequestExt, RouterBuilder};
@@ -67,7 +67,7 @@ use crate::tenant::mgr::{
 use crate::tenant::remote_timeline_client::{
     download_index_part, download_tenant_manifest, list_remote_tenant_shards, list_remote_timelines,
 };
-use crate::tenant::storage_layer::{IoConcurrency, LayerAccessStatsReset, LayerName};
+use crate::tenant::storage_layer::IoConcurrency;
 use crate::tenant::timeline::{
     MarkInvisibleRequest, Timeline, WaitLsnTimeout,
     WaitLsnWaiter,
@@ -1247,89 +1247,6 @@ async fn tenant_shard_split_handler(
     Err(ApiError::BadRequest(anyhow::anyhow!(
         "shard_split is not supported in yb-pageserver mode"
     )))
-}
-
-async fn layer_map_info_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    let reset: LayerAccessStatsReset =
-        parse_query_param(&request, "reset")?.unwrap_or(LayerAccessStatsReset::NoReset);
-    let state = get_state(&request);
-
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-
-    let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id)
-            .await?;
-    let layer_map_info = timeline.layer_map_info(reset).await;
-
-    json_response(StatusCode::OK, layer_map_info)
-}
-
-async fn layer_download_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    let layer_file_name = get_request_param(&request, "layer_file_name")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-    let layer_name = LayerName::from_str(layer_file_name)
-        .map_err(|s| ApiError::BadRequest(anyhow::anyhow!(s)))?;
-    let state = get_state(&request);
-
-    let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id)
-            .await?;
-    let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
-        .with_scope_timeline(&timeline);
-    let downloaded = timeline
-        .download_layer(&layer_name, &ctx)
-        .await
-        .map_err(|e| ApiError::InternalServerError(e.into()))?;
-
-    match downloaded {
-        Some(true) => json_response(StatusCode::OK, ()),
-        Some(false) => json_response(StatusCode::NOT_MODIFIED, ()),
-        None => json_response(
-            StatusCode::BAD_REQUEST,
-            format!("Layer {tenant_shard_id}/{timeline_id}/{layer_file_name} not found"),
-        ),
-    }
-}
-
-async fn evict_timeline_layer_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    let layer_file_name = get_request_param(&request, "layer_file_name")?;
-    let state = get_state(&request);
-
-    let layer_name = LayerName::from_str(layer_file_name)
-        .map_err(|s| ApiError::BadRequest(anyhow::anyhow!(s)))?;
-
-    let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id)
-            .await?;
-    let evicted = timeline
-        .evict_layer(&layer_name)
-        .await
-        .map_err(ApiError::InternalServerError)?;
-
-    match evicted {
-        Some(true) => json_response(StatusCode::OK, ()),
-        Some(false) => json_response(StatusCode::NOT_MODIFIED, ()),
-        None => json_response(
-            StatusCode::BAD_REQUEST,
-            format!("Layer {tenant_shard_id}/{timeline_id}/{layer_file_name} not found"),
-        ),
-    }
 }
 
 async fn timeline_gc_blocking_handler(
@@ -2901,18 +2818,6 @@ pub fn make_router(
         .delete("/v1/tenant/:tenant_shard_id/timeline/:timeline_id", |r| {
             api_handler(r, timeline_delete_handler)
         })
-        .get(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/layer",
-            |r| api_handler(r, layer_map_info_handler),
-        )
-        .get(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/layer/:layer_file_name",
-            |r| api_handler(r, layer_download_handler),
-        )
-        .delete(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/layer/:layer_file_name",
-            |r| api_handler(r, evict_timeline_layer_handler),
-        )
         .post(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/block_gc",
             |r| api_handler(r, timeline_gc_blocking_handler),

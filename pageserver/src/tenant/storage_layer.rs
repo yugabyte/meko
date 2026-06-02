@@ -17,17 +17,6 @@ use utils::lsn::Lsn;
 use utils::sync::gate::GateGuard;
 use wal_decoder::models::record::NeonWalRecord;
 
-pub fn range_overlaps<T>(a: &Range<T>, b: &Range<T>) -> bool
-where
-    T: PartialOrd<T>,
-{
-    if a.start < b.start {
-        a.end > b.start
-    } else {
-        b.end > a.start
-    }
-}
-
 /// Walredo reconstruction state — the accumulator for image + WAL
 /// records on the read path. Still used by `Timeline::reconstruct_value`.
 #[derive(Debug, Default, Clone)]
@@ -78,12 +67,6 @@ impl IoConcurrency {
         IoConcurrency::Sequential
     }
 
-}
-
-#[derive(Clone, Copy, strum_macros::EnumString)]
-pub(crate) enum LayerAccessStatsReset {
-    NoReset,
-    AllStats,
 }
 
 /// Range wrapping newtype, which uses display to render Debug.
