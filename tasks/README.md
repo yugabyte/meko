@@ -88,3 +88,4 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 9 | [Safekeeper Paxos removal](9_safekeeper-paxos-removal.md) | ⏳ pending | high | safekeeper |
 | 10 | [Collapse storage_ctl Diesel migrations](10_collapse-storage_ctl-diesel-migrations.md) | ⏳ pending | medium | storage_ctl |
 | 11 | [Reduce YB reads when cold pages are modified](11_reduce-yb-reads-cold-page-modify.md) | ⏳ pending | medium | yb-pageserver |
+| 12 | [End-to-end test infra](12_e2e-test-infra.md) | ⏳ pending | high | yb-pageserver |
