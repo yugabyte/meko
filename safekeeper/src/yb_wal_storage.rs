@@ -92,7 +92,10 @@ use futures::future::{BoxFuture, FutureExt};
 use postgres_ffi::XLogSegNo;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, watch};
-use tokio_postgres::types::ToSql;
+// YB smart-driver fork; aliased so the type names below stay
+// untouched. See pageserver/src/page_store.rs for the rationale.
+use yb_tokio_postgres as tokio_postgres;
+use yb_tokio_postgres::types::ToSql;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
 

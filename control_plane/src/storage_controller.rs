@@ -9,6 +9,13 @@ use std::time::{Duration, Instant};
 
 use crate::background_process;
 use crate::local_env::{LocalEnv, NeonStorageControllerConf};
+
+// The storage controller's metadata DB lives in YB; talk to it
+// through the YB smart-driver fork so `build_yb_rustls_connector`
+// (which returns a `yb_postgres_openssl::MakeTlsConnector`) lines up
+// with the Config / Client / Error types this file uses below. The
+// rest of control_plane keeps using the Neon fork's `tokio_postgres`.
+use yb_tokio_postgres as tokio_postgres;
 use camino::{Utf8Path, Utf8PathBuf};
 use hyper0::Uri;
 use nix::unistd::Pid;

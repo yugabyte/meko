@@ -235,6 +235,20 @@ postgres-protocol = { git = "https://github.com/neondatabase/rust-postgres.git",
 postgres-types = { git = "https://github.com/neondatabase/rust-postgres.git", branch = "neon" }
 tokio-postgres = { git = "https://github.com/neondatabase/rust-postgres.git", branch = "neon" }
 
+## YugabyteDB smart-driver fork of rust-postgres. Used only by
+## libs/remote_storage/src/ysql_client.rs for YB-storage connections —
+## the safekeeper↔walproposer replication path keeps the Neon fork
+## above. Smart-driver behavior (yb_servers() discovery + load
+## balancing across tservers + refresh) lives inside yb-tokio-postgres
+## itself; we just enable it via `load_balance=only-primary` in the
+## connection options.
+yb-tokio-postgres = "0.7.10-yb-1-beta.3"
+yb-postgres-openssl = "0.5.0-yb-1-beta.3"
+# Needed transitively by yb-postgres-openssl. We already ship
+# libssl.so.1.1 / libcrypto.so.1.1 at runtime (see ship script),
+# so the dynamic link target is satisfied without bundle changes.
+openssl = "0.10"
+
 ## Azure SDK crates
 
 ## Local libraries

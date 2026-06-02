@@ -50,7 +50,14 @@ use futures::stream::{StreamExt, TryStreamExt};
 use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::reltag::SlruKind;
 use remote_storage::{YbStoreConfig, YsqlClient};
-use tokio_postgres::types::ToSql;
+// We talk to YugabyteDB through the YB smart-driver fork of
+// tokio-postgres; alias it so the type names below (`tokio_postgres::Row`,
+// `tokio_postgres::types::ToSql`, etc.) keep working without
+// per-callsite churn. The Neon fork of tokio-postgres survives
+// elsewhere in the workspace for the walproposer/walreceiver
+// replication path.
+use yb_tokio_postgres as tokio_postgres;
+use yb_tokio_postgres::types::ToSql;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 

@@ -45,7 +45,10 @@ use anyhow::{Context, anyhow, bail};
 use bytes::Bytes;
 use futures::TryStreamExt;
 use futures::stream::Stream;
-use tokio_postgres::types::ToSql;
+// YB smart-driver fork; aliased so the type names below stay
+// untouched. See pageserver/src/page_store.rs for the rationale.
+use yb_tokio_postgres as tokio_postgres;
+use yb_tokio_postgres::types::ToSql;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::YbStoreConfig;

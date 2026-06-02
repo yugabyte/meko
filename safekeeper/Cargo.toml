@@ -49,6 +49,9 @@ tikv-jemallocator.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 tokio-io-timeout.workspace = true
 tokio-postgres.workspace = true
+# yb_wal_storage.rs talks to YugabyteDB via the YB smart-driver fork.
+# The Neon fork above stays for walproposer/walreceiver replication.
+yb-tokio-postgres.workspace = true
 tokio-rustls.workspace = true
 tokio-tar.workspace = true
 tokio-util = { workspace = true }

@@ -31,11 +31,13 @@ futures-util.workspace = true
 itertools.workspace = true
 sync_wrapper = { workspace = true, features = ["futures"] }
 md5.workspace = true
-tokio-postgres.workspace = true
-tokio-postgres-rustls.workspace = true
-rustls = { workspace = true, default-features = false, features = ["ring"] }
-rustls-native-certs.workspace = true
-rustls-pemfile.workspace = true
+# YB smart-driver fork of tokio-postgres + its openssl TLS sibling.
+# Used by libs/remote_storage/src/ysql_client.rs for cluster-aware
+# YB connections (yb_servers() discovery, load balancing,
+# topology-aware routing — see workspace Cargo.toml comment).
+yb-tokio-postgres.workspace = true
+yb-postgres-openssl.workspace = true
+openssl.workspace = true
 uuid.workspace = true
 
 byteorder = "1.4"

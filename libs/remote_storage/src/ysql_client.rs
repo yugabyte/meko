@@ -49,8 +49,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use tokio_postgres::Statement;
-use tokio_postgres::types::ToSql;
+use yb_tokio_postgres as tokio_postgres;
+use yb_tokio_postgres::Statement;
+use yb_tokio_postgres::types::ToSql;
 
 use crate::config::YbStoreConfig;
 
@@ -119,7 +120,7 @@ impl YsqlClient {
     /// `connect_rustls_pooled(config, tls, 1)`.
     pub async fn connect_rustls(
         config: tokio_postgres::Config,
-        tls: tokio_postgres_rustls::MakeRustlsConnect,
+        tls: yb_postgres_openssl::MakeTlsConnector,
     ) -> Result<Self> {
         Self::connect_rustls_pooled(config, tls, 1).await
     }
@@ -129,7 +130,7 @@ impl YsqlClient {
     /// eagerly.
     pub async fn connect_rustls_pooled(
         config: tokio_postgres::Config,
-        tls: tokio_postgres_rustls::MakeRustlsConnect,
+        tls: yb_postgres_openssl::MakeTlsConnector,
         pool_size: usize,
     ) -> Result<Self> {
         let config = Arc::new(config);
@@ -140,7 +141,7 @@ impl YsqlClient {
             Arc::new(move || {
                 let config = config.clone();
                 let tls = tls.clone();
-                async move { open_rustls(&config, &tls).await }.boxed()
+                async move { open_tls(&config, &tls).await }.boxed()
             })
         };
         Self::from_open(open, pool_size).await
@@ -458,6 +459,16 @@ fn build_pg_config(
         .user(&cfg.user)
         .dbname(&cfg.dbname)
         .application_name(application_name);
+    // YB smart-driver mode: `only-primary` makes the driver run
+    // `SELECT * FROM yb_servers()` against the seed host on connect,
+    // then open each pool connection to a different primary tserver
+    // (round-robin). Reads + writes spread across the cluster
+    // without any topology-keys configuration. The seed list is
+    // refreshed periodically (`yb_servers_refresh_interval`, default
+    // 300 s) so new tservers come into rotation without a restart.
+    // For single-node dev clusters the call still works — yb_servers()
+    // returns the lone node and every connection hits it.
+    pg_config.load_balance("only-primary");
     if let Some(env_name) = &cfg.password_env {
         let password = std::env::var(env_name).with_context(|| {
             format!("YsqlClient: password env var `{env_name}` is not set")
@@ -467,115 +478,43 @@ fn build_pg_config(
     Ok(pg_config)
 }
 
-/// Build a rustls connector suitable for YugabyteDB Postgres-wire
-/// connections.
+/// Build an openssl-based TLS connector suitable for YugabyteDB
+/// Postgres-wire connections through the yb-tokio-postgres smart
+/// driver.
 ///
-/// - `sslrootcert = None`: load the system root store and install an
-///   `AcceptAll` verifier that logs but ignores cert validation errors.
-///   Suitable for `sslmode = "require"` against YBA universes that ship
-///   per-universe self-signed CAs not in the system trust store.
+/// - `sslrootcert = None`: install an AcceptAll verifier
+///   (`SslVerifyMode::NONE`) that ignores cert validation entirely
+///   and logs the connection. Suitable for `sslmode = "require"`
+///   against YBA universes that ship per-universe self-signed CAs
+///   not in the system trust store.
 /// - `sslrootcert = Some(path)`: load the file as a PEM-encoded CA
-///   bundle and verify against it (sslmode = "verify-ca"). The file
-///   must contain one or more `-----BEGIN CERTIFICATE-----` blocks.
+///   bundle (`set_ca_file`) and require peer verification
+///   (`SslVerifyMode::PEER`) — sslmode = "verify-ca" semantics.
+///
+/// We swapped from rustls to openssl in the YB driver migration:
+/// the YB rust-postgres fork ships `yb-postgres-openssl` natively
+/// but no rustls sibling, and `libssl.so.1.1` / `libcrypto.so.1.1`
+/// are already in the deploy bundle (`scripts/yb-light-ship.sh`)
+/// for the postgres binaries, so the runtime link target is
+/// satisfied without new bundle changes.
 pub fn build_yb_rustls_connector(
     sslrootcert: Option<&str>,
-) -> anyhow::Result<tokio_postgres_rustls::MakeRustlsConnect> {
-    use rustls::client::WebPkiServerVerifier;
-    use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
-    use rustls::crypto::ring;
+) -> anyhow::Result<yb_postgres_openssl::MakeTlsConnector> {
+    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-    // Build the root store.
-    let roots = if let Some(path) = sslrootcert {
-        let pem = std::fs::read(path)
-            .with_context(|| format!("reading sslrootcert file `{path}`"))?;
-        let mut store = rustls::RootCertStore::empty();
-        let mut reader = std::io::Cursor::new(pem);
-        let mut added = 0usize;
-        for item in rustls_pemfile::certs(&mut reader) {
-            let cert = item
-                .with_context(|| format!("parsing PEM cert in `{path}`"))?;
-            store
-                .add(cert)
-                .with_context(|| format!("adding cert from `{path}` to root store"))?;
-            added += 1;
-        }
-        if added == 0 {
-            anyhow::bail!("sslrootcert `{path}` contains no PEM CERTIFICATE blocks");
-        }
-        Arc::new(store)
-    } else {
-        let der_certs = rustls_native_certs::load_native_certs();
-        let mut store = rustls::RootCertStore::empty();
-        store.add_parsable_certificates(der_certs.certs);
-        Arc::new(store)
-    };
-
-    let provider = Arc::new(ring::default_provider());
-    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()
-        .expect("ring should support default protocol versions");
-
-    let client_config = if sslrootcert.is_some() {
-        // Strict verification against the supplied CA bundle.
-        builder.with_root_certificates(roots).with_no_client_auth()
-    } else {
-        // AcceptAll: log validation failures and proceed. Mirrors the
-        // storage_controller's existing behaviour.
-        #[derive(Debug)]
-        struct AcceptAll(Arc<WebPkiServerVerifier>);
-        impl ServerCertVerifier for AcceptAll {
-            fn verify_server_cert(
-                &self,
-                end_entity: &rustls::pki_types::CertificateDer<'_>,
-                intermediates: &[rustls::pki_types::CertificateDer<'_>],
-                server_name: &rustls::pki_types::ServerName<'_>,
-                ocsp_response: &[u8],
-                now: rustls::pki_types::UnixTime,
-            ) -> Result<ServerCertVerified, rustls::Error> {
-                if let Err(err) = self.0.verify_server_cert(
-                    end_entity,
-                    intermediates,
-                    server_name,
-                    ocsp_response,
-                    now,
-                ) {
-                    tracing::info!(
-                        ?server_name,
-                        "YsqlClient: ignoring TLS validation error: {err:?}"
-                    );
-                }
-                Ok(ServerCertVerified::assertion())
-            }
-            fn verify_tls12_signature(
-                &self,
-                message: &[u8],
-                cert: &rustls::pki_types::CertificateDer<'_>,
-                dss: &rustls::DigitallySignedStruct,
-            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-                self.0.verify_tls12_signature(message, cert, dss)
-            }
-            fn verify_tls13_signature(
-                &self,
-                message: &[u8],
-                cert: &rustls::pki_types::CertificateDer<'_>,
-                dss: &rustls::DigitallySignedStruct,
-            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-                self.0.verify_tls13_signature(message, cert, dss)
-            }
-            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-                self.0.supported_verify_schemes()
-            }
-        }
-        let verifier = Arc::new(AcceptAll(
-            WebPkiServerVerifier::builder_with_provider(roots, provider).build()?,
-        ));
+    let mut builder =
+        SslConnector::builder(SslMethod::tls()).context("openssl SslConnector builder")?;
+    if let Some(path) = sslrootcert {
         builder
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth()
-    };
-
-    Ok(tokio_postgres_rustls::MakeRustlsConnect::new(client_config))
+            .set_ca_file(path)
+            .with_context(|| format!("set_ca_file({path})"))?;
+        builder.set_verify(SslVerifyMode::PEER);
+    } else {
+        // AcceptAll: skip verification entirely. Mirrors the previous
+        // rustls AcceptAll behaviour for YBA self-signed certs.
+        builder.set_verify(SslVerifyMode::NONE);
+    }
+    Ok(yb_postgres_openssl::MakeTlsConnector::new(builder.build()))
 }
 
 async fn open_no_tls(config: &tokio_postgres::Config) -> Result<tokio_postgres::Client> {
@@ -596,17 +535,17 @@ async fn open_no_tls(config: &tokio_postgres::Config) -> Result<tokio_postgres::
     Ok(client)
 }
 
-async fn open_rustls(
+async fn open_tls(
     config: &tokio_postgres::Config,
-    tls: &tokio_postgres_rustls::MakeRustlsConnect,
+    tls: &yb_postgres_openssl::MakeTlsConnector,
 ) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tls.clone())
         .await
-        .context("YsqlClient: connect (Rustls)")?;
+        .context("YsqlClient: connect (openssl)")?;
     tokio::spawn(async move {
         if let Err(e) = connection.await {
-            tracing::warn!("YsqlClient connection (Rustls) ended: {e}");
+            tracing::warn!("YsqlClient connection (openssl) ended: {e}");
         }
     });
     let _ = client

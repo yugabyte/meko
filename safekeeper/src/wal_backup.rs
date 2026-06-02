@@ -16,7 +16,6 @@ use remote_storage::{
 };
 use safekeeper_api::models::PeerInfo;
 use tokio::fs::File;
-use tokio_postgres;
 use tokio::select;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::watch;

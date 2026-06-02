@@ -95,6 +95,9 @@ tokio = { workspace = true, features = ["process", "sync", "fs", "rt", "io-util"
 tokio-epoll-uring.workspace = true
 tokio-io-timeout.workspace = true
 tokio-postgres.workspace = true
+# page_store.rs talks to YugabyteDB via the YB smart-driver fork.
+# The Neon fork above stays for walproposer/walreceiver replication.
+yb-tokio-postgres.workspace = true
 tokio-rustls.workspace = true
 tokio-stream.workspace = true
 tokio-tar.workspace = true
