@@ -320,6 +320,18 @@ impl UnifiedPages {
     /// Like `lookup_chain_if_complete` but only durable rows. Used
     /// by the materialiser's cache-only fast path so it never folds
     /// pre-flush deltas into an image.
+    ///
+    /// Walks LSN-desc from `target_lsn`. Unflushed rows at the **top
+    /// of the walk** (above the highest durable row) are skipped —
+    /// they're the just-pushed trigger row or later writes that
+    /// haven't flushed yet, and the materialiser is happy to produce
+    /// an image at the latest durable LSN instead of `target_lsn`.
+    /// An unflushed row sandwiched between durable rows is fatal:
+    /// returning that chain would hand walredo a non-contiguous
+    /// sequence (the surviving deltas can't legally derive the next
+    /// state from the anchor). On that case we return `None` and the
+    /// caller falls back to `read_chain_durable` (which is itself
+    /// horizon-capped, so even YB can't surface a mid-flush hole).
     pub fn lookup_chain_durable_if_complete(
         &self,
         key: &Bytes,
@@ -328,10 +340,15 @@ impl UnifiedPages {
         let ks = self.by_key.get(key)?;
         let mut out = Vec::new();
         let mut has_anchor = false;
+        let mut started_durable = false;
         for (_, e) in ks.chain.range(..=target_lsn).rev() {
             if !e.durable {
+                if started_durable {
+                    return None;
+                }
                 continue;
             }
+            started_durable = true;
             out.push(e.row.clone());
             if e.row.will_init {
                 has_anchor = true;
@@ -762,6 +779,51 @@ mod tests {
         assert!(chain[0].is_image);
         // And it shouldn't have looked anything like the original.
         assert_ne!(unflushed_before, 0);
+    }
+
+    /// Regression for the AWS BTREE walredo PANIC on 2026-06-02:
+    /// `lookup_chain_durable_if_complete` walked durable rows
+    /// silently skipping unflushed ones, returning a chain with a
+    /// hole. The materialiser walredoed the hole-bearing chain and
+    /// PG PANICed because the chain didn't legally reach the page
+    /// state at `target_lsn`. The fix returns `None` when any
+    /// unflushed row sits in the [anchor, target_lsn] range so the
+    /// caller falls back to `read_chain_durable` (cache + YB merge).
+    #[test]
+    fn durable_if_complete_returns_none_on_unflushed_in_range() {
+        // Build a chain with: anchor@10 durable, d20 durable, d30
+        // UNFLUSHED, d40 durable. The hole at d30 is what the AWS
+        // PANIC traced back to. `push_durable` here simulates
+        // "row arrived already-durable" (materialiser install) so we
+        // can park d40 as durable while d30 remains unflushed in the
+        // fifo.
+        let mut u = UnifiedPages::new(4096);
+        u.push(mk(b"k", 10, true, b"anchor"));
+        u.mark_first_n_flushed(1);              // anchor durable
+        u.push(mk(b"k", 20, false, b"d20"));
+        u.mark_first_n_flushed(1);              // d20 durable
+        u.push(mk(b"k", 30, false, b"d30"));    // UNFLUSHED — sits in fifo
+        u.push_durable(mk(b"k", 40, false, b"d40")); // d40 lands already-durable
+
+        // Now chain LSN-desc: d40 (D), d30 (U), d20 (D), anchor@10 (D).
+        // Pre-fix `_if_complete` returned Some([d40, d20, anchor@10]) —
+        // missing d30. Post-fix returns None so the caller falls back
+        // to read_chain_durable (cache + YB).
+        let r = u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(100));
+        assert!(
+            r.is_none(),
+            "must reject the chain when an unflushed row sits between \
+             the anchor and target_lsn — chains with holes are unsafe",
+        );
+
+        // Sanity: the underlying `lookup_chain_durable` still returns
+        // its silently-filtered view (durable rows only, hole and all).
+        // It's the right primitive for `read_chain_durable`'s cache
+        // half — YB fills in the gap. Only the `_if_complete` claim
+        // is strengthened.
+        let d = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
+        let lsns: Vec<u64> = d.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns, vec![40, 20, 10]);
     }
 
     /// Materialiser install at LSN N MUST drop every durable row with

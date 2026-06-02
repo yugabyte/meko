@@ -207,6 +207,13 @@ pub struct PageWriter {
     /// because the buffer was at `policy.backpressure_bytes`. Exposed
     /// for telemetry / smoke tests.
     backpressure_waits: std::sync::atomic::AtomicU64,
+    /// Upper bound on rel-page LSNs the materialiser is allowed to
+    /// consult in YB. Advanced only when `mark_first_n_flushed` runs
+    /// (after every chunk of a flush has committed). Materialiser
+    /// reads cap their `target_lsn` at this value so a mid-flush
+    /// partial-YB-view can never feed walredo a chain with a hole
+    /// — see `read_chain_durable` for the use site.
+    flush_horizon_lsn: std::sync::atomic::AtomicU64,
 }
 
 struct WriterState {
@@ -272,6 +279,7 @@ impl PageWriter {
             remote_consistent_lsn_slot: std::sync::OnceLock::new(),
             flush_completed: tokio::sync::Notify::new(),
             backpressure_waits: std::sync::atomic::AtomicU64::new(0),
+            flush_horizon_lsn: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -751,20 +759,36 @@ impl PageWriter {
         target_lsn: Lsn,
     ) -> Result<Vec<PageRow>> {
         let key_bytes = key_to_bytes(key);
+        // Cap the read at the writer's flush horizon. YB rows above
+        // the horizon are mid-flush — `put_pages` dispatches chunks
+        // via `buffer_unordered` so some chunks of the current flush
+        // may have committed while others haven't, and
+        // `mark_first_n_flushed` (which atomically promotes the
+        // snapshot in cache) hasn't run yet. Reading above the
+        // horizon could see a partial-chunk view (a delta missing
+        // from the middle of the chain) and walredo would PANIC.
+        // Reproduced on 2026-06-02 against the 2M-row workload.
+        let horizon = Lsn(self.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed));
+        let effective_target = std::cmp::min(target_lsn, horizon);
+        if effective_target.0 == 0 {
+            // Pre-flush — nothing durable yet anywhere. Materialiser
+            // has nothing to do; let the caller skip.
+            return Ok(Vec::new());
+        }
         // Cache-only fast path (durable-only variant for the
         // materialiser): same completeness criterion as `read_chain`,
         // but restricted to durable rows.
         {
             let s = self.state.read().await;
             if let Some(chain) =
-                s.pages.lookup_chain_durable_if_complete(&key_bytes, target_lsn)
+                s.pages.lookup_chain_durable_if_complete(&key_bytes, effective_target)
             {
                 return Ok(chain);
             }
         }
         let cached: Vec<PageRow> = {
             let s = self.state.read().await;
-            s.pages.lookup_chain_durable(&key_bytes, target_lsn)
+            s.pages.lookup_chain_durable(&key_bytes, effective_target)
         };
         // Materialiser-side cache miss → the internal conn (same one
         // the materialiser's write path uses). Keeping this off
@@ -772,7 +796,7 @@ impl PageWriter {
         // long materialiser walredo-and-INSERT can't stall compute.
         let persisted = self
             .internal_page_store
-            .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
+            .read_chain(self.tenant_id, self.timeline_id, &key_bytes, effective_target)
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
@@ -873,6 +897,19 @@ impl PageWriter {
                 // shrink the cache if it's over capacity.
                 s.pages.mark_first_n_flushed(rel_count);
                 s.pages.evict_to_capacity();
+                // Advance the materialiser's safe-to-read-from-YB watermark
+                // to the just-flushed max LSN. Until this point, YB contained
+                // a partial view of this flush's chunks (buffer_unordered
+                // dispatch order ≠ commit order) and the materialiser would
+                // have seen holes in the chain. After mark_first_n_flushed
+                // every snapshot row is durable in both cache and YB.
+                if let Some(max) = max_flushed_lsn {
+                    let cur = self.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed);
+                    if max > cur {
+                        self.flush_horizon_lsn
+                            .store(max, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 // Aux buffers drain as before.
                 let aux_drop_bytes: usize = s
                     .slru_buffer

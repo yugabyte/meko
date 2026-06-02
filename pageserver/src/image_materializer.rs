@@ -516,14 +516,26 @@ impl ImageMaterializer {
         // `read_chain`. Only the write-side trigger captures a chain;
         // read-side and shutdown triggers carry `None` and fall back to
         // the round-trip path below.
-        let chain = if let Some(captured) = &job.chain {
-            captured.clone()
+        let (chain, source) = if let Some(captured) = &job.chain {
+            (captured.clone(), "captured")
         } else {
-            self.page_writer
-                .read_chain_durable(Key::from_slice(&job.key), job.target_lsn)
-                .await
-                .context("read_chain_durable")?
+            (
+                self.page_writer
+                    .read_chain_durable(Key::from_slice(&job.key), job.target_lsn)
+                    .await
+                    .context("read_chain_durable")?,
+                "fallback",
+            )
         };
+        tracing::debug!(
+            tenant_id = %self.tenant_id,
+            timeline_id = %self.timeline_id,
+            target_lsn = %job.target_lsn,
+            key = ?bytes::Bytes::copy_from_slice(&job.key),
+            source,
+            chain_len = chain.len(),
+            "materialize_chain"
+        );
         if chain.is_empty() {
             return Ok(None);
         }
@@ -558,17 +570,36 @@ impl ImageMaterializer {
                 .expect("checked records empty + base_img some")
                 .1
         } else {
+            let chain_dump: Vec<String> = chain
+                .iter()
+                .map(|r| {
+                    format!(
+                        "(lsn={} is_image={} will_init={} pl={})",
+                        r.lsn,
+                        r.is_image as u8,
+                        r.will_init as u8,
+                        r.payload.len()
+                    )
+                })
+                .collect();
             self.walredo_mgr
                 .request_redo(
                     key,
                     actual_lsn,
-                    base_img,
+                    base_img.clone(),
                     records,
                     self.pg_version,
                     RedoAttemptType::LegacyCompaction,
                 )
                 .await
-                .context("request_redo")?
+                .with_context(|| {
+                    format!(
+                        "request_redo chain source={source} actual_lsn={actual_lsn} \
+                         chain_len={chain_len} base_img_lsn={:?} chain=[{}]",
+                        base_img.as_ref().map(|(l, _)| *l),
+                        chain_dump.join(",")
+                    )
+                })?
         };
         drop(chain_guard);
         Ok(Some((
