@@ -7,10 +7,15 @@ frontmatter `status` (or move to `tasks/archive/` once truly cold).
 
 ## Conventions
 
-- **Filename:** `<id>_<short-kebab-case-slug>.md`. The `<id>` is
-  either a bare integer (`6`, `10`) or `<num>.<letter>` for grouped
-  work (`4.a`, `4.k`, `2.b`). Use `<num>.<letter>` only when a
-  parent number has multiple subtasks; otherwise drop the letter.
+- **Filename:** `<id>_<short-kebab-case-slug>.md`. The `<id>` is one
+  of:
+  - `<num>` for top-level tasks with no siblings (`6`, `10`).
+  - `<num>.<letter>` when a parent number has multiple subtasks
+    (`4.a`, `4.k`, `2.b`).
+  - `<num>.<letter>.<num>` for further nesting under a subtask
+    (`3.a.1`, `3.c.1` — sub-subtasks of `3.a` / `3.c`).
+  Drop the trailing component whenever there's only one child;
+  don't add letters or numbers for siblings that don't exist.
   Don't reuse IDs even when the underlying file is deleted, so
   references stay stable.
 - **Frontmatter** at the top of each file (keep it brief):
@@ -56,10 +61,10 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 2.a | [`ImageRule` 10-delta enforcement](2.a_image-rule.md) | ✅ done | medium | yb-pageserver |
 | 2.b | [`PageWriter` buffered write path](2.b_pagewriter-buffered-write-path.md) | ✅ done | medium | yb-pageserver |
 | 3.a | [`Materializer` trait refactor](3.a_materializer-trait-refactor.md) | ✅ done | medium | yb-pageserver |
-| 3.a+ | [Primitives feeding Phase 3b](3.a+_primitives.md) | ✅ done | medium | yb-pageserver |
+| 3.a.1 | [Primitives feeding Phase 3b](3.a.1_primitives.md) | ✅ done | medium | yb-pageserver |
 | 3.b | [Tenant / Timeline plumbing for dual-write](3.b_tenant-timeline-plumbing.md) | ✅ done | medium | yb-pageserver |
 | 3.c | [Read flip to PageStore](3.c_read-flip-to-pagestore.md) | ✅ done | medium | yb-pageserver |
-| 3.c+ | [`yb_page_writer` config block](3.c+_config-block.md) | ✅ done | medium | yb-pageserver |
+| 3.c.1 | [`yb_page_writer` config block](3.c.1_config-block.md) | ✅ done | medium | yb-pageserver |
 | 3.d | [Schema reshape + design pivot](3.d_schema-reshape-design-pivot.md) | ✅ done | medium | yb-pageserver |
 | 3.e | [Background image materialiser](3.e_background-image-materialiser.md) | ✅ done | medium | yb-pageserver |
 | 3.f | [`UnifiedPages`](3.f_unified-pages.md) | ✅ done | medium | yb-pageserver |
