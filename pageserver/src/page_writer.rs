@@ -17,6 +17,7 @@
 //! Buffering: rows accumulate in RAM until a flush trigger (age or
 //! bytes) fires, then drain to `pageserver.pages` in one INSERT.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -71,24 +72,12 @@ impl Default for FlushPolicy {
 #[derive(Debug, Clone)]
 pub struct MaterializeJob {
     pub key: bytes::Bytes,
+    /// Always durable by construction. The post-flush trigger uses
+    /// `max(snapshot.lsn for key)` (every snapshot row is in YB AND
+    /// marked durable in cache by the time the trigger fires); the
+    /// read-side trigger uses the read's `target_lsn` which is the
+    /// caller's responsibility to bound at a durable LSN.
     pub target_lsn: Lsn,
-    /// Durable chain captured at trigger time, LSN-descending, when the
-    /// write-side trigger snapshots the cache while holding the writer
-    /// lock. The materialiser uses this directly when it's
-    /// `Some`-with-anchor, skipping the cache fast path and YB fallback
-    /// entirely — the chain is by-construction complete (no other
-    /// writer could have raced, no evictor had a chance to mutate it).
-    ///
-    /// `None` for the read-side trigger and shutdown trigger (no lock
-    /// held when those fire); also `None` if the captured durable
-    /// subset had no `will_init` row at trigger time (a freshly
-    /// inserted page whose anchor is still pre-flush). The materialiser
-    /// falls back to `read_chain_durable` in those cases.
-    ///
-    /// Payload `Bytes` here share their backing with the cache copies;
-    /// holding the chain in the job only extends those allocations'
-    /// lifetime — payload data is not duplicated.
-    pub chain: Option<Vec<crate::page_store::PageRow>>,
 }
 
 /// Trigger criteria for the image materialiser. `None` disables the
@@ -456,14 +445,17 @@ impl PageWriter {
         if rel_rows.is_empty() && slru_rows.is_empty() && meta_rows.is_empty() {
             return Ok(());
         }
-        // Collect materialisation jobs while holding the lock; dispatch
-        // them after release so the tx.send (channel-full case) can't
-        // block another writer waiting on `state`.
-        let trigger = self
+        // Accumulate per-key delta counters here; the materialiser
+        // trigger fires from `flush()` (after `mark_first_n_flushed`
+        // advances `flush_horizon_lsn`), not from this put loop. That
+        // way every job's `target_lsn` is durable by construction —
+        // see `flush()` for the trigger site.
+        let counting = self
             .materializer
             .as_ref()
-            .map(|m| (m.count_limit, m.payload_bytes_limit, m.in_flight.clone()));
-        let mut to_materialize: Vec<MaterializeJob> = Vec::new();
+            .map(|m| (m.count_limit, m.payload_bytes_limit))
+            .filter(|(c, b)| *c > 0 || *b > 0)
+            .is_some();
         {
             let mut s = self.state.write().await;
             if s.opened_at.is_none() {
@@ -471,7 +463,6 @@ impl PageWriter {
             }
             for row in rel_rows {
                 let key = row.key.clone();
-                let lsn = row.lsn;
                 let resets_chain = row.is_image || row.will_init;
                 let payload_len = row.payload.len() as u32;
                 s.pages.push(row);
@@ -479,50 +470,10 @@ impl PageWriter {
 
                 if resets_chain {
                     s.delta_counts.remove(&key);
-                } else if let Some((count_limit, bytes_limit, in_flight)) = trigger.as_ref()
-                    && (*count_limit > 0 || *bytes_limit > 0)
-                {
-                    let tally = s.delta_counts.entry(key.clone()).or_default();
+                } else if counting {
+                    let tally = s.delta_counts.entry(key).or_default();
                     tally.count = tally.count.saturating_add(1);
                     tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
-                    // Whichever threshold lands first dispatches. A
-                    // disabled threshold (zero) is treated as "infinity"
-                    // so it never alone fires.
-                    let count_hit = *count_limit > 0 && tally.count >= *count_limit;
-                    let bytes_hit = *bytes_limit > 0 && tally.payload_bytes >= *bytes_limit;
-                    if count_hit || bytes_hit {
-                        // Only enqueue + reset the counter if this key
-                        // doesn't already have a job in flight. If it
-                        // does, leave the counter at >= threshold so the
-                        // first delta past the in-flight job's completion
-                        // immediately re-fires — at the *current* LSN,
-                        // not stale intermediate LSNs we'd waste walredo
-                        // cycles on.
-                        let inserted = in_flight.lock().unwrap().insert(key.clone());
-                        if inserted {
-                            s.delta_counts.remove(&key);
-                            // Snapshot the durable chain while the
-                            // writer lock is still held. Use the
-                            // completeness-checked lookup so a
-                            // mid-chain eviction (per-row FIFO can
-                            // drop a delta between the anchor and
-                            // `target_lsn` for a hot key) surfaces as
-                            // `None` and the materialiser falls back
-                            // to `read_chain_durable` (cache + YB
-                            // merge). Skipping the check is what
-                            // produced the AWS-side walredo PANIC on
-                            // 2026-06-02; see `tasks/4.f`. PageRows
-                            // are cloned but payload Bytes refcount-
-                            // bump rather than duplicate.
-                            let chain =
-                                s.pages.lookup_chain_durable_if_complete(&key, lsn);
-                            to_materialize.push(MaterializeJob {
-                                key,
-                                target_lsn: lsn,
-                                chain,
-                            });
-                        }
-                    }
                 }
             }
             for row in slru_rows {
@@ -537,57 +488,61 @@ impl PageWriter {
             }
         }
 
-        if !to_materialize.is_empty()
-            && let Some(m) = self.materializer.as_ref()
-        {
-            let dispatched = to_materialize.len();
-            let queue_cap = m.tx.max_capacity();
-            let queue_remaining_before = m.tx.capacity();
-            let mut waited_for_capacity = false;
-            for job in to_materialize {
-                // Blocking send: backpressure the walreceiver if the
-                // materialiser can't keep up. Silent try_send drops
-                // were causing deep chains to accumulate during write
-                // bursts and stay deep forever once ingest went idle
-                // (no later put would re-trigger after the counter
-                // cleared). Receiver lives as long as the timeline, so
-                // SendError here means timeline shutdown — undo the
-                // in_flight reservation for this and remaining jobs so
-                // a later restart's trigger isn't blocked.
-                if !waited_for_capacity && m.tx.capacity() == 0 {
-                    waited_for_capacity = true;
-                    crate::metrics::PAGEWRITER_BACKPRESSURE_WAITS
-                        .with_label_values(&["materializer"])
-                        .inc();
-                }
-                let key_for_rollback = job.key.clone();
-                if let Err(e) = m.tx.send(job).await {
-                    tracing::debug!(
-                        "materialiser send dropped (receiver closed): {e}"
-                    );
-                    m.in_flight.lock().unwrap().remove(&key_for_rollback);
-                    break;
-                }
+        Ok(())
+    }
+
+    /// Send a batch of materialise jobs to the worker. Extracted so
+    /// the post-flush trigger (`flush()`) and read-side dispatch can
+    /// share the same backpressure + metrics path. Caller must have
+    /// already reserved each job's key in `in_flight`.
+    async fn dispatch_materialize_jobs(&self, to_materialize: Vec<MaterializeJob>) {
+        if to_materialize.is_empty() {
+            return;
+        }
+        let Some(m) = self.materializer.as_ref() else {
+            return;
+        };
+        let dispatched = to_materialize.len();
+        let queue_cap = m.tx.max_capacity();
+        let queue_remaining_before = m.tx.capacity();
+        let mut waited_for_capacity = false;
+        for job in to_materialize {
+            // Blocking send: backpressure the walreceiver if the
+            // materialiser can't keep up. Silent try_send drops were
+            // causing deep chains to accumulate during write bursts
+            // and stay deep forever once ingest went idle (no later
+            // put would re-trigger after the counter cleared).
+            // Receiver lives as long as the timeline, so SendError
+            // here means timeline shutdown — undo the in_flight
+            // reservation for this and remaining jobs so a later
+            // restart's trigger isn't blocked.
+            if !waited_for_capacity && m.tx.capacity() == 0 {
+                waited_for_capacity = true;
+                crate::metrics::PAGEWRITER_BACKPRESSURE_WAITS
+                    .with_label_values(&["materializer"])
+                    .inc();
             }
-            // Sample queue depth gauge after dispatch. Captures the
-            // post-burst level; reads between bursts will tail toward
-            // 0 as the materialiser drains.
-            crate::metrics::MATERIALIZER_QUEUE_DEPTH
-                .set(m.tx.max_capacity().saturating_sub(m.tx.capacity()) as u64);
-            let queue_remaining_after = m.tx.capacity();
-            if waited_for_capacity || queue_remaining_after < queue_cap / 2 {
-                info!(
-                    tag = "materialise_dispatch",
-                    dispatched = dispatched,
-                    queue_cap = queue_cap,
-                    queue_remaining_before = queue_remaining_before,
-                    queue_remaining_after = queue_remaining_after,
-                    waited_for_capacity = waited_for_capacity,
-                    "perf",
-                );
+            let key_for_rollback = job.key.clone();
+            if let Err(e) = m.tx.send(job).await {
+                tracing::debug!("materialiser send dropped (receiver closed): {e}");
+                m.in_flight.lock().unwrap().remove(&key_for_rollback);
+                break;
             }
         }
-        Ok(())
+        crate::metrics::MATERIALIZER_QUEUE_DEPTH
+            .set(m.tx.max_capacity().saturating_sub(m.tx.capacity()) as u64);
+        let queue_remaining_after = m.tx.capacity();
+        if waited_for_capacity || queue_remaining_after < queue_cap / 2 {
+            info!(
+                tag = "materialise_dispatch",
+                dispatched = dispatched,
+                queue_cap = queue_cap,
+                queue_remaining_before = queue_remaining_before,
+                queue_remaining_after = queue_remaining_after,
+                waited_for_capacity = waited_for_capacity,
+                "perf",
+            );
+        }
     }
 
     /// Range scan: return all page rows in `range` at LSN ≤
@@ -698,9 +653,23 @@ impl PageWriter {
         let Some(m) = self.materializer.as_ref() else {
             return;
         };
+        // The materialiser's target_lsn must be durable. The read's
+        // target_lsn can sit above the horizon (compute observing its
+        // own pre-flush writes). Cap at the horizon so the resulting
+        // job won't ask the materialiser to read YB above the
+        // partial-flush window. If horizon is 0 (no flush yet) skip
+        // the dispatch — nothing to materialize against.
+        let horizon = Lsn(
+            self.flush_horizon_lsn
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        if horizon.0 == 0 {
+            return;
+        }
+        let bounded_target = std::cmp::min(target_lsn, horizon);
         if try_dispatch_read_side(
             key_bytes,
-            target_lsn,
+            bounded_target,
             chain_len,
             m.count_limit,
             &m.in_flight,
@@ -758,37 +727,28 @@ impl PageWriter {
         key: Key,
         target_lsn: Lsn,
     ) -> Result<Vec<PageRow>> {
+        // `target_lsn` is the caller's contract: it must be ≤
+        // `flush_horizon_lsn` so a YB read above the horizon can't
+        // surface a mid-flush partial-chunk view. The post-flush
+        // materialiser trigger guarantees this by construction
+        // (it sets `target_lsn` to the snapshot's max, which the
+        // horizon was just advanced to). The read-side dispatch
+        // path must bound its own `target_lsn` similarly.
         let key_bytes = key_to_bytes(key);
-        // Cap the read at the writer's flush horizon. YB rows above
-        // the horizon are mid-flush — `put_pages` dispatches chunks
-        // via `buffer_unordered` so some chunks of the current flush
-        // may have committed while others haven't, and
-        // `mark_first_n_flushed` (which atomically promotes the
-        // snapshot in cache) hasn't run yet. Reading above the
-        // horizon could see a partial-chunk view (a delta missing
-        // from the middle of the chain) and walredo would PANIC.
-        // Reproduced on 2026-06-02 against the 2M-row workload.
-        let horizon = Lsn(self.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed));
-        let effective_target = std::cmp::min(target_lsn, horizon);
-        if effective_target.0 == 0 {
-            // Pre-flush — nothing durable yet anywhere. Materialiser
-            // has nothing to do; let the caller skip.
-            return Ok(Vec::new());
-        }
         // Cache-only fast path (durable-only variant for the
         // materialiser): same completeness criterion as `read_chain`,
         // but restricted to durable rows.
         {
             let s = self.state.read().await;
             if let Some(chain) =
-                s.pages.lookup_chain_durable_if_complete(&key_bytes, effective_target)
+                s.pages.lookup_chain_durable_if_complete(&key_bytes, target_lsn)
             {
                 return Ok(chain);
             }
         }
         let cached: Vec<PageRow> = {
             let s = self.state.read().await;
-            s.pages.lookup_chain_durable(&key_bytes, effective_target)
+            s.pages.lookup_chain_durable(&key_bytes, target_lsn)
         };
         // Materialiser-side cache miss → the internal conn (same one
         // the materialiser's write path uses). Keeping this off
@@ -796,7 +756,7 @@ impl PageWriter {
         // long materialiser walredo-and-INSERT can't stall compute.
         let persisted = self
             .internal_page_store
-            .read_chain(self.tenant_id, self.timeline_id, &key_bytes, effective_target)
+            .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
@@ -891,6 +851,7 @@ impl PageWriter {
                 .chain(slru_rows.iter().map(|r| r.lsn.0))
                 .chain(meta_rows.iter().map(|r| r.lsn.0))
                 .max();
+            let mut to_materialize: Vec<MaterializeJob> = Vec::new();
             {
                 let mut s = self.state.write().await;
                 // Promote rel rows in-place (no copy), then opportunistically
@@ -908,6 +869,59 @@ impl PageWriter {
                     if max > cur {
                         self.flush_horizon_lsn
                             .store(max, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                // Materialiser trigger fires here, not from `put`. The
+                // trigger LSN is the just-promoted max per key in this
+                // snapshot — durable by construction (every row in
+                // `rel_rows` is now in YB AND marked durable in cache).
+                // Walking `delta_counts` finds keys whose count or
+                // payload-byte tally crossed `image_chain_limit` /
+                // `image_chain_payload_bytes_limit`; for each, find the
+                // max LSN seen in this snapshot and enqueue one job.
+                // Keys without a matching snapshot row (counter bumped
+                // by an unflushed put after the snapshot) are deferred
+                // to the next flush.
+                if let Some(m) = self.materializer.as_ref()
+                    && (m.count_limit > 0 || m.payload_bytes_limit > 0)
+                {
+                    let mut max_lsn_per_key: HashMap<bytes::Bytes, Lsn> = HashMap::new();
+                    for row in &rel_rows {
+                        let entry = max_lsn_per_key
+                            .entry(row.key.clone())
+                            .or_insert(Lsn(0));
+                        if row.lsn > *entry {
+                            *entry = row.lsn;
+                        }
+                    }
+                    let mut keys_to_clear: Vec<bytes::Bytes> = Vec::new();
+                    for (key, tally) in s.delta_counts.iter() {
+                        let count_hit =
+                            m.count_limit > 0 && tally.count >= m.count_limit;
+                        let bytes_hit = m.payload_bytes_limit > 0
+                            && tally.payload_bytes >= m.payload_bytes_limit;
+                        if !(count_hit || bytes_hit) {
+                            continue;
+                        }
+                        let Some(&target_lsn) = max_lsn_per_key.get(key) else {
+                            // Counter bumped after the snapshot — leave it
+                            // at >= threshold so the next flush picks it
+                            // up. Skipping is the same write-trigger gap
+                            // the old put-time logic handled with an
+                            // `in_flight` recheck.
+                            continue;
+                        };
+                        let inserted = m.in_flight.lock().unwrap().insert(key.clone());
+                        if inserted {
+                            keys_to_clear.push(key.clone());
+                            to_materialize.push(MaterializeJob {
+                                key: key.clone(),
+                                target_lsn,
+                            });
+                        }
+                    }
+                    for k in keys_to_clear {
+                        s.delta_counts.remove(&k);
                     }
                 }
                 // Aux buffers drain as before.
@@ -932,6 +946,7 @@ impl PageWriter {
                     s.opened_at = None;
                 }
             }
+            self.dispatch_materialize_jobs(to_materialize).await;
             // Wake any `put()` callers blocked on backpressure. Done
             // after the state lock is released so the woken tasks can
             // re-take it immediately.
@@ -1513,10 +1528,6 @@ fn try_dispatch_read_side(
         .try_send(MaterializeJob {
             key: key_bytes.clone(),
             target_lsn,
-            // Read-side trigger doesn't hold the writer lock, so no
-            // race-free snapshot is available; materialiser falls
-            // back to `read_chain_durable` for these.
-            chain: None,
         })
         .is_err()
     {
@@ -2127,132 +2138,41 @@ mod tests {
         let (w, _t, _tl, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // (LIMIT - 1) deltas: nothing queued yet.
+        // (LIMIT - 1) deltas + a flush — the counter sits below
+        // threshold, so the post-flush trigger doesn't fire yet.
         for i in 0..(LIMIT - 1) {
             w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
                 .await
                 .unwrap();
-            assert!(
-                rx.try_recv().is_err(),
-                "premature dispatch after {} deltas",
-                i + 1
-            );
         }
-        // LIMITth delta: dispatch.
+        w.flush().await.unwrap();
+        assert!(rx.try_recv().is_err(), "premature dispatch below threshold");
+
+        // LIMITth delta + flush: the post-flush trigger sees count ≥
+        // limit and enqueues exactly one job at the snapshot's max
+        // LSN for this key.
         w.put(&[(k(1), Lsn(10 + LIMIT as u64), delta_non_init())])
             .await
             .unwrap();
-        let job = rx
-            .try_recv()
-            .expect("dispatched on hitting threshold");
+        w.flush().await.unwrap();
+        let job = rx.try_recv().expect("dispatched after flush hits threshold");
         assert_eq!(job.target_lsn, Lsn(10 + LIMIT as u64));
         assert_eq!(job.key.as_ref(), key_to_bytes(k(1)).as_ref());
-        // Simulate the materialiser finishing this batch (production:
-        // `ImageMaterializer::materialize_batch` does this after the
-        // INSERT). Until this happens the in_flight dedup blocks
-        // re-enqueue for the same key.
+        // Simulate the materialiser finishing this batch.
         in_flight.lock().unwrap().remove(&job.key);
 
-        // Counter reset: another (LIMIT-1) deltas must not re-dispatch.
+        // Counter reset: another (LIMIT-1) deltas + flush must not
+        // re-dispatch.
         for i in 0..(LIMIT - 1) {
             w.put(&[(k(1), Lsn(100 + i as u64), delta_non_init())])
                 .await
                 .unwrap();
         }
+        w.flush().await.unwrap();
         assert!(rx.try_recv().is_err(), "dispatch before second threshold");
         w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
-        let _ = rx.try_recv().expect("dispatch on second threshold");
-
-        drop_schema(&store, &schema).await;
-    }
-
-    /// Write-side trigger captures the durable chain at dispatch time
-    /// when the chain has a durable anchor.
-    ///
-    /// Regression for commit `e50423234` (captured chain at materialiser
-    /// trigger): the materialiser used to re-read the chain via
-    /// `read_chain_durable`, which forced a YB round-trip whenever the
-    /// cache fast path bailed on `evicted_below`. Now the trigger
-    /// snapshots the durable chain under the writer lock (where it is
-    /// by construction complete) and embeds it in `MaterializeJob.chain`.
-    #[tokio::test]
-    async fn trigger_captures_durable_chain_with_anchor() {
-        let (store, schema) = make_store("mat_capture_chain").await;
-        const LIMIT: u32 = 10;
-        let (w, _t, _tl, mut rx, _in_flight) =
-            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
-
-        // Anchor + 9 deltas, then flush so all become durable.
-        w.put(&[(k(1), Lsn(10), delta_will_init())]).await.unwrap();
-        for i in 0..(LIMIT - 1) {
-            w.put(&[(k(1), Lsn(20 + i as u64), delta_non_init())])
-                .await
-                .unwrap();
-        }
         w.flush().await.unwrap();
-
-        // The LIMIT-th post-anchor delta fires the trigger. At this
-        // point the new delta is unflushed but the anchor + the
-        // earlier 9 deltas are durable. The captured chain should hold
-        // those 10 durable rows.
-        w.put(&[(k(1), Lsn(100), delta_non_init())]).await.unwrap();
-        let job = rx.try_recv().expect("dispatched on hitting threshold");
-        let chain = job
-            .chain
-            .as_ref()
-            .expect("captured chain populated when anchor is durable");
-
-        // LSN-descending; the will_init anchor is at the end.
-        let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
-        let lowest = *lsns.last().expect("non-empty chain");
-        assert_eq!(lowest, 10, "anchor at lsn 10 must be in the captured chain");
-        assert!(
-            chain.last().unwrap().will_init,
-            "the lowest captured row must be a will_init anchor"
-        );
-        // The just-pushed (unflushed) row must NOT appear in the
-        // durable snapshot, even though target_lsn covers it.
-        assert!(
-            !lsns.contains(&100),
-            "the pre-flush row pushed at trigger time must be excluded \
-             from the durable snapshot — captured chain is durable-only"
-        );
-
-        drop_schema(&store, &schema).await;
-    }
-
-    /// Write-side trigger captures `chain: None` when the durable chain
-    /// has no `will_init` anchor at trigger time — the materialiser
-    /// can't act on an anchorless captured chain, and forcing it to
-    /// would cost a snapshot allocation for nothing. Materialiser
-    /// falls back to `read_chain_durable` in this case.
-    ///
-    /// Same regression as `trigger_captures_durable_chain_with_anchor`,
-    /// covering the no-durable-anchor branch of
-    /// `lookup_chain_durable_if_complete` (returns `None` when the
-    /// cache has no `will_init` anchor at or below `target_lsn`).
-    #[tokio::test]
-    async fn trigger_captures_none_when_anchor_still_pre_flush() {
-        let (store, schema) = make_store("mat_capture_none").await;
-        const LIMIT: u32 = 10;
-        let (w, _t, _tl, mut rx, _in_flight) =
-            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
-
-        // Anchor + 10 non-init deltas, no flush in between — every
-        // row including the anchor stays in the pre-flush buffer.
-        w.put(&[(k(1), Lsn(10), delta_will_init())]).await.unwrap();
-        for i in 0..LIMIT {
-            w.put(&[(k(1), Lsn(20 + i as u64), delta_non_init())])
-                .await
-                .unwrap();
-        }
-
-        let job = rx.try_recv().expect("dispatched on hitting threshold");
-        assert!(
-            job.chain.is_none(),
-            "captured chain must be None when the will_init anchor is \
-             still unflushed at trigger time"
-        );
+        let _ = rx.try_recv().expect("dispatch on second threshold");
 
         drop_schema(&store, &schema).await;
     }
@@ -2266,7 +2186,9 @@ mod tests {
         let (w, _t, _tl, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // 5 deltas, then an image, then 9 deltas — must NOT dispatch.
+        // 5 deltas, then an image, then 9 deltas + flush — must NOT
+        // dispatch (counter reset by the image, then only 9 deltas
+        // accumulated again).
         for i in 0..5 {
             w.put(&[(k(1), Lsn(10 + i), delta_non_init())])
                 .await
@@ -2278,12 +2200,11 @@ mod tests {
                 .await
                 .unwrap();
         }
-        assert!(
-            rx.try_recv().is_err(),
-            "image should have reset the counter"
-        );
-        // 10th post-image delta: now dispatch.
+        w.flush().await.unwrap();
+        assert!(rx.try_recv().is_err(), "image should have reset the counter");
+        // 10th post-image delta + flush: now dispatch.
         w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
+        w.flush().await.unwrap();
         let job = rx.try_recv().expect("dispatch after 10 post-image deltas");
         assert_eq!(job.target_lsn, Lsn(200));
 
@@ -2320,34 +2241,31 @@ mod tests {
 
         w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();
         w.put(&[(k(1), Lsn(20), delta_non_init())]).await.unwrap();
+        w.flush().await.unwrap();
         assert!(
             rx.try_recv().is_err(),
             "must not dispatch before payload-bytes threshold is reached"
         );
-        // 3rd delta puts cumulative bytes at exactly the limit.
+        // 3rd delta + flush puts cumulative bytes at exactly the limit.
         w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
-        let job = rx
-            .try_recv()
-            .expect("dispatched on hitting payload-bytes threshold");
+        w.flush().await.unwrap();
+        let job = rx.try_recv().expect("dispatched on hitting payload-bytes threshold");
         assert_eq!(job.target_lsn, Lsn(30));
 
-        // Simulate materialiser finishing so the next threshold can re-fire.
         in_flight.lock().unwrap().remove(&job.key);
 
-        // Counter reset on dispatch — another 2 deltas must NOT
-        // dispatch even though cumulative-since-creation is now 5
-        // deltas (well past 3).
+        // Counter reset on dispatch — another 2 deltas + flush must
+        // NOT dispatch.
         w.put(&[(k(1), Lsn(40), delta_non_init())]).await.unwrap();
         w.put(&[(k(1), Lsn(50), delta_non_init())]).await.unwrap();
+        w.flush().await.unwrap();
         assert!(
             rx.try_recv().is_err(),
             "counter must reset after dispatch; tally restarts at 0"
         );
-        // 3rd delta past the previous trigger re-fires.
         w.put(&[(k(1), Lsn(60), delta_non_init())]).await.unwrap();
-        let _ = rx
-            .try_recv()
-            .expect("dispatch on second payload-bytes threshold");
+        w.flush().await.unwrap();
+        let _ = rx.try_recv().expect("dispatch on second payload-bytes threshold");
 
         drop_schema(&store, &schema).await;
     }
@@ -2376,8 +2294,10 @@ mod tests {
 
         w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();
         w.put(&[(k(1), Lsn(20), delta_non_init())]).await.unwrap();
+        w.flush().await.unwrap();
         assert!(rx.try_recv().is_err());
         w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
+        w.flush().await.unwrap();
         let _ = rx.try_recv().expect("count threshold fires first");
 
         drop_schema(&store, &schema).await;
@@ -2401,12 +2321,13 @@ mod tests {
         let (w, _t, _tl, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // First threshold: dispatch.
+        // First threshold + flush: dispatch.
         for i in 0..LIMIT {
             w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
                 .await
                 .unwrap();
         }
+        w.flush().await.unwrap();
         let first = rx.try_recv().expect("first threshold dispatches");
         assert_eq!(first.target_lsn, Lsn(10 + (LIMIT - 1) as u64));
         assert!(
@@ -2414,33 +2335,30 @@ mod tests {
             "in_flight must hold the key while the job is outstanding"
         );
 
-        // While the key is in_flight, additional threshold-crossings
-        // for it must not enqueue duplicates. Push a generous run of
-        // deltas — many multiples of LIMIT — and confirm no new
-        // dispatch lands.
+        // While the key is in_flight, subsequent flushes must NOT
+        // enqueue duplicates for it.
         for i in 0..(LIMIT * 3) {
             w.put(&[(k(1), Lsn(100 + i as u64), delta_non_init())])
                 .await
                 .unwrap();
         }
+        w.flush().await.unwrap();
         assert!(
             rx.try_recv().is_err(),
             "no duplicate dispatch while key is in_flight"
         );
 
         // Materialiser completes — remove the in_flight reservation.
-        // The next delta must re-fire immediately at the *current* LSN,
-        // because the counter has been left at-or-above threshold since
-        // the dedup-blocked dispatch.
+        // The next push + flush re-fires at the current LSN (counter
+        // still ≥ threshold from the dedup-blocked attempt).
         in_flight.lock().unwrap().remove(&first.key);
         w.put(&[(k(1), Lsn(500), delta_non_init())]).await.unwrap();
-        let second = rx
-            .try_recv()
-            .expect("first delta after in_flight release immediately re-fires");
+        w.flush().await.unwrap();
+        let second = rx.try_recv().expect("re-fires after in_flight release");
         assert_eq!(
             second.target_lsn,
             Lsn(500),
-            "re-dispatch must target the *current* LSN, not a stale intermediate one"
+            "re-dispatch must target the latest flushed LSN for this key"
         );
 
         drop_schema(&store, &schema).await;
@@ -2467,11 +2385,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        assert!(
-            rx.try_recv().is_err(),
-            "will_init should have reset the counter"
-        );
+        w.flush().await.unwrap();
+        assert!(rx.try_recv().is_err(), "will_init should have reset the counter");
         w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
+        w.flush().await.unwrap();
         let _ = rx.try_recv().expect("dispatch after will_init + LIMIT");
 
         drop_schema(&store, &schema).await;
@@ -2485,8 +2402,8 @@ mod tests {
         let (w, _t, _tl, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // Alternate keys k(1) and k(2). After 4 deltas total each, both
-        // should have hit the threshold once.
+        // Alternate keys k(1) and k(2). After 4 deltas total each +
+        // flush, the post-flush trigger should fire one job per key.
         for i in 0..LIMIT {
             w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
                 .await
@@ -2495,6 +2412,7 @@ mod tests {
                 .await
                 .unwrap();
         }
+        w.flush().await.unwrap();
         let mut seen_keys = std::collections::HashSet::new();
         for _ in 0..2 {
             let job = rx.try_recv().expect("two dispatches expected");
@@ -2741,7 +2659,6 @@ mod tests {
             tx.try_send(MaterializeJob {
                 key: key_to_bytes(k(99)),
                 target_lsn: Lsn(1),
-                chain: None,
             })
             .unwrap();
             let in_flight = Mutex::new(HashSet::new());
