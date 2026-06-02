@@ -11,7 +11,7 @@ opened: 2026-06-02
 
 After a `neon_local init` + `start` against a freshly-created
 `storage_controller` database, the very next API call from the
-pageserver to storcon fails with:
+pageserver to storage_ctl fails with:
 
 ```
 pageserver API: Conflict: 1 (localhost) 500 Internal Server Error:
@@ -26,16 +26,38 @@ after `start` before the first `tenant create` also works.
 
 ## Why it happens
 
-`neon_local start` brings up storcon's embedded Postgres, then storcon
-itself, then the pageserver. Pageserver registration with storcon
-appears to fire before storcon's migrations have finished against a
+`neon_local start` brings up storage_ctl's embedded Postgres, then storage_ctl
+itself, then the pageserver. Pageserver registration with storage_ctl
+appears to fire before storage_ctl's migrations have finished against a
 just-created DB. The pageserver looks healthy by neon_local's standards
-("port is open") but its first operation against storcon hits a
+("port is open") but its first operation against storage_ctl hits a
 schema that doesn't exist yet.
 
 Storage_controller migrations against a freshly-dropped YB-style
 database take ~60 s in practice; neon_local's health check doesn't
 account for that.
+
+## Sibling wedge (same area, hit twice on 2026-06-02)
+
+`ensure_yb_storage_schema` (control_plane/src/storage_controller.rs)
+itself can hang on a fresh YB database after the first few
+`CREATE TABLE IF NOT EXISTS` statements complete. The tokio_postgres
+connection ends up in a state where:
+
+- neon_local's runtime sits in `do_epoll_wait` indefinitely (no syscall progress).
+- pg_stat_activity shows zero active queries from the connection.
+- Manually running the same `CREATE TABLE` via psql against YB
+  succeeds in <1s, so YB itself is fine.
+
+The hang reliably occurs *between* `pageserver.meta` and
+`pageserver.timelines` creations. Killing neon_local and restarting
+against the now-partial schema lets the idempotent path complete in
+seconds because all CREATEs become no-ops.
+
+Workaround: run init/start twice — or pre-create the schema
+manually. Proper fix: investigate why the tokio_postgres connection
+silently stalls; likely a connection-task cancellation race in the
+external-DB bootstrap path.
 
 ## Repro
 

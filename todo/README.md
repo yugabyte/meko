@@ -8,7 +8,7 @@ to `todo/done/`) once the work lands.
 ## Conventions
 
 - Filename: `<id>_<short-kebab-case-slug>.md`, where `<id>` is a
-  monotonically-increasing integer (`1_phase-4k-storcon-startup-wedge.md`).
+  monotonically-increasing integer (`1_phase-4k-storage_ctl-startup-wedge.md`).
   Use the next free integer for new entries — don't reuse IDs even
   when the underlying file is deleted, so references stay stable.
 - Suggested frontmatter at the top of each file (keep it brief):
@@ -16,7 +16,7 @@ to `todo/done/`) once the work lands.
   ---
   status: open       # open | in_progress | blocked | done
   severity: high     # high | medium | low
-  area: storcon      # tag the subsystem
+  area: storage_ctl  # tag the subsystem
   opened: 2026-06-02
   ---
   ```
