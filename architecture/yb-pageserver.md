@@ -236,7 +236,7 @@ Default knobs (configurable via `pageserver.toml` under the
 | `backpressure_bytes` | 50 MiB | Hard ceiling on the pre-flush buffer. `PageWriter::put` blocks until a flush drains below it. `0` disables (legacy unbounded growth) |
 | `image_chain_limit` | 20 | Deltas-since-anchor before a key is queued for materialisation (`0` disables count trigger) |
 | `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for materialisation (`0` disables size trigger) |
-| `materialize_queue_capacity` | 5000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
+| `materialize_queue_capacity` | 1000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
 | `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Durable entries are evicted FIFO when crossed; pre-flush entries are pinned regardless |
 
 ## Backpressure
@@ -264,7 +264,7 @@ Set `backpressure_bytes = 0` to opt out (legacy unbounded growth).
 
 **Materialiser-side backpressure.** The write-time materialisation
 trigger does a **blocking** `mpsc::send` into the materialiser channel
-(capacity `materialize_queue_capacity`, default 5000). When the
+(capacity `materialize_queue_capacity`, default 1000). When the
 materialiser can't drain — usually because its own `read_chain_durable`
 + walredo + `put_pages` chain is bottlenecked on the dedicated YSQL
 connection — the channel fills and the walreceiver blocks at the

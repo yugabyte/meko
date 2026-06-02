@@ -337,8 +337,8 @@ pub struct YbPageWriterConfig {
     /// can't keep up — preferred over silent drops, which leak deep
     /// chains into the steady state). The read-side trigger uses
     /// `try_send` (drop OK — the next read of the same key re-evaluates).
-    /// At ~100 B per slot (job + mpsc overhead), 5000 ≈ 500 KB total.
-    /// Default 5000.
+    /// At ~100 B per slot (job + mpsc overhead), 1000 ≈ 100 KB total.
+    /// Default 1000.
     pub materialize_queue_capacity: usize,
 
     /// Soft cap on the in-RAM `UnifiedPages` cache (pre-flush buffer +
@@ -367,7 +367,7 @@ impl Default for YbPageWriterConfig {
             flush_poll_interval: Duration::from_millis(500),
             image_chain_limit: 20,
             image_chain_payload_bytes_limit: 4096,
-            materialize_queue_capacity: 5000,
+            materialize_queue_capacity: 1000,
             read_cache_bytes: 1024 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
         }
