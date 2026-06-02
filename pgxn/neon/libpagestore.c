@@ -85,8 +85,14 @@ static int	stripe_size;
 static int	max_sockets;
 
 static int pageserver_response_log_timeout = 10000;
-/* 2.5 minutes. A bit higher than highest default TCP retransmission timeout */
-static int pageserver_response_disconnect_timeout = 150000;
+/*
+ * 30 s. Below the kernel's default TCP-retransmit ceiling on purpose:
+ * yb-pageserver is a same-DC, low-latency hop, so a stuck request is far
+ * more likely a pageserver-side stall than transient packet loss, and
+ * we want the compute to drop+reopen the socket quickly rather than wait
+ * out an arbitrarily long TCP retry sequence.
+ */
+static int pageserver_response_disconnect_timeout = 30000;
 
 static int	conf_refresh_reconnect_attempt_threshold = 16;
 // Hadron: timeout for refresh errors (1 minute)
@@ -1613,7 +1619,7 @@ pg_init_libpagestore(void)
 							"If the pageserver doesn't respond to a request within this timeout, "
 							"disconnect and reconnect.",
 							&pageserver_response_disconnect_timeout,
-							150000, 100, INT_MAX,
+							30000, 100, INT_MAX,
 							PGC_SUSET,
 							GUC_UNIT_MS,
 							NULL, NULL, NULL);
