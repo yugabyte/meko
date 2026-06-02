@@ -71,6 +71,23 @@ impl Default for FlushPolicy {
 pub struct MaterializeJob {
     pub key: bytes::Bytes,
     pub target_lsn: Lsn,
+    /// Durable chain captured at trigger time, LSN-descending, when the
+    /// write-side trigger snapshots the cache while holding the writer
+    /// lock. The materialiser uses this directly when it's
+    /// `Some`-with-anchor, skipping the cache fast path and YB fallback
+    /// entirely — the chain is by-construction complete (no other
+    /// writer could have raced, no evictor had a chance to mutate it).
+    ///
+    /// `None` for the read-side trigger and shutdown trigger (no lock
+    /// held when those fire); also `None` if the captured durable
+    /// subset had no `will_init` row at trigger time (a freshly
+    /// inserted page whose anchor is still pre-flush). The materialiser
+    /// falls back to `read_chain_durable` in those cases.
+    ///
+    /// Payload `Bytes` here share their backing with the cache copies;
+    /// holding the chain in the job only extends those allocations'
+    /// lifetime — payload data is not duplicated.
+    pub chain: Option<Vec<crate::page_store::PageRow>>,
 }
 
 /// Trigger criteria for the image materialiser. `None` disables the
@@ -475,9 +492,22 @@ impl PageWriter {
                         let inserted = in_flight.lock().unwrap().insert(key.clone());
                         if inserted {
                             s.delta_counts.remove(&key);
+                            // Snapshot the durable chain while the
+                            // writer lock is still held — no evictor
+                            // or other put can race here, so the chain
+                            // is by-construction complete. Lets the
+                            // materialiser skip its cache fast path and
+                            // (when an anchor is present) the YB
+                            // fallback. `lookup_chain_durable` clones
+                            // PageRows; payload Bytes refcount-bump
+                            // rather than duplicate. See `MaterializeJob`
+                            // for when this is `None`.
+                            let chain = s.pages.lookup_chain_durable(&key, lsn);
+                            let chain = chain_with_anchor(chain);
                             to_materialize.push(MaterializeJob {
                                 key,
                                 target_lsn: lsn,
+                                chain,
                             });
                         }
                     }
@@ -1239,6 +1269,20 @@ pub fn extract_triples(batch: &SerializedValueBatch) -> Result<Vec<(Key, Lsn, Va
     Ok(out)
 }
 
+/// Returns the chain if it contains a `will_init` row (image or
+/// init-delta), otherwise `None`. Used at write-side trigger time to
+/// drop captured chains that the materialiser can't act on
+/// — without an anchor the materialiser would have to fall back to
+/// `read_chain_durable` anyway, so we may as well not carry the
+/// useless snapshot.
+fn chain_with_anchor(chain: Vec<PageRow>) -> Option<Vec<PageRow>> {
+    if chain.iter().any(|r| r.will_init) {
+        Some(chain)
+    } else {
+        None
+    }
+}
+
 fn key_to_bytes(key: Key) -> Bytes {
     let mut buf = vec![0u8; KEY_SIZE];
     key.write_to_byte_slice(&mut buf);
@@ -1367,6 +1411,10 @@ fn try_dispatch_read_side(
         .try_send(MaterializeJob {
             key: key_bytes.clone(),
             target_lsn,
+            // Read-side trigger doesn't hold the writer lock, so no
+            // race-free snapshot is available; materialiser falls
+            // back to `read_chain_durable` for these.
+            chain: None,
         })
         .is_err()
     {
@@ -2317,6 +2365,7 @@ mod tests {
             tx.try_send(MaterializeJob {
                 key: key_to_bytes(k(99)),
                 target_lsn: Lsn(1),
+                chain: None,
             })
             .unwrap();
             let in_flight = Mutex::new(HashSet::new());

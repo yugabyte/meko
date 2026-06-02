@@ -472,15 +472,23 @@ impl ImageMaterializer {
         &self,
         job: &MaterializeJob,
     ) -> Result<Option<(PageRow, usize, usize)>> {
-        // Durable-only read: combines the post-flush cache with YB,
-        // EXCLUDES the pre-flush buffer. If we built an image from
-        // pre-flush rows, a crash + WAL replay would re-apply those
-        // deltas on top of the (already-INSERTed) image → double-apply.
-        let chain = self
-            .page_writer
-            .read_chain_durable(Key::from_slice(&job.key), job.target_lsn)
-            .await
-            .context("read_chain_durable")?;
+        // Prefer the chain captured at write-side trigger time. That
+        // snapshot was taken under the writer lock so no evictor or
+        // concurrent put could have raced — it's by construction the
+        // complete durable chain at `target_lsn`, and using it skips
+        // both `lookup_chain_durable_if_complete` (the cache fast path
+        // that bails on `evicted_below`) and the YB fallback in
+        // `read_chain`. Only the write-side trigger captures a chain;
+        // read-side and shutdown triggers carry `None` and fall back to
+        // the round-trip path below.
+        let chain = if let Some(captured) = &job.chain {
+            captured.clone()
+        } else {
+            self.page_writer
+                .read_chain_durable(Key::from_slice(&job.key), job.target_lsn)
+                .await
+                .context("read_chain_durable")?
+        };
         if chain.is_empty() {
             return Ok(None);
         }
