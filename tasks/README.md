@@ -17,7 +17,7 @@ frontmatter `status` (or move to `tasks/archive/` once truly cold).
   ```
   ---
   status: pending    # pending | in_progress | blocked | done | deferred
-  severity: high     # high | high | low
+  severity: medium   # highest | high | medium | low
   area: yb-pageserver
   opened: 2026-06-02
   ---
