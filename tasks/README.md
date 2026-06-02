@@ -16,14 +16,14 @@ frontmatter `status` (or move to `tasks/archive/` once truly cold).
 - **Frontmatter** at the top of each file (keep it brief):
   ```
   ---
-  status: open       # open | 🚧 in_progress | ⏳ pending | blocked | done | deferred
+  status: pending    # pending | in_progress | blocked | done | deferred
   severity: high     # high | medium | low
   area: yb-pageserver
   opened: 2026-06-02
   ---
   ```
   Index renders status as: ✅ done · 🚧 in_progress · ⏳ pending ·
-  📂 open · 🚫 blocked · 💤 deferred.
+  🚫 blocked · 💤 deferred.
 - Sections to include when relevant: **Symptom**, **Root cause /
   hypothesis**, **Repro**, **Fix sketch / Plan**, **Notes / links**
   (commits, log lines, PR refs).
@@ -73,7 +73,7 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 4.h | [Dedicated YSQL connection](4.h_dedicated-ysql-connection.md) | ✅ done | low | yb-pageserver |
 | 4.i | [Hybrid materialiser threshold](4.i_hybrid-materialiser-threshold.md) | ✅ done | low | yb-pageserver |
 | 4.j | [Microbench threshold tuning](4.j_microbench-threshold-tuning.md) | ⏳ pending | low | yb-pageserver |
-| 4.k | [`neon_local start` wedge](4.k_neon-local-start-wedge.md) | 📂 open | medium | storage_ctl / neon_local |
+| 4.k | [`neon_local start` wedge](4.k_neon-local-start-wedge.md) | ⏳ pending | medium | storage_ctl / neon_local |
 | 4.l | [`s3_upload_limit_bytes` config](4.l_s3-upload-limit-config.md) | ✅ done | low | yb-pageserver |
 | 4.m | [YB write concurrency + read collapse](4.m_yb-write-concurrency-read-collapse.md) | ✅ done | low | yb-pageserver |
 | 5 | [Pageserver restart from timeline_state](5_pageserver-restart-from-timeline-state.md) | ✅ done | low | yb-pageserver |
@@ -81,4 +81,4 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 7 | [Garbage collection](7_gc.md) | 💤 deferred | low | yb-pageserver |
 | 8 | [Page-service going-away frame](8_going-away-frame.md) | ⏳ pending | medium | page_service / compute |
 | 9 | [Safekeeper Paxos removal](9_safekeeper-paxos-removal.md) | ⏳ pending | medium | safekeeper |
-| 10 | [Collapse storage_ctl Diesel migrations](10_collapse-storage_ctl-diesel-migrations.md) | 📂 open | low | storage_ctl |
+| 10 | [Collapse storage_ctl Diesel migrations](10_collapse-storage_ctl-diesel-migrations.md) | ⏳ pending | low | storage_ctl |

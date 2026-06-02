@@ -1,5 +1,5 @@
 ---
-status: open
+status: pending
 severity: low
 area: storage_ctl
 opened: 2026-06-02
