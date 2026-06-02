@@ -47,7 +47,7 @@ use crate::walredo::RedoAttemptType;
 /// Sized to keep the COPY round-trip dominated by network/disk and
 /// not by per-row PG parameter overhead; capped to avoid stalling
 /// the queue if walredo is slow.
-const BATCH_DRAIN_LIMIT: usize = 64;
+const BATCH_DRAIN_LIMIT: usize = 32;
 
 /// Maximum number of pipelined INSERT futures that can be in flight
 /// concurrently on the materialiser task. The redo phase of batch N+1

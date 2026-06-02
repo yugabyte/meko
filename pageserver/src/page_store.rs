@@ -471,8 +471,29 @@ impl PageStore {
         let timeline_s = timeline.to_string();
         let target = target_lsn.0 as i64;
 
-        // Fast path: anchor on latest image ≤ target_lsn.
-        let fast_sql = format!(
+        // One SQL that subsumes both the old fast (image-anchored) and
+        // slow (full-chain) paths:
+        //
+        // - The anchor CTE seeks the latest `is_image=TRUE` row ≤ target.
+        //   That's a cheap clustered seek — `(is_image, lsn DESC)` is
+        //   inside the table's primary key.
+        // - The outer SELECT `LEFT JOIN`s the anchor on TRUE so a
+        //   missing anchor surfaces as `anchor_lsn IS NULL` instead of
+        //   eliding the row. The predicate
+        //   `(p.lsn >= anchor.anchor_lsn OR anchor.anchor_lsn IS NULL)`
+        //   narrows to `[anchor_lsn, target]` when an image exists, or
+        //   falls back to `[-∞, target]` (the old slow path's scan)
+        //   when none does.
+        //
+        // The Rust-side trim below truncates at the first `will_init=true`
+        // row walking LSN-desc, which (a) recovers the old slow-path
+        // semantics in the no-image case and (b) is also safe in the
+        // image case: the trim stops at the image itself, so existing
+        // callers see the same chain shape. If an init-delta lands
+        // *between* the image and `target_lsn`, the trim now correctly
+        // shortens the chain to start there instead of returning the
+        // wider [image..target] chain the old fast path would have.
+        let sql = format!(
             "WITH anchor AS ( \
                  SELECT lsn AS anchor_lsn \
                  FROM \"{schema}\".pages \
@@ -484,56 +505,27 @@ impl PageStore {
              ) \
              SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                     p.lsn, p.is_image, p.will_init, p.payload \
-             FROM \"{schema}\".pages p, anchor \
+             FROM \"{schema}\".pages p LEFT JOIN anchor ON TRUE \
              WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
                AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
                AND p.forknum=$6 AND p.blknum=$7 \
-               AND p.lsn >= anchor.anchor_lsn AND p.lsn <= $8 \
+               AND (p.lsn >= anchor.anchor_lsn OR anchor.anchor_lsn IS NULL) \
+               AND p.lsn <= $8 \
              ORDER BY p.lsn DESC",
             schema = self.schema
         );
-        let fast_rows = self
+        let rows = self
             .client
             .query(
-                &fast_sql,
+                &sql,
                 &[
                     &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk, &target,
                 ],
             )
             .await
-            .context("read_chain fast")?;
-        if !fast_rows.is_empty() {
-            return fast_rows.into_iter().map(row_to_page).collect();
-        }
-
-        // Slow path: no image. Walk the chain LSN-desc until a will_init
-        // row is found (image OR will_init delta). The is_image clustering
-        // column means a single block's rows are split into two clusters
-        // (true, false); the chain seen here lives entirely in the
-        // is_image=false cluster.
-        let slow_sql = format!(
-            "SELECT spcnode, dbnode, relnode, forknum, blknum, \
-                    lsn, is_image, will_init, payload \
-             FROM \"{}\".pages \
-             WHERE tenant_id=$1 AND timeline_id=$2 \
-               AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
-               AND forknum=$6 AND blknum=$7 \
-               AND lsn <= $8 \
-             ORDER BY lsn DESC",
-            self.schema
-        );
-        let slow_rows = self
-            .client
-            .query(
-                &slow_sql,
-                &[
-                    &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk, &target,
-                ],
-            )
-            .await
-            .context("read_chain slow")?;
-        let mut chain = Vec::with_capacity(slow_rows.len());
-        for r in slow_rows {
+            .context("read_chain")?;
+        let mut chain = Vec::with_capacity(rows.len());
+        for r in rows {
             let row = row_to_page(r)?;
             let anchor = row.will_init;
             chain.push(row);
@@ -848,7 +840,14 @@ impl PageStore {
         let blk_i = blknum as i64;
         let target = target_lsn.0 as i64;
 
-        let fast_sql = format!(
+        // Single SQL covering the image-anchored fast path and the
+        // no-image fallback. See `read_chain` for the rationale; the
+        // SLRU table has the same `(is_image, lsn DESC)` clustering, so
+        // the anchor CTE is a cheap clustered seek and the LEFT JOIN
+        // with `(p.lsn >= anchor.anchor_lsn OR anchor.anchor_lsn IS NULL)`
+        // narrows or widens the scan automatically. Client-side trim
+        // truncates at the first `will_init=true` row LSN-desc.
+        let sql = format!(
             "WITH anchor AS ( \
                  SELECT lsn AS anchor_lsn FROM \"{schema}\".slru_pages \
                  WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 \
@@ -857,44 +856,24 @@ impl PageStore {
                  ORDER BY lsn DESC LIMIT 1 \
              ) \
              SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
-             FROM \"{schema}\".slru_pages p, anchor \
+             FROM \"{schema}\".slru_pages p LEFT JOIN anchor ON TRUE \
              WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 \
                AND p.segno=$4 AND p.blknum=$5 \
-               AND p.lsn >= anchor.anchor_lsn AND p.lsn <= $6 \
+               AND (p.lsn >= anchor.anchor_lsn OR anchor.anchor_lsn IS NULL) \
+               AND p.lsn <= $6 \
              ORDER BY p.lsn DESC",
             schema = self.schema
         );
-        let fast_rows = self
+        let rows = self
             .client
             .query(
-                &fast_sql,
+                &sql,
                 &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_i, &target],
             )
             .await
-            .context("read_slru_chain fast")?;
-        if !fast_rows.is_empty() {
-            return fast_rows.into_iter().map(row_to_slru_page).collect();
-        }
-
-        let slow_sql = format!(
-            "SELECT kind, segno, blknum, lsn, is_image, will_init, payload \
-             FROM \"{}\".slru_pages \
-             WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 \
-               AND segno=$4 AND blknum=$5 \
-               AND lsn <= $6 \
-             ORDER BY lsn DESC",
-            self.schema
-        );
-        let slow_rows = self
-            .client
-            .query(
-                &slow_sql,
-                &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_i, &target],
-            )
-            .await
-            .context("read_slru_chain slow")?;
-        let mut chain = Vec::with_capacity(slow_rows.len());
-        for r in slow_rows {
+            .context("read_slru_chain")?;
+        let mut chain = Vec::with_capacity(rows.len());
+        for r in rows {
             let row = row_to_slru_page(r)?;
             let anchor = row.will_init;
             chain.push(row);
