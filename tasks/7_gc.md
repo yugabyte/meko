@@ -1,6 +1,6 @@
 ---
 status: deferred
-severity: low
+severity: medium
 area: yb-pageserver
 opened: 2026-05-01
 ---

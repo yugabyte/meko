@@ -1,6 +1,6 @@
 ---
 status: pending
-severity: medium
+severity: high
 area: page_service / compute
 opened: 2026-05-20
 ---

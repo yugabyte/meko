@@ -1,6 +1,6 @@
 ---
 status: pending
-severity: low
+severity: medium
 area: storage_ctl
 opened: 2026-06-02
 ---
