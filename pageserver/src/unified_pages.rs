@@ -1,42 +1,56 @@
-//! Single in-RAM structure for relation-page rows, replacing the
-//! separate "flush buffer" + "post-flush cache" pair.
+//! Single in-RAM structure for relation-page rows. Combines the
+//! pre-flush write buffer with the post-flush read cache, evicting
+//! at the **per-key** granularity so a cache hit either has the
+//! complete chain for that key or no rows at all — never a partial
+//! middle-of-chain hole.
 //!
-//! Externally one API; internally two FIFOs share one key index:
-//! - `unflushed_fifo` — pre-flush entries pinned in RAM (the row is
-//!   the only copy that exists; losing it loses accepted WAL).
-//! - `durable_fifo` — entries already INSERTed to YB. Eligible for
-//!   eviction (when `total_bytes > capacity_bytes`) or trim (when a
-//!   materialised image supersedes them).
-//! - `by_key: HashMap<Bytes, KeyState>` indexes both, so per-key chain
-//!   lookups are one HashMap probe + one BTree range. `KeyState` also
-//!   carries an `evicted_below` watermark — when an image anchor sits
-//!   above it, the cache holds the complete chain for that key and
-//!   reads can skip YB entirely.
+//! ## Per-key whole-eviction (Phase 4f)
 //!
-//! Flush is a cursor flip — `mark_first_n_flushed(n)` pops `n` from
-//! the front of `unflushed_fifo`, flips each entry's `durable` flag,
-//! pushes its ref onto the back of `durable_fifo`. No row data is
-//! copied; `unflushed_bytes` decrements; `total_bytes` unchanged.
+//! Eviction unit is the entire `KeyState` (one map entry +
+//! everything in its `chain` BTreeMap). The `by_key` map keeps
+//! insertion / promotion order — back = most recently written /
+//! materialised, front = coldest — and `evict_to_capacity` walks
+//! from the front dropping whole keys until `total_bytes` falls
+//! back under `capacity_bytes`. There is no per-row FIFO and no
+//! `evicted_below` watermark. Reads check anchor presence; if the
+//! key is in `by_key`, its chain is complete from the latest
+//! `will_init` row up to whatever was most recently inserted.
+//!
+//! Keys with `unflushed_count > 0` are **pinned**: they hold rows
+//! that haven't been INSERTed to YB yet and are the only copy that
+//! exists, so dropping them would lose accepted WAL. Eviction skips
+//! pinned keys (and on skip moves them to the back so the next
+//! eviction call doesn't keep tripping over them).
+//!
+//! ## Flush ordering
+//!
+//! Unflushed rows are visited in put-order so the YB flush is
+//! monotonic in LSN. We track this with a small auxiliary FIFO of
+//! `(key, lsn)` pairs (`unflushed_fifo`), kept in sync with
+//! `KeyState::unflushed_count` and the `PageEntry::durable` bits.
 //!
 //! ## Lookup
 //! - [`UnifiedPages::lookup_chain`] returns rows for `key` at `lsn ≤
-//!   target_lsn`, including unflushed. Used by the regular `read_chain`
-//!   blender — the caller (compute) is in the same process and
-//!   observes its own pre-flush writes.
+//!   target_lsn`, including unflushed.
 //! - [`UnifiedPages::lookup_chain_durable`] returns only durable rows.
-//!   Used by the image materialiser, which must never build an image
-//!   from pre-flush inputs (crash + WAL replay would reapply those
-//!   deltas on top of the image → double-apply).
+//!   Used by the materialiser, which must never fold pre-flush deltas
+//!   into an image (crash + WAL replay would reapply those deltas on
+//!   top of the image → double-apply).
+//! - [`UnifiedPages::lookup_chain_if_complete`] /
+//!   [`UnifiedPages::lookup_chain_durable_if_complete`] are the
+//!   cache-only fast paths: with per-key whole-eviction, a key either
+//!   has its full chain or is absent, so anchor presence is
+//!   sufficient — no `evicted_below` check.
 //!
 //! ## Trim
 //! [`UnifiedPages::trim_key_up_to`] removes durable rows for `key`
-//! with `lsn ≤ max_lsn`. Called by the materialiser after a successful
-//! image INSERT to drop the deltas the image superseded. Stale FIFO
-//! refs are tolerated (the evictor skips them).
+//! with `lsn ≤ max_lsn`. Called by the materialiser after a
+//! successful image INSERT to drop the deltas the image superseded.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use bytes::Bytes;
+use hashlink::LinkedHashMap;
 use utils::lsn::Lsn;
 
 use crate::page_store::PageRow;
@@ -48,44 +62,38 @@ struct PageEntry {
     durable: bool,
 }
 
-/// A reference into a FIFO eviction queue. Carries the size so the
-/// evictor doesn't need to re-look-up `by_key` to know how many bytes
-/// it's freeing.
-#[derive(Clone)]
-struct EntryRef {
-    key: Bytes,
-    lsn: Lsn,
-    size: usize,
-}
-
-/// Per-key bookkeeping. The chain is LSN-sorted (ascending). The
-/// `evicted_below` field is the `low watermark` of completeness: cache
-/// holds every row for this key with `lsn ≥ evicted_below` (lsn ==
-/// `Lsn(0)` means "no eviction has happened yet"). Reads with
-/// `target_lsn` ≥ anchor.lsn AND `anchor.lsn > evicted_below` can be
-/// served entirely from the cache without consulting YB — there's no
-/// hole between the anchor and the target.
+/// Per-key bookkeeping. The chain is LSN-sorted (ascending). Unlike
+/// the pre-4f layout, there is no `evicted_below`: a key is either
+/// present (with its complete chain) or evicted entirely.
 struct KeyState {
     chain: BTreeMap<Lsn, PageEntry>,
-    /// Highest LSN ever evicted for this key. `Lsn(0)` if never
-    /// evicted. Reads whose anchor LSN sits above this value can
-    /// trust the cache to have the full chain.
-    evicted_below: Lsn,
+    /// Count of `PageEntry`s in `chain` with `durable == false`.
+    /// When > 0 the key is pinned and `evict_to_capacity` skips it.
+    unflushed_count: u32,
+    /// Sum of `row_size(entry.row)` for every entry in `chain`.
+    /// Tracked so eviction can subtract the right amount from
+    /// `total_bytes` in one shot.
+    bytes: usize,
 }
 
 impl KeyState {
     fn new() -> Self {
         Self {
             chain: BTreeMap::new(),
-            evicted_below: Lsn(0),
+            unflushed_count: 0,
+            bytes: 0,
         }
     }
 }
 
 pub struct UnifiedPages {
-    by_key: HashMap<Bytes, KeyState>,
-    unflushed_fifo: VecDeque<EntryRef>,
-    durable_fifo: VecDeque<EntryRef>,
+    /// LRU-ordered per-key state. Back = most recently inserted /
+    /// promoted, front = coldest. Iteration is in this order.
+    by_key: LinkedHashMap<Bytes, KeyState>,
+    /// Insertion-ordered list of (key, lsn) pairs for unflushed
+    /// entries. Drives `snapshot_unflushed` + `mark_first_n_flushed`
+    /// so flushes hit YB in monotonic put-order.
+    unflushed_fifo: VecDeque<(Bytes, Lsn)>,
     total_bytes: usize,
     unflushed_bytes: usize,
     capacity_bytes: usize,
@@ -94,12 +102,11 @@ pub struct UnifiedPages {
 impl UnifiedPages {
     pub fn new(capacity_bytes: usize) -> Self {
         Self {
-            by_key: HashMap::new(),
+            by_key: LinkedHashMap::new(),
             unflushed_fifo: VecDeque::new(),
-            durable_fifo: VecDeque::new(),
             total_bytes: 0,
             unflushed_bytes: 0,
-            capacity_bytes: capacity_bytes.max(1), // guard against 0
+            capacity_bytes: capacity_bytes.max(1),
         }
     }
 
@@ -115,130 +122,128 @@ impl UnifiedPages {
         self.unflushed_fifo.len()
     }
 
-    /// Number of distinct keys tracked in `by_key`. The map covers
-    /// both pre-flush rows and post-flush durable-cached rows;
-    /// `total_bytes` is the byte-side cap, this is the entry-side
-    /// view used by the `pageserver_yb_unified_pages_by_key_entries`
-    /// gauge.
+    /// Number of distinct keys tracked. Drives the
+    /// `pageserver_yb_unified_pages_by_key_entries` gauge.
     pub fn by_key_entries(&self) -> usize {
         self.by_key.len()
     }
 
     /// Append a row as unflushed. Same-`(key, lsn)` overwrites the
-    /// existing entry's payload and adjusts the byte counters.
+    /// existing entry's payload and adjusts the byte counters. The
+    /// key is promoted to the back of the LRU.
     pub fn push(&mut self, row: PageRow) {
-        let size = row_size(&row);
         let key = row.key.clone();
         let lsn = row.lsn;
-        self.insert_entry(key.clone(), lsn, row, false);
-        self.unflushed_fifo.push_back(EntryRef { key, lsn, size });
-        self.unflushed_bytes += size;
+        let prev = self.insert_entry(key.clone(), lsn, row, false);
+        // Tracking: if we replaced a row that was unflushed, the old
+        // entry is being superseded — no need to append a new fifo
+        // entry, the existing one still applies. If the old row was
+        // durable, the new row is unflushed and needs a fifo append.
+        let need_fifo = match prev {
+            Some(prev_was_unflushed) => !prev_was_unflushed,
+            None => true,
+        };
+        if need_fifo {
+            self.unflushed_fifo.push_back((key, lsn));
+        }
     }
 
     /// Append a row that is already durable in YB. Used by the image
-    /// materialiser after a successful `put_pages` of the fresh image.
-    /// O(1) — appended at the back of `durable_fifo` so it's evictable
-    /// in LRU-ish order (most recently materialised images last).
+    /// materialiser after a successful `put_pages`. Promotes the key
+    /// to the back of the LRU; eviction picks up cold keys first.
     pub fn push_durable(&mut self, row: PageRow) {
-        let size = row_size(&row);
         let key = row.key.clone();
         let lsn = row.lsn;
-        self.insert_entry(key.clone(), lsn, row, true);
-        self.durable_fifo.push_back(EntryRef { key, lsn, size });
+        // Old entry's durability is irrelevant — the new row is
+        // durable. If it was unflushed, switch counters; if it was
+        // durable, just update bytes.
+        let prev_was_unflushed = self.insert_entry(key, lsn, row, true);
+        if matches!(prev_was_unflushed, Some(true)) {
+            // The unflushed-fifo entry for this (key, lsn) is now
+            // stale — pop it lazily during mark_first_n_flushed.
+            // unflushed_bytes was already adjusted inside
+            // insert_entry; nothing else to do here.
+        }
     }
 
     /// Mark the first `n` unflushed entries durable. `n` must equal
     /// the snapshot count submitted to `try_write_rows`.
     pub fn mark_first_n_flushed(&mut self, n: usize) {
-        for _ in 0..n {
-            let Some(er) = self.unflushed_fifo.pop_front() else {
+        let mut promoted = 0usize;
+        while promoted < n {
+            let Some((key, lsn)) = self.unflushed_fifo.pop_front() else {
                 break;
             };
-            // Look up the live entry — it may have been replaced by a
-            // newer overwrite at the same (key, lsn) since the
-            // snapshot. The overwriting `push` would have left this
-            // er in unflushed_fifo (the replacement inserted ITS own
-            // er to the back), so we still flip it correctly here.
-            if let Some(ks) = self.by_key.get_mut(&er.key)
-                && let Some(entry) = ks.chain.get_mut(&er.lsn)
-                && !entry.durable
-            {
-                entry.durable = true;
-                self.unflushed_bytes -= er.size;
-                self.durable_fifo.push_back(er);
+            // Look up the entry: it may have been trimmed,
+            // overwritten with a durable row by the materialiser, or
+            // already flipped (defensively).
+            let Some(ks) = self.by_key.get_mut(&key) else {
+                continue;
+            };
+            let Some(entry) = ks.chain.get_mut(&lsn) else {
+                continue;
+            };
+            if entry.durable {
+                // Already promoted (push_durable raced ahead). Don't
+                // count this towards `n` — caller asked us to
+                // promote n *unflushed* rows, this one wasn't one.
+                continue;
             }
-            // else: entry was trimmed or already durable — drop the ref.
+            entry.durable = true;
+            let size = row_size(&entry.row);
+            self.unflushed_bytes -= size;
+            ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
+            promoted += 1;
         }
     }
 
-    /// Drop durable entries from the front of `durable_fifo` until
-    /// `total_bytes <= capacity_bytes`, bounded by a split budget:
-    ///
-    /// - **Real removals** (an entry actually came out of `chain`) are
-    ///   bounded by wall-clock time only (`TIME_BUDGET`). Each removal
-    ///   is one `HashMap::get_mut` + one `BTreeMap::remove`, ~0.3 µs;
-    ///   a 2 ms budget covers ~6 k removals per call, which keeps
-    ///   under-load steady-state cache size near `capacity_bytes`
-    ///   instead of growing per flush.
-    /// - **Stale refs** (left by `trim_key_up_to`) are bounded by
-    ///   `STALE_SKIP_BUDGET`. This is the *original* reason the loop
-    ///   had a cap: a long stretch of stale refs at the FIFO front
-    ///   used to make this method walk O(N) under the writer lock and
-    ///   starve the walreceiver. Stale skipping still gives up early;
-    ///   the next call resumes.
-    ///
-    /// Pre-flush entries are never evicted (they're in
-    /// `unflushed_fifo`, not `durable_fifo`). The cache is allowed to
-    /// transiently exceed `capacity_bytes` between calls.
+    /// Drop whole keys from the front of the LRU until `total_bytes
+    /// <= capacity_bytes`. Bounded by a 2 ms wall-clock budget so a
+    /// big cap overshoot doesn't starve the writer lock. Pinned keys
+    /// (`unflushed_count > 0`) are moved to the back so subsequent
+    /// calls aren't blocked by them.
     pub fn evict_to_capacity(&mut self) {
-        const STALE_SKIP_BUDGET: usize = 64;
         const TIME_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
-
         let start = std::time::Instant::now();
-        let mut stale_skipped = 0;
+
+        // Pinned keys we've moved to the back during this call.
+        // Once we've seen every key (front pointer is at one we've
+        // already requeued), there's nothing left to evict and we
+        // stop.
+        let mut requeued_pins = 0usize;
         while self.total_bytes > self.capacity_bytes {
-            let Some(er) = self.durable_fifo.pop_front() else {
+            let total_keys = self.by_key.len();
+            if total_keys == 0 || requeued_pins >= total_keys {
+                break;
+            }
+            let Some((front_key, front_state)) = self.by_key.front() else {
                 break;
             };
-            // Stale ref (entry was trimmed)?
-            let (removed, now_empty) = match self.by_key.get_mut(&er.key) {
-                Some(ks) => match ks.chain.remove(&er.lsn) {
-                    Some(_) => {
-                        // Bump the watermark — every row at or below
-                        // this LSN is now missing from the cache.
-                        if er.lsn > ks.evicted_below {
-                            ks.evicted_below = er.lsn;
-                        }
-                        (true, ks.chain.is_empty())
-                    }
-                    None => (false, false),
-                },
-                None => (false, false),
-            };
-            if removed {
-                self.total_bytes -= er.size;
-                if now_empty {
-                    self.by_key.remove(&er.key);
-                }
-                // Real removal — only the time budget bounds us. Check
-                // every iteration; `Instant::now()` is ~20 ns so the
-                // check itself is negligible compared to the work.
-                if start.elapsed() >= TIME_BUDGET {
-                    break;
-                }
-            } else {
-                stale_skipped += 1;
-                if stale_skipped >= STALE_SKIP_BUDGET {
-                    break;
-                }
+            if front_state.unflushed_count > 0 {
+                // Pinned — rotate to the back so we don't re-visit
+                // it until we've cycled past every other key.
+                let key = front_key.clone();
+                self.by_key.to_back(&key);
+                requeued_pins += 1;
+                continue;
+            }
+            // Evictable. Pop the whole key.
+            let (_, ks) = self.by_key.pop_front().expect("front existed");
+            self.total_bytes -= ks.bytes;
+            // `bytes` accounting was kept in sync; this can only
+            // underflow on a real bug, in which case the panic is
+            // exactly the right behaviour. We use `-=` directly so a
+            // bug surfaces immediately.
+
+            if start.elapsed() >= TIME_BUDGET {
+                break;
             }
         }
     }
 
     /// Remove all durable entries for `key` with `lsn <= max_lsn`.
-    /// Used by the image materialiser to drop deltas the new image
+    /// Used by the materialiser to drop deltas the new image
     /// supersedes. Newer deltas and unflushed entries are untouched.
-    /// FIFO refs become stale and are skipped by `evict_to_capacity`.
     pub fn trim_key_up_to(&mut self, key: &Bytes, max_lsn: Lsn) {
         let Some(ks) = self.by_key.get_mut(key) else {
             return;
@@ -252,19 +257,20 @@ impl UnifiedPages {
         for lsn in to_remove {
             if let Some(entry) = ks.chain.remove(&lsn) {
                 let size = row_size(&entry.row);
+                ks.bytes -= size;
                 self.total_bytes -= size;
             }
         }
-        // Trim does NOT advance `evicted_below`: the rows it drops are
-        // superseded by the just-installed image that lives in `chain`,
-        // not lost. Completeness is preserved.
         if ks.chain.is_empty() {
             self.by_key.remove(key);
         }
     }
 
     /// Return rows for `key` at `lsn <= target_lsn`, LSN-descending.
-    /// Includes unflushed.
+    /// Includes unflushed. Does NOT touch the LRU position — reads
+    /// are `&self` and the lock is shared, so promotion on read
+    /// would force serialisation. LRU order tracks write recency
+    /// only, which is sufficient: hot keys keep getting written.
     pub fn lookup_chain(&self, key: &Bytes, target_lsn: Lsn) -> Vec<PageRow> {
         let Some(ks) = self.by_key.get(key) else {
             return Vec::new();
@@ -276,9 +282,7 @@ impl UnifiedPages {
             .collect()
     }
 
-    /// Like `lookup_chain` but only durable rows. The materialiser
-    /// uses this so its image is built from inputs that survive a
-    /// crash.
+    /// Like `lookup_chain` but only durable rows.
     pub fn lookup_chain_durable(&self, key: &Bytes, target_lsn: Lsn) -> Vec<PageRow> {
         let Some(ks) = self.by_key.get(key) else {
             return Vec::new();
@@ -292,38 +296,29 @@ impl UnifiedPages {
     }
 
     /// Cache-only fast path. Returns `Some(chain)` (LSN-descending,
-    /// including unflushed) iff the cache holds the COMPLETE chain for
-    /// `key` at `target_lsn`: i.e. it contains an image-anchor (or any
-    /// row with `will_init=true`) at some `anchor_lsn` where
-    /// `anchor_lsn ≤ target_lsn` AND `anchor_lsn > evicted_below`.
-    /// The first inequality means we have an anchor reachable from
-    /// `target_lsn`; the second means nothing between the anchor and
-    /// `target_lsn` was evicted. Otherwise returns `None` and the
-    /// caller falls back to YB.
+    /// including unflushed) iff `key` is present and the chain
+    /// contains a `will_init` row at some `anchor_lsn ≤ target_lsn`.
+    ///
+    /// With per-key whole-eviction (Phase 4f) the cache cannot have
+    /// a hole between the anchor and `target_lsn`: if the key is
+    /// here, every row for it that we ever cached is here too.
+    /// Anchor presence is therefore both necessary and sufficient.
     pub fn lookup_chain_if_complete(&self, key: &Bytes, target_lsn: Lsn) -> Option<Vec<PageRow>> {
         let ks = self.by_key.get(key)?;
-        // Walk descending: collect rows from target_lsn down until we
-        // hit an anchor (will_init=true). If none, the chain is
-        // incomplete and we must consult YB.
         let mut out = Vec::new();
-        let mut anchor_lsn: Option<Lsn> = None;
-        for (lsn, e) in ks.chain.range(..=target_lsn).rev() {
+        let mut has_anchor = false;
+        for (_, e) in ks.chain.range(..=target_lsn).rev() {
             out.push(e.row.clone());
             if e.row.will_init {
-                anchor_lsn = Some(*lsn);
+                has_anchor = true;
                 break;
             }
         }
-        let anchor_lsn = anchor_lsn?;
-        if anchor_lsn > ks.evicted_below {
-            Some(out)
-        } else {
-            None
-        }
+        has_anchor.then_some(out)
     }
 
-    /// Like `lookup_chain_if_complete` but only durable rows. Used by
-    /// the materialiser's cache-only fast path so it never folds
+    /// Like `lookup_chain_if_complete` but only durable rows. Used
+    /// by the materialiser's cache-only fast path so it never folds
     /// pre-flush deltas into an image.
     pub fn lookup_chain_durable_if_complete(
         &self,
@@ -332,23 +327,18 @@ impl UnifiedPages {
     ) -> Option<Vec<PageRow>> {
         let ks = self.by_key.get(key)?;
         let mut out = Vec::new();
-        let mut anchor_lsn: Option<Lsn> = None;
-        for (lsn, e) in ks.chain.range(..=target_lsn).rev() {
+        let mut has_anchor = false;
+        for (_, e) in ks.chain.range(..=target_lsn).rev() {
             if !e.durable {
                 continue;
             }
             out.push(e.row.clone());
             if e.row.will_init {
-                anchor_lsn = Some(*lsn);
+                has_anchor = true;
                 break;
             }
         }
-        let anchor_lsn = anchor_lsn?;
-        if anchor_lsn > ks.evicted_below {
-            Some(out)
-        } else {
-            None
-        }
+        has_anchor.then_some(out)
     }
 
     /// Range scan: rows for keys in `[start_key, end_key)` at `lsn ≤
@@ -360,7 +350,7 @@ impl UnifiedPages {
         target_lsn: Lsn,
     ) -> HashMap<Bytes, Vec<PageRow>> {
         let mut out: HashMap<Bytes, Vec<PageRow>> = HashMap::new();
-        for (k, ks) in &self.by_key {
+        for (k, ks) in self.by_key.iter() {
             if k.as_ref() < start_key.as_ref() || k.as_ref() >= end_key.as_ref() {
                 continue;
             }
@@ -383,9 +373,9 @@ impl UnifiedPages {
     pub fn snapshot_unflushed(&self, max: Option<usize>) -> Vec<PageRow> {
         let cap = max.unwrap_or(self.unflushed_fifo.len());
         let mut out = Vec::with_capacity(cap.min(self.unflushed_fifo.len()));
-        for er in self.unflushed_fifo.iter().take(cap) {
-            if let Some(ks) = self.by_key.get(&er.key)
-                && let Some(entry) = ks.chain.get(&er.lsn)
+        for (key, lsn) in self.unflushed_fifo.iter().take(cap) {
+            if let Some(ks) = self.by_key.get(key)
+                && let Some(entry) = ks.chain.get(lsn)
                 && !entry.durable
             {
                 out.push(entry.row.clone());
@@ -394,23 +384,52 @@ impl UnifiedPages {
         out
     }
 
-    fn insert_entry(&mut self, key: Bytes, lsn: Lsn, row: PageRow, durable: bool) {
+    /// Insert or overwrite a `PageEntry` for `(key, lsn)`. Returns
+    /// `Some(prev_was_unflushed)` if this overwrote an existing
+    /// entry, `None` if it's fresh. Adjusts `total_bytes`,
+    /// `unflushed_bytes`, and per-key `bytes` / `unflushed_count`.
+    /// The key is promoted to the back of the LRU on every call —
+    /// new keys land at the back via `insert`, existing keys are
+    /// moved with `to_back`.
+    fn insert_entry(
+        &mut self,
+        key: Bytes,
+        lsn: Lsn,
+        row: PageRow,
+        durable: bool,
+    ) -> Option<bool> {
         let size = row_size(&row);
         let entry = PageEntry { row, durable };
-        let prev = self
-            .by_key
-            .entry(key)
-            .or_insert_with(KeyState::new)
-            .chain
-            .insert(lsn, entry);
+
+        // Ensure the key exists in `by_key` and is at the back. If
+        // it's already there, `to_back` returns the mut ref; else we
+        // insert a fresh empty `KeyState` (which goes to the back).
+        if !self.by_key.contains_key(&key) {
+            self.by_key.insert(key.clone(), KeyState::new());
+        } else {
+            self.by_key.to_back(&key);
+        }
+        let ks = self.by_key.get_mut(&key).expect("just inserted/touched");
+
+        let prev = ks.chain.insert(lsn, entry);
+        let prev_was_unflushed = prev.as_ref().map(|p| !p.durable);
+
         if let Some(prev) = prev {
             let prev_size = row_size(&prev.row);
+            ks.bytes -= prev_size;
             self.total_bytes -= prev_size;
             if !prev.durable {
                 self.unflushed_bytes -= prev_size;
+                ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
             }
         }
+        ks.bytes += size;
         self.total_bytes += size;
+        if !durable {
+            self.unflushed_bytes += size;
+            ks.unflushed_count += 1;
+        }
+        prev_was_unflushed
     }
 }
 
@@ -452,7 +471,7 @@ mod tests {
         let unflushed_before = u.unflushed_bytes;
 
         u.mark_first_n_flushed(2);
-        assert!(u.unflushed_bytes > 0); // one row still unflushed
+        assert!(u.unflushed_bytes > 0);
         assert!(u.unflushed_bytes < unflushed_before);
 
         let all = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
@@ -464,7 +483,7 @@ mod tests {
         let mut u = UnifiedPages::new(4096);
         u.push(mk(b"k", 1, true, b"img"));
         u.push(mk(b"k", 2, false, b"d2"));
-        u.mark_first_n_flushed(1); // @1 durable; @2 still unflushed
+        u.mark_first_n_flushed(1);
         u.push(mk(b"k", 3, false, b"d3"));
 
         let all = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
@@ -475,25 +494,17 @@ mod tests {
     }
 
     #[test]
-    fn evict_drains_many_real_entries_in_one_call() {
-        // Regression: the old `MAX_ITERS_PER_CALL = 64` cap conflated
-        // stale-skip budget with real-removal budget — under steady
-        // TPC-C ingest a single flush could enqueue thousands of
-        // durable entries while evict reclaimed only 64, leaking the
-        // cache. The split-budget design lets real removals run until
-        // the wall-clock budget is hit; on a small workload that
-        // means a single call drains everything down to the cap.
+    fn evict_drops_whole_cold_keys() {
+        // Per-key eviction: many small durable keys, push hard until
+        // we blow the cap; eviction should drop coldest keys whole.
         let mut u = UnifiedPages::new(64);
         for i in 0u32..1000 {
-            // 32 B payload + 4 B key + 16 B overhead ≈ 52 B per entry
-            // → 1000 entries ≈ 52 KB ≫ 64 B cap.
             u.push_durable(mk(&i.to_be_bytes(), i as u64, true, &[0u8; 32]));
         }
         let before = u.total_bytes;
         u.evict_to_capacity();
         assert!(
-            u.total_bytes <= u.capacity_bytes
-                || u.total_bytes < before / 2,
+            u.total_bytes <= u.capacity_bytes || u.total_bytes < before / 2,
             "evict reclaimed too little: before={}, after={}, cap={}",
             before,
             u.total_bytes,
@@ -503,23 +514,36 @@ mod tests {
 
     #[test]
     fn push_durable_is_immediately_evictable() {
-        let mut u = UnifiedPages::new(20); // tiny cap
+        let mut u = UnifiedPages::new(20);
         u.push_durable(mk(b"k1", 1, true, b"AAAAAAAAAAAAAAAA"));
         u.push_durable(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
         u.evict_to_capacity();
-        // Both were durable; the front one should be evicted.
+        // k1 was inserted first → at the front → evicted first.
         assert!(u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100)).is_empty());
     }
 
     #[test]
-    fn evict_skips_unflushed_front() {
+    fn evict_skips_pinned_keys() {
+        // Every key has an unflushed row → all pinned → no-op.
         let mut u = UnifiedPages::new(10);
         u.push(mk(b"k1", 1, true, b"xxxxxxxx"));
         u.push(mk(b"k2", 2, true, b"xxxxxxxx"));
         u.evict_to_capacity();
-        // Both unflushed → no-op.
         assert!(u.total_bytes > u.capacity_bytes);
-        assert_eq!(u.unflushed_fifo.len(), 2);
+        assert_eq!(u.by_key_entries(), 2);
+    }
+
+    #[test]
+    fn evict_drops_only_unpinned_keys() {
+        // k1 is durable (unpinned), k2 has an unflushed row (pinned).
+        // Eviction must drop k1 and leave k2 alone, even with k1 at
+        // the front initially.
+        let mut u = UnifiedPages::new(20);
+        u.push_durable(mk(b"k1", 1, true, b"AAAAAAAAAAAAAAAA"));
+        u.push(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
+        u.evict_to_capacity();
+        assert!(u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100)).is_empty());
+        assert!(!u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100)).is_empty());
     }
 
     #[test]
@@ -540,7 +564,7 @@ mod tests {
         let mut u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, false, b"d10"));
         u.mark_first_n_flushed(1);
-        u.push(mk(b"k", 20, false, b"d20")); // unflushed
+        u.push(mk(b"k", 20, false, b"d20"));
         u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(50));
         let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1);
@@ -549,13 +573,11 @@ mod tests {
 
     #[test]
     fn materializer_install_sequence_works_end_to_end() {
-        // 5 deltas, flushed → trim to fresh image at lsn 50.
         let mut u = UnifiedPages::new(4096);
         for i in 1..=5 {
             u.push(mk(b"k", i * 10, false, &[i as u8; 4]));
         }
         u.mark_first_n_flushed(5);
-        // The materialiser's "install image" sequence:
         u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(50));
         u.push_durable(mk(b"k", 50, true, b"full-page-image"));
         let chain = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
@@ -580,12 +602,12 @@ mod tests {
     #[test]
     fn complete_chain_with_image_anchor_in_cache() {
         let mut u = UnifiedPages::new(4096);
-        u.push_durable(mk(b"k", 50, true, b"image")); // anchor
+        u.push_durable(mk(b"k", 50, true, b"image"));
         u.push(mk(b"k", 60, false, b"d60"));
         u.push(mk(b"k", 70, false, b"d70"));
         let chain = u
             .lookup_chain_if_complete(&Bytes::from_static(b"k"), Lsn(100))
-            .expect("complete: anchor in cache, nothing evicted");
+            .expect("anchor in cache");
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns, vec![70, 60, 50]);
     }
@@ -598,42 +620,46 @@ mod tests {
         assert!(
             u.lookup_chain_if_complete(&Bytes::from_static(b"k"), Lsn(100))
                 .is_none(),
-            "no will_init in cache → must consult YB"
+            "no will_init → must consult YB"
         );
     }
 
+    /// Regression for the AWS BTREE PANIC: with per-row FIFO eviction,
+    /// an intermediate delta could be popped while the anchor stayed,
+    /// leaving a mid-chain hole that `lookup_chain_durable_if_complete`
+    /// served as "complete". Per-key whole-eviction structurally
+    /// prevents this — either the key is present (full chain) or
+    /// absent.
     #[test]
-    fn incomplete_after_eviction_clobbers_anchor() {
-        // Tiny cap forces durable eviction; once the anchor's LSN is
-        // evicted_below the watermark, the cache must NOT claim
-        // completeness even after newer rows arrive.
-        let mut u = UnifiedPages::new(20);
-        u.push_durable(mk(b"k", 50, true, b"AAAAAAAAAAAAAAAA"));
-        u.push_durable(mk(b"k2", 60, true, b"BBBBBBBBBBBBBBBB"));
-        u.evict_to_capacity(); // boots k@50
-        assert!(
-            u.lookup_chain_if_complete(&Bytes::from_static(b"k"), Lsn(100))
-                .is_none(),
-            "anchor evicted → must consult YB"
-        );
-    }
+    fn whole_key_eviction_never_leaves_mid_chain_hole() {
+        let mut u = UnifiedPages::new(40);
+        // Hot key with chain: anchor + 3 deltas. Each row is ~40 B
+        // (16 B payload + 4 B key + 16 B overhead = 36).
+        u.push_durable(mk(b"hot", 100, true, b"AAAAAAAAAAAAAAAA"));
+        u.push_durable(mk(b"hot", 110, false, b"BBBBBBBBBBBBBBBB"));
+        u.push_durable(mk(b"hot", 120, false, b"CCCCCCCCCCCCCCCC"));
+        u.push_durable(mk(b"hot", 130, false, b"DDDDDDDDDDDDDDDD"));
+        // Cold key, even bigger so total bytes well exceed cap.
+        u.push_durable(mk(b"cold", 1, true, b"EEEEEEEEEEEEEEEE"));
+        u.evict_to_capacity();
 
-    #[test]
-    fn complete_when_unflushed_image_above_watermark() {
-        // Materialised image survives in cache even after eviction
-        // wiped earlier durable rows for the same key.
-        let mut u = UnifiedPages::new(20);
-        u.push_durable(mk(b"k", 30, false, b"XXXXXXXXXXXXXXXX"));
-        u.push_durable(mk(b"k2", 40, true, b"YYYYYYYYYYYYYYYY"));
-        u.evict_to_capacity(); // boots k@30 → evicted_below=30
-        // Materialiser installs a fresh image > watermark.
-        u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(50));
-        u.push_durable(mk(b"k", 60, true, b"image"));
-        let chain = u
-            .lookup_chain_if_complete(&Bytes::from_static(b"k"), Lsn(100))
-            .expect("image > evicted_below → complete");
-        assert_eq!(chain.len(), 1);
-        assert_eq!(chain[0].lsn, Lsn(60));
+        let r = u.lookup_chain_durable_if_complete(&Bytes::from_static(b"hot"), Lsn(200));
+        match r {
+            Some(chain) => {
+                // If hot is still cached, it must have the anchor and
+                // all 3 deltas — never a hole.
+                let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
+                assert_eq!(lsns, vec![130, 120, 110, 100]);
+            }
+            None => {
+                // Acceptable: hot got evicted whole.
+                assert!(
+                    u.lookup_chain(&Bytes::from_static(b"hot"), Lsn(200))
+                        .is_empty(),
+                    "key absent ⇒ no rows at all (no partial cache state)"
+                );
+            }
+        }
     }
 
     #[test]
@@ -646,5 +672,26 @@ mod tests {
         let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1);
         assert!(chain[0].is_image);
+    }
+
+    #[test]
+    fn lru_order_is_insertion_order_with_promotion_on_write() {
+        // k1 then k2 then update k1 → k2 becomes the LRU front, but
+        // the cap is sized so that only ONE key needs to be evicted
+        // to fit. With per-key sizes around 60 B each, cap=120 fits
+        // exactly two key states' worth — after the third push the
+        // overshoot is small, so evict drops just the front key.
+        // Per-key sizes: ~34 B each (16 payload + 2 key + 16 overhead).
+        // After 3 pushes, total ≈ 102 B (k1 = 68, k2 = 34). Cap = 80
+        // forces evicting one key — the LRU front.
+        let mut u = UnifiedPages::new(80);
+        u.push_durable(mk(b"k1", 1, true, b"AAAAAAAAAAAAAAAA"));
+        u.push_durable(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
+        // Write to k1 again — promotes it to the back of the LRU.
+        u.push_durable(mk(b"k1", 3, false, b"CCCCCCCCCCCCCCCC"));
+        u.evict_to_capacity();
+        // k2 was at the front after the k1 promotion → evicted.
+        assert!(u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100)).is_empty());
+        assert!(!u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100)).is_empty());
     }
 }
