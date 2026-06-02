@@ -343,8 +343,6 @@ pub enum TaskKind {
     // task that handhes metrics collection
     MetricsCollection,
 
-    // task that drives downloading layers
-    DownloadAllRemoteLayers,
     // Task that calculates synthetis size for all active tenants
     CalculateSyntheticSize,
 

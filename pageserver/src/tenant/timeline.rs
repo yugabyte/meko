@@ -25,8 +25,7 @@ use pageserver_api::key::{
     Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX,
 };
 use pageserver_api::models::{
-    DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest, LsnLease, PageTraceEvent, RelSizeMigration,
-    TimelineState,
+    LsnLease, PageTraceEvent, RelSizeMigration, TimelineState,
 };
 use pageserver_api::reltag::{BlockNumber, RelTag};
 use pageserver_api::shard::{ShardIdentity, ShardIndex, ShardNumber, TenantShardId};
@@ -229,8 +228,6 @@ pub struct Timeline {
     /// Relation size cache
     pub(crate) rel_size_latest_cache: RwLock<HashMap<RelTag, (Lsn, BlockNumber)>>,
     pub(crate) rel_size_snapshot_cache: Mutex<LruCache<(Lsn, RelTag), BlockNumber>>,
-
-    download_all_remote_layers_task_info: RwLock<Option<DownloadRemoteLayersTaskInfo>>,
 
     state: watch::Sender<TimelineState>,
 
@@ -2196,7 +2193,6 @@ impl Timeline {
                 rel_size_latest_cache: RwLock::new(HashMap::new()),
                 rel_size_snapshot_cache: Mutex::new(LruCache::new(relsize_snapshot_cache_capacity)),
 
-                download_all_remote_layers_task_info: RwLock::new(None),
 
                 state,
 
@@ -3196,95 +3192,6 @@ impl Timeline {
                 Ok(img)
             }
         }
-    }
-
-    pub(crate) async fn spawn_download_all_remote_layers(
-        self: Arc<Self>,
-        request: DownloadRemoteLayersTaskSpawnRequest,
-        ctx: &RequestContext,
-    ) -> Result<DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskInfo> {
-        use pageserver_api::models::DownloadRemoteLayersTaskState;
-
-        // this is not really needed anymore; it has tests which really check the return value from
-        // http api. it would be better not to maintain this anymore.
-
-        let mut status_guard = self.download_all_remote_layers_task_info.write().unwrap();
-        if let Some(st) = &*status_guard {
-            match &st.state {
-                DownloadRemoteLayersTaskState::Running => {
-                    return Err(st.clone());
-                }
-                DownloadRemoteLayersTaskState::ShutDown
-                | DownloadRemoteLayersTaskState::Completed => {
-                    *status_guard = None;
-                }
-            }
-        }
-
-        let self_clone = Arc::clone(&self);
-        let task_ctx = ctx.detached_child(
-            TaskKind::DownloadAllRemoteLayers,
-            DownloadBehavior::Download,
-        );
-        let task_id = task_mgr::spawn(
-            task_mgr::BACKGROUND_RUNTIME.handle(),
-            task_mgr::TaskKind::DownloadAllRemoteLayers,
-            self.tenant_shard_id,
-            Some(self.timeline_id),
-            "download all remote layers task",
-            async move {
-                self_clone.download_all_remote_layers(request, &task_ctx).await;
-                let mut status_guard = self_clone.download_all_remote_layers_task_info.write().unwrap();
-                 match &mut *status_guard {
-                    None => {
-                        warn!("tasks status is supposed to be Some(), since we are running");
-                    }
-                    Some(st) => {
-                        let exp_task_id = format!("{}", task_mgr::current_task_id().unwrap());
-                        if st.task_id != exp_task_id {
-                            warn!("task id changed while we were still running, expecting {} but have {}", exp_task_id, st.task_id);
-                        } else {
-                            st.state = DownloadRemoteLayersTaskState::Completed;
-                        }
-                    }
-                };
-                Ok(())
-            }
-            .instrument(info_span!(parent: None, "download_all_remote_layers", tenant_id = %self.tenant_shard_id.tenant_id, shard_id = %self.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id))
-        );
-
-        let initial_info = DownloadRemoteLayersTaskInfo {
-            task_id: format!("{task_id}"),
-            state: DownloadRemoteLayersTaskState::Running,
-            total_layer_count: 0,
-            successful_download_count: 0,
-            failed_download_count: 0,
-        };
-        *status_guard = Some(initial_info.clone());
-
-        Ok(initial_info)
-    }
-
-    async fn download_all_remote_layers(
-        self: &Arc<Self>,
-        _request: DownloadRemoteLayersTaskSpawnRequest,
-        _ctx: &RequestContext,
-    ) {
-        use pageserver_api::models::DownloadRemoteLayersTaskState;
-        // yb-mode: no layer files to download. Mark immediately complete.
-        let mut st = self.download_all_remote_layers_task_info.write().unwrap();
-        if let Some(st) = st.as_mut() {
-            st.state = DownloadRemoteLayersTaskState::Completed;
-        }
-    }
-
-    pub(crate) fn get_download_all_remote_layers_task_info(
-        &self,
-    ) -> Option<DownloadRemoteLayersTaskInfo> {
-        self.download_all_remote_layers_task_info
-            .read()
-            .unwrap()
-            .clone()
     }
 
     /* BEGIN_HADRON */

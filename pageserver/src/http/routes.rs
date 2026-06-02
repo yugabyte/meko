@@ -29,7 +29,7 @@ use hyper::{Body, Request, Response, StatusCode, Uri, header};
 use metrics::launch_timestamp::LaunchTimestamp;
 use pageserver_api::models::virtual_file::IoMode;
 use pageserver_api::models::{
-    DownloadRemoteLayersTaskSpawnRequest, IngestAuxFilesRequest,
+    IngestAuxFilesRequest,
     ListAuxFilesRequest, LocationConfig, LocationConfigListResponse, LocationConfigMode, LsnLease,
     LsnLeaseRequest, OffloadedTimelineInfo, PageTraceEvent, ShardParameters, StatusResponse,
     TenantConfigPatchRequest, TenantConfigRequest, TenantDetails, TenantInfo,
@@ -1787,47 +1787,6 @@ async fn timeline_checkpoint_handler(
     .await
 }
 
-async fn timeline_download_remote_layers_handler_post(
-    mut request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    let body: DownloadRemoteLayersTaskSpawnRequest = json_request(&mut request).await?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-
-    let state = get_state(&request);
-
-    let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id)
-            .await?;
-    let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
-        .with_scope_timeline(&timeline);
-    match timeline.spawn_download_all_remote_layers(body, &ctx).await {
-        Ok(st) => json_response(StatusCode::ACCEPTED, st),
-        Err(st) => json_response(StatusCode::CONFLICT, st),
-    }
-}
-
-async fn timeline_download_remote_layers_handler_get(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    let state = get_state(&request);
-
-    let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_shard_id, timeline_id)
-            .await?;
-    let info = timeline
-        .get_download_all_remote_layers_task_info()
-        .context("task never started since last pageserver process start")
-        .map_err(|e| ApiError::NotFound(e.into()))?;
-    json_response(StatusCode::OK, info)
-}
-
 async fn timeline_detach_ancestor_handler(
     _request: Request<Body>,
     _cancel: CancellationToken,
@@ -2802,14 +2761,6 @@ pub fn make_router(
         .put(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/checkpoint",
             |r| testing_api_handler("run timeline checkpoint", r, timeline_checkpoint_handler),
-        )
-        .post(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/download_remote_layers",
-            |r| api_handler(r, timeline_download_remote_layers_handler_post),
-        )
-        .get(
-            "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/download_remote_layers",
-            |r| api_handler(r, timeline_download_remote_layers_handler_get),
         )
         .put(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/detach_ancestor",

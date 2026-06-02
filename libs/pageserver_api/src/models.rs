@@ -1725,11 +1725,6 @@ impl HistoricLayerInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct DownloadRemoteLayersTaskSpawnRequest {
-    pub max_concurrent_downloads: NonZeroUsize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct IngestAuxFilesRequest {
     pub aux_files: HashMap<String, String>,
 }
@@ -1737,22 +1732,6 @@ pub struct IngestAuxFilesRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListAuxFilesRequest {
     pub lsn: Lsn,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DownloadRemoteLayersTaskInfo {
-    pub task_id: String,
-    pub state: DownloadRemoteLayersTaskState,
-    pub total_layer_count: u64,         // stable once `completed`
-    pub successful_download_count: u64, // stable once `completed`
-    pub failed_download_count: u64,     // stable once `completed`
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum DownloadRemoteLayersTaskState {
-    Running,
-    Completed,
-    ShutDown,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
