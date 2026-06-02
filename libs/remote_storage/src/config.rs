@@ -126,7 +126,9 @@ pub struct YbStoreConfig {
     /// Override per-component if you need a different layout.
     #[serde(default = "default_yb_dbname")]
     pub dbname: String,
-    /// Name of the table that holds the objects.
+    /// Name of the table that holds the objects. Defaults to `blobs` —
+    /// the table neon_local provisions in `yb_storage.public`.
+    #[serde(default = "default_yb_table_name")]
     pub table_name: String,
     /// Optional "subfolder" prefix that's prepended to every key, allowing
     /// multiple tenants to share a single backing table.
@@ -155,6 +157,10 @@ fn default_yb_port() -> u16 {
 
 fn default_yb_dbname() -> String {
     "yb_storage".to_string()
+}
+
+fn default_yb_table_name() -> String {
+    "blobs".to_string()
 }
 
 fn default_yb_concurrency_limit() -> NonZeroUsize {
