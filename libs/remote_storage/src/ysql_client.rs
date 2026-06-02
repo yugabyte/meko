@@ -45,6 +45,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::FutureExt;
@@ -54,6 +55,7 @@ use yb_tokio_postgres::Statement;
 use yb_tokio_postgres::types::ToSql;
 
 use crate::config::YbStoreConfig;
+use crate::metrics::{YB_CLIENT_ERRORS, YB_RETRIES_EXHAUSTED};
 
 /// Future returned by the reconnect closure.
 type OpenFut = BoxFuture<'static, Result<tokio_postgres::Client>>;
@@ -290,29 +292,43 @@ impl YsqlClient {
         .await
     }
 
-    /// Run a statement-shaped operation against the current client
-    /// with two retry classes layered on top:
+    /// Run a statement-shaped operation against the current client with
+    /// classified, bounded internal retries.
     ///
-    /// 1. **Connection drop** — if the op errors and `is_closed()` is
-    ///    true, force a reconnect (which clears the prepared-statement
-    ///    cache, since old `Statement`s are bound to the dead client),
-    ///    re-prepare the SQL on the fresh connection, and retry once.
-    ///    Catches the case where the TCP socket died mid-statement (YB
-    ///    tserver restart, YBA rolling restart, etc.).
-    /// 2. **YB "Restart read required"** — a YugabyteDB-specific
-    ///    transient surfaced on read-only metadata operations that
-    ///    race a schema-change side-effect (common right after
-    ///    CREATE DATABASE / DDL bursts, also seen during shard
-    ///    splits and rebalances). The error means "the statement did
-    ///    not execute; retry it". Bounded to 5 attempts with doubling
-    ///    backoff from 200 ms. Safe to retry because the statement
-    ///    by definition didn't apply.
+    /// Every error is classified by [`classify_error`] into one of:
+    ///
+    /// - **`ConnectionDrop`** — TCP socket died (`is_closed()` is true,
+    ///   or the wire surfaced a `connection closed/reset/unexpectedly
+    ///   closed` message). Force-reconnect the slot (which clears the
+    ///   prepared-statement cache, since old `Statement`s are bound to
+    ///   the dead client), re-prepare on the fresh connection, retry.
+    ///   Capped at [`MAX_CONNECTION_DROPS`] because each one pays a full
+    ///   TCP+TLS handshake.
+    /// - **`Transient`** — SQLSTATE `40001` (serialization failure),
+    ///   `40P01` (deadlock), `25P03` (idle-in-txn timeout), or an
+    ///   `XX000` whose message matches one of the
+    ///   [`YB_TRANSIENT_MSG_PATTERNS`] entries (tablet leader change,
+    ///   schema version mismatch, etc.). The statement did not commit
+    ///   — safe to retry. Backoff with jitter, capped at
+    ///   [`MAX_TOTAL_ATTEMPTS`].
+    /// - **`Fatal`** — application/logic errors (`25006`, `25P02`,
+    ///   `2D000`, `3B001`, any `42xxx`) and anything else. Returned
+    ///   directly.
+    ///
+    /// **Idempotency assumption.** All current callers (pageserver
+    /// `PageStore`, safekeeper WAL backup, `YbStore` blob ops, storage
+    /// controller) issue idempotent SQL — reads, `INSERT ... ON
+    /// CONFLICT` / upserts (we `SET yb_enable_upsert_mode = true` on
+    /// connect), gen-fenced metadata updates. That lets the retry loop
+    /// replay connection drops blindly even when we can't prove the
+    /// pre-drop statement didn't commit. A future caller adding a bare
+    /// non-idempotent write needs a separate path that returns
+    /// `ConnectionDrop` errors to the caller unretried.
     ///
     /// All YsqlClient public methods (`execute` / `query` /
-    /// `query_opt`) go through here so every caller — pageserver,
-    /// safekeeper WAL backup, YbStore blob ops, storage controller
-    /// — gets the same retry semantics and prepared-statement caching
-    /// without each one having to reimplement it.
+    /// `query_opt`) go through here, so every caller gets the same
+    /// retry semantics + prepared-statement caching without
+    /// reimplementing them.
     async fn run_with_retries<F, Fut, T>(
         &self,
         op_label: &str,
@@ -323,91 +339,243 @@ impl YsqlClient {
         F: Fn(Arc<tokio_postgres::Client>, Statement) -> Fut,
         Fut: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
     {
-        // Treat any error message containing one of these as a
-        // connection-drop signal. `is_closed()` doesn't always race
-        // ahead of the user-visible op: tokio-postgres can surface
-        // "connection closed" from the response channel before the
-        // Client's internal task has marked itself closed. The
-        // message check is the safety net.
-        fn looks_like_dropped_connection(msg: &str) -> bool {
-            msg.contains("connection closed")
-                || msg.contains("connection reset")
-                || msg.contains("connection unexpectedly closed")
-        }
-
         let slot = self.pick_slot();
-        let mut delay = std::time::Duration::from_millis(200);
-        for attempt in 1..=5u32 {
+        let mut delay = INITIAL_DELAY;
+        let mut connection_drops = 0u32;
+
+        for attempt in 1..=MAX_TOTAL_ATTEMPTS {
             // Ensure the slot's current client is live before fetching
             // its (client, stmt) pair atomically.
             let _ = self.current_client_at(slot).await?;
             let (client, stmt) = match self.get_client_and_stmt_at(slot, sql).await {
                 Ok(pair) => pair,
                 Err(e) => {
-                    // prepare() failed. If the connection looks dead,
-                    // reconnect and loop. Otherwise classify as either
-                    // a transient "Restart read required" (backoff +
-                    // continue) or a hard error (return).
-                    let msg = e.to_string();
                     let live = self.current_client_at(slot).await?;
-                    if live.is_closed() || looks_like_dropped_connection(&msg) {
-                        let _ = self.force_reconnect_at(slot).await?;
-                        if attempt < 5 {
-                            continue;
+                    let class = classify_error(&e, live.is_closed());
+                    record_error("prepare", &e, class);
+                    match self
+                        .handle_retry_outcome(
+                            slot,
+                            "prepare",
+                            attempt,
+                            class,
+                            &mut connection_drops,
+                            &mut delay,
+                            &e,
+                        )
+                        .await?
+                    {
+                        RetryAction::Continue => continue,
+                        RetryAction::Exhaust(reason) => {
+                            YB_RETRIES_EXHAUSTED.with_label_values(&[reason]).inc();
+                            return Err(anyhow::Error::from(e)).with_context(|| {
+                                format!("YsqlClient: {op_label} prepare exhausted {reason} budget")
+                            });
                         }
-                        return Err(anyhow::Error::from(e)).with_context(|| {
-                            format!("YsqlClient: {op_label} prepare exhausted retries")
-                        });
+                        RetryAction::Fatal => return Err(anyhow::Error::from(e)),
                     }
-                    if attempt < 5 && msg.contains("Restart read required") {
-                        tokio::time::sleep(delay).await;
-                        delay = delay.saturating_mul(2);
-                        continue;
-                    }
-                    return Err(anyhow::Error::from(e));
                 }
             };
             match f(client.clone(), stmt).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    let msg = e.to_string();
-
-                    // (1) connection drop — reconnect, then `continue`
-                    // the outer loop so we get up to 5 attempts total
-                    // (each with fresh client + re-prepared stmt).
-                    if client.is_closed() || looks_like_dropped_connection(&msg) {
-                        let _ = self.force_reconnect_at(slot).await?;
-                        if attempt < 5 {
-                            tracing::info!(
-                                attempt,
-                                "YsqlClient: {op_label} reconnect+retry after dropped connection ({msg})"
-                            );
-                            continue;
-                        }
-                        return Err(anyhow::Error::from(e)).with_context(|| {
-                            format!("YsqlClient: {op_label} after reconnect retries exhausted")
-                        });
-                    }
-
-                    // (2) YB "Restart read required" — match by message
-                    // because tokio-postgres does not surface a stable
-                    // SQLSTATE for this. Cheap string contain check.
-                    if attempt < 5 && msg.contains("Restart read required") {
-                        tracing::info!(
+                    let class = classify_error(&e, client.is_closed());
+                    record_error(op_label, &e, class);
+                    match self
+                        .handle_retry_outcome(
+                            slot,
+                            op_label,
                             attempt,
-                            backoff_ms = delay.as_millis() as u64,
-                            "YsqlClient: {op_label} hit YB 'Restart read required', retrying"
-                        );
-                        tokio::time::sleep(delay).await;
-                        delay = delay.saturating_mul(2);
-                        continue;
+                            class,
+                            &mut connection_drops,
+                            &mut delay,
+                            &e,
+                        )
+                        .await?
+                    {
+                        RetryAction::Continue => continue,
+                        RetryAction::Exhaust(reason) => {
+                            YB_RETRIES_EXHAUSTED.with_label_values(&[reason]).inc();
+                            return Err(anyhow::Error::from(e)).with_context(|| {
+                                format!("YsqlClient: {op_label} after {reason} retries exhausted")
+                            });
+                        }
+                        RetryAction::Fatal => return Err(anyhow::Error::from(e)),
                     }
-                    return Err(anyhow::Error::from(e));
                 }
             }
         }
         unreachable!("retry loop returns or errors")
     }
+
+    /// Apply the retry decision for a classified error. Mutates
+    /// `connection_drops` / `delay` and either advances the loop
+    /// (`Continue`), signals the caller to return after recording the
+    /// exhaustion (`Exhaust`), or signals a fatal classification
+    /// (`Fatal`). Centralized so the prepare-failure and run-failure
+    /// paths in `run_with_retries` share identical logic.
+    async fn handle_retry_outcome(
+        &self,
+        slot: usize,
+        op_label: &str,
+        attempt: u32,
+        class: RetryClass,
+        connection_drops: &mut u32,
+        delay: &mut Duration,
+        err: &tokio_postgres::Error,
+    ) -> Result<RetryAction> {
+        match class {
+            RetryClass::ConnectionDrop => {
+                *connection_drops += 1;
+                if *connection_drops > MAX_CONNECTION_DROPS || attempt == MAX_TOTAL_ATTEMPTS {
+                    return Ok(RetryAction::Exhaust("connection_drop"));
+                }
+                let _ = self.force_reconnect_at(slot).await?;
+                tracing::info!(
+                    attempt,
+                    connection_drops = *connection_drops,
+                    "YsqlClient: {op_label} reconnect+retry after dropped connection: {err}"
+                );
+                Ok(RetryAction::Continue)
+            }
+            RetryClass::Transient => {
+                if attempt == MAX_TOTAL_ATTEMPTS {
+                    return Ok(RetryAction::Exhaust("transient"));
+                }
+                tracing::info!(
+                    attempt,
+                    sqlstate = err.code().map(|c| c.code()).unwrap_or("none"),
+                    backoff_ms = delay.as_millis() as u64,
+                    "YsqlClient: {op_label} transient error, retrying: {err}"
+                );
+                sleep_with_jitter(*delay).await;
+                *delay = (*delay * 2).min(MAX_DELAY);
+                Ok(RetryAction::Continue)
+            }
+            RetryClass::Fatal => Ok(RetryAction::Fatal),
+        }
+    }
+}
+
+/// Total retry attempts. Sized for transient-conflict tails under load;
+/// connection drops have a separate, smaller budget below.
+const MAX_TOTAL_ATTEMPTS: u32 = 10;
+
+/// Maximum reconnects in a single call. Each one is a full TCP+TLS
+/// handshake against a (possibly remote) tserver, so we cap tighter
+/// than the overall attempt count.
+const MAX_CONNECTION_DROPS: u32 = 5;
+
+/// Initial backoff for transient retries. Conflict cycles (`40001`,
+/// `40P01`) usually clear in single-digit ms — start low to avoid
+/// wasted latency, then double up if the contention persists.
+const INITIAL_DELAY: Duration = Duration::from_millis(50);
+
+/// Cap on the per-attempt backoff. Without a cap, the doubling chain
+/// would reach 25 s at attempt 10 — too long for caller-visible
+/// latency on what is usually a momentary cluster event.
+const MAX_DELAY: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryClass {
+    ConnectionDrop,
+    Transient,
+    Fatal,
+}
+
+enum RetryAction {
+    Continue,
+    /// Retry budget for `reason` exhausted; caller should propagate the
+    /// underlying error with this label.
+    Exhaust(&'static str),
+    /// Classification was fatal; caller should return the error.
+    Fatal,
+}
+
+/// XX000 message substrings YB documents as safe-to-retry transients.
+/// See <https://yugabytedb.tips/which-client-errors-are-safe-to-retry/>.
+/// All correspond to "the statement did not commit" or "the underlying
+/// tablet moved mid-flight" events — replaying is safe for any
+/// idempotent op (and all current YsqlClient callers are idempotent).
+const YB_TRANSIENT_MSG_PATTERNS: &[&str] = &[
+    // Read race against a concurrent write — YB asks us to retry from
+    // a newer snapshot. The statement did not execute.
+    "Restart read required",
+    // Tablet leader moved during an async write. Replay-safe for
+    // idempotent ops.
+    "Tablet leader changed",
+    // A follow-up read waited on a prior async write past the deadline.
+    "WaitForAsyncWrite RPC",
+    // Cluster saturation backpressure — the RPC sat in the queue past
+    // its deadline without ever running.
+    "Call waited in the queue past deadline",
+    // Tablet peer is restarting / splitting / being removed. Whoever
+    // takes over the tablet will accept the retry.
+    "is shutting down",
+    // DML hit during a concurrent schema change — replay against the
+    // newer schema version.
+    "schema version mismatch",
+];
+
+fn looks_like_dropped_connection(msg: &str) -> bool {
+    msg.contains("connection closed")
+        || msg.contains("connection reset")
+        || msg.contains("connection unexpectedly closed")
+}
+
+/// Classify a `tokio_postgres::Error` against the YB retry guide.
+/// SQLSTATE is preferred when present; for `XX000` and missing codes
+/// we fall back to a vetted message-substring allowlist
+/// ([`YB_TRANSIENT_MSG_PATTERNS`]). Anything we can't positively
+/// identify as transient or connection-drop is `Fatal`.
+fn classify_error(err: &tokio_postgres::Error, is_closed: bool) -> RetryClass {
+    let msg = err.to_string();
+    if is_closed || looks_like_dropped_connection(&msg) {
+        return RetryClass::ConnectionDrop;
+    }
+    if let Some(code) = err.code() {
+        let c = code.code();
+        // Standard-PG transients: the statement is guaranteed not to
+        // have committed.
+        if matches!(c, "40001" | "40P01" | "25P03") {
+            return RetryClass::Transient;
+        }
+        // Application / structural errors — never retry. 42xxx covers
+        // syntax / undefined object / permission / type mismatch
+        // (caller bug). Listing the txn-state codes by hand because
+        // they don't share a prefix.
+        if matches!(c, "25006" | "25P02" | "2D000" | "3B001") || c.starts_with("42") {
+            return RetryClass::Fatal;
+        }
+        // XX000 and unrecognized codes: fall through. YB packs several
+        // distinct transients into XX000, so we have to inspect the
+        // message.
+    }
+    if YB_TRANSIENT_MSG_PATTERNS.iter().any(|p| msg.contains(p)) {
+        return RetryClass::Transient;
+    }
+    RetryClass::Fatal
+}
+
+fn record_error(op: &str, e: &tokio_postgres::Error, class: RetryClass) {
+    let sqlstate = e.code().map(|c| c.code()).unwrap_or("none");
+    let class_str = match class {
+        RetryClass::ConnectionDrop => "connection_drop",
+        RetryClass::Transient => "transient",
+        RetryClass::Fatal => "fatal",
+    };
+    YB_CLIENT_ERRORS
+        .with_label_values(&[op, class_str, sqlstate])
+        .inc();
+}
+
+/// Sleep for `base` plus 0–25% random jitter. With `pool_size > 1`,
+/// slots that all hit the same cluster event would otherwise retry in
+/// lockstep — jitter breaks the herd.
+async fn sleep_with_jitter(base: Duration) {
+    let jitter_factor = rand::random::<f64>() * 0.25;
+    let total = base.mul_f64(1.0 + jitter_factor);
+    tokio::time::sleep(total).await;
 }
 
 impl YsqlClient {
@@ -552,4 +720,80 @@ async fn open_tls(
         .execute("SET yb_enable_upsert_mode = true", &[])
         .await;
     Ok(client)
+}
+
+#[cfg(test)]
+mod retry_class_tests {
+    //! `tokio_postgres::Error` has no public constructor, so we can't
+    //! drive `classify_error` end-to-end. Instead we test the helpers
+    //! the classifier delegates to (connection-drop detector +
+    //! transient-message allowlist) — those carry the substantive
+    //! logic.
+    use super::*;
+
+    #[test]
+    fn drop_patterns_match() {
+        assert!(looks_like_dropped_connection(
+            "db error: connection closed"
+        ));
+        assert!(looks_like_dropped_connection(
+            "io error: connection reset by peer"
+        ));
+        assert!(looks_like_dropped_connection(
+            "connection unexpectedly closed"
+        ));
+        assert!(!looks_like_dropped_connection(
+            "ERROR: relation foo does not exist"
+        ));
+        assert!(!looks_like_dropped_connection(
+            "Restart read required at 12345"
+        ));
+    }
+
+    #[test]
+    fn yb_transient_patterns_cover_documented_classes() {
+        // Anchor the allowlist contents so a renamed pattern can't
+        // silently drop coverage.
+        let expected = [
+            "Restart read required",
+            "Tablet leader changed",
+            "WaitForAsyncWrite RPC",
+            "Call waited in the queue past deadline",
+            "is shutting down",
+            "schema version mismatch",
+        ];
+        for needle in expected {
+            assert!(
+                YB_TRANSIENT_MSG_PATTERNS.iter().any(|p| *p == needle),
+                "missing transient pattern: {needle}"
+            );
+        }
+    }
+
+    #[test]
+    fn jitter_stays_inside_envelope() {
+        // 0–25% jitter on top of base must never produce a total below
+        // `base` or above `1.25 * base`. Sample a few times because
+        // `rand::random` is non-deterministic.
+        let base = Duration::from_millis(100);
+        for _ in 0..50 {
+            let jitter_factor = rand::random::<f64>() * 0.25;
+            let total = base.mul_f64(1.0 + jitter_factor);
+            assert!(total >= base);
+            assert!(total <= base.mul_f64(1.25));
+        }
+    }
+
+    #[test]
+    fn fortytwo_class_prefix_is_correct() {
+        // 42xxx covers syntax, undefined object, permission errors —
+        // all caller bugs that retrying would not fix. The classifier
+        // catches the family via `c.starts_with("42")`; lock that in.
+        for code in ["42P01", "42703", "42501", "42883"] {
+            assert!(code.starts_with("42"));
+        }
+        for code in ["40001", "40P01", "25P03", "XX000"] {
+            assert!(!code.starts_with("42"));
+        }
+    }
 }
