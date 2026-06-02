@@ -932,19 +932,29 @@ async fn create_compute_page_store(
 /// materialiser `read_chain_durable` cache miss + materialiser
 /// `put_pages`. Schema already exists by the time this runs.
 ///
-/// Single connection: the walreceiver feeds one stream of WAL,
-/// `PageWriter::flush` parallelises within its own chunked INSERT
-/// (`buffer_unordered(4)`) on this conn via tokio_postgres pipelining,
-/// and the materialiser drains its queue serially. No benefit from
-/// extra connections.
+/// Pool size 4: `put_pages` chunks each INSERT into 500-row sub-batches
+/// and dispatches `PARALLELISM = 4` of them at a time (see
+/// `PageStore::put_pages`). tokio-postgres pipelines them on the wire,
+/// but YB serialises any pipeline behind a single backend session —
+/// without independent connections one flush's 4 chunks would run
+/// sequentially even though the round-trip is dominated by YB's tablet
+/// RPC + Raft replicate (~13 ms per ~490-row batch in TPC-C profiles).
+/// 4 connections lets the 4 chunks land on 4 distinct YB backends and
+/// complete in one wall-clock RTT instead of four. The materialiser
+/// shares this pool for its image INSERTs.
 async fn create_internal_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
-    let Some(store) = create_page_store_with_app_name(conf, "yb-pageserver:internal", 1).await?
+    const INTERNAL_POOL_SIZE: usize = 4;
+    let Some(store) =
+        create_page_store_with_app_name(conf, "yb-pageserver:internal", INTERNAL_POOL_SIZE).await?
     else {
         return Ok(None);
     };
-    info!("Internal PageStore connected");
+    info!(
+        pool_size = INTERNAL_POOL_SIZE,
+        "Internal PageStore connected"
+    );
     Ok(Some(store))
 }
 

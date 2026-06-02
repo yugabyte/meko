@@ -64,15 +64,17 @@ const BATCH_DRAIN_LIMIT: usize = 500;
 /// drains in a spawned future; this cap bounds how many spawned
 /// INSERT futures can be outstanding at once.
 ///
-/// At 2: while one INSERT is talking to YB, the main task can drain
-/// the queue, run redo for the next batch, and queue *one* further
-/// INSERT before having to await the oldest INSERT to finish. That
-/// covers the common case where INSERT and redo take comparable wall
-/// time. Going higher would queue more dirty images in RAM (each
-/// holds its `Vec<PageRow>` until the INSERT lands) without much
-/// throughput gain — YB-side write contention from concurrent
-/// `put_pages` is what would dominate.
-const MAX_INFLIGHT_INSERTS: usize = 2;
+/// At 4: each materialiser `put_pages` carries ≤500 rows (one
+/// `ROWS_PER_INSERT` chunk) and therefore uses exactly one slot of
+/// the internal `PageStore` pool. With `INTERNAL_POOL_SIZE = 4` over
+/// in `yb-pageserver.rs`, 4 in-flight INSERTs map to 4 distinct YB
+/// backends and lift the materialiser's INSERT-side throughput from
+/// ~38 K rows/s (1 conn at ~13 ms / 490-row batch) toward ~150 K rows/s.
+/// Raises peak in-flight RAM by ~8 MB (4 × 500 × 8 KB image) over
+/// the prior 2-deep pipeline; small versus the win when the
+/// materialise queue is being driven hard enough to backpressure
+/// the walreceiver.
+const MAX_INFLIGHT_INSERTS: usize = 4;
 
 /// Maximum concurrent `redo_one` futures in flight within a single
 /// `materialize_batch`. Each future does an SQL `read_chain_durable`
