@@ -4,7 +4,6 @@
 use std::cmp::{max, min};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, bail};
 use bytes::Bytes;
@@ -12,9 +11,9 @@ use futures::FutureExt;
 use itertools::Itertools;
 use parking_lot::Mutex;
 use postgres_backend::{CopyStreamHandlerEnd, PostgresBackend, PostgresBackendReader, QueryError};
-use postgres_ffi::{MAX_SEND_SIZE, PgMajorVersion, get_current_timestamp};
+use postgres_ffi::{MAX_SEND_SIZE, PgMajorVersion};
 use postgres_ffi_types::TimestampTz;
-use pq_proto::{BeMessage, WalSndKeepAlive, XLogDataBody};
+use pq_proto::BeMessage;
 use safekeeper_api::Term;
 use safekeeper_api::models::{
     HotStandbyFeedback, INVALID_FULL_TRANSACTION_ID, ReplicationFeedback, StandbyFeedback,
@@ -22,16 +21,14 @@ use safekeeper_api::models::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch::Receiver;
-use tokio::time::timeout;
 use tracing::*;
 use utils::bin_ser::BeSer;
-use utils::failpoint_support;
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 use utils::postgres_client::PostgresClientProtocol;
 
 use crate::handler::SafekeeperPostgresHandler;
-use crate::metrics::{RECEIVED_PS_FEEDBACKS, WAL_READERS};
+use crate::metrics::RECEIVED_PS_FEEDBACKS;
 use crate::receive_wal::WalReceivers;
 use crate::safekeeper::TermLsn;
 use crate::send_interpreted_wal::{
@@ -39,7 +36,6 @@ use crate::send_interpreted_wal::{
 };
 use crate::timeline::WalResidentTimeline;
 use crate::wal_reader_stream::StreamingWalReader;
-use crate::wal_storage::WalReader;
 
 // See: https://www.postgresql.org/docs/13/protocol-replication.html
 const HOT_STANDBY_FEEDBACK_TAG_BYTE: u8 = b'h';
@@ -102,25 +98,23 @@ impl WalSenders {
 
         let mut selected_interpreted_reader = None;
         for slot in state.slots.iter().flatten() {
-            if let WalSenderState::Interpreted(slot_state) = slot {
-                if let Some(ref interpreted_reader) = slot_state.interpreted_wal_reader {
-                    let select = match (interpreted_reader.current_position(), max_delta_for_fanout)
-                    {
-                        (Some(pos), Some(max_delta)) => {
-                            let delta = pos.0.abs_diff(start_pos.0);
-                            delta <= max_delta
-                        }
-                        // Reader is not active
-                        (None, _) => false,
-                        // Gating fanout by max delta is disabled.
-                        // Attach to any active reader.
-                        (_, None) => true,
-                    };
-
-                    if select {
-                        selected_interpreted_reader = Some(interpreted_reader.clone());
-                        break;
+            let WalSenderState::Interpreted(slot_state) = slot;
+            if let Some(ref interpreted_reader) = slot_state.interpreted_wal_reader {
+                let select = match (interpreted_reader.current_position(), max_delta_for_fanout) {
+                    (Some(pos), Some(max_delta)) => {
+                        let delta = pos.0.abs_diff(start_pos.0);
+                        delta <= max_delta
                     }
+                    // Reader is not active
+                    (None, _) => false,
+                    // Gating fanout by max delta is disabled.
+                    // Attach to any active reader.
+                    (_, None) => true,
+                };
+
+                if select {
+                    selected_interpreted_reader = Some(interpreted_reader.clone());
+                    break;
                 }
             }
         }
@@ -522,8 +516,6 @@ impl SafekeeperPostgresHandler {
         // switch to copy
         pgb.write_message(&BeMessage::CopyBothResponse).await?;
 
-        let wal_reader = tli.get_walreader(start_pos).await?;
-
         // Split to concurrently receive and send data; replies are generally
         // not synchronized with sends, so this avoids deadlocks.
         let reader = pgb.split().context("START_REPLICATION split")?;
@@ -726,225 +718,6 @@ pub(crate) struct EndWatchView(EndWatch);
 impl EndWatchView {
     pub(crate) fn get(&self) -> Lsn {
         self.0.get()
-    }
-}
-/// A half driving sending WAL.
-struct WalSender<'a, IO> {
-    pgb: &'a mut PostgresBackend<IO>,
-    tli: WalResidentTimeline,
-    appname: Option<String>,
-    // Position since which we are sending next chunk.
-    start_pos: Lsn,
-    // WAL up to this position is known to be locally available.
-    // Usually this is the same as the latest commit_lsn, but in case of
-    // walproposer recovery, this is flush_lsn.
-    //
-    // We send this LSN to the receiver as wal_end, so that it knows how much
-    // WAL this safekeeper has. This LSN should be as fresh as possible.
-    end_pos: Lsn,
-    /// When streaming uncommitted part, the term the client acts as the leader
-    /// in. Streaming is stopped if local term changes to a different (higher)
-    /// value.
-    term: Option<Term>,
-    /// Watch channel receiver to learn end of available WAL (and wait for its advancement).
-    end_watch: EndWatch,
-    ws_guard: Arc<WalSenderGuard>,
-    wal_reader: WalReader,
-    // buffer for readling WAL into to send it
-    send_buf: Vec<u8>,
-}
-
-const POLL_STATE_TIMEOUT: Duration = Duration::from_secs(1);
-
-impl<IO: AsyncRead + AsyncWrite + Unpin> WalSender<'_, IO> {
-    /// Send WAL until
-    /// - an error occurs
-    /// - receiver is caughtup and there is no computes (if streaming up to commit_lsn)
-    /// - timeline's cancellation token fires
-    ///
-    /// Err(CopyStreamHandlerEnd) is always returned; Result is used only for ?
-    /// convenience.
-    async fn run(mut self) -> Result<(), CopyStreamHandlerEnd> {
-        let metric = WAL_READERS
-            .get_metric_with_label_values(&[
-                "future",
-                self.appname.as_deref().unwrap_or("safekeeper"),
-            ])
-            .unwrap();
-
-        metric.inc();
-        scopeguard::defer! {
-            metric.dec();
-        }
-
-        loop {
-            // Wait for the next portion if it is not there yet, or just
-            // update our end of WAL available for sending value, we
-            // communicate it to the receiver.
-            self.wait_wal().await?;
-            assert!(
-                self.end_pos > self.start_pos,
-                "nothing to send after waiting for WAL"
-            );
-
-            // try to send as much as available, capped by MAX_SEND_SIZE
-            let mut chunk_end_pos = self.start_pos + MAX_SEND_SIZE as u64;
-            // if we went behind available WAL, back off
-            if chunk_end_pos >= self.end_pos {
-                chunk_end_pos = self.end_pos;
-            } else {
-                // If sending not up to end pos, round down to page boundary to
-                // avoid breaking WAL record not at page boundary, as protocol
-                // demands. See walsender.c (XLogSendPhysical).
-                chunk_end_pos = chunk_end_pos
-                    .checked_sub(chunk_end_pos.block_offset())
-                    .unwrap();
-            }
-            let send_size = (chunk_end_pos.0 - self.start_pos.0) as usize;
-            let send_buf = &mut self.send_buf[..send_size];
-            let send_size: usize;
-            {
-                // If uncommitted part is being pulled, check that the term is
-                // still the expected one.
-                let _term_guard = if let Some(t) = self.term {
-                    Some(self.tli.acquire_term(t).await?)
-                } else {
-                    None
-                };
-                // Read WAL into buffer. send_size can be additionally capped to
-                // segment boundary here.
-                send_size = self.wal_reader.read(send_buf).await?
-            };
-            let send_buf = &send_buf[..send_size];
-
-            // and send it, while respecting Timeline::cancel
-            let msg = BeMessage::XLogData(XLogDataBody {
-                wal_start: self.start_pos.0,
-                wal_end: self.end_pos.0,
-                timestamp: get_current_timestamp(),
-                data: send_buf,
-            });
-            self.pgb.write_message(&msg).await?;
-
-            if let Some(appname) = &self.appname {
-                if appname == "replica" {
-                    failpoint_support::sleep_millis_async!("sk-send-wal-replica-sleep");
-                }
-            }
-            trace!(
-                "sent {} bytes of WAL {}-{}",
-                send_size,
-                self.start_pos,
-                self.start_pos + send_size as u64
-            );
-            self.start_pos += send_size as u64;
-        }
-    }
-
-    /// wait until we have WAL to stream, sending keepalives and checking for
-    /// exit in the meanwhile
-    async fn wait_wal(&mut self) -> Result<(), CopyStreamHandlerEnd> {
-        loop {
-            self.end_pos = self.end_watch.get();
-            let have_something_to_send = (|| {
-                fail::fail_point!(
-                    "sk-pause-send",
-                    self.appname.as_deref() != Some("pageserver"),
-                    |_| { false }
-                );
-                self.end_pos > self.start_pos
-            })();
-
-            if have_something_to_send {
-                trace!("got end_pos {:?}, streaming", self.end_pos);
-                return Ok(());
-            }
-
-            // Wait for WAL to appear, now self.end_pos == self.start_pos.
-            if let Some(lsn) = self.wait_for_lsn().await? {
-                self.end_pos = lsn;
-                trace!("got end_pos {:?}, streaming", self.end_pos);
-                return Ok(());
-            }
-
-            // Timed out waiting for WAL, check for termination and send KA.
-            // Check for termination only if we are streaming up to commit_lsn
-            // (to pageserver).
-            if let EndWatch::Commit(_) = self.end_watch {
-                if let Some(remote_consistent_lsn) = self
-                    .ws_guard
-                    .walsenders
-                    .get_ws_remote_consistent_lsn(self.ws_guard.id)
-                {
-                    if self.tli.should_walsender_stop(remote_consistent_lsn).await {
-                        // Terminate if there is nothing more to send.
-                        // Note that "ending streaming" part of the string is used by
-                        // pageserver to identify WalReceiverError::SuccessfulCompletion,
-                        // do not change this string without updating pageserver.
-                        return Err(CopyStreamHandlerEnd::ServerInitiated(format!(
-                            "ending streaming to {:?} at {}, receiver is caughtup and there is no computes",
-                            self.appname, self.start_pos,
-                        )));
-                    }
-                }
-            }
-
-            let msg = BeMessage::KeepAlive(WalSndKeepAlive {
-                wal_end: self.end_pos.0,
-                timestamp: get_current_timestamp(),
-                request_reply: true,
-            });
-
-            self.pgb.write_message(&msg).await?;
-        }
-    }
-
-    /// Wait until we have available WAL > start_pos or timeout expires. Returns
-    /// - Ok(Some(end_pos)) if needed lsn is successfully observed;
-    /// - Ok(None) if timeout expired;
-    /// - Err in case of error -- only if 1) term changed while fetching in recovery
-    ///   mode 2) watch channel closed, which must never happen.
-    async fn wait_for_lsn(&mut self) -> anyhow::Result<Option<Lsn>> {
-        let fp = (|| {
-            fail::fail_point!(
-                "sk-pause-send",
-                self.appname.as_deref() != Some("pageserver"),
-                |_| { true }
-            );
-            false
-        })();
-        if fp {
-            tokio::time::sleep(POLL_STATE_TIMEOUT).await;
-            return Ok(None);
-        }
-
-        let res = timeout(POLL_STATE_TIMEOUT, async move {
-            loop {
-                let end_pos = self.end_watch.get();
-                if end_pos > self.start_pos {
-                    return Ok(end_pos);
-                }
-                if let EndWatch::Flush(rx) = &self.end_watch {
-                    let curr_term = rx.borrow().term;
-                    if let Some(client_term) = self.term {
-                        if curr_term != client_term {
-                            bail!("term changed: requested {}, now {}", client_term, curr_term);
-                        }
-                    }
-                }
-                self.end_watch.changed().await?;
-            }
-        })
-        .await;
-
-        match res {
-            // success
-            Ok(Ok(commit_lsn)) => Ok(Some(commit_lsn)),
-            // error inside closure
-            Ok(Err(err)) => Err(err),
-            // timeout
-            Err(_) => Ok(None),
-        }
     }
 }
 

@@ -49,6 +49,8 @@ async fn main() -> anyhow::Result<()> {
             table_name: table,
             prefix,
             concurrency_limit: NonZeroUsize::new(16).unwrap(),
+            sslmode: None,
+            sslrootcert: None,
         }),
         timeout: Duration::from_secs(60),
         small_timeout: Duration::from_secs(10),

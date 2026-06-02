@@ -78,22 +78,6 @@ impl IoConcurrency {
         IoConcurrency::Sequential
     }
 
-    #[cfg(test)]
-    pub(crate) fn spawn_for_test() -> impl std::ops::DerefMut<Target = Self> {
-        struct Wrapper(IoConcurrency);
-        impl std::ops::Deref for Wrapper {
-            type Target = IoConcurrency;
-            fn deref(&self) -> &Self::Target {
-                &self.0
-            }
-        }
-        impl std::ops::DerefMut for Wrapper {
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                &mut self.0
-            }
-        }
-        Wrapper(IoConcurrency::Sequential)
-    }
 }
 
 #[derive(Clone, Copy, strum_macros::EnumString)]

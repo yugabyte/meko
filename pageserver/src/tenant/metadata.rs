@@ -188,12 +188,6 @@ impl TimelineMetadata {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_recalculated_checksum(mut self) -> anyhow::Result<Self> {
-        self.hdr = TimelineMetadataHeader::try_from(&self.body)?;
-        Ok(self)
-    }
-
     fn upgrade_timeline_metadata(metadata_bytes: &[u8]) -> anyhow::Result<Self> {
         let mut hdr = TimelineMetadataHeader::des(&metadata_bytes[0..METADATA_HDR_SIZE])?;
 
@@ -320,22 +314,6 @@ impl TimelineMetadata {
 
     pub fn pg_version(&self) -> PgMajorVersion {
         self.body.pg_version
-    }
-
-    // Checksums make it awkward to build a valid instance by hand.  This helper
-    // provides a TimelineMetadata with a valid checksum in its header.
-    pub fn example() -> Self {
-        let instance = Self::new(
-            "0/16960E8".parse::<Lsn>().unwrap(),
-            None,
-            None,
-            Lsn::from_hex("00000000").unwrap(),
-            Lsn::from_hex("00000000").unwrap(),
-            Lsn::from_hex("00000000").unwrap(),
-            PgMajorVersion::PG14,
-        );
-        let bytes = instance.to_bytes().unwrap();
-        Self::from_bytes(&bytes).unwrap()
     }
 
 }

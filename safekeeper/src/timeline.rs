@@ -44,7 +44,7 @@ use crate::wal_backup::{WalBackup, remote_timeline_path};
 use crate::wal_backup_partial::PartialRemoteSegment;
 use crate::wal_storage::{PhysicalStorage, Storage as wal_storage_iface, WalReader};
 use crate::yb_wal_storage::{self, YbWalStorage};
-use crate::{SafeKeeperConf, control_file, debug_dump, timeline_manager, wal_storage};
+use crate::{SafeKeeperConf, control_file, debug_dump, timeline_manager};
 
 fn peer_info_from_sk_info(sk_info: &SafekeeperTimelineInfo, ts: Instant) -> PeerInfo {
     PeerInfo {

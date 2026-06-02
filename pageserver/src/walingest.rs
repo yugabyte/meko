@@ -1396,21 +1396,6 @@ impl WalIngest {
         Ok(())
     }
 
-    #[cfg(test)]
-    async fn put_rel_page_image(
-        &mut self,
-        modification: &mut DatadirModification<'_>,
-        rel: RelTag,
-        blknum: BlockNumber,
-        img: Bytes,
-        ctx: &RequestContext,
-    ) -> Result<(), WalIngestError> {
-        self.handle_rel_extend(modification, rel, blknum, ctx)
-            .await?;
-        modification.put_rel_page_image(rel, blknum, img)?;
-        Ok(())
-    }
-
     async fn put_rel_wal_record(
         &mut self,
         modification: &mut DatadirModification<'_>,

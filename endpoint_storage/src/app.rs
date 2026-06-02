@@ -206,17 +206,12 @@ mod tests {
     use axum::{body::Body, extract::Request, response::Response};
     use http_body_util::BodyExt;
     use itertools::iproduct;
-    use std::env::var;
     use std::sync::Arc;
     use std::time::Duration;
     use test_log::test as testlog;
     use tower::{Service, util::ServiceExt};
     use utils::id::{TenantId, TimelineId};
 
-    // see libs/remote_storage/tests/test_real_s3.rs
-    const REAL_S3_ENV: &str = "ENABLE_REAL_S3_REMOTE_STORAGE";
-    const REAL_S3_BUCKET: &str = "REMOTE_STORAGE_S3_BUCKET";
-    const REAL_S3_REGION: &str = "REMOTE_STORAGE_S3_REGION";
 
     async fn proxy() -> (Storage, Option<camino_tempfile::Utf8TempDir>) {
         let cancel = CancellationToken::new();
@@ -437,10 +432,8 @@ MC4CAQAwBQYDK2VwBCIEID/Drmc1AA6U/znNRWpF3zEGegOATQxfkdWxitcOMsIH
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let body = String::from_utf8_lossy(&body);
         tracing::debug!(%body);
-        // Storage metrics are not gathered for LocalFs
-        if var(REAL_S3_ENV).is_ok() {
-            assert!(body.contains("remote_storage_s3_deleted_objects_total"));
-        }
+        // Storage metrics are not gathered for LocalFs; the
+        // S3-backend assertion was dropped with lane E.
 
         #[cfg(target_os = "linux")]
         assert!(body.contains("process_threads"));

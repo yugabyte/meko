@@ -860,13 +860,6 @@ impl CreateTimelineResult {
             Self::Created(t) | Self::Idempotent(t) => t,
         }
     }
-    /// Unit test timelines aren't activated, test has to do it if it needs to.
-    #[cfg(test)]
-    fn into_timeline_for_test(self) -> Arc<Timeline> {
-        match self {
-            Self::Created(t) | Self::Idempotent(t) => t,
-        }
-    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -3866,27 +3859,6 @@ impl TenantShard {
         Ok(gc_timelines)
     }
 
-    /// A substitute for `branch_timeline` for use in unit tests.
-    /// The returned timeline will have state value `Active` to make various `anyhow::ensure!()`
-    /// calls pass, but, we do not actually call `.activate()` under the hood. So, none of the
-    /// timeline background tasks are launched, except the flush loop.
-    #[cfg(test)]
-    async fn branch_timeline_test(
-        self: &Arc<Self>,
-        src_timeline: &Arc<Timeline>,
-        dst_id: TimelineId,
-        ancestor_lsn: Option<Lsn>,
-        ctx: &RequestContext,
-    ) -> Result<Arc<Timeline>, CreateTimelineError> {
-        let tl = self
-            .branch_timeline_impl(src_timeline, dst_id, ancestor_lsn, ctx)
-            .await?
-            .into_timeline_for_test();
-        tl.set_state(TimelineState::Active);
-        Ok(tl)
-    }
-
-
     /// Branch an existing timeline.
     async fn branch_timeline(
         self: &Arc<Self>,
@@ -4036,22 +4008,6 @@ impl TenantShard {
         // Callers are responsible to wait for uploads to complete and for activating the timeline.
 
         Ok(CreateTimelineResult::Created(new_timeline))
-    }
-
-    /// For unit tests, make this visible so that other modules can directly create timelines
-    #[cfg(test)]
-    #[tracing::instrument(skip_all, fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug(), %timeline_id))]
-    pub(crate) async fn bootstrap_timeline_test(
-        self: &Arc<Self>,
-        timeline_id: TimelineId,
-        pg_version: PgMajorVersion,
-        load_existing_initdb: Option<TimelineId>,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<Arc<Timeline>> {
-        self.bootstrap_timeline(timeline_id, pg_version, load_existing_initdb, ctx)
-            .await
-            .map_err(anyhow::Error::new)
-            .map(|r| r.into_timeline_for_test())
     }
 
     /// Get exclusive access to the timeline ID for creation.

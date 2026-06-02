@@ -823,9 +823,7 @@ impl ConcurrencyLimiter {
             RequestKind::List => &self.read,
             RequestKind::Delete => &self.write,
             RequestKind::Copy => &self.write,
-            RequestKind::TimeTravel => &self.write,
             RequestKind::Head => &self.read,
-            RequestKind::ListVersions => &self.read,
         }
     }
 
@@ -834,13 +832,6 @@ impl ConcurrencyLimiter {
         kind: RequestKind,
     ) -> Result<tokio::sync::SemaphorePermit<'_>, tokio::sync::AcquireError> {
         self.for_kind(kind).acquire().await
-    }
-
-    async fn acquire_owned(
-        &self,
-        kind: RequestKind,
-    ) -> Result<tokio::sync::OwnedSemaphorePermit, tokio::sync::AcquireError> {
-        Arc::clone(self.for_kind(kind)).acquire_owned().await
     }
 
     fn new(limit: usize) -> ConcurrencyLimiter {

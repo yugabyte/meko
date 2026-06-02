@@ -185,11 +185,6 @@ impl IndexPart {
         serde_json::to_vec(self)
     }
 
-    #[cfg(test)]
-    pub(crate) fn example() -> Self {
-        Self::empty(TimelineMetadata::example())
-    }
-
     /// Returns true if the index contains a reference to the given layer (i.e. file path).
     ///
     /// TODO: there should be a variant of LayerName for the physical remote path that contains

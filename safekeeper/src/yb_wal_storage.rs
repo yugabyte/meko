@@ -92,9 +92,6 @@ use futures::future::{BoxFuture, FutureExt};
 use postgres_ffi::XLogSegNo;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, watch};
-// YB smart-driver fork; aliased so the type names below stay
-// untouched. See pageserver/src/page_store.rs for the rationale.
-use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
@@ -551,20 +548,6 @@ impl YbWalStorage {
         Ok(())
     }
 
-    async fn delete_segments_up_to(&self, segno_up_to: XLogSegNo) -> Result<()> {
-        let sql = format!(
-            "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 AND segno < $3",
-            quote_ident(&self.table_name)
-        );
-        let segno_i: i64 = segno_up_to as i64;
-        let params: [&(dyn ToSql + Sync); 3] =
-            [&self.tenant_id, &self.timeline_id, &segno_i];
-        self.client
-            .execute(&sql, &params)
-            .await
-            .context("YbWalStorage: remove_up_to delete")?;
-        Ok(())
-    }
 }
 
 impl Storage for YbWalStorage {
@@ -1217,6 +1200,10 @@ mod tests {
     use crate::wal_storage::Storage;
     use camino_tempfile::Utf8TempDir;
     use utils::id::{TenantId, TenantTimelineId, TimelineId};
+    // Tests build a `yb_tokio_postgres::Config` via `tokio_postgres::*`
+    // type paths; the production code in this module doesn't need the
+    // alias.
+    use yb_tokio_postgres as tokio_postgres;
 
     fn pgcfg() -> tokio_postgres::Config {
         let mut cfg = tokio_postgres::Config::new();

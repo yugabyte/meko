@@ -443,13 +443,6 @@ impl From<utils::bin_ser::DeserializeError> for PageReconstructError {
     }
 }
 
-impl GetVectoredError {
-    #[cfg(test)]
-    pub(crate) fn is_missing_key_error(&self) -> bool {
-        matches!(self, Self::MissingKey(_))
-    }
-}
-
 #[derive(thiserror::Error)]
 pub struct MissingKeyError {
     keyspace: KeySpace,
@@ -3353,16 +3346,6 @@ impl Timeline {
         use crate::tenant::remote_timeline_client::index::GcBlockingReason;
         assert_eq!(self.tenant_shard_id, tenant.tenant_shard_id);
         tenant.gc_block.remove(self, GcBlockingReason::Manual).await
-    }
-
-    #[cfg(test)]
-    pub(super) fn force_advance_lsn(self: &Arc<Timeline>, new_lsn: Lsn) {
-        self.last_record_lsn.advance(new_lsn);
-    }
-
-    #[cfg(test)]
-    pub(super) fn force_set_disk_consistent_lsn(&self, new_value: Lsn) {
-        self.disk_consistent_lsn.store(new_value);
     }
 
 }
