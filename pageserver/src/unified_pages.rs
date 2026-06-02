@@ -172,21 +172,31 @@ impl UnifiedPages {
     }
 
     /// Drop durable entries from the front of `durable_fifo` until
-    /// `total_bytes <= capacity_bytes` OR `MAX_ITERS_PER_CALL` entries
-    /// have been popped. Pre-flush entries are never evicted. Stale
-    /// FIFO refs (left by `trim_key_up_to`) count toward the iteration
-    /// bound — so the cost of skipping them is capped per call. The
-    /// cache is allowed to transiently exceed `capacity_bytes`; the
-    /// next call continues the work. Without this bound, a long
-    /// sequence of `trim_key_up_to` calls (many per materialised hot
-    /// page) builds up O(N) stale refs at the FIFO front, and an
-    /// unbounded loop walks all of them while holding the writer
-    /// lock — starving the walreceiver.
+    /// `total_bytes <= capacity_bytes`, bounded by a split budget:
+    ///
+    /// - **Real removals** (an entry actually came out of `chain`) are
+    ///   bounded by wall-clock time only (`TIME_BUDGET`). Each removal
+    ///   is one `HashMap::get_mut` + one `BTreeMap::remove`, ~0.3 µs;
+    ///   a 2 ms budget covers ~6 k removals per call, which keeps
+    ///   under-load steady-state cache size near `capacity_bytes`
+    ///   instead of growing per flush.
+    /// - **Stale refs** (left by `trim_key_up_to`) are bounded by
+    ///   `STALE_SKIP_BUDGET`. This is the *original* reason the loop
+    ///   had a cap: a long stretch of stale refs at the FIFO front
+    ///   used to make this method walk O(N) under the writer lock and
+    ///   starve the walreceiver. Stale skipping still gives up early;
+    ///   the next call resumes.
+    ///
+    /// Pre-flush entries are never evicted (they're in
+    /// `unflushed_fifo`, not `durable_fifo`). The cache is allowed to
+    /// transiently exceed `capacity_bytes` between calls.
     pub fn evict_to_capacity(&mut self) {
-        const MAX_ITERS_PER_CALL: usize = 64;
-        let mut iters = 0;
-        while self.total_bytes > self.capacity_bytes && iters < MAX_ITERS_PER_CALL {
-            iters += 1;
+        const STALE_SKIP_BUDGET: usize = 64;
+        const TIME_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
+
+        let start = std::time::Instant::now();
+        let mut stale_skipped = 0;
+        while self.total_bytes > self.capacity_bytes {
             let Some(er) = self.durable_fifo.pop_front() else {
                 break;
             };
@@ -209,6 +219,17 @@ impl UnifiedPages {
                 self.total_bytes -= er.size;
                 if now_empty {
                     self.by_key.remove(&er.key);
+                }
+                // Real removal — only the time budget bounds us. Check
+                // every iteration; `Instant::now()` is ~20 ns so the
+                // check itself is negligible compared to the work.
+                if start.elapsed() >= TIME_BUDGET {
+                    break;
+                }
+            } else {
+                stale_skipped += 1;
+                if stale_skipped >= STALE_SKIP_BUDGET {
+                    break;
                 }
             }
         }
@@ -451,6 +472,33 @@ mod tests {
         assert_eq!(all.len(), 3);
         assert_eq!(durable.len(), 1);
         assert_eq!(durable[0].lsn, Lsn(1));
+    }
+
+    #[test]
+    fn evict_drains_many_real_entries_in_one_call() {
+        // Regression: the old `MAX_ITERS_PER_CALL = 64` cap conflated
+        // stale-skip budget with real-removal budget — under steady
+        // TPC-C ingest a single flush could enqueue thousands of
+        // durable entries while evict reclaimed only 64, leaking the
+        // cache. The split-budget design lets real removals run until
+        // the wall-clock budget is hit; on a small workload that
+        // means a single call drains everything down to the cap.
+        let mut u = UnifiedPages::new(64);
+        for i in 0u32..1000 {
+            // 32 B payload + 4 B key + 16 B overhead ≈ 52 B per entry
+            // → 1000 entries ≈ 52 KB ≫ 64 B cap.
+            u.push_durable(mk(&i.to_be_bytes(), i as u64, true, &[0u8; 32]));
+        }
+        let before = u.total_bytes;
+        u.evict_to_capacity();
+        assert!(
+            u.total_bytes <= u.capacity_bytes
+                || u.total_bytes < before / 2,
+            "evict reclaimed too little: before={}, after={}, cap={}",
+            before,
+            u.total_bytes,
+            u.capacity_bytes,
+        );
     }
 
     #[test]
