@@ -244,10 +244,18 @@ tokio-postgres = { git = "https://github.com/neondatabase/rust-postgres.git", br
 ## connection options.
 yb-tokio-postgres = "0.7.10-yb-1-beta.3"
 yb-postgres-openssl = "0.5.0-yb-1-beta.3"
-# Needed transitively by yb-postgres-openssl. We already ship
-# libssl.so.1.1 / libcrypto.so.1.1 at runtime (see ship script),
-# so the dynamic link target is satisfied without bundle changes.
-openssl = "0.10"
+# `vendored` builds openssl from source via `openssl-src` and
+# statically links it into our binaries. The deploy box is RHEL 9
+# (system openssl 3.x, no `libssl.so.1.1` rpm) — we were shipping
+# `lib/libssl.so.1.1` and loading it via `LD_LIBRARY_PATH`, but the
+# dynamically-loaded 1.1 failed the YB TLS handshake while a
+# statically-linked variant worked. Vendoring side-steps the
+# cross-host openssl ABI surface entirely — the Rust binaries no
+# longer depend on any host-side openssl. The pg_install/v17/postgres
+# binaries still need `libssl.so.1.1` at runtime; the ship script
+# keeps shipping it for them, but yb-pageserver / safekeeper /
+# control_plane et al. are self-contained after this.
+openssl = { version = "0.10", features = ["vendored"] }
 
 ## Azure SDK crates
 
