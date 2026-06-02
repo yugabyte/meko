@@ -606,6 +606,15 @@ fn parse_chain(chain: &[PageRow]) -> Result<(Option<(Lsn, Bytes)>, Vec<(Lsn, Neo
 
     let mut records = Vec::with_capacity(records_slice.len());
     for row in records_slice {
+        if row.is_image {
+            anyhow::bail!(
+                "image row at lsn={} found above the chain anchor (anchor_lsn={}); \
+                 parse_chain expects exactly one anchor at the tail. \
+                 Upstream chain construction is feeding mixed image+delta rows.",
+                row.lsn,
+                anchor.lsn,
+            );
+        }
         let rec = NeonWalRecord::des(&row.payload).with_context(|| {
             // Include payload length + a short hex prefix so on-disk
             // corruption is diagnosable from the log alone (the

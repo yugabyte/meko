@@ -1290,18 +1290,18 @@ pub fn extract_triples(batch: &SerializedValueBatch) -> Result<Vec<(Key, Lsn, Va
     Ok(out)
 }
 
-/// Returns the chain if it contains a `will_init` row (image or
-/// init-delta), otherwise `None`. Used at write-side trigger time to
-/// drop captured chains that the materialiser can't act on
-/// — without an anchor the materialiser would have to fall back to
-/// `read_chain_durable` anyway, so we may as well not carry the
-/// useless snapshot.
-fn chain_with_anchor(chain: Vec<PageRow>) -> Option<Vec<PageRow>> {
-    if chain.iter().any(|r| r.will_init) {
-        Some(chain)
-    } else {
-        None
-    }
+/// Truncate the LSN-descending chain at the LATEST `will_init` row
+/// (image or init-delta) and return the prefix, or `None` if no
+/// anchor exists. Used at write-side trigger time so the captured
+/// snapshot matches the shape `parse_chain` expects: exactly one
+/// anchor at the tail, with only deltas above it. Without truncation
+/// an older image sitting beneath a newer anchor would be fed to
+/// `NeonWalRecord::des` and surface as a "deserialize error" at
+/// materialisation time.
+fn chain_with_anchor(mut chain: Vec<PageRow>) -> Option<Vec<PageRow>> {
+    let idx = chain.iter().position(|r| r.will_init)?;
+    chain.truncate(idx + 1);
+    Some(chain)
 }
 
 fn key_to_bytes(key: Key) -> Bytes {
@@ -1677,6 +1677,45 @@ mod tests {
             will_init: true,
             rec: Bytes::from_static(b"init-rec"),
         })
+    }
+
+    fn row(lsn: u64, is_image: bool, will_init: bool) -> PageRow {
+        PageRow {
+            key: key_to_bytes(k(1)),
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::from_static(b"dummy"),
+        }
+    }
+
+    /// `chain_with_anchor` must truncate at the LATEST `will_init` row so
+    /// `parse_chain` only ever sees one anchor at the tail. Regression for
+    /// the corruption-repro on 2026-06-02 where an older image sitting
+    /// beneath a newer image in a captured chain reached `parse_chain` and
+    /// was fed to `NeonWalRecord::des` as if it were a delta.
+    #[test]
+    fn chain_with_anchor_truncates_at_latest_will_init() {
+        // LSN-desc, two anchors: keep the newest, drop everything below it.
+        let chain = vec![
+            row(500, false, false),
+            row(400, true, true),   // newest anchor (post-truncation tail)
+            row(300, false, false),
+            row(200, true, true),   // older anchor — must not leak through
+            row(100, false, false),
+        ];
+        let truncated = chain_with_anchor(chain).expect("anchor present");
+        assert_eq!(
+            truncated.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![500, 400],
+        );
+        assert!(truncated.last().unwrap().will_init);
+    }
+
+    #[test]
+    fn chain_with_anchor_none_when_no_anchor() {
+        let chain = vec![row(500, false, false), row(400, false, false)];
+        assert!(chain_with_anchor(chain).is_none());
     }
 
     #[test]
