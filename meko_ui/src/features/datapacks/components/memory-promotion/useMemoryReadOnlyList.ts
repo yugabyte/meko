@@ -14,8 +14,11 @@ import { DEFAULT_PAGE_SIZE } from "./useMemoryPromotion";
 
 export function useMemoryReadOnlyList({
   datapackId,
+  q = "",
 }: {
   datapackId: string;
+  /** Optional substring filter forwarded to GET /memories?q=…. */
+  q?: string;
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +66,8 @@ export function useMemoryReadOnlyList({
         user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
         page,
         page_size: pageSize,
+        q: q.trim() || undefined,
+        scope: "memories",
       });
       setMemories(resp.memories ?? []);
       setTotal(resp.total ?? 0);
@@ -80,13 +85,19 @@ export function useMemoryReadOnlyList({
       setLoading(false);
       setListReady(true);
     }
-  }, [accountId, datapackId, page, pageSize]);
+  }, [accountId, datapackId, page, pageSize, q]);
 
   useEffect(() => {
     setPage(1);
     setPageSize(DEFAULT_PAGE_SIZE);
     setListReady(false);
   }, [datapackId, accountId]);
+
+  // Reset to page 1 whenever the search filter changes so a new query
+  // doesn't land on an out-of-range page number.
+  useEffect(() => {
+    setPage(1);
+  }, [q]);
 
   useEffect(() => {
     if (!datapackId || !accountId) return;

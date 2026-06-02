@@ -89,6 +89,10 @@ export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
       toast({
         title: user_action === "accept" ? INCOMING_SHARE_TOAST_ACCEPTED_TITLE : INCOMING_SHARE_TOAST_DECLINED_TITLE,
       });
+      // Re-sync from the server so the badge count reflects BE truth
+      // (and the row doesn't pop back on next mount if the BE is still
+      // returning the accepted/declined invite).
+      void loadInvites();
     } catch (err) {
       toast({
         variant: "destructive",

@@ -1,7 +1,7 @@
 // Renders agent memories with promote-to-KB actions (full paginated list).
 // UI-only; state and API calls live in useMemoryPromotion.
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeftRight,
   Loader2,
@@ -11,9 +11,11 @@ import {
   RefreshCw,
   ChevronLeft,
   ChevronRight,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
   Tooltip,
   TooltipContent,
@@ -44,6 +46,14 @@ export default function MemoryPromotionPanel({
   isPromotionAllowed,
   onPromoted,
 }: Props) {
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
   const handlePromoted = useCallback(
     (count: number) => {
       toast({
@@ -85,8 +95,10 @@ export default function MemoryPromotionPanel({
     toggleAll,
     promote,
     promoteOne,
+    keep,
+    keepOne,
     accountId,
-  } = useMemoryPromotion({ datapackId, onPromoted: handlePromoted });
+  } = useMemoryPromotion({ datapackId, onPromoted: handlePromoted, q: debouncedSearch });
 
   const showPagination = total > 0;
 
@@ -203,8 +215,32 @@ export default function MemoryPromotionPanel({
                   ? `Promote to Knowledge (${selected.size})`
                   : "Promote to Knowledge"}
             </Button>}
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => void keep()}
+              disabled={promoting || selected.size < 2}
+            >
+              {selected.size > 1
+                ? `Keep as memory (${selected.size})`
+                : "Keep as memory"}
+            </Button>
           </div>
         )}
+
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search learnings…"
+            className="border border-border bg-background pl-9"
+            aria-label="Search learnings"
+          />
+        </div>
 
         {promoteError && (
           <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-700 dark:text-red-300">
@@ -350,14 +386,23 @@ export default function MemoryPromotionPanel({
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="border-border bg-background/80 text-muted-foreground"
-                              disabled
+                              className="border-border bg-background/80"
+                              onClick={() => keepOne(m.id)}
+                              disabled={promoting || multiSelectActive}
                             >
                               Keep as memory
                             </Button>
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent side="top">Coming Soon</TooltipContent>
+                        {multiSelectActive ? (
+                          <TooltipContent side="top">
+                            Multiple rows selected — use the “Keep as memory ({selected.size})” button above.
+                          </TooltipContent>
+                        ) : (
+                          <TooltipContent side="top">
+                            Mark this memory as kept; it drops off the Learnings list but stays in Memories.
+                          </TooltipContent>
+                        )}
                       </Tooltip>
                     </div>
                   </li>

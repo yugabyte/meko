@@ -135,3 +135,24 @@ func (svc *MemoriesService) Count(
 		Count:      count,
 	}, nil
 }
+
+// CountLearnings returns the count of mem0 rows still awaiting a user
+// decision (meko_promotion_user_action IS NULL). Reuses the same
+// response shape as Count for caller symmetry.
+func (svc *MemoriesService) CountLearnings(
+	ctx context.Context,
+	datapackID string,
+) (models.MemoryCountResponse, error) {
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return models.MemoryCountResponse{}, fmt.Errorf("datapack_id is required")
+	}
+	count, err := svc.memoriesRepo.CountLearningsByDatapack(ctx, datapackID)
+	if err != nil {
+		return models.MemoryCountResponse{}, err
+	}
+	return models.MemoryCountResponse{
+		DatapackID: datapackID,
+		Count:      count,
+	}, nil
+}

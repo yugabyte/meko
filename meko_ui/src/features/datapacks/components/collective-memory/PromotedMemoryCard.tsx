@@ -11,7 +11,7 @@
 // comes from GET /knowledge-bases/summary as props, NOT from the
 // /promoted-memories row — single source of truth for index-level
 // constants. The row carries only per-row data (data, agent_id,
-// conversation_id, promoted_to_kb_at, promoted_by_email).
+// conversation_id, promoted_to_kb_at, promoted_by_name, promoted_by_email).
 //
 // Vector entries: always exactly 1. `Promote()` writes one row to
 // `datapacks.knowledge_bases` per promoted memory (single chunk, single
@@ -35,7 +35,7 @@ import {
   CONVERSATION_SOURCE,
   datapackConversationsPathWithSource,
 } from "@/app/routes/paths";
-import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
+import { formatRelativeTime, formatUtcAbsolute, useNowMs } from "@/lib/relativeTime";
 import type { PromotedMemory } from "@/lib/mekoApi";
 
 type Props = {
@@ -63,7 +63,10 @@ export function PromotedMemoryCard({
   const agent = memory.agent_id ?? "";
   const conversationId = memory.conversation_id ?? "";
   const promotedAt = memory.promoted_to_kb_at ?? "";
-  const promotedBy = memory.promoted_by_email ?? "";
+  // Prefer the full name when available, otherwise fall back to email.
+  // Mirrors the name → email → … fallback chain used everywhere else
+  // memory authors are rendered.
+  const promotedBy = (memory.promoted_by_name ?? "").trim() || (memory.promoted_by_email ?? "").trim();
   // First 8 chars of memory id — enough to disambiguate in the UI
   // without consuming a whole row. Matches the "<id-prefix>" pattern
   // used by the conversations viewer.
@@ -96,6 +99,9 @@ export function PromotedMemoryCard({
               promoted{" "}
               <span className="text-foreground/85">
                 {formatRelativeTime(promotedAt, nowMs)}
+              </span>
+              <span className="text-muted-foreground/80">
+                {" · "}{formatUtcAbsolute(promotedAt)}
               </span>
               {promotedBy ? (
                 <>

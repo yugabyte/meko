@@ -706,6 +706,7 @@ func (s *LangfuseService) GetProjectID(datapackID string) string {
 func (s *LangfuseService) ListConversations(
 	datapackID string,
 	limit, offset int,
+	q string,
 ) (string, []Conversation, error) {
 	if s == nil || s.repo == nil {
 		return "", nil, fmt.Errorf("langfuse service is not configured")
@@ -732,7 +733,7 @@ func (s *LangfuseService) ListConversations(
 		return "", nil, fmt.Errorf("langfuse project mapping is incomplete")
 	}
 
-	conversations, err := s.repo.ListConversationsForProject(projectID, limit, offset)
+	conversations, err := s.repo.ListConversationsForProject(projectID, limit, offset, q)
 	if err != nil {
 		return "", nil, err
 	}

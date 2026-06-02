@@ -157,6 +157,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [knowledgeSummaryRefreshTick, setKnowledgeSummaryRefreshTick] = useState(0);
   const [memoriesCount, setMemoriesCount] = useState(0);
   const [learningsCount, setLearningsCount] = useState(0);
+  const [collectiveMemoryCount, setCollectiveMemoryCount] = useState(0);
   const [conversationsCount, setConversationsCount] = useState(0);
   const [datapackGrant, setDatapackGrant] = useState<DatapackShareGrant | null>(null);
   const [members, setMembers] = useState<DatapackOutgoingMember[]>([]);
@@ -185,6 +186,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           setDatapack(dp);
           // setKnowledgeBaseCount(dp.knowledge_count ?? 0);
           setMemoriesCount(dp.memory_count ?? 0);
+          setCollectiveMemoryCount(dp.collective_memory_count ?? 0);
           setLearningsCount(dp.learnings_count ?? 0);
           setDatapackGrant(dp.grant ?? null);
         }
@@ -504,6 +506,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           conversationsCount={conversationsCount}
           memoryCount={memoriesCount}
           learningsCount={learningsCount}
+          collectiveMemoryCount={collectiveMemoryCount}
           datapackId={datapack?.datapack_id ?? null}
           knowledgeFileCount={knowledgeFileCount ?? undefined}
           knowledgeFileAndPromotedCount={knowledgeTotalCount ?? undefined}

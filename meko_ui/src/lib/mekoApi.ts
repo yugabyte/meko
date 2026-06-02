@@ -89,7 +89,10 @@ export type Datapack = {
   description?: string;
   memory_count?: number;
   knowledge_count?: number;
+  /** mem0 rows still awaiting a decision (meko_promotion_user_action IS NULL). */
   learnings_count?: number;
+  /** Memories already promoted into the shared knowledge base. */
+  collective_memory_count?: number;
   datapack_owner_name?: string;
   /** Owner account email from `users.user_email` (list + describe). */
   datapack_owner_email_id?: string;
@@ -604,6 +607,7 @@ export async function listDatapackMembers(
   );
 }
 
+
 /** Combined members + pending invites for share UI (from member-list + outgoing-shares). */
 export type DatapackShareListsResponse = {
   members: DatapackOutgoingMember[];
@@ -954,12 +958,13 @@ export type ListDatapackConversationsResponse = {
  */
 export async function listDatapackConversations(
   datapackName: string,
-  params: { limit?: number; offset?: number } = {},
+  params: { limit?: number; offset?: number; q?: string } = {},
   options: DatapackRouteOptions = {},
 ) {
   const qs = new URLSearchParams();
   if (params.limit !== undefined) qs.set("limit", String(params.limit));
   if (params.offset !== undefined) qs.set("offset", String(params.offset));
+  if (params.q) qs.set("q", params.q);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<ListDatapackConversationsResponse>(
     withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/conversations${suffix}`, options.datapackId),
@@ -1525,6 +1530,7 @@ export type Memory = {
   user_id?: string;
   user_name?: string;
   user_email?: string;
+  created_at?: string;
 };
 
 /**
@@ -1568,6 +1574,11 @@ export type MemoryListFilter = {
   user_type?: MemoryUserType;
   page: number;
   page_size: number;
+  /** Case-insensitive substring filter over the memory text. */
+  q?: string;
+  /** "learnings" → rows still awaiting a decision (NULL action).
+   *  "memories"  (default) → NULL OR explicitly kept. */
+  scope?: "learnings" | "memories";
 };
 
 /** Echoed inside GET /memories `data.criteria` (shape may grow server-side). */
@@ -1608,6 +1619,8 @@ export async function listMemories(
   qs.set("user_type", params.user_type ?? MEMORY_LIST_DEFAULT_USER_TYPE);
   qs.set("page", String(params.page));
   qs.set("page_size", String(params.page_size));
+  if (params.q) qs.set("q", params.q);
+  if (params.scope) qs.set("scope", params.scope);
   return request<MemoryListResponse>(`/memories?${qs.toString()}`, "GET", undefined, options);
 }
 
@@ -1645,6 +1658,22 @@ export type PromoteMemoriesResult = {
 
 export async function promoteMemories(payload: PromoteMemoriesRequest) {
   return request<PromoteMemoriesResult>("/promote-memories", "POST", payload);
+}
+
+/** Body for POST /api/v1/keep-as-memory. Stamps each mem0 row with
+ *  `meko_promotion_user_action = 'keep_as_memory'` so it drops off the
+ *  Learnings list while still appearing in Memories. One-way. */
+export type KeepAsMemoryRequest = {
+  datapack_id: string;
+  memory_ids: string[];
+};
+
+export type KeepAsMemoryResult = {
+  updated: number;
+};
+
+export async function keepAsMemory(payload: KeepAsMemoryRequest) {
+  return request<KeepAsMemoryResult>("/keep-as-memory", "POST", payload);
 }
 
 /**
@@ -1716,10 +1745,12 @@ export async function submitFeedback(payload: CreateFeedbackRequest) {
 
 /** One row from GET /promoted-memories. Mirrors `models.PromotedMemory`.
  *
- *  Per-row enrichment (kept server-side; we never look these up from the UI):
- *   - `promoted_by_email`: who clicked "Promote" — sourced via JOIN on
- *     meko_system.users.user_email. Nullable when the user has been
- *     deleted, or when the row was promoted without a tracked user_id.
+ *  Per-row enrichment (resolved server-side via the shared
+ *  `LookupUserDisplays` on systemDB):
+ *   - `promoted_by_name` / `promoted_by_email`: identity of the user
+ *     who clicked "Promote". Either or both may be absent — the user
+ *     row may have empty first/last name columns, or have been deleted,
+ *     or the row was promoted without a tracked user_id.
  */
 export type PromotedMemory = {
   id: string;
@@ -1727,6 +1758,7 @@ export type PromotedMemory = {
   agent_id?: string;
   data: string;
   promoted_to_kb_at?: string | null;
+  promoted_by_name?: string | null;
   promoted_by_email?: string | null;
 };
 

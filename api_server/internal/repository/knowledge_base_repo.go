@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -500,72 +501,6 @@ func (r *KnowledgeBaseRepo) GetSourceIDs(
 	return ids, rows.Err()
 }
 
-// lookupUserEmails batch-resolves user_id → user_email against
-// `meko_system.users` (systemDB). Replaces the cross-schema
-// `LEFT JOIN meko_system.users` that several dataDB queries previously
-// used inline; those queries can no longer reach the meko_system schema
-// in their own SELECT now that the two schemas live on separate physical
-// databases.
-//
-// Behavior:
-//   - Empty / whitespace-only IDs are skipped (matches the previous
-//     `NULLIF(..., '')::uuid` guard).
-//   - Input is de-duplicated before the query (callers typically pass a
-//     parallel slice with repeats).
-//   - Missing rows are silently absent from the returned map; this
-//     mirrors `LEFT JOIN` semantics: no row → no email → caller leaves
-//     the email field nil.
-//   - Returns nil map (not an error) when there are no IDs to look up.
-func (r *KnowledgeBaseRepo) lookupUserEmails(userIDs []string) (map[string]string, error) {
-	if len(userIDs) == 0 {
-		return nil, nil
-	}
-	seen := make(map[string]struct{}, len(userIDs))
-	unique := make([]string, 0, len(userIDs))
-	for _, id := range userIDs {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		if _, dup := seen[id]; dup {
-			continue
-		}
-		seen[id] = struct{}{}
-		unique = append(unique, id)
-	}
-	if len(unique) == 0 {
-		return nil, nil
-	}
-	rows, err := r.systemDB.Query(
-		`SELECT user_id::text, user_email
-		 FROM   meko_system.users
-		 WHERE  user_id = ANY($1::uuid[])`,
-		pq.Array(unique),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("lookup user emails: %w", err)
-	}
-	defer rows.Close()
-
-	out := make(map[string]string, len(unique))
-	for rows.Next() {
-		var (
-			uid   string
-			email sql.NullString
-		)
-		if err := rows.Scan(&uid, &email); err != nil {
-			return nil, fmt.Errorf("scan user email: %w", err)
-		}
-		if email.Valid && strings.TrimSpace(email.String) != "" {
-			out[uid] = email.String
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate user email rows: %w", err)
-	}
-	return out, nil
-}
-
 // GetSourceURIs returns the knowledge_base_url values for a datapack,
 // ordered by created_at descending.
 func (r *KnowledgeBaseRepo) GetSourceURIs(
@@ -822,7 +757,13 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 		 WHERE  ($4 = '' OR lpd.document_name ILIKE '%' || $4 || '%')
 		   AND  ($5 = '' OR lower(lpd.document_name) LIKE '%' || lower($5))
 		   AND  (NOT $6  OR lpd.status = 'COMPLETED')
-		 ORDER  BY lpd.pipeline_completed_at DESC NULLS LAST, lpd.document_name
+		 ORDER  BY CASE lpd.status
+		             WHEN 'QUEUED'     THEN 0
+		             WHEN 'PROCESSING' THEN 1
+		             ELSE 2
+		           END,
+		           lpd.pipeline_completed_at DESC NULLS LAST,
+		           lpd.document_name
 		 LIMIT  $7 OFFSET $8`,
 		pq.Array(sourceIDs), schema, indexName,
 		opts.SearchQuery, opts.TypeFilter, opts.IndexedOnly,
@@ -905,22 +846,22 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 		return nil, 0, fmt.Errorf("iterate document rows: %w", err)
 	}
 
-	// Step 3 (systemDB): batch-resolve uploader emails. Best-effort —
-	// matches the previous LEFT JOIN's "missing user → no email"
-	// semantics; the rest of the row still ships.
-	emails, err := r.lookupUserEmails(uploaderIDs)
+	// Step 3 (systemDB): batch-resolve uploader display info via the
+	// shared LookupUserDisplays helper. We only consume `.Email` here;
+	// `.Name` rides along for free if a future change wants it.
+	displays, err := LookupUserDisplays(context.Background(), r.systemDB, uploaderIDs)
 	if err != nil {
-		slog.Warn("list dist_rag documents: user email lookup failed",
+		slog.Warn("list dist_rag documents: user display lookup failed",
 			"datapack_id", datapackID, "error", err)
-		emails = nil
+		displays = nil
 	}
 	for i := range docs {
 		uid := uploaderIDs[i]
 		if uid == "" {
 			continue
 		}
-		if e, ok := emails[uid]; ok {
-			s := e
+		if d, ok := displays[uid]; ok && d.Email != "" {
+			s := d.Email
 			docs[i].UploadedByEmail = &s
 		}
 	}
@@ -1183,9 +1124,12 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 //
 //  1. systemDB: gather this datapack's rag_source_id values (`GetSourceIDs`).
 //  2. dataDB:  pipeline rows filtered by `source_id = ANY($1::uuid[])`.
+
+//             Drops the previous `LEFT JOIN meko_system.users` —
+//             uploader_user_id is selected raw from `document_details`.
+//  3. systemDB: batch-resolve user_id → display info (`LookupUserDisplays`).
 //     Drops the previous `LEFT JOIN meko_system.users` —
 //     uploader_user_id is selected raw from `document_details`.
-//  3. systemDB: batch-resolve user_id → user_email (`lookupUserEmails`).
 //  4. Go:      merge the email back into each row.
 //
 // (When the two physical DBs are colocated, this is one extra trivial
@@ -1321,13 +1265,14 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 		return nil, fmt.Errorf("iterate file upload rows: %w", err)
 	}
 
-	// Step 3: batch-resolve uploader emails (systemDB). Best-effort:
-	// matches the previous LEFT JOIN's "missing user → no email" semantics.
-	emails, err := r.lookupUserEmails(uploaderIDs)
+	// Step 3: batch-resolve uploader display info (systemDB) via the
+	// shared LookupUserDisplays helper. Best-effort: matches the
+	// previous LEFT JOIN's "missing user → no email" semantics.
+	displays, err := LookupUserDisplays(context.Background(), r.systemDB, uploaderIDs)
 	if err != nil {
-		slog.Warn("activity log file uploads: user email lookup failed",
+		slog.Warn("activity log file uploads: user display lookup failed",
 			"datapack_id", datapackID, "error", err)
-		emails = nil
+		displays = nil
 	}
 	// Step 4: merge emails onto rows.
 	for i := range out {
@@ -1335,8 +1280,8 @@ func (r *KnowledgeBaseRepo) listActivityFileUploads(
 		if uid == "" {
 			continue
 		}
-		if e, ok := emails[uid]; ok {
-			s := e
+		if d, ok := displays[uid]; ok && d.Email != "" {
+			s := d.Email
 			out[i].item.UploadedByEmail = &s
 		}
 	}

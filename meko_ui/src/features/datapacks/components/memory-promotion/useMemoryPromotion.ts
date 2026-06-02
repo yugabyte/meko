@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   getApiErrorMessage,
   getCurrentUser,
+  keepAsMemory,
   listMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
   promoteMemories,
@@ -30,11 +31,14 @@ type PromotionSummary = {
 export function useMemoryPromotion({
   datapackId,
   onPromoted,
+  q = "",
 }: {
   datapackId: string;
+  /** Optional substring filter forwarded to GET /memories?q=…. */
+  q?: string;
   /** Fired after a successful promote with the count of just-promoted memories
    *  (inserted + updated). Parent typically refetches the datapack to refresh
-   *  learnings_count and shows a toast. */
+   *  collective_memory_count and shows a toast. */
   onPromoted?: (count: number) => void;
 }) {
   const [loading, setLoading] = useState(false);
@@ -92,6 +96,8 @@ export function useMemoryPromotion({
         user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
         page,
         page_size: pageSize,
+        q: q.trim() || undefined,
+        scope: "learnings",
       });
       setMemories(resp.memories ?? []);
       setSelected(new Set());
@@ -109,13 +115,18 @@ export function useMemoryPromotion({
       setLoading(false);
       setMemoriesSummaryReady(true);
     }
-  }, [accountId, datapackId, page, pageSize]);
+  }, [accountId, datapackId, page, pageSize, q]);
 
   useEffect(() => {
     setPage(1);
     setPageSize(DEFAULT_PAGE_SIZE);
     setMemoriesSummaryReady(false);
   }, [datapackId, accountId]);
+
+  // Reset to page 1 when the search filter changes.
+  useEffect(() => {
+    setPage(1);
+  }, [q]);
 
   useEffect(() => {
     if (!datapackId || !accountId) return;
@@ -261,6 +272,75 @@ export function useMemoryPromotion({
     [promoteMemoryIds],
   );
 
+  // "Keep as memory" sibling of promote: stamps mem0 rows with
+  // `keep_as_memory` so they drop from Learnings (this list) but stay
+  // in Memories. Same snapshot-and-merge rollback pattern as
+  // `promoteMemoryIds` — see the long comment there for the rationale
+  // (snapshot the removed rows + their original indices + the affected
+  // selection ids, then merge them back into *current* state on failure
+  // so any concurrent edit during the in-flight call survives).
+  const keepMemoryIds = useCallback(
+    async (memoryIds: string[]) => {
+      if (memoryIds.length === 0) return;
+      const ids = new Set(memoryIds);
+      const removedRows: { index: number; memory: Memory }[] = [];
+      memories.forEach((m, i) => {
+        if (ids.has(m.id)) {
+          removedRows.push({ index: i, memory: m });
+        }
+      });
+      const removedSelectedIds = memoryIds.filter((id) => selected.has(id));
+      setMemories((prev) => prev.filter((m) => !ids.has(m.id)));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const id of memoryIds) next.delete(id);
+        return next;
+      });
+      setTotal((prev) => Math.max(0, prev - removedRows.length));
+      try {
+        await keepAsMemory({ datapack_id: datapackId, memory_ids: memoryIds });
+        await loadMemories();
+      } catch (err) {
+        // Roll back into *current* state so a concurrent change (manual
+        // refresh, checkbox toggle, pagination) isn't clobbered.
+        setMemories((current) => {
+          const next = [...current];
+          const ordered = [...removedRows].sort((a, b) => a.index - b.index);
+          for (const { index, memory } of ordered) {
+            if (next.some((m) => m.id === memory.id)) continue;
+            const insertAt = Math.min(index, next.length);
+            next.splice(insertAt, 0, memory);
+          }
+          return next;
+        });
+        setSelected((current) => {
+          if (removedSelectedIds.length === 0) return current;
+          const next = new Set(current);
+          for (const id of removedSelectedIds) next.add(id);
+          return next;
+        });
+        setTotal((prev) => prev + removedRows.length);
+        setError(getApiErrorMessage(err, "Failed to keep memories."));
+        // Fire-and-forget reconcile so the server's view eventually
+        // lands even if the rollback above is the immediate truth.
+        void loadMemories();
+      }
+    },
+    [datapackId, loadMemories, memories, selected],
+  );
+
+  const keep = useCallback(async () => {
+    const memoryIds = memories.filter((m) => selected.has(m.id)).map((m) => m.id);
+    await keepMemoryIds(memoryIds);
+  }, [memories, selected, keepMemoryIds]);
+
+  const keepOne = useCallback(
+    (memoryId: string) => {
+      void keepMemoryIds([memoryId]);
+    },
+    [keepMemoryIds],
+  );
+
   return {
     loading,
     memoriesSummaryReady,
@@ -291,5 +371,7 @@ export function useMemoryPromotion({
     toggleAll,
     promote,
     promoteOne,
+    keep,
+    keepOne,
   };
 }

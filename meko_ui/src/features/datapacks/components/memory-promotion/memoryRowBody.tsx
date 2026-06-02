@@ -1,4 +1,5 @@
 import { formatMemoryAuthor, type Memory } from "@/lib/mekoApi";
+import { formatRelativeTime, formatUtcAbsolute, useNowMs } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -11,9 +12,10 @@ type Props = {
 export function MemoryRowBody({ memory, textClassName }: Props) {
   const data = memory.data ?? "";
   const agent = memory.agent_id ?? "";
-  // Roster view: show the actual name even on your own rows (no
-  // selfLabel). Fallback chain (name → email → short UUID → "-") is
-  // centralised in formatMemoryAuthor.
+  const nowMs = useNowMs();
+  const createdLabel = memory.created_at
+    ? formatRelativeTime(memory.created_at, nowMs)
+    : null;
   const authorName = formatMemoryAuthor(memory);
   return (
     <div className="min-w-0 space-y-1">
@@ -27,6 +29,14 @@ export function MemoryRowBody({ memory, textClassName }: Props) {
         {agent ? (
           <span>
             agent: <code className="text-blue-700 dark:text-blue-300">{agent}</code>
+          </span>
+        ) : null}
+        {createdLabel ? (
+          <span title={memory.created_at}>
+            {createdLabel}
+            <span className="text-muted-foreground/80">
+              {" · "}{formatUtcAbsolute(memory.created_at)}
+            </span>
           </span>
         ) : null}
       </div>

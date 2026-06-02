@@ -3,10 +3,11 @@
  * Same card chrome as Learnings summary, without promote / keep actions.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { ArrowLeftRight, ChevronLeft, ChevronRight, Loader2, AlertCircle, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowLeftRight, ChevronLeft, ChevronRight, Loader2, AlertCircle, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,6 +38,14 @@ type Props = {
 
 export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) {
   const navigate = useNavigate();
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
   const {
     loading,
     error,
@@ -55,7 +64,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
     loadMemories,
     goToPage,
     changePageSize,
-  } = useMemoryReadOnlyList({ datapackId });
+  } = useMemoryReadOnlyList({ datapackId, q: debouncedSearch });
 
   // Memory id currently being deleted. Single-flight: at most one delete
   // in flight at a time so the row spinner is unambiguous and the user
@@ -186,6 +195,20 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
             {error}
           </div>
         ) : null}
+
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search memories…"
+            className="border border-border bg-background pl-9"
+            aria-label="Search memories"
+          />
+        </div>
 
         {showPagination ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">

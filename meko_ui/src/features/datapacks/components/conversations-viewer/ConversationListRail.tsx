@@ -16,7 +16,9 @@ import {
   AlertCircle,
   Loader2,
   MessageSquare,
+  Search,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   getApiErrorMessage,
@@ -58,6 +60,14 @@ export function ConversationListRail({
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
   /** True once the very first fetch resolves — drives the empty
    *  state vs initial-loader split. */
   const [firstLoadDone, setFirstLoadDone] = useState(false);
@@ -76,7 +86,7 @@ export function ConversationListRail({
         const nextOffset = reset ? 0 : offset;
         const resp = await listDatapackConversations(
           datapackName,
-          { limit: PAGE_SIZE, offset: nextOffset },
+          { limit: PAGE_SIZE, offset: nextOffset, q: debouncedSearch.trim() || undefined },
           { signal: params.signal, datapackId },
         );
         if (params.signal?.aborted) return;
@@ -93,10 +103,13 @@ export function ConversationListRail({
         if (!params.signal?.aborted) setLoading(false);
       }
     },
-    [datapackName, offset, onFirstPageLoaded],
+    [datapackName, offset, onFirstPageLoaded, debouncedSearch],
   );
 
-  // Reset + first fetch whenever the datapack changes.
+  // Reset + first fetch whenever the datapack OR the search filter
+  // changes. Search is part of the dep set so a typed query restarts
+  // the infinite-scroll cleanly (otherwise we'd append filtered pages
+  // onto the unfiltered list).
   useEffect(() => {
     const ac = new AbortController();
     setConversations([]);
@@ -106,9 +119,9 @@ export function ConversationListRail({
     void loadPage({ reset: true, signal: ac.signal });
     return () => ac.abort();
     // loadPage intentionally not in deps — its captured `offset` is
-    // stale on first run and we only want this on datapack change.
+    // stale on first run and we only want this on datapack/search change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datapackName]);
+  }, [datapackName, debouncedSearch]);
 
   // Bottom sentinel observer — triggers next page when scrolled into
   // view. We re-create the observer when `hasMore`/`loading` flip so
@@ -152,6 +165,19 @@ export function ConversationListRail({
           </span>
         ) : null}
       </div>
+      <div className="relative shrink-0 border-b border-border px-3 py-2">
+        <Search
+          className="pointer-events-none absolute left-5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+          aria-hidden
+        />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search conversations…"
+          className="h-8 border border-border bg-background pl-8 text-xs"
+          aria-label="Search conversations"
+        />
+      </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-color:hsl(var(--meko-navy-700))_hsl(var(--meko-navy-900))] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-input [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-meko-navy-700 hover:[&::-webkit-scrollbar-thumb]:bg-meko-navy-600">
         {error ? (
@@ -189,11 +215,10 @@ export function ConversationListRail({
                   // payloads don't drown out the action verb.
                   aria-label={
                     c.title || c.first_message
-                      ? `Open conversation: ${
-                          headline.length > 80
-                            ? `${headline.slice(0, 80)}…`
-                            : headline
-                        }`
+                      ? `Open conversation: ${headline.length > 80
+                        ? `${headline.slice(0, 80)}…`
+                        : headline
+                      }`
                       : `Open conversation ${c.id.slice(0, 8)}…`
                   }
                 >

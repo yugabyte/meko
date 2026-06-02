@@ -438,7 +438,7 @@ func (r *LangfuseRepo) CountDistinctSessionsForProject(projectID string) (int64,
 //	$1 = langfuse project_id
 //	$2 = page size  (e.g. 20)
 //	$3 = offset     (e.g. 0)
-func (r *LangfuseRepo) ListConversationsForProject(projectID string, limit, offset int) ([]Conversation, error) {
+func (r *LangfuseRepo) ListConversationsForProject(projectID string, limit, offset int, q string) ([]Conversation, error) {
 	if !r.LangfuseDBConfigured() {
 		return nil, ErrLangfuseDBNotConfigured
 	}
@@ -452,7 +452,7 @@ func (r *LangfuseRepo) ListConversationsForProject(projectID string, limit, offs
 		offset = 0
 	}
 
-	const q = `
+	const query = `
 -- One page of conversations enriched with title, last activity, and
 -- per-trace counters. UI uses this for an infinite-scroll list.
 --
@@ -545,10 +545,13 @@ JOIN (
         ) > 0
 ) AS obs_agg ON obs_agg.conversation_id = sessions.conversation_id
 
+-- Optional substring filter on first_message. $2 = '' disables it so
+-- the same query handles "no search" and "search" without dynamic SQL.
+WHERE ($2 = '' OR obs_agg.first_message ILIKE '%' || $2 || '%')
 ORDER BY last_activity_at DESC NULLS LAST, sessions.started_at DESC
-LIMIT  $2 OFFSET $3`
+LIMIT  $3 OFFSET $4`
 
-	rows, err := r.langfuseDB.Query(q, projectID, limit, offset)
+	rows, err := r.langfuseDB.Query(query, projectID, strings.TrimSpace(q), limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("langfuse db: list conversations: %w", err)
 	}

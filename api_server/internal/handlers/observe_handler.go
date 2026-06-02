@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -107,7 +108,8 @@ func (h *ObserveHandler) ConversationList(c echo.Context) error {
 		}
 	}
 
-	projectID, conversations, err := h.langfuse.ListConversations(dp.ID, limit, offset)
+	q := strings.TrimSpace(c.QueryParam("q"))
+	projectID, conversations, err := h.langfuse.ListConversations(dp.ID, limit, offset, q)
 	if err != nil {
 		if errors.Is(err, service.ErrLangfuseDBNotConfigured) {
 			return apiError(c, http.StatusServiceUnavailable,

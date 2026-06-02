@@ -563,7 +563,7 @@ const FileRow = memo(function FileRow({
   const chunks = doc.chunks_processed;
   // Prefer S3 upload time; fall back to pipeline completion for legacy docs.
   const uploadTimestamp = doc.uploaded_at ?? doc.completed_at;
-  const uploadedRel = uploadTimestamp ? formatRelativeTime(uploadTimestamp, now) : "—";
+  const uploadedRel = uploadTimestamp ? formatRelativeTime(uploadTimestamp, now, true) : "—";
   const rawChecksum = doc.document_checksum?.replace(/^"+|"+$/g, "") ?? "";
   const md5 = rawChecksum
     ? `${rawChecksum.slice(0, 8)}…${rawChecksum.slice(-4)}`

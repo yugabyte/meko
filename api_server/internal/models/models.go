@@ -28,9 +28,13 @@ type Datapack struct {
 	OwnerName        string    `json:"datapack_owner_name,omitempty"`
 	OwnerEmail       string    `json:"datapack_owner_email_id,omitempty"`
 	Grant            string    `json:"grant,omitempty"`
-	MemoryCount      int       `json:"memory_count"`
-	KnowledgeCount   int       `json:"knowledge_count"`
-	LearningsCount   int       `json:"learnings_count"`
+	MemoryCount           int `json:"memory_count"`
+	KnowledgeCount        int `json:"knowledge_count"`
+	// LearningsCount = mem0 rows still awaiting a user decision
+	// (meko_promotion_user_action IS NULL). A subset of MemoryCount.
+	LearningsCount        int `json:"learnings_count"`
+	// CollectiveMemoryCount = memories promoted into the shared KB.
+	CollectiveMemoryCount int `json:"collective_memory_count"`
 }
 
 // Agent represents a user-scoped agent. Backed by meko_system.agents.
@@ -84,13 +88,14 @@ type KnowledgeBase struct {
 // the UI uses these fields to label the author and to gate per-memory
 // actions (e.g. "delete" only on memories the current user owns).
 type Memory struct {
-	ID             string `json:"id"`
-	Data           string `json:"data"`
-	AgentID        string `json:"agent_id"`
-	ConversationID string `json:"conversation_id,omitempty"`
-	UserID         string `json:"user_id,omitempty"`
-	UserName       string `json:"user_name,omitempty"`
-	UserEmail      string `json:"user_email,omitempty"`
+	ID             string     `json:"id"`
+	Data           string     `json:"data"`
+	AgentID        string     `json:"agent_id"`
+	ConversationID string     `json:"conversation_id,omitempty"`
+	UserID         string     `json:"user_id,omitempty"`
+	UserName       string     `json:"user_name,omitempty"`
+	UserEmail      string     `json:"user_email,omitempty"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
 }
 
 // MemoryListFilter is the filter for the Mem0 collection (datapacks.meko_mem0_collection).
@@ -98,6 +103,14 @@ type Memory struct {
 // selects the query path: only "pro" / "enterprise" run the vector-similarity ranking
 // (LLM summary + embedding + ORDER BY embeddings); everything else runs the plain SELECT.
 type MemoryListFilter struct {
+	// Q is a case-insensitive substring filter over `payload->>'data'`.
+	// Empty disables the filter.
+	Q string `json:"q,omitempty"`
+	// Scope selects which `meko_promotion_user_action` values are
+	// included. "learnings" → only NULL (rows still awaiting decision).
+	// "memories" → NULL OR 'keep_as_memory'. Empty falls back to
+	// "memories" so legacy callers keep working.
+	Scope string `json:"scope,omitempty"`
 	DatapackID string `json:"datapack_id"`
 	UserID     string `json:"user_id,omitempty"`
 	UserType   string `json:"user_type,omitempty"`
@@ -223,13 +236,28 @@ type PromoteMemoriesResult struct {
 	NotFoundIDs []string `json:"not_found_ids"`
 }
 
+// KeepAsMemoryRequest is the body for POST /api/v1/keep-as-memory.
+// Flags one or more mem0 rows as "user chose to keep, not promote" so
+// they vanish from the Learnings list but stay in Memories.
+type KeepAsMemoryRequest struct {
+	DatapackID string   `json:"datapack_id"`
+	MemoryIDs  []string `json:"memory_ids"`
+}
+
+// KeepAsMemoryResult reports how many rows actually flipped state. Rows
+// already marked, or that don't belong to the datapack, are not counted.
+type KeepAsMemoryResult struct {
+	Updated int64 `json:"updated"`
+}
+
 // PromotedMemory is one row from datapacks.promoted_collection for list APIs.
 //
 // Per-row enrichment for the SharedKnowledge "Promoted memories" tab:
-//   - PromotedByEmail: email of the user who promoted this memory.
-//     Sourced via LEFT JOIN meko_system.users on meko_user_id; nullable
-//     because (a) meko_user_id is nullable on the row, and (b) the user
-//     may have been deleted since the promotion happened.
+//   - PromotedByName / PromotedByEmail: identity of the user who
+//     promoted this memory. Resolved out-of-line via systemDB's
+//     LookupUserDisplays — both fields are nullable because (a)
+//     `meko_user_id` on the row can be NULL, and (b) the user may have
+//     been deleted since the promotion happened.
 //
 // Index-level constants (embedding_model / dimensions / ai_provider)
 // are NOT on this struct OR on PromotedMemoryListResponse — they live
@@ -243,6 +271,7 @@ type PromotedMemory struct {
 	AgentID         string     `json:"agent_id,omitempty"`
 	Data            string     `json:"data"`
 	PromotedToKBAt  *time.Time `json:"promoted_to_kb_at,omitempty"`
+	PromotedByName  *string    `json:"promoted_by_name,omitempty"`
 	PromotedByEmail *string    `json:"promoted_by_email,omitempty"`
 }
 

@@ -26,6 +26,44 @@ const (
 	promotedGraphVertexEmbeddingsTable = `datapacks.meko_promoted_graph_vertex_embeddings`
 )
 
+// MarkAsKept stamps `meko_promotion_user_action = 'keep_as_memory'` on
+// each mem0 row in `memory_ids` for the given datapack. One-way: the
+// UI exposes no undo path. Returns the number of rows actually updated
+// (a memory_id that doesn't belong to the datapack, or is already kept,
+// is simply not counted).
+func (r *PromoteMemoriesRepo) MarkAsKept(
+	ctx context.Context,
+	datapackID string,
+	memoryIDs []string,
+) (int64, error) {
+	if r.db == nil {
+		return 0, fmt.Errorf("database connection is required")
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return 0, fmt.Errorf("datapack_id is required")
+	}
+	if len(memoryIDs) == 0 {
+		return 0, nil
+	}
+	q := fmt.Sprintf(`
+		UPDATE %s
+		   SET meko_promotion_user_action = 'keep_as_memory'::datapacks.meko_promotion_user_action
+		 WHERE meko_datapack_id = $1::uuid
+		   AND id = ANY($2::uuid[])
+		   AND meko_promotion_user_action IS NULL`, memoriesSourceTable)
+	updCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, err := r.db.ExecContext(updCtx, q, datapackID, pq.Array(memoryIDs))
+	if err != nil {
+		return 0, fmt.Errorf("mark as kept: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	slog.Info("marked memories as kept",
+		"datapack_id", datapackID, "requested", len(memoryIDs), "updated", n)
+	return n, nil
+}
+
 // Values for datapacks.knowledge_bases.metadata_filters->>'source' — used to
 // differentiate where each KB chunk originated. Today every chunk this code
 // writes/reads originates from a conversation; additional sources can be
@@ -34,11 +72,16 @@ const (
 const KBSourceConversation = "memory"
 
 type PromoteMemoriesRepo struct {
+	// db is the dataDB handle (datapacks.* tables live here).
 	db *sql.DB
+	// systemDB serves out-of-line user lookups for list enrichment (the
+	// LEFT JOIN to meko_system.users from a dataDB query is no longer
+	// reachable now that the schemas live on separate physical DBs).
+	systemDB *sql.DB
 }
 
-func NewPromoteMemoriesRepo(db *sql.DB) *PromoteMemoriesRepo {
-	return &PromoteMemoriesRepo{db: db}
+func NewPromoteMemoriesRepo(db, systemDB *sql.DB) *PromoteMemoriesRepo {
+	return &PromoteMemoriesRepo{db: db, systemDB: systemDB}
 }
 
 type mem0Row struct {
@@ -575,11 +618,14 @@ func insertPromotedGraphVertex(
 // ListPromoted returns a page of rows from datapacks.promoted_collection for a datapack.
 //
 // Per-row enrichment:
-//   - promoted_by_email comes from a LEFT JOIN on meko_system.users via the
-//     stored meko_user_id. LEFT (not INNER) because meko_user_id is nullable
-//     on the row and because the user may have been deleted since the
-//     promotion happened — in either case the row still represents real
-//     knowledge that should appear in the listing.
+//   - promoted_by_name / promoted_by_email come from an out-of-line
+//     systemDB lookup via `LookupUserDisplays`. We can no longer LEFT
+//     JOIN meko_system.users from a dataDB query (the two schemas live
+//     on different physical DBs), so the list query selects
+//     `meko_user_id` raw and we batch-resolve names/emails after the
+//     scan. Both fields stay empty when the user row is missing
+//     (deleted account) or the memory has no associated user — matches
+//     the previous LEFT JOIN's "missing user → no enrichment" semantics.
 func (r *PromoteMemoriesRepo) ListPromoted(
 	ctx context.Context,
 	datapackID string,
@@ -609,9 +655,8 @@ func (r *PromoteMemoriesRepo) ListPromoted(
 		       pc.meko_agent_id,
 		       COALESCE(pc.payload->>'data', '') AS data,
 		       pc.meko_promoted_to_kb_at,
-		       u.user_email AS promoted_by_email
+		       pc.meko_user_id::text AS promoted_by_user_id
 		  FROM %s pc
-		  LEFT JOIN meko_system.users u ON u.user_id = pc.meko_user_id
 		 WHERE pc.meko_datapack_id = $1::uuid
 		 ORDER BY pc.meko_promoted_to_kb_at DESC
 		 LIMIT $2 OFFSET $3`,
@@ -634,17 +679,20 @@ func (r *PromoteMemoriesRepo) ListPromoted(
 	}()
 
 	var out []models.PromotedMemory
+	// Parallel to `out`: the promoter's user_id per row, so we can
+	// attach name + email after a single batched systemDB lookup.
+	promoterIDs := []string{}
 	for rows.Next() {
 		var (
-			row             models.PromotedMemory
-			convoID         sql.NullString
-			agentID         sql.NullString
-			promotedAt      sql.NullTime
-			promotedByEmail sql.NullString
+			row              models.PromotedMemory
+			convoID          sql.NullString
+			agentID          sql.NullString
+			promotedAt       sql.NullTime
+			promotedByUserID sql.NullString
 		)
 		if err := rows.Scan(
 			&row.ID, &convoID, &agentID, &row.Data, &promotedAt,
-			&promotedByEmail,
+			&promotedByUserID,
 		); err != nil {
 			return nil, 0, fmt.Errorf("promoted memories scan: %w", err)
 		}
@@ -659,14 +707,41 @@ func (r *PromoteMemoriesRepo) ListPromoted(
 			t := promotedAt.Time
 			row.PromotedToKBAt = &t
 		}
-		if promotedByEmail.Valid && strings.TrimSpace(promotedByEmail.String) != "" {
-			e := promotedByEmail.String
-			row.PromotedByEmail = &e
-		}
 		out = append(out, row)
+		if promotedByUserID.Valid {
+			promoterIDs = append(promoterIDs, strings.TrimSpace(promotedByUserID.String))
+		} else {
+			promoterIDs = append(promoterIDs, "")
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("promoted memories rows: %w", err)
+	}
+
+	// Out-of-line systemDB enrichment for promoter name + email.
+	// Non-fatal: a lookup failure just leaves both fields nil, matching
+	// the previous LEFT JOIN's "missing user → no enrichment" semantics.
+	displays, dispErr := LookupUserDisplays(ctx, r.systemDB, promoterIDs)
+	if dispErr != nil {
+		slog.Warn("promoted memories: user display lookup failed",
+			"datapack_id", datapackID, "error", dispErr)
+	} else if displays != nil {
+		for i := range out {
+			uid := promoterIDs[i]
+			if uid == "" {
+				continue
+			}
+			if d, ok := displays[uid]; ok {
+				if d.Name != "" {
+					n := d.Name
+					out[i].PromotedByName = &n
+				}
+				if d.Email != "" {
+					e := d.Email
+					out[i].PromotedByEmail = &e
+				}
+			}
+		}
 	}
 
 	return out, total, nil

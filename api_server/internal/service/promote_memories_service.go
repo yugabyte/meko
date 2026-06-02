@@ -51,6 +51,25 @@ func (svc *PromoteMemoriesService) Promote(
 	}, nil
 }
 
+// KeepAsMemory stamps mem0 rows with `keep_as_memory` so they no longer
+// appear in the Learnings list. Validates inputs; delegates to the repo.
+func (svc *PromoteMemoriesService) KeepAsMemory(
+	ctx context.Context,
+	req models.KeepAsMemoryRequest,
+) (models.KeepAsMemoryResult, error) {
+	if strings.TrimSpace(req.DatapackID) == "" {
+		return models.KeepAsMemoryResult{}, fmt.Errorf("datapack_id is required")
+	}
+	if len(req.MemoryIDs) == 0 {
+		return models.KeepAsMemoryResult{}, fmt.Errorf("memory_ids is required")
+	}
+	n, err := svc.repo.MarkAsKept(ctx, req.DatapackID, req.MemoryIDs)
+	if err != nil {
+		return models.KeepAsMemoryResult{}, err
+	}
+	return models.KeepAsMemoryResult{Updated: n}, nil
+}
+
 // List returns paginated promoted memories from datapacks.promoted_collection.
 func (svc *PromoteMemoriesService) List(
 	ctx context.Context,

@@ -12,6 +12,7 @@ import (
 
 var (
 	ErrInviteExists   = fmt.Errorf("pending invite already exists for this email and datapack")
+	ErrAlreadyMember  = fmt.Errorf("recipient is already a member of this datapack; use change-role instead")
 	ErrInviteNotFound = fmt.Errorf("invite not found")
 )
 
@@ -32,6 +33,36 @@ type CreateInviteParams struct {
 	RecipientEmail  string
 	RecipientUserID *string
 	GrantRole       string
+}
+
+// LookupInviteStatus returns the most-recent invite status for the
+// (datapack_id, recipient_email) pair, or "" when no invite has ever
+// been issued. Used to pre-check duplicate / already-member cases before
+// CreateInvite (the unique-violation path inside CreateInvite only catches
+// pending dupes when the DB has a partial unique index, which not every
+// deployment carries).
+func (r *SharingRepo) LookupInviteStatus(datapackID, recipientEmail string) (string, error) {
+	var status string
+	// `lower()` on both sides so the match is case-insensitive
+	// regardless of how the existing row was capitalised at insert
+	// time. The service caller also lower-cases its input — belt and
+	// braces — so this protects against any code path that forgets.
+	err := r.db.QueryRow(
+		`SELECT status
+		 FROM   meko_system.datapack_invites
+		 WHERE  datapack_id              = $1
+		   AND  lower(recipient_email)   = lower($2)
+		 ORDER  BY updated_at DESC
+		 LIMIT  1`,
+		datapackID, recipientEmail,
+	).Scan(&status)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("lookup invite status: %w", err)
+	}
+	return status, nil
 }
 
 // CreateInvite inserts a new pending invite. Returns ErrInviteExists if

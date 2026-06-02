@@ -60,6 +60,10 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 			return apiError(c, http.StatusConflict,
 				"CONFLICT", err.Error())
 		}
+		if errors.Is(err, repository.ErrAlreadyMember) {
+			return apiError(c, http.StatusConflict,
+				"ALREADY_MEMBER", err.Error())
+		}
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", err.Error())
 	}

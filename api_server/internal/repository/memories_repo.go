@@ -18,7 +18,12 @@ const (
 )
 
 type MemoriesRepo struct {
-	db                   *sql.DB
+	// db is the dataDB handle (datapacks.meko_mem0_collection lives here).
+	db *sql.DB
+	// systemDB is the meko_system schema handle, used by ListByFilter
+	// for out-of-line user lookups now that the LEFT JOIN to
+	// meko_system.users would cross physical databases.
+	systemDB             *sql.DB
 	openAIAPIKey         string
 	openAILLMModel       string
 	openAIEmbeddingModel string
@@ -27,9 +32,10 @@ type MemoriesRepo struct {
 	skipVectorSort bool
 }
 
-func NewMemoriesRepo(db *sql.DB, openAIAPIKey, openAILLMModel, openAIEmbeddingModel string, skipVectorSort bool) *MemoriesRepo {
+func NewMemoriesRepo(db, systemDB *sql.DB, openAIAPIKey, openAILLMModel, openAIEmbeddingModel string, skipVectorSort bool) *MemoriesRepo {
 	return &MemoriesRepo{
 		db:                   db,
+		systemDB:             systemDB,
 		openAIAPIKey:         openAIAPIKey,
 		openAILLMModel:       openAILLMModel,
 		openAIEmbeddingModel: openAIEmbeddingModel,
@@ -143,6 +149,37 @@ func (repo *MemoriesRepo) CountByDatapack(ctx context.Context, datapackID string
 	return count, nil
 }
 
+// CountLearningsByDatapack counts only mem0 rows still awaiting a
+// user decision — i.e. `meko_promotion_user_action IS NULL`. Sibling of
+// CountByDatapack which counts the full inventory (NULL or
+// 'keep_as_memory'). Drives the `learnings_count` field on the datapack
+// describe response, which the Learnings UI uses as its source of
+// truth.
+func (repo *MemoriesRepo) CountLearningsByDatapack(ctx context.Context, datapackID string) (int, error) {
+	if repo.db == nil {
+		return 0, fmt.Errorf("database connection is required")
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return 0, fmt.Errorf("datapack_id is required")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s WHERE meko_datapack_id = $1::uuid AND meko_promotion_user_action IS NULL`,
+		memoriesTableSQL,
+	)
+
+	countCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	slog.Debug("executing SQL", "func", "CountLearningsByDatapack", "query", query, "args", []any{datapackID})
+	var count int
+	if err := repo.db.QueryRowContext(countCtx, query, datapackID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("memories learnings-count query: %w", err)
+	}
+	return count, nil
+}
+
 // DeleteByIDForUser deletes a single mem0 memory, scoped to the given
 // (memoryID, datapackID, userID) triple. The userID predicate is the
 // authorization gate: it ensures a caller can only delete memories they
@@ -217,10 +254,23 @@ func (repo *MemoriesRepo) ListByFilter(
 		return nil, 0, fmt.Errorf("datapack_id is required")
 	}
 
-	whereSQL := "m.meko_datapack_id = $1::uuid" +
-		" AND m.meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action"
+	// Scope decides which `meko_promotion_user_action` values are kept.
+	// "learnings" = rows still awaiting a decision (NULL).
+	// "memories"  (default) = NULL OR explicitly kept.
+	scopeFilter := "m.meko_promotion_user_action IS NULL" +
+		" OR m.meko_promotion_user_action = 'keep_as_memory'::datapacks.meko_promotion_user_action"
+	if strings.EqualFold(filter.Scope, "learnings") {
+		scopeFilter = "m.meko_promotion_user_action IS NULL"
+	}
+	whereSQL := fmt.Sprintf("m.meko_datapack_id = $1::uuid AND (%s)", scopeFilter)
 	args := []any{datapackID}
 	n := 2
+
+	if q := strings.TrimSpace(filter.Q); q != "" {
+		whereSQL += fmt.Sprintf(" AND (m.payload->>'data') ILIKE '%%' || $%d || '%%'", n)
+		args = append(args, q)
+		n++
+	}
 
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s m WHERE %s`, memoriesTableSQL, whereSQL)
 	countCtx, cancelCount := context.WithTimeout(ctx, 30*time.Second)
@@ -236,18 +286,19 @@ func (repo *MemoriesRepo) ListByFilter(
 		return []models.Memory{}, 0, nil
 	}
 
-	// LEFT JOIN to meko_system.users so a deleted/orphaned account still
-	// returns the memory (with empty user_name/user_email) rather than
-	// dropping the row.
+	// meko_system.users now lives on systemDB; we can't join to it from
+	// a dataDB query (the JOIN would silently return NULLs for every
+	// row, blanking user_name + user_email). The list query stays on
+	// dataDB and selects `meko_user_id` raw; the user-display enrichment
+	// happens out-of-line below via `LookupUserDisplays` on systemDB.
 	const selectCols = `
 			m.id::text,
 			COALESCE(m.payload->>'data', '') AS data,
 			m.meko_agent_id,
 			COALESCE(m.meko_conversation_id::text, '') AS conversation_id,
 			m.meko_user_id::text,
-			COALESCE(NULLIF(TRIM(COALESCE(u.user_first_name, '') || ' ' || COALESCE(u.user_last_name, '')), ''), '') AS user_name,
-			COALESCE(u.user_email, '') AS user_email`
-	const fromSQL = memoriesTableSQL + ` m LEFT JOIN meko_system.users u ON u.user_id = m.meko_user_id`
+			m.meko_created_at`
+	const fromSQL = memoriesTableSQL + ` m`
 
 	var vector []float64
 	if filter.IsPaidUserType() {
@@ -304,19 +355,48 @@ func (repo *MemoriesRepo) ListByFilter(
 
 	var matched []models.Memory
 	for sqlRows.Next() {
-		var row models.Memory
+		var (
+			row       models.Memory
+			createdAt sql.NullTime
+		)
 		if err := sqlRows.Scan(
 			&row.ID,
 			&row.Data,
 			&row.AgentID,
 			&row.ConversationID,
 			&row.UserID,
-			&row.UserName,
-			&row.UserEmail,
+			&createdAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("memories scan: %w", err)
 		}
+		if createdAt.Valid {
+			t := createdAt.Time.UTC()
+			row.CreatedAt = &t
+		}
 		matched = append(matched, row)
+	}
+
+	// Out-of-line systemDB enrichment: pull user_name + user_email for
+	// every distinct meko_user_id we just scanned, then attach. Mirrors
+	// the previous LEFT JOIN's semantics — missing user → empty fields →
+	// `omitempty` strips them from the JSON.
+	userIDs := make([]string, 0, len(matched))
+	for _, m := range matched {
+		userIDs = append(userIDs, m.UserID)
+	}
+	displays, dispErr := LookupUserDisplays(ctx, repo.systemDB, userIDs)
+	if dispErr != nil {
+		// Non-fatal: log + ship rows without name/email rather than
+		// failing the whole list.
+		slog.Warn("memories list: user display lookup failed",
+			"datapack_id", filter.DatapackID, "error", dispErr)
+	} else if displays != nil {
+		for i := range matched {
+			if d, ok := displays[matched[i].UserID]; ok {
+				matched[i].UserName = d.Name
+				matched[i].UserEmail = d.Email
+			}
+		}
 	}
 	if err := sqlRows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("memories rows: %w", err)

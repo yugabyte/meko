@@ -20,6 +20,7 @@ import {
   updateDatapackMemberGrant,
 } from "@/lib/mekoApi";
 import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/datapack-share/ShareComingSoonPlaceholder";
+import { DatapackChangeRoleConfirmDialog } from "@/features/datapacks/components/datapack-share/DatapackChangeRoleConfirmDialog";
 import { SHARE_INVITE_ROLES, shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -63,23 +64,38 @@ function MemberRow({
 }) {
   const [grantBusy, setGrantBusy] = useState(false);
   const [removeBusy, setRemoveBusy] = useState(false);
+  // The role the user just picked from the dropdown but hasn't yet
+  // confirmed. Drives the confirmation modal; cleared on
+  // cancel/success. Keeping it as the pending target (not just a
+  // boolean) lets the modal say "from Contributor to Maintainer" using
+  // the exact value the user clicked.
+  const [pendingGrant, setPendingGrant] = useState<DatapackShareGrant | null>(null);
   const isYou = emailsMatch(member.user_email_id, currentUserEmail);
   // Owners never change grant here; non-owners see read-only grant unless the signed-in user owns the datapack.
   const grantReadOnly = member.is_owner || !canManage;
 
-  const handleGrantChange = async (next: DatapackShareGrant) => {
+  const handleGrantPick = (next: DatapackShareGrant) => {
     if (next === member.grant || grantReadOnly) return;
+    setPendingGrant(next);
+  };
+
+  const handleGrantConfirm = async () => {
+    if (!pendingGrant) return;
     setGrantBusy(true);
     try {
-      await updateDatapackMemberGrant(datapackName, member.user_id, { grant: next }, { datapackId });
+      await updateDatapackMemberGrant(datapackName, member.user_id, { grant: pendingGrant }, { datapackId });
       toast({ title: "Role updated" });
+      setPendingGrant(null);
       await onMembersChanged();
     } catch (err) {
+      // Re-throw so the dialog surfaces the error inline and keeps the
+      // modal open; the busy state below resets in `finally`.
       toast({
         variant: "destructive",
         title: "Could not update role",
         description: getApiErrorMessage(err, "Something went wrong. Try again."),
       });
+      throw err;
     } finally {
       setGrantBusy(false);
     }
@@ -113,23 +129,25 @@ function MemberRow({
       {shareGrantLabel(member.grant)}
     </div>
   ) : (
-    <div
-      className="flex h-9 min-w-[80px] items-center rounded-md border border-border bg-muted/30 px-3 text-xs text-muted-foreground">
-      {shareGrantLabel(member.grant as DatapackShareGrant)}
-    </div>
-    /* TODO: We will addd back dropdown for enabling owner to change permissions */
-    // <Select value={member.grant} onValueChange={(v) => void handleGrantChange(v as DatapackShareGrant)} disabled={grantBusy}>
-    //   <SelectTrigger className="h-9 w-[min(100%,11rem)] min-w-[148px] text-xs bg-background/80 sm:w-44">
-    //     <SelectValue />
-    //   </SelectTrigger>
-    //   <SelectContent>
-    //     {SHARE_INVITE_ROLES.map((r) => (
-    //       <SelectItem key={r.id} value={r.id}>
-    //         {r.label}
-    //       </SelectItem>
-    //     ))}
-    //   </SelectContent>
-    // </Select>
+    // Controlled Select: value stays at the CURRENT grant until the
+    // user confirms in the modal — that way cancelling the dialog
+    // leaves the dropdown reflecting reality (no re-sync needed).
+    <Select
+      value={member.grant}
+      onValueChange={(v) => handleGrantPick(v as DatapackShareGrant)}
+      disabled={grantBusy}
+    >
+      <SelectTrigger className="h-9 w-[min(100%,11rem)] min-w-[148px] text-xs bg-background/80 sm:w-44">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {SHARE_INVITE_ROLES.map((r) => (
+          <SelectItem key={r.id} value={r.id}>
+            {r.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 
   return (
@@ -159,6 +177,19 @@ function MemberRow({
       <div className="flex shrink-0 items-center justify-end gap-2">
         <span className="flex shrink-0 items-center justify-end gap-2">{roleControl}</span>
       </div>
+      {pendingGrant ? (
+        <DatapackChangeRoleConfirmDialog
+          open={pendingGrant !== null}
+          onOpenChange={(next) => {
+            if (!next) setPendingGrant(null);
+          }}
+          memberName={member.user_name || member.user_email_id || "this member"}
+          datapackName={datapackName}
+          fromRoleLabel={shareGrantLabel(member.grant)}
+          toRoleLabel={shareGrantLabel(pendingGrant)}
+          onConfirm={handleGrantConfirm}
+        />
+      ) : null}
     </div>
   );
 }

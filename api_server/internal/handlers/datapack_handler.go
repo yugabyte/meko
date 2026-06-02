@@ -146,6 +146,14 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 		} else {
 			dp.MemoryCount = resp.Count
 		}
+		// Sibling count: only memories still awaiting a decision
+		// (meko_promotion_user_action IS NULL). Failure is non-fatal —
+		// learnings_count stays zero and the UI degrades gracefully.
+		if resp, err := h.memoriesSvc.CountLearnings(c.Request().Context(), dp.ID); err != nil {
+			slog.Warn("failed to count learnings", "datapack_id", dp.ID, "error", err)
+		} else {
+			dp.LearningsCount = resp.Count
+		}
 	}
 
 	if h.kbSvc != nil {
@@ -153,7 +161,7 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 			slog.Warn("failed to count knowledge base items", "datapack_id", dp.ID, "error", err)
 		} else {
 			dp.KnowledgeCount = int(kbCounts.TotalChunks)
-			dp.LearningsCount = int(kbCounts.PromotedMemories)
+			dp.CollectiveMemoryCount = int(kbCounts.PromotedMemories)
 		}
 	}
 

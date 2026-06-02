@@ -9,21 +9,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
-	"meko/api_server/internal/auth"
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/service"
 )
 
-// DatapackMembershipLookup verifies that a caller is currently a member
-// of a given datapack (owner OR active accepted share). DELETE /memories
-// uses it as a defense-in-depth gate so a revoked member can't keep
-// modifying rows they authored before being removed. Implemented by
-// repository.DatapackRepo; declared here so the handler depends on the
-// narrow interface, not the concrete type.
-type DatapackMembershipLookup interface {
-	GetByID(userID, datapackID string) (*models.Datapack, error)
-	GetByIDForSharedAccess(userID, datapackID string) (*models.Datapack, error)
-}
+// DatapackMembershipLookup interface + the access-gate helper now live
+// in datapack_access.go and are shared with PromoteMemoriesHandler.
 
 type MemoriesHandler struct {
 	memoriesSvc *service.MemoriesService
@@ -93,6 +84,8 @@ func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 		UserType:   strings.TrimSpace(c.QueryParam("user_type")),
 		Page:       page,
 		PageSize:   pageSize,
+		Q:          strings.TrimSpace(c.QueryParam("q")),
+		Scope:      strings.TrimSpace(c.QueryParam("scope")),
 	}
 	return handler.list(c, filter)
 }
@@ -129,47 +122,24 @@ func (handler *MemoriesHandler) DeleteByID(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "memory_id must be a valid UUID")
 	}
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
-	if datapackID == "" {
-		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
-	}
-	if _, err := uuid.Parse(datapackID); err != nil {
-		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id must be a valid UUID")
-	}
-
-	account, err := auth.GetAccount(c)
-	if err != nil || account == nil {
-		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
-	}
-
-	// Membership gate: confirm the caller is currently a member of the
-	// datapack (owner OR accepted share) before letting them delete any
-	// row. The SQL meko_user_id = caller predicate alone would still let
-	// a revoked contributor delete memories they authored before being
-	// removed; this check shuts that path. We collapse "not a member"
-	// and "datapack doesn't exist" into one 404 — same convention as
-	// auth.RequireDatapackAccess.
-	dp, err := handler.dpLookup.GetByID(account.ID, datapackID)
+	// Membership gate (shared with PromoteMemoriesHandler): a revoked
+	// contributor with a memory they once authored could otherwise still
+	// hit DELETE via the SQL `meko_user_id = caller` predicate alone.
+	// RequireDatapackAccess validates + parses the UUID, resolves the
+	// account, checks owner-then-shared access, and 404s on miss.
+	accountID, err := RequireDatapackAccess(c, handler.dpLookup, datapackID)
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
-	}
-	if dp == nil {
-		dp, err = handler.dpLookup.GetByIDForSharedAccess(account.ID, datapackID)
-		if err != nil {
-			return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
-		}
-	}
-	if dp == nil {
-		return apiError(c, http.StatusNotFound, "NOT_FOUND", "datapack not found")
+		return err
 	}
 
 	slog.Info("deleting memory",
 		"layer", "handler",
 		"memory_id", memoryID,
 		"datapack_id", datapackID,
-		"user_id", account.ID,
+		"user_id", accountID,
 	)
 
-	deleted, err := handler.memoriesSvc.Delete(c.Request().Context(), memoryID, datapackID, account.ID)
+	deleted, err := handler.memoriesSvc.Delete(c.Request().Context(), memoryID, datapackID, accountID)
 	if err != nil {
 		if isValidationErr(err) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())

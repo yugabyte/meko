@@ -49,6 +49,19 @@ export function formatRelativeTime(
   return `${diffYr}y ago`;
 }
 
+/** Stable UTC wall-clock string: "YYYY-MM-DD HH:mm UTC". Pair with
+ *  `formatRelativeTime` to show both "X ago" and the exact moment. */
+export function formatUtcAbsolute(iso: string | undefined | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+  );
+}
+
 /** Returns a `now` timestamp that ticks every minute. Components call
  *  `formatRelativeTime(iso, now)` to derive their display string. */
 export function useNowMs(): number {

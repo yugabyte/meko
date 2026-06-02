@@ -100,7 +100,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
           <CollectiveMemoryPanel
             datapackName={datapackName}
             datapackId={datapack.datapack_id}
-            pendingCount={datapack.memory_count ?? 0}
+            pendingCount={datapack.learnings_count ?? 0}
             embeddingModel={summary?.embedding_model ?? null}
             embeddingDimensions={summary?.embedding_dimensions ?? null}
             aiProvider={summary?.ai_provider ?? null}

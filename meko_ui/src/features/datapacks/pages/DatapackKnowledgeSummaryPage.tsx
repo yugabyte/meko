@@ -111,7 +111,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
       { datapack_id: dpId, user_id: currentUser.account_id, page: 1, page_size: 1 },
       { signal: ac.signal },
     )
-      .then((r) => { if (!ac.signal.aborted) setPendingMemoryCount(r.total); })
+      .then((r) => { })
       .catch(() => { });
     return () => ac.abort();
   }, [datapack?.datapack_id, datapackId, currentUser?.account_id]);
@@ -124,6 +124,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
     setDatapackError(null);
     void getDatapack(datapackName, { datapackId })
       .then((d) => {
+        setPendingMemoryCount(d.learnings_count ?? 0);
         if (!cancelled) setDatapack(d);
       })
       .catch((e) => {

@@ -25,15 +25,15 @@ type CognitoInviter interface {
 
 // InviteEmailParams carries the context needed to render an invitation email.
 type InviteEmailParams struct {
-	RecipientEmail  string
-	DatapackName    string
-	DatapackDesc    string
-	OwnerName       string
-	OwnerEmail      string
-	GrantRole       string
-	AppURL          string
-	TempPassword    string // non-empty only for new (non-existing) users
-	IsExistingUser  bool
+	RecipientEmail string
+	DatapackName   string
+	DatapackDesc   string
+	OwnerName      string
+	OwnerEmail     string
+	GrantRole      string
+	AppURL         string
+	TempPassword   string // non-empty only for new (non-existing) users
+	IsExistingUser bool
 }
 
 // EmailSender abstracts SES email dispatch. The service package defines the
@@ -156,6 +156,22 @@ func (s *SharingService) InviteToDatapack(
 	recipientUserID, err := s.repo.LookupUserByEmail(email)
 	if err != nil {
 		return nil, fmt.Errorf("failed to look up recipient: %w", err)
+	}
+
+	// Pre-check: reject duplicates BEFORE the insert. Catches deployments
+	// that lack the partial-unique-index plus the already-accepted case
+	// (where CreateInvite would otherwise happily add a fresh pending row
+	// alongside an active member).
+	// Normalise to lower-case so the pre-check matches regardless of how
+	// the caller (or an existing pending invite) capitalised the email.
+	// The repo also `lower()`s the column on its side for symmetry.
+	switch existing, lookupErr := s.repo.LookupInviteStatus(datapackID, strings.ToLower(email)); {
+	case lookupErr != nil:
+		return nil, lookupErr
+	case existing == "pending":
+		return nil, fmt.Errorf("%w: email=%s datapack=%s", repository.ErrInviteExists, email, datapackID)
+	case existing == "accepted":
+		return nil, fmt.Errorf("%w: email=%s datapack=%s", repository.ErrAlreadyMember, email, datapackID)
 	}
 
 	inv, err := s.repo.CreateInvite(repository.CreateInviteParams{

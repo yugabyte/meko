@@ -57,10 +57,10 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
 	ragSvc := service.NewRagService(cfg.DB, service.DatapackIndexSchema, service.DatapackIndexName)
 
-	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel, cfg.MemoryListSkipVectorSort)
+	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.SystemDB, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel, cfg.MemoryListSkipVectorSort)
 	memoriesSvc := service.NewMemoriesService(memoriesRepo, cfg.MemoryListSkipVectorSort)
 
-	promoteMemoriesRepo := repository.NewPromoteMemoriesRepo(cfg.DB)
+	promoteMemoriesRepo := repository.NewPromoteMemoriesRepo(cfg.DB, cfg.SystemDB)
 	promoteMemoriesSvc := service.NewPromoteMemoriesService(promoteMemoriesRepo)
 
 	sharingRepo := repository.NewSharingRepo(cfg.SystemDB)
@@ -383,8 +383,9 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	g.GET("/me/meko-tokens", patH.List)
 	g.DELETE("/me/meko-tokens/:id", patH.Revoke)
 
-	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc)
+	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc, reg.dpRepo)
 	g.POST("/promote-memories", promoteMemoriesH.Promote)
+	g.POST("/keep-as-memory", promoteMemoriesH.KeepAsMemory)
 	g.GET("/promoted-memories", promoteMemoriesH.ListGET)
 
 	feedbackH := handlers.NewFeedbackHandler(reg.feedbackRepo)

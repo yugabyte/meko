@@ -265,6 +265,7 @@ type Props = {
   learningsCount?: number;
   knowledgeFileCount?: number;
   knowledgeFileAndPromotedCount?: number;
+  collectiveMemoryCount?: number;
   knowledgeChunks?: number;
   datapackId?: string | null;
   onSelectSection?: (tab: DatapackDetailTab) => void;
@@ -278,6 +279,7 @@ export function CollectiveLearningPipeline({
   memoryCount = 0,
   learningsCount = 0,
   knowledgeFileCount = 0,
+  collectiveMemoryCount = 0,
   knowledgeFileAndPromotedCount = 0,
   knowledgeChunks: _knowledgeChunks = 0,
   datapackId = null,
@@ -328,9 +330,7 @@ export function CollectiveLearningPipeline({
     ? learningsCount
     : learningsCountLoading
       ? 0
-      : totalPromotionProposals !== undefined
-        ? totalPromotionProposals
-        : learningsCount;
+      : learningsCount
 
   const learningsReadyBadge =
     !statusLoading &&
@@ -484,13 +484,13 @@ export function CollectiveLearningPipeline({
                 tone={DATAPACK_DETAIL_TAB.collectiveMemory}
                 eyebrow=""
                 title="Collective Memory"
-                value={learningsCount}
+                value={collectiveMemoryCount}
                 subtitle=""
                 titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
                 loading={statusLoading}
                 loadingLabel="Loading collective memory count"
                 afterValue={
-                  !statusLoading && learningsCount === 0 ? (
+                  !statusLoading && collectiveMemoryCount === 0 ? (
                     <p className="text-center text-[10px] font-semibold uppercase  text-muted-foreground">
                       Awaiting first promotion
                     </p>

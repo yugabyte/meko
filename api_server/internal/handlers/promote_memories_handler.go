@@ -13,11 +13,15 @@ import (
 )
 
 type PromoteMemoriesHandler struct {
-	svc *service.PromoteMemoriesService
+	svc      *service.PromoteMemoriesService
+	dpLookup DatapackMembershipLookup
 }
 
-func NewPromoteMemoriesHandler(svc *service.PromoteMemoriesService) *PromoteMemoriesHandler {
-	return &PromoteMemoriesHandler{svc: svc}
+func NewPromoteMemoriesHandler(
+	svc *service.PromoteMemoriesService,
+	dpLookup DatapackMembershipLookup,
+) *PromoteMemoriesHandler {
+	return &PromoteMemoriesHandler{svc: svc, dpLookup: dpLookup}
 }
 
 // Promote handles POST /api/v1/promote-memories.
@@ -38,6 +42,9 @@ func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
+	if _, err := RequireDatapackAccess(c, h.dpLookup, req.DatapackID); err != nil {
+		return err
+	}
 
 	result, err := h.svc.Promote(c.Request().Context(), req)
 	if err != nil {
@@ -47,6 +54,26 @@ func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 
+	return ok(c, http.StatusOK, result)
+}
+
+// KeepAsMemory handles POST /api/v1/keep-as-memory. Stamps mem0 rows
+// with `meko_promotion_user_action = 'keep_as_memory'`. One-way.
+func (h *PromoteMemoriesHandler) KeepAsMemory(c echo.Context) error {
+	var req models.KeepAsMemoryRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	}
+	if _, err := RequireDatapackAccess(c, h.dpLookup, req.DatapackID); err != nil {
+		return err
+	}
+	result, err := h.svc.KeepAsMemory(c.Request().Context(), req)
+	if err != nil {
+		if isValidationErr(err) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
 	return ok(c, http.StatusOK, result)
 }
 
@@ -66,8 +93,8 @@ func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
 //	@Router		/promoted-memories [get]
 func (h *PromoteMemoriesHandler) ListGET(c echo.Context) error {
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
-	if datapackID == "" {
-		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
+	if _, err := RequireDatapackAccess(c, h.dpLookup, datapackID); err != nil {
+		return err
 	}
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	pageSize, _ := strconv.Atoi(c.QueryParam("page_size"))
