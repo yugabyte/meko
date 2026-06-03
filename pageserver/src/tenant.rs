@@ -1693,13 +1693,12 @@ impl TenantShard {
     ///
     /// This function relies on the index_part instead of listing the remote storage
     pub fn remote_size(&self) -> u64 {
-        let mut size = 0;
-
-        for timeline in self.list_timelines() {
-            size += timeline.remote_client.get_remote_physical_size();
-        }
-
-        size
+        // yb-mode: no remote layer files; sum is always 0. The
+        // caller (storage_ctl heatmap) tolerates this; tenant-size
+        // reporting happens via timeline-row LSN ranges, not blob
+        // bytes.
+        let _ = self.list_timelines();
+        0
     }
 
     #[instrument(skip_all, fields(timeline_id=%timeline_id))]
@@ -2073,48 +2072,16 @@ impl TenantShard {
                 .await?
         };
 
-        // Third part: upload new timeline archival state and block until it is present in S3
-        // yb-mode: also push the bit to `remote_state` so readers
-        // (flush gate, http status, ancestor checks) see the new
-        // state without round-tripping through the dead RTC upload
-        // pipeline. RTC keeps its own copy for the upstream-compat
-        // schedule_index_upload call below.
+        // Third part: persist the new archival state. yb-mode keeps
+        // it in `remote_state.archived` only — there's no
+        // index_part.json to upload, so the RTC schedule + the
+        // wait_completion that used to gate this RPC are both gone.
+        // Future restarts re-derive `archived` from
+        // pageserver.timeline_state (TODO once we wire that column).
         timeline.remote_state.archived.store(
             matches!(new_state, TimelineArchivalState::Archived),
             std::sync::atomic::Ordering::Relaxed,
         );
-        let upload_needed = match timeline
-            .remote_client
-            .schedule_index_upload_for_timeline_archival_state(new_state)
-        {
-            Ok(upload_needed) => upload_needed,
-            Err(e) => {
-                if timeline.cancel.is_cancelled() {
-                    return Err(TimelineArchivalError::Cancelled);
-                } else {
-                    return Err(TimelineArchivalError::Other(e));
-                }
-            }
-        };
-
-        if upload_needed {
-            info!("Uploading new state");
-            const MAX_WAIT: Duration = Duration::from_secs(10);
-            let Ok(v) =
-                tokio::time::timeout(MAX_WAIT, timeline.remote_client.wait_completion()).await
-            else {
-                tracing::warn!("reached timeout for waiting on upload queue");
-                return Err(TimelineArchivalError::Timeout);
-            };
-            v.map_err(|e| match e {
-                WaitCompletionError::NotInitialized(e) => {
-                    TimelineArchivalError::Other(anyhow::anyhow!(e))
-                }
-                WaitCompletionError::UploadQueueShutDownOrStopped => {
-                    TimelineArchivalError::Cancelled
-                }
-            })?;
-        }
         Ok(())
     }
 
@@ -2293,8 +2260,8 @@ impl TenantShard {
         tline.maybe_spawn_flush_loop();
         tline.freeze_and_flush().await.context("freeze_and_flush")?;
 
-        // Make sure the freeze_and_flush reaches remote storage.
-        tline.remote_client.wait_completion().await.unwrap();
+        // yb-mode: `freeze_and_flush` already issued the YB INSERTs
+        // synchronously; nothing to wait on.
 
         let tl = uninit_tl.finish_creation().await?;
         // The non-test code would call tl.activate() here.
@@ -4473,9 +4440,8 @@ impl TenantShard {
         async fn flush_timeline(_gate: GateGuard, timeline: Arc<Timeline>) -> anyhow::Result<()> {
             tracing::info!(timeline_id=%timeline.timeline_id, "Flushing...");
             timeline.freeze_and_flush().await?;
-            tracing::info!(timeline_id=%timeline.timeline_id, "Waiting for uploads...");
-            timeline.remote_client.wait_completion().await?;
-
+            // yb-mode: no asynchronous uploads to wait on; flush is
+            // synchronous against YB.
             Ok(())
         }
 

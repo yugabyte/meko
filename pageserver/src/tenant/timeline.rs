@@ -1628,19 +1628,12 @@ impl Timeline {
             if do_flush {
                 match self.freeze_and_flush().await {
                     Ok(_) => {
-                        // drain the upload queue
-                        // if we did not wait for completion here, it might be our shutdown process
-                        // didn't wait for remote uploads to complete at all, as new tasks can forever
-                        // be spawned.
-                        //
-                        // what is problematic is the shutting down of RemoteTimelineClient, because
-                        // obviously it does not make sense to stop while we wait for it, but what
-                        // about corner cases like s3 suddenly hanging up?
-                        self.remote_client.shutdown().await;
+                        // yb-mode: nothing to drain. The upload queue is
+                        // empty by design — `PageWriter::flush()` already
+                        // persisted via YB INSERTs as part of
+                        // `freeze_and_flush`.
                     }
                     Err(FlushLayerError::Cancelled) => {
-                        // this is likely the second shutdown, ignore silently.
-                        // TODO: this can be removed once https://github.com/neondatabase/neon/issues/5080
                         debug_assert!(self.cancel.is_cancelled());
                     }
                     Err(e) => {
@@ -1648,14 +1641,6 @@ impl Timeline {
                         // we have some extra WAL replay to do next time the timeline starts.
                         warn!("failed to freeze and flush: {e:#}");
                     }
-                }
-
-                // `self.remote_client.shutdown().await` above should have already flushed everything from the queue, but
-                // we also do a final check here to ensure that the queue is empty.
-                if !self.remote_client.no_pending_work() {
-                    warn!(
-                        "still have pending work in remote upload queue, but continuing shutting down anyways"
-                    );
                 }
             }
         }
@@ -1667,22 +1652,14 @@ impl Timeline {
         // Ensure Prevent new page service requests from starting.
         self.handles.shutdown();
 
-        // Transition the remote_client into a state where it's only useful for timeline deletion.
-        // (The deletion use case is why we can't just hook up remote_client to Self::cancel).)
+        // Mark the timeline deleting so the attach path (and any
+        // in-flight ancestor checks) refuse to touch it.
         self.remote_state
             .deleting
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.remote_client.stop();
 
-        // As documented in remote_client.stop()'s doc comment, it's our responsibility
-        // to shut down the upload queue tasks.
-        // TODO: fix that, task management should be encapsulated inside remote_client.
-        task_mgr::shutdown_tasks(
-            Some(TaskKind::RemoteUploadTask),
-            Some(self.tenant_shard_id),
-            Some(self.timeline_id),
-        )
-        .await;
+        // yb-mode: there are no `RemoteUploadTask`s spawned, so the
+        // upstream "shut down upload queue tasks" step is a no-op.
 
         // TODO: work toward making this a no-op. See this function's doc comment for more context.
         tracing::debug!("Waiting for tasks...");
@@ -1984,7 +1961,9 @@ impl Timeline {
 
             let timeline_id_str = self.timeline_id.to_string();
 
-            self.remote_client.update_config(&new_conf.location);
+            // yb-mode: RTC config update was for tuning the
+            // deletion-block drain. Deletions don't exist anymore
+            // (no layer files), so there's nothing to retune.
 
             let mut rel_size_cache = self.rel_size_snapshot_cache.lock().unwrap();
             if let Some(new_capacity) = new_conf.tenant_conf.relsize_snapshot_cache_capacity {

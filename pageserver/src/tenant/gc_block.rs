@@ -73,20 +73,11 @@ impl GcBlock {
         timeline: &super::Timeline,
         reason: GcBlockingReason,
     ) -> anyhow::Result<bool> {
-        let (added, uploaded) = {
+        let added = {
             let mut g = self.reasons.lock().unwrap();
             let set = g.entry(timeline.timeline_id).or_default();
-            let added = set.insert(reason);
-
-            // LOCK ORDER: intentionally hold the lock, see self.reasons.
-            let uploaded = timeline
-                .remote_client
-                .schedule_insert_gc_block_reason(reason)?;
-
-            (added, uploaded)
+            set.insert(reason)
         };
-
-        uploaded.await?;
 
         // ensure that any ongoing gc iteration has completed
         drop(self.blocking.lock().await);
@@ -104,7 +95,9 @@ impl GcBlock {
 
         super::span::debug_assert_current_span_has_tenant_and_timeline_id();
 
-        let (remaining_blocks, uploaded) = {
+        let _ = timeline;
+
+        let remaining_blocks = {
             let mut g = self.reasons.lock().unwrap();
             match g.entry(timeline.timeline_id) {
                 Entry::Occupied(mut oe) => {
@@ -114,22 +107,10 @@ impl GcBlock {
                         oe.remove();
                     }
                 }
-                Entry::Vacant(_) => {
-                    // we must still do the index_part.json update regardless, in case we had earlier
-                    // been cancelled
-                }
+                Entry::Vacant(_) => {}
             }
-
-            let remaining_blocks = g.len();
-
-            // LOCK ORDER: intentionally hold the lock while scheduling; see self.reasons
-            let uploaded = timeline
-                .remote_client
-                .schedule_remove_gc_block_reason(reason)?;
-
-            (remaining_blocks, uploaded)
+            g.len()
         };
-        uploaded.await?;
 
         // no need to synchronize with gc iteration again
 

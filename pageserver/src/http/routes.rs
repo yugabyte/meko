@@ -1728,14 +1728,12 @@ async fn timeline_mark_invisible_handler(
             .tenant_manager
             .get_attached_tenant_shard(tenant_shard_id)?;
         let timeline = tenant.get_timeline(timeline_id, true)?;
-        // yb-mode: mirror to `remote_state` so the status endpoint
-        // (`is_invisible()`) reads it directly. RTC keeps its own
-        // copy for upstream-compat.
+        // yb-mode: visibility state lives in `remote_state.invisible`
+        // only. No index_part.json upload needed.
         timeline.remote_state.invisible.store(
             matches!(visibility, TimelineVisibilityState::Invisible),
             std::sync::atomic::Ordering::Relaxed,
         );
-        timeline.remote_client.schedule_index_upload_for_timeline_invisible_state(visibility).map_err(ApiError::InternalServerError)?;
         json_response(StatusCode::OK, ())
     }
     .instrument(info_span!("manual_timeline_mark_invisible", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
@@ -1783,11 +1781,14 @@ async fn timeline_checkpoint_handler(
         let _ = (ctx, &cancel);
 
         if wait_until_uploaded {
-            tracing::info!("Waiting for uploads to complete...");
-            timeline.remote_client.wait_completion().await
-            // XXX map to correct ApiError for the cases where it's due to shutdown
-            .context("wait completion").map_err(ApiError::InternalServerError)?;
-            tracing::info!("Uploads completed up to {}", timeline.get_remote_consistent_lsn_projected().unwrap_or(Lsn(0)));
+            // yb-mode: flush is synchronous against YB; there's
+            // nothing to wait on. The "uploaded up to" line stays so
+            // the manual-checkpoint endpoint's response shape
+            // doesn't change for callers.
+            tracing::info!(
+                "Uploads completed up to {}",
+                timeline.get_remote_consistent_lsn_projected().unwrap_or(Lsn(0))
+            );
         }
 
         json_response(StatusCode::OK, ())

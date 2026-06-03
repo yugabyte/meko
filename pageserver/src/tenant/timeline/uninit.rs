@@ -147,15 +147,13 @@ impl<'t> UninitializedTimeline<'t> {
         // Hand the upload-queue's `visible_remote_consistent_lsn` slot
         // to PageWriter so its flush success path can advance the
         // safekeeper-truncation bound directly. The upload queue is
-        // already initialized at this point (init_upload_queue_for_empty_remote
-        // ran in prepare_new_timeline), so the slot is materialized.
+        // The PageWriter shares the timeline's `remote_state.rc_lsn`
+        // slot — bumping it on flush is what feeds the safekeeper's
+        // `remote_consistent_lsn` via walreceiver feedback.
         {
             let tl = &self.raw_timeline.as_ref().expect("checked above").0;
-            if let (Some(pw), Some(slot)) = (
-                tl.page_writer.as_ref(),
-                tl.remote_client.remote_consistent_lsn_slot(),
-            ) {
-                pw.set_remote_consistent_lsn_slot(slot);
+            if let Some(pw) = tl.page_writer.as_ref() {
+                pw.set_remote_consistent_lsn_slot(tl.remote_state.rc_lsn.clone());
             }
         }
 
