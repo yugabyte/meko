@@ -16,15 +16,12 @@
 //! caller-supplied `result_slot` for `remote_consistent_lsn` updates.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use pageserver_api::shard::TenantShardId;
 use remote_storage::GenericRemoteStorage;
 use thiserror::Error;
 use utils::generation::Generation;
-use utils::id::TimelineId;
-use utils::lsn::{AtomicLsn, Lsn};
 
 use crate::config::PageServerConf;
 use crate::controller_upcall_client::StorageControllerUpcallApi;
@@ -74,20 +71,6 @@ impl DeletionQueueClient {
         _attached_tenants: HashMap<TenantShardId, Generation>,
     ) -> Result<(), DeletionQueueError> {
         Ok(())
-    }
-
-    /// Advertise a timeline's new `remote_consistent_lsn`. Unlike the
-    /// Neon pipeline this doesn't wait for a generation-validation
-    /// upcall — we publish to the slot directly.
-    pub(crate) async fn update_remote_consistent_lsn(
-        &self,
-        _tenant_shard_id: TenantShardId,
-        _timeline_id: TimelineId,
-        _current_generation: Generation,
-        lsn: Lsn,
-        result_slot: Arc<AtomicLsn>,
-    ) {
-        result_slot.fetch_max(lsn);
     }
 
     pub async fn flush(&self) -> Result<(), DeletionQueueError> {

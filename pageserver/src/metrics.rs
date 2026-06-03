@@ -3109,29 +3109,20 @@ pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantShardId) {
 }
 
 /// Maintain a per timeline gauge in addition to the global gauge.
+///
+/// yb-mode: the metric is always 0 (no layer files = no "remote
+/// physical size"). The struct survives because `RemoteTimelineClientMetrics`
+/// still keeps the field, but the setter / getter are gone and
+/// nothing ever advances `last_set` above zero. Drop is a no-op.
 pub(crate) struct PerTimelineRemotePhysicalSizeGauge {
     last_set: AtomicU64,
-    gauge: UIntGauge,
 }
 
 impl PerTimelineRemotePhysicalSizeGauge {
-    fn new(per_timeline_gauge: UIntGauge) -> Self {
+    fn new() -> Self {
         Self {
             last_set: AtomicU64::new(0),
-            gauge: per_timeline_gauge,
         }
-    }
-    pub(crate) fn set(&self, sz: u64) {
-        self.gauge.set(sz);
-        let prev = self.last_set.swap(sz, std::sync::atomic::Ordering::Relaxed);
-        if sz < prev {
-            REMOTE_PHYSICAL_SIZE_GLOBAL.sub(prev - sz);
-        } else {
-            REMOTE_PHYSICAL_SIZE_GLOBAL.add(sz - prev);
-        };
-    }
-    pub(crate) fn get(&self) -> u64 {
-        self.gauge.get()
     }
 }
 
@@ -3156,11 +3147,7 @@ impl RemoteTimelineClientMetrics {
         let shard_id_str = format!("{}", tenant_shard_id.shard_slug());
         let timeline_id_str = timeline_id.to_string();
 
-        let remote_physical_size_gauge = PerTimelineRemotePhysicalSizeGauge::new(
-            REMOTE_PHYSICAL_SIZE
-                .get_metric_with_label_values(&[&tenant_id_str, &shard_id_str, &timeline_id_str])
-                .unwrap(),
-        );
+        let remote_physical_size_gauge = PerTimelineRemotePhysicalSizeGauge::new();
 
         let projected_remote_consistent_lsn_gauge = PROJECTED_REMOTE_CONSISTENT_LSN
             .get_metric_with_label_values(&[&tenant_id_str, &shard_id_str, &timeline_id_str])
@@ -3223,14 +3210,6 @@ pub(crate) struct RemoteTimelineClientCallMetricGuard {
     calls_counter_pair: Option<IntCounterPair>,
 }
 
-impl RemoteTimelineClientCallMetricGuard {
-    /// Consume this guard object without performing the metric updates it would do on `drop()`.
-    /// The caller vouches to do the metric updates manually.
-    pub fn will_decrement_manually(mut self) {
-        self.calls_counter_pair.take();
-    }
-}
-
 impl Drop for RemoteTimelineClientCallMetricGuard {
     fn drop(&mut self) {
         if let Some(guard) = self.calls_counter_pair.take() {
@@ -3241,11 +3220,8 @@ impl Drop for RemoteTimelineClientCallMetricGuard {
 
 impl RemoteTimelineClientMetrics {
     /// Update the metrics that change when a call to the remote timeline client instance starts.
-    ///
     /// Drop the returned guard object once the operation is finished to update the corresponding
-    /// metrics that track completions. Or, use
-    /// [`RemoteTimelineClientCallMetricGuard::will_decrement_manually`] and [`call_end`](Self::call_end)
-    /// if that is more suitable. Never do both.
+    /// metrics that track completions.
     pub(crate) fn call_begin(
         &self,
         file_kind: &RemoteOpFileKind,
@@ -3256,13 +3232,6 @@ impl RemoteTimelineClientMetrics {
         RemoteTimelineClientCallMetricGuard {
             calls_counter_pair: Some(calls_counter_pair),
         }
-    }
-
-    /// Manually update the metrics that track completions, instead of using the guard object.
-    /// Using the guard object is generally preferable.
-    /// See [`call_begin`](Self::call_begin) for more context.
-    pub(crate) fn call_end(&self, file_kind: &RemoteOpFileKind, op_kind: &RemoteOpKind) {
-        self.calls_counter_pair(file_kind, op_kind).dec();
     }
 }
 

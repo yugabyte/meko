@@ -4,9 +4,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use pageserver_api::models::TimelineState;
 use pageserver_api::shard::TenantShardId;
-use remote_storage::DownloadError;
 use tokio::sync::OwnedMutexGuard;
-use tracing::{Instrument, error, info, info_span, instrument};
+use tracing::{Instrument, error, info, instrument};
 use utils::id::TimelineId;
 use utils::{crashsafe, fs_ext, pausable_failpoint};
 
@@ -14,7 +13,6 @@ use crate::config::PageServerConf;
 use crate::context::RequestContext;
 use crate::task_mgr::{self, TaskKind};
 use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::remote_timeline_client::RemoteTimelineClient;
 use crate::tenant::{
     CreateTimelineCause, DeleteTimelineError, TenantManifestError, TenantShard, Timeline,
     TimelineOrOffloaded,

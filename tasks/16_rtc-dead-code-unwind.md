@@ -1,11 +1,43 @@
 ---
-status: pending
+status: done
 severity: medium
 area: yb-pageserver
 opened: 2026-06-03
+closed: 2026-06-03
 ---
 
 # Unwind the dead RTC plumbing
+
+## Resolution
+
+`RemoteTimelineClient` is now a thin holder around
+`download_index_file`. Struct dropped from 9 fields to 5; the
+~1,200-line impl block dropped to two methods (`new` + the
+download). The upload-queue subsystem and its types are entirely
+gone (`pageserver/src/tenant/upload_queue.rs` deleted along with
+`UploadOp`, `UploadTask`, `SetDeletedFlagProgress`, the
+`NotInitialized`/`UploadQueueNotReadyError`/etc. error types,
+the location-conf-driven `RemoteTimelineClientConfig`, and the
+matching `From<NotInitialized> for GcError` impl). Dead helpers
+removed in lockstep: `preserve_initdb_archive`,
+`index_part_to_timeline_row`, `Lineage::is_previous_ancestor_lsn`
+/ `is_detached_from_ancestor`, `GcBlocking::started_now_for` /
+`blocked_by` / `with_reason` / `without_reason`,
+`PerTimelineRemotePhysicalSizeGauge::set`/`get` and its
+`UIntGauge` field, `RemoteTimelineClientMetrics::call_end`,
+`RemoteTimelineClientCallMetricGuard::will_decrement_manually`,
+`Tenant::build_timeline_remote_client`,
+`CreateTimelineResult::timeline`, `GcError::Remote`, and
+`DeletionQueueClient::update_remote_consistent_lsn`. The
+`WaitCompletionError` import in `http::routes::handle_tenant_timeline_block_unblock_gc`
+was inlined to a plain `ApiError::InternalServerError` mapping.
+
+`cargo build -p pageserver --bin yb-pageserver` is now
+warning-clean.
+
+---
+
+(Below: original analysis at filing time.)
 
 ## Symptom
 

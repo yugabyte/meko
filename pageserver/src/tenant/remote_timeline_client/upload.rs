@@ -16,7 +16,7 @@ use utils::pausable_failpoint;
 use super::Generation;
 use super::manifest::TenantManifest;
 use crate::tenant::remote_timeline_client::{
-    remote_initdb_archive_path, remote_initdb_preserved_archive_path,
+    remote_initdb_archive_path,
     remote_tenant_manifest_path,
 };
 
@@ -73,19 +73,6 @@ pub(crate) async fn upload_initdb_dir(
         .with_context(|| format!("upload initdb dir for '{tenant_id} / {timeline_id}'"))
 }
 
-pub(crate) async fn preserve_initdb_archive(
-    storage: &GenericRemoteStorage,
-    tenant_id: &TenantId,
-    timeline_id: &TimelineId,
-    cancel: &CancellationToken,
-) -> anyhow::Result<()> {
-    let source_path = remote_initdb_archive_path(tenant_id, timeline_id);
-    let dest_path = remote_initdb_preserved_archive_path(tenant_id, timeline_id);
-    storage
-        .copy_object(&source_path, &dest_path, cancel)
-        .await
-        .with_context(|| format!("backing up initdb archive for '{tenant_id} / {timeline_id}'"))
-}
 
 // The upstream `time_travel_recover_tenant` walked an S3 bucket's
 // versioned objects to roll a tenant back to a timestamp. S3 is gone

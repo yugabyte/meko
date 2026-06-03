@@ -52,7 +52,6 @@ use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
-use upload_queue::NotInitialized;
 use utils::crashsafe::path_with_suffix_extension;
 use utils::sync::gate::{Gate, GateGuard};
 use utils::timeout::{TimeoutCancellableError, timeout_cancellable};
@@ -64,7 +63,7 @@ use self::config::{AttachedLocationConfig, AttachmentMode, LocationConf};
 use self::metadata::TimelineMetadata;
 use self::mgr::{GetActiveTenantError, GetTenantError};
 use self::remote_timeline_client::upload::upload_tenant_manifest;
-use self::remote_timeline_client::{RemoteTimelineClient, WaitCompletionError};
+use self::remote_timeline_client::RemoteTimelineClient;
 use self::timeline::uninit::{TimelineCreateGuard, TimelineExclusionError, UninitializedTimeline};
 use self::timeline::{
     GcCutoffs, TimelineDeleteProgress, TimelineResources, WaitLsnError,
@@ -110,7 +109,6 @@ pub mod storage_layer;
 pub mod config;
 pub mod mgr;
 pub mod tasks;
-pub mod upload_queue;
 
 pub(crate) mod timeline;
 
@@ -855,11 +853,6 @@ impl CreateTimelineResult {
             Self::Idempotent(_) => "Idempotent",
         }
     }
-    fn timeline(&self) -> &Arc<Timeline> {
-        match self {
-            Self::Created(t) | Self::Idempotent(t) => t,
-        }
-    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -915,10 +908,6 @@ pub(crate) enum GcError {
     #[error("not active")]
     NotActive,
 
-    // A remote storage error while scheduling updates after compaction
-    #[error(transparent)]
-    Remote(anyhow::Error),
-
     // An error reading while calculating GC cutoffs
     #[error(transparent)]
     GcCutoffs(PageReconstructError),
@@ -933,15 +922,6 @@ impl From<PageReconstructError> for GcError {
         match value {
             PageReconstructError::Cancelled => Self::TimelineCancelled,
             other => Self::GcCutoffs(other),
-        }
-    }
-}
-
-impl From<NotInitialized> for GcError {
-    fn from(value: NotInitialized) -> Self {
-        match value {
-            NotInitialized::Uninitialized => GcError::Remote(value.into()),
-            NotInitialized::Stopped | NotInitialized::ShuttingDown => GcError::TimelineCancelled,
         }
     }
 }
@@ -1787,13 +1767,10 @@ impl TenantShard {
         remote_storage: GenericRemoteStorage,
     ) -> RemoteTimelineClient {
         RemoteTimelineClient::new(
-            remote_storage.clone(),
-            self.deletion_queue_client.clone(),
-            self.fpu_page_store.clone(),
+            remote_storage,
             self.tenant_shard_id,
             timeline_id,
             self.generation,
-            &self.tenant_conf.load().location,
         )
     }
 
@@ -4249,18 +4226,6 @@ impl TenantShard {
         // Callers are responsible to wait for uploads to complete and for activating the timeline.
 
         Ok(CreateTimelineResult::Created(timeline))
-    }
-
-    fn build_timeline_remote_client(&self, timeline_id: TimelineId) -> RemoteTimelineClient {
-        RemoteTimelineClient::new(
-            self.remote_storage.clone(),
-            self.deletion_queue_client.clone(),
-            self.fpu_page_store.clone(),
-            self.tenant_shard_id,
-            timeline_id,
-            self.generation,
-            &self.tenant_conf.load().location,
-        )
     }
 
     /// Builds required resources for a new timeline.

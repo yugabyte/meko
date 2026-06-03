@@ -1335,8 +1335,6 @@ async fn block_or_unblock_gc(
     request: Request<Body>,
     block: bool,
 ) -> Result<Response<Body>, ApiError> {
-    use crate::tenant::remote_timeline_client::WaitCompletionError;
-    use crate::tenant::upload_queue::NotInitialized;
     let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
     check_permission(&request, Some(tenant_shard_id.tenant_id))?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
@@ -1368,13 +1366,11 @@ async fn block_or_unblock_gc(
 
     let res = fut.instrument(span).await;
 
-    res.map_err(|e| {
-        if e.is::<NotInitialized>() || e.is::<WaitCompletionError>() {
-            ApiError::ShuttingDown
-        } else {
-            ApiError::InternalServerError(e)
-        }
-    })?;
+    // yb-mode: the upstream `NotInitialized` / `WaitCompletionError`
+    // discrimination was RTC-only. GC block/unblock here returns
+    // plain anyhow errors, so internal-server is the appropriate
+    // catch-all mapping.
+    res.map_err(ApiError::InternalServerError)?;
 
     json_response(StatusCode::OK, ())
 }

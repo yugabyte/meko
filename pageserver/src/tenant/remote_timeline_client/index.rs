@@ -226,20 +226,6 @@ fn is_false(b: &bool) -> bool {
     !b
 }
 
-impl Lineage {
-    /// The queried lsn is most likely the basebackup lsn, and this answers question "is it allowed
-    /// to start a read/write primary at this lsn".
-    pub(crate) fn is_previous_ancestor_lsn(&self, lsn: Lsn) -> bool {
-        self.original_ancestor
-            .is_some_and(|(_, ancestor_lsn, _)| ancestor_lsn == lsn)
-    }
-
-    /// Returns true if the timeline originally had an ancestor, and no longer has one.
-    pub(crate) fn is_detached_from_ancestor(&self) -> bool {
-        self.original_ancestor.is_some()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct GcBlocking {
     pub(crate) started_at: NaiveDateTime,
@@ -251,50 +237,5 @@ pub(crate) struct GcBlocking {
 pub(crate) enum GcBlockingReason {
     Manual,
     DetachAncestor,
-}
-
-impl GcBlocking {
-    pub(super) fn started_now_for(reason: GcBlockingReason) -> Self {
-        GcBlocking {
-            started_at: chrono::Utc::now().naive_utc(),
-            reasons: enumset::EnumSet::only(reason),
-        }
-    }
-
-    /// Returns true if the given reason is one of the reasons why the gc is blocked.
-    pub(crate) fn blocked_by(&self, reason: GcBlockingReason) -> bool {
-        self.reasons.contains(reason)
-    }
-
-    /// Returns a version of self with the given reason.
-    pub(super) fn with_reason(&self, reason: GcBlockingReason) -> Self {
-        assert!(!self.blocked_by(reason));
-        let mut reasons = self.reasons;
-        reasons.insert(reason);
-
-        Self {
-            started_at: self.started_at,
-            reasons,
-        }
-    }
-
-    /// Returns a version of self without the given reason. Assumption is that if
-    /// there are no more reasons, we can unblock the gc by returning `None`.
-    pub(super) fn without_reason(&self, reason: GcBlockingReason) -> Option<Self> {
-        assert!(self.blocked_by(reason));
-
-        if self.reasons.len() == 1 {
-            None
-        } else {
-            let mut reasons = self.reasons;
-            assert!(reasons.remove(reason));
-            assert!(!reasons.is_empty());
-
-            Some(Self {
-                started_at: self.started_at,
-                reasons,
-            })
-        }
-    }
 }
 
