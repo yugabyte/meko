@@ -1,6 +1,7 @@
 pub mod delete;
 pub(crate) mod handle;
 pub(crate) mod logical_size;
+pub(crate) mod remote_state;
 pub mod uninit;
 mod walreceiver;
 
@@ -128,6 +129,13 @@ pub struct Timeline {
     /// Remote storage client.
     /// See [`remote_timeline_client`](super::remote_timeline_client) module comment for details.
     pub(crate) remote_client: Arc<RemoteTimelineClient>,
+
+    /// Direct-access subset of `remote_client`'s state. Phase 4.d
+    /// chunk-1 step 1: shadow only — populated at construction with
+    /// defaults; later steps migrate callers from `remote_client`
+    /// methods to read here, then `remote_client` goes away
+    /// entirely. See `tasks/4.d_layer-stack-code-deletion.md`.
+    pub(crate) remote_state: Arc<remote_state::TimelineRemoteState>,
 
     /// yb-pageserver row-per-page writer. `Some` enables dual-write at
     /// `TimelineWriter::put_batch`: every `(Key, LSN, Value)` digested
@@ -2142,6 +2150,7 @@ impl Timeline {
                 walreceiver: Mutex::new(None),
 
                 remote_client: Arc::new(resources.remote_client),
+                remote_state: Arc::new(remote_state::TimelineRemoteState::new()),
 
                 page_writer: page_writer.clone(),
                 page_writer_flush_task: std::sync::Mutex::new(page_writer_flush_task),
