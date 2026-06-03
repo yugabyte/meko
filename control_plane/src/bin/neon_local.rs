@@ -127,7 +127,13 @@ struct InitCmdArgs {
 /// Start pageserver and safekeepers.
 #[derive(clap::Args)]
 struct StartCmdArgs {
-    #[clap(long = "start-timeout", default_value = "10s")]
+    // 120s default: on a freshly-created YB-backed `yb_storage` DB,
+    // storage_controller's diesel migrations + our own schema bootstrap
+    // take ~60-90s end-to-end. The previous 10s default fired before
+    // migrations finished and the pageserver's first call to
+    // storage_ctl saw "relation storage_controller.timelines does not
+    // exist". See tasks/4.k_neon-local-start-wedge.md.
+    #[clap(long = "start-timeout", default_value = "120s")]
     timeout: humantime::Duration,
 }
 

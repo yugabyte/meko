@@ -416,9 +416,52 @@ impl StorageController {
     }
 
     /// Connect to the `yb_storage` database on the cluster described by
-    /// `base` and create the `blob_namespace` ENUM type plus the `blobs`
-    /// and `wals` tables. All statements are idempotent.
+    /// `base` and create the `blob_namespace` ENUM type plus the
+    /// pageserver/safekeeper schema. All statements are idempotent.
+    ///
+    /// Wraps [`Self::ensure_yb_storage_schema_once`] with a per-attempt
+    /// deadline and a small retry loop. On a freshly-created YB cluster
+    /// the tokio_postgres connection can stall silently between
+    /// CREATE TABLE statements (no in-flight query visible in
+    /// pg_stat_activity, no syscall progress). Dropping the connection
+    /// and reconnecting consistently makes forward progress because all
+    /// CREATEs are idempotent. See `tasks/4.k_neon-local-start-wedge.md`.
     async fn ensure_yb_storage_schema(base: &tokio_postgres::Config) -> anyhow::Result<()> {
+        const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 1..=MAX_ATTEMPTS {
+            match tokio::time::timeout(
+                ATTEMPT_TIMEOUT,
+                Self::ensure_yb_storage_schema_once(base),
+            )
+            .await
+            {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(e)) => {
+                    eprintln!(
+                        "ensure_yb_storage_schema attempt {attempt}/{MAX_ATTEMPTS} failed: {e:#}"
+                    );
+                    last_err = Some(e);
+                }
+                Err(_elapsed) => {
+                    eprintln!(
+                        "ensure_yb_storage_schema attempt {attempt}/{MAX_ATTEMPTS} timed out after {}s; reconnecting",
+                        ATTEMPT_TIMEOUT.as_secs()
+                    );
+                    last_err = Some(anyhow::anyhow!(
+                        "ensure_yb_storage_schema timed out after {}s",
+                        ATTEMPT_TIMEOUT.as_secs()
+                    ));
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!("ensure_yb_storage_schema failed with no captured error")
+        }))
+    }
+
+    async fn ensure_yb_storage_schema_once(base: &tokio_postgres::Config) -> anyhow::Result<()> {
         let mut cfg = base.clone();
         cfg.dbname("yb_storage");
         let (client, conn_task) =
