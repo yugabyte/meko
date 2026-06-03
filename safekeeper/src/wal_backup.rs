@@ -286,7 +286,7 @@ impl WalBackup {
                 // WAL chunk INSERTs (`yb_wal_storage::insert_wal`)
                 // and WAL GC (`truncate_wal`) which both benefit
                 // from skipping YB's read-before-write check.
-                let yb_fpu_client = ysql_client::YsqlClient::from_yb_config(
+                let ysql_fpu_client = ysql_client::YsqlClient::from_yb_config(
                     &yb.conn_config(),
                     "safekeeper:yb_wal_mirror",
                     true,
@@ -307,7 +307,7 @@ impl WalBackup {
                 } else {
                     None
                 };
-                (Some(Arc::new(yb_fpu_client)), Some(yb.table_name.clone()), cache)
+                (Some(Arc::new(ysql_fpu_client)), Some(yb.table_name.clone()), cache)
             }
             None => (None, None, None),
         };

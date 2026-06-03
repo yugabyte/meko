@@ -104,7 +104,7 @@ impl YbStore {
         // blob key rely on YB's upsert mode to skip the
         // read-before-write check. Without the GUC, the second PUT
         // would PK-conflict.
-        let yb_fpu_client = ysql_client::YsqlClient::from_yb_config(
+        let ysql_fpu_client = ysql_client::YsqlClient::from_yb_config(
             &config.conn_config(),
             "pageserver:yb_store",
             true,
@@ -126,7 +126,7 @@ impl YbStore {
         });
 
         Ok(Self {
-            client: Arc::new(yb_fpu_client),
+            client: Arc::new(ysql_fpu_client),
             table_name: config.table_name.clone(),
             prefix,
             timeout,

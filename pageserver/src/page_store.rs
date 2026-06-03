@@ -301,7 +301,7 @@ impl PageStore {
         pool_size: usize,
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        let client = ysql_client::YsqlClient::from_yb_config_pooled(
+        let ysql_client = ysql_client::YsqlClient::from_yb_config_pooled(
             &config.yb.conn_config(),
             application_name,
             pool_size,
@@ -310,7 +310,7 @@ impl PageStore {
         .await
         .context("opening PageStore connection")?;
         Ok(Self {
-            client: Arc::new(client),
+            client: Arc::new(ysql_client),
             schema: Arc::from(config.schema),
         })
     }

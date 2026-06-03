@@ -1258,12 +1258,12 @@ mod tests {
     /// and tempdir. `start_lsn` becomes the rehydrated `write_lsn` (the
     /// table is empty, so `load_write_lsn` falls back to `commit_lsn`).
     async fn make_storage(table: &str, start_lsn: Lsn) -> (YbWalStorage, Utf8TempDir) {
-        let yb_fpu_client = Arc::new(
+        let ysql_fpu_client = Arc::new(
             YsqlClient::connect_no_tls(pgcfg(), true)
                 .await
                 .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
         );
-        make_wals_table(&yb_fpu_client, table).await;
+        make_wals_table(&ysql_fpu_client, table).await;
 
         let tenant = TenantId::generate();
         let timeline = TimelineId::generate();
@@ -1278,7 +1278,7 @@ mod tests {
         let tmp = camino_tempfile::tempdir().expect("tempdir");
         let dir = tmp.path().to_path_buf();
         let storage =
-            YbWalStorage::new(&ttid, &dir, &state, true, yb_fpu_client, table.to_string(), None)
+            YbWalStorage::new(&ttid, &dir, &state, true, ysql_fpu_client, table.to_string(), None)
                 .await
                 .expect("YbWalStorage::new");
         (storage, tmp)
