@@ -71,7 +71,7 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 4.a | [Stop dual-writing rel pages](4.a_stop-dual-writing-rel-pages.md) | ✅ done | medium | yb-pageserver |
 | 4.b | [SLRU pages table](4.b_slru-pages-table.md) | ✅ done | medium | yb-pageserver |
 | 4.c | [Meta blobs table](4.c_meta-blobs-table.md) | ✅ done | medium | yb-pageserver |
-| 4.d | [Layer-stack code deletion](4.d_layer-stack-code-deletion.md) | 🚧 in_progress | medium | yb-pageserver |
+| 4.d | [Layer-stack code deletion](4.d_layer-stack-code-deletion.md) | ✅ done | medium | yb-pageserver |
 | 4.e | [Write-path hardening + perf](4.e_write-path-hardening-perf.md) | ✅ done | medium | yb-pageserver |
 | 4.f | [Per-key LRU eviction](4.f_per-key-lru-eviction.md) | ✅ done | high | yb-pageserver |
 | 4.g | [Cache-only fast path](4.g_cache-only-fast-path.md) | ✅ done | medium | yb-pageserver |
