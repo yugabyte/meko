@@ -93,8 +93,8 @@ pub struct TimelineResources {
     /// yb-pageserver mode for this timeline.
     pub compute_page_store: Option<Arc<crate::page_store::PageStore>>,
     /// Internal-traffic `PageStore` (see
-    /// `TenantSharedResources::internal_page_store`).
-    pub internal_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// `TenantSharedResources::fpu_page_store`).
+    pub fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 
 pub struct Timeline {
@@ -940,7 +940,7 @@ impl Timeline {
         let Some(page_writer) = self.page_writer.clone() else {
             return Err(GetVectoredError::Other(anyhow::anyhow!(
                 "Timeline has no PageWriter — yb-pageserver mode requires both \
-                 compute_page_store and internal_page_store to be configured"
+                 compute_page_store and fpu_page_store to be configured"
             )));
         };
         self.get_vectored_via_page_writer(page_writer, query, RedoAttemptType::ReadPage, ctx)
@@ -1098,7 +1098,7 @@ impl Timeline {
     /// already on disk.
     ///
     /// No-op when `page_writer` is None (upstream pageserver mode). The
-    /// upsert uses `internal_page_store` so the bootstrap I/O doesn't
+    /// upsert uses `fpu_page_store` so the bootstrap I/O doesn't
     /// land on the compute-reads connection.
     pub(crate) async fn write_timeline_row_to_yb(&self) -> anyhow::Result<()> {
         let Some(pw) = self.page_writer.as_ref() else {
@@ -1135,7 +1135,7 @@ impl Timeline {
             rel_size_migrated_at: None,
             lineage: Default::default(),
         };
-        pw.internal_page_store()
+        pw.fpu_page_store()
             .insert_timeline_at_creation(&row)
             .await
             .context("insert_timeline_at_creation")?;
@@ -1163,7 +1163,7 @@ impl Timeline {
             return Ok(());
         };
         match pw
-            .internal_page_store()
+            .fpu_page_store()
             .cas_bump_generation_on_attach(
                 self.tenant_shard_id.tenant_id,
                 self.timeline_id,
@@ -1476,7 +1476,7 @@ impl Timeline {
     /// the equivalent of "make pending writes durable" is to flush the
     /// pending row buffer; YB's Raft replication takes it from there.
     /// No-op if there's no `PageWriter` (a yb-pageserver running with
-    /// no compute_page_store + internal_page_store wouldn't accept
+    /// no compute_page_store + fpu_page_store wouldn't accept
     /// writes in the first place).
     pub(crate) async fn freeze_and_flush(&self) -> Result<(), FlushLayerError> {
         self.freeze_and_flush0().await
@@ -2031,13 +2031,13 @@ impl Timeline {
         // Build the row-per-page writer if both PageStores are
         // configured (yb-pageserver mode). Upstream pageserver builds
         // a Timeline with both = None. PageWriter routes reads through
-        // `compute_page_store` and writes through `internal_page_store`
+        // `compute_page_store` and writes through `fpu_page_store`
         // so compute getPage stays off the walreceiver/materialiser
         // write conn.
         let (page_writer, page_writer_flush_task, image_materializer_task) =
             match (
                 resources.compute_page_store.as_ref(),
-                resources.internal_page_store.as_ref(),
+                resources.fpu_page_store.as_ref(),
             ) {
                 (Some(compute_ps), Some(internal_ps)) => {
                     let pw_cfg = &conf.yb_page_writer;
@@ -3268,7 +3268,7 @@ impl TimelineWriter<'_> {
         let page_writer = self.tl.page_writer.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "Timeline has no PageWriter — yb-pageserver mode requires both \
-                 compute_page_store and internal_page_store to be configured"
+                 compute_page_store and fpu_page_store to be configured"
             )
         })?;
         let triples = crate::page_writer::extract_triples(&batch)?;

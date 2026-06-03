@@ -538,8 +538,8 @@ fn start_pageserver(
     // / materialiser writes pile onto, and vice versa.
     let compute_page_store =
         BACKGROUND_RUNTIME.block_on(create_compute_page_store(conf))?;
-    let internal_page_store = if compute_page_store.is_some() {
-        BACKGROUND_RUNTIME.block_on(create_internal_page_store(conf))?
+    let fpu_page_store = if compute_page_store.is_some() {
+        BACKGROUND_RUNTIME.block_on(create_fpu_page_store(conf))?
     } else {
         None
     };
@@ -596,7 +596,7 @@ fn start_pageserver(
             deletion_queue_client,
             basebackup_cache: Arc::clone(&basebackup_cache),
             compute_page_store: compute_page_store.clone(),
-            internal_page_store: internal_page_store.clone(),
+            fpu_page_store: fpu_page_store.clone(),
         },
         shutdown_pageserver.clone(),
     );
@@ -942,7 +942,7 @@ async fn create_compute_page_store(
 /// 4 connections lets the 4 chunks land on 4 distinct YB backends and
 /// complete in one wall-clock RTT instead of four. The materialiser
 /// shares this pool for its image INSERTs.
-async fn create_internal_page_store(
+async fn create_fpu_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
     const INTERNAL_POOL_SIZE: usize = 4;
@@ -952,7 +952,7 @@ async fn create_internal_page_store(
     // read-before-write on partial-chunk retries.
     let Some(store) = create_page_store_with_app_name(
         conf,
-        "yb-pageserver:internal",
+        "yb-pageserver:fpu",
         INTERNAL_POOL_SIZE,
         true,
     )

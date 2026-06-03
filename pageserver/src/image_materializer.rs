@@ -78,7 +78,7 @@ const MAX_INFLIGHT_INSERTS: usize = 4;
 
 /// Maximum concurrent `redo_one` futures in flight within a single
 /// `materialize_batch`. Each future does an SQL `read_chain_durable`
-/// (against `internal_page_store` — its own connection), a CPU
+/// (against `fpu_page_store` — its own connection), a CPU
 /// WAL-record decode, and a walredo subprocess RPC.
 ///
 /// The walredo subprocess serialises its own apply phase via stdin /
@@ -116,7 +116,7 @@ pub struct ImageMaterializer {
     /// the materialiser's own cache-miss `read_chain_durable`).
     /// Keeps every materialiser write off the compute getPage
     /// connection — that's the isolation we wanted.
-    internal_page_store: Arc<PageStore>,
+    fpu_page_store: Arc<PageStore>,
     walredo_mgr: Arc<WalRedoManager>,
     pg_version: PgMajorVersion,
     /// Shared with the write trigger in `PageWriter::put` — see
@@ -146,7 +146,7 @@ impl ImageMaterializer {
         tenant_id: TenantId,
         timeline_id: TimelineId,
         page_writer: Arc<PageWriter>,
-        internal_page_store: Arc<PageStore>,
+        fpu_page_store: Arc<PageStore>,
         walredo_mgr: Arc<WalRedoManager>,
         pg_version: PgMajorVersion,
         mut rx: mpsc::Receiver<MaterializeJob>,
@@ -158,7 +158,7 @@ impl ImageMaterializer {
             tenant_id,
             timeline_id,
             page_writer,
-            internal_page_store,
+            fpu_page_store,
             walredo_mgr,
             pg_version,
             in_flight,
@@ -290,7 +290,7 @@ impl ImageMaterializer {
     ///
     /// Redo runs up to `REDO_CONCURRENCY` `redo_one` futures in
     /// parallel via `FuturesUnordered`. Each future reads its chain
-    /// from `internal_page_store` (own YSQL connection — no contention
+    /// from `fpu_page_store` (own YSQL connection — no contention
     /// with the walreceiver write path), decodes records, and calls
     /// walredo. The SQL reads and WAL decodes parallelise cleanly;
     /// walredo serialises its apply but pipelines IPC, so concurrent
@@ -456,7 +456,7 @@ impl ImageMaterializer {
         // overflows, put_pages's `buffer_unordered(4)` pipelines the
         // chunks on the dedicated connection.
         let t_insert_start = std::time::Instant::now();
-        self.internal_page_store
+        self.fpu_page_store
             .put_pages(self.tenant_id, self.timeline_id, &images)
             .await
             .context("put_pages")?;

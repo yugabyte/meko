@@ -228,7 +228,7 @@ impl PageStoreConfig {
 
 #[derive(Clone)]
 pub struct PageStore {
-    client: Arc<YsqlClient>,
+    ysql_client: Arc<YsqlClient>,
     schema: Arc<str>,
 }
 
@@ -310,7 +310,7 @@ impl PageStore {
         .await
         .context("opening PageStore connection")?;
         Ok(Self {
-            client: Arc::new(ysql_client),
+            ysql_client: Arc::new(ysql_client),
             schema: Arc::from(config.schema),
         })
     }
@@ -328,7 +328,7 @@ impl PageStore {
         // exists"; we only need to also handle the type counterpart.
         let create_schema = format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", self.schema);
         Self::idempotent_create(
-            self.client.execute(&create_schema, &[]).await,
+            self.ysql_client.execute(&create_schema, &[]).await,
             "creating schema",
         )?;
 
@@ -351,7 +351,7 @@ impl PageStore {
             self.schema
         );
         Self::idempotent_create(
-            self.client.execute(&create_pages, &[]).await,
+            self.ysql_client.execute(&create_pages, &[]).await,
             "creating pages table",
         )?;
 
@@ -367,7 +367,7 @@ impl PageStore {
             self.schema
         );
         Self::idempotent_create(
-            self.client.execute(&create_meta, &[]).await,
+            self.ysql_client.execute(&create_meta, &[]).await,
             "creating meta table",
         )?;
 
@@ -388,7 +388,7 @@ impl PageStore {
             self.schema
         );
         Self::idempotent_create(
-            self.client.execute(&create_slru, &[]).await,
+            self.ysql_client.execute(&create_slru, &[]).await,
             "creating slru_pages table",
         )?;
 
@@ -421,7 +421,7 @@ impl PageStore {
             self.schema
         );
         Self::idempotent_create(
-            self.client.execute(&create_timelines, &[]).await,
+            self.ysql_client.execute(&create_timelines, &[]).await,
             "creating timeline_state table",
         )?;
         Ok(())
@@ -505,11 +505,11 @@ impl PageStore {
                 params.push(Box::new(row.payload.to_vec()));
             }
             let chunk_rows = chunk.len();
-            let client = Arc::clone(&self.client);
+            let ysql_client = Arc::clone(&self.ysql_client);
             futs.push(Box::pin(async move {
                 let params_ref: Vec<&(dyn ToSql + Sync)> =
                     params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-                client
+                ysql_client
                     .execute(&sql, &params_ref)
                     .await
                     .with_context(|| {
@@ -599,7 +599,7 @@ impl PageStore {
             schema = self.schema
         );
         let rows = self
-            .client
+            .ysql_client
             .query(
                 &sql,
                 &[
@@ -733,7 +733,7 @@ impl PageStore {
                  ORDER BY p.blknum, p.lsn DESC",
                 schema = self.schema
             );
-            self.client
+            self.ysql_client
                 .query(
                     &sql,
                     &[
@@ -788,7 +788,7 @@ impl PageStore {
                  ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC",
                 schema = self.schema
             );
-            self.client
+            self.ysql_client
                 .query(
                     &sql,
                     &[
@@ -828,7 +828,7 @@ impl PageStore {
             "DELETE FROM \"{}\".pages WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
         );
-        self.client
+        self.ysql_client
             .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("delete_all_pages")?;
@@ -883,11 +883,11 @@ impl PageStore {
                 params.push(Box::new(row.payload.to_vec()));
             }
             let chunk_rows = chunk.len();
-            let client = Arc::clone(&self.client);
+            let ysql_client = Arc::clone(&self.ysql_client);
             futs.push(Box::pin(async move {
                 let params_ref: Vec<&(dyn ToSql + Sync)> =
                     params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-                client
+                ysql_client
                     .execute(&sql, &params_ref)
                     .await
                     .with_context(|| {
@@ -949,7 +949,7 @@ impl PageStore {
             schema = self.schema
         );
         let rows = self
-            .client
+            .ysql_client
             .query(
                 &sql,
                 &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_i, &target],
@@ -1021,7 +1021,7 @@ impl PageStore {
             schema = self.schema
         );
         let rows = self
-            .client
+            .ysql_client
             .query(
                 &sql,
                 &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_lo, &blk_hi, &target],
@@ -1085,11 +1085,11 @@ impl PageStore {
                 params.push(Box::new(row.payload.to_vec()));
             }
             let chunk_rows = chunk.len();
-            let client = Arc::clone(&self.client);
+            let ysql_client = Arc::clone(&self.ysql_client);
             futs.push(Box::pin(async move {
                 let params_ref: Vec<&(dyn ToSql + Sync)> =
                     params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
-                client
+                ysql_client
                     .execute(&sql, &params_ref)
                     .await
                     .with_context(|| {
@@ -1127,7 +1127,7 @@ impl PageStore {
             self.schema
         );
         let row_opt = self
-            .client
+            .ysql_client
             .query_opt(
                 &sql,
                 &[
@@ -1190,7 +1190,7 @@ impl PageStore {
             schema = self.schema
         );
         let rows = self
-            .client
+            .ysql_client
             .query(
                 &sql,
                 &[
@@ -1220,7 +1220,7 @@ impl PageStore {
             "DELETE FROM \"{}\".meta WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
         );
-        self.client
+        self.ysql_client
             .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("delete_all_meta")?;
@@ -1236,7 +1236,7 @@ impl PageStore {
             "DELETE FROM \"{}\".slru_pages WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
         );
-        self.client
+        self.ysql_client
             .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("delete_all_slru_pages")?;
@@ -1299,7 +1299,7 @@ impl PageStore {
             self.schema
         );
         let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
-        self.client
+        self.ysql_client
             .execute(
                 &sql,
                 &[
@@ -1369,7 +1369,7 @@ impl PageStore {
         );
         let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
         let n = self
-            .client
+            .ysql_client
             .execute(
                 &sql,
                 &[
@@ -1410,7 +1410,7 @@ impl PageStore {
             self.schema
         );
         let row = self
-            .client
+            .ysql_client
             .query_opt(&sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("get_timeline")?;
@@ -1425,7 +1425,7 @@ impl PageStore {
             self.schema
         );
         let rows = self
-            .client
+            .ysql_client
             .query(&sql, &[&tenant.to_string()])
             .await
             .context("list_timelines")?;
@@ -1441,7 +1441,7 @@ impl PageStore {
             "DELETE FROM \"{}\".timeline_state WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
         );
-        self.client
+        self.ysql_client
             .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("delete_timeline")?;
@@ -1496,7 +1496,7 @@ impl PageStore {
             self.schema
         );
         let n = self
-            .client
+            .ysql_client
             .execute(
                 &sql,
                 &[&tenant.to_string(), &timeline.to_string(), &gen_i32],
@@ -1513,7 +1513,7 @@ impl PageStore {
             self.schema
         );
         let row = self
-            .client
+            .ysql_client
             .query_opt(&probe_sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("cas_bump_generation_on_attach probe")?;
@@ -1571,7 +1571,7 @@ impl PageStore {
         );
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let n = self
-            .client
+            .ysql_client
             .execute(
                 &sql,
                 &[
@@ -1593,7 +1593,7 @@ impl PageStore {
                 self.schema
             );
             let row = self
-                .client
+                .ysql_client
                 .query_opt(
                     &probe_sql,
                     &[&tenant.to_string(), &timeline.to_string()],
@@ -1630,7 +1630,7 @@ impl PageStore {
             self.schema
         );
         let row = self
-            .client
+            .ysql_client
             .query_opt(&sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("bump_generation")?
@@ -1649,19 +1649,19 @@ impl PageStore {
             self.schema
         );
         let row = self
-            .client
+            .ysql_client
             .query_opt(&sql, &[&tenant.to_string(), &timeline.to_string()])
             .await
             .context("read_generation")?;
         Ok(row.map(|r| r.get::<_, i32>(0)))
     }
 
-    /// Test-only escape hatch — runs raw SQL on the underlying client.
+    /// Test-only escape hatch — runs raw SQL on the underlying ysql_client.
     /// Used by integration tests to create / drop per-test schemas. Not
     /// for production callers.
     #[doc(hidden)]
     pub async fn test_only_execute(&self, sql: &str) -> Result<u64> {
-        self.client.execute(sql, &[]).await
+        self.ysql_client.execute(sql, &[]).await
     }
 }
 
@@ -2018,7 +2018,7 @@ mod tests {
 
     /// Image at LSN 10, deltas above, then an init-delta at LSN 25, then
     /// more deltas to LSN 30. The merged `read_chain` SQL returns rows
-    /// from the image's anchor (LSN 10) forward; the client-side trim
+    /// from the image's anchor (LSN 10) forward; the ysql_client-side trim
     /// must stop at the init-delta at LSN 25 — the chain past that point
     /// is what the image-then-deltas walredo needs, but the deltas
     /// between the image and the init-delta are superseded by the

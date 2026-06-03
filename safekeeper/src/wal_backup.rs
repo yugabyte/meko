@@ -266,7 +266,7 @@ pub struct WalBackup {
     /// YB tserver crashing or being restarted) triggers a transparent
     /// reconnect on the next operation — without this wrapper the
     /// process held a corpse Arc<Client> until restart.
-    wal_yb_client: Option<Arc<crate::yb_wal_storage::YsqlClient>>,
+    ysql_fpu_client: Option<Arc<crate::yb_wal_storage::YsqlClient>>,
     wal_yb_table: Option<String>,
     /// In-memory cache of recent WAL chunks. Shared between
     /// [`crate::yb_wal_storage::YbWalStorage`] (the writer) and
@@ -278,7 +278,7 @@ pub struct WalBackup {
 impl WalBackup {
     /// Create a new WalBackup instance.
     pub async fn new(conf: &SafeKeeperConf) -> Result<Self> {
-        let (wal_yb_client, wal_yb_table, wal_cache) = match &conf.wal_yb_config {
+        let (ysql_fpu_client, wal_yb_table, wal_cache) = match &conf.wal_yb_config {
             Some(yb) => {
                 // Same factory the pageserver's YbStore uses — honors
                 // sslmode + sslrootcert + password_env consistently.
@@ -315,7 +315,7 @@ impl WalBackup {
         if !conf.wal_backup_enabled {
             return Ok(Self {
                 storage: None,
-                wal_yb_client,
+                ysql_fpu_client,
                 wal_yb_table,
                 wal_cache,
             });
@@ -326,14 +326,14 @@ impl WalBackup {
                 let storage = GenericRemoteStorage::from_config(config).await?;
                 Ok(Self {
                     storage: Some(Arc::new(storage)),
-                    wal_yb_client,
+                    ysql_fpu_client,
                     wal_yb_table,
                     wal_cache,
                 })
             }
             None => Ok(Self {
                 storage: None,
-                wal_yb_client,
+                ysql_fpu_client,
                 wal_yb_table,
                 wal_cache,
             }),
@@ -354,7 +354,7 @@ impl WalBackup {
         String,
         Option<Arc<std::sync::Mutex<crate::wal_cache::WalCache>>>,
     )> {
-        match (&self.wal_yb_client, &self.wal_yb_table) {
+        match (&self.ysql_fpu_client, &self.wal_yb_table) {
             (Some(c), Some(t)) => Some((c.clone(), t.clone(), self.wal_cache.clone())),
             _ => None,
         }

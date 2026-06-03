@@ -353,7 +353,7 @@ pub(crate) struct RemoteTimelineClient {
     /// Always `Some` in yb-mode; the type stays `Option` only because
     /// the test fixtures in this file build an `RemoteTimelineClient`
     /// without a real `PageStore`.
-    pub(crate) internal_page_store: Option<Arc<crate::page_store::PageStore>>,
+    pub(crate) fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
 
     /// Subset of tenant configuration used to control upload behaviors during migrations
     config: std::sync::RwLock<RemoteTimelineClientConfig>,
@@ -377,7 +377,7 @@ impl RemoteTimelineClient {
     pub(crate) fn new(
         remote_storage: GenericRemoteStorage,
         deletion_queue_client: DeletionQueueClient,
-        internal_page_store: Option<Arc<crate::page_store::PageStore>>,
+        fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
         tenant_shard_id: TenantShardId,
         timeline_id: TimelineId,
         generation: Generation,
@@ -395,7 +395,7 @@ impl RemoteTimelineClient {
             generation,
             storage_impl: remote_storage,
             deletion_queue_client,
-            internal_page_store,
+            fpu_page_store,
             upload_queue: Mutex::new(UploadQueue::Uninitialized),
             metrics: Arc::new(RemoteTimelineClientMetrics::new(
                 &tenant_shard_id,
@@ -1091,7 +1091,7 @@ impl RemoteTimelineClient {
                 // mark the timeline deleted hits 0 rows and we treat
                 // it as success — the live pageserver owns the
                 // deletion sequence.
-                if let Some(store) = &self.internal_page_store {
+                if let Some(store) = &self.fpu_page_store {
                     let row = index_part_to_timeline_row(
                         &index_part_with_deleted_at,
                         self.tenant_shard_id.tenant_id,
@@ -1295,7 +1295,7 @@ impl RemoteTimelineClient {
 
             let upload_result: anyhow::Result<()> = match &task.op {
                 UploadOp::UploadMetadata { uploaded } => {
-                    let res = if let Some(store) = &self.internal_page_store {
+                    let res = if let Some(store) = &self.fpu_page_store {
                         let row = index_part_to_timeline_row(
                             uploaded,
                             self.tenant_shard_id.tenant_id,

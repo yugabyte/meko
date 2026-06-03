@@ -131,7 +131,7 @@ struct DeltaTally {
 /// Two `PageStore` handles, each on its own YSQL connection:
 /// - `compute_page_store` serves compute-facing reads
 ///   (`scan_range` / `read_chain`). Idle on cache hit.
-/// - `internal_page_store` serves walreceiver writes (`flush*`) and
+/// - `fpu_page_store` serves walreceiver writes (`flush*`) and
 ///   the image materialiser's cache-miss durable read
 ///   (`read_chain_durable`). Materialiser image writes also go via
 ///   this connection (held directly by `ImageMaterializer`).
@@ -147,7 +147,7 @@ pub struct PageWriter {
     /// can fail-fast if a higher generation has taken over.
     generation: utils::generation::Generation,
     compute_page_store: Arc<PageStore>,
-    internal_page_store: Arc<PageStore>,
+    fpu_page_store: Arc<PageStore>,
     policy: FlushPolicy,
     state: RwLock<WriterState>,
     materializer: Option<MaterializerHandle>,
@@ -241,7 +241,7 @@ impl PageWriter {
         timeline_id: TimelineId,
         generation: utils::generation::Generation,
         compute_page_store: Arc<PageStore>,
-        internal_page_store: Arc<PageStore>,
+        fpu_page_store: Arc<PageStore>,
         policy: FlushPolicy,
         read_cache_bytes: usize,
     ) -> Self {
@@ -250,7 +250,7 @@ impl PageWriter {
             timeline_id,
             generation,
             compute_page_store,
-            internal_page_store,
+            fpu_page_store,
             policy,
             state: RwLock::new(WriterState {
                 pages: crate::unified_pages::UnifiedPages::new(read_cache_bytes),
@@ -291,8 +291,8 @@ impl PageWriter {
     /// `Timeline::write_timeline_row_to_yb` (Phase 5b) and other
     /// callers that need to issue side-effects (timeline-row upsert,
     /// generation bump) on the same connection the flush path uses.
-    pub fn internal_page_store(&self) -> &Arc<PageStore> {
-        &self.internal_page_store
+    pub fn fpu_page_store(&self) -> &Arc<PageStore> {
+        &self.fpu_page_store
     }
 
     /// Bypass-throttle dc_lsn upsert for shutdown. The periodic flush
@@ -311,7 +311,7 @@ impl PageWriter {
         }
         let lsn = utils::lsn::Lsn(observed);
         match self
-            .internal_page_store
+            .fpu_page_store
             .advance_disk_consistent_lsn(self.tenant_id, self.timeline_id, self.generation, lsn)
             .await?
         {
@@ -755,7 +755,7 @@ impl PageWriter {
         // `compute_page_store` is the whole point of the split: a
         // long materialiser walredo-and-INSERT can't stall compute.
         let persisted = self
-            .internal_page_store
+            .fpu_page_store
             .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
@@ -984,7 +984,7 @@ impl PageWriter {
                 if new_lsn > prev && elapsed_ok {
                     let lsn = utils::lsn::Lsn(new_lsn);
                     match self
-                        .internal_page_store
+                        .fpu_page_store
                         .advance_disk_consistent_lsn(
                             self.tenant_id,
                             self.timeline_id,
@@ -1057,17 +1057,17 @@ impl PageWriter {
         // All flush writes go via the internal conn. Compute getPage
         // never queues behind a 25 MiB INSERT.
         if !rel_rows.is_empty() {
-            self.internal_page_store
+            self.fpu_page_store
                 .put_pages(self.tenant_id, self.timeline_id, rel_rows)
                 .await?;
         }
         if !slru_rows.is_empty() {
-            self.internal_page_store
+            self.fpu_page_store
                 .put_slru_pages(self.tenant_id, self.timeline_id, slru_rows)
                 .await?;
         }
         if !meta_rows.is_empty() {
-            self.internal_page_store
+            self.fpu_page_store
                 .put_meta(self.tenant_id, self.timeline_id, meta_rows)
                 .await?;
         }

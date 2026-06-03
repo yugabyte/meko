@@ -101,7 +101,7 @@ use crate::state::TimelinePersistentState;
 use crate::wal_cache::WalCache;
 use crate::wal_storage::{PhysicalStorage, Storage};
 
-// Re-export the auto-reconnecting Postgres client wrapper from the
+// Re-export the auto-reconnecting Postgres ysql_fpu_client wrapper from the
 // shared `remote_storage` crate (used by both the pageserver's
 // `YbStore` and our YB-WAL mirror here). See `remote_storage::YsqlClient`
 // for the reconnect / retry-once semantics.
@@ -170,7 +170,7 @@ pub struct YbWalStorage {
     /// directly for the synchronous DELETE paths (`truncate_wal`,
     /// `remove_up_to`). The consumer task gets a clone of this `Arc` for
     /// its batched INSERTs.
-    client: Arc<YsqlClient>,
+    ysql_fpu_client: Arc<YsqlClient>,
     tenant_id: String,
     timeline_id: String,
     table_name: String,
@@ -226,7 +226,7 @@ impl YbWalStorage {
         timeline_dir: &Utf8Path,
         state: &TimelinePersistentState,
         _no_sync: bool,
-        client: Arc<YsqlClient>,
+        ysql_fpu_client: Arc<YsqlClient>,
         table_name: String,
         cache: Option<Arc<std::sync::Mutex<WalCache>>>,
     ) -> Result<Self> {
@@ -238,7 +238,7 @@ impl YbWalStorage {
         // the highest `chunk_offset + chunk_size` across all segnos for this
         // (tenant, timeline) as the end-of-WAL position.
         let write_lsn = Self::load_write_lsn(
-            &client,
+            &ysql_fpu_client,
             &table_name,
             &tenant_id_str,
             &timeline_id_str,
@@ -263,7 +263,7 @@ impl YbWalStorage {
         let durable_lsn = Arc::new(AtomicU64::new(write_lsn.0));
         let consumer_handle = tokio::spawn(consumer_main(
             rx,
-            client.clone(),
+            ysql_fpu_client.clone(),
             table_name.clone(),
             tenant_id_str.clone(),
             timeline_id_str.clone(),
@@ -276,7 +276,7 @@ impl YbWalStorage {
         // don't scan/tombstone the empty range below the first surviving
         // segno. Cheap: one tablet lookup keyed on (tenant, timeline).
         let min_segno = Self::load_min_segno(
-            &client,
+            &ysql_fpu_client,
             &table_name,
             &tenant_id_str,
             &timeline_id_str,
@@ -285,7 +285,7 @@ impl YbWalStorage {
 
         let mut me = YbWalStorage {
             inner,
-            client,
+            ysql_fpu_client,
             tenant_id: tenant_id_str,
             timeline_id: timeline_id_str,
             table_name,
@@ -303,10 +303,10 @@ impl YbWalStorage {
 
         // Clean any rows past write_lsn left over from a crash where we
         // INSERT'd but never returned to the caller. Goes direct via the
-        // sync client (consumer hasn't been handed anything yet anyway).
+        // sync ysql_fpu_client (consumer hasn't been handed anything yet anyway).
         me.delete_after(write_lsn).await?;
         me.next_chunk_seq = Self::load_next_chunk_seq(
-            &me.client,
+            &me.ysql_fpu_client,
             &me.table_name,
             &me.tenant_id,
             &me.timeline_id,
@@ -319,7 +319,7 @@ impl YbWalStorage {
     /// highest end-byte across all segnos for this timeline. Falls back to
     /// `commit_lsn` when the table is empty (fresh timeline).
     async fn load_write_lsn(
-        client: &YsqlClient,
+        ysql_fpu_client: &YsqlClient,
         table: &str,
         tenant_id: &str,
         timeline_id: &str,
@@ -333,7 +333,7 @@ impl YbWalStorage {
             quote_ident(table)
         );
         let params: [&(dyn ToSql + Sync); 2] = [&tenant_id, &timeline_id];
-        let row_opt = client
+        let row_opt = ysql_fpu_client
             .query_opt(&sql, &params)
             .await
             .context("YbWalStorage: rehydrate write_lsn from YB")?;
@@ -353,7 +353,7 @@ impl YbWalStorage {
     /// `remove_up_to(N)` DELETE after a safekeeper restart is bounded
     /// from below rather than scanning from 0.
     async fn load_min_segno(
-        client: &YsqlClient,
+        ysql_fpu_client: &YsqlClient,
         table: &str,
         tenant_id: &str,
         timeline_id: &str,
@@ -366,7 +366,7 @@ impl YbWalStorage {
         let params: [&(dyn ToSql + Sync); 2] = [&tenant_id, &timeline_id];
         // Aggregate over an empty set still returns one row (NULL); a
         // missing row would mean the query itself didn't run.
-        let row = client
+        let row = ysql_fpu_client
             .query_opt(&sql, &params)
             .await
             .context("YbWalStorage: rehydrate min(segno) from YB")?;
@@ -375,7 +375,7 @@ impl YbWalStorage {
     }
 
     async fn load_next_chunk_seq(
-        client: &YsqlClient,
+        ysql_fpu_client: &YsqlClient,
         table: &str,
         tenant_id: &str,
         timeline_id: &str,
@@ -386,7 +386,7 @@ impl YbWalStorage {
             quote_ident(table)
         );
         let params: [&(dyn ToSql + Sync); 2] = [&tenant_id, &timeline_id];
-        let rows = client
+        let rows = ysql_fpu_client
             .query(&sql, &params)
             .await
             .context("YbWalStorage: load chunk_seq state")?;
@@ -520,7 +520,7 @@ impl YbWalStorage {
         );
         let params: [&(dyn ToSql + Sync); 4] =
             [&self.tenant_id, &self.timeline_id, &segno_end, &offset_end];
-        self.client
+        self.ysql_fpu_client
             .execute(&sql, &params)
             .await
             .context("YbWalStorage: truncate delete")?;
@@ -537,7 +537,7 @@ impl YbWalStorage {
             // After a partial-segment truncate we conservatively reload that
             // segment's seq from YB so chunk_seq stays monotonic.
             let cur = Self::load_next_chunk_seq(
-                &self.client,
+                &self.ysql_fpu_client,
                 &self.table_name,
                 &self.tenant_id,
                 &self.timeline_id,
@@ -653,7 +653,7 @@ impl Storage for YbWalStorage {
 
     fn remove_up_to(&self, segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
         let inner_fut = self.inner.remove_up_to(segno_up_to);
-        let client = self.client.clone();
+        let ysql_fpu_client = self.ysql_fpu_client.clone();
         let table = self.table_name.clone();
         let tenant_id = self.tenant_id.clone();
         let timeline_id = self.timeline_id.clone();
@@ -686,7 +686,7 @@ impl Storage for YbWalStorage {
             let upper_i: i64 = segno_up_to as i64;
             let params: [&(dyn ToSql + Sync); 4] =
                 [&tenant_id, &timeline_id, &lower_i, &upper_i];
-            client
+            ysql_fpu_client
                 .execute(&sql, &params)
                 .await
                 .context("YbWalStorage: remove_up_to delete")?;
@@ -735,7 +735,7 @@ fn quote_ident(ident: &str) -> String {
 /// producer side, `rx.recv()` returns `None`).
 async fn consumer_main(
     mut rx: mpsc::Receiver<PendingChunk>,
-    client: Arc<YsqlClient>,
+    ysql_fpu_client: Arc<YsqlClient>,
     table_name: String,
     tenant_id: String,
     timeline_id: String,
@@ -791,7 +791,7 @@ async fn consumer_main(
             .map(|c| c.end_lsn)
             .expect("batch is non-empty");
 
-        match flush_batch(&client, &table_name, &tenant_id, &timeline_id, &batch).await {
+        match flush_batch(&ysql_fpu_client, &table_name, &tenant_id, &timeline_id, &batch).await {
             Ok(()) => {
                 // Publish durability advance. The atomic is the
                 // authoritative source for `YbWalStorage::flush_lsn()`'s
@@ -821,7 +821,7 @@ async fn consumer_main(
 /// for the entire batch. Returns the error chain on failure (the
 /// statement is atomic — all rows commit or none).
 async fn flush_batch(
-    client: &YsqlClient,
+    ysql_fpu_client: &YsqlClient,
     table_name: &str,
     tenant_id: &str,
     timeline_id: &str,
@@ -884,7 +884,7 @@ async fn flush_batch(
         params.push(&now_us);
     }
 
-    client
+    ysql_fpu_client
         .execute(&sql, &params)
         .await
         .with_context(|| format!("YB WAL batched INSERT ({n} rows)"))?;
@@ -920,7 +920,7 @@ pub struct YbSegmentReader {
     pos: u64,
 
     cache: Option<Arc<std::sync::Mutex<WalCache>>>,
-    client: Arc<YsqlClient>,
+    ysql_fpu_client: Arc<YsqlClient>,
     table: String,
     tenant_id: String,
     timeline_id: String,
@@ -943,11 +943,11 @@ struct CurrentChunk {
 
 impl YbSegmentReader {
     /// Build a reader for `segno` starting at byte offset `start_xlogoff`.
-    /// The reader holds clones of the YB client + cache handle, so it's
+    /// The reader holds clones of the YB ysql_fpu_client + cache handle, so it's
     /// `Send + Sync` and can be passed up the WAL sender stack like the
     /// `tokio::fs::File` it replaces.
     pub fn new(
-        client: Arc<YsqlClient>,
+        ysql_fpu_client: Arc<YsqlClient>,
         table: String,
         cache: Option<Arc<std::sync::Mutex<WalCache>>>,
         ttid: &TenantTimelineId,
@@ -960,7 +960,7 @@ impl YbSegmentReader {
             wal_seg_size: wal_seg_size as u64,
             pos: start_xlogoff as u64,
             cache,
-            client,
+            ysql_fpu_client,
             table,
             tenant_id: ttid.tenant_id.to_string(),
             timeline_id: ttid.timeline_id.to_string(),
@@ -970,7 +970,7 @@ impl YbSegmentReader {
     }
 
     fn start_fetch(&mut self) {
-        let client = self.client.clone();
+        let ysql_fpu_client = self.ysql_fpu_client.clone();
         let table = self.table.clone();
         let tenant_id = self.tenant_id.clone();
         let timeline_id = self.timeline_id.clone();
@@ -979,7 +979,7 @@ impl YbSegmentReader {
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let res =
-                fetch_chunk_from_yb(&client, &table, &tenant_id, &timeline_id, segno, pos).await;
+                fetch_chunk_from_yb(&ysql_fpu_client, &table, &tenant_id, &timeline_id, segno, pos).await;
             let _ = tx.send(res);
         });
         self.fetch = Some(rx);
@@ -1076,7 +1076,7 @@ impl AsyncRead for YbSegmentReader {
 /// highest-seq chunk wins in the overlap case (segno-0 init blob vs.
 /// later write_wal chunks at the same offset).
 async fn fetch_chunk_from_yb(
-    client: &YsqlClient,
+    ysql_fpu_client: &YsqlClient,
     table: &str,
     tenant_id: &str,
     timeline_id: &str,
@@ -1093,7 +1093,7 @@ async fn fetch_chunk_from_yb(
     let segno_i: i64 = segno as i64;
     let pos_i: i64 = byte_offset as i64;
     let params: [&(dyn ToSql + Sync); 4] = [&tenant_id, &timeline_id, &segno_i, &pos_i];
-    let row_opt = client
+    let row_opt = ysql_fpu_client
         .query_opt(&sql, &params)
         .await
         .context("YB WAL fetch_chunk_from_yb")?;
@@ -1222,13 +1222,13 @@ mod tests {
 
     /// One-off `wals`-shaped table per test so concurrent runs and dirty
     /// state from prior failures can't interfere.
-    async fn make_wals_table(client: &YsqlClient, table: &str) {
+    async fn make_wals_table(ysql_fpu_client: &YsqlClient, table: &str) {
         let q = quote_ident(table);
-        client
+        ysql_fpu_client
             .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
             .await
             .expect("drop scratch wals table");
-        client
+        ysql_fpu_client
             .execute(
                 &format!(
                     "CREATE TABLE {q} (\
@@ -1249,9 +1249,9 @@ mod tests {
             .expect("create scratch wals table");
     }
 
-    async fn drop_wals_table(client: &YsqlClient, table: &str) {
+    async fn drop_wals_table(ysql_fpu_client: &YsqlClient, table: &str) {
         let q = quote_ident(table);
-        let _ = client.execute(&format!("DROP TABLE IF EXISTS {q}"), &[]).await;
+        let _ = ysql_fpu_client.execute(&format!("DROP TABLE IF EXISTS {q}"), &[]).await;
     }
 
     /// Build a fresh `YbWalStorage` with its own per-test scratch table
@@ -1342,7 +1342,7 @@ mod tests {
             .await
             .expect("truncate_wal at durable should succeed");
 
-        drop_wals_table(&storage.client, &table).await;
+        drop_wals_table(&storage.ysql_fpu_client, &table).await;
     }
 
     /// `flush_lsn()` returns `min(inner, durable)` — defence-in-depth
@@ -1372,7 +1372,7 @@ mod tests {
         // permanently-regressed watermark.
         storage.durable_lsn.store(start.0, Ordering::Release);
 
-        drop_wals_table(&storage.client, &table).await;
+        drop_wals_table(&storage.ysql_fpu_client, &table).await;
     }
 
     fn rand_suffix() -> String {

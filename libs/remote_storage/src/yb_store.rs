@@ -74,7 +74,7 @@ const YB_CHUNK_SIZE: usize = 100 * 1024 * 1024;
 pub struct YbStore {
     /// Auto-reconnecting wrapper around `tokio_postgres::Client`. See
     /// [`crate::YsqlClient`] for the reconnect/retry semantics.
-    client: Arc<crate::YsqlClient>,
+    ysql_fpu_client: Arc<crate::YsqlClient>,
     table_name: String,
     /// Configured prefix, normalized to always end in `/` when non-empty.
     prefix: Option<String>,
@@ -126,7 +126,7 @@ impl YbStore {
         });
 
         Ok(Self {
-            client: Arc::new(ysql_fpu_client),
+            ysql_fpu_client: Arc::new(ysql_fpu_client),
             table_name: config.table_name.clone(),
             prefix,
             timeout,
@@ -158,7 +158,7 @@ impl YbStore {
     ) -> anyhow::Result<Vec<String>> {
         let sql = "SELECT timeline_id FROM storage_controller.timelines \
                    WHERE tenant_id = $1 AND deleted_at IS NULL";
-        let client = self.client.current().await?;
+        let client = self.ysql_fpu_client.current().await?;
         let rows = client.query(sql, &[&tenant_id]).await?;
         Ok(rows.into_iter().map(|r| r.get::<_, String>("timeline_id")).collect())
     }
@@ -601,7 +601,7 @@ impl RemoteStorage for YbStore {
         }
 
         let rows = {
-            let client = self.client.current().await.map_err(DownloadError::Other)?;
+            let client = self.ysql_fpu_client.current().await.map_err(DownloadError::Other)?;
             let fut = client.query_raw(&sql, bind_params);
             let row_stream = self
                 .with_timeout_download(fut, cancel)
@@ -742,7 +742,7 @@ impl RemoteStorage for YbStore {
         let params: [&(dyn ToSql + Sync); 5] =
             [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
         let row_opt = self
-            .with_timeout_download(self.client.query_opt(&sql, &params), cancel)
+            .with_timeout_download(self.ysql_fpu_client.query_opt(&sql, &params), cancel)
             .await?;
         let row = row_opt.ok_or(DownloadError::NotFound)?;
         let size_bytes: i64 = row.get("size_bytes");
@@ -812,7 +812,7 @@ impl RemoteStorage for YbStore {
         {
             let params: [&(dyn ToSql + Sync); 4] =
                 [&tenant_id, &timeline_id, &namespace, &key_body];
-            self.with_timeout(self.client.execute(&delete_sql, &params), cancel)
+            self.with_timeout(self.ysql_fpu_client.execute(&delete_sql, &params), cancel)
                 .await
                 .with_context(|| format!("YbStore upload: pre-delete `{db_key}`"))?;
         }
@@ -849,7 +849,7 @@ impl RemoteStorage for YbStore {
                 .collect()
         };
 
-        let client = self.client.current().await?;
+        let client = self.ysql_fpu_client.current().await?;
         let pipeline_fut = async {
             let futures = row_chunks.into_iter().map(|(idx, chunk)| {
                 let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
@@ -909,7 +909,7 @@ impl RemoteStorage for YbStore {
         let head_params: [&(dyn ToSql + Sync); 5] =
             [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
         let head_opt = self
-            .with_timeout_download(self.client.query_opt(&head_sql, &head_params), cancel)
+            .with_timeout_download(self.ysql_fpu_client.query_opt(&head_sql, &head_params), cancel)
             .await?;
         let head = head_opt.ok_or(DownloadError::NotFound)?;
         let total_size: i64 = head.get("size_bytes");
@@ -967,7 +967,7 @@ impl RemoteStorage for YbStore {
         // replayable), so we just grab the current live client; the next
         // download() call will reconnect if this one's been dropped since.
         let client = self
-            .client
+            .ysql_fpu_client
             .current()
             .await
             .map_err(DownloadError::Other)?;
@@ -1061,7 +1061,7 @@ impl RemoteStorage for YbStore {
         );
         let params: [&(dyn ToSql + Sync); 5] =
             [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
-        self.with_timeout(self.client.execute(&sql, &params), cancel)
+        self.with_timeout(self.ysql_fpu_client.execute(&sql, &params), cancel)
             .await
             .with_context(|| format!("YbStore delete of `{db_key}`"))?;
         Ok(())
@@ -1097,7 +1097,7 @@ impl RemoteStorage for YbStore {
             })
             .collect();
 
-        let client = self.client.current().await?;
+        let client = self.ysql_fpu_client.current().await?;
         let pipeline_fut = async {
             let futures = parsed
                 .into_iter()
@@ -1151,7 +1151,7 @@ impl RemoteStorage for YbStore {
         {
             let params: [&(dyn ToSql + Sync); 5] =
                 [&to_tenant, &to_timeline, &to_ns, &to_body, &to_gen];
-            self.with_timeout(self.client.execute(&delete_dst, &params), cancel)
+            self.with_timeout(self.ysql_fpu_client.execute(&delete_dst, &params), cancel)
                 .await
                 .with_context(|| format!("YbStore copy: pre-delete `{to_key}`"))?;
         }
@@ -1183,7 +1183,7 @@ impl RemoteStorage for YbStore {
             &to_gen,
         ];
         let affected = self
-            .with_timeout(self.client.execute(&insert_sql, &params), cancel)
+            .with_timeout(self.ysql_fpu_client.execute(&insert_sql, &params), cancel)
             .await
             .with_context(|| format!("YbStore copy of `{from_key}` -> `{to_key}`"))?;
         if affected == 0 {

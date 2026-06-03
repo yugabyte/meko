@@ -143,7 +143,7 @@ pub struct TenantSharedResources {
     /// reads (GetPage hot path: `PageWriter::scan_range` and
     /// `PageWriter::read_chain`). `Some` enables yb-pageserver mode;
     /// `None` is upstream layer-file behaviour. Paired with
-    /// `internal_page_store` — both populated or neither.
+    /// `fpu_page_store` — both populated or neither.
     pub compute_page_store: Option<Arc<crate::page_store::PageStore>>,
     /// `PageStore` dedicated to internal traffic: walreceiver
     /// `PageWriter::flush` (parameterised batched INSERT), and the
@@ -151,7 +151,7 @@ pub struct TenantSharedResources {
     /// `put_pages`). Owning its own YSQL connection keeps walapply
     /// writes and materialiser work off the compute getPage path so
     /// reads stay isolated from internal load.
-    pub internal_page_store: Option<Arc<crate::page_store::PageStore>>,
+    pub fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 
 /// A [`TenantShard`] is really an _attached_ tenant.  The configuration
@@ -334,8 +334,8 @@ pub struct TenantShard {
     /// `TenantSharedResources::compute_page_store`).
     pub(crate) compute_page_store: Option<Arc<crate::page_store::PageStore>>,
     /// Internal-traffic `PageStore` (see
-    /// `TenantSharedResources::internal_page_store`).
-    pub(crate) internal_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// `TenantSharedResources::fpu_page_store`).
+    pub(crate) fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
 }
 impl std::fmt::Debug for TenantShard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1089,7 +1089,7 @@ impl TenantShard {
             deletion_queue_client,
             basebackup_cache,
             compute_page_store,
-            internal_page_store,
+            fpu_page_store,
         } = resources;
 
         let attach_mode = attached_conf.location.attach_mode;
@@ -1106,7 +1106,7 @@ impl TenantShard {
             deletion_queue_client,
             basebackup_cache,
             compute_page_store,
-            internal_page_store,
+            fpu_page_store,
         ));
 
         // The attach task will carry a GateGuard, so that shutdown() reliably waits for it to drop out if
@@ -1785,7 +1785,7 @@ impl TenantShard {
         RemoteTimelineClient::new(
             remote_storage.clone(),
             self.deletion_queue_client.clone(),
-            self.internal_page_store.clone(),
+            self.fpu_page_store.clone(),
             self.tenant_shard_id,
             timeline_id,
             self.generation,
@@ -3370,7 +3370,7 @@ impl TenantShard {
         deletion_queue_client: DeletionQueueClient,
         basebackup_cache: Arc<BasebackupCache>,
         compute_page_store: Option<Arc<crate::page_store::PageStore>>,
-        internal_page_store: Option<Arc<crate::page_store::PageStore>>,
+        fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
     ) -> TenantShard {
         assert!(!attached_conf.location.generation.is_none());
 
@@ -3460,7 +3460,7 @@ impl TenantShard {
             gc_block: Default::default(),
             basebackup_cache,
             compute_page_store,
-            internal_page_store,
+            fpu_page_store,
         }
     }
 
@@ -4251,7 +4251,7 @@ impl TenantShard {
         RemoteTimelineClient::new(
             self.remote_storage.clone(),
             self.deletion_queue_client.clone(),
-            self.internal_page_store.clone(),
+            self.fpu_page_store.clone(),
             self.tenant_shard_id,
             timeline_id,
             self.generation,
@@ -4266,7 +4266,7 @@ impl TenantShard {
             pagestream_throttle_metrics: self.pagestream_throttle_metrics.clone(),
             basebackup_cache: self.basebackup_cache.clone(),
             compute_page_store: self.compute_page_store.clone(),
-            internal_page_store: self.internal_page_store.clone(),
+            fpu_page_store: self.fpu_page_store.clone(),
         }
     }
 
