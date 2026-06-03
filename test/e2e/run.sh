@@ -6,11 +6,13 @@
 # corruption marker (or if any psql command errors out).
 #
 # Usage:
-#   test/e2e/run.sh                # fast suite only (default)
-#   test/e2e/run.sh fast           # explicit
-#   test/e2e/run.sh slow           # slow suite only
-#   test/e2e/run.sh all            # fast then slow
-#   SKIP_RESET=1 test/e2e/run.sh   # reuse running cluster (assumes endpoint 'main' is up)
+#   test/e2e/run.sh                          # fast suite, fresh cluster
+#   test/e2e/run.sh fast                     # explicit
+#   test/e2e/run.sh slow                     # slow suite only
+#   test/e2e/run.sh all                      # fast then slow
+#   test/e2e/run.sh fast --noclean           # reuse existing cluster
+#                                            # (skip clean.sh + init/start;
+#                                            # assumes endpoint 'main' is up)
 #
 # Workloads are *.sql files under test/e2e/<category>/, run in lexical
 # order. Each runs against a fresh schema (its own CREATE TABLE) so
@@ -23,11 +25,15 @@ set -euo pipefail
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
-CATEGORY=${1:-fast}
-case "$CATEGORY" in
-    fast|slow|all) ;;
-    *) echo "usage: $0 [fast|slow|all]"; exit 2;;
-esac
+CATEGORY=fast
+NOCLEAN=0
+for arg in "$@"; do
+    case "$arg" in
+        fast|slow|all) CATEGORY=$arg ;;
+        --noclean)     NOCLEAN=1 ;;
+        *) echo "usage: $0 [fast|slow|all] [--noclean]"; exit 2;;
+    esac
+done
 
 NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.neon-localfs}
 export NEON_REPO_DIR
@@ -47,17 +53,8 @@ MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|ima
 log_baseline_lines=0
 
 # Bring up a fresh cluster + tenant + endpoint, unless caller opted out.
-if [[ "${SKIP_RESET:-0}" == "0" ]]; then
-    step "Stop any running pageserver/neon processes"
-    pkill -9 -f "yb-pageserver|safekeeper|storage_broker|endpoint_storag|storage_controller|neon_local" 2>/dev/null || true
-    sleep 2
-
-    step "Drop + recreate yb_storage"
-    PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
-        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='yb_storage'" >/dev/null 2>&1 || true
-    PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte -c "DROP DATABASE IF EXISTS yb_storage" >/dev/null
-    PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte -c "CREATE DATABASE yb_storage" >/dev/null
-    rm -rf "$NEON_REPO_DIR"
+if (( NOCLEAN == 0 )); then
+    "$REPO/test/e2e/clean.sh"
 
     step "neon_local init + start"
     "$NEON" init --config /tmp/neon-init.toml
