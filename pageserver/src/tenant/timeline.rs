@@ -53,7 +53,6 @@ use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 use self::delete::DeleteTimelineFlow;
 use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
-use super::remote_timeline_client::RemoteTimelineClient;
 use super::remote_timeline_client::index::GcCompactionState;
 use super::{
     AttachedTenantConf, GcError, MaybeOffloaded,
@@ -86,7 +85,6 @@ use crate::{task_mgr, walredo};
 
 /// The outward-facing resources required to build a Timeline
 pub struct TimelineResources {
-    pub remote_client: RemoteTimelineClient,
     pub pagestream_throttle: Arc<crate::tenant::throttle::Throttle>,
     pub pagestream_throttle_metrics: Arc<crate::metrics::tenant_throttling::Pagestream>,
     pub basebackup_cache: Arc<BasebackupCache>,
@@ -126,15 +124,10 @@ pub struct Timeline {
     // WAL redo manager. `None` only for broken tenants.
     walredo_mgr: Option<Arc<super::WalRedoManager>>,
 
-    /// Remote storage client.
-    /// See [`remote_timeline_client`](super::remote_timeline_client) module comment for details.
-    pub(crate) remote_client: Arc<RemoteTimelineClient>,
-
-    /// Direct-access subset of `remote_client`'s state. Phase 4.d
-    /// chunk-1 step 1: shadow only — populated at construction with
-    /// defaults; later steps migrate callers from `remote_client`
-    /// methods to read here, then `remote_client` goes away
-    /// entirely. See `tasks/4.d_layer-stack-code-deletion.md`.
+    /// Per-timeline state previously owned by RemoteTimelineClient
+    /// (rcLsn slot, archived/invisible/deleting bits). The RTC
+    /// itself was deleted in Phase 4.d chunk 1; this struct is the
+    /// minimal residual state callers still care about.
     pub(crate) remote_state: Arc<remote_state::TimelineRemoteState>,
 
     /// yb-pageserver row-per-page writer. `Some` enables dual-write at
@@ -2140,7 +2133,6 @@ impl Timeline {
                 walredo_mgr,
                 walreceiver: Mutex::new(None),
 
-                remote_client: Arc::new(resources.remote_client),
                 remote_state: Arc::new(remote_state::TimelineRemoteState::new()),
 
                 page_writer: page_writer.clone(),
@@ -2251,11 +2243,10 @@ impl Timeline {
             Some(rel_size_v2_status.clone()),
             rel_size_migrated_at,
         )));
-        self.remote_client
-            .schedule_index_upload_for_rel_size_v2_status_update(
-                rel_size_v2_status,
-                rel_size_migrated_at,
-            )
+        // yb-mode: status lives in `self.rel_size_v2_status` (set
+        // above) only; no index_part.json to upload.
+        let _ = (rel_size_v2_status, rel_size_migrated_at);
+        Ok(())
     }
 
     /// Creates and starts the wal receiver.
@@ -2862,13 +2853,10 @@ impl Timeline {
     }
 
     pub(crate) async fn preserve_initdb_archive(&self) -> anyhow::Result<()> {
-        self.remote_client
-            .preserve_initdb_archive(
-                &self.tenant_shard_id.tenant_id,
-                &self.timeline_id,
-                &self.cancel,
-            )
-            .await
+        // yb-mode: initdb archive lives in `endpoint_storage`, not
+        // in the dead layer-file remote path. The admin endpoint
+        // stays so callers don't 404, but the operation is a no-op.
+        Ok(())
     }
 
     /// Wait until the background initial logical size calculation is complete, or

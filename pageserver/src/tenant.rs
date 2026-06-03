@@ -605,11 +605,11 @@ impl TimelineOrOffloaded {
             TimelineOrOffloaded::Offloaded(offloaded) => &offloaded.delete_progress,
         }
     }
-    fn maybe_remote_client(&self) -> Option<Arc<RemoteTimelineClient>> {
-        match self {
-            TimelineOrOffloaded::Timeline(timeline) => Some(timeline.remote_client.clone()),
-            TimelineOrOffloaded::Offloaded(_offloaded) => None,
-        }
+    /// Returns true if this variant is a live `Timeline` (vs an
+    /// offloaded shell). Used by the delete path to decide whether
+    /// the timeline has in-memory state to shut down.
+    fn is_live_timeline(&self) -> bool {
+        matches!(self, TimelineOrOffloaded::Timeline(_))
     }
 }
 
@@ -1013,14 +1013,10 @@ impl TenantShard {
             "these are used interchangeably"
         );
 
-        timeline.remote_client.init_upload_queue(&index_part)?;
-
-        // Hand the upload-queue's `visible_remote_consistent_lsn`
-        // slot to PageWriter so its flush success path can bump the
-        // safekeeper-truncation bound directly. Must run after
-        // init_upload_queue (which creates the slot) and before
-        // anyone calls walreceiver_connection::send_feedback (which
-        // reads it).
+        // yb-mode: no upload queue to init. The PageWriter takes the
+        // `remote_state.rc_lsn` slot directly so flush success bumps
+        // the safekeeper-truncation bound.
+        let _ = &index_part;
         if let Some(pw) = timeline.page_writer.as_ref() {
             pw.set_remote_consistent_lsn_slot(timeline.remote_state.rc_lsn.clone());
         }
@@ -1531,7 +1527,7 @@ impl TenantShard {
         // layer file.
         let sorted_timelines = tree_sort_timelines(timeline_ancestors, |m| m.ancestor_timeline())?;
         for (timeline_id, remote_metadata) in sorted_timelines {
-            let (index_part, remote_client) = remote_index_and_client
+            let (index_part, _remote_client) = remote_index_and_client
                 .remove(&timeline_id)
                 .expect("just put it in above");
 
@@ -1551,7 +1547,7 @@ impl TenantShard {
                     timeline_id,
                     index_part,
                     remote_metadata,
-                    self.get_timeline_resources_for(remote_client),
+                    self.build_timeline_resources(timeline_id),
                     LoadTimelineCause::Attach,
                     ctx,
                 )
@@ -1584,18 +1580,15 @@ impl TenantShard {
         // update_layer_visibility removed in phase 4d.2.
         let _ = compute_visiblity_for;
 
-        // Walk through deleted timelines, resume deletion
-        for (timeline_id, index_part, remote_timeline_client) in timelines_to_resume_deletions {
-            remote_timeline_client
-                .init_upload_queue_stopped_to_continue_deletion(&index_part)
-                .context("init queue stopped")
-                .map_err(LoadLocalTimelineError::ResumeDeletion)?;
-
+        // Walk through deleted timelines, resume deletion.
+        // yb-mode: no upload queue to re-arm for deletion — the
+        // metadata is enough to spawn the delete flow, which then
+        // drops YB rows directly.
+        for (timeline_id, index_part, _remote_timeline_client) in timelines_to_resume_deletions {
             DeleteTimelineFlow::resume_deletion(
                 Arc::clone(self),
                 timeline_id,
                 &index_part.metadata,
-                remote_timeline_client,
                 ctx,
             )
             .instrument(tracing::info_span!("timeline_delete", %timeline_id))
@@ -2386,25 +2379,10 @@ impl TenantShard {
         //
         // To re-emphasize: the only correct way to create a timeline is to repeat calling the
         // creation API until it returns success. Only then is durability guaranteed.
-        info!(creation_result=%result.discriminant(), "waiting for timeline to be durable");
-        result
-            .timeline()
-            .remote_client
-            .wait_completion()
-            .await
-            .map_err(|e| match e {
-                WaitCompletionError::NotInitialized(
-                    e, // If the queue is already stopped, it's a shutdown error.
-                ) if e.is_stopping() => CreateTimelineError::ShuttingDown,
-                WaitCompletionError::NotInitialized(_) => {
-                    // This is a bug: we should never try to wait for uploads before initializing the timeline
-                    debug_assert!(false);
-                    CreateTimelineError::Other(anyhow::anyhow!("timeline not initialized"))
-                }
-                WaitCompletionError::UploadQueueShutDownOrStopped => {
-                    CreateTimelineError::ShuttingDown
-                }
-            })?;
+        // yb-mode: creation is synchronous (the timeline_state row is
+        // upserted by `UninitializedTimeline::finish_creation` before
+        // the lock is released). Nothing to wait on.
+        info!(creation_result=%result.discriminant(), "timeline durable");
 
         // The creating task is responsible for activating the timeline.
         // We do this after `wait_completion()` so that we don't spin up tasks that start
@@ -3012,12 +2990,8 @@ impl TenantShard {
 
         for timeline in self.timelines.lock().unwrap().values() {
             result.resident_size += timeline.metrics.resident_physical_size_gauge.get();
-
-            result.physical_size += timeline
-                .remote_client
-                .metrics
-                .remote_physical_size_gauge
-                .get();
+            // yb-mode: remote physical size is always 0 (no S3
+            // layer files).
             result.max_logical_size = std::cmp::max(
                 result.max_logical_size,
                 timeline.metrics.current_logical_size_gauge.get(),
@@ -3983,15 +3957,10 @@ impl TenantShard {
 
         let new_timeline = uninitialized_timeline.finish_creation().await?;
 
-        // Root timeline gets its layers during creation and uploads them along with the metadata.
-        // A branch timeline though, when created, can get no writes for some time, hence won't get any layers created.
-        // We still need to upload its metadata eagerly: if other nodes `attach` the tenant and miss this timeline, their GC
-        // could get incorrect information and remove more layers, than needed.
-        // See also https://github.com/neondatabase/neon/issues/3865
-        new_timeline
-            .remote_client
-            .schedule_index_upload_for_full_metadata_update(&metadata)
-            .context("branch initial metadata upload")?;
+        // yb-mode: the metadata lives in `pageserver.timeline_state`,
+        // not in an S3 `index_part.json`. `finish_creation` already
+        // upserted the row; nothing to upload here.
+        let _ = metadata;
 
         // Callers are responsible to wait for uploads to complete and for activating the timeline.
 
@@ -4291,15 +4260,8 @@ impl TenantShard {
     }
 
     /// Builds required resources for a new timeline.
-    fn build_timeline_resources(&self, timeline_id: TimelineId) -> TimelineResources {
-        let remote_client = self.build_timeline_remote_client(timeline_id);
-        self.get_timeline_resources_for(remote_client)
-    }
-
-    /// Builds timeline resources for the given remote client.
-    fn get_timeline_resources_for(&self, remote_client: RemoteTimelineClient) -> TimelineResources {
+    pub(crate) fn build_timeline_resources(&self, _timeline_id: TimelineId) -> TimelineResources {
         TimelineResources {
-            remote_client,
             pagestream_throttle: self.pagestream_throttle.clone(),
             pagestream_throttle_metrics: self.pagestream_throttle_metrics.clone(),
             basebackup_cache: self.basebackup_cache.clone(),
@@ -4328,11 +4290,7 @@ impl TenantShard {
         let tenant_shard_id = self.tenant_shard_id;
 
         let resources = self.build_timeline_resources(new_timeline_id);
-        resources.remote_client.init_upload_queue_for_empty_remote(
-            new_metadata,
-            rel_size_v2_status.clone(),
-            rel_size_migrated_at,
-        )?;
+        let _ = (new_metadata, &rel_size_v2_status, rel_size_migrated_at);
 
         let (timeline_struct, timeline_ctx) = self
             .create_timeline_struct(

@@ -889,11 +889,9 @@ async fn timeline_patch_index_part_handler(
         }
 
         if request_data.force_index_update {
-            timeline
-                .remote_client
-                .force_schedule_index_upload()
-                .context("force schedule index upload")
-                .map_err(ApiError::InternalServerError)?;
+            // yb-mode: no index_part.json to upload. Endpoint stays
+            // for compatibility but the operation is a no-op.
+            let _ = timeline;
         }
 
         Ok::<_, ApiError>(())

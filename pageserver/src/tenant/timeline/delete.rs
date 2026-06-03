@@ -191,24 +191,17 @@ impl DeleteTimelineFlow {
             ))?
         });
 
-        // yb-mode: live timelines own their `remote_client` directly
-        // and there is no "rebuild client + download index_part"
-        // path — that whole branch was for S3-offloaded timelines
-        // which don't exist here. If we somehow see an
-        // `Offloaded` variant, treat it as a no-op removal: there's
-        // no in-memory state to drop and the YB row cleanup runs in
-        // `Self::background` below.
-        let remote_client = match timeline.maybe_remote_client() {
-            Some(remote_client) => remote_client,
-            None => {
-                tracing::info!(
-                    "Offloaded timeline in yb-mode — skipping remote-index dance, \
-                     proceeding to YB cleanup directly"
-                );
-                remove_maybe_offloaded_timeline_from_tenant(tenant, &timeline, &guard).await?;
-                return Ok(());
-            }
-        };
+        // yb-mode: there's no remote-index dance left. Live
+        // timelines have already been shut down above; offloaded
+        // ones have no in-memory state, so we go straight to the
+        // tenant-level removal.
+        if !timeline.is_live_timeline() {
+            tracing::info!(
+                "Offloaded timeline in yb-mode — removing from tenant directly"
+            );
+            remove_maybe_offloaded_timeline_from_tenant(tenant, &timeline, &guard).await?;
+            return Ok(());
+        }
 
         fail::fail_point!("timeline-delete-before-schedule", |_| {
             Err(anyhow::anyhow!(
@@ -216,13 +209,7 @@ impl DeleteTimelineFlow {
             ))?
         });
 
-        Self::schedule_background(
-            guard,
-            tenant.conf,
-            Arc::clone(tenant),
-            timeline,
-            remote_client,
-        );
+        Self::schedule_background(guard, tenant.conf, Arc::clone(tenant), timeline);
 
         Ok(())
     }
@@ -245,17 +232,15 @@ impl DeleteTimelineFlow {
         tenant: Arc<TenantShard>,
         timeline_id: TimelineId,
         local_metadata: &TimelineMetadata,
-        remote_client: RemoteTimelineClient,
         ctx: &RequestContext,
     ) -> anyhow::Result<()> {
         // Note: here we even skip populating layer map. Timeline is essentially uninitialized.
-        // RemoteTimelineClient is the only functioning part.
         let (timeline, _timeline_ctx) = tenant
             .create_timeline_struct(
                 timeline_id,
                 local_metadata,
                 None, // Ancestor is not needed for deletion.
-                tenant.get_timeline_resources_for(remote_client),
+                tenant.build_timeline_resources(timeline_id),
                 // Important. We dont pass ancestor above because it can be missing.
                 // Thus we need to skip the validation here.
                 CreateTimelineCause::Delete,
@@ -282,9 +267,8 @@ impl DeleteTimelineFlow {
 
         guard.mark_in_progress()?;
 
-        let remote_client = timeline.remote_client.clone();
         let timeline = TimelineOrOffloaded::Timeline(timeline);
-        Self::schedule_background(guard, tenant.conf, tenant, timeline, remote_client);
+        Self::schedule_background(guard, tenant.conf, tenant, timeline);
 
         Ok(())
     }
@@ -294,7 +278,6 @@ impl DeleteTimelineFlow {
         conf: &'static PageServerConf,
         tenant: Arc<TenantShard>,
         timeline: TimelineOrOffloaded,
-        remote_client: Arc<RemoteTimelineClient>,
     ) {
         let tenant_shard_id = timeline.tenant_shard_id();
         let timeline_id = timeline.timeline_id();
@@ -315,7 +298,7 @@ impl DeleteTimelineFlow {
             async move {
                 let _guard = tenant_guard;
 
-                if let Err(err) = Self::background(guard, conf, &tenant, &timeline, remote_client).await {
+                if let Err(err) = Self::background(guard, conf, &tenant, &timeline).await {
                     // Only log as an error if it's not a cancellation.
                     if matches!(err, DeleteTimelineError::Cancelled) {
                         info!("Shutdown during timeline deletion");
@@ -337,7 +320,6 @@ impl DeleteTimelineFlow {
         conf: &PageServerConf,
         tenant: &TenantShard,
         timeline: &TimelineOrOffloaded,
-        remote_client: Arc<RemoteTimelineClient>,
     ) -> Result<(), DeleteTimelineError> {
         fail::fail_point!("timeline-delete-before-rm", |_| {
             Err(anyhow::anyhow!("failpoint: timeline-delete-before-rm"))?
@@ -369,7 +351,6 @@ impl DeleteTimelineFlow {
                 .await
                 .map_err(DeleteTimelineError::Other)?;
         }
-        let _ = remote_client;
 
         pausable_failpoint!("in_progress_delete");
 
