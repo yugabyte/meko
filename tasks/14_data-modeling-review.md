@@ -104,6 +104,9 @@ implementation. Deliverable:
 
 ## Notes
 
+- Reference write-up on the two hot `pageserver.pages` read shapes
+  and the anchor/will_init clustering trade-off:
+  [pages CTE optimization](14_ref_pages_cte_optimization.md).
 - Cross-link to [4.k storage_ctl startup wedge](4.k_neon-local-start-wedge.md)
   and [10 Diesel migrations collapse](10_collapse-storage_ctl-diesel-migrations.md);
   the schema-bootstrap pain points are part of the data-modeling
