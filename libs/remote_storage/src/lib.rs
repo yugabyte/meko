@@ -2,20 +2,19 @@
 //! No other modules from this tree are supposed to be used directly by the external code.
 //!
 //! [`RemoteStorage`] trait a CRUD-like generic abstraction over external storages:
-//!   * [`local_fs`] uses the local file system (dev / single-box setups)
 //!   * [`yb_store`] uses a YugabyteDB table over the Postgres wire protocol
-//!     (the production backend for yb-pageserver)
+//!     (the only production / dev backend for yb-pageserver)
 //!
 //! Cloud-storage backends (S3, Azure Blob, GCS) were removed in lane E
 //! along with their integration tests and SDK dependencies — yb-light
-//! never reads or writes to a cloud object store.
+//! never reads or writes to a cloud object store. The dev-only LocalFs
+//! backend was dropped subsequently; everything writes through YbStore.
 //!
 #![deny(unsafe_code)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 mod config;
 mod error;
-mod local_fs;
 mod metrics;
 mod simulate_failures;
 mod support;
@@ -47,7 +46,6 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-pub use self::local_fs::LocalFs;
 pub use self::simulate_failures::UnreliableWrapper;
 pub use self::yb_store::YbStore;
 pub use crate::config::{RemoteStorageConfig, RemoteStorageKind, YbStoreConfig};
@@ -83,13 +81,12 @@ impl AsRef<str> for Etag {
     }
 }
 
-/// Concurrency cap for the LocalFs backend.
+/// Default concurrency cap for backends that don't enforce one themselves.
 ///
-/// LocalFs doesn't enforce a concurrency limit itself, but this also
-/// bounds the upload queue concurrency. Some tests create thousands of
+/// Also bounds the upload queue concurrency. Some tests create thousands of
 /// uploads, which slows down the quadratic scheduling of the upload
 /// queue, and there's no point spawning so many Tokio tasks.
-pub const DEFAULT_REMOTE_STORAGE_LOCALFS_CONCURRENCY_LIMIT: usize = 100;
+pub const DEFAULT_REMOTE_STORAGE_CONCURRENCY_LIMIT: usize = 100;
 
 /// No client-side limit by default.
 pub const DEFAULT_MAX_KEYS_PER_LIST_RESPONSE: Option<i32> = None;
@@ -529,12 +526,12 @@ impl Debug for Download {
 
 /// Every storage backend that yb-light supports.
 /// Serves as a simple way to pass around the [`RemoteStorage`] without
-/// dealing with generics. Post lane E only LocalFs (dev) + YbStore
-/// (production) + Unreliable (test wrapper) survive — the cloud
-/// backends and their SDK dependencies were deleted.
+/// dealing with generics. Post lane E + LocalFs removal, only YbStore
+/// (real backend) + Unreliable (test wrapper) survive — the cloud
+/// backends and their SDK dependencies were deleted, and the dev-only
+/// LocalFs backend was removed afterward.
 #[derive(Clone)]
 pub enum GenericRemoteStorage<Other: Clone = Arc<UnreliableWrapper>> {
-    LocalFs(LocalFs),
     Unreliable(Other),
     YbStore(Arc<YbStore>),
 }
@@ -549,7 +546,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &CancellationToken,
     ) -> Result<Listing, DownloadError> {
         match self {
-            Self::LocalFs(s) => s.list(prefix, mode, max_keys, cancel).await,
             Self::Unreliable(s) => s.list(prefix, mode, max_keys, cancel).await,
             Self::YbStore(s) => s.list(prefix, mode, max_keys, cancel).await,
         }
@@ -564,9 +560,8 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &'a CancellationToken,
     ) -> impl Stream<Item = Result<Listing, DownloadError>> + 'a + Send {
         match self {
-            Self::LocalFs(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel))
+            Self::Unreliable(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel))
                 as Pin<Box<dyn Stream<Item = Result<Listing, DownloadError>> + Send>>,
-            Self::Unreliable(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
             Self::YbStore(s) => Box::pin(s.list_streaming(prefix, mode, max_keys, cancel)),
         }
     }
@@ -580,7 +575,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &'a CancellationToken,
     ) -> Result<VersionListing, DownloadError> {
         match self {
-            Self::LocalFs(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
             Self::Unreliable(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
             Self::YbStore(s) => s.list_versions(prefix, mode, max_keys, cancel).await,
         }
@@ -593,7 +587,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &CancellationToken,
     ) -> Result<ListingObject, DownloadError> {
         match self {
-            Self::LocalFs(s) => s.head_object(key, cancel).await,
             Self::Unreliable(s) => s.head_object(key, cancel).await,
             Self::YbStore(s) => s.head_object(key, cancel).await,
         }
@@ -609,7 +602,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
         match self {
-            Self::LocalFs(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
             Self::Unreliable(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
             Self::YbStore(s) => s.upload(from, data_size_bytes, to, metadata, cancel).await,
         }
@@ -623,7 +615,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &CancellationToken,
     ) -> Result<Download, DownloadError> {
         match self {
-            Self::LocalFs(s) => s.download(from, opts, cancel).await,
             Self::Unreliable(s) => s.download(from, opts, cancel).await,
             Self::YbStore(s) => s.download(from, opts, cancel).await,
         }
@@ -636,7 +627,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
         match self {
-            Self::LocalFs(s) => s.delete(path, cancel).await,
             Self::Unreliable(s) => s.delete(path, cancel).await,
             Self::YbStore(s) => s.delete(path, cancel).await,
         }
@@ -649,7 +639,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
         match self {
-            Self::LocalFs(s) => s.delete_objects(paths, cancel).await,
             Self::Unreliable(s) => s.delete_objects(paths, cancel).await,
             Self::YbStore(s) => s.delete_objects(paths, cancel).await,
         }
@@ -658,7 +647,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
     /// [`RemoteStorage::max_keys_per_delete`]
     pub fn max_keys_per_delete(&self) -> usize {
         match self {
-            Self::LocalFs(s) => s.max_keys_per_delete(),
             Self::Unreliable(s) => s.max_keys_per_delete(),
             Self::YbStore(s) => s.max_keys_per_delete(),
         }
@@ -671,7 +659,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
         match self {
-            Self::LocalFs(s) => s.delete_prefix(prefix, cancel).await,
             Self::Unreliable(s) => s.delete_prefix(prefix, cancel).await,
             Self::YbStore(s) => s.delete_prefix(prefix, cancel).await,
         }
@@ -685,7 +672,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         cancel: &CancellationToken,
     ) -> anyhow::Result<()> {
         match self {
-            Self::LocalFs(s) => s.copy(from, to, cancel).await,
             Self::Unreliable(s) => s.copy(from, to, cancel).await,
             Self::YbStore(s) => s.copy(from, to, cancel).await,
         }
@@ -701,10 +687,6 @@ impl<Other: RemoteStorage> GenericRemoteStorage<Arc<Other>> {
         complexity_limit: Option<NonZeroU32>,
     ) -> Result<(), TimeTravelError> {
         match self {
-            Self::LocalFs(s) => {
-                s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
-                    .await
-            }
             Self::Unreliable(s) => {
                 s.time_travel_recover(prefix, timestamp, done_if_after, cancel, complexity_limit)
                     .await
@@ -742,10 +724,6 @@ impl GenericRemoteStorage {
 
         let _ = small_timeout; // reserved; the cloud backends used it
         Ok(match &storage_config.storage {
-            RemoteStorageKind::LocalFs { local_path: path } => {
-                info!("Using fs root '{path}' as a remote storage");
-                Self::LocalFs(LocalFs::new(path.clone(), timeout)?)
-            }
             RemoteStorageKind::YbStore(yb_config) => {
                 info!(
                     "Using YugabyteDB table '{}' at {}:{} as a remote storage, prefix: '{:?}'",
@@ -784,7 +762,6 @@ impl GenericRemoteStorage {
     /// The name of the bucket/container/etc.
     pub fn bucket_name(&self) -> Option<&str> {
         match self {
-            Self::LocalFs(_s) => None,
             Self::Unreliable(_s) => None,
             Self::YbStore(s) => Some(s.table_name()),
         }

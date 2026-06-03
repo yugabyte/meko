@@ -56,7 +56,6 @@ impl UnreliableWrapper {
     ) -> Self {
         assert!(attempts_to_fail > 0);
         let inner = match inner {
-            GenericRemoteStorage::LocalFs(s) => GenericRemoteStorage::LocalFs(s),
             // We could also make this a no-op, as in, extract the
             // inner of the passed generic remote storage.
             GenericRemoteStorage::Unreliable(_s) => {
@@ -127,7 +126,7 @@ impl UnreliableWrapper {
 }
 
 // We never construct this, so the type is not important, just has to not be UnreliableWrapper and impl RemoteStorage.
-type VoidStorage = crate::LocalFs;
+type VoidStorage = crate::YbStore;
 
 impl RemoteStorage for UnreliableWrapper {
     fn list_streaming(

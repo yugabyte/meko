@@ -30,9 +30,6 @@ use utils::lsn::Lsn;
 use crate::background_process;
 use crate::local_env::{LocalEnv, NeonLocalInitPageserverConf, PageServerConf};
 
-/// Directory within .neon which will be used by default for LocalFs remote storage.
-pub const PAGESERVER_REMOTE_STORAGE_DIR: &str = "local_fs_remote_storage/pageserver";
-
 //
 // Control routines for pageserver.
 //
@@ -129,13 +126,15 @@ impl PageServerNode {
         // verbatim to avoid the `#[serde(flatten)] other` mangling that
         // turns inline tables into nested `other = { remote_storage = "..." }`
         // blocks pageserver ignores. Legacy callers that stuff it into
-        // `other` still work. If neither is set, fall back to local_fs.
+        // `other` still work. LocalFs was dropped from remote_storage, so
+        // a YbStore config is mandatory — bail out hard if it isn't set.
         if let Some(rs) = &conf.remote_storage {
             overrides.push(format!("remote_storage={rs}"));
         } else if !conf.other.contains_key("remote_storage") {
-            overrides.push(format!(
-                "remote_storage={{local_path='../{PAGESERVER_REMOTE_STORAGE_DIR}'}}"
-            ));
+            anyhow::bail!(
+                "pageserver remote_storage must be configured (LocalFs was removed; \
+                 set NeonLocalInitPageserverConf::remote_storage to a YbStore inline table)"
+            );
         }
 
         if [conf.http_auth_type, conf.pg_auth_type, conf.grpc_auth_type]

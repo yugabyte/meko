@@ -815,15 +815,11 @@ fn parse_remote_storage(storage_conf: &str) -> anyhow::Result<RemoteStorageConfi
 
 fn parse_yb_store_config(s: &str) -> anyhow::Result<remote_storage::YbStoreConfig> {
     // Reuse the same TOML-parsing path the pageserver uses for its remote
-    // storage config: deserialize as a single RemoteStorageConfig and assert
-    // it's the YbStore variant.
+    // storage config: deserialize as a single RemoteStorageConfig and pull
+    // out the YbStore variant (the only one).
     let cfg = RemoteStorageConfig::from_toml(&s.parse()?)?;
-    match cfg.storage {
-        remote_storage::RemoteStorageKind::YbStore(yb) => Ok(yb),
-        other => anyhow::bail!(
-            "--wal-yb-config must be a YbStore-shaped config (got {other:?})"
-        ),
-    }
+    let remote_storage::RemoteStorageKind::YbStore(yb) = cfg.storage;
+    Ok(yb)
 }
 
 #[test]

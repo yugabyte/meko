@@ -9,8 +9,6 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
-#[cfg(feature = "testing")]
-use camino::Utf8PathBuf;
 use postgres_versioninfo::PgMajorVersion;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::serde_as;
@@ -425,8 +423,6 @@ pub struct TimelineCreateRequestModeImportPgdata {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ImportPgdataLocation {
-    #[cfg(feature = "testing")]
-    LocalFs { path: Utf8PathBuf },
     AwsS3 {
         region: String,
         bucket: String,

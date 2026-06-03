@@ -3,10 +3,9 @@ use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::time::Duration;
 
-use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::DEFAULT_REMOTE_STORAGE_LOCALFS_CONCURRENCY_LIMIT;
+use crate::DEFAULT_REMOTE_STORAGE_CONCURRENCY_LIMIT;
 
 /// External backup storage configuration, enough for creating a client for that storage.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -24,7 +23,7 @@ pub struct RemoteStorageConfig {
     pub timeout: Duration,
     /// Alternative timeout used for metadata objects which are expected to be small.
     /// Retained for backwards-compat with existing config files; the
-    /// surviving backends (LocalFs, YbStore) don't currently use it.
+    /// surviving backend (YbStore) doesn't currently use it.
     #[serde(
         with = "humantime_serde",
         default = "default_small_timeout",
@@ -36,7 +35,6 @@ pub struct RemoteStorageConfig {
 impl RemoteStorageKind {
     pub fn bucket_name(&self) -> Option<&str> {
         match self {
-            RemoteStorageKind::LocalFs { .. } => None,
             RemoteStorageKind::YbStore(config) => Some(&config.table_name),
         }
     }
@@ -46,7 +44,6 @@ impl RemoteStorageConfig {
     /// Helper to fetch the configured concurrency limit.
     pub fn concurrency_limit(&self) -> usize {
         match &self.storage {
-            RemoteStorageKind::LocalFs { .. } => DEFAULT_REMOTE_STORAGE_LOCALFS_CONCURRENCY_LIMIT,
             RemoteStorageKind::YbStore(c) => c.concurrency_limit.into(),
         }
     }
@@ -69,14 +66,12 @@ fn is_default_small_timeout(d: &Duration) -> bool {
 }
 
 /// A kind of a remote storage to connect to, with its connection
-/// configuration. Cloud variants (S3/Azure/GCS) were removed in lane
-/// E — yb-light writes only to LocalFs (dev) or YbStore (production).
+/// configuration. Cloud variants (S3/Azure/GCS) were removed in lane E
+/// and the LocalFs variant was dropped along with the dev fallback —
+/// yb-light writes only to YbStore.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum RemoteStorageKind {
-    /// Storage based on local file system. Specify a root folder to
-    /// place all stored files into.
-    LocalFs { local_path: Utf8PathBuf },
     /// YugabyteDB-based storage, storing all files as rows in a YB
     /// table over a Postgres-wire-compatible SQL connection.
     YbStore(YbStoreConfig),
@@ -88,16 +83,12 @@ pub enum RemoteStorageKind {
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum TypedRemoteStorageKind {
-    LocalFs { local_path: Utf8PathBuf },
     YbStore(YbStoreConfig),
 }
 
 impl From<TypedRemoteStorageKind> for RemoteStorageKind {
     fn from(value: TypedRemoteStorageKind) -> Self {
         match value {
-            TypedRemoteStorageKind::LocalFs { local_path } => {
-                RemoteStorageKind::LocalFs { local_path }
-            }
             TypedRemoteStorageKind::YbStore(v) => RemoteStorageKind::YbStore(v),
         }
     }
@@ -164,7 +155,7 @@ fn default_yb_table_name() -> String {
 }
 
 fn default_yb_concurrency_limit() -> NonZeroUsize {
-    NonZeroUsize::new(DEFAULT_REMOTE_STORAGE_LOCALFS_CONCURRENCY_LIMIT).unwrap()
+    NonZeroUsize::new(DEFAULT_REMOTE_STORAGE_CONCURRENCY_LIMIT).unwrap()
 }
 
 impl Debug for YbStoreConfig {
@@ -223,25 +214,6 @@ mod tests {
 
     fn parse(input: &str) -> anyhow::Result<RemoteStorageConfig> {
         RemoteStorageConfig::from_toml_str(input)
-    }
-
-    #[test]
-    fn parse_localfs_config_with_timeout() {
-        let input = "local_path = '.'
-timeout = '5s'";
-
-        let config = parse(input).unwrap();
-
-        assert_eq!(
-            config,
-            RemoteStorageConfig {
-                storage: RemoteStorageKind::LocalFs {
-                    local_path: Utf8PathBuf::from(".")
-                },
-                timeout: Duration::from_secs(5),
-                small_timeout: RemoteStorageConfig::DEFAULT_SMALL_TIMEOUT
-            }
-        );
     }
 
     #[test]

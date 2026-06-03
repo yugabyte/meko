@@ -871,9 +871,7 @@ async fn create_page_store_with_app_name(
         .remote_storage_config
         .as_ref()
         .context("yb-pageserver requires `remote_storage` configured")?;
-    let RemoteStorageKind::YbStore(yb_cfg) = &rs_cfg.storage else {
-        anyhow::bail!("yb-pageserver requires a YbStore remote_storage backend");
-    };
+    let RemoteStorageKind::YbStore(yb_cfg) = &rs_cfg.storage;
     let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg.clone());
     let store = pageserver::page_store::PageStore::connect_pooled(
         ps_cfg,

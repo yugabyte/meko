@@ -33,8 +33,8 @@
 //! kept as a serialized JSON string in `metadata_json`; the column is TEXT so
 //! that no extra `tokio_postgres` features are required.
 //!
-//! `list_versions` and `time_travel_recover` are intentionally unsupported,
-//! matching the posture of `LocalFs`.
+//! `list_versions` and `time_travel_recover` are intentionally unsupported;
+//! yb-light has no need for them and any caller hitting these paths is a bug.
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -643,9 +643,9 @@ impl RemoteStorage for YbStore {
                 }
             }
             ListingMode::WithDelimiter => {
-                // Mirror `LocalFs`: if the caller's prefix does not end in
-                // `/`, treat its parent directory as the "group root" so that
-                // sibling keys still group correctly.
+                // If the caller's prefix does not end in `/`, treat its parent
+                // directory as the "group root" so that sibling keys still
+                // group correctly (the same convention S3 uses).
                 let listing_prefix = match prefix {
                     Some(p) => {
                         let s = p.get_path().as_str().to_string();

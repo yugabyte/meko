@@ -22,9 +22,9 @@ use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 
 use crate::broker::StorageBroker;
 use crate::endpoint_storage::{
-    ENDPOINT_STORAGE_DEFAULT_ADDR, ENDPOINT_STORAGE_REMOTE_STORAGE_DIR, EndpointStorage,
+    ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage,
 };
-use crate::pageserver::{PAGESERVER_REMOTE_STORAGE_DIR, PageServerNode};
+use crate::pageserver::PageServerNode;
 use crate::safekeeper::SafekeeperNode;
 
 pub const DEFAULT_PG_VERSION: u32 = 17;
@@ -159,8 +159,11 @@ pub struct NeonLocalInitConf {
 pub struct EndpointStorageConf {
     pub listen_addr: SocketAddr,
     /// If `Some`, written verbatim as the `storage_kind` block of
-    /// `endpoint_storage.json` instead of the default `LocalFs`. Value
-    /// must be a JSON object including the `type` discriminator, e.g.
+    /// `endpoint_storage.json`. Otherwise neon_local derives a default
+    /// `YbStore` config from `storage_controller.database_url`,
+    /// colocating endpoint_storage with the pageserver in the same
+    /// `yb_storage.public.blobs` table. Value must be a JSON object
+    /// including the `type` discriminator, e.g.
     /// `{"type": "YbStore", "host": "...", "user": "...", ...}`. Mirrors
     /// the way [`NeonLocalInitPageserverConf::remote_storage`] feeds the
     /// pageserver's TOML inline table — opaque to neon_local, parsed
@@ -344,11 +347,11 @@ pub struct NeonLocalInitPageserverConf {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_sync: bool,
     /// If `Some`, written verbatim into `pageserver.toml` as
-    /// `remote_storage = <value>`. Value must be a TOML inline table
-    /// (e.g. `{ host = "172.151.17.132", port = 5433, ... }` for `YbStore`,
-    /// or `{ local_path = '...' }` for `LocalFs`). Mirrors
-    /// [`SafekeeperConf::remote_storage`]; bypasses the `#[serde(flatten)]
-    /// other` round-trip that mangles inline tables.
+    /// `remote_storage = <value>`. Value must be a TOML inline table for
+    /// `YbStore` (e.g. `{ host = "172.151.17.132", port = 5433, ... }`).
+    /// Required — pageserver init bails if neither this nor `other.remote_storage`
+    /// is set. Mirrors [`SafekeeperConf::remote_storage`]; bypasses the
+    /// `#[serde(flatten)] other` round-trip that mangles inline tables.
     #[serde(default)]
     pub remote_storage: Option<String>,
     #[serde(flatten)]
@@ -1045,10 +1048,6 @@ impl LocalEnv {
         EndpointStorage::from_env(&env)
             .init()
             .context("object storage init failed")?;
-
-        // setup remote remote location for default LocalFs remote storage
-        std::fs::create_dir_all(env.base_data_dir.join(PAGESERVER_REMOTE_STORAGE_DIR))?;
-        std::fs::create_dir_all(env.base_data_dir.join(ENDPOINT_STORAGE_REMOTE_STORAGE_DIR))?;
 
         env.persist_config()
     }
