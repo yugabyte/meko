@@ -1,11 +1,33 @@
 ---
-status: pending
+status: done
 severity: medium
 area: storage_ctl
 opened: 2026-06-02
+closed: 2026-06-02
 ---
 
 # Collapse storage_ctl Diesel migrations into one initial schema
+
+## Resolution
+
+`storage_controller/migrations/` is now a single
+`00000000000000_initial_schema/{up,down}.sql` that emits the final
+schema (10 tables + 1 index + 1 FK + the two diesel helper
+functions). The 24 historical per-step migrations were deleted.
+
+Measured impact: fresh `neon_local init + start` against an empty
+`yb_storage` went from ~3 min (12 dots of `pageserver has not started
+yet, continuing to wait` during the 25-step replay) to **16s**
+end-to-end on the same dev box.
+
+The Diesel framework wiring (`embed_migrations!`, `__diesel_schema_migrations`,
+`run_pending_migrations`) is unchanged — future schema changes still
+add timestamped migrations as new directories alongside the initial
+one.
+
+---
+
+(Below: original analysis at filing time.)
 
 ## Motivation
 
