@@ -78,7 +78,7 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 4.h | [Dedicated YSQL connection](4.h_dedicated-ysql-connection.md) | ✅ done | medium | yb-pageserver |
 | 4.i | [Hybrid materialiser threshold](4.i_hybrid-materialiser-threshold.md) | ✅ done | medium | yb-pageserver |
 | 4.j | [Microbench threshold tuning](4.j_microbench-threshold-tuning.md) | ⏳ pending | medium | yb-pageserver |
-| 4.k | [`neon_local start` wedge](4.k_neon-local-start-wedge.md) | ⏳ pending | high | storage_ctl / neon_local |
+| 4.k | [`neon_local start` wedge](4.k_neon-local-start-wedge.md) | ✅ done | high | storage_ctl / neon_local |
 | 4.l | [`s3_upload_limit_bytes` config](4.l_s3-upload-limit-config.md) | ✅ done | medium | yb-pageserver |
 | 4.m | [YB write concurrency + read collapse](4.m_yb-write-concurrency-read-collapse.md) | ✅ done | medium | yb-pageserver |
 | 5 | [Pageserver restart from timeline_state](5_pageserver-restart-from-timeline-state.md) | ✅ done | medium | yb-pageserver |

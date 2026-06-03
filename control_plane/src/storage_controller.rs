@@ -700,6 +700,21 @@ impl StorageController {
             .expect("Failed to wait for pg_ctl termination")
     }
 
+    /// Idempotent: ensure the external `yb_storage` database exists and
+    /// has the pageserver/safekeeper schema in place. Callers must run
+    /// this **before** spawning pageserver / safekeeper / endpoint_storage
+    /// since those bind to `yb_storage` immediately on start. Without
+    /// this barrier, a fresh `neon_local start` races storage_controller's
+    /// own database provisioning against the pageserver's first connect
+    /// and the pageserver crashes with `database "yb_storage" does not
+    /// exist`. See `tasks/4.k_neon-local-start-wedge.md`.
+    pub async fn prepare_database_if_external(&self) -> anyhow::Result<()> {
+        if let Some(url) = self.config.database_url.clone() {
+            self.ensure_external_database(&url).await?;
+        }
+        Ok(())
+    }
+
     pub async fn start(&self, start_args: NeonStorageControllerStartArgs) -> anyhow::Result<()> {
         let instance_dir = self.storage_controller_instance_dir(start_args.instance_id);
         if let Err(err) = tokio::fs::create_dir(&instance_dir).await {

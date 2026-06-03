@@ -59,26 +59,9 @@ if [[ "${SKIP_RESET:-0}" == "0" ]]; then
     PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte -c "CREATE DATABASE yb_storage" >/dev/null
     rm -rf "$NEON_REPO_DIR"
 
-    step "neon_local init + start (with Phase 4.k schema-bootstrap workaround)"
+    step "neon_local init + start"
     "$NEON" init --config /tmp/neon-init.toml
-    if ! "$NEON" start --start-timeout 240s; then
-        echo "First start failed; applying Phase 4.k workaround (manually create pageserver.timelines + restart)…"
-        PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yb_storage -c "
-            CREATE TABLE IF NOT EXISTS pageserver.timelines (
-                tenant_id              TEXT    NOT NULL,
-                timeline_id            TEXT    NOT NULL,
-                last_record_lsn        BIGINT  NOT NULL,
-                disk_consistent_lsn    BIGINT  NOT NULL,
-                applied_gc_cutoff_lsn  BIGINT  NOT NULL,
-                ancestor_timeline_id   TEXT,
-                ancestor_lsn           BIGINT,
-                current_generation     INT     NOT NULL,
-                pg_version             INT     NOT NULL,
-                PRIMARY KEY ((tenant_id) HASH, timeline_id))" >/dev/null
-        pkill -9 -f "neon_local|yb-pageserver|safekeeper|storage_broker|endpoint_storag|storage_controller" 2>/dev/null || true
-        sleep 2
-        "$NEON" start --start-timeout 240s
-    fi
+    "$NEON" start
 
     step "tenant + endpoint"
     TID=$("$NEON" tenant create --pg-version 16 2>&1 | awk '/successfully created/{print $2}')

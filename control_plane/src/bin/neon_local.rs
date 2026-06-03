@@ -1968,6 +1968,21 @@ async fn handle_start_all_impl(
 ) -> Result<(), Vec<anyhow::Error>> {
     // Endpoints are not started automatically
 
+    // Provision the external `yb_storage` database synchronously before
+    // spawning any service. pageserver / safekeeper / endpoint_storage
+    // all bind to `yb_storage` immediately on start; if storage_controller
+    // is still creating it (the only thing that does), they crash with
+    // `database "yb_storage" does not exist`. The call is idempotent so
+    // a repeat from inside `StorageController::start` is a no-op.
+    //
+    // See `tasks/4.k_neon-local-start-wedge.md`.
+    if let Err(e) = StorageController::from_env(env)
+        .prepare_database_if_external()
+        .await
+    {
+        return Err(vec![e.context("prepare external storage controller database")]);
+    }
+
     let mut js = JoinSet::new();
 
     // force infalliblity through closure
