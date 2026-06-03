@@ -2849,7 +2849,15 @@ impl Timeline {
         assert!(new_lsn.is_aligned());
 
         self.metrics.last_record_lsn_gauge.set(new_lsn.0 as i64);
+        // Snapshot the current `last` before advancing — that's the
+        // record's `prev_record_lsn`. PageWriter will pair it with
+        // `disk_consistent_lsn` when persisting `timeline_state`, so
+        // a restart can hand the safekeeper the correct `xl_prev`.
+        let prev_for_new = self.last_record_lsn.load().last;
         self.last_record_lsn.advance(new_lsn);
+        if let Some(pw) = self.page_writer.as_ref() {
+            pw.note_record_lsn(new_lsn, prev_for_new);
+        }
     }
 
     pub(crate) async fn preserve_initdb_archive(&self) -> anyhow::Result<()> {

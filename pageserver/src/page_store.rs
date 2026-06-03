@@ -1427,15 +1427,27 @@ impl PageStore {
         timeline: TimelineId,
         generation: utils::generation::Generation,
         new_dc_lsn: Lsn,
+        new_prev_record_lsn: Option<Lsn>,
     ) -> Result<AdvanceDcLsnOutcome> {
+        // Persist `prev_record_lsn` alongside `disk_consistent_lsn`
+        // so a restart can hand the safekeeper the right `xl_prev`
+        // for the record at `disk_consistent_lsn`. `COALESCE($5,
+        // prev_record_lsn)` keeps the existing column value when
+        // the caller didn't resolve a fresh pairing (race —
+        // pages flushed before their record's `finish_write` ran;
+        // see `PageWriter::take_prev_at_or_below`). Without
+        // COALESCE we'd overwrite a previously-good value with
+        // NULL on every throttled flush window.
         let sql = format!(
             "UPDATE \"{}\".timeline_state \
-             SET disk_consistent_lsn = $3 \
+             SET disk_consistent_lsn = $3, \
+                 prev_record_lsn      = COALESCE($5, prev_record_lsn) \
              WHERE tenant_id = $1 AND timeline_id = $2 \
                AND current_generation = $4",
             self.schema
         );
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
+        let prev_i64: Option<i64> = new_prev_record_lsn.map(|l| l.0 as i64);
         let n = self
             .ysql_client
             .execute(
@@ -1445,6 +1457,7 @@ impl PageStore {
                     &timeline.to_string(),
                     &(new_dc_lsn.0 as i64),
                     &gen_i32,
+                    &prev_i64,
                 ],
             )
             .await
@@ -2325,16 +2338,29 @@ mod tests {
 
         // Matching generation → Updated, persisted value advances.
         let res = store
-            .advance_disk_consistent_lsn(tenant, timeline, Generation::new(5), Lsn(0x2000))
+            .advance_disk_consistent_lsn(
+                tenant,
+                timeline,
+                Generation::new(5),
+                Lsn(0x2000),
+                Some(Lsn(0x1F00)),
+            )
             .await
             .unwrap();
         assert_eq!(res, AdvanceDcLsnOutcome::Updated);
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
         assert_eq!(got.disk_consistent_lsn, Lsn(0x2000));
+        assert_eq!(got.prev_record_lsn, Some(Lsn(0x1F00)));
 
         // Stale generation → StaleGeneration { live = 5 }, value unchanged.
         let res = store
-            .advance_disk_consistent_lsn(tenant, timeline, Generation::new(4), Lsn(0x3000))
+            .advance_disk_consistent_lsn(
+                tenant,
+                timeline,
+                Generation::new(4),
+                Lsn(0x3000),
+                Some(Lsn(0x2F00)),
+            )
             .await
             .unwrap();
         assert_eq!(res, AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 });
@@ -2345,7 +2371,13 @@ mod tests {
         // row hasn't been UPSERT'd yet) → also stale: persisted row is
         // the source of truth.
         let res = store
-            .advance_disk_consistent_lsn(tenant, timeline, Generation::new(6), Lsn(0x4000))
+            .advance_disk_consistent_lsn(
+                tenant,
+                timeline,
+                Generation::new(6),
+                Lsn(0x4000),
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(res, AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 });

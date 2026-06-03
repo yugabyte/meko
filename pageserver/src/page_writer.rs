@@ -177,6 +177,20 @@ pub struct PageWriter {
     /// isn't atomically representable. `None` means "no upsert yet";
     /// the first flush always writes regardless of elapsed time.
     last_dc_lsn_upsert_at: std::sync::Mutex<Option<Instant>>,
+    /// `(last_record_lsn → prev_record_lsn)` for WAL records the
+    /// walreceiver has finish_write'd but PageWriter hasn't yet
+    /// persisted via `advance_disk_consistent_lsn`. Populated by
+    /// `Timeline::finish_write` (which knows both values atomically
+    /// from `RecordLsn::cnt_advance`). The flush path looks up the
+    /// prev for the max flushed lsn and prunes entries ≤ that lsn
+    /// (those records are now durable).
+    ///
+    /// When the lookup misses (rare race: a record's pages landed in
+    /// the buffer before its `finish_write` ran, and a flush fired
+    /// between the two), we persist `dc_lsn` with `prev = NULL`
+    /// — same as before this tracker existed; the walreceiver
+    /// re-derives prev on restart.
+    record_lsn_history: std::sync::Mutex<std::collections::BTreeMap<Lsn, Lsn>>,
     /// `Arc<AtomicLsn>` of the timeline's `visible_remote_consistent_lsn`
     /// — the value the walreceiver loop forwards to the safekeeper as
     /// `remote_consistent_lsn` in `PageserverFeedback`, which drives
@@ -265,6 +279,7 @@ impl PageWriter {
             dc_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
             dc_lsn_observed: std::sync::atomic::AtomicU64::new(0),
             last_dc_lsn_upsert_at: std::sync::Mutex::new(None),
+            record_lsn_history: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             remote_consistent_lsn_slot: std::sync::OnceLock::new(),
             flush_completed: tokio::sync::Notify::new(),
             backpressure_waits: std::sync::atomic::AtomicU64::new(0),
@@ -310,9 +325,19 @@ impl PageWriter {
             return Ok(());
         }
         let lsn = utils::lsn::Lsn(observed);
+        // Pair dc_lsn with the prev_record_lsn the walreceiver
+        // noted for this record. `None` falls through to a NULL
+        // column — the walreceiver re-derives prev on restart.
+        let prev = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
         match self
             .fpu_page_store
-            .advance_disk_consistent_lsn(self.tenant_id, self.timeline_id, self.generation, lsn)
+            .advance_disk_consistent_lsn(
+                self.tenant_id,
+                self.timeline_id,
+                self.generation,
+                lsn,
+                prev,
+            )
             .await?
         {
             crate::page_store::AdvanceDcLsnOutcome::Updated => {
@@ -983,6 +1008,8 @@ impl PageWriter {
                 };
                 if new_lsn > prev && elapsed_ok {
                     let lsn = utils::lsn::Lsn(new_lsn);
+                    // Best-effort pairing — see force_upsert_dc_lsn_if_advanced.
+                    let prev_record_lsn = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
                     match self
                         .fpu_page_store
                         .advance_disk_consistent_lsn(
@@ -990,6 +1017,7 @@ impl PageWriter {
                             self.timeline_id,
                             self.generation,
                             lsn,
+                            prev_record_lsn,
                         )
                         .await
                     {
@@ -1117,6 +1145,43 @@ impl PageWriter {
     pub fn backpressure_wait_count(&self) -> u64 {
         self.backpressure_waits
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Record that the walreceiver has applied a record ending at
+    /// `last_record_lsn`, whose predecessor record ended at
+    /// `prev_record_lsn`. The flush path looks this up when it
+    /// persists `disk_consistent_lsn` so the matching
+    /// `prev_record_lsn` column gets a non-NULL value on restart.
+    ///
+    /// Called from `Timeline::finish_write` after each WAL record
+    /// is applied.
+    pub fn note_record_lsn(&self, last_record_lsn: Lsn, prev_record_lsn: Lsn) {
+        if let Ok(mut m) = self.record_lsn_history.lock() {
+            m.insert(last_record_lsn, prev_record_lsn);
+            // Cap the map size at a generous bound so a stuck flush
+            // doesn't grow it unboundedly. We prune from below in
+            // `take_prev_at_or_below`; this is just defense in depth.
+            const HARD_CAP: usize = 16_384;
+            if m.len() > HARD_CAP {
+                let prune_to = m.len() - HARD_CAP / 2;
+                let cutoff = *m.keys().nth(prune_to).expect("len > HARD_CAP/2");
+                m.retain(|&k, _| k >= cutoff);
+            }
+        }
+    }
+
+    /// Pull the `prev_record_lsn` paired with the highest noted
+    /// `last_record_lsn ≤ flushed_lsn`, and remove that entry plus
+    /// all older ones from the history (those records are durable
+    /// now). Returns the matched `(last, prev)` pair, or `None` if
+    /// the buffer holds no notes at or below `flushed_lsn` —
+    /// typically because pages landed before their record's
+    /// `finish_write` ran.
+    fn take_prev_at_or_below(&self, flushed_lsn: Lsn) -> Option<(Lsn, Lsn)> {
+        let mut m = self.record_lsn_history.lock().ok()?;
+        let (&last, &prev) = m.range(..=flushed_lsn).next_back()?;
+        m.retain(|&k, _| k > last);
+        Some((last, prev))
     }
 
     /// Read the latest meta value for `key` at LSN ≤ `target_lsn`,
@@ -2632,6 +2697,144 @@ mod tests {
             slot.load(),
             Lsn(42),
             "throttle prevents back-to-back UPDATE; slot retains prior value"
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `note_record_lsn` records (last → prev) pairs; the next
+    /// lookup at or below a given flushed lsn returns the matching
+    /// prev and prunes the rest. Pure map mechanics.
+    #[tokio::test]
+    async fn note_record_lsn_basic_lookup_and_prune() {
+        let (store, schema) = make_store("rl_hist_basic").await;
+        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+
+        w.note_record_lsn(Lsn(0x100), Lsn(0x080));
+        w.note_record_lsn(Lsn(0x200), Lsn(0x100));
+        w.note_record_lsn(Lsn(0x300), Lsn(0x200));
+
+        // Lookup at the exact `last` returns its prev.
+        assert_eq!(w.take_prev_at_or_below(Lsn(0x200)), Some((Lsn(0x200), Lsn(0x100))));
+        // Older entries (≤ 0x200) are pruned; 0x100 is gone.
+        assert_eq!(w.take_prev_at_or_below(Lsn(0x100)), None);
+        // 0x300 survives.
+        assert_eq!(w.take_prev_at_or_below(Lsn(0x300)), Some((Lsn(0x300), Lsn(0x200))));
+        // Map now empty.
+        assert_eq!(w.take_prev_at_or_below(Lsn(0x400)), None);
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `take_prev_at_or_below(L)` picks the highest noted entry ≤ L,
+    /// not the exact L. Models the race where pages flush at an lsn
+    /// the walreceiver has noted but a later (uncommitted) record
+    /// sits above.
+    #[tokio::test]
+    async fn note_record_lsn_picks_highest_at_or_below() {
+        let (store, schema) = make_store("rl_hist_range").await;
+        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+
+        w.note_record_lsn(Lsn(0x100), Lsn(0x080));
+        w.note_record_lsn(Lsn(0x300), Lsn(0x100));
+
+        // Query at 0x250 — no entry at exactly that lsn; pick the
+        // highest noted ≤ 0x250, which is 0x100.
+        assert_eq!(w.take_prev_at_or_below(Lsn(0x250)), Some((Lsn(0x100), Lsn(0x080))));
+        // 0x300 still there.
+        assert_eq!(w.take_prev_at_or_below(Lsn(0x300)), Some((Lsn(0x300), Lsn(0x100))));
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// End-to-end: walreceiver-style flow notes record_lsn after a
+    /// put + flush, the throttled `advance_disk_consistent_lsn` runs,
+    /// and the persisted `timeline_state.prev_record_lsn` reflects
+    /// the noted prev. Restart correctness depends on this column
+    /// being non-NULL; the previous shape never wrote it.
+    #[tokio::test]
+    async fn flush_persists_prev_record_lsn_when_noted() {
+        let (store, schema) = make_store("flush_persists_prev").await;
+        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t, tl).await;
+
+        // Simulate `Timeline::finish_write(Lsn(42))` for the record
+        // whose pages we're about to flush.
+        w.note_record_lsn(Lsn(42), Lsn(40));
+
+        w.put(&[(k(1), Lsn(42), image())]).await.unwrap();
+        w.flush().await.unwrap();
+
+        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        assert_eq!(row.disk_consistent_lsn, Lsn(42));
+        assert_eq!(
+            row.prev_record_lsn,
+            Some(Lsn(40)),
+            "prev_record_lsn must be persisted alongside disk_consistent_lsn"
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// When `note_record_lsn` hasn't run for the flush's max lsn
+    /// (rare race: pages landed in the buffer before their record's
+    /// `finish_write` ran), the persisted `prev_record_lsn` column
+    /// is NULL — the walreceiver re-derives prev on restart.
+    #[tokio::test]
+    async fn flush_writes_null_prev_when_not_noted() {
+        let (store, schema) = make_store("flush_null_prev").await;
+        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t, tl).await;
+
+        // Deliberately skip note_record_lsn.
+        w.put(&[(k(1), Lsn(42), image())]).await.unwrap();
+        w.flush().await.unwrap();
+
+        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        assert_eq!(row.disk_consistent_lsn, Lsn(42));
+        assert_eq!(row.prev_record_lsn, None);
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Once a non-NULL `prev_record_lsn` has been persisted, a
+    /// subsequent throttled `advance_disk_consistent_lsn` whose
+    /// caller couldn't resolve a fresh pairing must NOT clobber the
+    /// column with NULL. The SQL uses `COALESCE($5, prev_record_lsn)`
+    /// to preserve the prior value in that case.
+    #[tokio::test]
+    async fn flush_with_no_pairing_preserves_persisted_prev() {
+        use utils::generation::Generation;
+        let (store, schema) = make_store("flush_preserve_prev").await;
+        let (_w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t, tl).await;
+
+        // First advance with a real prev.
+        store
+            .advance_disk_consistent_lsn(
+                t,
+                tl,
+                Generation::new(1),
+                Lsn(0x200),
+                Some(Lsn(0x180)),
+            )
+            .await
+            .unwrap();
+        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        assert_eq!(row.prev_record_lsn, Some(Lsn(0x180)));
+
+        // Second advance with no pairing (None). dc_lsn moves forward
+        // but prev_record_lsn must retain its prior value.
+        store
+            .advance_disk_consistent_lsn(t, tl, Generation::new(1), Lsn(0x300), None)
+            .await
+            .unwrap();
+        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        assert_eq!(row.disk_consistent_lsn, Lsn(0x300));
+        assert_eq!(
+            row.prev_record_lsn,
+            Some(Lsn(0x180)),
+            "NULL-prev advance must not clobber the persisted value"
         );
 
         drop_schema(&store, &schema).await;

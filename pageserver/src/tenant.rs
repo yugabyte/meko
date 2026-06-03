@@ -1466,7 +1466,11 @@ impl TenantShard {
                         };
                         let metadata = crate::tenant::metadata::TimelineMetadata::new(
                             row.disk_consistent_lsn,
-                            None, // prev_record_lsn: not persisted (re-derived by walreceiver)
+                            // Persisted when the matching dc_lsn was last
+                            // upserted; see PageWriter::take_prev_at_or_below.
+                            // NULL falls through as None and the walreceiver
+                            // re-derives prev from the SK stream.
+                            row.prev_record_lsn,
                             row.ancestor_timeline_id,
                             row.ancestor_lsn.unwrap_or(Lsn(0)),
                             row.applied_gc_cutoff_lsn,
