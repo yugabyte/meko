@@ -82,7 +82,7 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 4.l | [`s3_upload_limit_bytes` config](4.l_s3-upload-limit-config.md) | ✅ done | medium | yb-pageserver |
 | 4.m | [YB write concurrency + read collapse](4.m_yb-write-concurrency-read-collapse.md) | ✅ done | medium | yb-pageserver |
 | 5 | [Pageserver restart from timeline_state](5_pageserver-restart-from-timeline-state.md) | ✅ done | medium | yb-pageserver |
-| 6 | [Startup performance](6_startup-perf.md) | ⏳ pending | high | yb-pageserver |
+| 6 | [Startup performance](6_startup-perf.md) | ✅ done | low | yb-pageserver |
 | 7 | [Garbage collection](7_gc.md) | 💤 deferred | medium | yb-pageserver |
 | 8 | [Page-service going-away frame](8_going-away-frame.md) | ⏳ pending | high | page_service / compute |
 | 9 | [Safekeeper Paxos removal](9_safekeeper-paxos-removal.md) | ⏳ pending | high | safekeeper |
