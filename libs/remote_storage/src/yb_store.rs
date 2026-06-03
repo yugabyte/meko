@@ -98,7 +98,7 @@ impl YbStore {
         // on every reopen, and dispatches sslmode + sslrootcert internally.
         // Same factory used by the safekeeper's WAL-mirror connection so
         // both honour the same TLS rules.
-        let client = crate::YsqlClient::from_yb_config(config, "pageserver:yb_store")
+        let client = crate::from_yb_config(config, "pageserver:yb_store")
             .await
             .with_context(|| {
                 format!(

@@ -1,0 +1,31 @@
+[package]
+name = "ysql_client"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+metrics.workspace = true
+once_cell.workspace = true
+rand.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+# YB smart-driver fork of tokio-postgres. Used for cluster-aware YB
+# connections (yb_servers() discovery, load balancing, topology-aware
+# routing). TLS goes through `tokio-postgres-rustls` via the
+# `rustls_adapter` newtype; the YB fork's own `yb-postgres-openssl`
+# connector fails the TLS handshake against YB tservers (filed
+# upstream).
+yb-tokio-postgres.workspace = true
+# Needed to disambiguate the `MakeTlsConnect` trait used by
+# `tokio-postgres-rustls` (upstream `tokio_postgres::tls::*`) from
+# the YB fork's copy in `yb_tokio_postgres::tls::*` — the adapter
+# in `src/rustls_adapter.rs` bridges between them.
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+rustls = { workspace = true, features = ["ring"] }
+rustls-native-certs.workspace = true
+rustls-pemfile.workspace = true

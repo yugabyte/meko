@@ -19,12 +19,11 @@ mod local_fs;
 mod metrics;
 mod simulate_failures;
 mod support;
-mod yb_rustls;
 mod yb_store;
-mod ysql_client;
+mod ysql_factory;
 
-pub use yb_rustls::YbMakeRustlsConnect;
-pub use ysql_client::{YsqlClient, build_yb_rustls_connector};
+pub use ysql_client::{YbMakeRustlsConnect, YsqlClient, build_yb_rustls_connector};
+pub use ysql_factory::{from_yb_config, from_yb_config_pooled};
 
 use std::collections::HashMap;
 use std::fmt::Debug;

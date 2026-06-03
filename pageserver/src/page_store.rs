@@ -290,9 +290,10 @@ impl PageStore {
         application_name: &str,
         pool_size: usize,
     ) -> Result<Self> {
-        let client = YsqlClient::from_yb_config_pooled(&config.yb, application_name, pool_size)
-            .await
-            .context("opening PageStore connection")?;
+        let client =
+            remote_storage::from_yb_config_pooled(&config.yb, application_name, pool_size)
+                .await
+                .context("opening PageStore connection")?;
         Ok(Self {
             client: Arc::new(client),
             schema: Arc::from(config.schema),

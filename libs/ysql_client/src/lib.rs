@@ -43,6 +43,12 @@
 //! operation runs, so multiple writers hit `tokio_postgres`'s internal
 //! statement multiplexing concurrently with no extra serialization.
 
+mod metrics;
+mod rustls_adapter;
+
+pub use rustls_adapter::YbMakeRustlsConnect;
+pub use yb_tokio_postgres as tokio_postgres;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,12 +56,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use yb_tokio_postgres as tokio_postgres;
+use metrics::{YB_CLIENT_ERRORS, YB_RETRIES_EXHAUSTED};
 use yb_tokio_postgres::Statement;
 use yb_tokio_postgres::types::ToSql;
-
-use crate::config::YbStoreConfig;
-use crate::metrics::{YB_CLIENT_ERRORS, YB_RETRIES_EXHAUSTED};
 
 /// Future returned by the reconnect closure.
 type OpenFut = BoxFuture<'static, Result<tokio_postgres::Client>>;
@@ -122,7 +125,7 @@ impl YsqlClient {
     /// `connect_rustls_pooled(config, tls, 1)`.
     pub async fn connect_rustls(
         config: tokio_postgres::Config,
-        tls: crate::yb_rustls::YbMakeRustlsConnect,
+        tls: crate::rustls_adapter::YbMakeRustlsConnect,
     ) -> Result<Self> {
         Self::connect_rustls_pooled(config, tls, 1).await
     }
@@ -132,7 +135,7 @@ impl YsqlClient {
     /// eagerly.
     pub async fn connect_rustls_pooled(
         config: tokio_postgres::Config,
-        tls: crate::yb_rustls::YbMakeRustlsConnect,
+        tls: crate::rustls_adapter::YbMakeRustlsConnect,
         pool_size: usize,
     ) -> Result<Self> {
         let config = Arc::new(config);
@@ -578,83 +581,10 @@ async fn sleep_with_jitter(base: Duration) {
     tokio::time::sleep(total).await;
 }
 
-impl YsqlClient {
-    /// High-level factory: build a `YsqlClient` from a `YbStoreConfig`.
-    /// Handles `password_env` lookup, application_name, and the
-    /// sslmode/sslrootcert dispatch.
-    ///
-    /// Both the pageserver's `YbStore` and the safekeeper's WAL-mirror
-    /// (`WalBackup`) call this so they agree on TLS semantics — without
-    /// this shared factory, the WAL mirror used to hardcode `NoTls`
-    /// regardless of `sslmode`, and would silently fail against any YBA
-    /// universe configured with TLS-only `pg_hba` rules.
-    pub async fn from_yb_config(
-        cfg: &YbStoreConfig,
-        application_name: &str,
-    ) -> Result<Self> {
-        Self::from_yb_config_pooled(cfg, application_name, 1).await
-    }
-
-    /// Same as `from_yb_config` but opens `pool_size` independent
-    /// connections. Use for hot read paths that benefit from parallel
-    /// SQL execution (e.g. pageserver compute_page_store at pool_size=4).
-    pub async fn from_yb_config_pooled(
-        cfg: &YbStoreConfig,
-        application_name: &str,
-        pool_size: usize,
-    ) -> Result<Self> {
-        let pg_config = build_pg_config(cfg, application_name)?;
-        match cfg.sslmode.as_deref() {
-            None | Some("disable") => {
-                Self::connect_no_tls_pooled(pg_config, pool_size).await
-            }
-            Some(_mode) => {
-                let tls = build_yb_rustls_connector(cfg.sslrootcert.as_deref())?;
-                Self::connect_rustls_pooled(pg_config, tls, pool_size).await
-            }
-        }
-    }
-}
-
-fn build_pg_config(
-    cfg: &YbStoreConfig,
-    application_name: &str,
-) -> Result<tokio_postgres::Config> {
-    let mut pg_config = tokio_postgres::Config::new();
-    pg_config
-        .host(&cfg.host)
-        .port(cfg.port)
-        .user(&cfg.user)
-        .dbname(&cfg.dbname)
-        .application_name(application_name);
-    // NOTE: smart-driver load balancing is currently disabled. Setting
-    // `pg_config.load_balance("only-primary")` causes
-    // `yb-tokio-postgres 0.7.10-yb-1-beta.3` to fail every connect
-    // attempt with "could not create control connection" — the smart
-    // driver opens an internal "control connection" to run
-    // `yb_servers()` for discovery, and that path doesn't work in the
-    // current YB fork. Direct queries against the same target via the
-    // same TLS connector succeed (verified
-    // 2026-06-02 against 172.151.17.132:5433). Filed alongside the
-    // openssl handshake issue. Until both are fixed upstream we open
-    // each pool slot to the configured seed host; pool size still
-    // gives us parallel SQL via independent connections, just not
-    // tserver-spread.
-    //
-    // pg_config.load_balance("only-primary");
-    if let Some(env_name) = &cfg.password_env {
-        let password = std::env::var(env_name).with_context(|| {
-            format!("YsqlClient: password env var `{env_name}` is not set")
-        })?;
-        pg_config.password(password);
-    }
-    Ok(pg_config)
-}
-
 /// Build an openssl-based TLS connector suitable for YugabyteDB
 /// Postgres-wire connections through the yb-tokio-postgres smart
 /// driver, using rustls (pure-Rust / ring) wrapped in the
-/// [`crate::yb_rustls::YbMakeRustlsConnect`] adapter so the
+/// [`crate::rustls_adapter::YbMakeRustlsConnect`] adapter so the
 /// upstream `tokio-postgres-rustls` impl satisfies the YB fork's
 /// `MakeTlsConnect` trait.
 ///
@@ -674,7 +604,7 @@ fn build_pg_config(
 /// the diagnosis.
 pub fn build_yb_rustls_connector(
     sslrootcert: Option<&str>,
-) -> anyhow::Result<crate::yb_rustls::YbMakeRustlsConnect> {
+) -> anyhow::Result<crate::rustls_adapter::YbMakeRustlsConnect> {
     use rustls::client::WebPkiServerVerifier;
     use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
     use rustls::crypto::ring;
@@ -772,7 +702,7 @@ pub fn build_yb_rustls_connector(
             .with_no_client_auth()
     };
 
-    Ok(crate::yb_rustls::YbMakeRustlsConnect::new(
+    Ok(crate::rustls_adapter::YbMakeRustlsConnect::new(
         tokio_postgres_rustls::MakeRustlsConnect::new(client_config),
     ))
 }
@@ -811,7 +741,7 @@ async fn open_no_tls(config: &tokio_postgres::Config) -> Result<tokio_postgres::
 
 async fn open_tls(
     config: &tokio_postgres::Config,
-    tls: &crate::yb_rustls::YbMakeRustlsConnect,
+    tls: &crate::rustls_adapter::YbMakeRustlsConnect,
 ) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tls.clone())

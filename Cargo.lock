@@ -4473,17 +4473,12 @@ dependencies = [
  "once_cell",
  "pin-project-lite",
  "rand 0.9.1",
- "rustls 0.23.29",
- "rustls-native-certs 0.8.0",
- "rustls-pemfile",
  "scopeguard",
  "serde",
  "serde_json",
  "sync_wrapper 0.1.2",
  "test-context",
  "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
  "tokio-stream",
  "tokio-util",
  "toml_edit",
@@ -4491,6 +4486,7 @@ dependencies = [
  "utils",
  "uuid",
  "yb-tokio-postgres",
+ "ysql_client",
 ]
 
 [[package]]
@@ -7322,6 +7318,25 @@ dependencies = [
  "quote",
  "syn 2.0.100",
  "synstructure",
+]
+
+[[package]]
+name = "ysql_client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "metrics",
+ "once_cell",
+ "rand 0.9.1",
+ "rustls 0.23.29",
+ "rustls-native-certs 0.8.0",
+ "rustls-pemfile",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tracing",
+ "yb-tokio-postgres",
 ]
 
 [[package]]

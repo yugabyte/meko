@@ -33,6 +33,7 @@ members = [
     "libs/metrics",
     "libs/postgres_connection",
     "libs/remote_storage",
+    "libs/ysql_client",
     "libs/tracing-utils",
     "libs/postgres_ffi/wal_craft",
     "libs/vm_monitor",
@@ -286,6 +287,7 @@ utils = { version = "0.1", path = "./libs/utils/" }
 vm_monitor = { version = "0.1", path = "./libs/vm_monitor/" }
 wal_decoder = { version = "0.1", path = "./libs/wal_decoder" }
 walproposer = { version = "0.1", path = "./libs/walproposer/" }
+ysql_client = { version = "0.1", path = "./libs/ysql_client/" }
 
 ## Common library dependency
 workspace_hack = { version = "0.1", path = "./workspace_hack/" }
