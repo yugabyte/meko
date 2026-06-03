@@ -97,46 +97,54 @@ struct State {
 }
 
 impl YsqlClient {
-    /// Build a `YsqlClient` with a single connection (no pool). Equivalent
-    /// to `connect_no_tls_pooled(config, 1)`.
-    pub async fn connect_no_tls(config: tokio_postgres::Config) -> Result<Self> {
-        Self::connect_no_tls_pooled(config, 1).await
+    /// Build a `YsqlClient` with a single connection (no pool).
+    /// Equivalent to `connect_no_tls_pooled(config, 1, set_upserts)`.
+    pub async fn connect_no_tls(
+        config: tokio_postgres::Config,
+        set_upserts: bool,
+    ) -> Result<Self> {
+        Self::connect_no_tls_pooled(config, 1, set_upserts).await
     }
 
     /// Build a `YsqlClient` that connects without TLS, with `pool_size`
     /// independent connections. Opens all connections eagerly so config
-    /// errors surface at construction.
+    /// errors surface at construction. When `set_upserts` is true, each
+    /// connection runs `SET yb_enable_upsert_mode = true` after opening
+    /// — see `set_yb_upsert_mode` for why.
     pub async fn connect_no_tls_pooled(
         config: tokio_postgres::Config,
         pool_size: usize,
+        set_upserts: bool,
     ) -> Result<Self> {
         let config = Arc::new(config);
         let open: OpenFn = {
             let config = config.clone();
             Arc::new(move || {
                 let config = config.clone();
-                async move { open_no_tls(&config).await }.boxed()
+                async move { open_no_tls(&config, set_upserts).await }.boxed()
             })
         };
         Self::from_open(open, pool_size).await
     }
 
     /// Build a `YsqlClient` with a single TLS connection. Equivalent to
-    /// `connect_rustls_pooled(config, tls, 1)`.
+    /// `connect_rustls_pooled(config, tls, 1, set_upserts)`.
     pub async fn connect_rustls(
         config: tokio_postgres::Config,
         tls: crate::rustls_adapter::YbMakeRustlsConnect,
+        set_upserts: bool,
     ) -> Result<Self> {
-        Self::connect_rustls_pooled(config, tls, 1).await
+        Self::connect_rustls_pooled(config, tls, 1, set_upserts).await
     }
 
     /// Build a `YsqlClient` that connects via the supplied rustls
     /// connector with `pool_size` independent connections. Opens all
-    /// eagerly.
+    /// eagerly. `set_upserts` behaves as in `connect_no_tls_pooled`.
     pub async fn connect_rustls_pooled(
         config: tokio_postgres::Config,
         tls: crate::rustls_adapter::YbMakeRustlsConnect,
         pool_size: usize,
+        set_upserts: bool,
     ) -> Result<Self> {
         let config = Arc::new(config);
         let tls = Arc::new(tls);
@@ -146,7 +154,7 @@ impl YsqlClient {
             Arc::new(move || {
                 let config = config.clone();
                 let tls = tls.clone();
-                async move { open_tls(&config, &tls).await }.boxed()
+                async move { open_tls(&config, &tls, set_upserts).await }.boxed()
             })
         };
         Self::from_open(open, pool_size).await
@@ -725,7 +733,10 @@ async fn set_yb_upsert_mode(client: &tokio_postgres::Client) -> Result<()> {
     Ok(())
 }
 
-async fn open_no_tls(config: &tokio_postgres::Config) -> Result<tokio_postgres::Client> {
+async fn open_no_tls(
+    config: &tokio_postgres::Config,
+    set_upserts: bool,
+) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tokio_postgres::NoTls)
         .await
@@ -735,13 +746,16 @@ async fn open_no_tls(config: &tokio_postgres::Config) -> Result<tokio_postgres::
             tracing::warn!("YsqlClient connection (NoTls) ended: {e}");
         }
     });
-    set_yb_upsert_mode(&client).await?;
+    if set_upserts {
+        set_yb_upsert_mode(&client).await?;
+    }
     Ok(client)
 }
 
 async fn open_tls(
     config: &tokio_postgres::Config,
     tls: &crate::rustls_adapter::YbMakeRustlsConnect,
+    set_upserts: bool,
 ) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tls.clone())
@@ -752,7 +766,9 @@ async fn open_tls(
             tracing::warn!("YsqlClient connection (rustls) ended: {e}");
         }
     });
-    set_yb_upsert_mode(&client).await?;
+    if set_upserts {
+        set_yb_upsert_mode(&client).await?;
+    }
     Ok(client)
 }
 

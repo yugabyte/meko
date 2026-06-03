@@ -275,9 +275,13 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
 
 impl PageStore {
     /// Open a `PageStore` with a single YSQL connection. Equivalent to
-    /// `connect_pooled(config, app, 1)`.
-    pub async fn connect(config: PageStoreConfig, application_name: &str) -> Result<Self> {
-        Self::connect_pooled(config, application_name, 1).await
+    /// `connect_pooled(config, app, 1, set_upserts)`.
+    pub async fn connect(
+        config: PageStoreConfig,
+        application_name: &str,
+        set_upserts: bool,
+    ) -> Result<Self> {
+        Self::connect_pooled(config, application_name, 1, set_upserts).await
     }
 
     /// Open a `PageStore` with `pool_size` independent YSQL connections.
@@ -285,15 +289,25 @@ impl PageStore {
     /// from one Postgres backend (or many concurrent computes) need
     /// to overlap SQL execution. `pool_size = 1` matches the single-
     /// connection behaviour of `connect()`.
+    ///
+    /// `set_upserts` enables `yb_enable_upsert_mode = true` on each
+    /// connection — true for write-heavy pools (the internal store's
+    /// `put_pages` / `put_slru_pages` / `put_meta` fast paths), false
+    /// for read-only pools (compute-facing reads).
     pub async fn connect_pooled(
         config: PageStoreConfig,
         application_name: &str,
         pool_size: usize,
+        set_upserts: bool,
     ) -> Result<Self> {
-        let client =
-            remote_storage::from_yb_config_pooled(&config.yb, application_name, pool_size)
-                .await
-                .context("opening PageStore connection")?;
+        let client = remote_storage::from_yb_config_pooled(
+            &config.yb,
+            application_name,
+            pool_size,
+            set_upserts,
+        )
+        .await
+        .context("opening PageStore connection")?;
         Ok(Self {
             client: Arc::new(client),
             schema: Arc::from(config.schema),
@@ -1821,7 +1835,7 @@ mod tests {
                     yb: test_yb_config(),
                     schema: SHARED_SCHEMA.to_string(),
                 };
-                let pre = PageStore::connect(cfg.clone(), "page_store_test_setup")
+                let pre = PageStore::connect(cfg.clone(), "page_store_test_setup", true)
                     .await
                     .expect("connect to local YB");
                 let _ = pre
@@ -1829,7 +1843,7 @@ mod tests {
                         "DROP SCHEMA IF EXISTS \"{SHARED_SCHEMA}\" CASCADE"
                     ))
                     .await;
-                let store = PageStore::connect(cfg, "page_store_test")
+                let store = PageStore::connect(cfg, "page_store_test", true)
                     .await
                     .expect("connect to local YB");
                 store.ensure_schema().await.expect("ensure_schema");

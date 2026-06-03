@@ -1259,7 +1259,7 @@ mod tests {
     /// table is empty, so `load_write_lsn` falls back to `commit_lsn`).
     async fn make_storage(table: &str, start_lsn: Lsn) -> (YbWalStorage, Utf8TempDir) {
         let client = Arc::new(
-            YsqlClient::connect_no_tls(pgcfg())
+            YsqlClient::connect_no_tls(pgcfg(), true)
                 .await
                 .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
         );

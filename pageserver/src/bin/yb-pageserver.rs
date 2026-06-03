@@ -877,6 +877,7 @@ async fn create_page_store_with_app_name(
     conf: &'static PageServerConf,
     application_name: &str,
     pool_size: usize,
+    set_upserts: bool,
 ) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
     use remote_storage::RemoteStorageKind;
     let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
@@ -891,6 +892,7 @@ async fn create_page_store_with_app_name(
         ps_cfg,
         application_name,
         pool_size,
+        set_upserts,
     )
     .await?;
     Ok(Some(Arc::new(store)))
@@ -913,9 +915,14 @@ async fn create_compute_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
     const COMPUTE_POOL_SIZE: usize = 4;
-    let Some(store) =
-        create_page_store_with_app_name(conf, "yb-pageserver:compute_reads", COMPUTE_POOL_SIZE)
-            .await?
+    // Read-only path — no `yb_enable_upsert_mode` GUC needed.
+    let Some(store) = create_page_store_with_app_name(
+        conf,
+        "yb-pageserver:compute_reads",
+        COMPUTE_POOL_SIZE,
+        false,
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -947,8 +954,17 @@ async fn create_internal_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
     const INTERNAL_POOL_SIZE: usize = 4;
-    let Some(store) =
-        create_page_store_with_app_name(conf, "yb-pageserver:internal", INTERNAL_POOL_SIZE).await?
+    // The fast-upsert pool: `put_pages` + `put_slru_pages` +
+    // `put_meta` + the materialiser's image INSERTs all run here and
+    // depend on `yb_enable_upsert_mode = true` to skip
+    // read-before-write on partial-chunk retries.
+    let Some(store) = create_page_store_with_app_name(
+        conf,
+        "yb-pageserver:internal",
+        INTERNAL_POOL_SIZE,
+        true,
+    )
+    .await?
     else {
         return Ok(None);
     };

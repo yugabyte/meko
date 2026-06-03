@@ -282,9 +282,14 @@ impl WalBackup {
             Some(yb) => {
                 // Same factory the pageserver's YbStore uses — honors
                 // sslmode + sslrootcert + password_env consistently.
+                // `set_upserts = true`: this client serves WAL chunk
+                // INSERTs (`yb_wal_storage::insert_wal`) and WAL GC
+                // (`truncate_wal`) which both benefit from skipping
+                // YB's read-before-write check.
                 let client = remote_storage::from_yb_config(
                     yb,
                     "safekeeper:yb_wal_mirror",
+                    true,
                 )
                 .await
                 .with_context(|| {

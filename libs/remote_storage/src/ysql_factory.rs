@@ -19,11 +19,15 @@ use crate::config::YbStoreConfig;
 /// factory, the WAL mirror used to hardcode `NoTls` regardless of
 /// `sslmode` and would silently fail against any YBA universe
 /// configured with TLS-only `pg_hba` rules.
+///
+/// `set_upserts` enables `SET yb_enable_upsert_mode = true` on each
+/// new connection — see [`YsqlClient::connect_no_tls_pooled`].
 pub async fn from_yb_config(
     cfg: &YbStoreConfig,
     application_name: &str,
+    set_upserts: bool,
 ) -> Result<YsqlClient> {
-    from_yb_config_pooled(cfg, application_name, 1).await
+    from_yb_config_pooled(cfg, application_name, 1, set_upserts).await
 }
 
 /// Same as [`from_yb_config`] but opens `pool_size` independent
@@ -33,15 +37,16 @@ pub async fn from_yb_config_pooled(
     cfg: &YbStoreConfig,
     application_name: &str,
     pool_size: usize,
+    set_upserts: bool,
 ) -> Result<YsqlClient> {
     let pg_config = build_pg_config(cfg, application_name)?;
     match cfg.sslmode.as_deref() {
         None | Some("disable") => {
-            YsqlClient::connect_no_tls_pooled(pg_config, pool_size).await
+            YsqlClient::connect_no_tls_pooled(pg_config, pool_size, set_upserts).await
         }
         Some(_mode) => {
             let tls = build_yb_rustls_connector(cfg.sslrootcert.as_deref())?;
-            YsqlClient::connect_rustls_pooled(pg_config, tls, pool_size).await
+            YsqlClient::connect_rustls_pooled(pg_config, tls, pool_size, set_upserts).await
         }
     }
 }

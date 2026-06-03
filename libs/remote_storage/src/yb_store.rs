@@ -98,7 +98,13 @@ impl YbStore {
         // on every reopen, and dispatches sslmode + sslrootcert internally.
         // Same factory used by the safekeeper's WAL-mirror connection so
         // both honour the same TLS rules.
-        let client = crate::from_yb_config(config, "pageserver:yb_store")
+        // `set_upserts = true`: the blob INSERT path (see
+        // `put_chunked_with_etag` below) is plain `INSERT INTO {table}
+        // VALUES ...` without `ON CONFLICT`, and re-PUTs of the same
+        // blob key rely on YB's upsert mode to skip the
+        // read-before-write check. Without the GUC, the second PUT
+        // would PK-conflict.
+        let client = crate::from_yb_config(config, "pageserver:yb_store", true)
             .await
             .with_context(|| {
                 format!(
