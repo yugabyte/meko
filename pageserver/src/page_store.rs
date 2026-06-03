@@ -23,7 +23,7 @@
 //!     will_init   BOOLEAN  NOT NULL,
 //!     payload     BYTEA    NOT NULL,
 //!     PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-//!                  blknum, is_image, lsn DESC)
+//!                  blknum, lsn DESC, is_image)
 //! );
 //! ```
 //!
@@ -346,7 +346,7 @@ impl PageStore {
                 will_init    BOOLEAN  NOT NULL,
                 payload      BYTEA    NOT NULL,
                 PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                             blknum, is_image, lsn DESC)
+                             blknum, lsn DESC, is_image)
             )",
             self.schema
         );
@@ -383,7 +383,7 @@ impl PageStore {
                 will_init    BOOLEAN  NOT NULL,
                 payload      BYTEA    NOT NULL,
                 PRIMARY KEY ((tenant_id, timeline_id, kind, segno) HASH,
-                             blknum, is_image, lsn DESC)
+                             blknum, lsn DESC, is_image)
             )",
             self.schema
         );
@@ -555,46 +555,31 @@ impl PageStore {
         let timeline_s = timeline.to_string();
         let target = target_lsn.0 as i64;
 
-        // One SQL that subsumes both the old fast (image-anchored) and
-        // slow (full-chain) paths:
+        // Scalar-subquery anchor + COALESCE(..., 0) lower bound so
+        // both ends of the lsn range are pushed into the DocDB scan
+        // (rows scanned = rows returned). `lsn >= 0` covers the
+        // no-image case.
         //
-        // - The anchor CTE seeks the latest `is_image=TRUE` row ≤ target.
-        //   That's a cheap clustered seek — `(is_image, lsn DESC)` is
-        //   inside the table's primary key.
-        // - The outer SELECT `LEFT JOIN`s the anchor on TRUE so a
-        //   missing anchor surfaces as `anchor_lsn IS NULL` instead of
-        //   eliding the row. The predicate
-        //   `(p.lsn >= anchor.anchor_lsn OR anchor.anchor_lsn IS NULL)`
-        //   narrows to `[anchor_lsn, target]` when an image exists, or
-        //   falls back to `[-∞, target]` (the old slow path's scan)
-        //   when none does.
-        //
-        // The Rust-side trim below truncates at the first `will_init=true`
-        // row walking LSN-desc, which (a) recovers the old slow-path
-        // semantics in the no-image case and (b) is also safe in the
-        // image case: the trim stops at the image itself, so existing
-        // callers see the same chain shape. If an init-delta lands
-        // *between* the image and `target_lsn`, the trim now correctly
-        // shortens the chain to start there instead of returning the
-        // wider [image..target] chain the old fast path would have.
+        // The Rust-side trim below still truncates at the first
+        // `will_init=true` row walking LSN-desc — same as before, so
+        // (a) the no-image case keeps the original full-chain
+        // semantics and (b) an init-delta between the image and
+        // target_lsn correctly shortens the chain.
         let sql = format!(
-            "WITH anchor AS ( \
-                 SELECT lsn AS anchor_lsn \
-                 FROM \"{schema}\".pages \
-                 WHERE tenant_id=$1 AND timeline_id=$2 \
-                   AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
-                   AND forknum=$6 AND blknum=$7 \
-                   AND is_image=TRUE AND lsn <= $8 \
-                 ORDER BY lsn DESC LIMIT 1 \
-             ) \
-             SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+            "SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                     p.lsn, p.is_image, p.will_init, p.payload \
-             FROM \"{schema}\".pages p LEFT JOIN anchor ON TRUE \
+             FROM \"{schema}\".pages p \
              WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
                AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
                AND p.forknum=$6 AND p.blknum=$7 \
-               AND (p.lsn >= anchor.anchor_lsn OR anchor.anchor_lsn IS NULL) \
                AND p.lsn <= $8 \
+               AND p.lsn >= COALESCE(( \
+                     SELECT a.lsn FROM \"{schema}\".pages a \
+                     WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
+                       AND a.spcnode=$3 AND a.dbnode=$4 AND a.relnode=$5 \
+                       AND a.forknum=$6 AND a.blknum=$7 \
+                       AND a.is_image=TRUE AND a.lsn <= $8 \
+                     ORDER BY a.lsn DESC LIMIT 1), 0) \
              ORDER BY p.lsn DESC",
             schema = self.schema
         );
@@ -699,37 +684,42 @@ impl PageStore {
             let fork = range.start.field5 as i16;
             let blk_lo = range.start.field6 as i64;
             let blk_hi = range.end.field6 as i64;
-            // `per_block_anchor` is a single contiguous scan of the
-            // `is_image=TRUE` cluster within the blknum range, reduced
-            // by `GROUP BY blknum MAX(lsn)`. The PK clustering
-            // `(blknum, is_image, lsn DESC)` makes this one tablet-local
-            // range scan instead of one LATERAL subquery + LIMIT 1 per
-            // block (the prior shape, which scaled RPCs at ~1 per block
-            // — wasteful when most blocks have no image at all). The
-            // main SELECT then LEFT JOINs back and keeps only rows from
-            // the anchor up; blocks without an image fall through as
-            // `bi.anchor_lsn IS NULL` and replay the full chain.
+            // DISTINCT-driven LATERAL form: iterate the blocks that
+            // actually exist (`SELECT DISTINCT blknum`, a Distinct
+            // Index Scan ⇒ one row per block) and run the read_chain
+            // pushdown per block via CROSS JOIN LATERAL. The
+            // per-block InitPlan anchor becomes a pushable lower
+            // bound so both ends of the lsn range are pushed into
+            // the DocDB scan, same as the single-block case.
             let sql = format!(
-                "WITH per_block_anchor AS ( \
-                     SELECT blknum, MAX(lsn) AS anchor_lsn \
-                     FROM \"{schema}\".pages \
+                "WITH blocks AS ( \
+                     SELECT DISTINCT blknum FROM \"{schema}\".pages \
                      WHERE tenant_id=$1 AND timeline_id=$2 \
                        AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
                        AND forknum=$6 \
                        AND blknum >= $7 AND blknum < $8 \
-                       AND is_image=TRUE AND lsn <= $9 \
-                     GROUP BY blknum \
+                       AND lsn <= $9 \
                  ) \
                  SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                         p.lsn, p.is_image, p.will_init, p.payload \
-                 FROM \"{schema}\".pages p \
-                 LEFT JOIN per_block_anchor bi ON p.blknum = bi.blknum \
-                 WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
-                   AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
-                   AND p.forknum=$6 \
-                   AND p.blknum >= $7 AND p.blknum < $8 \
-                   AND p.lsn <= $9 \
-                   AND (bi.anchor_lsn IS NULL OR p.lsn >= bi.anchor_lsn) \
+                 FROM blocks b \
+                 CROSS JOIN LATERAL ( \
+                     SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                            p.lsn, p.is_image, p.will_init, p.payload \
+                     FROM \"{schema}\".pages p \
+                     WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+                       AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
+                       AND p.forknum=$6 AND p.blknum = b.blknum \
+                       AND p.lsn <= $9 \
+                       AND p.lsn >= COALESCE(( \
+                             SELECT a.lsn FROM \"{schema}\".pages a \
+                             WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
+                               AND a.spcnode=$3 AND a.dbnode=$4 AND a.relnode=$5 \
+                               AND a.forknum=$6 AND a.blknum = b.blknum \
+                               AND a.is_image=TRUE AND a.lsn <= $9 \
+                             ORDER BY a.lsn DESC LIMIT 1), 0) \
+                     ORDER BY p.lsn DESC \
+                 ) p \
                  ORDER BY p.blknum, p.lsn DESC",
                 schema = self.schema
             );
@@ -757,34 +747,41 @@ impl PageStore {
             let rel_hi = range.end.field4 as i64;
             let fork_hi = range.end.field5 as i16;
             let blk_hi = range.end.field6 as i64;
-            // Same GROUP BY MAX rewrite as the one-fork variant, but
+            // Cross-fork variant of the DISTINCT-driven LATERAL,
             // keyed on the full (spcnode, dbnode, relnode, forknum,
-            // blknum) tuple so anchors stay paired with the right block
-            // when the range crosses forks. Single ranged scan of the
-            // `is_image=TRUE` cluster across the tablets the range
-            // touches, reduced inline.
+            // blknum) tuple so anchors stay paired with the right
+            // block.
             let sql = format!(
-                "WITH per_block_anchor AS ( \
-                     SELECT spcnode, dbnode, relnode, forknum, blknum, MAX(lsn) AS anchor_lsn \
+                "WITH blocks AS ( \
+                     SELECT DISTINCT spcnode, dbnode, relnode, forknum, blknum \
                      FROM \"{schema}\".pages \
                      WHERE tenant_id=$1 AND timeline_id=$2 \
                        AND (spcnode, dbnode, relnode, forknum, blknum) >= ($3, $4, $5, $6, $7) \
                        AND (spcnode, dbnode, relnode, forknum, blknum) <  ($8, $9, $10, $11, $12) \
-                       AND is_image=TRUE AND lsn <= $13 \
-                     GROUP BY spcnode, dbnode, relnode, forknum, blknum \
+                       AND lsn <= $13 \
                  ) \
                  SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                         p.lsn, p.is_image, p.will_init, p.payload \
-                 FROM \"{schema}\".pages p \
-                 LEFT JOIN per_block_anchor bi \
-                     ON p.spcnode = bi.spcnode AND p.dbnode = bi.dbnode \
-                    AND p.relnode = bi.relnode AND p.forknum = bi.forknum \
-                    AND p.blknum = bi.blknum \
-                 WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
-                   AND (p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum) >= ($3, $4, $5, $6, $7) \
-                   AND (p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum) <  ($8, $9, $10, $11, $12) \
-                   AND p.lsn <= $13 \
-                   AND (bi.anchor_lsn IS NULL OR p.lsn >= bi.anchor_lsn) \
+                 FROM blocks b \
+                 CROSS JOIN LATERAL ( \
+                     SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                            p.lsn, p.is_image, p.will_init, p.payload \
+                     FROM \"{schema}\".pages p \
+                     WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+                       AND p.spcnode = b.spcnode AND p.dbnode = b.dbnode \
+                       AND p.relnode = b.relnode AND p.forknum = b.forknum \
+                       AND p.blknum = b.blknum \
+                       AND p.lsn <= $13 \
+                       AND p.lsn >= COALESCE(( \
+                             SELECT a.lsn FROM \"{schema}\".pages a \
+                             WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
+                               AND a.spcnode = b.spcnode AND a.dbnode = b.dbnode \
+                               AND a.relnode = b.relnode AND a.forknum = b.forknum \
+                               AND a.blknum = b.blknum \
+                               AND a.is_image=TRUE AND a.lsn <= $13 \
+                             ORDER BY a.lsn DESC LIMIT 1), 0) \
+                     ORDER BY p.lsn DESC \
+                 ) p \
                  ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC",
                 schema = self.schema
             );
@@ -924,27 +921,21 @@ impl PageStore {
         let blk_i = blknum as i64;
         let target = target_lsn.0 as i64;
 
-        // Single SQL covering the image-anchored fast path and the
-        // no-image fallback. See `read_chain` for the rationale; the
-        // SLRU table has the same `(is_image, lsn DESC)` clustering, so
-        // the anchor CTE is a cheap clustered seek and the LEFT JOIN
-        // with `(p.lsn >= anchor.anchor_lsn OR anchor.anchor_lsn IS NULL)`
-        // narrows or widens the scan automatically. Client-side trim
-        // truncates at the first `will_init=true` row LSN-desc.
+        // Scalar-subquery anchor + COALESCE(..., 0) lower bound so
+        // both ends of the lsn range are pushed into the DocDB scan
+        // (same shape as `pages::read_chain`).
         let sql = format!(
-            "WITH anchor AS ( \
-                 SELECT lsn AS anchor_lsn FROM \"{schema}\".slru_pages \
-                 WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 \
-                   AND segno=$4 AND blknum=$5 \
-                   AND is_image=TRUE AND lsn <= $6 \
-                 ORDER BY lsn DESC LIMIT 1 \
-             ) \
-             SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
-             FROM \"{schema}\".slru_pages p LEFT JOIN anchor ON TRUE \
+            "SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
+             FROM \"{schema}\".slru_pages p \
              WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 \
                AND p.segno=$4 AND p.blknum=$5 \
-               AND (p.lsn >= anchor.anchor_lsn OR anchor.anchor_lsn IS NULL) \
                AND p.lsn <= $6 \
+               AND p.lsn >= COALESCE(( \
+                     SELECT a.lsn FROM \"{schema}\".slru_pages a \
+                     WHERE a.tenant_id=$1 AND a.timeline_id=$2 AND a.kind=$3 \
+                       AND a.segno=$4 AND a.blknum=$5 \
+                       AND a.is_image=TRUE AND a.lsn <= $6 \
+                     ORDER BY a.lsn DESC LIMIT 1), 0) \
              ORDER BY p.lsn DESC",
             schema = self.schema
         );
@@ -1002,21 +993,30 @@ impl PageStore {
         let blk_hi = blknum_range.end as i64;
         let target = target_lsn.0 as i64;
 
+        // DISTINCT-driven LATERAL so both ends of the lsn range are
+        // pushed into the DocDB scan per block (same shape as
+        // `pages::scan_range`).
         let sql = format!(
-            "WITH per_block_anchor AS ( \
-                 SELECT blknum, MAX(lsn) AS anchor_lsn \
-                 FROM \"{schema}\".slru_pages \
+            "WITH blocks AS ( \
+                 SELECT DISTINCT blknum FROM \"{schema}\".slru_pages \
                  WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 AND segno=$4 \
                    AND blknum >= $5 AND blknum < $6 \
-                   AND is_image=TRUE AND lsn <= $7 \
-                 GROUP BY blknum \
+                   AND lsn <= $7 \
              ) \
              SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
-             FROM \"{schema}\".slru_pages p \
-             LEFT JOIN per_block_anchor bi ON p.blknum = bi.blknum \
-             WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 AND p.segno=$4 \
-               AND p.blknum >= $5 AND p.blknum < $6 AND p.lsn <= $7 \
-               AND (bi.anchor_lsn IS NULL OR p.lsn >= bi.anchor_lsn) \
+             FROM blocks b \
+             CROSS JOIN LATERAL ( \
+                 SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
+                 FROM \"{schema}\".slru_pages p \
+                 WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 AND p.segno=$4 \
+                   AND p.blknum = b.blknum AND p.lsn <= $7 \
+                   AND p.lsn >= COALESCE(( \
+                         SELECT a.lsn FROM \"{schema}\".slru_pages a \
+                         WHERE a.tenant_id=$1 AND a.timeline_id=$2 AND a.kind=$3 AND a.segno=$4 \
+                           AND a.blknum = b.blknum AND a.is_image=TRUE AND a.lsn <= $7 \
+                         ORDER BY a.lsn DESC LIMIT 1), 0) \
+                 ORDER BY p.lsn DESC \
+             ) p \
              ORDER BY p.blknum, p.lsn DESC",
             schema = self.schema
         );

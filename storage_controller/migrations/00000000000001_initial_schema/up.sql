@@ -195,7 +195,7 @@ CREATE TABLE pageserver.pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, is_image, lsn DESC)
+                 blknum, lsn DESC, is_image)
 );
 
 -- SLRU pages — pg_xact, pg_multixact_offsets, pg_multixact_members.
@@ -213,7 +213,7 @@ CREATE TABLE pageserver.slru_pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((tenant_id, timeline_id, kind, segno) HASH,
-                 blknum, is_image, lsn DESC)
+                 blknum, lsn DESC, is_image)
 );
 
 -- Metadata blobs — everything that isn't a relation page or SLRU
