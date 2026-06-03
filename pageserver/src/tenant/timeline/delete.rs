@@ -413,6 +413,21 @@ impl DeleteTimelineFlow {
             Err(anyhow::anyhow!("failpoint: timeline-delete-after-rm"))?
         });
 
+        // yb-mode: drop every row for this (tenant, timeline) across
+        // `pages`, `slru_pages`, `meta`, `timeline_state`. Replaces
+        // the RTC `delete_all` upload-queue dance — that's a no-op
+        // in yb-mode since the layer-file index_part.json path is
+        // dead. If the tenant has no internal_page_store wired (test
+        // harnesses without a PageStore) we skip; production always
+        // has it.
+        if let Some(ps) = tenant.internal_page_store.as_ref() {
+            ps.delete_all_for_timeline(tenant.tenant_shard_id.tenant_id, timeline.timeline_id())
+                .await
+                .map_err(DeleteTimelineError::Other)?;
+        }
+        // Keep RTC's `delete_all` invocation only for the
+        // sanity-check side effects (asserts the upload queue is in
+        // the right state). The actual cleanup happened above.
         remote_client.delete_all().await?;
 
         pausable_failpoint!("in_progress_delete");

@@ -1211,6 +1211,49 @@ impl PageStore {
         Ok(())
     }
 
+    pub async fn delete_all_slru_pages(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+    ) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM \"{}\".slru_pages WHERE tenant_id = $1 AND timeline_id = $2",
+            self.schema
+        );
+        self.client
+            .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .await
+            .context("delete_all_slru_pages")?;
+        Ok(())
+    }
+
+    /// Drop every row for `(tenant, timeline)` across all four
+    /// pageserver tables (`pages`, `slru_pages`, `meta`,
+    /// `timeline_state`). Used by the timeline-delete flow to
+    /// reclaim space and erase persisted state in one go.
+    ///
+    /// Deletes are dispatched concurrently; YB commits each one
+    /// independently. If any DELETE fails the whole call returns
+    /// `Err` and the caller may retry — partial deletion is
+    /// idempotent so a re-run safely catches up.
+    pub async fn delete_all_for_timeline(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+    ) -> Result<()> {
+        let (a, b, c, d) = tokio::join!(
+            self.delete_all_pages(tenant, timeline),
+            self.delete_all_slru_pages(tenant, timeline),
+            self.delete_all_meta(tenant, timeline),
+            self.delete_timeline(tenant, timeline),
+        );
+        a?;
+        b?;
+        c?;
+        d?;
+        Ok(())
+    }
+
     // ------------------- timelines ----------------------------------------
 
     /// One-shot INSERT used at timeline creation by Phase 5b's
