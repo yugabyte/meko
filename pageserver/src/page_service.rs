@@ -3345,7 +3345,7 @@ impl GrpcPageServiceHandler {
                     .serve_with_incoming_shutdown(incoming, task_cancel.cancelled())
                     .await?;
                 // Server exited cleanly. All requests should have completed by now. Wait for any
-                // spawned tasks to complete as well (e.g. IoConcurrency sidecars) via the gate.
+                // remaining spawned tasks to finish via the gate.
                 gate.close().await;
                 anyhow::Ok(())
             },
