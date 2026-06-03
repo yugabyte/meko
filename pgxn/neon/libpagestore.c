@@ -1269,6 +1269,26 @@ pageserver_receive(shardno_t shard_no)
 			neon_shard_log(shard_no, PageStoreTrace, "got response: %s", msg);
 			pfree(msg);
 		}
+
+		/*
+		 * GoingAway is an unsolicited frame: the pageserver is closing
+		 * the connection on graceful shutdown. Drop the connection now
+		 * so the caller retries via the reconnect loop, instead of
+		 * waiting out pageserver_response_disconnect_timeout for the
+		 * read to time out.
+		 */
+		if (resp != NULL && resp->tag == T_NeonGoingAwayResponse)
+		{
+			NeonGoingAwayResponse *ga = (NeonGoingAwayResponse *) resp;
+
+			neon_shard_log(shard_no, LOG,
+						   "received GoingAway from pageserver (reason=%u); disconnecting",
+						   ga->reason);
+			pfree(resp);
+			pageserver_disconnect(shard_no);
+			shard->nresponses_received++;
+			return NULL;
+		}
 	}
 	else if (rc == -1 && shard->state == PS_Disconnected)
 	{
@@ -1363,6 +1383,18 @@ pageserver_try_receive(shardno_t shard_no)
 
 			neon_shard_log(shard_no, PageStoreTrace, "got response: %s", msg);
 			pfree(msg);
+		}
+
+		if (resp != NULL && resp->tag == T_NeonGoingAwayResponse)
+		{
+			NeonGoingAwayResponse *ga = (NeonGoingAwayResponse *) resp;
+
+			neon_shard_log(shard_no, LOG,
+						   "received GoingAway from pageserver (reason=%u); disconnecting",
+						   ga->reason);
+			pfree(resp);
+			pageserver_disconnect(shard_no);
+			return NULL;
 		}
 	}
 	else if (rc == -1)

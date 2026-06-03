@@ -237,7 +237,8 @@ impl PagestreamReceiver {
             PagestreamBeMessage::Exists(_)
             | PagestreamBeMessage::Nblocks(_)
             | PagestreamBeMessage::DbSize(_)
-            | PagestreamBeMessage::GetSlruSegment(_) => {
+            | PagestreamBeMessage::GetSlruSegment(_)
+            | PagestreamBeMessage::GoingAway(_) => {
                 anyhow::bail!(
                     "unexpected be message kind in response to getpage request: {}",
                     next.kind()

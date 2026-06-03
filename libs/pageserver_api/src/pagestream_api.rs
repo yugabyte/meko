@@ -38,6 +38,11 @@ pub enum PagestreamBeMessage {
     Error(PagestreamErrorResponse),
     DbSize(PagestreamDbSizeResponse),
     GetSlruSegment(PagestreamGetSlruSegmentResponse),
+    /// Unsolicited frame the pageserver sends just before closing a
+    /// connection on graceful shutdown. Receipt is the compute's
+    /// signal to abandon in-flight requests and reconnect now,
+    /// instead of waiting out the read-side disconnect timeout.
+    GoingAway(PagestreamGoingAwayResponse),
     #[cfg(feature = "testing")]
     Test(PagestreamTestResponse),
 }
@@ -65,6 +70,7 @@ enum PagestreamBeMessageTag {
     Error = 103,
     DbSize = 104,
     GetSlruSegment = 105,
+    GoingAway = 106,
     /* future tags above this line */
     /// For testing purposes, not available in production.
     #[cfg(feature = "testing")]
@@ -97,6 +103,7 @@ impl TryFrom<u8> for PagestreamBeMessageTag {
             103 => Ok(PagestreamBeMessageTag::Error),
             104 => Ok(PagestreamBeMessageTag::DbSize),
             105 => Ok(PagestreamBeMessageTag::GetSlruSegment),
+            106 => Ok(PagestreamBeMessageTag::GoingAway),
             #[cfg(feature = "testing")]
             199 => Ok(PagestreamBeMessageTag::Test),
             _ => Err(value),
@@ -214,6 +221,29 @@ pub struct PagestreamErrorResponse {
 pub struct PagestreamDbSizeResponse {
     pub req: PagestreamDbSizeRequest,
     pub db_size: i64,
+}
+
+/// Reason the pageserver is closing the connection. Kept as an open
+/// `u8` so we can add codes without a wire-protocol bump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GoingAwayReason {
+    /// Operator-initiated graceful shutdown.
+    Shutdown = 0,
+}
+
+impl GoingAwayReason {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => GoingAwayReason::Shutdown,
+            _ => GoingAwayReason::Shutdown,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PagestreamGoingAwayResponse {
+    pub reason: GoingAwayReason,
 }
 
 #[cfg(feature = "testing")]
@@ -453,6 +483,11 @@ impl PagestreamBeMessage {
                         bytes.put(&resp.segment[..]);
                     }
 
+                    Self::GoingAway(resp) => {
+                        bytes.put_u8(Tag::GoingAway as u8);
+                        bytes.put_u8(resp.reason as u8);
+                    }
+
                     #[cfg(feature = "testing")]
                     Self::Test(resp) => {
                         bytes.put_u8(Tag::Test as u8);
@@ -528,6 +563,18 @@ impl PagestreamBeMessage {
                         bytes.put_u32(resp.req.segno);
                         bytes.put_u32((resp.segment.len() / BLCKSZ) as u32);
                         bytes.put(&resp.segment[..]);
+                    }
+
+                    Self::GoingAway(resp) => {
+                        // Unsolicited frame; no request to echo. V3
+                        // readers blindly drain 24 bytes of header
+                        // after the tag, so we send zeros to keep the
+                        // parser symmetric.
+                        bytes.put_u8(Tag::GoingAway as u8);
+                        bytes.put_u64(0); // reqid
+                        bytes.put_u64(0); // request_lsn
+                        bytes.put_u64(0); // not_modified_since
+                        bytes.put_u8(resp.reason as u8);
                     }
 
                     #[cfg(feature = "testing")]
@@ -683,6 +730,14 @@ impl PagestreamBeMessage {
                         segment: segment.into(),
                     })
                 }
+                Tag::GoingAway => {
+                    // V3 echo header (zeros — see serialize).
+                    let _reqid = buf.read_u64::<BigEndian>()?;
+                    let _request_lsn = buf.read_u64::<BigEndian>()?;
+                    let _not_modified_since = buf.read_u64::<BigEndian>()?;
+                    let reason = GoingAwayReason::from_u8(buf.read_u8()?);
+                    Self::GoingAway(PagestreamGoingAwayResponse { reason })
+                }
                 #[cfg(feature = "testing")]
                 Tag::Test => {
                     let reqid = buf.read_u64::<BigEndian>()?;
@@ -724,6 +779,7 @@ impl PagestreamBeMessage {
             Self::Error(_) => "Error",
             Self::DbSize(_) => "DbSize",
             Self::GetSlruSegment(_) => "GetSlruSegment",
+            Self::GoingAway(_) => "GoingAway",
             #[cfg(feature = "testing")]
             Self::Test(_) => "Test",
         }
@@ -794,5 +850,34 @@ mod tests {
                     .unwrap();
             assert!(msg == reconstructed);
         }
+    }
+
+    #[test]
+    fn going_away_v3_roundtrip() {
+        let frame = PagestreamBeMessage::GoingAway(PagestreamGoingAwayResponse {
+            reason: GoingAwayReason::Shutdown,
+        });
+        let bytes = frame.serialize(PagestreamProtocolVersion::V3);
+        let back = PagestreamBeMessage::deserialize(bytes).unwrap();
+        match back {
+            PagestreamBeMessage::GoingAway(r) => {
+                assert_eq!(r.reason, GoingAwayReason::Shutdown);
+            }
+            other => panic!("expected GoingAway, got {}", other.kind()),
+        }
+    }
+
+    #[test]
+    fn going_away_v2_wire_shape() {
+        // V2 has no echo header: tag byte + reason byte = 2 bytes total.
+        // We don't deserialize V2 in Rust (compute parses it in C), but
+        // pin the wire shape so the C parser stays in sync.
+        let frame = PagestreamBeMessage::GoingAway(PagestreamGoingAwayResponse {
+            reason: GoingAwayReason::Shutdown,
+        });
+        let bytes = frame.serialize(PagestreamProtocolVersion::V2);
+        assert_eq!(bytes.len(), 2);
+        assert_eq!(bytes[0], PagestreamBeMessageTag::GoingAway as u8);
+        assert_eq!(bytes[1], GoingAwayReason::Shutdown as u8);
     }
 }

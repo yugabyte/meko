@@ -127,7 +127,12 @@ pub struct Listener {
 }
 
 pub struct Connections {
+    /// Hard cancel: forces tasks to exit immediately.
     cancel: CancellationToken,
+    /// Graceful cancel: tells tasks to write a `GoingAway` frame and exit
+    /// cleanly. Fires first in `shutdown()`, before the hard `cancel`
+    /// as a fallback for stragglers.
+    graceful_cancel: CancellationToken,
     tasks: tokio::task::JoinSet<ConnectionHandlerResult>,
     gate: Gate,
 }
@@ -180,9 +185,21 @@ impl Connections {
     pub(crate) async fn shutdown(self) {
         let Self {
             cancel,
+            graceful_cancel,
             mut tasks,
             gate,
         } = self;
+        // Fire graceful first so handlers can flush a `GoingAway` frame
+        // to their compute before the socket closes — keeps the compute's
+        // reconnect snappy. Briefly wait for them to drain naturally, then
+        // fall back to the hard cancel for any stragglers.
+        graceful_cancel.cancel();
+        let _ = tokio::time::timeout(Duration::from_millis(500), async {
+            while let Some(res) = tasks.join_next().await {
+                Self::handle_connection_completion(res);
+            }
+        })
+        .await;
         cancel.cancel();
         while let Some(res) = tasks.join_next().await {
             Self::handle_connection_completion(res);
@@ -220,6 +237,7 @@ pub async fn libpq_listener_main(
     listener_cancel: CancellationToken,
 ) -> Connections {
     let connections_cancel = CancellationToken::new();
+    let connections_graceful_cancel = CancellationToken::new();
     let connections_gate = Gate::default();
     let mut connection_handler_tasks = tokio::task::JoinSet::default();
 
@@ -260,6 +278,7 @@ pub async fn libpq_listener_main(
                     pipelining_config.clone(),
                     connection_ctx,
                     connections_cancel.child_token(),
+                    connections_graceful_cancel.child_token(),
                     gate_guard,
                 ));
             }
@@ -274,6 +293,7 @@ pub async fn libpq_listener_main(
 
     Connections {
         cancel: connections_cancel,
+        graceful_cancel: connections_graceful_cancel,
         tasks: connection_handler_tasks,
         gate: connections_gate,
     }
@@ -301,6 +321,7 @@ async fn page_service_conn_main(
     pipelining_config: PageServicePipeliningConfig,
     connection_ctx: RequestContext,
     cancel: CancellationToken,
+    graceful_cancel: CancellationToken,
     // Holds the connections-gate slot open for this task's lifetime.
     _gate_guard: GateGuard,
 ) -> ConnectionHandlerResult {
@@ -366,6 +387,7 @@ async fn page_service_conn_main(
         perf_span_fields,
         connection_ctx,
         cancel.clone(),
+        graceful_cancel,
     );
     let pgbackend =
         PostgresBackend::new_from_io(socket_fd, socket, peer_addr, auth_type, tls_config)?;
@@ -409,6 +431,9 @@ struct PageServerHandler {
     perf_span_fields: ConnectionPerfSpanFields,
 
     cancel: CancellationToken,
+    /// Fires before `cancel` on graceful shutdown so the pagestream loop
+    /// can write a `GoingAway` frame to the compute before closing.
+    graceful_cancel: CancellationToken,
 
     /// None only while pagestream protocol is being processed.
     timeline_handles: Option<TimelineHandles>,
@@ -901,6 +926,7 @@ impl PageServerHandler {
         perf_span_fields: ConnectionPerfSpanFields,
         connection_ctx: RequestContext,
         cancel: CancellationToken,
+        graceful_cancel: CancellationToken,
     ) -> Self {
         PageServerHandler {
             auth,
@@ -909,6 +935,7 @@ impl PageServerHandler {
             perf_span_fields,
             timeline_handles: Some(TimelineHandles::new(tenant_manager)),
             cancel,
+            graceful_cancel,
             pipelining_config,
         }
     }
@@ -935,6 +962,31 @@ impl PageServerHandler {
                 Err(QueryError::Shutdown)
             }
         )
+    }
+
+    /// Write an unsolicited `GoingAway` frame and flush it. Called on
+    /// graceful shutdown so the compute knows to abandon in-flight
+    /// requests and reconnect immediately, rather than waiting out the
+    /// `pageserver_response_disconnect_timeout` safety net.
+    async fn send_going_away<IO>(
+        pgb: &mut PostgresBackend<IO>,
+        protocol_version: PagestreamProtocolVersion,
+    ) -> anyhow::Result<()>
+    where
+        IO: AsyncRead + AsyncWrite + Send + Sync + Unpin,
+    {
+        use pageserver_api::pagestream_api::{
+            GoingAwayReason, PagestreamBeMessage, PagestreamGoingAwayResponse,
+        };
+        let frame = PagestreamBeMessage::GoingAway(PagestreamGoingAwayResponse {
+            reason: GoingAwayReason::Shutdown,
+        });
+        info!("writing GoingAway frame on graceful shutdown");
+        pgb.write_message_noflush(&pq_proto::BeMessage::CopyData(
+            &frame.serialize(protocol_version),
+        ))?;
+        pgb.flush().await?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1867,21 +1919,35 @@ impl PageServerHandler {
         IO: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
     {
         let cancel = self.cancel.clone();
+        let graceful_cancel = self.graceful_cancel.clone();
 
         let err = loop {
-            let msg = Self::pagestream_read_message(
-                &mut pgb_reader,
-                tenant_id,
-                timeline_id,
-                &mut timeline_handles,
-                &self.perf_span_fields,
-                &cancel,
-                ctx,
-                protocol_version,
-                request_span.clone(),
-                hold_gc_cutoff_guard,
-            )
-            .await;
+            let msg = tokio::select! {
+                biased;
+                _ = graceful_cancel.cancelled() => {
+                    // Graceful shutdown: write GoingAway and exit cleanly
+                    // so the compute reconnects immediately instead of
+                    // hanging on its disconnect timeout.
+                    if let Err(e) =
+                        Self::send_going_away(pgb_writer, protocol_version).await
+                    {
+                        debug!("failed to write GoingAway frame: {e}");
+                    }
+                    return ((pgb_reader, timeline_handles), Ok(()));
+                }
+                read = Self::pagestream_read_message(
+                    &mut pgb_reader,
+                    tenant_id,
+                    timeline_id,
+                    &mut timeline_handles,
+                    &self.perf_span_fields,
+                    &cancel,
+                    ctx,
+                    protocol_version,
+                    request_span.clone(),
+                    hold_gc_cutoff_guard,
+                ) => read,
+            };
             let msg = match msg {
                 Ok(msg) => msg,
                 Err(e) => break e,
@@ -2012,6 +2078,8 @@ impl PageServerHandler {
         let perf_span_fields = self.perf_span_fields.clone();
 
         let cancel_batcher = self.cancel.child_token();
+        let graceful_cancel_batcher = self.graceful_cancel.clone();
+        let batcher_graceful_watch = graceful_cancel_batcher.clone();
         let (mut batch_tx, mut batch_rx) = spsc_fold::channel();
         let batcher = pipeline_stage!("batcher", cancel_batcher.clone(), move |cancel_batcher| {
             let ctx = ctx.attached_child();
@@ -2019,19 +2087,29 @@ impl PageServerHandler {
                 let mut pgb_reader = pgb_reader;
                 let mut exit = false;
                 while !exit {
-                    let read_res = Self::pagestream_read_message(
-                        &mut pgb_reader,
-                        tenant_id,
-                        timeline_id,
-                        &mut timeline_handles,
-                        &perf_span_fields,
-                        &cancel_batcher,
-                        &ctx,
-                        protocol_version,
-                        request_span.clone(),
-                        hold_gc_cutoff_guard,
-                    )
-                    .await;
+                    let read_res = tokio::select! {
+                        biased;
+                        _ = batcher_graceful_watch.cancelled() => {
+                            // Graceful shutdown: stop reading. Dropping
+                            // batch_tx tells the executor to drain its
+                            // current batch and then send a GoingAway
+                            // frame before closing the connection.
+                            debug!("graceful shutdown: batcher exiting");
+                            break;
+                        }
+                        r = Self::pagestream_read_message(
+                            &mut pgb_reader,
+                            tenant_id,
+                            timeline_id,
+                            &mut timeline_handles,
+                            &perf_span_fields,
+                            &cancel_batcher,
+                            &ctx,
+                            protocol_version,
+                            request_span.clone(),
+                            hold_gc_cutoff_guard,
+                        ) => r,
+                    };
                     let Some(read_res) = read_res.transpose() else {
                         debug!("client-initiated shutdown");
                         break;
@@ -2052,6 +2130,7 @@ impl PageServerHandler {
         // Executor
         //
 
+        let graceful_cancel_executor = self.graceful_cancel.clone();
         let executor = pipeline_stage!("executor", self.cancel.clone(), move |cancel| {
             let ctx = ctx.attached_child();
             async move {
@@ -2062,6 +2141,17 @@ impl PageServerHandler {
                         Ok(batch) => batch,
                         Err(spsc_fold::RecvError::SenderGone) => {
                             debug!("upstream gone");
+                            // If the batcher exited because of graceful
+                            // shutdown, send a GoingAway frame so the
+                            // compute disconnects + reconnects now.
+                            if graceful_cancel_executor.is_cancelled() {
+                                if let Err(e) =
+                                    Self::send_going_away(pgb_writer, protocol_version)
+                                        .await
+                                {
+                                    debug!("failed to write GoingAway frame: {e}");
+                                }
+                            }
                             return Ok(());
                         }
                     };

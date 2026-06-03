@@ -41,6 +41,7 @@ typedef enum
 	T_NeonErrorResponse,
 	T_NeonDbSizeResponse,
 	T_NeonGetSlruSegmentResponse,
+	T_NeonGoingAwayResponse, /* unsolicited; pageserver closing the connection */
 	/* future tags above this line */
 	T_NeonTestResponse = 199, /* only in cfg(feature = "testing") */
 } NeonMessageTag;
@@ -171,6 +172,26 @@ typedef struct
 	int			n_blocks;
 	char		data[BLCKSZ * SLRU_PAGES_PER_SEGMENT];
 } NeonGetSlruSegmentResponse;
+
+/*
+ * Unsolicited "I'm shutting down" frame the pageserver sends just before
+ * closing the connection on graceful shutdown. Receipt is the compute's
+ * cue to abandon in-flight requests and reconnect now (vs waiting out
+ * the pageserver_response_disconnect_timeout safety net).
+ *
+ * `req` is zero-filled padding so the V3 echo-header parser stays
+ * symmetric — there's no request being echoed.
+ */
+typedef enum
+{
+	NEON_GOING_AWAY_SHUTDOWN = 0
+} NeonGoingAwayReason;
+
+typedef struct
+{
+	NeonResponse req;
+	uint8		reason;	/* NeonGoingAwayReason */
+} NeonGoingAwayResponse;
 
 
 extern StringInfoData nm_pack_request(NeonRequest *msg);

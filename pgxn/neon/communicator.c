@@ -1558,6 +1558,7 @@ nm_pack_request(NeonRequest *msg)
 		case T_NeonErrorResponse:
 		case T_NeonDbSizeResponse:
 		case T_NeonGetSlruSegmentResponse:
+		case T_NeonGoingAwayResponse:
 		default:
 			neon_log(PANIC, "unexpected neon message tag 0x%02x", msg->tag);
 			break;
@@ -1694,6 +1695,18 @@ nm_unpack_response(StringInfo s)
 				n_blocks = pq_getmsgint(s, 4);
 				msg_resp->n_blocks = n_blocks;
 				memcpy(msg_resp->data, pq_getmsgbytes(s, n_blocks * BLCKSZ), n_blocks * BLCKSZ);
+				pq_getmsgend(s);
+
+				resp = (NeonResponse *) msg_resp;
+				break;
+			}
+
+		case T_NeonGoingAwayResponse:
+			{
+				NeonGoingAwayResponse *msg_resp = palloc0(sizeof(NeonGoingAwayResponse));
+
+				msg_resp->req = resp_hdr;
+				msg_resp->reason = pq_getmsgbyte(s);
 				pq_getmsgend(s);
 
 				resp = (NeonResponse *) msg_resp;
@@ -1855,6 +1868,15 @@ nm_to_string(NeonMessage *msg)
 								 msg_resp->n_blocks);
 				appendStringInfoChar(&s, '}');
 
+				break;
+			}
+
+		case T_NeonGoingAwayResponse:
+			{
+				NeonGoingAwayResponse *msg_resp = (NeonGoingAwayResponse *) msg;
+
+				appendStringInfoString(&s, "{\"type\": \"NeonGoingAwayResponse\"");
+				appendStringInfo(&s, ", \"reason\": %u}", msg_resp->reason);
 				break;
 			}
 
