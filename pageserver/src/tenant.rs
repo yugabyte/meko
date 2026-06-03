@@ -1021,11 +1021,8 @@ impl TenantShard {
         // init_upload_queue (which creates the slot) and before
         // anyone calls walreceiver_connection::send_feedback (which
         // reads it).
-        if let (Some(pw), Some(slot)) = (
-            timeline.page_writer.as_ref(),
-            timeline.remote_client.remote_consistent_lsn_slot(),
-        ) {
-            pw.set_remote_consistent_lsn_slot(slot);
+        if let Some(pw) = timeline.page_writer.as_ref() {
+            pw.set_remote_consistent_lsn_slot(timeline.remote_state.rc_lsn.clone());
         }
 
         // Eager push of the controller-issued generation to YB. The
@@ -2077,6 +2074,15 @@ impl TenantShard {
         };
 
         // Third part: upload new timeline archival state and block until it is present in S3
+        // yb-mode: also push the bit to `remote_state` so readers
+        // (flush gate, http status, ancestor checks) see the new
+        // state without round-tripping through the dead RTC upload
+        // pipeline. RTC keeps its own copy for the upstream-compat
+        // schedule_index_upload call below.
+        timeline.remote_state.archived.store(
+            matches!(new_state, TimelineArchivalState::Archived),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let upload_needed = match timeline
             .remote_client
             .schedule_index_upload_for_timeline_archival_state(new_state)

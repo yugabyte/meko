@@ -19,17 +19,16 @@
 //!   detach. Cosmetic/visibility-only today.
 //! - **`deleting`** — set when a timeline-delete operation is
 //!   in progress. Blocks attach + walreceiver feedback.
-//! - **`gc_blocking_reasons`** — set of reasons GC must stay
-//!   blocked (e.g. an in-progress detach-ancestor). Modified by
-//!   `gc_block.rs`'s insert/remove helpers.
+//!
+//! GC blocking reasons stay in `gc_block::GcBlock` (per-tenant
+//! Mutex<HashMap<TimelineId, …>>) — that struct already owns the
+//! runtime authority; the RTC schedule_*_gc_block_reason calls
+//! are only there to persist to `index_part.json`, which yb-mode
+//! doesn't write. Step 4 removes those calls.
 
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use enumset::EnumSet;
 use utils::lsn::AtomicLsn;
-
-use crate::tenant::remote_timeline_client::index::GcBlockingReason;
 
 pub struct TimelineRemoteState {
     /// `remote_consistent_lsn` slot. `Arc` so `PageWriter` can hold a
@@ -39,7 +38,6 @@ pub struct TimelineRemoteState {
     pub archived: AtomicBool,
     pub invisible: AtomicBool,
     pub deleting: AtomicBool,
-    pub gc_blocking_reasons: Mutex<EnumSet<GcBlockingReason>>,
 }
 
 impl TimelineRemoteState {
@@ -49,7 +47,6 @@ impl TimelineRemoteState {
             archived: AtomicBool::new(false),
             invisible: AtomicBool::new(false),
             deleting: AtomicBool::new(false),
-            gc_blocking_reasons: Mutex::new(EnumSet::empty()),
         }
     }
 }

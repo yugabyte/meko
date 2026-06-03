@@ -1198,17 +1198,19 @@ impl Timeline {
     }
 
     /// remote_consistent_lsn from the perspective of the tenant's current generation,
-    /// not validated with control plane yet.
-    /// See [`Self::get_remote_consistent_lsn_visible`].
+    /// not validated with control plane yet. In yb-mode the slot is
+    /// driven directly by `PageWriter` (no upload pipeline), so
+    /// projected and visible are the same single `AtomicLsn`.
     pub(crate) fn get_remote_consistent_lsn_projected(&self) -> Option<Lsn> {
-        self.remote_client.remote_consistent_lsn_projected()
+        let lsn = self.remote_state.rc_lsn.load();
+        (lsn != Lsn(0)).then_some(lsn)
     }
 
-    /// remote_consistent_lsn which the tenant is guaranteed not to go backward from,
-    /// i.e. a value of remote_consistent_lsn_projected which has undergone
-    /// generation validation in the deletion queue.
+    /// remote_consistent_lsn which the tenant is guaranteed not to go backward from.
+    /// See [`Self::get_remote_consistent_lsn_projected`].
     pub(crate) fn get_remote_consistent_lsn_visible(&self) -> Option<Lsn> {
-        self.remote_client.remote_consistent_lsn_visible()
+        let lsn = self.remote_state.rc_lsn.load();
+        (lsn != Lsn(0)).then_some(lsn)
     }
 
     /// yb-mode: no layer files exist, so the sum is always 0.
@@ -1618,7 +1620,10 @@ impl Timeline {
             // yb-mode: no in-memory layers to inspect; always issue the
             // freeze_and_flush call so PageWriter has a chance to flush
             // its pending row buffer before shutdown.
-            let do_flush = self.remote_client.is_archived() != Some(true);
+            let do_flush = !self
+                .remote_state
+                .archived
+                .load(std::sync::atomic::Ordering::Relaxed);
 
             if do_flush {
                 match self.freeze_and_flush().await {
@@ -1664,6 +1669,9 @@ impl Timeline {
 
         // Transition the remote_client into a state where it's only useful for timeline deletion.
         // (The deletion use case is why we can't just hook up remote_client to Self::cancel).)
+        self.remote_state
+            .deleting
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.remote_client.stop();
 
         // As documented in remote_client.stop()'s doc comment, it's our responsibility
@@ -1742,7 +1750,11 @@ impl Timeline {
     }
 
     pub(crate) fn is_archived(&self) -> Option<bool> {
-        self.remote_client.is_archived()
+        Some(
+            self.remote_state
+                .archived
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     pub(crate) fn is_stopping(&self) -> bool {
@@ -2888,7 +2900,11 @@ impl Timeline {
             return;
         }
 
-        if self.remote_client.is_deleting() {
+        if self
+            .remote_state
+            .deleting
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             // The timeline was created in a deletion-resume state, we don't expect logical size to be populated
             return;
         }

@@ -683,7 +683,7 @@ impl PageStore {
             let fork = range.start.field5 as i16;
             let blk_lo = range.start.field6 as i64;
             let blk_hi = range.end.field6 as i64;
-            // `per_block_image` is a single contiguous scan of the
+            // `per_block_anchor` is a single contiguous scan of the
             // `is_image=TRUE` cluster within the blknum range, reduced
             // by `GROUP BY blknum MAX(lsn)`. The PK clustering
             // `(blknum, is_image, lsn DESC)` makes this one tablet-local
@@ -692,10 +692,10 @@ impl PageStore {
             // — wasteful when most blocks have no image at all). The
             // main SELECT then LEFT JOINs back and keeps only rows from
             // the anchor up; blocks without an image fall through as
-            // `bi.image_lsn IS NULL` and replay the full chain.
+            // `bi.anchor_lsn IS NULL` and replay the full chain.
             let sql = format!(
-                "WITH per_block_image AS ( \
-                     SELECT blknum, MAX(lsn) AS image_lsn \
+                "WITH per_block_anchor AS ( \
+                     SELECT blknum, MAX(lsn) AS anchor_lsn \
                      FROM \"{schema}\".pages \
                      WHERE tenant_id=$1 AND timeline_id=$2 \
                        AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
@@ -707,13 +707,13 @@ impl PageStore {
                  SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                         p.lsn, p.is_image, p.will_init, p.payload \
                  FROM \"{schema}\".pages p \
-                 LEFT JOIN per_block_image bi ON p.blknum = bi.blknum \
+                 LEFT JOIN per_block_anchor bi ON p.blknum = bi.blknum \
                  WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
                    AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
                    AND p.forknum=$6 \
                    AND p.blknum >= $7 AND p.blknum < $8 \
                    AND p.lsn <= $9 \
-                   AND (bi.image_lsn IS NULL OR p.lsn >= bi.image_lsn) \
+                   AND (bi.anchor_lsn IS NULL OR p.lsn >= bi.anchor_lsn) \
                  ORDER BY p.blknum, p.lsn DESC",
                 schema = self.schema
             );
@@ -748,8 +748,8 @@ impl PageStore {
             // `is_image=TRUE` cluster across the tablets the range
             // touches, reduced inline.
             let sql = format!(
-                "WITH per_block_image AS ( \
-                     SELECT spcnode, dbnode, relnode, forknum, blknum, MAX(lsn) AS image_lsn \
+                "WITH per_block_anchor AS ( \
+                     SELECT spcnode, dbnode, relnode, forknum, blknum, MAX(lsn) AS anchor_lsn \
                      FROM \"{schema}\".pages \
                      WHERE tenant_id=$1 AND timeline_id=$2 \
                        AND (spcnode, dbnode, relnode, forknum, blknum) >= ($3, $4, $5, $6, $7) \
@@ -760,7 +760,7 @@ impl PageStore {
                  SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                         p.lsn, p.is_image, p.will_init, p.payload \
                  FROM \"{schema}\".pages p \
-                 LEFT JOIN per_block_image bi \
+                 LEFT JOIN per_block_anchor bi \
                      ON p.spcnode = bi.spcnode AND p.dbnode = bi.dbnode \
                     AND p.relnode = bi.relnode AND p.forknum = bi.forknum \
                     AND p.blknum = bi.blknum \
@@ -768,7 +768,7 @@ impl PageStore {
                    AND (p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum) >= ($3, $4, $5, $6, $7) \
                    AND (p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum) <  ($8, $9, $10, $11, $12) \
                    AND p.lsn <= $13 \
-                   AND (bi.image_lsn IS NULL OR p.lsn >= bi.image_lsn) \
+                   AND (bi.anchor_lsn IS NULL OR p.lsn >= bi.anchor_lsn) \
                  ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC",
                 schema = self.schema
             );
@@ -987,8 +987,8 @@ impl PageStore {
         let target = target_lsn.0 as i64;
 
         let sql = format!(
-            "WITH per_block_image AS ( \
-                 SELECT blknum, MAX(lsn) AS image_lsn \
+            "WITH per_block_anchor AS ( \
+                 SELECT blknum, MAX(lsn) AS anchor_lsn \
                  FROM \"{schema}\".slru_pages \
                  WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 AND segno=$4 \
                    AND blknum >= $5 AND blknum < $6 \
@@ -997,10 +997,10 @@ impl PageStore {
              ) \
              SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
              FROM \"{schema}\".slru_pages p \
-             LEFT JOIN per_block_image bi ON p.blknum = bi.blknum \
+             LEFT JOIN per_block_anchor bi ON p.blknum = bi.blknum \
              WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 AND p.segno=$4 \
                AND p.blknum >= $5 AND p.blknum < $6 AND p.lsn <= $7 \
-               AND (bi.image_lsn IS NULL OR p.lsn >= bi.image_lsn) \
+               AND (bi.anchor_lsn IS NULL OR p.lsn >= bi.anchor_lsn) \
              ORDER BY p.blknum, p.lsn DESC",
             schema = self.schema
         );
@@ -2106,7 +2106,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scan_range_anchors_on_per_block_image() {
+    async fn scan_range_anchors_on_per_block_anchor() {
         // Block 0: image at LSN 50, deltas at 20, 30, 40, 60, 70.
         //          Expected return: 60, 70 above image, plus 50 itself => 3 rows.
         //          (Rows 20, 30, 40 are shadowed by the image.)

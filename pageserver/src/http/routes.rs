@@ -421,7 +421,10 @@ async fn build_timeline_info_common(
     let remote_consistent_lsn_visible = timeline
         .get_remote_consistent_lsn_visible()
         .unwrap_or(Lsn(0));
-    let is_invisible = timeline.remote_client.is_invisible().unwrap_or(false);
+    let is_invisible = timeline
+        .remote_state
+        .invisible
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     let walreceiver_status = timeline.walreceiver_status();
 
@@ -1725,6 +1728,13 @@ async fn timeline_mark_invisible_handler(
             .tenant_manager
             .get_attached_tenant_shard(tenant_shard_id)?;
         let timeline = tenant.get_timeline(timeline_id, true)?;
+        // yb-mode: mirror to `remote_state` so the status endpoint
+        // (`is_invisible()`) reads it directly. RTC keeps its own
+        // copy for upstream-compat.
+        timeline.remote_state.invisible.store(
+            matches!(visibility, TimelineVisibilityState::Invisible),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         timeline.remote_client.schedule_index_upload_for_timeline_invisible_state(visibility).map_err(ApiError::InternalServerError)?;
         json_response(StatusCode::OK, ())
     }
