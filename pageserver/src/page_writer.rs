@@ -2424,6 +2424,122 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// The post-flush trigger refactor (Phase 4.d follow-on): even
+    /// when the per-key tally is well past the threshold, no
+    /// MaterializeJob fires until a flush completes. Regression
+    /// guard for the put-time trigger semantics we replaced —
+    /// nothing should sneak through `put()`.
+    #[tokio::test]
+    async fn dispatch_does_not_fire_without_flush() {
+        let (store, schema) = make_store("mat_no_dispatch_without_flush").await;
+        const LIMIT: u32 = 10;
+        let (w, _t, _tl, mut rx, _in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // Push 10× the threshold without ever flushing. Pre-refactor
+        // the put-time trigger would have dispatched as soon as the
+        // counter crossed LIMIT; post-refactor nothing should land
+        // in the channel until `flush()` runs.
+        for i in 0..(LIMIT * 10) as u64 {
+            w.put(&[(k(1), Lsn(10 + i), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "no dispatch should happen until a flush completes",
+        );
+
+        // The pending flush only fires after we explicitly flush.
+        w.flush().await.unwrap();
+        let job = rx
+            .try_recv()
+            .expect("flush completes → post-flush trigger fires");
+        // target_lsn is the max LSN in the snapshot, not the LSN of
+        // some interior row that "crossed the threshold". With
+        // pushes 10..(10 + 100), max = 109.
+        assert_eq!(job.target_lsn, Lsn(10 + (LIMIT * 10 - 1) as u64));
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `flush_horizon_lsn` advances atomically inside
+    /// `mark_first_n_flushed` to `max(snapshot.lsn)`. The post-flush
+    /// materialiser trigger relies on this — every job has
+    /// `target_lsn ≤ horizon` by construction, which is what makes
+    /// `read_chain_durable` safe.
+    #[tokio::test]
+    async fn flush_horizon_advances_to_snapshot_max_lsn() {
+        let (store, schema) = make_store("mat_horizon").await;
+        const LIMIT: u32 = 10;
+        let (w, _t, _tl, _rx, _in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        assert_eq!(
+            w.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "horizon starts at zero before any flush",
+        );
+
+        // Push three rows at increasing LSNs across two keys; their
+        // max is 30. After the flush, horizon = 30.
+        w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();
+        w.put(&[(k(2), Lsn(20), delta_non_init())]).await.unwrap();
+        w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
+        w.flush().await.unwrap();
+        assert_eq!(
+            w.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed),
+            30,
+            "horizon advances to max(snapshot.lsn) after mark_first_n_flushed",
+        );
+
+        // A second flush with smaller-LSN-then-larger pushes
+        // monotonically extends the horizon.
+        w.put(&[(k(1), Lsn(40), delta_non_init())]).await.unwrap();
+        w.flush().await.unwrap();
+        assert_eq!(
+            w.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed),
+            40,
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// When a single key has multiple deltas in one snapshot, the
+    /// dispatched `target_lsn` is the max LSN for that key — not the
+    /// LSN of whichever delta nominally crossed the threshold.
+    /// Pinning this matters because `read_chain_durable(key,
+    /// target_lsn)` walks the chain up to `target_lsn`, so the
+    /// materialised image's LSN equals what we put here.
+    #[tokio::test]
+    async fn flush_trigger_target_lsn_is_per_key_max() {
+        let (store, schema) = make_store("mat_target_lsn").await;
+        const LIMIT: u32 = 3;
+        let (w, _t, _tl, mut rx, _in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // 5 deltas for k(1), all in the same snapshot. LIMIT=3
+        // crosses with delta #3 at lsn 30, but the snapshot includes
+        // up to lsn 50.
+        for (i, lsn) in [10u64, 20, 30, 40, 50].iter().enumerate() {
+            let _ = i;
+            w.put(&[(k(1), Lsn(*lsn), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        w.flush().await.unwrap();
+
+        let job = rx.try_recv().expect("trigger fires post-flush");
+        assert_eq!(
+            job.target_lsn,
+            Lsn(50),
+            "target_lsn must be max LSN-for-key in the snapshot, not the \
+             threshold-crossing delta's LSN",
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
     /// `image_chain_limit = 0` disables the counter entirely — no
     /// dispatches no matter how many deltas land.
     #[tokio::test]
