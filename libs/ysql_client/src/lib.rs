@@ -850,10 +850,17 @@ async fn set_fast_path_upsert_gucs(client: &tokio_postgres::Client) -> Result<()
         .execute("SET yb_enable_upsert_mode = true", &[])
         .await
         .context("YsqlClient: SET yb_enable_upsert_mode = true")?;
-    client
-        .execute("SET yb_disable_transactional_writes = true", &[])
-        .await
-        .context("YsqlClient: SET yb_disable_transactional_writes = true")?;
+    // `yb_disable_transactional_writes = true` is disabled while we
+    // investigate a 500-conn-workload WAL-durability incident: under
+    // tablet rebalancing / RPC retries, batch INSERTs reported as
+    // success appear to lose individual rows, leaving holes in
+    // `yb_storage.wals` that wedge pageserver restart. With the GUC
+    // off, INSERTs go through the standard transactional path on
+    // this connection — slower, atomic.
+    // client
+    //     .execute("SET yb_disable_transactional_writes = true", &[])
+    //     .await
+    //     .context("YsqlClient: SET yb_disable_transactional_writes = true")?;
     Ok(())
 }
 
