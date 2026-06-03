@@ -89,12 +89,11 @@ pub struct TimelineResources {
     pub pagestream_throttle_metrics: Arc<crate::metrics::tenant_throttling::Pagestream>,
     pub basebackup_cache: Arc<BasebackupCache>,
     /// Compute-reads `PageStore` (see
-    /// `TenantSharedResources::compute_page_store`). `Some` enables
-    /// yb-pageserver mode for this timeline.
-    pub compute_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// `TenantSharedResources::compute_page_store`).
+    pub compute_page_store: Arc<crate::page_store::PageStore>,
     /// Internal-traffic `PageStore` (see
     /// `TenantSharedResources::fpu_page_store`).
-    pub fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
+    pub fpu_page_store: Arc<crate::page_store::PageStore>,
 }
 
 pub struct Timeline {
@@ -2028,86 +2027,77 @@ impl Timeline {
                 .unwrap_or(conf.default_tenant_conf.relsize_snapshot_cache_capacity)
         };
 
-        // Build the row-per-page writer if both PageStores are
-        // configured (yb-pageserver mode). Upstream pageserver builds
-        // a Timeline with both = None. PageWriter routes reads through
-        // `compute_page_store` and writes through `fpu_page_store`
-        // so compute getPage stays off the walreceiver/materialiser
-        // write conn.
-        let (page_writer, page_writer_flush_task, image_materializer_task) =
-            match (
-                resources.compute_page_store.as_ref(),
-                resources.fpu_page_store.as_ref(),
-            ) {
-                (Some(compute_ps), Some(internal_ps)) => {
-                    let pw_cfg = &conf.yb_page_writer;
-                    let mut writer = crate::page_writer::PageWriter::new(
+        // PageWriter routes reads through `compute_page_store` and writes
+        // through `fpu_page_store` so compute getPage stays off the
+        // walreceiver/materialiser write conn.
+        let (page_writer, page_writer_flush_task, image_materializer_task) = {
+            let compute_ps = &resources.compute_page_store;
+            let internal_ps = &resources.fpu_page_store;
+            let pw_cfg = &conf.yb_page_writer;
+            let mut writer = crate::page_writer::PageWriter::new(
+                tenant_shard_id.tenant_id,
+                timeline_id,
+                generation,
+                compute_ps.clone(),
+                internal_ps.clone(),
+                crate::page_writer::FlushPolicy {
+                    max_age: pw_cfg.flush_interval,
+                    max_bytes: pw_cfg.flush_size_bytes,
+                    backpressure_bytes: pw_cfg.backpressure_bytes,
+                },
+                pw_cfg.read_cache_bytes,
+            );
+
+            // Materialiser channel: established BEFORE we wrap the writer
+            // in an Arc so we can set_materializer on `&mut writer`. The
+            // spawn happens AFTER the Arc exists because the materialiser
+            // needs to hold its own Arc<PageWriter>.
+            // Either-threshold trigger: count OR payload bytes, whichever
+            // lands first. Both zero disables.
+            let mat_enabled = (pw_cfg.image_chain_limit > 0
+                || pw_cfg.image_chain_payload_bytes_limit > 0)
+                && walredo_mgr.is_some();
+            let mat_channel = if mat_enabled {
+                let (tx, rx) = tokio::sync::mpsc::channel(
+                    pw_cfg.materialize_queue_capacity.max(1),
+                );
+                let in_flight = std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::HashSet::new(),
+                ));
+                writer.set_materializer(crate::page_writer::MaterializerHandle {
+                    count_limit: pw_cfg.image_chain_limit,
+                    payload_bytes_limit: pw_cfg.image_chain_payload_bytes_limit,
+                    tx,
+                    in_flight: in_flight.clone(),
+                });
+                Some((rx, in_flight))
+            } else {
+                None
+            };
+
+            let writer = Arc::new(writer);
+            let flush_task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
+
+            let materializer_task = match (mat_channel, walredo_mgr.clone()) {
+                (Some((rx, in_flight)), Some(wr)) => {
+                    let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
+                        .expect("invalid pg_version in timeline init");
+                    Some(crate::image_materializer::ImageMaterializer::spawn(
                         tenant_shard_id.tenant_id,
                         timeline_id,
-                        generation,
-                        compute_ps.clone(),
+                        writer.clone(),
                         internal_ps.clone(),
-                        crate::page_writer::FlushPolicy {
-                            max_age: pw_cfg.flush_interval,
-                            max_bytes: pw_cfg.flush_size_bytes,
-                            backpressure_bytes: pw_cfg.backpressure_bytes,
-                        },
-                        pw_cfg.read_cache_bytes,
-                    );
-
-                    // Materialiser channel: established BEFORE we wrap
-                    // the writer in an Arc so we can set_materializer
-                    // on `&mut writer`. The spawn happens AFTER the
-                    // Arc exists because the materialiser needs to
-                    // hold its own Arc<PageWriter>.
-                    // Either-threshold trigger: count OR payload bytes,
-                    // whichever lands first. Both zero disables.
-                    let mat_enabled = (pw_cfg.image_chain_limit > 0
-                        || pw_cfg.image_chain_payload_bytes_limit > 0)
-                        && walredo_mgr.is_some();
-                    let mat_channel = if mat_enabled {
-                        let (tx, rx) = tokio::sync::mpsc::channel(
-                            pw_cfg.materialize_queue_capacity.max(1),
-                        );
-                        let in_flight = std::sync::Arc::new(std::sync::Mutex::new(
-                            std::collections::HashSet::new(),
-                        ));
-                        writer.set_materializer(crate::page_writer::MaterializerHandle {
-                            count_limit: pw_cfg.image_chain_limit,
-                            payload_bytes_limit: pw_cfg.image_chain_payload_bytes_limit,
-                            tx,
-                            in_flight: in_flight.clone(),
-                        });
-                        Some((rx, in_flight))
-                    } else {
-                        None
-                    };
-
-                    let writer = Arc::new(writer);
-                    let flush_task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
-
-                    let materializer_task = match (mat_channel, walredo_mgr.clone()) {
-                        (Some((rx, in_flight)), Some(wr)) => {
-                            let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
-                                .expect("invalid pg_version in timeline init");
-                            Some(crate::image_materializer::ImageMaterializer::spawn(
-                                tenant_shard_id.tenant_id,
-                                timeline_id,
-                                writer.clone(),
-                                internal_ps.clone(),
-                                wr,
-                                pg_major,
-                                rx,
-                                in_flight,
-                            ))
-                        }
-                        _ => None,
-                    };
-
-                    (Some(writer), Some(flush_task), materializer_task)
+                        wr,
+                        pg_major,
+                        rx,
+                        in_flight,
+                    ))
                 }
-                _ => (None, None, None),
+                _ => None,
             };
+
+            (Some(writer), Some(flush_task), materializer_task)
+        };
 
         Arc::new_cyclic(|myself| {
             let metrics = Arc::new(TimelineMetrics::new(

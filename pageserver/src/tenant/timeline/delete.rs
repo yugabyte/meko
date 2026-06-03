@@ -1,7 +1,6 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use anyhow::Context;
 use pageserver_api::models::TimelineState;
 use pageserver_api::shard::TenantShardId;
 use tokio::sync::OwnedMutexGuard;
@@ -10,11 +9,9 @@ use utils::id::TimelineId;
 use utils::{crashsafe, fs_ext, pausable_failpoint};
 
 use crate::config::PageServerConf;
-use crate::context::RequestContext;
 use crate::task_mgr::{self, TaskKind};
-use crate::tenant::metadata::TimelineMetadata;
 use crate::tenant::{
-    CreateTimelineCause, DeleteTimelineError, TenantManifestError, TenantShard, Timeline,
+    DeleteTimelineError, TenantManifestError, TenantShard, Timeline,
     TimelineOrOffloaded,
 };
 use crate::virtual_file::MaybeFatalIo;
@@ -224,53 +221,6 @@ impl DeleteTimelineFlow {
         Ok(())
     }
 
-    /// Shortcut to create Timeline in stopping state and spawn deletion task.
-    #[instrument(skip_all, fields(%timeline_id))]
-    pub(crate) async fn resume_deletion(
-        tenant: Arc<TenantShard>,
-        timeline_id: TimelineId,
-        local_metadata: &TimelineMetadata,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<()> {
-        // Note: here we even skip populating layer map. Timeline is essentially uninitialized.
-        let (timeline, _timeline_ctx) = tenant
-            .create_timeline_struct(
-                timeline_id,
-                local_metadata,
-                None, // Ancestor is not needed for deletion.
-                tenant.build_timeline_resources(timeline_id),
-                // Important. We dont pass ancestor above because it can be missing.
-                // Thus we need to skip the validation here.
-                CreateTimelineCause::Delete,
-                crate::tenant::CreateTimelineIdempotency::FailWithConflict, // doesn't matter what we put here
-                None, // doesn't matter what we put here
-                None, // doesn't matter what we put here
-                None, // doesn't matter what we put here
-                ctx,
-            )
-            .context("create_timeline_struct")?;
-
-        let mut guard = DeletionGuard(
-            Arc::clone(&timeline.delete_progress)
-                .try_lock_owned()
-                .expect("cannot happen because we're the only owner"),
-        );
-
-        // We meed to do this because when console retries delete request we shouldnt answer with 404
-        // because 404 means successful deletion.
-        {
-            let mut locked = tenant.timelines.lock().unwrap();
-            locked.insert(timeline_id, Arc::clone(&timeline));
-        }
-
-        guard.mark_in_progress()?;
-
-        let timeline = TimelineOrOffloaded::Timeline(timeline);
-        Self::schedule_background(guard, tenant.conf, tenant, timeline);
-
-        Ok(())
-    }
-
     fn schedule_background(
         guard: DeletionGuard,
         conf: &'static PageServerConf,
@@ -337,18 +287,13 @@ impl DeleteTimelineFlow {
             Err(anyhow::anyhow!("failpoint: timeline-delete-after-rm"))?
         });
 
-        // yb-mode: drop every row for this (tenant, timeline) across
-        // `pages`, `slru_pages`, `meta`, `timeline_state`. Replaces
-        // the RTC `delete_all` upload-queue dance — that's a no-op
-        // in yb-mode since the layer-file index_part.json path is
-        // dead. If the tenant has no fpu_page_store wired (test
-        // harnesses without a PageStore) we skip; production always
-        // has it.
-        if let Some(ps) = tenant.fpu_page_store.as_ref() {
-            ps.delete_all_for_timeline(tenant.tenant_shard_id.tenant_id, timeline.timeline_id())
-                .await
-                .map_err(DeleteTimelineError::Other)?;
-        }
+        // Drop every row for this (tenant, timeline) across
+        // `pages`, `slru_pages`, `meta`, `timeline_state`.
+        tenant
+            .fpu_page_store
+            .delete_all_for_timeline(tenant.tenant_shard_id.tenant_id, timeline.timeline_id())
+            .await
+            .map_err(DeleteTimelineError::Other)?;
 
         pausable_failpoint!("in_progress_delete");
 

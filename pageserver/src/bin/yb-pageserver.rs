@@ -536,13 +536,8 @@ fn start_pageserver(
     // (GetPage hot path) and internal traffic (walreceiver flush +
     // materialiser). Compute reads stay off the conn that walreceiver
     // / materialiser writes pile onto, and vice versa.
-    let compute_page_store =
-        BACKGROUND_RUNTIME.block_on(create_compute_page_store(conf))?;
-    let fpu_page_store = if compute_page_store.is_some() {
-        BACKGROUND_RUNTIME.block_on(create_fpu_page_store(conf))?
-    } else {
-        None
-    };
+    let compute_page_store = BACKGROUND_RUNTIME.block_on(create_compute_page_store(conf))?;
+    let fpu_page_store = BACKGROUND_RUNTIME.block_on(create_fpu_page_store(conf))?;
 
     // Set up deletion queue
     let (deletion_queue, deletion_workers) = DeletionQueue::new(
@@ -863,23 +858,23 @@ fn start_pageserver(
 
 /// Open a `PageStore` against the configured YB cluster with the
 /// given Postgres `application_name` and `pool_size` independent YSQL
-/// connections. Returns `None` if the pageserver isn't configured for
-/// yb-pageserver mode (no `YbStore` remote_storage backend).
+/// connections. Fails if the pageserver isn't configured with a
+/// `YbStore` remote_storage backend — yb-pageserver requires it.
 async fn create_page_store_with_app_name(
     conf: &'static PageServerConf,
     application_name: &str,
     pool_size: usize,
     set_fast_path_upsert: bool,
-) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
+) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
     use remote_storage::RemoteStorageKind;
-    let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
-        return Ok(None);
+    let rs_cfg = conf
+        .remote_storage_config
+        .as_ref()
+        .context("yb-pageserver requires `remote_storage` configured")?;
+    let RemoteStorageKind::YbStore(yb_cfg) = &rs_cfg.storage else {
+        anyhow::bail!("yb-pageserver requires a YbStore remote_storage backend");
     };
-    let yb_cfg = match &rs_cfg.storage {
-        RemoteStorageKind::YbStore(cfg) => cfg.clone(),
-        _ => return Ok(None),
-    };
-    let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg);
+    let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg.clone());
     let store = pageserver::page_store::PageStore::connect_pooled(
         ps_cfg,
         application_name,
@@ -887,7 +882,7 @@ async fn create_page_store_with_app_name(
         set_fast_path_upsert,
     )
     .await?;
-    Ok(Some(Arc::new(store)))
+    Ok(Arc::new(store))
 }
 
 /// Compute-reads `PageStore`: serves the compute GetPage hot path
@@ -905,27 +900,24 @@ async fn create_page_store_with_app_name(
 /// prefetches overlap on YB instead of queueing.
 async fn create_compute_page_store(
     conf: &'static PageServerConf,
-) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
+) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
     const COMPUTE_POOL_SIZE: usize = 4;
     // Read-only path — no `yb_enable_upsert_mode` GUC needed.
-    let Some(store) = create_page_store_with_app_name(
+    let store = create_page_store_with_app_name(
         conf,
         "yb-pageserver:compute_reads",
         COMPUTE_POOL_SIZE,
         false,
     )
-    .await?
-    else {
-        return Ok(None);
-    };
+    .await?;
     // No schema bootstrap here — storage_controller's diesel
     // migrations are the single source of truth for `pageserver.*`
     // tables. Tests still call `store.ensure_schema()` directly.
     info!(
         pool_size = COMPUTE_POOL_SIZE,
-        "Compute-reads PageStore connected; yb-pageserver mode enabled"
+        "Compute-reads PageStore connected"
     );
-    Ok(Some(store))
+    Ok(store)
 }
 
 /// Internal-traffic `PageStore`: walreceiver `PageWriter::flush` +
@@ -944,27 +936,24 @@ async fn create_compute_page_store(
 /// shares this pool for its image INSERTs.
 async fn create_fpu_page_store(
     conf: &'static PageServerConf,
-) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
+) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
     const INTERNAL_POOL_SIZE: usize = 4;
     // The fast-upsert pool: `put_pages` + `put_slru_pages` +
     // `put_meta` + the materialiser's image INSERTs all run here and
     // depend on `yb_enable_upsert_mode = true` to skip
     // read-before-write on partial-chunk retries.
-    let Some(store) = create_page_store_with_app_name(
+    let store = create_page_store_with_app_name(
         conf,
         "yb-pageserver:fpu",
         INTERNAL_POOL_SIZE,
         true,
     )
-    .await?
-    else {
-        return Ok(None);
-    };
+    .await?;
     info!(
         pool_size = INTERNAL_POOL_SIZE,
         "Internal PageStore connected"
     );
-    Ok(Some(store))
+    Ok(store)
 }
 
 async fn create_remote_storage_client(

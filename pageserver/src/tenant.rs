@@ -42,14 +42,10 @@ use remote_timeline_client::index::GcCompactionState;
 use remote_timeline_client::manifest::{
     LATEST_TENANT_MANIFEST_VERSION, OffloadedTimelineManifest, TenantManifest,
 };
-use remote_timeline_client::{
-    FAILED_REMOTE_OP_RETRIES, FAILED_UPLOAD_WARN_THRESHOLD,
-    download_tenant_manifest,
-};
+use remote_timeline_client::{FAILED_REMOTE_OP_RETRIES, FAILED_UPLOAD_WARN_THRESHOLD};
 use storage_broker::BrokerClientChannel;
 use tokio::io::BufReader;
 use tokio::sync::{Semaphore, watch};
-use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::crashsafe::path_with_suffix_extension;
@@ -139,17 +135,15 @@ pub struct TenantSharedResources {
     pub basebackup_cache: Arc<BasebackupCache>,
     /// Row-per-page YugabyteDB store dedicated to compute-facing
     /// reads (GetPage hot path: `PageWriter::scan_range` and
-    /// `PageWriter::read_chain`). `Some` enables yb-pageserver mode;
-    /// `None` is upstream layer-file behaviour. Paired with
-    /// `fpu_page_store` — both populated or neither.
-    pub compute_page_store: Option<Arc<crate::page_store::PageStore>>,
+    /// `PageWriter::read_chain`). Paired with `fpu_page_store`.
+    pub compute_page_store: Arc<crate::page_store::PageStore>,
     /// `PageStore` dedicated to internal traffic: walreceiver
     /// `PageWriter::flush` (parameterised batched INSERT), and the
     /// image materialiser (cache-miss `read_chain_durable` +
     /// `put_pages`). Owning its own YSQL connection keeps walapply
     /// writes and materialiser work off the compute getPage path so
     /// reads stay isolated from internal load.
-    pub fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
+    pub fpu_page_store: Arc<crate::page_store::PageStore>,
 }
 
 /// A [`TenantShard`] is really an _attached_ tenant.  The configuration
@@ -208,8 +202,6 @@ impl AttachedTenantConf {
     }
 }
 struct TimelinePreload {
-    timeline_id: TimelineId,
-    client: RemoteTimelineClient,
     index_part: Result<MaybeDeletedIndexPart, DownloadError>,
 }
 
@@ -361,10 +353,10 @@ pub struct TenantShard {
 
     /// Compute-reads `PageStore` (see
     /// `TenantSharedResources::compute_page_store`).
-    pub(crate) compute_page_store: Option<Arc<crate::page_store::PageStore>>,
+    pub(crate) compute_page_store: Arc<crate::page_store::PageStore>,
     /// Internal-traffic `PageStore` (see
     /// `TenantSharedResources::fpu_page_store`).
-    pub(crate) fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
+    pub(crate) fpu_page_store: Arc<crate::page_store::PageStore>,
 }
 impl std::fmt::Debug for TenantShard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -914,11 +906,6 @@ pub enum InitdbError {
     Inner(postgres_initdb::Error),
 }
 
-enum CreateTimelineCause {
-    Load,
-    Delete,
-}
-
 #[allow(clippy::large_enum_variant, reason = "TODO")]
 enum LoadTimelineCause {
     Attach,
@@ -1005,7 +992,6 @@ impl TenantShard {
             &metadata,
             ancestor.clone(),
             resources,
-            CreateTimelineCause::Load,
             idempotency.clone(),
             index_part.gc_compaction.clone(),
             index_part.rel_size_migration.clone(),
@@ -1306,102 +1292,34 @@ impl TenantShard {
     #[instrument(skip_all)]
     pub(crate) async fn preload(
         self: &Arc<Self>,
-        remote_storage: &GenericRemoteStorage,
+        _remote_storage: &GenericRemoteStorage,
         cancel: CancellationToken,
     ) -> anyhow::Result<TenantPreload> {
         span::debug_assert_current_span_has_tenant_id();
 
-        // yb-mode short-circuit: the authoritative timeline set lives in
-        // `pageserver.timeline_state`; one SQL fetch replaces a controller
-        // LIST + per-timeline blob `download_index_file` round-trip. The
-        // tenant manifest tracks offloaded timelines and is unused here, so
-        // we skip its blob fetch too.
-        if let Some(ps) = self.compute_page_store.as_ref() {
-            let tenant_id = self.tenant_shard_id.tenant_id;
-            let rows = tokio::select! {
-                r = ps.list_timelines(tenant_id) => r?,
-                _ = cancel.cancelled() => anyhow::bail!("cancelled"),
-            };
-            info!("preload: {} timelines from pageserver.timeline_state", rows.len());
-            let mut timelines = HashMap::with_capacity(rows.len());
-            for row in rows {
-                let timeline_id = row.timeline_id;
-                let index_part = synth_index_part_from_row(&row)?;
-                let client = self.build_timeline_client(timeline_id, remote_storage.clone());
-                timelines.insert(
-                    timeline_id,
-                    Some(TimelinePreload {
-                        timeline_id,
-                        client,
-                        index_part: Ok(index_part),
-                    }),
-                );
-            }
-            return Ok(TenantPreload {
-                tenant_manifest: None,
-                timelines,
-            });
-        }
-
-        // Get list of remote timelines
-        // download index files for every tenant timeline
-        info!("listing remote timelines");
-        let (mut remote_timeline_ids, other_keys) = remote_timeline_client::list_remote_timelines(
-            remote_storage,
-            self.tenant_shard_id,
-            cancel.clone(),
-        )
-        .await?;
-
-        let tenant_manifest = match download_tenant_manifest(
-            remote_storage,
-            &self.tenant_shard_id,
-            self.generation,
-            &cancel,
-        )
-        .await
-        {
-            Ok((tenant_manifest, _, _)) => Some(tenant_manifest),
-            Err(DownloadError::NotFound) => None,
-            Err(err) => return Err(err.into()),
+        // The authoritative timeline set lives in
+        // `pageserver.timeline_state`; one SQL fetch builds the full
+        // preload. Offloaded timelines aren't supported in yb-mode, so
+        // the tenant-manifest blob is also skipped.
+        let tenant_id = self.tenant_shard_id.tenant_id;
+        let rows = tokio::select! {
+            r = self.compute_page_store.list_timelines(tenant_id) => r?,
+            _ = cancel.cancelled() => anyhow::bail!("cancelled"),
         };
-
-        info!(
-            "found {} timelines ({} offloaded timelines)",
-            remote_timeline_ids.len(),
-            tenant_manifest
-                .as_ref()
-                .map(|m| m.offloaded_timelines.len())
-                .unwrap_or(0)
-        );
-
-        for k in other_keys {
-            warn!("Unexpected non timeline key {k}");
+        info!("preload: {} timelines from pageserver.timeline_state", rows.len());
+        let mut timelines = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let index_part = synth_index_part_from_row(&row)?;
+            timelines.insert(
+                row.timeline_id,
+                Some(TimelinePreload {
+                    index_part: Ok(index_part),
+                }),
+            );
         }
-
-        // Avoid downloading IndexPart of offloaded timelines.
-        let mut offloaded_with_prefix = HashSet::new();
-        if let Some(tenant_manifest) = &tenant_manifest {
-            for offloaded in tenant_manifest.offloaded_timelines.iter() {
-                if remote_timeline_ids.remove(&offloaded.timeline_id) {
-                    offloaded_with_prefix.insert(offloaded.timeline_id);
-                } else {
-                    // We'll take care later of timelines in the manifest without a prefix
-                }
-            }
-        }
-
-        let timelines = self
-            .load_timelines_metadata(remote_timeline_ids, remote_storage, cancel)
-            .await?;
-
         Ok(TenantPreload {
-            tenant_manifest,
-            timelines: timelines
-                .into_iter()
-                .map(|(id, tl)| (id, Some(tl)))
-                .chain(offloaded_with_prefix.into_iter().map(|id| (id, None)))
-                .collect(),
+            tenant_manifest: None,
+            timelines,
         })
     }
 
@@ -1450,105 +1368,32 @@ impl TenantShard {
                 !delete
         });
 
-        let mut timelines_to_resume_deletions = vec![];
-
-        let mut remote_index_and_client = HashMap::new();
+        let mut remote_index = HashMap::new();
         let mut timeline_ancestors = HashMap::new();
-        let mut existent_timelines = HashSet::new();
         for (timeline_id, preload) in preload.timelines {
             let Some(preload) = preload else { continue };
-            // This is an invariant of the `preload` function's API
+            // Offloaded timelines are tracked separately; preload only
+            // surfaces non-offloaded ones.
             assert!(!offloaded_timeline_ids.contains(&timeline_id));
-            let index_part = match preload.index_part {
-                Ok(i) => {
-                    debug!("remote index part exists for timeline {timeline_id}");
-                    // We found index_part on the remote, this is the standard case.
-                    existent_timelines.insert(timeline_id);
-                    i
-                }
-                Err(DownloadError::NotFound) => {
-                    // No index_part on the remote. Two paths converge here:
-                    //
-                    // (a) Upstream pageserver mode: there's some prefix for
-                    //     this timeline (initdb.tar.zst, a partial deletion,
-                    //     etc.) but no index_part. The right move is to
-                    //     drop the local dentry — original upstream behaviour.
-                    //
-                    // (b) yb-pageserver mode (Phase 5c): index_part.json
-                    //     was never uploaded because Phase 4a/b/c stopped
-                    //     producing layer files for rel/SLRU/meta keys, so
-                    //     the upload that piggybacks on layer-file flushes
-                    //     never fires. The authoritative timeline state
-                    //     lives in `pageserver.timeline_state` instead.
-                    //     Read the row, synthesise an IndexPart with empty
-                    //     `layer_metadata` (no layer files exist) and the
-                    //     metadata reconstructed from the row's columns.
-                    //
-                    // If yb mode is on AND the row exists → synthesise.
-                    // Else fall through to the original NotFound behaviour.
-                    let yb_row = match self.compute_page_store.as_ref() {
-                        Some(ps) => match ps
-                            .get_timeline(self.tenant_shard_id.tenant_id, timeline_id)
-                            .await
-                        {
-                            Ok(row) => row,
-                            Err(e) => {
-                                warn!(%timeline_id, "yb timeline_state lookup failed: {e:#}");
-                                None
-                            }
-                        },
-                        None => None,
-                    };
-                    if let Some(row) = yb_row {
-                        info!(%timeline_id, "Phase 5c: synthesising IndexPart from pageserver.timeline_state");
-                        existent_timelines.insert(timeline_id);
-                        synth_index_part_from_row(&row)?
-                    } else {
-                        info!(%timeline_id, "index_part not found on remote");
-                        continue;
-                    }
-                }
-                Err(DownloadError::Fatal(why)) => {
-                    // If, while loading one remote timeline, we saw an indication that our generation
-                    // number is likely invalid, then we should not load the whole tenant.
-                    error!(%timeline_id, "Fatal error loading timeline: {why}");
-                    anyhow::bail!(why.to_string());
-                }
-                Err(e) => {
-                    // Some (possibly ephemeral) error happened during index_part download.
-                    // Pretend the timeline exists to not delete the timeline directory,
-                    // as it might be a temporary issue and we don't want to re-download
-                    // everything after it resolves.
-                    warn!(%timeline_id, "Failed to load index_part from remote storage, failed creation? ({e})");
-
-                    existent_timelines.insert(timeline_id);
-                    continue;
-                }
+            // `preload.index_part` is synthesised from
+            // `pageserver.timeline_state` in `Tenant::preload`, so it's
+            // always `Ok(IndexPart(...))` — no remote blob download
+            // path remains in yb-mode.
+            let MaybeDeletedIndexPart::IndexPart(index_part) = preload
+                .index_part
+                .expect("yb-mode preload always builds an Ok IndexPart")
+            else {
+                unreachable!("synth_index_part_from_row never produces Deleted");
             };
-            match index_part {
-                MaybeDeletedIndexPart::IndexPart(index_part) => {
-                    timeline_ancestors.insert(timeline_id, index_part.metadata.clone());
-                    remote_index_and_client
-                        .insert(timeline_id, (index_part, preload.client));
-                }
-                MaybeDeletedIndexPart::Deleted(index_part) => {
-                    info!(
-                        "timeline {} is deleted, picking to resume deletion",
-                        timeline_id
-                    );
-                    timelines_to_resume_deletions.push((timeline_id, index_part, preload.client));
-                }
-            }
+            timeline_ancestors.insert(timeline_id, index_part.metadata.clone());
+            remote_index.insert(timeline_id, index_part);
         }
 
         let mut gc_blocks = HashMap::new();
 
-        // For every timeline, download the metadata file, scan the local directory,
-        // and build a layer map that contains an entry for each remote and local
-        // layer file.
         let sorted_timelines = tree_sort_timelines(timeline_ancestors, |m| m.ancestor_timeline())?;
         for (timeline_id, remote_metadata) in sorted_timelines {
-            let (index_part, _remote_client) = remote_index_and_client
+            let index_part = remote_index
                 .remove(&timeline_id)
                 .expect("just put it in above");
 
@@ -1601,22 +1446,10 @@ impl TenantShard {
         // update_layer_visibility removed in phase 4d.2.
         let _ = compute_visiblity_for;
 
-        // Walk through deleted timelines, resume deletion.
-        // yb-mode: no upload queue to re-arm for deletion — the
-        // metadata is enough to spawn the delete flow, which then
-        // drops YB rows directly.
-        for (timeline_id, index_part, _remote_timeline_client) in timelines_to_resume_deletions {
-            DeleteTimelineFlow::resume_deletion(
-                Arc::clone(self),
-                timeline_id,
-                &index_part.metadata,
-                ctx,
-            )
-            .instrument(tracing::info_span!("timeline_delete", %timeline_id))
-            .await
-            .context("resume_deletion")
-            .map_err(LoadLocalTimelineError::ResumeDeletion)?;
-        }
+        // Resume-deletion path is dead in yb-mode: synth never produces
+        // `MaybeDeletedIndexPart::Deleted`, so there's nothing to
+        // restart here. If we want crash-safe deletion in yb-mode,
+        // surface `timeline_state.deleted_at` at preload time instead.
 
         // Stash the preloaded tenant manifest, and upload a new manifest if changed.
         //
@@ -1629,17 +1462,8 @@ impl TenantShard {
         }
         self.maybe_upload_tenant_manifest().await?;
 
-        // The local filesystem contents are a cache of what's in the remote IndexPart;
-        // IndexPart is the source of truth.
-        //
-        // yb-mode skips this: we never write layer files, and the only
-        // dentries the pageserver itself creates are now gone (the
-        // per-timeline `create_dir_all` in `load_remote_timeline` is
-        // gated off too). `pageserver.timeline_state` is the authoritative
-        // existence set.
-        if self.compute_page_store.is_none() {
-            self.clean_up_timelines(&existent_timelines)?;
-        }
+        // yb-mode is the only path; we never wrote layer files, never
+        // created per-timeline dentries, nothing to reconcile.
 
         self.gc_block.set_scanned(gc_blocks);
 
@@ -1649,64 +1473,6 @@ impl TenantShard {
         failpoint_support::sleep_millis_async!("attach-before-activate-sleep", &self.cancel);
 
         info!("Done");
-
-        Ok(())
-    }
-
-    /// Check for any local timeline directories that are temporary, or do not correspond to a
-    /// timeline that still exists: this can happen if we crashed during a deletion/creation, or
-    /// if a timeline was deleted while the tenant was attached to a different pageserver.
-    fn clean_up_timelines(&self, existent_timelines: &HashSet<TimelineId>) -> anyhow::Result<()> {
-        let timelines_dir = self.conf.timelines_path(&self.tenant_shard_id);
-
-        let entries = match timelines_dir.read_dir_utf8() {
-            Ok(d) => d,
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    return Ok(());
-                } else {
-                    return Err(e).context("list timelines directory for tenant");
-                }
-            }
-        };
-
-        for entry in entries {
-            let entry = entry.context("read timeline dir entry")?;
-            let entry_path = entry.path();
-
-            let purge = if crate::is_temporary(entry_path) {
-                true
-            } else {
-                match TimelineId::try_from(entry_path.file_name()) {
-                    Ok(i) => {
-                        // Purge if the timeline ID does not exist in remote storage: remote storage is the authority.
-                        !existent_timelines.contains(&i)
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Unparseable directory in timelines directory: {entry_path}, ignoring ({e})"
-                        );
-                        // Do not purge junk: if we don't recognize it, be cautious and leave it for a human.
-                        false
-                    }
-                }
-            };
-
-            if purge {
-                tracing::info!("Purging stale timeline dentry {entry_path}");
-                if let Err(e) = match entry.file_type() {
-                    Ok(t) => if t.is_dir() {
-                        std::fs::remove_dir_all(entry_path)
-                    } else {
-                        std::fs::remove_file(entry_path)
-                    }
-                    .or_else(fs_ext::ignore_not_found),
-                    Err(e) => Err(e),
-                } {
-                    tracing::warn!("Failed to purge stale timeline dentry {entry_path}: {e}");
-                }
-            }
-        }
 
         Ok(())
     }
@@ -1737,13 +1503,6 @@ impl TenantShard {
         span::debug_assert_current_span_has_tenant_id();
 
         info!("loading timeline {}", timeline_id);
-        // yb-mode never writes layer files; skip the empty per-timeline
-        // directory entirely.
-        if self.compute_page_store.is_none() {
-            tokio::fs::create_dir_all(self.conf.timeline_path(&self.tenant_shard_id, &timeline_id))
-                .await
-                .context("Failed to create new timeline directory")?;
-        }
 
         let ancestor = if let Some(ancestor_id) = remote_metadata.ancestor_timeline() {
             let timelines = self.timelines.lock().unwrap();
@@ -1768,46 +1527,6 @@ impl TenantShard {
             ctx,
         )
         .await
-    }
-
-    async fn load_timelines_metadata(
-        self: &Arc<TenantShard>,
-        timeline_ids: HashSet<TimelineId>,
-        remote_storage: &GenericRemoteStorage,
-        cancel: CancellationToken,
-    ) -> anyhow::Result<HashMap<TimelineId, TimelinePreload>> {
-        let mut part_downloads = JoinSet::new();
-        for timeline_id in timeline_ids {
-            let cancel_clone = cancel.clone();
-
-            part_downloads.spawn(
-                self.load_timeline_metadata(timeline_id, remote_storage.clone(), cancel_clone)
-                    .instrument(info_span!("download_index_part", %timeline_id)),
-            );
-        }
-
-        let mut timeline_preloads: HashMap<TimelineId, TimelinePreload> = HashMap::new();
-
-        loop {
-            tokio::select!(
-                next = part_downloads.join_next() => {
-                    match next {
-                        Some(result) => {
-                            let preload = result.context("join preload task")?;
-                            timeline_preloads.insert(preload.timeline_id, preload);
-                        },
-                        None => {
-                            break;
-                        }
-                    }
-                },
-                _ = cancel.cancelled() => {
-                    anyhow::bail!("Cancelled while waiting for remote index download")
-                }
-            )
-        }
-
-        Ok(timeline_preloads)
     }
 
     fn build_timeline_client(
@@ -1838,11 +1557,7 @@ impl TenantShard {
 
             debug!("finished index part download");
 
-            TimelinePreload {
-                client,
-                timeline_id,
-                index_part,
-            }
+            TimelinePreload { index_part }
         }
     }
 
@@ -3334,24 +3049,18 @@ impl TenantShard {
         new_metadata: &TimelineMetadata,
         ancestor: Option<Arc<Timeline>>,
         resources: TimelineResources,
-        cause: CreateTimelineCause,
         create_idempotency: CreateTimelineIdempotency,
         gc_compaction_state: Option<GcCompactionState>,
         rel_size_v2_status: Option<RelSizeMigration>,
         rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
     ) -> anyhow::Result<(Arc<Timeline>, RequestContext)> {
-        let state = match cause {
-            CreateTimelineCause::Load => {
-                let ancestor_id = new_metadata.ancestor_timeline();
-                anyhow::ensure!(
-                    ancestor_id == ancestor.as_ref().map(|t| t.timeline_id),
-                    "Timeline's {new_timeline_id} ancestor {ancestor_id:?} was not found"
-                );
-                TimelineState::Loading
-            }
-            CreateTimelineCause::Delete => TimelineState::Stopping,
-        };
+        let ancestor_id = new_metadata.ancestor_timeline();
+        anyhow::ensure!(
+            ancestor_id == ancestor.as_ref().map(|t| t.timeline_id),
+            "Timeline's {new_timeline_id} ancestor {ancestor_id:?} was not found"
+        );
+        let state = TimelineState::Loading;
 
         let pg_version = new_metadata.pg_version();
 
@@ -3399,8 +3108,8 @@ impl TenantShard {
         remote_storage: GenericRemoteStorage,
         deletion_queue_client: DeletionQueueClient,
         basebackup_cache: Arc<BasebackupCache>,
-        compute_page_store: Option<Arc<crate::page_store::PageStore>>,
-        fpu_page_store: Option<Arc<crate::page_store::PageStore>>,
+        compute_page_store: Arc<crate::page_store::PageStore>,
+        fpu_page_store: Arc<crate::page_store::PageStore>,
     ) -> TenantShard {
         assert!(!attached_conf.location.generation.is_none());
 
@@ -4316,7 +4025,6 @@ impl TenantShard {
                 new_metadata,
                 ancestor,
                 resources,
-                CreateTimelineCause::Load,
                 create_guard.idempotency.clone(),
                 None,
                 rel_size_v2_status,
