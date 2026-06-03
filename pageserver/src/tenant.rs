@@ -220,6 +220,37 @@ pub(crate) struct TenantPreload {
     timelines: HashMap<TimelineId, Option<TimelinePreload>>,
 }
 
+/// Build a yb-mode `IndexPart` from the `pageserver.timeline_state` row.
+/// Layer files don't exist, so the index is empty; the metadata fields
+/// that used to live in `index_part.json` ride on the row directly.
+fn synth_index_part_from_row(
+    row: &crate::page_store::TimelineRow,
+) -> anyhow::Result<MaybeDeletedIndexPart> {
+    let pg_major = match row.pg_version {
+        14 => PgMajorVersion::PG14,
+        15 => PgMajorVersion::PG15,
+        16 => PgMajorVersion::PG16,
+        17 => PgMajorVersion::PG17,
+        v => anyhow::bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
+    };
+    let metadata = crate::tenant::metadata::TimelineMetadata::new(
+        row.disk_consistent_lsn,
+        // Persisted on flush; see PageWriter::take_prev_at_or_below.
+        // NULL falls through as None and the walreceiver re-derives
+        // prev from the SK stream.
+        row.prev_record_lsn,
+        row.ancestor_timeline_id,
+        row.ancestor_lsn.unwrap_or(Lsn(0)),
+        row.applied_gc_cutoff_lsn,
+        // initdb_lsn falls back to disk_consistent_lsn — only consulted
+        // by the bootstrap-time image-layer optimisation (dead code in
+        // yb-mode) and consumption metrics.
+        row.initdb_lsn.unwrap_or(row.disk_consistent_lsn),
+        pg_major,
+    );
+    Ok(MaybeDeletedIndexPart::IndexPart(IndexPart::empty(metadata)))
+}
+
 /// When we spawn a tenant, there is a special mode for tenant creation that
 /// avoids trying to read anything from remote storage.
 pub(crate) enum SpawnMode {
@@ -1279,6 +1310,39 @@ impl TenantShard {
         cancel: CancellationToken,
     ) -> anyhow::Result<TenantPreload> {
         span::debug_assert_current_span_has_tenant_id();
+
+        // yb-mode short-circuit: the authoritative timeline set lives in
+        // `pageserver.timeline_state`; one SQL fetch replaces a controller
+        // LIST + per-timeline blob `download_index_file` round-trip. The
+        // tenant manifest tracks offloaded timelines and is unused here, so
+        // we skip its blob fetch too.
+        if let Some(ps) = self.compute_page_store.as_ref() {
+            let tenant_id = self.tenant_shard_id.tenant_id;
+            let rows = tokio::select! {
+                r = ps.list_timelines(tenant_id) => r?,
+                _ = cancel.cancelled() => anyhow::bail!("cancelled"),
+            };
+            info!("preload: {} timelines from pageserver.timeline_state", rows.len());
+            let mut timelines = HashMap::with_capacity(rows.len());
+            for row in rows {
+                let timeline_id = row.timeline_id;
+                let index_part = synth_index_part_from_row(&row)?;
+                let client = self.build_timeline_client(timeline_id, remote_storage.clone());
+                timelines.insert(
+                    timeline_id,
+                    Some(TimelinePreload {
+                        timeline_id,
+                        client,
+                        index_part: Ok(index_part),
+                    }),
+                );
+            }
+            return Ok(TenantPreload {
+                tenant_manifest: None,
+                timelines,
+            });
+        }
+
         // Get list of remote timelines
         // download index files for every tenant timeline
         info!("listing remote timelines");
@@ -1437,35 +1501,8 @@ impl TenantShard {
                     };
                     if let Some(row) = yb_row {
                         info!(%timeline_id, "Phase 5c: synthesising IndexPart from pageserver.timeline_state");
-                        let pg_major = match row.pg_version {
-                            14 => PgMajorVersion::PG14,
-                            15 => PgMajorVersion::PG15,
-                            16 => PgMajorVersion::PG16,
-                            17 => PgMajorVersion::PG17,
-                            v => anyhow::bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
-                        };
-                        let metadata = crate::tenant::metadata::TimelineMetadata::new(
-                            row.disk_consistent_lsn,
-                            // Persisted when the matching dc_lsn was last
-                            // upserted; see PageWriter::take_prev_at_or_below.
-                            // NULL falls through as None and the walreceiver
-                            // re-derives prev from the SK stream.
-                            row.prev_record_lsn,
-                            row.ancestor_timeline_id,
-                            row.ancestor_lsn.unwrap_or(Lsn(0)),
-                            row.applied_gc_cutoff_lsn,
-                            // initdb_lsn: not persisted separately yet. Using
-                            // disk_consistent_lsn as a conservative stand-in
-                            // — it's only consulted by the bootstrap-time
-                            // image-layer optimisation (dead code in yb-mode)
-                            // and consumption metrics. Add a column if we
-                            // ever revive a code path that needs the true
-                            // bootstrap LSN.
-                            row.disk_consistent_lsn,
-                            pg_major,
-                        );
                         existent_timelines.insert(timeline_id);
-                        MaybeDeletedIndexPart::IndexPart(IndexPart::empty(metadata))
+                        synth_index_part_from_row(&row)?
                     } else {
                         info!(%timeline_id, "index_part not found on remote");
                         continue;
@@ -1594,7 +1631,15 @@ impl TenantShard {
 
         // The local filesystem contents are a cache of what's in the remote IndexPart;
         // IndexPart is the source of truth.
-        self.clean_up_timelines(&existent_timelines)?;
+        //
+        // yb-mode skips this: we never write layer files, and the only
+        // dentries the pageserver itself creates are now gone (the
+        // per-timeline `create_dir_all` in `load_remote_timeline` is
+        // gated off too). `pageserver.timeline_state` is the authoritative
+        // existence set.
+        if self.compute_page_store.is_none() {
+            self.clean_up_timelines(&existent_timelines)?;
+        }
 
         self.gc_block.set_scanned(gc_blocks);
 
@@ -1691,10 +1736,14 @@ impl TenantShard {
     ) -> anyhow::Result<TimelineInitAndSyncResult> {
         span::debug_assert_current_span_has_tenant_id();
 
-        info!("downloading index file for timeline {}", timeline_id);
-        tokio::fs::create_dir_all(self.conf.timeline_path(&self.tenant_shard_id, &timeline_id))
-            .await
-            .context("Failed to create new timeline directory")?;
+        info!("loading timeline {}", timeline_id);
+        // yb-mode never writes layer files; skip the empty per-timeline
+        // directory entirely.
+        if self.compute_page_store.is_none() {
+            tokio::fs::create_dir_all(self.conf.timeline_path(&self.tenant_shard_id, &timeline_id))
+                .await
+                .context("Failed to create new timeline directory")?;
+        }
 
         let ancestor = if let Some(ancestor_id) = remote_metadata.ancestor_timeline() {
             let timelines = self.timelines.lock().unwrap();
