@@ -134,7 +134,7 @@ impl YsqlClient {
     /// independent connections. Opens all connections eagerly so config
     /// errors surface at construction. When `set_fast_path_upsert` is true, each
     /// connection runs `SET yb_enable_upsert_mode = true` after opening
-    /// — see `set_yb_upsert_mode` for why.
+    /// — see `set_fast_path_upsert_gucs` for why.
     pub async fn connect_no_tls_pooled(
         config: tokio_postgres::Config,
         pool_size: usize,
@@ -827,11 +827,33 @@ fn build_pg_config(
     Ok(pg_config)
 }
 
-async fn set_yb_upsert_mode(client: &tokio_postgres::Client) -> Result<()> {
+/// Enable both GUCs that make this connection a "fast-path-upsert"
+/// connection:
+///
+/// - `yb_enable_upsert_mode = true` skips YB's read-before-write
+///   check on plain `INSERT`, turning duplicate-PK writes into a
+///   silent overwrite. Required by put_pages/put_slru_pages/put_meta
+///   and the WAL chunk INSERTs whose partial-chunk-retry flow re-
+///   issues the same row.
+/// - `yb_disable_transactional_writes = true` drops the transactional
+///   write fast path's read-modify-write guarantees. Safe for the
+///   write paths above because they're append-only INSERTs whose
+///   ordering is established by the higher-level LSN scheme, not by
+///   YB's transaction semantics.
+///
+/// Failure on either SET propagates: in production we only ever talk
+/// to YB, so a SET failure means the connection would silently fall
+/// back to the slow / transactional path. We'd rather refuse the
+/// connection here than carry a misconfigured client.
+async fn set_fast_path_upsert_gucs(client: &tokio_postgres::Client) -> Result<()> {
     client
         .execute("SET yb_enable_upsert_mode = true", &[])
         .await
         .context("YsqlClient: SET yb_enable_upsert_mode = true")?;
+    client
+        .execute("SET yb_disable_transactional_writes = true", &[])
+        .await
+        .context("YsqlClient: SET yb_disable_transactional_writes = true")?;
     Ok(())
 }
 
@@ -849,7 +871,7 @@ async fn open_no_tls(
         }
     });
     if set_fast_path_upsert {
-        set_yb_upsert_mode(&client).await?;
+        set_fast_path_upsert_gucs(&client).await?;
     }
     Ok(client)
 }
@@ -869,7 +891,7 @@ async fn open_tls(
         }
     });
     if set_fast_path_upsert {
-        set_yb_upsert_mode(&client).await?;
+        set_fast_path_upsert_gucs(&client).await?;
     }
     Ok(client)
 }
