@@ -90,3 +90,4 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 11 | [Reduce YB reads when cold pages are modified](11_reduce-yb-reads-cold-page-modify.md) | ⏳ pending | medium | yb-pageserver |
 | 12 | [End-to-end test infra](12_e2e-test-infra.md) | ⏳ pending | high | yb-pageserver |
 | 14 | [Data-modeling review](14_data-modeling-review.md) | ⏳ pending | high | yb-pageserver |
+| 15 | [`pageserver.meta` read hotness](15_pageserver-meta-read-hotness.md) | ⏳ pending | high | yb-pageserver |
