@@ -828,17 +828,10 @@ impl StorageController {
             ));
         }
 
-        let mut envs = vec![
+        let envs = vec![
             ("LD_LIBRARY_PATH".to_owned(), pg_lib_dir.to_string()),
             ("DYLD_LIBRARY_PATH".to_owned(), pg_lib_dir.to_string()),
         ];
-
-        if let Some(posthog_config) = &self.config.posthog_config {
-            envs.push((
-                "POSTHOG_CONFIG".to_string(),
-                serde_json::to_string(posthog_config)?,
-            ));
-        }
 
         println!("Starting storage controller at {scheme}://{host}:{listen_port}");
 

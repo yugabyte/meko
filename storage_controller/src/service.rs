@@ -1,5 +1,4 @@
 pub mod chaos_injector;
-pub mod feature_flag;
 pub(crate) mod safekeeper_reconciler;
 mod safekeeper_service;
 mod tenant_shard_iterator;
@@ -25,7 +24,6 @@ use futures::stream::FuturesUnordered;
 use http_utils::error::ApiError;
 use hyper::Uri;
 use itertools::Itertools;
-use pageserver_api::config::PostHogConfig;
 use pageserver_api::controller_api::{
     AvailabilityZone, MetadataHealthRecord, MetadataHealthUpdateRequest, NodeAvailability,
     NodeRegisterRequest, NodeSchedulingPolicy, NodeShard, NodeShardResponse, PlacementPolicy,
@@ -478,9 +476,6 @@ pub struct Config {
     /// Number of safekeepers to choose for a timeline when creating it.
     /// Safekeepers will be choosen from different availability zones.
     pub timeline_safekeeper_count: usize,
-
-    /// PostHog integration config
-    pub posthog_config: Option<PostHogConfig>,
 
     /// When set, actively checks and initiates heatmap downloads/uploads.
     pub kick_secondary_downloads: bool,

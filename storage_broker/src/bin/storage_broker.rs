@@ -53,7 +53,6 @@ use tonic::{Code, Request, Response, Status};
 use tracing::*;
 use utils::id::TenantTimelineId;
 use utils::logging::{self, LogFormat};
-use utils::sentry_init::init_sentry;
 use utils::signals::ShutdownSignals;
 use utils::{project_build_tag, project_git_version};
 
@@ -678,8 +677,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         logging::Output::Stdout,
     )?;
     logging::replace_panic_hook_with_tracing_panic_hook().forget();
-    // initialize sentry if SENTRY_DSN is provided
-    let _sentry_guard = init_sentry(Some(GIT_VERSION.into()), &[]);
     info!("version: {GIT_VERSION} build_tag: {BUILD_TAG}");
     metrics::set_build_info_metric(GIT_VERSION, BUILD_TAG);
 

@@ -16,7 +16,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use once_cell::sync::OnceCell;
 use pageserver_api::config::{
     DiskUsageEvictionTaskConfig, MaxGetVectoredKeys, MaxVectoredReadBytes,
-    PageServicePipeliningConfig, PageServicePipeliningConfigPipelined, PostHogConfig,
+    PageServicePipeliningConfig, PageServicePipeliningConfigPipelined,
 };
 use pageserver_api::models::ImageCompressionAlgorithm;
 use pageserver_api::shard::TenantShardId;
@@ -136,11 +136,6 @@ pub struct PageServerConf {
     /// [`TenantShard::gather_size_inputs`]: crate::tenant::TenantShard::gather_size_inputs
     pub eviction_task_immitated_concurrent_logical_size_queries: ConfigurableSemaphore,
 
-    // How often to collect metrics and send them to the metrics endpoint.
-    pub metric_collection_interval: Duration,
-    // How often to send unchanged cached metrics to the metrics endpoint.
-    pub metric_collection_endpoint: Option<Url>,
-    pub metric_collection_bucket: Option<RemoteStorageConfig>,
     pub synthetic_size_calculation_interval: Duration,
 
     pub disk_usage_based_eviction: DiskUsageEvictionTaskConfig,
@@ -222,9 +217,6 @@ pub struct PageServerConf {
     /// such as authentication requirements for HTTP and PostgreSQL APIs.
     /// This is insecure and should only be used in development environments.
     pub dev_mode: bool,
-
-    /// PostHog integration config.
-    pub posthog_config: Option<PostHogConfig>,
 
     pub timeline_import_config: pageserver_api::config::TimelineImportConfig,
 
@@ -377,9 +369,6 @@ impl PageServerConf {
             broker_endpoint,
             broker_keepalive_interval,
             log_format,
-            metric_collection_interval,
-            metric_collection_endpoint,
-            metric_collection_bucket,
             synthetic_size_calculation_interval,
             disk_usage_based_eviction,
             test_remote_failures,
@@ -416,7 +405,6 @@ impl PageServerConf {
             tracing,
             enable_tls_page_service_api,
             dev_mode,
-            posthog_config,
             timeline_import_config,
             basebackup_cache_config,
             image_layer_generation_large_timeline_threshold,
@@ -450,9 +438,6 @@ impl PageServerConf {
             broker_endpoint,
             broker_keepalive_interval,
             log_format,
-            metric_collection_interval,
-            metric_collection_endpoint,
-            metric_collection_bucket,
             synthetic_size_calculation_interval,
             disk_usage_based_eviction,
             test_remote_failures,
@@ -530,7 +515,6 @@ impl PageServerConf {
                 }
                 None => Vec::new(),
             },
-            posthog_config,
         };
 
         // ------------------------------------------------------------
@@ -610,7 +594,6 @@ impl PageServerConf {
             wait_lsn_timeout: Duration::from_secs(60),
             wal_redo_timeout: Duration::from_secs(60),
             pg_distrib_dir: Some(pg_distrib_dir),
-            metric_collection_interval: Duration::from_secs(60),
             synthetic_size_calculation_interval: Duration::from_secs(60),
             background_task_maximum_delay: Duration::ZERO,
             control_plane_api: Some(Url::parse("http://localhost:6666").unwrap()),
@@ -752,42 +735,6 @@ mod tests {
         let workdir = Utf8PathBuf::from("/nonexistent");
         let result = PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir);
         assert_eq!(result.is_ok(), is_valid);
-    }
-
-    #[test]
-    fn test_config_posthog_config_is_valid() {
-        let input = r#"
-            control_plane_api = "http://localhost:6666"
-
-            [posthog_config]
-            server_api_key = "phs_AAA"
-            client_api_key = "phc_BBB"
-            project_id = "000"
-            private_api_url = "https://us.posthog.com"
-            public_api_url = "https://us.i.posthog.com"
-        "#;
-        let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
-            .expect("posthogconfig is valid");
-        let workdir = Utf8PathBuf::from("/nonexistent");
-        PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir)
-            .expect("parse_and_validate");
-    }
-
-    #[test]
-    fn test_config_posthog_incomplete_config_is_valid() {
-        let input = r#"
-            control_plane_api = "http://localhost:6666"
-
-            [posthog_config]
-            server_api_key = "phs_AAA"
-            private_api_url = "https://us.posthog.com"
-            public_api_url = "https://us.i.posthog.com"
-        "#;
-        let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
-            .expect("posthogconfig is valid");
-        let workdir = Utf8PathBuf::from("/nonexistent");
-        PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir)
-            .expect("parse_and_validate");
     }
 
     #[rstest]

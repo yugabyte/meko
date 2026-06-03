@@ -25,9 +25,7 @@ members = [
     "libs/desim",
     "libs/neon-shmem",
     "libs/utils",
-    "libs/consumption_metrics",
     "libs/postgres_backend",
-    "libs/posthog_client_lite",
     "libs/pq_proto",
     "libs/tenant_size_model",
     "libs/metrics",
@@ -165,7 +163,6 @@ scopeguard = "1.1"
 sysinfo = "0.29.2"
 sd-notify = "0.4.1"
 send-future = "0.1.0"
-sentry = { version = "0.37", default-features = false, features = ["backtrace", "contexts", "panic", "rustls", "reqwest" ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"
@@ -258,7 +255,6 @@ yb-tokio-postgres = { version = "0.7.10-yb-1-beta.3", features = ["with-chrono-0
 
 ## Local libraries
 compute_api = { version = "0.1", path = "./libs/compute_api/" }
-consumption_metrics = { version = "0.1", path = "./libs/consumption_metrics/" }
 desim = { version = "0.1", path = "./libs/desim" }
 endpoint_storage = { version = "0.0.1", path = "./endpoint_storage/" }
 http-utils = { version = "0.1", path = "./libs/http-utils/" }
@@ -274,7 +270,6 @@ postgres_ffi = { version = "0.1", path = "./libs/postgres_ffi/" }
 postgres_ffi_types = { version = "0.1", path = "./libs/postgres_ffi_types/" }
 postgres_versioninfo = { version = "0.1", path = "./libs/postgres_versioninfo/" }
 postgres_initdb = { path = "./libs/postgres_initdb" }
-posthog_client_lite = { version = "0.1", path = "./libs/posthog_client_lite" }
 pq_proto = { version = "0.1", path = "./libs/pq_proto/" }
 remote_storage = { version = "0.1", path = "./libs/remote_storage/" }
 safekeeper_api = { version = "0.1", path = "./libs/safekeeper_api" }

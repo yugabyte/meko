@@ -282,12 +282,12 @@ impl WalBackup {
             Some(yb) => {
                 // Same factory the pageserver's YbStore uses — honors
                 // sslmode + sslrootcert + password_env consistently.
-                // `set_upserts = true`: this client serves WAL chunk
-                // INSERTs (`yb_wal_storage::insert_wal`) and WAL GC
-                // (`truncate_wal`) which both benefit from skipping
-                // YB's read-before-write check.
-                let client = remote_storage::from_yb_config(
-                    yb,
+                // `set_fast_path_upsert = true`: this client serves
+                // WAL chunk INSERTs (`yb_wal_storage::insert_wal`)
+                // and WAL GC (`truncate_wal`) which both benefit
+                // from skipping YB's read-before-write check.
+                let yb_fpu_client = ysql_client::YsqlClient::from_yb_config(
+                    &yb.conn_config(),
                     "safekeeper:yb_wal_mirror",
                     true,
                 )
@@ -307,7 +307,7 @@ impl WalBackup {
                 } else {
                     None
                 };
-                (Some(Arc::new(client)), Some(yb.table_name.clone()), cache)
+                (Some(Arc::new(yb_fpu_client)), Some(yb.table_name.clone()), cache)
             }
             None => (None, None, None),
         };

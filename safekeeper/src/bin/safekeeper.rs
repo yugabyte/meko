@@ -39,7 +39,6 @@ use utils::auth::{JwtAuth, Scope, SwappableJwtAuth};
 use utils::id::NodeId;
 use utils::logging::{self, LogFormat, SecretString};
 use utils::metrics_collector::{METRICS_COLLECTION_INTERVAL, METRICS_COLLECTOR};
-use utils::sentry_init::init_sentry;
 use utils::{pid_file, project_build_tag, project_git_version, tcp_listener};
 
 use safekeeper::hadron::{
@@ -497,11 +496,6 @@ async fn main() -> anyhow::Result<()> {
         /* END_HADRON */
     });
 
-    // initialize sentry if SENTRY_DSN is provided
-    let _sentry_guard = init_sentry(
-        Some(GIT_VERSION.into()),
-        &[("node_id", &conf.my_id.to_string())],
-    );
     start_safekeeper(conf).await
 }
 

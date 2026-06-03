@@ -4,7 +4,6 @@ use camino::Utf8PathBuf;
 mod tests;
 
 use const_format::formatcp;
-use posthog_client_lite::PostHogClientConfig;
 use utils::serde_percent::Percent;
 pub const DEFAULT_PG_LISTEN_PORT: u16 = 64000;
 pub const DEFAULT_PG_LISTEN_ADDR: &str = formatcp!("127.0.0.1:{DEFAULT_PG_LISTEN_PORT}");
@@ -62,66 +61,6 @@ impl Display for NodeMetadata {
         write!(f, "http://{}:{} ", self.http_host, self.http_port)?;
         write!(f, "other:{:?}", self.other)?;
         Ok(())
-    }
-}
-
-/// PostHog integration config. This is used in pageserver, storcon, and neon_local.
-/// Ensure backward compatibility when adding new fields.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PostHogConfig {
-    /// PostHog project ID
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
-    /// Server-side (private) API key
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub server_api_key: Option<String>,
-    /// Client-side (public) API key
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_api_key: Option<String>,
-    /// Private API URL
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub private_api_url: Option<String>,
-    /// Public API URL
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_api_url: Option<String>,
-    /// Refresh interval for the feature flag spec.
-    /// The storcon will push the feature flag spec to the pageserver. If the pageserver does not receive
-    /// the spec for `refresh_interval`, it will fetch the spec from the PostHog API.
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "humantime_serde")]
-    pub refresh_interval: Option<Duration>,
-}
-
-impl PostHogConfig {
-    pub fn try_into_posthog_config(self) -> Result<PostHogClientConfig, &'static str> {
-        let Some(project_id) = self.project_id else {
-            return Err("project_id is required");
-        };
-        let Some(server_api_key) = self.server_api_key else {
-            return Err("server_api_key is required");
-        };
-        let Some(client_api_key) = self.client_api_key else {
-            return Err("client_api_key is required");
-        };
-        let Some(private_api_url) = self.private_api_url else {
-            return Err("private_api_url is required");
-        };
-        let Some(public_api_url) = self.public_api_url else {
-            return Err("public_api_url is required");
-        };
-        Ok(PostHogClientConfig {
-            project_id,
-            server_api_key,
-            client_api_key,
-            private_api_url,
-            public_api_url,
-        })
     }
 }
 
@@ -219,10 +158,6 @@ pub struct ConfigToml {
     pub concurrent_tenant_warmup: NonZeroUsize,
     pub concurrent_tenant_size_logical_size_queries: NonZeroUsize,
     #[serde(with = "humantime_serde")]
-    pub metric_collection_interval: Duration,
-    pub metric_collection_endpoint: Option<reqwest::Url>,
-    pub metric_collection_bucket: Option<RemoteStorageConfig>,
-    #[serde(with = "humantime_serde")]
     pub synthetic_size_calculation_interval: Duration,
     pub disk_usage_based_eviction: DiskUsageEvictionTaskConfig,
     pub test_remote_failures: u64,
@@ -267,8 +202,6 @@ pub struct ConfigToml {
     pub tracing: Option<Tracing>,
     pub enable_tls_page_service_api: bool,
     pub dev_mode: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub posthog_config: Option<PostHogConfig>,
     pub timeline_import_config: TimelineImportConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basebackup_cache_config: Option<BasebackupCacheConfig>,
@@ -786,8 +719,6 @@ pub mod defaults {
 
     pub const DEFAULT_CONCURRENT_TENANT_SIZE_LOGICAL_SIZE_QUERIES: usize = 1;
 
-    pub const DEFAULT_METRIC_COLLECTION_INTERVAL: &str = "10 min";
-    pub const DEFAULT_METRIC_COLLECTION_ENDPOINT: Option<reqwest::Url> = None;
     pub const DEFAULT_SYNTHETIC_SIZE_CALCULATION_INTERVAL: &str = "10 min";
     pub const DEFAULT_BACKGROUND_TASK_MAXIMUM_DELAY: &str = "10s";
 
@@ -866,17 +797,10 @@ impl Default for ConfigToml {
                 DEFAULT_CONCURRENT_TENANT_SIZE_LOGICAL_SIZE_QUERIES,
             )
             .unwrap(),
-            metric_collection_interval: (humantime::parse_duration(
-                DEFAULT_METRIC_COLLECTION_INTERVAL,
-            )
-            .expect("cannot parse default metric collection interval")),
             synthetic_size_calculation_interval: (humantime::parse_duration(
                 DEFAULT_SYNTHETIC_SIZE_CALCULATION_INTERVAL,
             )
             .expect("cannot parse default synthetic size calculation interval")),
-            metric_collection_endpoint: (DEFAULT_METRIC_COLLECTION_ENDPOINT),
-
-            metric_collection_bucket: (None),
 
             disk_usage_based_eviction: DiskUsageEvictionTaskConfig::default(),
 
@@ -944,7 +868,6 @@ impl Default for ConfigToml {
                 import_job_max_byte_range_size: NonZeroUsize::new(4 * 1024 * 1024).unwrap(),
             },
             basebackup_cache_config: None,
-            posthog_config: None,
             image_layer_generation_large_timeline_threshold: Some(2 * 1024 * 1024 * 1024),
             force_metric_collection_on_scrape: true,
             s3_upload_limit_bytes: 4_500_000_000,

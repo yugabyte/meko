@@ -275,13 +275,13 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
 
 impl PageStore {
     /// Open a `PageStore` with a single YSQL connection. Equivalent to
-    /// `connect_pooled(config, app, 1, set_upserts)`.
+    /// `connect_pooled(config, app, 1, set_fast_path_upsert)`.
     pub async fn connect(
         config: PageStoreConfig,
         application_name: &str,
-        set_upserts: bool,
+        set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        Self::connect_pooled(config, application_name, 1, set_upserts).await
+        Self::connect_pooled(config, application_name, 1, set_fast_path_upsert).await
     }
 
     /// Open a `PageStore` with `pool_size` independent YSQL connections.
@@ -290,21 +290,22 @@ impl PageStore {
     /// to overlap SQL execution. `pool_size = 1` matches the single-
     /// connection behaviour of `connect()`.
     ///
-    /// `set_upserts` enables `yb_enable_upsert_mode = true` on each
-    /// connection — true for write-heavy pools (the internal store's
-    /// `put_pages` / `put_slru_pages` / `put_meta` fast paths), false
-    /// for read-only pools (compute-facing reads).
+    /// `set_fast_path_upsert` enables `yb_enable_upsert_mode = true`
+    /// on each connection — true for write-heavy pools (the internal
+    /// store's `put_pages` / `put_slru_pages` / `put_meta` fast paths,
+    /// hence the "fpu" naming), false for read-only pools (compute-
+    /// facing reads).
     pub async fn connect_pooled(
         config: PageStoreConfig,
         application_name: &str,
         pool_size: usize,
-        set_upserts: bool,
+        set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        let client = remote_storage::from_yb_config_pooled(
-            &config.yb,
+        let client = ysql_client::YsqlClient::from_yb_config_pooled(
+            &config.yb.conn_config(),
             application_name,
             pool_size,
-            set_upserts,
+            set_fast_path_upsert,
         )
         .await
         .context("opening PageStore connection")?;

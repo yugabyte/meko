@@ -442,12 +442,4 @@ impl PageserverClient {
         )
     }
 
-    pub(crate) async fn update_feature_flag_spec(&self, spec: String) -> Result<()> {
-        measured_request!(
-            "update_feature_flag_spec",
-            crate::metrics::Method::Post,
-            &self.node_id_label,
-            self.inner.update_feature_flag_spec(spec).await
-        )
-    }
 }

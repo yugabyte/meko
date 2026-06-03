@@ -32,7 +32,6 @@ camino-tempfile.workspace = true
 camino.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["string"] }
-consumption_metrics.workspace = true
 crc32c.workspace = true
 either.workspace = true
 enum-map.workspace = true
@@ -66,13 +65,13 @@ postgres_ffi_types.workspace = true
 postgres_initdb.workspace = true
 postgres-protocol.workspace = true
 postgres-types.workspace = true
-posthog_client_lite.workspace = true
 pprof.workspace = true
 pq_proto.workspace = true
 rand.workspace = true
 range-set-blaze = { version = "0.1.16", features = ["alloc"] }
 regex.workspace = true
 remote_storage.workspace = true
+ysql_client.workspace = true
 reqwest.workspace = true
 rpds.workspace = true
 rustls.workspace = true

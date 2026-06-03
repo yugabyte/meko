@@ -13,7 +13,6 @@ testing = ["fail/failpoints"]
 
 [dependencies]
 arc-swap.workspace = true
-sentry.workspace = true
 async-compression.workspace = true
 anyhow.workspace = true
 bincode.workspace = true

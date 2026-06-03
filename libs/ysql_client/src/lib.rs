@@ -60,6 +60,30 @@ use metrics::{YB_CLIENT_ERRORS, YB_RETRIES_EXHAUSTED};
 use yb_tokio_postgres::Statement;
 use yb_tokio_postgres::types::ToSql;
 
+/// Minimal YugabyteDB connection configuration consumed by
+/// [`YsqlClient::from_yb_config`] / [`YsqlClient::from_yb_config_pooled`].
+/// Higher-level configs (e.g. `remote_storage::YbStoreConfig`) carry
+/// extra fields (table name, key prefix, …) that aren't relevant to
+/// the connection itself; they convert to this struct at the
+/// connection site.
+#[derive(Clone, Debug)]
+pub struct YbConnConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub dbname: String,
+    /// Name of an environment variable that holds the password. If
+    /// `Some` and unset, the connection fails at construction.
+    pub password_env: Option<String>,
+    /// `None` or `Some("disable")` → NoTls. Any other value → rustls
+    /// via [`build_yb_rustls_connector`].
+    pub sslmode: Option<String>,
+    /// Path to a PEM-encoded CA bundle. Required when `sslmode` calls
+    /// for strict verification (`verify-ca` / `verify-full`); when
+    /// `None` the verifier falls back to AcceptAll (logged).
+    pub sslrootcert: Option<String>,
+}
+
 /// Future returned by the reconnect closure.
 type OpenFut = BoxFuture<'static, Result<tokio_postgres::Client>>;
 
@@ -98,53 +122,53 @@ struct State {
 
 impl YsqlClient {
     /// Build a `YsqlClient` with a single connection (no pool).
-    /// Equivalent to `connect_no_tls_pooled(config, 1, set_upserts)`.
+    /// Equivalent to `connect_no_tls_pooled(config, 1, set_fast_path_upsert)`.
     pub async fn connect_no_tls(
         config: tokio_postgres::Config,
-        set_upserts: bool,
+        set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        Self::connect_no_tls_pooled(config, 1, set_upserts).await
+        Self::connect_no_tls_pooled(config, 1, set_fast_path_upsert).await
     }
 
     /// Build a `YsqlClient` that connects without TLS, with `pool_size`
     /// independent connections. Opens all connections eagerly so config
-    /// errors surface at construction. When `set_upserts` is true, each
+    /// errors surface at construction. When `set_fast_path_upsert` is true, each
     /// connection runs `SET yb_enable_upsert_mode = true` after opening
     /// — see `set_yb_upsert_mode` for why.
     pub async fn connect_no_tls_pooled(
         config: tokio_postgres::Config,
         pool_size: usize,
-        set_upserts: bool,
+        set_fast_path_upsert: bool,
     ) -> Result<Self> {
         let config = Arc::new(config);
         let open: OpenFn = {
             let config = config.clone();
             Arc::new(move || {
                 let config = config.clone();
-                async move { open_no_tls(&config, set_upserts).await }.boxed()
+                async move { open_no_tls(&config, set_fast_path_upsert).await }.boxed()
             })
         };
         Self::from_open(open, pool_size).await
     }
 
     /// Build a `YsqlClient` with a single TLS connection. Equivalent to
-    /// `connect_rustls_pooled(config, tls, 1, set_upserts)`.
+    /// `connect_rustls_pooled(config, tls, 1, set_fast_path_upsert)`.
     pub async fn connect_rustls(
         config: tokio_postgres::Config,
         tls: crate::rustls_adapter::YbMakeRustlsConnect,
-        set_upserts: bool,
+        set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        Self::connect_rustls_pooled(config, tls, 1, set_upserts).await
+        Self::connect_rustls_pooled(config, tls, 1, set_fast_path_upsert).await
     }
 
     /// Build a `YsqlClient` that connects via the supplied rustls
     /// connector with `pool_size` independent connections. Opens all
-    /// eagerly. `set_upserts` behaves as in `connect_no_tls_pooled`.
+    /// eagerly. `set_fast_path_upsert` behaves as in `connect_no_tls_pooled`.
     pub async fn connect_rustls_pooled(
         config: tokio_postgres::Config,
         tls: crate::rustls_adapter::YbMakeRustlsConnect,
         pool_size: usize,
-        set_upserts: bool,
+        set_fast_path_upsert: bool,
     ) -> Result<Self> {
         let config = Arc::new(config);
         let tls = Arc::new(tls);
@@ -154,10 +178,54 @@ impl YsqlClient {
             Arc::new(move || {
                 let config = config.clone();
                 let tls = tls.clone();
-                async move { open_tls(&config, &tls, set_upserts).await }.boxed()
+                async move { open_tls(&config, &tls, set_fast_path_upsert).await }.boxed()
             })
         };
         Self::from_open(open, pool_size).await
+    }
+
+    /// High-level factory: build a `YsqlClient` from a [`YbConnConfig`].
+    /// Single connection. Handles `password_env` lookup,
+    /// `application_name`, and the `sslmode` / `sslrootcert` dispatch.
+    ///
+    /// The pageserver's `YbStore`, the safekeeper's WAL-mirror, and
+    /// the pageserver's `PageStore` all go through this so they agree
+    /// on TLS semantics — without this shared factory the WAL mirror
+    /// used to hardcode `NoTls` regardless of `sslmode`, and would
+    /// silently fail against any YBA universe configured with TLS-only
+    /// `pg_hba` rules.
+    ///
+    /// `set_fast_path_upsert` enables `SET yb_enable_upsert_mode =
+    /// true` on each new connection — see [`Self::connect_no_tls_pooled`].
+    pub async fn from_yb_config(
+        cfg: &YbConnConfig,
+        application_name: &str,
+        set_fast_path_upsert: bool,
+    ) -> Result<Self> {
+        Self::from_yb_config_pooled(cfg, application_name, 1, set_fast_path_upsert).await
+    }
+
+    /// Same as [`Self::from_yb_config`] but opens `pool_size`
+    /// independent connections. Use for hot paths that benefit from
+    /// parallel SQL execution (e.g. the pageserver's compute-reads
+    /// pool at `pool_size = 4`).
+    pub async fn from_yb_config_pooled(
+        cfg: &YbConnConfig,
+        application_name: &str,
+        pool_size: usize,
+        set_fast_path_upsert: bool,
+    ) -> Result<Self> {
+        let pg_config = build_pg_config(cfg, application_name)?;
+        match cfg.sslmode.as_deref() {
+            None | Some("disable") => {
+                Self::connect_no_tls_pooled(pg_config, pool_size, set_fast_path_upsert).await
+            }
+            Some(_mode) => {
+                let tls = build_yb_rustls_connector(cfg.sslrootcert.as_deref())?;
+                Self::connect_rustls_pooled(pg_config, tls, pool_size, set_fast_path_upsert)
+                    .await
+            }
+        }
     }
 
     async fn from_open(open: OpenFn, pool_size: usize) -> Result<Self> {
@@ -725,6 +793,40 @@ pub fn build_yb_rustls_connector(
 /// the connection here than carry a silently misconfigured client
 /// (the previous `let _ = … .await` is exactly the kind of hidden
 /// GUC drift that bites under load).
+fn build_pg_config(
+    cfg: &YbConnConfig,
+    application_name: &str,
+) -> Result<tokio_postgres::Config> {
+    let mut pg_config = tokio_postgres::Config::new();
+    pg_config
+        .host(&cfg.host)
+        .port(cfg.port)
+        .user(&cfg.user)
+        .dbname(&cfg.dbname)
+        .application_name(application_name);
+    // NOTE: smart-driver load balancing is currently disabled. Setting
+    // `pg_config.load_balance("only-primary")` causes
+    // `yb-tokio-postgres 0.7.10-yb-1-beta.3` to fail every connect
+    // attempt with "could not create control connection" — the smart
+    // driver opens an internal "control connection" to run
+    // `yb_servers()` for discovery, and that path doesn't work in the
+    // current YB fork. Direct queries against the same target via the
+    // same TLS connector succeed (verified 2026-06-02 against
+    // 172.151.17.132:5433). Filed alongside the openssl handshake
+    // issue. Until both are fixed upstream we open each pool slot to
+    // the configured seed host; pool size still gives us parallel SQL
+    // via independent connections, just not tserver-spread.
+    //
+    // pg_config.load_balance("only-primary");
+    if let Some(env_name) = &cfg.password_env {
+        let password = std::env::var(env_name).with_context(|| {
+            format!("YsqlClient: password env var `{env_name}` is not set")
+        })?;
+        pg_config.password(password);
+    }
+    Ok(pg_config)
+}
+
 async fn set_yb_upsert_mode(client: &tokio_postgres::Client) -> Result<()> {
     client
         .execute("SET yb_enable_upsert_mode = true", &[])
@@ -735,7 +837,7 @@ async fn set_yb_upsert_mode(client: &tokio_postgres::Client) -> Result<()> {
 
 async fn open_no_tls(
     config: &tokio_postgres::Config,
-    set_upserts: bool,
+    set_fast_path_upsert: bool,
 ) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tokio_postgres::NoTls)
@@ -746,7 +848,7 @@ async fn open_no_tls(
             tracing::warn!("YsqlClient connection (NoTls) ended: {e}");
         }
     });
-    if set_upserts {
+    if set_fast_path_upsert {
         set_yb_upsert_mode(&client).await?;
     }
     Ok(client)
@@ -755,7 +857,7 @@ async fn open_no_tls(
 async fn open_tls(
     config: &tokio_postgres::Config,
     tls: &crate::rustls_adapter::YbMakeRustlsConnect,
-    set_upserts: bool,
+    set_fast_path_upsert: bool,
 ) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tls.clone())
@@ -766,7 +868,7 @@ async fn open_tls(
             tracing::warn!("YsqlClient connection (rustls) ended: {e}");
         }
     });
-    if set_upserts {
+    if set_fast_path_upsert {
         set_yb_upsert_mode(&client).await?;
     }
     Ok(client)

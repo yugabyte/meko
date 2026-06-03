@@ -183,6 +183,23 @@ impl Debug for YbStoreConfig {
     }
 }
 
+impl YbStoreConfig {
+    /// Strip the table / prefix / concurrency fields and project to
+    /// the minimal connection config the `ysql_client` crate
+    /// understands.
+    pub fn conn_config(&self) -> ysql_client::YbConnConfig {
+        ysql_client::YbConnConfig {
+            host: self.host.clone(),
+            port: self.port,
+            user: self.user.clone(),
+            dbname: self.dbname.clone(),
+            password_env: self.password_env.clone(),
+            sslmode: self.sslmode.clone(),
+            sslrootcert: self.sslrootcert.clone(),
+        }
+    }
+}
+
 impl RemoteStorageConfig {
     pub const DEFAULT_TIMEOUT: Duration = std::time::Duration::from_secs(120);
     pub const DEFAULT_SMALL_TIMEOUT: Duration = std::time::Duration::from_secs(30);

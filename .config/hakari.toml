@@ -32,7 +32,6 @@ workspace-members = [
     # All of these exist in libs and are not usually built independently.
     # Putting workspace hack there adds a bottleneck for cargo builds.
     "compute_api",
-    "consumption_metrics",
     "desim",
     "json",
     "metrics",

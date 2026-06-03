@@ -40,7 +40,6 @@ use utils::auth::{JwtAuth, SwappableJwtAuth};
 use utils::crashsafe::syncfs;
 use utils::logging::TracingErrorLayerEnablement;
 use utils::metrics_collector::{METRICS_COLLECTION_INTERVAL, METRICS_COLLECTOR};
-use utils::sentry_init::init_sentry;
 use utils::{failpoint_support, logging, project_build_tag, project_git_version, tcp_listener};
 
 project_git_version!(GIT_VERSION);
@@ -149,15 +148,8 @@ fn main() -> anyhow::Result<()> {
         info!(?conf.tracing, "starting with OTEL tracing enabled");
     }
 
-    // mind the order required here: 1. logging, 2. panic_hook, 3. sentry.
     // disarming this hook on pageserver, because we never tear down tracing.
     logging::replace_panic_hook_with_tracing_panic_hook().forget();
-
-    // initialize sentry if SENTRY_DSN is provided
-    let _sentry_guard = init_sentry(
-        Some(GIT_VERSION.into()),
-        &[("node_id", &conf.id.to_string())],
-    );
 
     // Warn about ignored config items; see pageserver_api::config::ConfigToml
     // doc comment for rationale why we prefer this over serde(deny_unknown_fields).
@@ -877,7 +869,7 @@ async fn create_page_store_with_app_name(
     conf: &'static PageServerConf,
     application_name: &str,
     pool_size: usize,
-    set_upserts: bool,
+    set_fast_path_upsert: bool,
 ) -> anyhow::Result<Option<Arc<pageserver::page_store::PageStore>>> {
     use remote_storage::RemoteStorageKind;
     let Some(rs_cfg) = conf.remote_storage_config.as_ref() else {
@@ -892,7 +884,7 @@ async fn create_page_store_with_app_name(
         ps_cfg,
         application_name,
         pool_size,
-        set_upserts,
+        set_fast_path_upsert,
     )
     .await?;
     Ok(Some(Arc::new(store)))
