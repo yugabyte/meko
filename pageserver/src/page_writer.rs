@@ -1572,37 +1572,29 @@ mod tests {
     /// Per-test schema DDL was costing 5–10 s of YB tablet
     /// coordination apiece; sharing amortizes that to once per binary.
     static SHARED_STORE: tokio::sync::OnceCell<Arc<PageStore>> = tokio::sync::OnceCell::const_new();
-    const SHARED_SCHEMA: &str = "pw_test_shared";
+    const PROD_SCHEMA: &str = "pageserver";
 
     async fn make_store(_suffix: &str) -> (Arc<PageStore>, String) {
         let store = SHARED_STORE
             .get_or_init(|| async {
                 let cfg = PageStoreConfig {
                     yb: test_yb_config(),
-                    schema: SHARED_SCHEMA.to_string(),
+                    schema: PROD_SCHEMA.to_string(),
                 };
-                let pre = PageStore::connect(cfg.clone(), "pw_test_setup")
+                let store = PageStore::connect(cfg, "pw_test", true)
                     .await
-                    .expect("connect to local YB");
-                let _ = pre
-                    .test_only_execute(&format!(
-                        "DROP SCHEMA IF EXISTS \"{SHARED_SCHEMA}\" CASCADE"
-                    ))
-                    .await;
-                let store = PageStore::connect(cfg, "pw_test")
-                    .await
-                    .expect("connect to local YB");
-                store.ensure_schema().await.expect("ensure_schema");
+                    .expect("connect to local YB; run `neon_local init && start` first to migrate the schema");
                 Arc::new(store)
             })
             .await
             .clone();
-        (store, SHARED_SCHEMA.to_string())
+        (store, PROD_SCHEMA.to_string())
     }
 
     async fn drop_schema(_store: &PageStore, _schema: &str) {
-        // No-op: shared schema; cleanup happens at the start of the
-        // next test-binary invocation via the OnceCell init.
+        // No-op: shared production schema, owned by the diesel
+        // migration. Per-test isolation comes from random
+        // tenant/timeline IDs.
     }
 
     fn k(n: u32) -> Key {

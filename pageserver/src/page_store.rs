@@ -315,140 +315,6 @@ impl PageStore {
         })
     }
 
-    pub async fn ensure_schema(&self) -> Result<()> {
-        // All DDL goes through `YsqlClient::execute` which transparently
-        // retries on YB "Restart read required" transients (see
-        // `YsqlClient::run_with_retries`).
-        //
-        // Each CREATE statement is wrapped in `Self::idempotent_create`
-        // which swallows YB's "type X already exists" — a quirk of
-        // YB's pg_type catalog that can outlive a DROP DATABASE if a
-        // prior process left an orphaned type entry behind. The actual
-        // CREATE TABLE IF NOT EXISTS already handles "relation
-        // exists"; we only need to also handle the type counterpart.
-        let create_schema = format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", self.schema);
-        Self::idempotent_create(
-            self.ysql_client.execute(&create_schema, &[]).await,
-            "creating schema",
-        )?;
-
-        let create_pages = format!(
-            "CREATE TABLE IF NOT EXISTS \"{}\".pages (
-                tenant_id    TEXT     NOT NULL,
-                timeline_id  TEXT     NOT NULL,
-                spcnode      BIGINT   NOT NULL,
-                dbnode       BIGINT   NOT NULL,
-                relnode      BIGINT   NOT NULL,
-                forknum      SMALLINT NOT NULL,
-                blknum       BIGINT   NOT NULL,
-                is_image     BOOLEAN  NOT NULL,
-                lsn          BIGINT   NOT NULL,
-                will_init    BOOLEAN  NOT NULL,
-                payload      BYTEA    NOT NULL,
-                PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                             blknum, lsn DESC, is_image)
-            )",
-            self.schema
-        );
-        Self::idempotent_create(
-            self.ysql_client.execute(&create_pages, &[]).await,
-            "creating pages table",
-        )?;
-
-        let create_meta = format!(
-            "CREATE TABLE IF NOT EXISTS \"{}\".meta (
-                tenant_id    TEXT     NOT NULL,
-                timeline_id  TEXT     NOT NULL,
-                key          BYTEA    NOT NULL,
-                lsn          BIGINT   NOT NULL,
-                payload      BYTEA    NOT NULL,
-                PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
-            )",
-            self.schema
-        );
-        Self::idempotent_create(
-            self.ysql_client.execute(&create_meta, &[]).await,
-            "creating meta table",
-        )?;
-
-        let create_slru = format!(
-            "CREATE TABLE IF NOT EXISTS \"{}\".slru_pages (
-                tenant_id    TEXT     NOT NULL,
-                timeline_id  TEXT     NOT NULL,
-                kind         SMALLINT NOT NULL,
-                segno        BIGINT   NOT NULL,
-                blknum       BIGINT   NOT NULL,
-                is_image     BOOLEAN  NOT NULL,
-                lsn          BIGINT   NOT NULL,
-                will_init    BOOLEAN  NOT NULL,
-                payload      BYTEA    NOT NULL,
-                PRIMARY KEY ((tenant_id, timeline_id, kind, segno) HASH,
-                             blknum, lsn DESC, is_image)
-            )",
-            self.schema
-        );
-        Self::idempotent_create(
-            self.ysql_client.execute(&create_slru, &[]).await,
-            "creating slru_pages table",
-        )?;
-
-        // The row absorbs every load-bearing field that used to live in
-        // `index_part.json`: archive / delete flags, the rel-size schema
-        // migration state, plus a JSON `lineage` column for future
-        // ancestor-detach support (the field is always `Default` in
-        // yb-mode today — detach_ancestor is not yet supported — but
-        // persisting it keeps the wire format ready). Fresh installs
-        // only; no migration from older shapes.
-        let create_timelines = format!(
-            "CREATE TABLE IF NOT EXISTS \"{}\".timeline_state (
-                tenant_id              TEXT    NOT NULL,
-                timeline_id            TEXT    NOT NULL,
-                disk_consistent_lsn    BIGINT  NOT NULL,
-                applied_gc_cutoff_lsn  BIGINT  NOT NULL,
-                ancestor_timeline_id   TEXT,
-                ancestor_lsn           BIGINT,
-                current_generation     INT     NOT NULL,
-                pg_version             INT     NOT NULL,
-                initdb_lsn             BIGINT,
-                prev_record_lsn        BIGINT,
-                archived_at            TIMESTAMP,
-                deleted_at             TIMESTAMP,
-                rel_size_migration     TEXT,
-                rel_size_migrated_at   BIGINT,
-                lineage                JSONB,
-                PRIMARY KEY ((tenant_id) HASH, timeline_id)
-            )",
-            self.schema
-        );
-        Self::idempotent_create(
-            self.ysql_client.execute(&create_timelines, &[]).await,
-            "creating timeline_state table",
-        )?;
-        Ok(())
-    }
-
-    /// Treat YB's "type X already exists" error as a benign no-op when
-    /// running `CREATE SCHEMA / TABLE IF NOT EXISTS`. The IF NOT EXISTS
-    /// guard normally handles the "relation exists" race; YB additionally
-    /// tracks the implicit row type in `pg_type` and a CREATE on a stale
-    /// catalog snapshot can hit "type already exists" even when the
-    /// table is fully there. Same outcome — schema is present — so we
-    /// treat it the same as "relation exists".
-    fn idempotent_create(res: Result<u64>, ctx: &'static str) -> Result<()> {
-        match res {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let msg = format!("{e:#}");
-                if msg.contains("already exists") {
-                    tracing::debug!("{ctx}: object already exists (idempotent CREATE), continuing");
-                    Ok(())
-                } else {
-                    Err(e).context(ctx)
-                }
-            }
-        }
-    }
-
     // ------------------- pages ---------------------------------------------
 
     pub async fn put_pages(
@@ -1814,50 +1680,41 @@ mod tests {
         }
     }
 
-    /// All tests share one schema, initialized once per test-binary
-    /// invocation. Per-test isolation comes from `rand_tenant()` /
-    /// `rand_timeline()` — every test writes to a distinct
-    /// `(tenant_id, timeline_id)` namespace, so concurrent tests don't
-    /// observe each other's data. Cleanup happens lazily: the next
-    /// test run's init drops + recreates the schema, so a single
-    /// run's leftover data never bleeds into the next.
+    /// All tests run against the production `pageserver.*` schema
+    /// (created by storage_controller's diesel migration on a
+    /// real `neon_local`-style cluster). Per-test isolation comes
+    /// from `rand_tenant()` / `rand_timeline()` — every test writes
+    /// to a distinct `(tenant_id, timeline_id)` namespace, so
+    /// concurrent tests don't observe each other's data and rows
+    /// from prior runs are harmless.
     ///
-    /// Why share: per-test CREATE+DROP SCHEMA in YB costs ~5–10 s
-    /// (tablet coordination on DDL). With ~44 integration tests in
-    /// this binary, that floors the suite at multiple minutes. Sharing
-    /// amortizes the DDL down to a single ~10 s setup.
+    /// Requires the YB cluster to have the diesel migration applied
+    /// (e.g. `neon_local init && neon_local start` once). The tests
+    /// don't create the schema themselves; that's the migration's
+    /// job and there's only one source of truth for it.
     static SHARED_STORE: tokio::sync::OnceCell<PageStore> = tokio::sync::OnceCell::const_new();
-    const SHARED_SCHEMA: &str = "pageserver_test_shared";
+    const PROD_SCHEMA: &str = "pageserver";
 
     async fn make_store(_suffix: &str) -> (PageStore, String) {
         let store = SHARED_STORE
             .get_or_init(|| async {
                 let cfg = PageStoreConfig {
                     yb: test_yb_config(),
-                    schema: SHARED_SCHEMA.to_string(),
+                    schema: PROD_SCHEMA.to_string(),
                 };
-                let pre = PageStore::connect(cfg.clone(), "page_store_test_setup", true)
+                PageStore::connect(cfg, "page_store_test", true)
                     .await
-                    .expect("connect to local YB");
-                let _ = pre
-                    .test_only_execute(&format!(
-                        "DROP SCHEMA IF EXISTS \"{SHARED_SCHEMA}\" CASCADE"
-                    ))
-                    .await;
-                let store = PageStore::connect(cfg, "page_store_test", true)
-                    .await
-                    .expect("connect to local YB");
-                store.ensure_schema().await.expect("ensure_schema");
-                store
+                    .expect("connect to local YB; run `neon_local init && start` first to migrate the schema")
             })
             .await
             .clone();
-        (store, SHARED_SCHEMA.to_string())
+        (store, PROD_SCHEMA.to_string())
     }
 
     async fn drop_schema(_store: &PageStore, _schema: &str) {
-        // No-op: the schema is shared across tests; cleanup happens
-        // via the next test run's DROP-IF-EXISTS during init.
+        // No-op: the schema is the production one, owned by the
+        // diesel migration. Per-test isolation comes from random
+        // tenant/timeline IDs.
     }
 
     fn rand_tenant() -> TenantId {
@@ -2322,15 +2179,6 @@ mod tests {
             store.read_chain(t1, tl2, &k, Lsn(100)).await.unwrap()[0].payload.as_ref(),
             b"t1tl2"
         );
-        drop_schema(&store, &schema).await;
-    }
-
-    #[tokio::test]
-    async fn ensure_schema_is_idempotent() {
-        let (store, schema) = make_store("idem").await;
-        for _ in 0..3 {
-            store.ensure_schema().await.expect("second ensure_schema");
-        }
         drop_schema(&store, &schema).await;
     }
 
