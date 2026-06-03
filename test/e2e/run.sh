@@ -1,21 +1,33 @@
 #!/usr/bin/env bash
 #
-# End-to-end corruption smoke test. Brings up neon_local against an
-# already-running YB cluster (assumed at 127.0.0.1:5433, yugabyte/yugabyte),
-# creates a tenant + endpoint, runs the canonical workload, and scans
-# the pageserver log for the marker set used by the 2026-06-02 Btree
-# INSERT_UPPER walredo PANIC.
-#
-# Exit code 0 = clean. Non-zero = at least one marker fired.
+# End-to-end test runner. Iterates SQL workloads under test/e2e/<cat>/
+# against a single shared neon_local cluster + tenant + endpoint,
+# scans pageserver.log after each, and exits non-zero on the first
+# corruption marker (or if any psql command errors out).
 #
 # Usage:
-#   test/repro/run-e2e.sh              # default — full reset, fresh tenant
-#   SKIP_RESET=1 test/repro/run-e2e.sh # reuse existing cluster (assumes endpoint 'main' is up)
+#   test/e2e/run.sh                # fast suite only (default)
+#   test/e2e/run.sh fast           # explicit
+#   test/e2e/run.sh slow           # slow suite only
+#   test/e2e/run.sh all            # fast then slow
+#   SKIP_RESET=1 test/e2e/run.sh   # reuse running cluster (assumes endpoint 'main' is up)
+#
+# Workloads are *.sql files under test/e2e/<category>/, run in lexical
+# order. Each runs against a fresh schema (its own CREATE TABLE) so
+# there's no cross-test state. The pageserver log is scanned ONCE at
+# the end against the full set of corruption markers; per-workload
+# scans add per-test attribution.
 #
 set -euo pipefail
 
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
+
+CATEGORY=${1:-fast}
+case "$CATEGORY" in
+    fast|slow|all) ;;
+    *) echo "usage: $0 [fast|slow|all]"; exit 2;;
+esac
 
 NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.neon-localfs}
 export NEON_REPO_DIR
@@ -30,24 +42,27 @@ NEON=${NEON:-$REPO/target/release/neon_local}
 
 step() { echo; echo "=== $* ==="; }
 
+MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
+
+log_baseline_lines=0
+
+# Bring up a fresh cluster + tenant + endpoint, unless caller opted out.
 if [[ "${SKIP_RESET:-0}" == "0" ]]; then
     step "Stop any running pageserver/neon processes"
     pkill -9 -f "yb-pageserver|safekeeper|storage_broker|endpoint_storag|storage_controller|neon_local" 2>/dev/null || true
     sleep 2
 
-    step "Drop + recreate yb_storage (terminating idle sessions first)"
+    step "Drop + recreate yb_storage"
     PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='yb_storage'" >/dev/null 2>&1 || true
     PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte -c "DROP DATABASE IF EXISTS yb_storage" >/dev/null
     PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte -c "CREATE DATABASE yb_storage" >/dev/null
     rm -rf "$NEON_REPO_DIR"
 
-    step "neon_local init"
+    step "neon_local init + start (with Phase 4.k schema-bootstrap workaround)"
     "$NEON" init --config /tmp/neon-init.toml
-
-    step "neon_local start (first attempt — may wedge on Phase 4.k schema bootstrap)"
     if ! "$NEON" start --start-timeout 240s; then
-        echo "First start failed; workaround Phase 4.k (manually create pageserver.timelines + restart)…"
+        echo "First start failed; applying Phase 4.k workaround (manually create pageserver.timelines + restart)…"
         PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yb_storage -c "
             CREATE TABLE IF NOT EXISTS pageserver.timelines (
                 tenant_id              TEXT    NOT NULL,
@@ -73,21 +88,54 @@ if [[ "${SKIP_RESET:-0}" == "0" ]]; then
     "$NEON" endpoint start main >/dev/null
 fi
 
-step "Run workload"
-WORKLOAD=$REPO/test/repro/workload.sql
-PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -f "$WORKLOAD"
-
-step "Verdict — scan pageserver.log for corruption markers"
 LOG=$NEON_REPO_DIR/pageserver_1/pageserver.log
-MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
-HITS=$(grep -cE "$MARKERS" "$LOG" || true)
-if (( HITS > 0 )); then
-    echo "FAIL — $HITS corruption marker(s) in $LOG"
-    grep -E "$MARKERS" "$LOG" | head -5
-    exit 1
-fi
 
-step "Counter check"
+# Per-workload runner: prints the workload's psql output, then
+# attributes any new corruption markers to it.
+run_workload() {
+    local sql=$1
+    local rel=${sql#$REPO/}
+    step "workload: $rel"
+    local before_lines after_lines
+    before_lines=$(wc -l < "$LOG")
+    local t0 t1
+    t0=$(date +%s)
+    PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres \
+        -v ON_ERROR_STOP=1 -f "$sql"
+    t1=$(date +%s)
+    after_lines=$(wc -l < "$LOG")
+    local new_hits
+    new_hits=$(tail -n $((after_lines - before_lines)) "$LOG" | grep -cE "$MARKERS" || true)
+    if (( new_hits > 0 )); then
+        echo "FAIL — $new_hits corruption marker(s) introduced by $rel"
+        tail -n $((after_lines - before_lines)) "$LOG" | grep -E "$MARKERS" | head -5
+        exit 1
+    fi
+    echo "  ok  ($(( t1 - t0 ))s, +$((after_lines - before_lines)) log lines)"
+}
+
+run_category() {
+    local cat=$1
+    local dir=$REPO/test/e2e/$cat
+    [[ -d $dir ]] || { echo "skip $cat (no directory)"; return 0; }
+    local found=0
+    for sql in "$dir"/*.sql; do
+        [[ -f $sql ]] || continue
+        found=1
+        run_workload "$sql"
+    done
+    if (( found == 0 )); then
+        echo "skip $cat (no .sql files)"
+    fi
+}
+
+case "$CATEGORY" in
+    fast) run_category fast ;;
+    slow) run_category slow ;;
+    all)  run_category fast; run_category slow ;;
+esac
+
+step "Final verdict"
 COUNTER=$(curl -sS http://127.0.0.1:9989/metrics 2>/dev/null \
     | grep -E '^pageserver_yb_correctness_errors_total\{' || true)
 if [[ -n $COUNTER ]]; then
@@ -95,6 +143,4 @@ if [[ -n $COUNTER ]]; then
     echo "$COUNTER"
     exit 1
 fi
-
-echo
-echo "PASS — workload clean, no corruption markers, counter at 0"
+echo "PASS — all workloads clean, counter at 0"
