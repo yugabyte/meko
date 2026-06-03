@@ -1090,7 +1090,7 @@ impl Timeline {
         self.disk_consistent_lsn.load()
     }
 
-    /// Phase 5b: write the full timeline row into `pageserver.timelines`
+    /// Phase 5b: write the full timeline row into `pageserver.timeline_state`
     /// once at creation time, so the per-flush `advance_disk_consistent_lsn`
     /// UPDATE has a row to target. Also seeds `PageWriter`'s in-memory
     /// `dc_lsn_watermark` from the just-written `disk_consistent_lsn` —

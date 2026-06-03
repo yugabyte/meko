@@ -326,12 +326,16 @@ impl StorageController {
             .context("storage_controller.database_url must include a database name")?
             .to_string();
 
-        // The controller's tables live in the `storage_controller` schema
-        // inside `yb_storage` (created by the controller's `migration_run`
-        // bootstrap). `blobs` and `wals` are top-level tables in the same
-        // DB. So we only need one DB: yb_storage. We log if the operator
-        // pointed the URL elsewhere — that still works, but they lose the
-        // colocation invariant.
+        // The controller's tables live in the `storage_controller`
+        // schema inside `yb_storage`; `blobs`/`wals` and the
+        // `pageserver.*` page-store tables share the same DB. We log
+        // if the operator pointed the URL elsewhere — that still
+        // works, but they lose the colocation invariant.
+        //
+        // The schema itself (every table + ENUM + index) is created
+        // by storage_controller's diesel migrations once the binary
+        // is up; here we only ensure the database container exists
+        // so the controller can connect to it.
         if controller_db != "yb_storage" {
             tracing::warn!(
                 "storage_controller.database_url names db {controller_db:?} \
@@ -343,14 +347,12 @@ impl StorageController {
         if controller_db != "yb_storage" {
             Self::create_database(&target, "yb_storage").await?;
         }
-        Self::ensure_yb_storage_schema(&target).await?;
-
         Ok(())
     }
 
     /// Open a one-shot connection to an external (YugabyteDB) cluster,
     /// honouring the parsed `Config`'s SSL mode. Used by the YB
-    /// provisioning helpers (`create_database`, `ensure_yb_storage_schema`).
+    /// provisioning helpers (`create_database`).
     /// Returns the `Client` plus the spawned connection-task handle.
     ///
     /// When the URL has `sslmode=disable` (or no sslmode) we use `NoTls`;
@@ -410,241 +412,6 @@ impl StorageController {
                 }
             }
         }
-        drop(client);
-        conn_task.await??;
-        Ok(())
-    }
-
-    /// Connect to the `yb_storage` database on the cluster described by
-    /// `base` and create the `blob_namespace` ENUM type plus the
-    /// pageserver/safekeeper schema. All statements are idempotent.
-    ///
-    /// Wraps [`Self::ensure_yb_storage_schema_once`] with a per-attempt
-    /// deadline and a small retry loop. On a freshly-created YB cluster
-    /// the tokio_postgres connection can stall silently between
-    /// CREATE TABLE statements (no in-flight query visible in
-    /// pg_stat_activity, no syscall progress). Dropping the connection
-    /// and reconnecting consistently makes forward progress because all
-    /// CREATEs are idempotent. See `tasks/4.k_neon-local-start-wedge.md`.
-    async fn ensure_yb_storage_schema(base: &tokio_postgres::Config) -> anyhow::Result<()> {
-        const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
-        const MAX_ATTEMPTS: u32 = 3;
-        let mut last_err: Option<anyhow::Error> = None;
-        for attempt in 1..=MAX_ATTEMPTS {
-            match tokio::time::timeout(
-                ATTEMPT_TIMEOUT,
-                Self::ensure_yb_storage_schema_once(base),
-            )
-            .await
-            {
-                Ok(Ok(())) => return Ok(()),
-                Ok(Err(e)) => {
-                    eprintln!(
-                        "ensure_yb_storage_schema attempt {attempt}/{MAX_ATTEMPTS} failed: {e:#}"
-                    );
-                    last_err = Some(e);
-                }
-                Err(_elapsed) => {
-                    eprintln!(
-                        "ensure_yb_storage_schema attempt {attempt}/{MAX_ATTEMPTS} timed out after {}s; reconnecting",
-                        ATTEMPT_TIMEOUT.as_secs()
-                    );
-                    last_err = Some(anyhow::anyhow!(
-                        "ensure_yb_storage_schema timed out after {}s",
-                        ATTEMPT_TIMEOUT.as_secs()
-                    ));
-                }
-            }
-        }
-        Err(last_err.unwrap_or_else(|| {
-            anyhow::anyhow!("ensure_yb_storage_schema failed with no captured error")
-        }))
-    }
-
-    async fn ensure_yb_storage_schema_once(base: &tokio_postgres::Config) -> anyhow::Result<()> {
-        let mut cfg = base.clone();
-        cfg.dbname("yb_storage");
-        let (client, conn_task) =
-            Self::connect_external(&cfg, "yb_storage to provision schema").await?;
-
-        // Schema-qualify everything so these objects never drift into
-        // `storage_controller` (or any other schema named first in
-        // search_path) when the controller URL carries
-        // `options=-csearch_path=…`. blobs/wals are the operator-facing
-        // tables; they belong in `public`.
-        //
-        // CREATE TYPE has no IF NOT EXISTS — swallow the duplicate-object
-        // error on retries.
-        match client
-            .batch_execute(
-                "CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper')",
-            )
-            .await
-        {
-            Ok(()) => println!("Created type yb_storage.public.blob_namespace"),
-            Err(e) => {
-                let is_dup = e
-                    .as_db_error()
-                    .is_some_and(|d| d.code() == &tokio_postgres::error::SqlState::DUPLICATE_OBJECT);
-                if is_dup {
-                    println!("Type yb_storage.public.blob_namespace already exists");
-                } else {
-                    return Err(anyhow::Error::from(e).context("creating blob_namespace type"));
-                }
-            }
-        }
-
-        client
-            .batch_execute(
-                "CREATE TABLE IF NOT EXISTS public.blobs (
-                    tenant_id        TEXT                  NOT NULL,
-                    timeline_id      TEXT                  NOT NULL,
-                    namespace        public.blob_namespace NOT NULL,
-                    key              TEXT                  NOT NULL,
-                    generation       INT,
-                    chunk_idx        INT                   NOT NULL,
-                    data             BYTEA                 NOT NULL,
-                    size_bytes       BIGINT                NOT NULL,
-                    etag             TEXT                  NOT NULL,
-                    last_modified_us BIGINT                NOT NULL,
-                    metadata_json    TEXT,
-                    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
-                )",
-            )
-            .await
-            .context("creating yb_storage.public.blobs")?;
-        println!("Ensured table yb_storage.public.blobs");
-
-        client
-            .batch_execute(
-                "CREATE TABLE IF NOT EXISTS public.wals (
-                    tenant_id        TEXT    NOT NULL,
-                    timeline_id      TEXT    NOT NULL,
-                    segno            BIGINT  NOT NULL,
-                    chunk_seq        INT     NOT NULL,
-                    chunk_offset     BIGINT  NOT NULL,
-                    chunk_size       INT     NOT NULL,
-                    data             BYTEA   NOT NULL,
-                    last_modified_us BIGINT  NOT NULL,
-                    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)
-                )",
-            )
-            .await
-            .context("creating yb_storage.public.wals")?;
-        println!("Ensured table yb_storage.public.wals");
-
-        // yb-pageserver schema: row-per-(key, lsn) page store plus a
-        // per-timeline state row that replaces local `metadata`, the
-        // `index_part.json` layer list, and `tenant-manifest.json`.
-        client
-            .batch_execute("CREATE SCHEMA IF NOT EXISTS pageserver")
-            .await
-            .context("creating schema yb_storage.pageserver")?;
-        println!("Ensured schema yb_storage.pageserver");
-
-        // Relation pages only — anything where Key::is_rel_block_key()
-        // holds (field1 == 0x00, field4 != 0, field6 != 0xffffffff).
-        // The hash partition is (tenant, timeline, spcnode, dbnode,
-        // relnode, forknum) so a fork's whole block-set lives on one
-        // tablet; range scans within a fork are tablet-local.
-        // Non-page keys (SLRUs, metadata, dir listings, aux, repl
-        // origins, rel-size sentinels) keep going through the layer-
-        // file path in `public.blobs`.
-        //
-        // `is_image` sits between `blknum` and `lsn` in the clustering
-        // key so a per-block image lookup (`AND is_image=TRUE ORDER BY
-        // lsn DESC LIMIT 1`) is a single seek, not a scan. Reads use a
-        // CTE anchored on the most recent image; the chain bound is now
-        // a pure storage optimisation handled by a background image
-        // materialiser, not a write-time invariant.
-        client
-            .batch_execute(
-                "CREATE TABLE IF NOT EXISTS pageserver.pages (
-                    tenant_id    TEXT     NOT NULL,
-                    timeline_id  TEXT     NOT NULL,
-                    spcnode      BIGINT   NOT NULL,
-                    dbnode       BIGINT   NOT NULL,
-                    relnode      BIGINT   NOT NULL,
-                    forknum      SMALLINT NOT NULL,
-                    blknum       BIGINT   NOT NULL,
-                    is_image     BOOLEAN  NOT NULL,
-                    lsn          BIGINT   NOT NULL,
-                    will_init    BOOLEAN  NOT NULL,
-                    payload      BYTEA    NOT NULL,
-                    PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                                 blknum, is_image, lsn DESC)
-                )",
-            )
-            .await
-            .context("creating yb_storage.pageserver.pages")?;
-        println!("Ensured table yb_storage.pageserver.pages");
-
-        // SLRU pages — pg_xact, pg_multixact_offsets, pg_multixact_members.
-        // Same image-anchored design as pages. Hash partition on
-        // (tenant, timeline, kind, segno) so all blocks of one SLRU
-        // segment live on one tablet. `kind` matches the byte order in
-        // `Key::field2`: 0=Clog, 1=MultiXactMembers, 2=MultiXactOffsets.
-        client
-            .batch_execute(
-                "CREATE TABLE IF NOT EXISTS pageserver.slru_pages (
-                    tenant_id    TEXT     NOT NULL,
-                    timeline_id  TEXT     NOT NULL,
-                    kind         SMALLINT NOT NULL,
-                    segno        BIGINT   NOT NULL,
-                    blknum       BIGINT   NOT NULL,
-                    is_image     BOOLEAN  NOT NULL,
-                    lsn          BIGINT   NOT NULL,
-                    will_init    BOOLEAN  NOT NULL,
-                    payload      BYTEA    NOT NULL,
-                    PRIMARY KEY ((tenant_id, timeline_id, kind, segno) HASH,
-                                 blknum, is_image, lsn DESC)
-                )",
-            )
-            .await
-            .context("creating yb_storage.pageserver.slru_pages")?;
-        println!("Ensured table yb_storage.pageserver.slru_pages");
-
-        // Metadata blobs — everything that isn't a relation page or
-        // SLRU block: relation-size sentinels, directory listings
-        // (TenantDir/DbDir/RelDir/SlruDir), aux files (zenith.signal,
-        // postgresql.auto.conf, replication slot state), two-phase
-        // commit files, replication origins, SLRU segment-size
-        // sentinels. All full-overwrite semantics — read = latest row
-        // ≤ target_lsn. No walredo, no chains.
-        client
-            .batch_execute(
-                "CREATE TABLE IF NOT EXISTS pageserver.meta (
-                    tenant_id    TEXT     NOT NULL,
-                    timeline_id  TEXT     NOT NULL,
-                    key          BYTEA    NOT NULL,
-                    lsn          BIGINT   NOT NULL,
-                    payload      BYTEA    NOT NULL,
-                    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
-                )",
-            )
-            .await
-            .context("creating yb_storage.pageserver.meta")?;
-        println!("Ensured table yb_storage.pageserver.meta");
-
-        client
-            .batch_execute(
-                "CREATE TABLE IF NOT EXISTS pageserver.timelines (
-                    tenant_id              TEXT    NOT NULL,
-                    timeline_id            TEXT    NOT NULL,
-                    last_record_lsn        BIGINT  NOT NULL,
-                    disk_consistent_lsn    BIGINT  NOT NULL,
-                    applied_gc_cutoff_lsn  BIGINT  NOT NULL,
-                    ancestor_timeline_id   TEXT,
-                    ancestor_lsn           BIGINT,
-                    current_generation     INT     NOT NULL,
-                    pg_version             INT     NOT NULL,
-                    PRIMARY KEY ((tenant_id) HASH, timeline_id)
-                )",
-            )
-            .await
-            .context("creating yb_storage.pageserver.timelines")?;
-        println!("Ensured table yb_storage.pageserver.timelines");
-
         drop(client);
         conn_task.await??;
         Ok(())

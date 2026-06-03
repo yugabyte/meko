@@ -37,8 +37,8 @@ YB_HOST=${YB_HOST:-127.0.0.1}
 YB_PORT=${YB_PORT:-5433}
 COMPUTE_PORT=${COMPUTE_PORT:-55432}
 
-NEON=${NEON:-$REPO/target/release/neon_local}
-[[ -x $NEON ]] || { echo "neon_local binary not found at $NEON; run 'cargo build --release --bin neon_local'"; exit 1; }
+NEON=${NEON:-$REPO/target/debug/neon_local}
+[[ -x $NEON ]] || { echo "neon_local binary not found at $NEON; run 'cargo build --bin neon_local'"; exit 1; }
 
 step() { echo; echo "=== $* ==="; }
 

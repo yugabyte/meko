@@ -1968,14 +1968,9 @@ async fn handle_start_all_impl(
 ) -> Result<(), Vec<anyhow::Error>> {
     // Endpoints are not started automatically
 
-    // Provision the external `yb_storage` database synchronously before
-    // spawning any service. pageserver / safekeeper / endpoint_storage
-    // all bind to `yb_storage` immediately on start; if storage_controller
-    // is still creating it (the only thing that does), they crash with
-    // `database "yb_storage" does not exist`. The call is idempotent so
-    // a repeat from inside `StorageController::start` is a no-op.
-    //
-    // See `tasks/4.k_neon-local-start-wedge.md`.
+    // Phase 1 — provision the external `yb_storage` database
+    // synchronously. Just CREATE DATABASE; the schema itself is
+    // created by storage_controller's diesel migrations in phase 2.
     if let Err(e) = StorageController::from_env(env)
         .prepare_database_if_external()
         .await
@@ -1983,22 +1978,22 @@ async fn handle_start_all_impl(
         return Err(vec![e.context("prepare external storage controller database")]);
     }
 
-    let mut js = JoinSet::new();
-
-    // force infalliblity through closure
-    #[allow(clippy::redundant_closure_call)]
-    (|| {
+    // Phase 2 — storage_broker + storage_controller. The controller
+    // runs diesel migrations on startup, and pageserver / safekeeper /
+    // endpoint_storage all need those tables in place before they
+    // can connect to yb_storage, so this phase has to complete
+    // before the next one starts. Broker rides along — it has no
+    // schema dependency and there's no reason to leave it for later.
+    {
+        let mut js = JoinSet::new();
         js.spawn(async move {
-            let storage_broker = StorageBroker::from_env(env);
-            storage_broker
+            StorageBroker::from_env(env)
                 .start(&retry_timeout)
                 .await
                 .map_err(|e| e.context("start storage_broker"))
         });
-
         js.spawn(async move {
-            let storage_controller = StorageController::from_env(env);
-            storage_controller
+            StorageController::from_env(env)
                 .start(NeonStorageControllerStartArgs::with_default_instance_id(
                     retry_timeout,
                 ))
@@ -2006,6 +2001,23 @@ async fn handle_start_all_impl(
                 .map_err(|e| e.context("start storage_controller"))
         });
 
+        let mut errors = Vec::new();
+        while let Some(result) = js.join_next().await {
+            if let Err(e) = result.expect("we don't panic or cancel the tasks") {
+                errors.push(e);
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+    }
+
+    // Phase 3 — pageserver(s), safekeeper(s), endpoint_storage in
+    // parallel. Schema is guaranteed to exist by this point.
+    let mut js = JoinSet::new();
+
+    #[allow(clippy::redundant_closure_call)]
+    (|| {
         for ps_conf in &env.pageservers {
             js.spawn(async move {
                 let pageserver = PageServerNode::from_env(env, ps_conf);

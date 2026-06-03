@@ -919,7 +919,9 @@ async fn create_compute_page_store(
     else {
         return Ok(None);
     };
-    store.ensure_schema().await?;
+    // No schema bootstrap here — storage_controller's diesel
+    // migrations are the single source of truth for `pageserver.*`
+    // tables. Tests still call `store.ensure_schema()` directly.
     info!(
         pool_size = COMPUTE_POOL_SIZE,
         "Compute-reads PageStore connected; yb-pageserver mode enabled"
