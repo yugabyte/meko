@@ -14,37 +14,12 @@ use crate::config::PageServerConf;
 use crate::context::RequestContext;
 use crate::task_mgr::{self, TaskKind};
 use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::remote_timeline_client::{
-    PersistIndexPartWithDeletedFlagError, RemoteTimelineClient,
-};
+use crate::tenant::remote_timeline_client::RemoteTimelineClient;
 use crate::tenant::{
-    CreateTimelineCause, DeleteTimelineError, MaybeDeletedIndexPart, TenantManifestError,
-    TenantShard, Timeline, TimelineOrOffloaded,
+    CreateTimelineCause, DeleteTimelineError, TenantManifestError, TenantShard, Timeline,
+    TimelineOrOffloaded,
 };
 use crate::virtual_file::MaybeFatalIo;
-
-/// Mark timeline as deleted in S3 so we won't pick it up next time
-/// during attach or pageserver restart.
-/// See comment in persist_index_part_with_deleted_flag.
-async fn set_deleted_in_remote_index(
-    remote_client: &Arc<RemoteTimelineClient>,
-) -> Result<(), DeleteTimelineError> {
-    let res = remote_client.persist_index_part_with_deleted_flag().await;
-    match res {
-        // If we (now, or already) marked it successfully as deleted, we can proceed
-        Ok(()) | Err(PersistIndexPartWithDeletedFlagError::AlreadyDeleted(_)) => (),
-        // Bail out otherwise
-        //
-        // AlreadyInProgress shouldn't happen, because the 'delete_lock' prevents
-        // two tasks from performing the deletion at the same time. The first task
-        // that starts deletion should run it to completion.
-        Err(e @ PersistIndexPartWithDeletedFlagError::AlreadyInProgress(_))
-        | Err(e @ PersistIndexPartWithDeletedFlagError::Other(_)) => {
-            return Err(DeleteTimelineError::Other(anyhow::anyhow!(e)));
-        }
-    }
-    Ok(())
-}
 
 /// Grab the compaction and gc locks, and actually perform the deletion.
 ///
@@ -216,55 +191,24 @@ impl DeleteTimelineFlow {
             ))?
         });
 
+        // yb-mode: live timelines own their `remote_client` directly
+        // and there is no "rebuild client + download index_part"
+        // path — that whole branch was for S3-offloaded timelines
+        // which don't exist here. If we somehow see an
+        // `Offloaded` variant, treat it as a no-op removal: there's
+        // no in-memory state to drop and the YB row cleanup runs in
+        // `Self::background` below.
         let remote_client = match timeline.maybe_remote_client() {
             Some(remote_client) => remote_client,
             None => {
-                let remote_client = tenant
-                    .build_timeline_client(timeline.timeline_id(), tenant.remote_storage.clone());
-                let result = match remote_client
-                    .download_index_file(&tenant.cancel)
-                    .instrument(info_span!("download_index_file"))
-                    .await
-                {
-                    Ok(r) => r,
-                    Err(DownloadError::NotFound) => {
-                        // Deletion is already complete.
-                        // As we came here, we will need to remove the timeline from the tenant though.
-                        tracing::info!("Timeline already deleted in remote storage");
-                        if let TimelineOrOffloaded::Offloaded(_) = &timeline {
-                            // We only supoprt this for offloaded timelines, as we don't know which state non-offloaded timelines are in.
-                            tracing::info!(
-                                "Timeline with gone index part is offloaded timeline. Removing from tenant."
-                            );
-                            remove_maybe_offloaded_timeline_from_tenant(tenant, &timeline, &guard)
-                                .await?;
-                        }
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        return Err(DeleteTimelineError::Other(anyhow::anyhow!(
-                            "error: {:?}",
-                            e
-                        )));
-                    }
-                };
-                let index_part = match result {
-                    MaybeDeletedIndexPart::Deleted(p) => {
-                        tracing::info!("Timeline already set as deleted in remote index");
-                        p
-                    }
-                    MaybeDeletedIndexPart::IndexPart(p) => p,
-                };
-                let remote_client = Arc::new(remote_client);
-
-                remote_client
-                    .init_upload_queue(&index_part)
-                    .map_err(DeleteTimelineError::Other)?;
-                remote_client.shutdown().await;
-                remote_client
+                tracing::info!(
+                    "Offloaded timeline in yb-mode — skipping remote-index dance, \
+                     proceeding to YB cleanup directly"
+                );
+                remove_maybe_offloaded_timeline_from_tenant(tenant, &timeline, &guard).await?;
+                return Ok(());
             }
         };
-        set_deleted_in_remote_index(&remote_client).await?;
 
         fail::fail_point!("timeline-delete-before-schedule", |_| {
             Err(anyhow::anyhow!(
@@ -425,10 +369,7 @@ impl DeleteTimelineFlow {
                 .await
                 .map_err(DeleteTimelineError::Other)?;
         }
-        // Keep RTC's `delete_all` invocation only for the
-        // sanity-check side effects (asserts the upload queue is in
-        // the right state). The actual cleanup happened above.
-        remote_client.delete_all().await?;
+        let _ = remote_client;
 
         pausable_failpoint!("in_progress_delete");
 
