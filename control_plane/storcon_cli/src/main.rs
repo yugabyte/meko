@@ -14,11 +14,8 @@ use pageserver_api::controller_api::{
     TenantShardMigrateRequest, TenantShardMigrateResponse, TimelineSafekeeperMigrateRequest,
 };
 use pageserver_api::models::{
-    ShardParameters, TenantConfig,
-    TenantConfigPatchRequest, TenantConfigRequest, TenantShardSplitRequest,
-    TenantShardSplitResponse,
+    ShardParameters, TenantConfig, TenantConfigPatchRequest, TenantConfigRequest,
 };
-use pageserver_api::shard::{ShardStripeSize};
 use pageserver_client::mgmt_api::{self};
 use reqwest::{Certificate, Method, StatusCode, Url};
 use safekeeper_api::models::TimelineLocateResponse;
@@ -130,16 +127,6 @@ enum Command {
     TenantDelete {
         #[arg(long)]
         tenant_id: TenantId,
-    },
-    /// Split an existing tenant into a higher number of shards than its current shard count.
-    TenantShardSplit {
-        #[arg(long)]
-        tenant_id: TenantId,
-        #[arg(long)]
-        shard_count: u8,
-        /// Optional, in 8kiB pages.  e.g. set 2048 for 16MB stripes.
-        #[arg(long)]
-        stripe_size: Option<u32>,
     },
     /// Migrate the attached location for a tenant shard to a specific pageserver.
     TenantShardMigrate {
@@ -664,35 +651,6 @@ async fn main() -> anyhow::Result<()> {
                     Some(req),
                 )
                 .await?;
-        }
-        Command::TenantShardSplit {
-            tenant_id,
-            shard_count,
-            stripe_size,
-        } => {
-            let req = TenantShardSplitRequest {
-                new_shard_count: shard_count,
-                new_stripe_size: stripe_size.map(ShardStripeSize),
-            };
-
-            let response = storcon_client
-                .dispatch::<TenantShardSplitRequest, TenantShardSplitResponse>(
-                    Method::PUT,
-                    format!("control/v1/tenant/{tenant_id}/shard_split"),
-                    Some(req),
-                )
-                .await?;
-            println!(
-                "Split tenant {} into {} shards: {}",
-                tenant_id,
-                shard_count,
-                response
-                    .new_shards
-                    .iter()
-                    .map(|s| format!("{s:?}"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
         }
         Command::TenantShardMigrate {
             tenant_shard_id,

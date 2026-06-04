@@ -1235,18 +1235,6 @@ async fn tenant_delete_handler(
 }
 
 
-async fn tenant_shard_split_handler(
-    _request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    // yb-pageserver: shard splitting is YugabyteDB's job. The
-    // pageserver runs as a single shard against the row store and
-    // never reshards itself.
-    Err(ApiError::BadRequest(anyhow::anyhow!(
-        "shard_split is not supported in yb-pageserver mode"
-    )))
-}
-
 async fn timeline_gc_blocking_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
@@ -2648,9 +2636,6 @@ pub fn make_router(
         })
         .put("/v1/tenant/config", |r| {
             api_handler(r, update_tenant_config_handler)
-        })
-        .put("/v1/tenant/:tenant_shard_id/shard_split", |r| {
-            api_handler(r, tenant_shard_split_handler)
         })
         .get("/v1/tenant/:tenant_shard_id/config", |r| {
             api_handler(r, get_tenant_config_handler)

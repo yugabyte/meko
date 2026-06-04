@@ -453,23 +453,6 @@ pub struct LsnLeaseRequest {
     pub lsn: Lsn,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct TenantShardSplitRequest {
-    pub new_shard_count: u8,
-
-    // A tenant's stripe size is only meaningful the first time their shard count goes
-    // above 1: therefore during a split from 1->N shards, we may modify the stripe size.
-    //
-    // If this is set while the stripe count is being increased from an already >1 value,
-    // then the request will fail with 400.
-    pub new_stripe_size: Option<ShardStripeSize>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct TenantShardSplitResponse {
-    pub new_shards: Vec<TenantId>,
-}
-
 /// Parameters that apply to all shards in a tenant.  Used during tenant creation.
 #[derive(Clone, Copy, Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]

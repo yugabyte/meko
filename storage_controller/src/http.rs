@@ -26,7 +26,7 @@ use pageserver_api::controller_api::{
 };
 use pageserver_api::models::{
     DetachBehavior, LsnLeaseRequest, TenantConfigPatchRequest, TenantConfigRequest,
-    TenantLocationConfigRequest, TenantShardSplitRequest, TenantTimeTravelRequest,
+    TenantLocationConfigRequest, TenantTimeTravelRequest,
     TimelineArchivalConfigRequest, TimelineCreateRequest,
 };
 use pageserver_api::upcall_api::{

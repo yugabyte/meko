@@ -108,23 +108,6 @@ struct Cli {
     #[arg(long)]
     max_warming_up_interval: Option<humantime::Duration>,
 
-    /// Size threshold for automatically splitting shards (disabled by default)
-    #[arg(long)]
-    split_threshold: Option<u64>,
-
-    /// Maximum number of shards during autosplits. 0 disables autosplits. Defaults
-    /// to 16 as a safety to avoid too many shards by accident.
-    #[arg(long, default_value = "16")]
-    max_split_shards: u8,
-
-    /// Size threshold for initial shard splits of unsharded tenants. 0 disables initial splits.
-    #[arg(long)]
-    initial_split_threshold: Option<u64>,
-
-    /// Number of target shards for initial splits. 0 or 1 disables initial splits. Defaults to 2.
-    #[arg(long, default_value = "2")]
-    initial_split_shards: u8,
-
     /// Maximum number of normal-priority reconcilers that may run in parallel
     #[arg(long)]
     reconciler_concurrency: Option<usize>,
@@ -219,9 +202,6 @@ struct Cli {
     /// Primarily useful for testing to reduce test execution time.
     #[arg(long, default_value = "false", action=ArgAction::Set)]
     kick_secondary_downloads: bool,
-
-    #[arg(long)]
-    shard_split_request_timeout: Option<humantime::Duration>,
 
     /// **Feature Flag** Whether the storage controller should act to rectify pageserver-reported local disk loss.
     #[arg(long, default_value = "false")]
@@ -431,10 +411,6 @@ async fn async_main() -> anyhow::Result<()> {
             .safekeeper_reconciler_concurrency
             .unwrap_or(SAFEKEEPER_RECONCILER_CONCURRENCY_DEFAULT),
         tenant_rate_limit: args.tenant_rate_limit,
-        split_threshold: args.split_threshold,
-        max_split_shards: args.max_split_shards,
-        initial_split_threshold: args.initial_split_threshold,
-        initial_split_shards: args.initial_split_shards,
         neon_local_repo_dir: args.neon_local_repo_dir,
         max_secondary_lag_bytes: args.max_secondary_lag_bytes,
         heartbeat_interval: args
@@ -454,10 +430,6 @@ async fn async_main() -> anyhow::Result<()> {
         use_local_compute_notifications: args.use_local_compute_notifications,
         timeline_safekeeper_count: args.timeline_safekeeper_count,
         kick_secondary_downloads: args.kick_secondary_downloads,
-        shard_split_request_timeout: args
-            .shard_split_request_timeout
-            .map(humantime::Duration::into)
-            .unwrap_or(Duration::MAX),
         handle_ps_local_disk_loss: args.handle_ps_local_disk_loss,
     };
 

@@ -32,27 +32,11 @@ const NOTIFY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) const API_CONCURRENCY: usize = 32;
 
-struct UnshardedComputeHookTenant {
-    // Which node is this tenant attached to
+/// yb-mode: every tenant is single-shard. The upstream
+/// Unsharded/Sharded enum is collapsed into one struct.
+struct ComputeHookTenantState {
     node_id: NodeId,
-
-    // The tenant's preferred AZ, so that we may pass this on to the control plane
     preferred_az: Option<AvailabilityZone>,
-
-    // Must hold this lock to send a notification.
-    send_lock: Arc<tokio::sync::Mutex<Option<ComputeRemoteTenantState>>>,
-}
-struct ShardedComputeHookTenant {
-    stripe_size: ShardStripeSize,
-    shard_count: ShardCount,
-    shards: Vec<(ShardNumber, NodeId)>,
-
-    // The tenant's preferred AZ, so that we may pass this on to the control plane
-    preferred_az: Option<AvailabilityZone>,
-
-    // Must hold this lock to send a notification.  The contents represent
-    // the last successfully sent notification, and are used to coalesce multiple
-    // updates by only sending when there is a chance since our last successful send.
     send_lock: Arc<tokio::sync::Mutex<Option<ComputeRemoteTenantState>>>,
 }
 
@@ -101,126 +85,35 @@ trait ApiMethod {
     ) -> Result<(), NotifyError>;
 }
 
-enum ComputeHookTenant {
-    Unsharded(UnshardedComputeHookTenant),
-    Sharded(ShardedComputeHookTenant),
-}
+/// yb-mode: tenants are single-shard. The upstream Unsharded/Sharded
+/// dispatch is gone; this is the one shape.
+struct ComputeHookTenant(ComputeHookTenantState);
 
 impl ComputeHookTenant {
-    /// Construct with at least one shard's information
     fn new(
-        tenant_shard_id: TenantId,
-        stripe_size: ShardStripeSize,
+        _tenant_id: TenantId,
+        _stripe_size: ShardStripeSize,
         preferred_az: Option<AvailabilityZone>,
         node_id: NodeId,
     ) -> Self {
-        if ShardCount(0).count() > 1 {
-            Self::Sharded(ShardedComputeHookTenant {
-                shards: vec![(ShardNumber(0), node_id)],
-                stripe_size,
-                shard_count: ShardCount::unsharded(),
-                preferred_az,
-                send_lock: Arc::default(),
-            })
-        } else {
-            Self::Unsharded(UnshardedComputeHookTenant {
-                node_id,
-                preferred_az,
-                send_lock: Arc::default(),
-            })
-        }
+        Self(ComputeHookTenantState {
+            node_id,
+            preferred_az,
+            send_lock: Arc::default(),
+        })
     }
 
     fn get_send_lock(&self) -> &Arc<tokio::sync::Mutex<Option<ComputeRemoteTenantState>>> {
-        match self {
-            Self::Unsharded(unsharded_tenant) => &unsharded_tenant.send_lock,
-            Self::Sharded(sharded_tenant) => &sharded_tenant.send_lock,
-        }
+        &self.0.send_lock
     }
 
-    fn is_sharded(&self) -> bool {
-        matches!(self, ComputeHookTenant::Sharded(_))
-    }
-
-    /// Clear compute hook state for the specified shard.
-    /// Only valid for [`ComputeHookTenant::Sharded`] instances.
-    fn remove_shard(&mut self, tenant_shard_id: TenantId, stripe_size: ShardStripeSize) {
-        match self {
-            ComputeHookTenant::Sharded(sharded) => {
-                if sharded.stripe_size != stripe_size
-                    || sharded.shard_count != ShardCount(0)
-                {
-                    tracing::warn!("Shard split detected while handling detach")
-                }
-
-                let shard_idx = sharded.shards.iter().position(|(shard_number, _node_id)| {
-                    *shard_number == ShardNumber(0)
-                });
-
-                if let Some(shard_idx) = shard_idx {
-                    sharded.shards.remove(shard_idx);
-                } else {
-                    // This is a valid but niche case, where the tenant was previously attached
-                    // as a Secondary location and then detached, so has no previously notified
-                    // state.
-                    tracing::info!("Shard not found while handling detach")
-                }
-            }
-            ComputeHookTenant::Unsharded(_) => {
-                unreachable!("Detach of unsharded tenants is handled externally");
-            }
-        }
-    }
-
-    /// Set one shard's location.  If stripe size or shard count have changed, Self is reset
-    /// and drops existing content.
     fn update(&mut self, shard_update: ShardUpdate) {
-        let tenant_shard_id = shard_update.tenant_shard_id;
         let node_id = shard_update.node_id;
-        let stripe_size = shard_update.stripe_size;
         let preferred_az = shard_update.preferred_az;
 
-        match self {
-            Self::Unsharded(unsharded_tenant) if ShardCount(0).count() == 1 => {
-                unsharded_tenant.node_id = node_id;
-                if unsharded_tenant.preferred_az.as_ref()
-                    != preferred_az.as_ref().map(|az| az.as_ref())
-                {
-                    unsharded_tenant.preferred_az = preferred_az.map(|az| az.as_ref().clone());
-                }
-            }
-            Self::Sharded(sharded_tenant)
-                if sharded_tenant.stripe_size == stripe_size
-                    && sharded_tenant.shard_count == ShardCount(0) =>
-            {
-                if let Some(existing) = sharded_tenant
-                    .shards
-                    .iter()
-                    .position(|s| s.0 == ShardNumber(0))
-                {
-                    sharded_tenant.shards.get_mut(existing).unwrap().1 = node_id;
-                } else {
-                    sharded_tenant
-                        .shards
-                        .push((ShardNumber(0), node_id));
-                    sharded_tenant.shards.sort_by_key(|s| s.0)
-                }
-
-                if sharded_tenant.preferred_az.as_ref()
-                    != preferred_az.as_ref().map(|az| az.as_ref())
-                {
-                    sharded_tenant.preferred_az = preferred_az.map(|az| az.as_ref().clone());
-                }
-            }
-            _ => {
-                // Shard count changed: reset struct.
-                *self = Self::new(
-                    tenant_shard_id,
-                    stripe_size,
-                    preferred_az.map(|az| az.into_owned()),
-                    node_id,
-                );
-            }
+        self.0.node_id = node_id;
+        if self.0.preferred_az.as_ref() != preferred_az.as_ref().map(|az| az.as_ref()) {
+            self.0.preferred_az = preferred_az.map(|az| az.as_ref().clone());
         }
     }
 }
@@ -426,47 +319,15 @@ impl ApiMethod for ComputeHookTenant {
             }
         };
 
-        let request = match self {
-            Self::Unsharded(unsharded_tenant) => Some(NotifyAttachRequest {
-                tenant_id,
-                shards: vec![NotifyAttachRequestShard {
-                    shard_number: ShardNumber(0),
-                    node_id: unsharded_tenant.node_id,
-                }],
-                stripe_size: None,
-                preferred_az: unsharded_tenant
-                    .preferred_az
-                    .as_ref()
-                    .map(|az| az.0.clone()),
-            }),
-            Self::Sharded(sharded_tenant)
-                if sharded_tenant.shards.len() == sharded_tenant.shard_count.count() as usize =>
-            {
-                Some(NotifyAttachRequest {
-                    tenant_id,
-                    shards: sharded_tenant
-                        .shards
-                        .iter()
-                        .map(|(shard_number, node_id)| NotifyAttachRequestShard {
-                            shard_number: *shard_number,
-                            node_id: *node_id,
-                        })
-                        .collect(),
-                    stripe_size: Some(sharded_tenant.stripe_size),
-                    preferred_az: sharded_tenant.preferred_az.as_ref().map(|az| az.0.clone()),
-                })
-            }
-            Self::Sharded(sharded_tenant) => {
-                // Sharded tenant doesn't yet have information for all its shards
-
-                tracing::info!(
-                    "ComputeHookTenant::maybe_send: not enough shards ({}/{})",
-                    sharded_tenant.shards.len(),
-                    sharded_tenant.shard_count.count()
-                );
-                None
-            }
-        };
+        let request = Some(NotifyAttachRequest {
+            tenant_id,
+            shards: vec![NotifyAttachRequestShard {
+                shard_number: ShardNumber(0),
+                node_id: self.0.node_id,
+            }],
+            stripe_size: None,
+            preferred_az: self.0.preferred_az.as_ref().map(|az| az.0.clone()),
+        });
 
         match request {
             None => {
@@ -1063,15 +924,9 @@ impl ComputeHook {
                 // state.
                 tracing::info!("Compute hook tenant not found for detach");
             }
-            Entry::Occupied(mut e) => {
-                let sharded = e.get().is_sharded();
-                if !sharded {
-                    e.remove();
-                } else {
-                    e.get_mut().remove_shard(tenant_shard_id, stripe_size);
-                }
-
-                tracing::debug!("Compute hook handled shard detach");
+            Entry::Occupied(e) => {
+                e.remove();
+                tracing::debug!("Compute hook handled tenant detach");
             }
         }
     }
