@@ -19,8 +19,6 @@ checkpoint_timeout = '10m'
 gc_period = '1 hour'
 gc_horizon = '67108864'
 
-max_file_descriptors = '100'
-
 # initial superuser role name to use when creating a new tenant
 initial_superuser_name = 'cloud_admin'
 
@@ -136,13 +134,6 @@ depends on that, so if you change it, bad things will happen.
 
 Size of the page cache. Unit is
 number of 8 kB blocks. The default is 8192, which means 64 MB.
-
-#### max_file_descriptors
-
-Max number of file descriptors to hold open concurrently for accessing
-layer files. This should be kept well below the process/container/OS
-limit (see `ulimit -n`), as the pageserver also needs file descriptors
-for other files and for sockets for incoming connections.
 
 #### pg_distrib_dir
 

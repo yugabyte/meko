@@ -211,7 +211,6 @@ fn main() -> anyhow::Result<()> {
     // Basic initialization of things that don't change after startup
     tracing::info!("Initializing virtual_file...");
     virtual_file::init(
-        conf.max_file_descriptors,
         conf.virtual_file_io_engine,
         conf.virtual_file_io_mode,
         if conf.no_sync {

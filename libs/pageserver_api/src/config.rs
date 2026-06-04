@@ -163,7 +163,6 @@ pub struct ConfigToml {
     pub superuser: String,
     pub locale: String,
     pub page_cache_size: usize,
-    pub max_file_descriptors: usize,
     pub pg_distrib_dir: Option<Utf8PathBuf>,
     #[serde_as(as = "serde_with::DisplayFromStr")]
     pub http_auth_type: AuthType,
@@ -811,7 +810,6 @@ pub mod defaults {
     };
 
     pub const DEFAULT_PAGE_CACHE_SIZE: usize = 8192;
-    pub const DEFAULT_MAX_FILE_DESCRIPTORS: usize = 100;
 
     pub const DEFAULT_LOG_FORMAT: &str = "plain";
 
@@ -875,7 +873,6 @@ impl Default for ConfigToml {
             superuser: (DEFAULT_SUPERUSER.to_string()),
             locale: DEFAULT_LOCALE.to_string(),
             page_cache_size: (DEFAULT_PAGE_CACHE_SIZE),
-            max_file_descriptors: (DEFAULT_MAX_FILE_DESCRIPTORS),
             pg_distrib_dir: None, // Utf8PathBuf::from("./pg_install"), // TODO: formely, this was std::env::current_dir()
             http_auth_type: (AuthType::Trust),
             pg_auth_type: (AuthType::Trust),

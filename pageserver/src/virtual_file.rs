@@ -1091,18 +1091,25 @@ impl OpenFiles {
 /// Initialize the virtual file module. This must be called once at page
 /// server startup.
 ///
+/// yb-mode leaves the `OPEN_FILES` slot pool effectively idle: the
+/// layer-file write/read paths are gone (pages live in YugabyteDB)
+/// and the only surviving `VirtualFile` callsite —
+/// `crashsafe_overwrite` for per-tenant config writes — bypasses the
+/// pool entirely. A small slot count is plenty; we keep the pool
+/// around only to avoid widening this module's surface area.
+const NUM_OPEN_FILE_SLOTS: usize = 16;
+const TEST_MAX_FILE_DESCRIPTORS: usize = 10;
+
 #[cfg(not(test))]
-pub fn init(num_slots: usize, engine: IoEngineKind, mode: IoMode, sync_mode: SyncMode) {
-    if OPEN_FILES.set(OpenFiles::new(num_slots)).is_err() {
+pub fn init(engine: IoEngineKind, mode: IoMode, sync_mode: SyncMode) {
+    if OPEN_FILES.set(OpenFiles::new(NUM_OPEN_FILE_SLOTS)).is_err() {
         panic!("virtual_file::init called twice");
     }
     set_io_mode(mode);
     io_engine::init(engine);
     SYNC_MODE.store(sync_mode as u8, std::sync::atomic::Ordering::Relaxed);
-    crate::metrics::virtual_file_descriptor_cache::SIZE_MAX.set(num_slots as u64);
+    crate::metrics::virtual_file_descriptor_cache::SIZE_MAX.set(NUM_OPEN_FILE_SLOTS as u64);
 }
-
-const TEST_MAX_FILE_DESCRIPTORS: usize = 10;
 
 // Get a handle to the global slots array.
 fn get_open_files() -> &'static OpenFiles {

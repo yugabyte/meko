@@ -89,8 +89,6 @@ pub struct PageServerConf {
     pub superuser: String,
     pub locale: String,
 
-    pub max_file_descriptors: usize,
-
     // Repository directory, relative to current working directory.
     // Normally, the page server changes the current working directory
     // to the repository, and 'workdir' is always '.'. But we don't do
@@ -365,7 +363,6 @@ impl PageServerConf {
             superuser,
             locale,
             page_cache_size: _,
-            max_file_descriptors,
             pg_distrib_dir,
             http_auth_type,
             pg_auth_type,
@@ -445,7 +442,6 @@ impl PageServerConf {
             wal_redo_timeout,
             superuser,
             locale,
-            max_file_descriptors,
             http_auth_type,
             pg_auth_type,
             grpc_auth_type,
