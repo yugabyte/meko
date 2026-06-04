@@ -1,43 +1,43 @@
 ---
-status: in_progress
+status: done
 severity: medium
 area: yb-pageserver
 opened: 2026-06-03
+closed: 2026-06-03
 ---
 
-## Progress
+## Resolution
 
-- **17.a — Dead `TenantConfig` field deletion**: ✅ done (commit
-  `a2eed007f`). 24 fields removed across the `TenantConfig` /
-  `TenantConfigToml` / `TenantConfigPatch` structs + getters +
-  storage_controller mirrors + control_plane parsing + tests.
-- **17.b — Drop `AttachmentMode` + `LocationMode`**: ✅ done (commit
-  `569319883`). `LocationConfigMode` enum + `LocationConfigSecondary`
-  struct gone; `LocationConf` collapses to
-  `{ generation, shard, tenant_conf }`; storage_controller
-  migration dance + secondary-location plumbing unwound.
-- **17.c — `pageserver.tenant_config` YB table**: ⏳ schema landed
-  (this commit). Remaining: storage_controller-side YB writes,
-  pageserver-side YB reads on attach + startup, drop `tenant_conf`
-  from `LocationConfig` wire + local `config-v1`.
+Landed across 7 commits:
 
-## Follow-up for 17.c
+- `a2eed007f` — **17.a** Drop 24 dead `TenantConfig` fields
+  (`compaction_*`, `l0_flush_*`, `image_*`, `gc_compaction_*`,
+  `eviction_*`, `checkpoint_*`, `timeline_offloading`,
+  `min_resident_size_override`). Compaction/image-layer/eviction
+  knobs were all dead in yb-mode.
+- `569319883` — **17.b** Drop `AttachmentMode` + `LocationMode` +
+  `LocationConfigMode` enums. `LocationConf` shrinks; live_migrate
+  collapses from a 6-step dance to bump-attach-notify-detach.
+- `cf28ecb86` — **17.c.1** Add `pageserver.tenant_config` table
+  to the existing 001 migration (no separate file).
+- `31d6e72b7` — **17.c.2** `PageStore::load_tenant_config` /
+  `save_tenant_config` (JSONB-keyed by tenant_id).
+- `c48cced3b` — **17.c.3** Storage_controller `Persistence::save_tenant_config`
+  (cross-schema `diesel::sql_query`) wired into `do_tenant_create`,
+  `set_tenant_config_and_reconcile`, `tenant_location_config`.
+- `a8121983e` — **17.c.4** Pageserver reads tenant_config from
+  YB on startup (`init_load_tenant_configs`) and on PUT
+  `location_config` (`upsert_location`). Falls back to
+  `TenantConfig::default()` if the YB row is absent.
+- `235999eee` — **17.c.5** Drop `tenant_conf` from the
+  `LocationConfig` wire and from internal `LocationConf`.
+  `AttachedTenantConf::try_from` takes an explicit `tenant_conf`
+  arg sourced from YB.
 
-1. Storage_controller `Persistence::write_tenant_config(tenant_id,
-   TenantConfig)` using `diesel::sql_query` (cross-schema). Call it
-   from `tenant_create` and `update_tenant_config` /
-   `patch_tenant_config` paths.
-2. Pageserver `PageStore::load_tenant_config(tenant_id) ->
-   Option<TenantConfig>`. Use the existing `fpu_page_store` pool
-   (one SELECT per attach, negligible load).
-3. `Tenant::persist_tenant_config_at` stops writing `tenant_conf`
-   to the local `config-v1` (only generation + shard remain).
-4. PUT `location_config` handler ignores `request.config.tenant_conf`
-   and re-reads from YB.
-5. Drop `tenant_conf` field from `LocationConfig` wire and from
-   internal `LocationConf`.
-6. Tenant startup (`init_load_tenant_configs` in `tenant/mgr.rs`)
-   reads tenant_conf from YB after loading the on-disk `config-v1`.
+End state: `pageserver.tenant_config` is the sole source of truth
+for `TenantConfig`. storage_controller writes it on tenant create /
+update; pageservers re-read on every PUT location_config and at
+startup. The wire and local `config-v1` no longer carry it.
 
 # Move per-tenant `TenantConfig` into YB, shrink `LocationConf`
 

@@ -1,9 +1,48 @@
 ---
-status: pending
+status: done
 severity: medium
 area: yb-pageserver
 opened: 2026-06-03
+closed: 2026-06-03
 ---
+
+## Resolution
+
+Landed across 4 commits:
+
+- `27f732647` — Drop `shard_*` fields from `LocationConfig` wire.
+- `e9615bd27` — Delete ~1,400 LOC of shard-split machinery in
+  `storage_controller`: `tenant_shard_split`, `prepare_tenant_shard_split`,
+  `do_tenant_shard_split`, `tenant_shard_split_commit_inmem`,
+  `tenant_shard_split_start_secondaries`, `abort_tenant_shard_split`,
+  `process_aborts`, `autosplit_tenants`, `begin_shard_split` /
+  `complete_shard_split` / `abort_shard_split` in `Persistence`,
+  `AbortShardSplitStatus`, the `handle_tenant_shard_split` HTTP
+  handler + route, the `tenant_shard_split` `PageserverClient` shim.
+- `585d1c862` — Drop `shard_number` / `shard_count` /
+  `shard_stripe_size` columns from `storage_controller.tenant_shards`
+  and `metadata_health` (schema + Diesel + persistence structs +
+  all query filters). `splitting` column gone.
+- `7e73653cd` — Drop `shard: ShardIdentity` from internal
+  `LocationConf`. `LocationConf` collapses to `{ generation }`.
+  `TenantStartupMode::Attached((Generation, ShardStripeSize))` →
+  `Attached(Generation)`.
+
+## Deferred
+
+The `TenantShardId` / `ShardCount` / `ShardNumber` /
+`ShardIdentity` / `ShardStripeSize` types are kept as
+always-unsharded values. They thread through enough unrelated
+API surface (route params, log spans, metric labels, gRPC types,
+walreceiver wire protocol) that a full mechanical rename to
+`TenantId` is its own focused refactor — call it task 19 if and
+when it's worth the churn.
+
+The structural cleanup above is the meaningful part: no more
+shard-aware routing, no more multi-step split orchestration, no
+more shard-keyed persistence. Whether the in-memory type name
+is `TenantShardId` or `TenantId` is mostly cosmetic at this
+point.
 
 # Drop tenant-sharding machinery
 
