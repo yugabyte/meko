@@ -68,6 +68,12 @@ the Postgres compute and YugabyteDB.
 - **Infinite scale**: tablet count grows with data; YB shards on the
   PK hash of `(tenant, timeline, fork)`. Adding YB nodes adds
   pageserver-side read capacity automatically.
+- **Highly available**: pages, WAL, and control-plane state all live
+  in YB, so durability is YB's RF=3 Raft replication with online
+  tablet repair. The pageserver layer is stateless-on-attach — no
+  local layer files, no S3 layer-file handoff — so any pageserver
+  can take over a tenant's attachment via the storage_controller's
+  generation-fenced `live_migrate`.
 
 ## What removed for real
 
@@ -102,8 +108,9 @@ A ybLight install is:
 - **Storage controller**: tenant/timeline placement & generation
   management. Backs its own state in YB too.
 - **YugabyteDB cluster**: holds `pageserver.pages`, `pageserver.slru_pages`,
-  `pageserver.meta`, the safekeeper WAL rows, the storage_controller
-  schema, and the blob table. This is the durable storage tier.
+  `pageserver.meta`, `pageserver.tenant_config`, the safekeeper WAL rows,
+  the storage_controller schema, and the blob table. This is the durable
+  storage tier.
 
 > **YB query contract**: every SQL statement issued through
 > `YsqlClient` must be idempotent. The client retries connection drops
