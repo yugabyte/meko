@@ -7,9 +7,9 @@
 **ybLight** is a serverless Postgres-compatible storage system that runs
 PostgreSQL computes over **YugabyteDB** as the durable backing store.
 Compute nodes are stateless and the storage tier is row-per-page tables
-in YB — so the system inherits YugabyteDB's geo-distributed, multi-region,
-multi-cloud, infinitely-scalable replication model directly underneath
-every byte of every page.
+in YB — so the system inherits YugabyteDB's highly available,
+geo-distributed, multi-region, multi-cloud, infinitely-scalable
+replication model directly underneath every byte of every page.
 
 ybLight started as a fork of [neondatabase/neon](https://github.com/neondatabase/neon)
 but is no longer one in any meaningful sense. The layer-file storage
@@ -58,6 +58,12 @@ the Postgres compute and YugabyteDB.
   parallelise on YB.
 
 **New properties inherited from YB:**
+- **Highly available**: pages, WAL, and control-plane state all live
+  in YB, so durability is YB's RF=3 Raft replication with online
+  tablet repair. The pageserver layer is stateless-on-attach — no
+  local layer files, no S3 layer-file handoff — so any pageserver
+  can take over a tenant's attachment via the storage_controller's
+  generation-fenced `live_migrate`.
 - **Multi-region resilience**: YB's Raft replication runs across
   zones / regions / clouds. ybLight's storage tier is wherever the YB
   cluster says it is.
@@ -68,12 +74,6 @@ the Postgres compute and YugabyteDB.
 - **Infinite scale**: tablet count grows with data; YB shards on the
   PK hash of `(tenant, timeline, fork)`. Adding YB nodes adds
   pageserver-side read capacity automatically.
-- **Highly available**: pages, WAL, and control-plane state all live
-  in YB, so durability is YB's RF=3 Raft replication with online
-  tablet repair. The pageserver layer is stateless-on-attach — no
-  local layer files, no S3 layer-file handoff — so any pageserver
-  can take over a tenant's attachment via the storage_controller's
-  generation-fenced `live_migrate`.
 
 ## What removed for real
 
