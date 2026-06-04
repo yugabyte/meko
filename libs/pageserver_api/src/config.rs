@@ -25,6 +25,30 @@ use utils::logging::LogFormat;
 
 use crate::models::{ImageCompressionAlgorithm, LsnLease};
 
+/// Default value for the `scale_factor` config knob. 1.0 means "leave
+/// every scale-derived default at its historical value".
+pub const DEFAULT_SCALE_FACTOR: f64 = 1.0;
+
+fn default_scale_factor() -> f64 {
+    DEFAULT_SCALE_FACTOR
+}
+
+/// Multiply a count-like base default by `scale_factor`, rounded and
+/// clamped to at least 1. Use for pool sizes, worker counts, queue
+/// depths — anything where 0 would deadlock the system.
+pub fn scale_count(base: usize, scale_factor: f64) -> usize {
+    let scaled = (base as f64 * scale_factor).round();
+    if scaled < 1.0 { 1 } else { scaled as usize }
+}
+
+/// Multiply a byte-budget base default by `scale_factor`, rounded and
+/// clamped to at least 1 byte. Use for cache sizes, buffer caps,
+/// memory budgets.
+pub fn scale_bytes(base: u64, scale_factor: f64) -> u64 {
+    let scaled = (base as f64 * scale_factor).round();
+    if scaled < 1.0 { 1 } else { scaled as u64 }
+}
+
 // Certain metadata (e.g. externally-addressable name, AZ) is delivered
 // as a separate structure.  This information is not needed by the pageserver
 // itself, it is only used for registering the pageserver with the control
@@ -155,7 +179,9 @@ pub struct ConfigToml {
     pub broker_keepalive_interval: Duration,
     #[serde_as(as = "serde_with::DisplayFromStr")]
     pub log_format: LogFormat,
-    pub concurrent_tenant_warmup: NonZeroUsize,
+    /// `None` → scaled default (`8 × scale_factor`, floored at 1).
+    /// `Some(n)` → honour the explicit value verbatim.
+    pub concurrent_tenant_warmup: Option<NonZeroUsize>,
     pub concurrent_tenant_size_logical_size_queries: NonZeroUsize,
     #[serde(with = "humantime_serde")]
     pub synthetic_size_calculation_interval: Duration,
@@ -224,11 +250,46 @@ pub struct ConfigToml {
     /// `remote_storage.kind = "YbStore"` and the binary is
     /// `yb-pageserver`.
     #[serde(default)]
-    pub yb_page_writer: YbPageWriterConfig,
+    pub yb_page_writer: YbPageWriterConfigToml,
+
+    /// Global multiplier applied to scale-derived defaults across the
+    /// pageserver: YSQL connection pool sizes, tokio worker threads,
+    /// in-flight materialiser concurrency, `YbPageWriterConfig` memory
+    /// budgets, etc. 1.0 preserves the historical sizing; 0.25 fits a
+    /// small dev box; values >1 scale up for beefy hosts. Fields that
+    /// are explicitly set in `pageserver.toml` always win over the
+    /// scaled default.
+    #[serde(default = "default_scale_factor")]
+    pub scale_factor: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// On-disk shape of `[yb_page_writer]` in `pageserver.toml`. Every
+/// field is optional so we can tell "absent" (apply the scaled
+/// default) apart from "explicitly set" (use the toml value verbatim,
+/// `scale_factor` does not touch it). Resolved into [`YbPageWriterConfig`]
+/// at startup by [`YbPageWriterConfigToml::resolve`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+pub struct YbPageWriterConfigToml {
+    #[serde(with = "humantime_serde::option", skip_serializing_if = "Option::is_none")]
+    pub flush_interval: Option<Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flush_size_bytes: Option<usize>,
+    #[serde(with = "humantime_serde::option", skip_serializing_if = "Option::is_none")]
+    pub flush_poll_interval: Option<Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_chain_limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_chain_payload_bytes_limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub materialize_queue_capacity: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_cache_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backpressure_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct YbPageWriterConfig {
     /// Flush the in-RAM buffer to `pageserver.pages` after this much
     /// wall-clock time since the buffer opened, even if it hasn't hit
@@ -237,7 +298,7 @@ pub struct YbPageWriterConfig {
     pub flush_interval: Duration,
 
     /// Flush the in-RAM buffer when its estimated size crosses this.
-    /// Default 25 MiB.
+    /// Default 25 MiB (scaled by `scale_factor`).
     pub flush_size_bytes: usize,
 
     /// Period at which the background flusher polls `should_flush()`.
@@ -304,8 +365,10 @@ pub struct YbPageWriterConfig {
     pub backpressure_bytes: usize,
 }
 
-impl Default for YbPageWriterConfig {
-    fn default() -> Self {
+impl YbPageWriterConfig {
+    /// Base defaults at `scale_factor = 1.0`. Used by tests and as
+    /// the input to [`YbPageWriterConfigToml::resolve`].
+    pub fn unscaled_defaults() -> Self {
         Self {
             flush_interval: Duration::from_secs(5),
             flush_size_bytes: 25 * 1024 * 1024,
@@ -315,6 +378,43 @@ impl Default for YbPageWriterConfig {
             materialize_queue_capacity: 2000,
             read_cache_bytes: 1024 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
+        }
+    }
+}
+
+impl Default for YbPageWriterConfig {
+    fn default() -> Self {
+        Self::unscaled_defaults()
+    }
+}
+
+impl YbPageWriterConfigToml {
+    /// Fill in unset fields with scale-aware defaults. Time/threshold
+    /// fields use the base default verbatim; memory and queue budgets
+    /// are multiplied by `scale_factor`.
+    pub fn resolve(&self, scale_factor: f64) -> YbPageWriterConfig {
+        let base = YbPageWriterConfig::unscaled_defaults();
+        YbPageWriterConfig {
+            flush_interval: self.flush_interval.unwrap_or(base.flush_interval),
+            flush_size_bytes: self.flush_size_bytes.unwrap_or_else(|| {
+                scale_count(base.flush_size_bytes, scale_factor)
+            }),
+            flush_poll_interval: self
+                .flush_poll_interval
+                .unwrap_or(base.flush_poll_interval),
+            image_chain_limit: self.image_chain_limit.unwrap_or(base.image_chain_limit),
+            image_chain_payload_bytes_limit: self
+                .image_chain_payload_bytes_limit
+                .unwrap_or(base.image_chain_payload_bytes_limit),
+            materialize_queue_capacity: self.materialize_queue_capacity.unwrap_or_else(|| {
+                scale_count(base.materialize_queue_capacity, scale_factor)
+            }),
+            read_cache_bytes: self
+                .read_cache_bytes
+                .unwrap_or_else(|| scale_count(base.read_cache_bytes, scale_factor)),
+            backpressure_bytes: self
+                .backpressure_bytes
+                .unwrap_or_else(|| scale_count(base.backpressure_bytes, scale_factor)),
         }
     }
 }
@@ -791,8 +891,7 @@ impl Default for ConfigToml {
             .expect("cannot parse default keepalive interval")),
             log_format: (LogFormat::from_str(DEFAULT_LOG_FORMAT).unwrap()),
 
-            concurrent_tenant_warmup: (NonZeroUsize::new(DEFAULT_CONCURRENT_TENANT_WARMUP)
-                .expect("Invalid default constant")),
+            concurrent_tenant_warmup: None,
             concurrent_tenant_size_logical_size_queries: NonZeroUsize::new(
                 DEFAULT_CONCURRENT_TENANT_SIZE_LOGICAL_SIZE_QUERIES,
             )
@@ -871,7 +970,8 @@ impl Default for ConfigToml {
             image_layer_generation_large_timeline_threshold: Some(2 * 1024 * 1024 * 1024),
             force_metric_collection_on_scrape: true,
             s3_upload_limit_bytes: 4_500_000_000,
-            yb_page_writer: YbPageWriterConfig::default(),
+            yb_page_writer: YbPageWriterConfigToml::default(),
+            scale_factor: DEFAULT_SCALE_FACTOR,
         }
     }
 }

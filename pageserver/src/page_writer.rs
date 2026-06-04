@@ -1645,6 +1645,7 @@ mod tests {
                 let cfg = PageStoreConfig {
                     yb: test_yb_config(),
                     schema: PROD_SCHEMA.to_string(),
+                    scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
                 };
                 let store = PageStore::connect(cfg, "pw_test", true)
                     .await

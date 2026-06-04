@@ -167,9 +167,17 @@ struct Args {
     wal_yb_config: Option<remote_storage::YbStoreConfig>,
     /// Capacity (MiB) of the in-memory cache of recent WAL chunks used
     /// in YB-WAL mode. Ignored when `--wal-yb-config` is not set.
-    /// Set to 0 to disable the cache.
-    #[arg(long, default_value_t = safekeeper::defaults::DEFAULT_WAL_CACHE_SIZE_MIB)]
-    wal_cache_size_mib: usize,
+    /// Set to 0 to disable the cache. When omitted, derives from
+    /// `DEFAULT_WAL_CACHE_SIZE_MIB × scale_factor`.
+    #[arg(long)]
+    wal_cache_size_mib: Option<usize>,
+    /// Global multiplier on scale-derived defaults (WAL cache size,
+    /// runtime worker-thread counts, …). 1.0 preserves historical
+    /// sizing; 0.25 fits a small dev box; values >1 scale up.
+    /// Explicit values for individual flags always win over the
+    /// scaled default.
+    #[arg(long, default_value_t = safekeeper::DEFAULT_SCALE_FACTOR)]
+    scale_factor: f64,
     /// Safekeeper won't be elected for WAL offloading if it is lagging for more than this value in bytes
     #[arg(long, default_value_t = DEFAULT_MAX_OFFLOADER_LAG_BYTES)]
     max_offloader_lag: u64,
@@ -457,7 +465,12 @@ async fn main() -> anyhow::Result<()> {
         remote_storage: args.remote_storage,
         control_file_backend: args.control_file_backend,
         wal_yb_config: args.wal_yb_config,
-        wal_cache_size_mib: args.wal_cache_size_mib,
+        wal_cache_size_mib: args.wal_cache_size_mib.unwrap_or_else(|| {
+            safekeeper::scale_count(
+                safekeeper::defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
+                args.scale_factor,
+            )
+        }),
         max_offloader_lag_bytes: args.max_offloader_lag,
         /* BEGIN_HADRON */
         max_reelect_offloader_lag_bytes: args.max_reelect_offloader_lag_bytes,

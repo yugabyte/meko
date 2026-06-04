@@ -236,6 +236,12 @@ pub struct PageServerConf {
 
     /// yb-pageserver row-per-page writer tunables.
     pub yb_page_writer: pageserver_api::config::YbPageWriterConfig,
+
+    /// See `pageserver_api::config::ConfigToml::scale_factor`. The
+    /// resolved (post-toml-merge) value is stashed here so binary
+    /// startup can multiply count-shaped constants — pool sizes,
+    /// PARALLELISM, `REDO_CONCURRENCY`, etc. — by it on the fly.
+    pub scale_factor: f64,
 }
 
 /// Token for authentication to safekeepers
@@ -411,7 +417,17 @@ impl PageServerConf {
             force_metric_collection_on_scrape,
             s3_upload_limit_bytes,
             yb_page_writer,
+            scale_factor,
         } = config_toml;
+
+        let yb_page_writer = yb_page_writer.resolve(scale_factor);
+        let concurrent_tenant_warmup = concurrent_tenant_warmup.unwrap_or_else(|| {
+            let scaled = pageserver_api::config::scale_count(
+                pageserver_api::config::defaults::DEFAULT_CONCURRENT_TENANT_WARMUP,
+                scale_factor,
+            );
+            NonZeroUsize::new(scaled).expect("scale_count clamps to >= 1")
+        });
 
         let mut conf = PageServerConf {
             // ------------------------------------------------------------
@@ -464,6 +480,7 @@ impl PageServerConf {
             force_metric_collection_on_scrape,
             s3_upload_limit_bytes,
             yb_page_writer,
+            scale_factor,
 
             // ------------------------------------------------------------
             // fields that require additional validation or custom handling

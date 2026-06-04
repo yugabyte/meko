@@ -215,6 +215,10 @@ pub enum CasBumpOutcome {
 pub struct PageStoreConfig {
     pub yb: YbStoreConfig,
     pub schema: String,
+    /// Multiplier applied to the per-statement INSERT fan-out
+    /// (`put_pages` / `put_slru_pages` / `put_meta`). Plumbed through
+    /// from `PageServerConf::scale_factor`; tests default to 1.0.
+    pub scale_factor: f64,
 }
 
 impl PageStoreConfig {
@@ -222,7 +226,13 @@ impl PageStoreConfig {
         Self {
             yb,
             schema: DEFAULT_SCHEMA.to_string(),
+            scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
         }
+    }
+
+    pub fn with_scale_factor(mut self, scale_factor: f64) -> Self {
+        self.scale_factor = scale_factor;
+        self
     }
 }
 
@@ -230,6 +240,7 @@ impl PageStoreConfig {
 pub struct PageStore {
     ysql_client: Arc<YsqlClient>,
     schema: Arc<str>,
+    scale_factor: f64,
 }
 
 /// Decompose an 18-byte relation-page Key into the typed columns.
@@ -312,6 +323,7 @@ impl PageStore {
         Ok(Self {
             ysql_client: Arc::new(ysql_client),
             schema: Arc::from(config.schema),
+            scale_factor: config.scale_factor,
         })
     }
 
@@ -329,7 +341,8 @@ impl PageStore {
         // on the shared connection so YB can absorb them concurrently.
         const COLS: usize = 11;
         const ROWS_PER_INSERT: usize = 500;
-        const PARALLELISM: usize = 4;
+        let parallelism =
+            pageserver_api::config::scale_count(4, self.scale_factor);
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
@@ -388,7 +401,7 @@ impl PageStore {
         }
 
         futures::stream::iter(futs)
-            .buffer_unordered(PARALLELISM)
+            .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>()
             .await?;
         Ok(())
@@ -708,7 +721,8 @@ impl PageStore {
     ) -> Result<()> {
         const COLS: usize = 9;
         const ROWS_PER_INSERT: usize = 500;
-        const PARALLELISM: usize = 2;
+        let parallelism =
+            pageserver_api::config::scale_count(2, self.scale_factor);
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
@@ -763,7 +777,7 @@ impl PageStore {
         }
 
         futures::stream::iter(futs)
-            .buffer_unordered(PARALLELISM)
+            .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>()
             .await?;
         Ok(())
@@ -917,7 +931,8 @@ impl PageStore {
     ) -> Result<()> {
         const COLS: usize = 5;
         const ROWS_PER_INSERT: usize = 2000;
-        const PARALLELISM: usize = 3;
+        let parallelism =
+            pageserver_api::config::scale_count(3, self.scale_factor);
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
@@ -968,7 +983,7 @@ impl PageStore {
         }
 
         futures::stream::iter(futs)
-            .buffer_unordered(PARALLELISM)
+            .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>()
             .await?;
         Ok(())
@@ -1714,6 +1729,7 @@ mod tests {
                 let cfg = PageStoreConfig {
                     yb: test_yb_config(),
                     schema: PROD_SCHEMA.to_string(),
+                    scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
                 };
                 PageStore::connect(cfg, "page_store_test", true)
                     .await

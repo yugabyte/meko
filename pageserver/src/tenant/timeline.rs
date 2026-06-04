@@ -2091,6 +2091,7 @@ impl Timeline {
                         pg_major,
                         rx,
                         in_flight,
+                        conf.scale_factor,
                     ))
                 }
                 _ => None,

@@ -872,7 +872,8 @@ async fn create_page_store_with_app_name(
         .as_ref()
         .context("yb-pageserver requires `remote_storage` configured")?;
     let RemoteStorageKind::YbStore(yb_cfg) = &rs_cfg.storage;
-    let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg.clone());
+    let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg.clone())
+        .with_scale_factor(conf.scale_factor);
     let store = pageserver::page_store::PageStore::connect_pooled(
         ps_cfg,
         application_name,
@@ -899,22 +900,21 @@ async fn create_page_store_with_app_name(
 async fn create_compute_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
-    const COMPUTE_POOL_SIZE: usize = 4;
+    // Base size of 4 scaled by `scale_factor`; see the function-level
+    // docstring for the parallelism rationale.
+    let pool_size = pageserver_api::config::scale_count(4, conf.scale_factor);
     // Read-only path — no `yb_enable_upsert_mode` GUC needed.
     let store = create_page_store_with_app_name(
         conf,
         "yb-pageserver:compute_reads",
-        COMPUTE_POOL_SIZE,
+        pool_size,
         false,
     )
     .await?;
     // No schema bootstrap here — storage_controller's diesel
     // migrations are the single source of truth for `pageserver.*`
     // tables. Tests still call `store.ensure_schema()` directly.
-    info!(
-        pool_size = COMPUTE_POOL_SIZE,
-        "Compute-reads PageStore connected"
-    );
+    info!(pool_size, "Compute-reads PageStore connected");
     Ok(store)
 }
 
@@ -935,7 +935,10 @@ async fn create_compute_page_store(
 async fn create_fpu_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
-    const INTERNAL_POOL_SIZE: usize = 4;
+    // Base size of 4 scaled by `scale_factor`; mirrors the
+    // `PARALLELISM = 4` chunk dispatch in `PageStore::put_pages`,
+    // which scales the same way.
+    let pool_size = pageserver_api::config::scale_count(4, conf.scale_factor);
     // The fast-upsert pool: `put_pages` + `put_slru_pages` +
     // `put_meta` + the materialiser's image INSERTs all run here and
     // depend on `yb_enable_upsert_mode = true` to skip
@@ -943,14 +946,11 @@ async fn create_fpu_page_store(
     let store = create_page_store_with_app_name(
         conf,
         "yb-pageserver:fpu",
-        INTERNAL_POOL_SIZE,
+        pool_size,
         true,
     )
     .await?;
-    info!(
-        pool_size = INTERNAL_POOL_SIZE,
-        "Internal PageStore connected"
-    );
+    info!(pool_size, "Internal PageStore connected");
     Ok(store)
 }
 

@@ -51,11 +51,11 @@ use crate::walredo::RedoAttemptType;
 /// Raised once write-side triggers started carrying their durable
 /// chain inline (see `MaterializeJob.chain`): redo no longer blocks on
 /// a YB `read_chain_durable` round-trip per job, so a batch of N is
-/// CPU + walproposer-lib bound at `REDO_CONCURRENCY` parallelism and
-/// can clear in tens to hundreds of ms even at the upper end. Larger
-/// batches amortise the per-row PG protocol overhead and (with
-/// `MAX_INFLIGHT_INSERTS = 2`) let batch N's INSERT overlap fully
-/// with batch N+1's redo.
+/// CPU + walproposer-lib bound at `BASE_REDO_CONCURRENCY` parallelism
+/// (scaled by `scale_factor`) and can clear in tens to hundreds of ms
+/// even at the upper end. Larger batches amortise the per-row PG
+/// protocol overhead and (with `BASE_MAX_INFLIGHT_INSERTS`) let batch
+/// N's INSERT overlap fully with batch N+1's redo.
 const BATCH_DRAIN_LIMIT: usize = 500;
 
 /// Maximum number of pipelined INSERT futures that can be in flight
@@ -73,8 +73,8 @@ const BATCH_DRAIN_LIMIT: usize = 500;
 /// Raises peak in-flight RAM by ~8 MB (4 × 500 × 8 KB image) over
 /// the prior 2-deep pipeline; small versus the win when the
 /// materialise queue is being driven hard enough to backpressure
-/// the walreceiver.
-const MAX_INFLIGHT_INSERTS: usize = 4;
+/// the walreceiver. Scaled by `PageServerConf::scale_factor`.
+const BASE_MAX_INFLIGHT_INSERTS: usize = 4;
 
 /// Maximum concurrent `redo_one` futures in flight within a single
 /// `materialize_batch`. Each future does an SQL `read_chain_durable`
@@ -88,8 +88,8 @@ const MAX_INFLIGHT_INSERTS: usize = 4;
 /// pipelines stdin-write of req N+1 with stdout-read of req N inside
 /// the subprocess. So 8-way fan-out captures most of the win at low
 /// risk; raising further hits diminishing returns until walredo itself
-/// is parallelised.
-const REDO_CONCURRENCY: usize = 8;
+/// is parallelised. Scaled by `PageServerConf::scale_factor`.
+const BASE_REDO_CONCURRENCY: usize = 8;
 
 /// Output of [`ImageMaterializer::redo_phase`] — everything
 /// [`ImageMaterializer::commit_phase`] needs to bulk-INSERT a batch's
@@ -125,6 +125,10 @@ pub struct ImageMaterializer {
     /// queue so the next delta past the per-key threshold can re-fire
     /// at the current LSN.
     in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
+    /// `BASE_REDO_CONCURRENCY` scaled by `PageServerConf::scale_factor`.
+    redo_concurrency: usize,
+    /// `BASE_MAX_INFLIGHT_INSERTS` scaled by `PageServerConf::scale_factor`.
+    max_inflight_inserts: usize,
 }
 
 /// Handle returned by [`ImageMaterializer::spawn`]. Drop to leak; call
@@ -151,9 +155,14 @@ impl ImageMaterializer {
         pg_version: PgMajorVersion,
         mut rx: mpsc::Receiver<MaterializeJob>,
         in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
+        scale_factor: f64,
     ) -> MaterializerTask {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
+        let redo_concurrency =
+            pageserver_api::config::scale_count(BASE_REDO_CONCURRENCY, scale_factor);
+        let max_inflight_inserts =
+            pageserver_api::config::scale_count(BASE_MAX_INFLIGHT_INSERTS, scale_factor);
         let me = Arc::new(Self {
             tenant_id,
             timeline_id,
@@ -162,6 +171,8 @@ impl ImageMaterializer {
             walredo_mgr,
             pg_version,
             in_flight,
+            redo_concurrency,
+            max_inflight_inserts,
         });
         // Walredo's `debug_assert_current_span_has_tenant_id` requires
         // both `tenant_id` and `shard_id` fields on the active span;
@@ -182,13 +193,14 @@ impl ImageMaterializer {
                     .set(rx.len() as u64);
             };
             // In-flight INSERT futures, oldest at the front. Bounded
-            // to MAX_INFLIGHT_INSERTS — when full, await the front
+            // to `max_inflight_inserts` — when full, await the front
             // before spawning a new one. Lets batch N+1's redo run
             // concurrently with batch N's INSERT round-trip while
             // keeping YB-side write fan-out bounded.
+            let max_inflight_inserts = me.max_inflight_inserts;
             let mut inflight_inserts: std::collections::VecDeque<
                 tokio::task::JoinHandle<()>,
-            > = std::collections::VecDeque::with_capacity(MAX_INFLIGHT_INSERTS);
+            > = std::collections::VecDeque::with_capacity(max_inflight_inserts);
             loop {
                 tokio::select! {
                     biased;
@@ -239,8 +251,8 @@ impl ImageMaterializer {
                         // cache install + in_flight release to a
                         // spawned future. The next iteration's redo
                         // starts immediately. If we're already at
-                        // MAX_INFLIGHT_INSERTS, await the oldest first.
-                        while inflight_inserts.len() >= MAX_INFLIGHT_INSERTS {
+                        // `max_inflight_inserts`, await the oldest first.
+                        while inflight_inserts.len() >= max_inflight_inserts {
                             if let Some(h) = inflight_inserts.pop_front() {
                                 let _ = h.await;
                             }
@@ -258,7 +270,7 @@ impl ImageMaterializer {
                 }
             }
             // Best-effort: drain any still-running INSERTs so the
-            // last MAX_INFLIGHT_INSERTS - 1 batches' images make it
+            // last `max_inflight_inserts - 1` batches' images make it
             // to YB before the task exits. Without this, a clean
             // shutdown could leave a redone-but-not-INSERTed batch
             // in RAM that disappears when the task drops.
@@ -288,7 +300,7 @@ impl ImageMaterializer {
     /// the call site can grow setup-time errors without changing the
     /// signature.
     ///
-    /// Redo runs up to `REDO_CONCURRENCY` `redo_one` futures in
+    /// Redo runs up to `self.redo_concurrency` `redo_one` futures in
     /// parallel via `FuturesUnordered`. Each future reads its chain
     /// from `fpu_page_store` (own YSQL connection — no contention
     /// with the walreceiver write path), decodes records, and calls
@@ -330,7 +342,7 @@ impl ImageMaterializer {
 
         let mut in_flight: FuturesUnordered<RedoFut<'_>> = FuturesUnordered::new();
         let mut iter = jobs.iter();
-        for _ in 0..REDO_CONCURRENCY {
+        for _ in 0..self.redo_concurrency {
             if let Some(job) = iter.next() {
                 in_flight.push(spawn_redo(self, job));
             } else {
@@ -389,8 +401,8 @@ impl ImageMaterializer {
     ///
     /// Spawned by the materialiser's outer loop so that the next
     /// batch's [`redo_phase`] can run concurrently with this INSERT.
-    /// At most `MAX_INFLIGHT_INSERTS` instances of this future are
-    /// alive at once.
+    /// At most `self.max_inflight_inserts` instances of this future
+    /// are alive at once.
     ///
     /// `in_flight` and the gauge are always released, regardless of
     /// success or failure of `put_pages`, so a transient YB error
@@ -537,7 +549,7 @@ impl ImageMaterializer {
 
         // Track chain bytes held in RAM for the duration of walredo.
         // The MATERIALIZER_INFLIGHT_BYTES gauge sums these across the
-        // REDO_CONCURRENCY in-flight chains so an operator can see the
+        // `redo_concurrency` in-flight chains so an operator can see the
         // transient pool that `read_cache_bytes` does NOT cap.
         let chain_bytes: u64 = chain.iter().map(|r| r.payload.len() as u64).sum();
         crate::metrics::MATERIALIZER_INFLIGHT_BYTES.add(chain_bytes);

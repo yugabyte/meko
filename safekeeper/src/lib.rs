@@ -58,6 +58,17 @@ use std::sync::Arc;
 pub use timelines_global_map::GlobalTimelines;
 use utils::auth::JwtAuth;
 
+/// Default `--scale-factor` for the safekeeper binary. 1.0 preserves
+/// historical sizing; 0.25 fits a small dev box; values >1 scale up.
+pub const DEFAULT_SCALE_FACTOR: f64 = 1.0;
+
+/// `scale_count` analogue for safekeeper. Multiplies `base` by
+/// `scale_factor`, rounds, floors at 1.
+pub fn scale_count(base: usize, scale_factor: f64) -> usize {
+    let scaled = (base as f64 * scale_factor).round();
+    if scaled < 1.0 { 1 } else { scaled as usize }
+}
+
 pub mod defaults {
     pub use safekeeper_api::{
         DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_HTTP_LISTEN_PORT, DEFAULT_PG_LISTEN_ADDR,
