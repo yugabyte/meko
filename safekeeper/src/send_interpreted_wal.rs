@@ -392,10 +392,25 @@ impl InterpretedWalReader {
                 // reader finished" wrapper message and have no idea whether it
                 // was an I/O error from YB, a missing WAL segment, a closed
                 // stream, etc. See findings-ps-wal-replay-restart-bug-2026-06-04.
+                //
+                // {err:?} dumps the full anyhow source chain — Display alone
+                // truncates to the outermost `.with_context()` and hides the
+                // YB / IO root cause.
                 error!(
-                    "interpreted wal reader exiting with error at start_pos={start_pos}: {err}"
+                    "interpreted wal reader exiting with error at start_pos={start_pos}: {err:?}"
                 );
-                format!("{err} (start_pos={start_pos})")
+                // Flatten the chain into the propagated message so the
+                // pageserver-side error carries the root cause too.
+                let chain: Vec<String> = match &err {
+                    InterpretedWalReaderError::ReadOrInterpret(e) => {
+                        e.chain().map(|c| c.to_string()).collect()
+                    }
+                    _ => vec![err.to_string()],
+                };
+                format!(
+                    "{err} (start_pos={start_pos}, chain=[{}])",
+                    chain.join(" / ")
+                )
             }
             Ok(()) => {
                 info!("interpreted wal reader exiting at start_pos={start_pos}");
