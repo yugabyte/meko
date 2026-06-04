@@ -32,6 +32,13 @@ export function isMekoApiRequestError(err: unknown): err is MekoApiRequestError 
 export const API_ERROR_CODE_USER_NOT_CONFIRMED = "USER_NOT_CONFIRMED" as const;
 
 /**
+ * Returned from POST /auth/login when an admin-created user's temporary password
+ * has expired. The server has already flipped the account to CONFIRMED, so the
+ * client should direct the user to the (now-working) Forgot Password flow.
+ */
+export const API_ERROR_CODE_INVITE_PASSWORD_EXPIRED = "INVITE_PASSWORD_EXPIRED" as const;
+
+/**
  * Returned from POST /auth/resend-confirmation when the email is already
  * verified. UI should treat this as success-with-nudge (close the resend
  * recovery panel and prompt the user to sign in) rather than a red error.

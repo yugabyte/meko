@@ -64,6 +64,16 @@ type mockCognitoAPI struct {
 		ctx context.Context, params *cip.ChangePasswordInput,
 		optFns ...cipOpt,
 	) (*cip.ChangePasswordOutput, error)
+
+	adminSetUserPasswordFn func(
+		ctx context.Context, params *cip.AdminSetUserPasswordInput,
+		optFns ...cipOpt,
+	) (*cip.AdminSetUserPasswordOutput, error)
+
+	adminGetUserFn func(
+		ctx context.Context, params *cip.AdminGetUserInput,
+		optFns ...cipOpt,
+	) (*cip.AdminGetUserOutput, error)
 }
 
 func (m *mockCognitoAPI) SignUp(
@@ -162,6 +172,28 @@ func (m *mockCognitoAPI) RespondToAuthChallenge(
 		return m.respondToAuthChallengeFn(ctx, params, optFns...)
 	}
 	return &cip.RespondToAuthChallengeOutput{}, nil
+}
+
+func (m *mockCognitoAPI) AdminSetUserPassword(
+	ctx context.Context,
+	params *cip.AdminSetUserPasswordInput,
+	optFns ...func(*cip.Options),
+) (*cip.AdminSetUserPasswordOutput, error) {
+	if m.adminSetUserPasswordFn != nil {
+		return m.adminSetUserPasswordFn(ctx, params, optFns...)
+	}
+	return &cip.AdminSetUserPasswordOutput{}, nil
+}
+
+func (m *mockCognitoAPI) AdminGetUser(
+	ctx context.Context,
+	params *cip.AdminGetUserInput,
+	optFns ...func(*cip.Options),
+) (*cip.AdminGetUserOutput, error) {
+	if m.adminGetUserFn != nil {
+		return m.adminGetUserFn(ctx, params, optFns...)
+	}
+	return &cip.AdminGetUserOutput{}, nil
 }
 
 func strPtr(s string) *string { return &s }
@@ -544,5 +576,147 @@ func TestCognitoClient_Logout_Success(t *testing.T) {
 	err := client.Logout(context.Background(), "some-access-token")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+// --------------- GetUserStatus tests ---------------
+
+func TestCognitoClient_GetUserStatus_Success(t *testing.T) {
+	var captured *cip.AdminGetUserInput
+	mock := &mockCognitoAPI{
+		adminGetUserFn: func(
+			_ context.Context,
+			params *cip.AdminGetUserInput,
+			_ ...func(*cip.Options),
+		) (*cip.AdminGetUserOutput, error) {
+			captured = params
+			return &cip.AdminGetUserOutput{
+				UserStatus: types.UserStatusTypeForceChangePassword,
+			}, nil
+		},
+	}
+	client := newTestClient(mock)
+
+	status, err := client.GetUserStatus(context.Background(), "user@example.com")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if status != auth.UserStatusForceChangePassword {
+		t.Errorf("expected status %s, got %q", auth.UserStatusForceChangePassword, status)
+	}
+	if captured == nil {
+		t.Fatal("expected AdminGetUser to be called")
+	}
+	if captured.UserPoolId == nil || *captured.UserPoolId != "test-pool" {
+		t.Errorf("expected UserPoolId=test-pool, got %v", captured.UserPoolId)
+	}
+	if captured.Username == nil || *captured.Username != "user@example.com" {
+		t.Errorf("expected Username=user@example.com, got %v", captured.Username)
+	}
+}
+
+func TestCognitoClient_GetUserStatus_NotFound(t *testing.T) {
+	mock := &mockCognitoAPI{
+		adminGetUserFn: func(
+			_ context.Context,
+			_ *cip.AdminGetUserInput,
+			_ ...func(*cip.Options),
+		) (*cip.AdminGetUserOutput, error) {
+			return nil, &types.UserNotFoundException{
+				Message: strPtr("user does not exist"),
+			}
+		},
+	}
+	client := newTestClient(mock)
+
+	_, err := client.GetUserStatus(context.Background(), "missing@example.com")
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Errorf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+// --------------- ResendInvite tests ---------------
+
+func TestCognitoClient_ResendInvite_Success(t *testing.T) {
+	var captured *cip.AdminCreateUserInput
+	mock := &mockCognitoAPI{
+		adminCreateUserFn: func(
+			_ context.Context,
+			params *cip.AdminCreateUserInput,
+			_ ...func(*cip.Options),
+		) (*cip.AdminCreateUserOutput, error) {
+			captured = params
+			return &cip.AdminCreateUserOutput{}, nil
+		},
+	}
+	client := newTestClient(mock)
+
+	if err := client.ResendInvite(context.Background(), "user@example.com"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if captured == nil {
+		t.Fatal("expected AdminCreateUser to be called")
+	}
+	// RESEND regenerates the temp password and re-sends the invite, keeping the
+	// user in FORCE_CHANGE_PASSWORD. We must NOT supply a temp password (Cognito
+	// generates a fresh one) — mirrors the bare `--message-action RESEND` CLI call.
+	if captured.MessageAction != types.MessageActionTypeResend {
+		t.Errorf("expected MessageAction=RESEND, got %q", captured.MessageAction)
+	}
+	if captured.TemporaryPassword != nil {
+		t.Errorf("expected no TemporaryPassword on resend, got %q", *captured.TemporaryPassword)
+	}
+	if captured.UserPoolId == nil || *captured.UserPoolId != "test-pool" {
+		t.Errorf("expected UserPoolId=test-pool, got %v", captured.UserPoolId)
+	}
+	if captured.Username == nil || *captured.Username != "user@example.com" {
+		t.Errorf("expected Username=user@example.com, got %v", captured.Username)
+	}
+}
+
+// --------------- expired temp password classification ---------------
+
+func TestCognitoClient_Login_TempPasswordExpired(t *testing.T) {
+	mock := &mockCognitoAPI{
+		initiateAuthFn: func(
+			_ context.Context,
+			_ *cip.InitiateAuthInput,
+			_ ...func(*cip.Options),
+		) (*cip.InitiateAuthOutput, error) {
+			return nil, &types.NotAuthorizedException{
+				Message: strPtr("Temporary password has expired and must be reset by an administrator."),
+			}
+		},
+	}
+	client := newTestClient(mock)
+
+	_, err := client.Login(context.Background(), "user@example.com", "Expired-1!")
+	if !errors.Is(err, auth.ErrTempPasswordExpired) {
+		t.Errorf("expected ErrTempPasswordExpired, got %v", err)
+	}
+}
+
+func TestCognitoClient_Login_WrongPasswordNotExpired(t *testing.T) {
+	// A plain wrong password must NOT be classified as expired (otherwise a typo
+	// on a still-valid temp password would trigger the rescue).
+	mock := &mockCognitoAPI{
+		initiateAuthFn: func(
+			_ context.Context,
+			_ *cip.InitiateAuthInput,
+			_ ...func(*cip.Options),
+		) (*cip.InitiateAuthOutput, error) {
+			return nil, &types.NotAuthorizedException{
+				Message: strPtr("Incorrect username or password."),
+			}
+		},
+	}
+	client := newTestClient(mock)
+
+	_, err := client.Login(context.Background(), "user@example.com", "wrong")
+	if !errors.Is(err, auth.ErrNotAuthorized) {
+		t.Errorf("expected ErrNotAuthorized, got %v", err)
+	}
+	if errors.Is(err, auth.ErrTempPasswordExpired) {
+		t.Error("a wrong password must not be classified as expired")
 	}
 }

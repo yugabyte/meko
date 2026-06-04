@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  API_ERROR_CODE_INVITE_PASSWORD_EXPIRED,
   API_ERROR_CODE_USER_ALREADY_CONFIRMED,
   API_ERROR_CODE_USER_NOT_CONFIRMED,
   getApiErrorMessage,
@@ -46,6 +47,8 @@ export default function SignInPage() {
   const [resendMessage, setResendMessage] = useState<string | null>(null);
   const [resendError, setResendError] = useState<string | null>(null);
   const [showPasswordResetBanner, setShowPasswordResetBanner] = useState(false);
+  /** Set after a failed login for an admin-created user whose temp password expired. */
+  const [showInviteExpired, setShowInviteExpired] = useState(false);
 
   useEffect(() => {
     if (searchParams.get("reset") !== "success") return;
@@ -65,6 +68,7 @@ export default function SignInPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setShowInviteExpired(false);
     resetRecoveryUi();
     try {
       const loginResult = await login({ email: email.trim(), password });
@@ -90,9 +94,15 @@ export default function SignInPage() {
       }
       navigate(nextPath, { replace: true });
     } catch (err) {
-      const isUnconfirmed =
-        isMekoApiRequestError(err) && err.code === API_ERROR_CODE_USER_NOT_CONFIRMED;
-      setShowUnconfirmedRecovery(isUnconfirmed);
+      const code = isMekoApiRequestError(err) ? err.code : undefined;
+      if (code === API_ERROR_CODE_INVITE_PASSWORD_EXPIRED) {
+        // Admin-created account whose temp password expired. The server already
+        // promoted it to CONFIRMED, so direct the user to Forgot Password (which
+        // now works) via a banner instead of a generic error.
+        setShowInviteExpired(true);
+        return;
+      }
+      setShowUnconfirmedRecovery(code === API_ERROR_CODE_USER_NOT_CONFIRMED);
       setError(getApiErrorMessage(err, "Sign in failed. Please try again."));
     } finally {
       setLoading(false);
@@ -144,6 +154,13 @@ export default function SignInPage() {
         {showPasswordResetBanner ? (
           <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-950/25 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-100">
             Your password was updated. Sign in with your new password.
+          </div>
+        ) : null}
+
+        {showInviteExpired ? (
+          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-950/25 px-4 py-3 text-sm text-amber-700 dark:text-amber-100">
+            Your temporary password has expired. We&apos;ve emailed you a new one — check your
+            inbox and sign in again.
           </div>
         ) : null}
 

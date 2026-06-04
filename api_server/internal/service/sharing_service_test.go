@@ -12,10 +12,14 @@ import (
 
 func TestSharingService_InviteToDatapack_RequiresEmail(t *testing.T) {
 	svc := service.NewSharingService(nil, nil)
-	_, err := svc.InviteToDatapack(context.Background(), "dp-1", "owner-1", "test-datapack", "Test Owner", service.InviteRequest{
-		RecipientEmail: "",
-		GrantRole:      "viewer",
-	})
+	_, err := svc.InviteToDatapack(
+		context.Background(),
+		"dp-1", "owner-1", "test-datapack", "A test datapack", "Test Owner", "owner@example.com",
+		service.InviteRequest{
+			RecipientEmail: "",
+			GrantRole:      "viewer",
+		},
+	)
 	if err == nil || !strings.Contains(err.Error(), "recipient_email is required") {
 		t.Errorf("expected 'recipient_email is required' error, got %v", err)
 	}
@@ -33,10 +37,14 @@ func TestSharingService_InviteToDatapack_RequiresValidGrant(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := svc.InviteToDatapack(context.Background(), "dp-1", "owner-1", "test-datapack", "Test Owner", service.InviteRequest{
-				RecipientEmail: "test@example.com",
-				GrantRole:      c.grant,
-			})
+			_, err := svc.InviteToDatapack(
+				context.Background(),
+				"dp-1", "owner-1", "test-datapack", "A test datapack", "Test Owner", "owner@example.com",
+				service.InviteRequest{
+					RecipientEmail: "test@example.com",
+					GrantRole:      c.grant,
+				},
+			)
 			if err == nil || !strings.Contains(err.Error(), "grant is required") {
 				t.Errorf("expected grant validation error, got %v", err)
 			}

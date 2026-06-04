@@ -59,6 +59,8 @@ type handlerMockCognito struct {
 	completeNewPasswordFn   func(ctx context.Context, email, newPassword, session, firstName, lastName string) (*auth.Result, error)
 	logoutFn                func(ctx context.Context, accessToken string) error
 	changePasswordFn        func(ctx context.Context, accessToken, previousPassword, proposedPassword string) error
+	getUserStatusFn         func(ctx context.Context, email string) (auth.UserStatus, error)
+	resendInviteFn          func(ctx context.Context, email string) error
 }
 
 func (m *handlerMockCognito) SignUp(
@@ -95,6 +97,20 @@ func (m *handlerMockCognito) ConfirmForgotPassword(
 ) error {
 	if m.confirmForgotPasswordFn != nil {
 		return m.confirmForgotPasswordFn(ctx, email, code, newPassword)
+	}
+	return nil
+}
+
+func (m *handlerMockCognito) GetUserStatus(ctx context.Context, email string) (auth.UserStatus, error) {
+	if m.getUserStatusFn != nil {
+		return m.getUserStatusFn(ctx, email)
+	}
+	return "", nil
+}
+
+func (m *handlerMockCognito) ResendInvite(ctx context.Context, email string) error {
+	if m.resendInviteFn != nil {
+		return m.resendInviteFn(ctx, email)
 	}
 	return nil
 }
@@ -679,6 +695,71 @@ func TestAuth_ForgotPassword_NoAccount(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuth_Login_ExpiredTempPassword_Returns401WithCode(t *testing.T) {
+	resendCalled := false
+	cog := &handlerMockCognito{
+		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
+			return nil, auth.ErrTempPasswordExpired
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return auth.UserStatusForceChangePassword, nil
+		},
+		resendInviteFn: func(_ context.Context, _ string) error {
+			resendCalled = true
+			return nil
+		},
+	}
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/login", map[string]string{
+		"email":    "pending@example.com",
+		"password": "Expired-1!",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+	apiResp := decodeResponse(t, resp)
+	if apiResp.Error == nil || apiResp.Error.Code != "INVITE_PASSWORD_EXPIRED" {
+		t.Errorf("expected error code INVITE_PASSWORD_EXPIRED, got %+v", apiResp.Error)
+	}
+	if !resendCalled {
+		t.Error("expected ResendInvite to be called for the expired-invite rescue")
+	}
+}
+
+func TestAuth_Login_ExpiredTempPassword_RescueFails_Returns401(t *testing.T) {
+	// If the rescue can't complete (here: the resend errors), the login must fail
+	// closed to a plain 401 — never a 500, and never the invite-expired code.
+	cog := &handlerMockCognito{
+		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
+			return nil, auth.ErrTempPasswordExpired
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return auth.UserStatusForceChangePassword, nil
+		},
+		resendInviteFn: func(_ context.Context, _ string) error {
+			return auth.ErrTooManyRequests
+		},
+	}
+	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/login", map[string]string{
+		"email":    "pending@example.com",
+		"password": "Expired-1!",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+	apiResp := decodeResponse(t, resp)
+	if apiResp.Error == nil || apiResp.Error.Code == "INVITE_PASSWORD_EXPIRED" {
+		t.Errorf("expected a generic 401 (not the invite-expired code), got %+v", apiResp.Error)
 	}
 }
 

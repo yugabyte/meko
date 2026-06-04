@@ -45,6 +45,8 @@ type mockCognito struct {
 	completeNewPasswordFn   func(ctx context.Context, email, newPassword, session, firstName, lastName string) (*auth.Result, error)
 	logoutFn                func(ctx context.Context, accessToken string) error
 	changePasswordFn        func(ctx context.Context, accessToken, previousPassword, proposedPassword string) error
+	getUserStatusFn         func(ctx context.Context, email string) (auth.UserStatus, error)
+	resendInviteFn          func(ctx context.Context, email string) error
 }
 
 func (m *mockCognito) SignUp(
@@ -81,6 +83,20 @@ func (m *mockCognito) ConfirmForgotPassword(
 ) error {
 	if m.confirmForgotPasswordFn != nil {
 		return m.confirmForgotPasswordFn(ctx, email, code, newPassword)
+	}
+	return nil
+}
+
+func (m *mockCognito) GetUserStatus(ctx context.Context, email string) (auth.UserStatus, error) {
+	if m.getUserStatusFn != nil {
+		return m.getUserStatusFn(ctx, email)
+	}
+	return "", nil
+}
+
+func (m *mockCognito) ResendInvite(ctx context.Context, email string) error {
+	if m.resendInviteFn != nil {
+		return m.resendInviteFn(ctx, email)
 	}
 	return nil
 }
@@ -277,6 +293,159 @@ func TestAuthService_ConfirmSignup_Success(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+// --- ForgotPasswordSendCode tests ---
+
+func TestAuthService_ForgotPasswordSendCode_Success(t *testing.T) {
+	var forgotEmail string
+	cog := &mockCognito{
+		forgotPasswordFn: func(_ context.Context, email string) error {
+			forgotEmail = email
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, &mockAccountStore{})
+
+	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "  user@example.com  ", // trimmed before use
+	}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if forgotEmail != "user@example.com" {
+		t.Errorf("expected ForgotPassword for trimmed email, got %q", forgotEmail)
+	}
+}
+
+func TestAuthService_ForgotPasswordSendCode_NoAccount(t *testing.T) {
+	cog := &mockCognito{
+		forgotPasswordFn: func(_ context.Context, _ string) error {
+			return auth.ErrUserNotFound
+		},
+	}
+	svc := service.NewAuthService(cog, &mockAccountStore{})
+
+	err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "missing@example.com",
+	})
+	if !errors.Is(err, service.ErrForgotPasswordNoAccount) {
+		t.Errorf("expected ErrForgotPasswordNoAccount, got %v", err)
+	}
+}
+
+// --- Login expired-temp-password rescue tests ---
+
+func TestAuthService_Login_ExpiredTempPassword_RescuesAndSignals(t *testing.T) {
+	var resentEmail string
+	cog := &mockCognito{
+		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
+			return nil, auth.ErrTempPasswordExpired
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return auth.UserStatusForceChangePassword, nil
+		},
+		resendInviteFn: func(_ context.Context, email string) error {
+			resentEmail = email
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, &mockAccountStore{})
+
+	_, err := svc.Login(context.Background(), service.LoginRequest{
+		Email:    "pending@example.com",
+		Password: "Expired-1!",
+	})
+	if !errors.Is(err, service.ErrInvitePasswordExpired) {
+		t.Errorf("expected ErrInvitePasswordExpired, got %v", err)
+	}
+	if resentEmail != "pending@example.com" {
+		t.Errorf("expected ResendInvite for pending@example.com, got %q", resentEmail)
+	}
+}
+
+func TestAuthService_Login_ExpiredTempPassword_NotForceChange_FallsBack(t *testing.T) {
+	// Defensive: if the account isn't actually FORCE_CHANGE_PASSWORD, do not
+	// resend anything and fall back to a normal failed-login.
+	resendCalled := false
+	cog := &mockCognito{
+		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
+			return nil, auth.ErrTempPasswordExpired
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return auth.UserStatusConfirmed, nil
+		},
+		resendInviteFn: func(_ context.Context, _ string) error {
+			resendCalled = true
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, &mockAccountStore{})
+
+	_, err := svc.Login(context.Background(), service.LoginRequest{
+		Email:    "confirmed@example.com",
+		Password: "wrong",
+	})
+	if errors.Is(err, service.ErrInvitePasswordExpired) {
+		t.Error("must not signal invite-expired when account is not FORCE_CHANGE_PASSWORD")
+	}
+	if err == nil {
+		t.Error("expected a login error")
+	}
+	if resendCalled {
+		t.Error("ResendInvite must not be called for a non-force-change account")
+	}
+}
+
+func TestAuthService_Login_ExpiredTempPassword_ResendError_FallsBack(t *testing.T) {
+	cog := &mockCognito{
+		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
+			return nil, auth.ErrTempPasswordExpired
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return auth.UserStatusForceChangePassword, nil
+		},
+		resendInviteFn: func(_ context.Context, _ string) error {
+			return auth.ErrTooManyRequests
+		},
+	}
+	svc := service.NewAuthService(cog, &mockAccountStore{})
+
+	_, err := svc.Login(context.Background(), service.LoginRequest{
+		Email:    "pending@example.com",
+		Password: "Expired-1!",
+	})
+	if errors.Is(err, service.ErrInvitePasswordExpired) {
+		t.Error("must not signal invite-expired when the rescue resend failed")
+	}
+	if err == nil {
+		t.Error("expected a login error")
+	}
+}
+
+func TestAuthService_Login_WrongPassword_NoRescue(t *testing.T) {
+	// A plain wrong password (not expired) must not trigger the rescue.
+	statusChecked := false
+	cog := &mockCognito{
+		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
+			return nil, auth.ErrNotAuthorized
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			statusChecked = true
+			return auth.UserStatusForceChangePassword, nil
+		},
+	}
+	svc := service.NewAuthService(cog, &mockAccountStore{})
+
+	_, err := svc.Login(context.Background(), service.LoginRequest{
+		Email:    "user@example.com",
+		Password: "wrong",
+	})
+	if !errors.Is(err, auth.ErrNotAuthorized) {
+		t.Errorf("expected ErrNotAuthorized, got %v", err)
+	}
+	if statusChecked {
+		t.Error("GetUserStatus must not be called for a plain wrong-password failure")
 	}
 }
 

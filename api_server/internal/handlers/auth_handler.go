@@ -408,6 +408,10 @@ func (h *AuthHandler) classifyAuthErr(
 	case errors.Is(err, auth.ErrNotAuthorized):
 		return apiError(c, http.StatusUnauthorized,
 			"UNAUTHORIZED", "invalid credentials")
+	case errors.Is(err, service.ErrInvitePasswordExpired):
+		return apiError(c, http.StatusUnauthorized,
+			"INVITE_PASSWORD_EXPIRED",
+			"Your temporary password has expired. We've emailed you a new one — check your inbox and sign in again.")
 	case errors.Is(err, auth.ErrUserNotFound):
 		return apiError(c, http.StatusNotFound,
 			"NOT_FOUND", "user not found")

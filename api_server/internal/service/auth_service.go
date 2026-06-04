@@ -25,6 +25,13 @@ type CognitoProvider interface {
 	ResendConfirmationCode(ctx context.Context, email string) error
 	ForgotPassword(ctx context.Context, email string) error
 	ConfirmForgotPassword(ctx context.Context, email, code, newPassword string) error
+	// GetUserStatus returns the Cognito account status (e.g.
+	// FORCE_CHANGE_PASSWORD) for the given email.
+	GetUserStatus(ctx context.Context, email string) (auth.UserStatus, error)
+	// ResendInvite regenerates the temporary password and re-sends the Cognito
+	// invitation email. Used to rescue an admin-created user whose temp password
+	// expired so they get a fresh one and can complete first login.
+	ResendInvite(ctx context.Context, email string) error
 	Login(
 		ctx context.Context, email, password string,
 	) (*auth.Result, error)
@@ -42,6 +49,12 @@ type CognitoProvider interface {
 // ErrForgotPasswordNoAccount is returned when Cognito has no user for this email
 // on the forgot-password flow (mapped to HTTP 404 in the auth handler).
 var ErrForgotPasswordNoAccount = errors.New("no account exists for this email address")
+
+// ErrInvitePasswordExpired is returned by Login when an admin-created user's
+// temporary password has expired. Login rescues the account by re-sending a
+// fresh temporary password and returns this so the handler can answer 401 with
+// a code the UI renders as "your temp password expired — we emailed a new one".
+var ErrInvitePasswordExpired = errors.New("invite temporary password expired; a new one was sent")
 
 // Password validation errors for the forgot-password / set-password flows.
 // They are returned as typed sentinels so the handler can map them to
@@ -248,7 +261,10 @@ type ForgotPasswordStartRequest struct {
 	Email string `json:"email"`
 }
 
-// ForgotPasswordSendCode triggers Cognito ForgotPassword (sends reset code to email).
+// ForgotPasswordSendCode triggers Cognito ForgotPassword (sends a reset code to
+// the user's email). Note: Cognito rejects this for accounts still in
+// FORCE_CHANGE_PASSWORD; those users are rescued at login time (see Login),
+// which flips them to CONFIRMED so this standard flow works.
 func (s *AuthService) ForgotPasswordSendCode(
 	ctx context.Context, req ForgotPasswordStartRequest,
 ) error {
@@ -371,6 +387,14 @@ func (s *AuthService) Login(
 
 	result, err := s.cognito.Login(ctx, req.Email, req.Password)
 	if err != nil {
+		// On expired temp password, send a new temp password and let the caller know.
+		if errors.Is(err, auth.ErrTempPasswordExpired) {
+			if s.rescueExpiredInvite(ctx, req.Email) {
+				return nil, ErrInvitePasswordExpired
+			}
+			// Fallback to not authorized if rescue fails.
+			return nil, auth.ErrNotAuthorized
+		}
 		return nil, fmt.Errorf("cognito login: %w", err)
 	}
 
@@ -398,6 +422,35 @@ func (s *AuthService) Login(
 		RefreshToken: result.RefreshToken,
 		ExpiresIn:    result.ExpiresIn,
 	}, nil
+}
+
+// rescueExpiredInvite flips an admin-created user whose temporary password
+// expired from FORCE_CHANGE_PASSWORD to CONFIRMED by setting a random permanent
+// password the user never learns. This unblocks the standard ForgotPassword
+// flow (Cognito rejects reset while the account is FORCE_CHANGE_PASSWORD). It is
+// intentionally best-effort and self-contained: it confirms the account really
+// is in FORCE_CHANGE_PASSWORD before changing anything, and returns false (with
+// a log) on any problem so the caller falls back to a normal 401 rather than
+// leaking state or surfacing an error. Returns true only if the account was
+// rescued.
+func (s *AuthService) rescueExpiredInvite(ctx context.Context, email string) bool {
+	status, err := s.cognito.GetUserStatus(ctx, email)
+	if err != nil {
+		slog.Warn("expired-invite rescue: status lookup failed", "email", email, "error", err)
+		return false
+	}
+	if status != auth.UserStatusForceChangePassword {
+		slog.Warn("expired-invite rescue: unexpected status, skipping",
+			"email", email, "status", string(status))
+		return false
+	}
+	if err := s.cognito.ResendInvite(ctx, email); err != nil {
+		slog.Error("expired-invite rescue: resend invite failed", "email", email, "error", err)
+		return false
+	}
+	slog.Info("expired-invite rescue: fresh temporary password sent, user can complete first login",
+		"email", email)
+	return true
 }
 
 // CompleteNewPassword finishes the NEW_PASSWORD_REQUIRED challenge

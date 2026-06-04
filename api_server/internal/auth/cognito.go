@@ -102,7 +102,38 @@ type CognitoAPI interface {
 		params *cip.AdminSetUserPasswordInput,
 		optFns ...func(*cip.Options),
 	) (*cip.AdminSetUserPasswordOutput, error)
+
+	// AdminGetUser reads a user's attributes and account status (e.g.
+	// FORCE_CHANGE_PASSWORD) by username, without requiring the user to be
+	// signed in.
+	AdminGetUser(
+		ctx context.Context,
+		params *cip.AdminGetUserInput,
+		optFns ...func(*cip.Options),
+	) (*cip.AdminGetUserOutput, error)
 }
+
+// UserStatus is a Cognito account status, returned by GetUserStatus. It wraps
+// the SDK's open string enum so callers in other packages get a closed,
+// self-documenting domain without importing the AWS SDK. Each constant is
+// derived from the SDK value (not hand-typed), so they cannot silently drift
+// from what Cognito actually returns.
+type UserStatus string
+
+// Cognito account statuses. Mirrors the AWS SDK UserStatusType enum; if AWS
+// adds a new value, an undeclared status simply round-trips as an unrecognized
+// UserStatus (Go string enums are open), which callers treat as "not one we
+// special-case".
+const (
+	UserStatusUnconfirmed         = UserStatus(types.UserStatusTypeUnconfirmed)
+	UserStatusConfirmed           = UserStatus(types.UserStatusTypeConfirmed)
+	UserStatusArchived            = UserStatus(types.UserStatusTypeArchived)
+	UserStatusCompromised         = UserStatus(types.UserStatusTypeCompromised)
+	UserStatusUnknown             = UserStatus(types.UserStatusTypeUnknown)
+	UserStatusResetRequired       = UserStatus(types.UserStatusTypeResetRequired)
+	UserStatusForceChangePassword = UserStatus(types.UserStatusTypeForceChangePassword)
+	UserStatusExternalProvider    = UserStatus(types.UserStatusTypeExternalProvider)
+)
 
 // Result holds the tokens returned by a successful login. When
 // Cognito responds to InitiateAuth with a challenge instead of tokens
@@ -657,6 +688,59 @@ func (c *CognitoClient) ResetTempPassword(
 	return nil
 }
 
+// GetUserStatus returns the Cognito account status for the given email (one of
+// the Cognito UserStatus values, e.g. CONFIRMED or FORCE_CHANGE_PASSWORD). A
+// missing user is mapped to ErrUserNotFound so callers can distinguish "no
+// account" from other failures.
+func (c *CognitoClient) GetUserStatus(ctx context.Context, email string) (UserStatus, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return "", fmt.Errorf("email is required")
+	}
+	out, err := c.api.AdminGetUser(ctx, &cip.AdminGetUserInput{
+		UserPoolId: &c.poolID,
+		Username:   &email,
+	})
+	if err != nil {
+		slog.Warn("cognito admin get user failed", "email", email, "error", err)
+		return "", classifyCognitoErr(err)
+	}
+	return UserStatus(out.UserStatus), nil
+}
+
+// ResendInvite re-sends the Cognito invitation message for an existing
+// admin-created user, mirroring:
+//
+//	aws cognito-idp admin-create-user --user-pool-id <pool> \
+//	    --username <email> --message-action RESEND
+//
+// Cognito regenerates the temporary password, resets its expiry, and emails the
+// invitation (using the pool's invitation message template). Used to rescue an
+// admin-created user whose temp password expired before first sign-in: they get
+// a fresh temporary password and stay in FORCE_CHANGE_PASSWORD, so the normal
+// first-login (NEW_PASSWORD_REQUIRED) flow still applies.
+//
+// NOTE: RESEND uses Cognito's own invitation email, not the custom SES invite
+// email new users first receive — the pool's invitation template must be
+// configured for the resent message to look right.
+func (c *CognitoClient) ResendInvite(ctx context.Context, email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	_, err := c.api.AdminCreateUser(ctx, &cip.AdminCreateUserInput{
+		UserPoolId:    &c.poolID,
+		Username:      &email,
+		MessageAction: types.MessageActionTypeResend,
+	})
+	if err != nil {
+		slog.Error("cognito resend invite failed", "email", email, "error", err)
+		return classifyCognitoErr(err)
+	}
+	slog.Info("cognito invite resent (fresh temporary password)", "email", email)
+	return nil
+}
+
 // secretHash computes the HMAC-SHA256 SECRET_HASH required when the
 // Cognito App Client is configured with a client secret. Returns nil
 // when no secret is configured.
@@ -677,6 +761,7 @@ var (
 	ErrCodeMismatch            = errors.New("invalid confirmation code")
 	ErrCodeExpired             = errors.New("confirmation code has expired")
 	ErrNotAuthorized           = errors.New("invalid credentials")
+	ErrTempPasswordExpired     = errors.New("temporary password has expired")
 	ErrUserNotFound            = errors.New("user not found")
 	ErrUserNotConfirmed        = errors.New("user email not confirmed")
 	ErrUserAlreadyConfirmed    = errors.New("user email is already confirmed")
@@ -713,9 +798,22 @@ func classifyCognitoErr(err error) error {
 	// NotAuthorizedException with a message like "User is not confirmed" instead.
 	var notAuthErr *types.NotAuthorizedException
 	if errors.As(err, &notAuthErr) {
-		if notAuthErr.Message != nil &&
-			strings.Contains(strings.ToLower(*notAuthErr.Message), "not confirmed") {
+		msg := ""
+		if notAuthErr.Message != nil {
+			msg = strings.ToLower(*notAuthErr.Message)
+		}
+		if strings.Contains(msg, "not confirmed") {
 			return ErrUserNotConfirmed
+		}
+		// An admin-created user whose temporary password expired surfaces here
+		// with "Temporary password has expired and must be reset by an
+		// administrator." Match that specific phrase (NOT a bare "expired", and
+		// NOT a wrong-password "Incorrect username or password") so Login only
+		// auto-rescues genuine expiry — never a typo on a still-valid temp
+		// password. NOTE: this matches Cognito's message text, which is not a
+		// stable API contract — confirm against the live pool.
+		if strings.Contains(msg, "temporary password has expired") {
+			return ErrTempPasswordExpired
 		}
 		return ErrNotAuthorized
 	}
