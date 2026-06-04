@@ -270,6 +270,7 @@ impl YbWalStorage {
             watermark_tx,
             flush_notify.clone(),
             durable_lsn.clone(),
+            cache.clone(),
         ));
 
         // Seed the DELETE lower bound from YB so post-restart removals
@@ -436,16 +437,17 @@ impl YbWalStorage {
             let chunk_seq = self.allocate_seq(segno);
             let data: Arc<Vec<u8>> = Arc::new(remaining[..take].to_vec());
 
-            // Populate the read-side cache before queueing for YB. The
-            // WAL sender can hit this without waiting for the consumer
-            // batch to land. Same Arc shared with the PendingChunk so no
-            // double allocation.
-            if let Some(cache) = &self.cache {
-                cache
-                    .lock()
-                    .unwrap()
-                    .insert(segno, offset as u64, chunk_seq, data.clone());
-            }
+            // NB: do NOT populate the read-side cache here. The cache
+            // is durability-aware now: it's only populated by
+            // `consumer_main` *after* the chunk has been successfully
+            // INSERT'd into `yb_storage.wals`. Populating it here
+            // pre-INSERT (the previous behaviour) let the WAL sender
+            // stream chunks to the pageserver that the safekeeper had
+            // not yet flushed to YB — and on safekeeper crash before
+            // the consumer drained, the pageserver was left holding a
+            // persisted disk_consistent_lsn for WAL the restarted SK
+            // could no longer serve. See findings-ps-wal-replay-
+            // restart-bug-2026-06-04.
 
             let pc = PendingChunk {
                 segno,
@@ -742,6 +744,7 @@ async fn consumer_main(
     watermark_tx: watch::Sender<DurableState>,
     flush_notify: Arc<tokio::sync::Notify>,
     durable_lsn: Arc<AtomicU64>,
+    cache: Option<Arc<std::sync::Mutex<crate::wal_cache::WalCache>>>,
 ) {
     loop {
         // Block until at least one chunk arrives.
@@ -793,6 +796,25 @@ async fn consumer_main(
 
         match flush_batch(&ysql_fpu_client, &table_name, &tenant_id, &timeline_id, &batch).await {
             Ok(()) => {
+                // Populate the read-side cache from the batch BEFORE
+                // publishing the durability advance. The cache is the
+                // WAL sender's fast path; we only insert chunks here
+                // (after a successful INSERT) so the cache never
+                // serves bytes that aren't durable in
+                // `yb_storage.wals`. See findings-ps-wal-replay-
+                // restart-bug-2026-06-04 for the failure mode that
+                // earlier pre-INSERT cache population caused.
+                if let Some(c) = &cache {
+                    let mut guard = c.lock().unwrap();
+                    for pc in &batch {
+                        guard.insert(
+                            pc.segno,
+                            pc.chunk_offset as u64,
+                            pc.chunk_seq,
+                            pc.data.clone(),
+                        );
+                    }
+                }
                 // Publish durability advance. The atomic is the
                 // authoritative source for `YbWalStorage::flush_lsn()`'s
                 // cap and `truncate_wal`'s precondition — must be set
