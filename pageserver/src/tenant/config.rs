@@ -1,13 +1,10 @@
-//! Functions for handling per-tenant configuration options
+//! Per-tenant configuration, persisted to `<workdir>/tenants/<id>/config-v1`.
 //!
-//! If tenant is created with --config option,
-//! the tenant-specific config will be stored in tenant's directory.
-//! Otherwise, global pageserver's config is used.
-//!
-//! If the tenant config file is corrupted, the tenant will be disabled.
-//! We cannot use global or default config instead, because wrong settings
-//! may lead to a data loss.
-//!
+//! In yb-mode a tenant is either *attached* to this pageserver (with a
+//! storage_controller-assigned generation number used for fencing YB
+//! writes) or it isn't here at all. Detachment is represented by
+//! absence of the on-disk config file, so [`LocationConf`] only models
+//! the attached state.
 
 use pageserver_api::models;
 use pageserver_api::shard::{ShardCount, ShardIdentity, ShardNumber, ShardStripeSize};
@@ -15,140 +12,54 @@ use serde::{Deserialize, Serialize};
 use utils::critical;
 use utils::generation::Generation;
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum AttachmentMode {
-    /// Our generation is current as far as we know, and as far as we know we are the only attached
-    /// pageserver.  This is the "normal" attachment mode.
-    Single,
-    /// Our generation number is current as far as we know, but we are advised that another
-    /// pageserver is still attached, and therefore to avoid executing deletions.   This is
-    /// the attachment mode of a pagesever that is the destination of a migration.
-    Multi,
-    /// Our generation number is superseded, or about to be superseded.  We are advised
-    /// to avoid remote storage writes if possible, and to avoid sending billing data.  This
-    /// is the attachment mode of a pageserver that is the origin of a migration.
-    Stale,
-}
-
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct AttachedLocationConfig {
-    pub(crate) generation: Generation,
-    pub(crate) attach_mode: AttachmentMode,
-    // TODO: add a flag to override AttachmentMode's policies under
-    // disk pressure (i.e. unblock uploads under disk pressure in Stale
-    // state, unblock deletions after timeout in Multi state)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum LocationMode {
-    Attached(AttachedLocationConfig),
-}
-
-/// Per-tenant, per-pageserver configuration.  All pageservers use the same TenantConf,
-/// but have distinct LocationConf.
+/// Per-tenant, per-pageserver attachment record. All pageservers use
+/// the same `tenant_conf`; the generation is per-attachment.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LocationConf {
-    /// The location-specific part of the configuration, describes the operating
-    /// mode of this pageserver for this tenant.
-    pub(crate) mode: LocationMode,
+    /// storage_controller-assigned generation, used to fence YB writes
+    /// against stale pageservers during failover.
+    pub(crate) generation: Generation,
 
-    /// The detailed shard identity.  This structure is already scoped within
-    /// a TenantShardId, but we need the full ShardIdentity to enable calculating
-    /// key->shard mappings.
-    ///
-    /// NB: we store this even for unsharded tenants, so that we agree with storcon on the intended
-    /// stripe size. Otherwise, a split request that does not specify a stripe size may use a
-    /// different default than storcon, which can lead to incorrect stripe sizes and corruption.
+    /// Full shard identity. Already implied by `TenantShardId`, but
+    /// the explicit `ShardIdentity` lets us compute key→shard mappings
+    /// and agree with storage_controller on the intended stripe size.
     pub(crate) shard: ShardIdentity,
 
-    /// The pan-cluster tenant configuration, the same on all locations
+    /// Pan-cluster tenant tunables; identical on every pageserver
+    /// that attaches the tenant. Will eventually move to YB
+    /// (task 17.c).
     pub(crate) tenant_conf: pageserver_api::models::TenantConfig,
 }
 
 impl std::fmt::Debug for LocationConf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let LocationMode::Attached(conf) = &self.mode;
-        write!(
-            f,
-            "Attached {:?}, gen={:?}",
-            conf.attach_mode, conf.generation
-        )
-    }
-}
-
-impl AttachedLocationConfig {
-    /// Consult attachment mode to determine whether we are currently permitted
-    /// to delete layers.  This is only advisory, not required for data safety.
-    /// See [`AttachmentMode`] for more context.
-    pub(crate) fn may_delete_layers_hint(&self) -> bool {
-        // TODO: add an override for disk pressure in AttachedLocationConfig,
-        // and respect it here.
-        match &self.attach_mode {
-            AttachmentMode::Single => true,
-            AttachmentMode::Multi | AttachmentMode::Stale => {
-                // In Multi mode we avoid doing deletions because some other
-                // attached pageserver might get 404 while trying to read
-                // a layer we delete which is still referenced in their metadata.
-                //
-                // In Stale mode, we avoid doing deletions because we expect
-                // that they would ultimately fail validation in the deletion
-                // queue due to our stale generation.
-                false
-            }
-        }
-    }
-
-    /// Whether we are currently hinted that it is worthwhile to upload layers.
-    /// This is only advisory, not required for data safety.
-    /// See [`AttachmentMode`] for more context.
-    pub(crate) fn may_upload_layers_hint(&self) -> bool {
-        // TODO: add an override for disk pressure in AttachedLocationConfig,
-        // and respect it here.
-        match &self.attach_mode {
-            AttachmentMode::Single | AttachmentMode::Multi => true,
-            AttachmentMode::Stale => {
-                // In Stale mode, we avoid doing uploads because we expect that
-                // our replacement pageserver will already have started its own
-                // IndexPart that will never reference layers we upload: it is
-                // wasteful.
-                false
-            }
-        }
+        write!(f, "Attached gen={:?}", self.generation)
     }
 }
 
 impl LocationConf {
-    /// For use when loading from a legacy configuration: presence of a tenant
-    /// implies it is in AttachmentMode::Single, which used to be the only
-    /// possible state.  This function should eventually be removed.
-    pub(crate) fn attached_single(
+    /// Construct an attachment record. Equivalent to the old
+    /// `attached_single` — there is no other attachment mode in yb-mode.
+    pub(crate) fn attached(
         tenant_conf: pageserver_api::models::TenantConfig,
         generation: Generation,
         shard_params: models::ShardParameters,
     ) -> Self {
         Self {
-            mode: LocationMode::Attached(AttachedLocationConfig {
-                generation,
-                attach_mode: AttachmentMode::Single,
-            }),
+            generation,
             shard: ShardIdentity::from_params(ShardNumber(0), shard_params),
             tenant_conf,
         }
     }
 
-    /// For use when attaching/re-attaching: update the generation stored in this
-    /// structure.  If we were in a secondary state, promote to attached (posession
-    /// of a fresh generation implies this).
+    /// Update the generation stored in this record. Called on
+    /// attach / re-attach.
     pub(crate) fn attach_in_generation(
         &mut self,
-        mode: AttachmentMode,
         generation: Generation,
         stripe_size: ShardStripeSize,
     ) {
-        let LocationMode::Attached(attach_conf) = &mut self.mode;
-        attach_conf.generation = generation;
-        attach_conf.attach_mode = mode;
-
+        self.generation = generation;
         // This should never happen.
         // TODO: turn this into a proper assertion.
         if stripe_size != self.shard.stripe_size {
@@ -158,55 +69,24 @@ impl LocationConf {
                 stripe_size,
             );
         }
-
         self.shard.stripe_size = stripe_size;
     }
 
+    /// Decode an external `LocationConfig` request into a
+    /// `LocationConf`. Fails if `generation` is absent — detachment
+    /// is signaled by the absence of a `LocationConf`, not by
+    /// decoding an empty one.
     pub(crate) fn try_from(conf: &'_ models::LocationConfig) -> anyhow::Result<Self> {
-        let tenant_conf = conf.tenant_conf.clone();
-
-        fn get_generation(conf: &'_ models::LocationConfig) -> Result<Generation, anyhow::Error> {
-            conf.generation
-                .map(Generation::new)
-                .ok_or_else(|| anyhow::anyhow!("Generation must be set when attaching"))
-        }
-
-        let mode = match &conf.mode {
-            models::LocationConfigMode::AttachedMulti => {
-                LocationMode::Attached(AttachedLocationConfig {
-                    generation: get_generation(conf)?,
-                    attach_mode: AttachmentMode::Multi,
-                })
-            }
-            models::LocationConfigMode::AttachedSingle => {
-                LocationMode::Attached(AttachedLocationConfig {
-                    generation: get_generation(conf)?,
-                    attach_mode: AttachmentMode::Single,
-                })
-            }
-            models::LocationConfigMode::AttachedStale => {
-                LocationMode::Attached(AttachedLocationConfig {
-                    generation: get_generation(conf)?,
-                    attach_mode: AttachmentMode::Stale,
-                })
-            }
-            models::LocationConfigMode::Secondary => {
-                return Err(anyhow::anyhow!(
-                    "Secondary mode is not supported in yb-pageserver"
-                ));
-            }
-            models::LocationConfigMode::Detached => {
-                // Should not have been called: API code should translate this mode
-                // into a detach rather than trying to decode it as a LocationConf
-                return Err(anyhow::anyhow!("Cannot decode a Detached configuration"));
-            }
-        };
+        let generation = conf
+            .generation
+            .map(Generation::new)
+            .ok_or_else(|| anyhow::anyhow!("Generation must be set when attaching"))?;
 
         let shard = if conf.shard_count == 0 {
-            // NB: carry over the persisted stripe size instead of using the default. This doesn't
-            // matter for most practical purposes, since unsharded tenants don't use the stripe
-            // size, but can cause inconsistencies between storcon and Pageserver and cause manual
-            // splits without `new_stripe_size` to use an unintended stripe size.
+            // NB: carry over the persisted stripe size instead of
+            // using the default. Unsharded tenants don't use the
+            // stripe size, but storage_controller and the pageserver
+            // need to agree on it for future splits.
             ShardIdentity::unsharded_with_stripe_size(ShardStripeSize(conf.shard_stripe_size))
         } else {
             ShardIdentity::new(
@@ -217,23 +97,20 @@ impl LocationConf {
         };
 
         Ok(Self {
+            generation,
             shard,
-            mode,
-            tenant_conf,
+            tenant_conf: conf.tenant_conf.clone(),
         })
     }
 }
 
 impl Default for LocationConf {
-    // TODO: this should be removed once tenant loading can guarantee that we are never
-    // loading from a directory without a configuration.
+    // TODO: this should be removed once tenant loading can guarantee
+    // that we are never loading from a directory without a configuration.
     // => tech debt since https://github.com/neondatabase/neon/issues/1555
     fn default() -> Self {
         Self {
-            mode: LocationMode::Attached(AttachedLocationConfig {
-                generation: Generation::none(),
-                attach_mode: AttachmentMode::Single,
-            }),
+            generation: Generation::none(),
             tenant_conf: pageserver_api::models::TenantConfig::default(),
             shard: ShardIdentity::unsharded(),
         }

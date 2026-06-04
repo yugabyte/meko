@@ -5,7 +5,7 @@ use std::time::Duration;
 use futures::future::{self, Either};
 use itertools::Itertools;
 use pageserver_api::controller_api::{AvailabilityZone, PlacementPolicy, ShardSchedulingPolicy};
-use pageserver_api::models::{LocationConfig, LocationConfigMode, TenantConfig};
+use pageserver_api::models::{LocationConfig, TenantConfig};
 use pageserver_api::shard::{ShardIdentity, TenantShardId};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
@@ -628,18 +628,10 @@ impl TenantShard {
             .locations
             .iter()
             .filter_map(|(node_id, l)| {
-                if let Some(conf) = &l.conf {
-                    if conf.mode == LocationConfigMode::AttachedMulti
-                        || conf.mode == LocationConfigMode::AttachedSingle
-                        || conf.mode == LocationConfigMode::AttachedStale
-                    {
-                        Some((node_id, conf.generation))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+                l.conf
+                    .as_ref()
+                    .filter(|conf| conf.generation.is_some())
+                    .map(|conf| (node_id, conf.generation))
             })
             .collect::<Vec<_>>();
 
@@ -1421,11 +1413,10 @@ impl TenantShard {
         let location_config = location.conf.as_ref()?;
 
         // Check if our intent and observed state agree that this node is in an attached state.
-        match location_config.mode {
-            LocationConfigMode::AttachedMulti
-            | LocationConfigMode::AttachedSingle
-            | LocationConfigMode::AttachedStale => Some(attach_intent),
-            _ => None,
+        if location_config.generation.is_some() {
+            Some(attach_intent)
+        } else {
+            None
         }
     }
 
@@ -1966,16 +1957,8 @@ impl TenantShard {
             .locations
             .iter()
             .filter_map(|(node_id, observed)| {
-                use LocationConfigMode::{AttachedMulti, AttachedSingle, AttachedStale};
-
                 let conf = observed.conf.as_ref()?;
-
-                match (conf.generation, conf.mode) {
-                    (Some(gen_), AttachedMulti | AttachedSingle | AttachedStale) => {
-                        Some((*node_id, gen_))
-                    }
-                    _ => None,
-                }
+                conf.generation.map(|gen_| (*node_id, gen_))
             })
             .sorted_by(|(_lhs_node_id, lhs_gen), (_rhs_node_id, rhs_gen)| {
                 lhs_gen.cmp(rhs_gen).reverse()
@@ -2204,9 +2187,7 @@ pub(crate) mod tests {
             NodeId(3),
             ObservedStateLocation {
                 conf: Some(LocationConfig {
-                    mode: LocationConfigMode::AttachedMulti,
                     generation: Some(2),
-                    secondary_conf: None,
                     shard_number: tenant_shard.shard.number.0,
                     shard_count: tenant_shard.shard.count.literal(),
                     shard_stripe_size: tenant_shard.shard.stripe_size.0,
@@ -2219,9 +2200,7 @@ pub(crate) mod tests {
             NodeId(2),
             ObservedStateLocation {
                 conf: Some(LocationConfig {
-                    mode: LocationConfigMode::AttachedStale,
                     generation: Some(1),
-                    secondary_conf: None,
                     shard_number: tenant_shard.shard.number.0,
                     shard_count: tenant_shard.shard.count.literal(),
                     shard_stripe_size: tenant_shard.shard.stripe_size.0,

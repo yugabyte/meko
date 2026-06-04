@@ -12,7 +12,6 @@ use anyhow::Context;
 use camino::{Utf8DirEntry, Utf8Path, Utf8PathBuf};
 use futures::StreamExt;
 use pageserver_api::key::Key;
-use pageserver_api::models::LocationConfigMode;
 use pageserver_api::shard::{
     ShardIdentity, ShardIndex, ShardNumber, ShardStripeSize, TenantShardId,
 };
@@ -41,9 +40,7 @@ use crate::deletion_queue::DeletionQueueClient;
 use crate::http::routes::ACTIVE_TENANT_TIMEOUT;
 use crate::metrics::{LOCAL_DATA_LOSS_SUSPECTED, TENANT, TENANT_MANAGER as METRICS};
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind};
-use crate::tenant::config::{
-    AttachedLocationConfig, AttachmentMode, LocationConf, LocationMode,
-};
+use crate::tenant::config::LocationConf;
 use crate::tenant::span::debug_assert_current_span_has_tenant_id;
 use crate::tenant::timeline::ShutdownMode;
 use crate::tenant::{
@@ -114,48 +111,16 @@ pub(crate) enum ShardSelector {
 ///
 /// This represents the subset of a LocationConfig that we receive during re-attach.
 pub(crate) enum TenantStartupMode {
-    Attached((AttachmentMode, Generation, ShardStripeSize)),
+    Attached((Generation, ShardStripeSize)),
 }
 
 impl TenantStartupMode {
-    /// Return the generation & mode that should be used when starting
-    /// this tenant.
-    ///
-    /// If this returns None, the re-attach struct is in an invalid state and
-    /// should be ignored in the response.
+    /// Return the generation & stripe size that should be used when
+    /// starting this tenant, or `None` if the re-attach response says
+    /// the tenant is not attached here.
     fn from_reattach_tenant(rart: ReAttachResponseTenant) -> Option<Self> {
-        match (rart.mode, rart.r#gen) {
-            (LocationConfigMode::Detached, _) => None,
-            (LocationConfigMode::Secondary, _) => {
-                tracing::warn!(
-                    "Ignoring Secondary mode for tenant {} (not supported in yb-pageserver)",
-                    rart.id
-                );
-                None
-            }
-            (LocationConfigMode::AttachedMulti, Some(g)) => Some(Self::Attached((
-                AttachmentMode::Multi,
-                Generation::new(g),
-                rart.stripe_size,
-            ))),
-            (LocationConfigMode::AttachedSingle, Some(g)) => Some(Self::Attached((
-                AttachmentMode::Single,
-                Generation::new(g),
-                rart.stripe_size,
-            ))),
-            (LocationConfigMode::AttachedStale, Some(g)) => Some(Self::Attached((
-                AttachmentMode::Stale,
-                Generation::new(g),
-                rart.stripe_size,
-            ))),
-            _ => {
-                tracing::warn!(
-                    "Received invalid re-attach state for tenant {}: {rart:?}",
-                    rart.id
-                );
-                None
-            }
-        }
+        rart.r#gen
+            .map(|g| Self::Attached((Generation::new(g), rart.stripe_size)))
     }
 }
 
@@ -312,14 +277,9 @@ fn emergency_generations(
                 Ok(lc) => lc,
                 Err(_) => return None,
             };
-            let LocationMode::Attached(alc) = &lc.mode;
             Some((
                 *tid,
-                TenantStartupMode::Attached((
-                    alc.attach_mode,
-                    alc.generation,
-                    lc.shard.stripe_size,
-                )),
+                TenantStartupMode::Attached((lc.generation, lc.shard.stripe_size)),
             ))
         })
         .collect()
@@ -361,7 +321,7 @@ async fn init_load_generations(
     let attached_tenants = generations
         .iter()
         .map(|(id, start_mode)| {
-            let TenantStartupMode::Attached((_mode, generation, _stripe_size)) = start_mode;
+            let TenantStartupMode::Attached((generation, _stripe_size)) = start_mode;
             (*id, *generation)
         })
         .collect();
@@ -571,19 +531,15 @@ pub async fn init_tenant_mgr(
                     // We deleted local content: move on to next tenant, don't try and spawn this one.
                     continue;
                 }
-                Some(TenantStartupMode::Attached((attach_mode, generation, stripe_size))) => {
-                    let LocationMode::Attached(AttachedLocationConfig {
-                        generation: old_generation,
-                        attach_mode: _attach_mode,
-                    }) = &location_conf.mode;
-                    if old_generation > generation {
+                Some(TenantStartupMode::Attached((generation, stripe_size))) => {
+                    if &location_conf.generation > generation {
                         tracing::error!(tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(),
                             "Control plane gave decreasing generation ({generation:?}) in re-attach response for tenant that was attached in generation {:?}; skipping",
-                            old_generation
+                            location_conf.generation
                         );
                         continue;
                     }
-                    location_conf.attach_in_generation(*attach_mode, *generation, *stripe_size);
+                    location_conf.attach_in_generation(*generation, *stripe_size);
                 }
             }
         } else {
@@ -622,14 +578,14 @@ pub async fn init_tenant_mgr(
 
         let tenant_dir_path = conf.tenant_path(&tenant_shard_id);
         let shard_identity = location_conf.shard;
-        let LocationMode::Attached(attached_conf) = location_conf.mode;
+        let generation = location_conf.generation;
         let slot = TenantSlot::Attached(
             tenant_spawn(
                 conf,
                 tenant_shard_id,
                 &tenant_dir_path,
                 resources.clone(),
-                AttachedTenantConf::new(conf, location_conf.tenant_conf, attached_conf),
+                AttachedTenantConf::new(conf, location_conf.tenant_conf, generation),
                 shard_identity,
                 Some(init_order.clone()),
                 SpawnMode::Lazy,
@@ -761,10 +717,9 @@ impl TenantManager {
             let locked = self.tenants.read().unwrap();
             let peek_slot =
                 tenant_map_peek_slot(&locked, &tenant_shard_id, TenantSlotPeekMode::Write)?;
-            let LocationMode::Attached(attach_conf) = &new_location_config.mode;
             match peek_slot {
                 Some(TenantSlot::Attached(tenant)) => {
-                    match attach_conf.generation.cmp(&tenant.generation) {
+                    match new_location_config.generation.cmp(&tenant.generation) {
                         Ordering::Equal => {
                             // A transition from Attached to Attached in the same generation, we may
                             // take our fast path and just provide the updated configuration
@@ -782,7 +737,7 @@ impl TenantManager {
                         Ordering::Less => {
                             return Err(UpsertLocationError::BadRequest(anyhow::anyhow!(
                                 "Generation {:?} is less than existing {:?}",
-                                attach_conf.generation,
+                                new_location_config.generation,
                                 tenant.generation
                             )));
                         }
@@ -814,30 +769,7 @@ impl TenantManager {
                 .await
                 .fatal_err("write tenant shard config");
 
-                // Transition to AttachedStale means we may well hold a valid generation
-                // still, and have been requested to go stale as part of a migration.  If
-                // the caller set `flush`, then flush to remote storage.
-                if let LocationMode::Attached(AttachedLocationConfig {
-                    generation: _,
-                    attach_mode: AttachmentMode::Stale,
-                }) = &new_location_config.mode
-                {
-                    if let Some(flush_timeout) = flush {
-                        match tokio::time::timeout(flush_timeout, tenant.flush_remote()).await {
-                            Ok(Err(e)) => {
-                                return Err(UpsertLocationError::Flush(e));
-                            }
-                            Ok(Ok(_)) => return Ok(Some(tenant)),
-                            Err(_) => {
-                                tracing::warn!(
-                                    timeout_ms = flush_timeout.as_millis(),
-                                    "Timed out waiting for flush to remote storage, proceeding anyway."
-                                )
-                            }
-                        }
-                    }
-                }
-
+                let _ = flush; // AttachedStale-flush dance was dead in yb-mode
                 return Ok(Some(tenant));
             }
             None => {
@@ -872,17 +804,9 @@ impl TenantManager {
                 // if we see an attached tenant we know it will be discarded and should be
                 // shut down.
                 let (_guard, progress) = utils::completion::channel();
-
-                match tenant.get_attach_mode() {
-                    AttachmentMode::Single | AttachmentMode::Multi => {
-                        // Before we leave our state as the presumed holder of the latest generation,
-                        // flush any outstanding deletions to reduce the risk of leaking objects.
-                        self.resources.deletion_queue_client.flush_advisory()
-                    }
-                    AttachmentMode::Stale => {
-                        // If we're stale there's not point trying to flush deletions
-                    }
-                };
+                // Before we leave our state as the presumed holder of the latest generation,
+                // flush any outstanding deletions to reduce the risk of leaking objects.
+                self.resources.deletion_queue_client.flush_advisory();
 
                 info!("Shutting down attached tenant");
                 match tenant.shutdown(progress, ShutdownMode::Hard).await {

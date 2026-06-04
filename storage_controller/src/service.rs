@@ -33,7 +33,7 @@ use pageserver_api::controller_api::{
     TenantShardMigrateRequest, TenantShardMigrateResponse, TenantTimelineDescribeResponse,
 };
 use pageserver_api::models::{
-    self, DetachBehavior, LocationConfig, LocationConfigListResponse, LocationConfigMode, LsnLease,
+    self, DetachBehavior, LocationConfig, LocationConfigListResponse, LsnLease,
     PageserverUtilization, SecondaryProgress, ShardImportStatus, ShardParameters, TenantConfig,
     TenantConfigPatchRequest, TenantConfigRequest, TenantLocationConfigRequest,
     TenantLocationConfigResponse, TenantShardLocation, TenantShardSplitRequest,
@@ -1219,9 +1219,7 @@ impl Service {
                 .location_config(
                     tenant_shard_id,
                     LocationConfig {
-                        mode: LocationConfigMode::Detached,
                         generation: None,
-                        secondary_conf: None,
                         shard_number: tenant_shard_id.shard_number.0,
                         shard_count: tenant_shard_id.shard_count.literal(),
                         shard_stripe_size: 0,
@@ -2327,9 +2325,7 @@ impl Service {
                 .with_client_retries(
                     |client| async move {
                         let config = LocationConfig {
-                            mode: LocationConfigMode::Detached,
                             generation: None,
-                            secondary_conf: None,
                             shard_number: tenant_shard_id.shard_number.0,
                             shard_count: tenant_shard_id.shard_count.literal(),
                             shard_stripe_size: 0,
@@ -2437,11 +2433,6 @@ impl Service {
                 response.tenants.push(ReAttachResponseTenant {
                     id: *tenant_shard_id,
                     r#gen: Some(new_gen.into().unwrap()),
-                    // A tenant is only put into multi or stale modes in the middle of a [`Reconciler::live_migrate`]
-                    // execution.  If a pageserver is restarted during that process, then the reconcile pass will
-                    // fail, and start from scratch, so it doesn't make sense for us to try and preserve
-                    // the stale/multi states at this point.
-                    mode: LocationConfigMode::AttachedSingle,
                     stripe_size: shard.shard.stripe_size,
                 });
 
@@ -2475,7 +2466,6 @@ impl Service {
                 response.tenants.push(ReAttachResponseTenant {
                     id: *tenant_shard_id,
                     r#gen: None,
-                    mode: LocationConfigMode::Secondary,
                     stripe_size: shard.shard.stripe_size,
                 });
 
@@ -2914,38 +2904,28 @@ impl Service {
         let (nodes, tenants, _scheduler) = locked.parts_mut();
         let tenant_shard_id = TenantShardId::unsharded(tenant_id);
 
-        // Use location config mode as an indicator of policy.
-        let placement_policy = match req.config.mode {
-            LocationConfigMode::Detached => PlacementPolicy::Detached,
-            LocationConfigMode::Secondary => PlacementPolicy::Secondary,
-            LocationConfigMode::AttachedMulti
-            | LocationConfigMode::AttachedSingle
-            | LocationConfigMode::AttachedStale => {
-                if nodes.len() > 1 {
-                    PlacementPolicy::Attached(1)
-                } else {
-                    // Convenience for dev/test: if we just have one pageserver, import
-                    // tenants into non-HA mode so that scheduling will succeed.
-                    PlacementPolicy::Attached(0)
-                }
+        // Derive placement policy + scheduling intent from the request:
+        // `generation: Some` = attach, `None` = detach. Secondary/Multi/Stale
+        // are gone (yb-mode has no layer-file coordination).
+        let attaching = req.config.generation.is_some();
+        let placement_policy = if attaching {
+            if nodes.len() > 1 {
+                PlacementPolicy::Attached(1)
+            } else {
+                // Convenience for dev/test: a single pageserver imports tenants
+                // in non-HA mode so scheduling succeeds.
+                PlacementPolicy::Attached(0)
             }
+        } else {
+            PlacementPolicy::Detached
         };
 
-        // Ordinarily we do not update scheduling policy, but when making major changes
-        // like detaching or demoting to secondary-only, we need to force the scheduling
-        // mode to Active, or the caller's expected outcome (detach it) will not happen.
-        let scheduling_policy = match req.config.mode {
-            LocationConfigMode::Detached | LocationConfigMode::Secondary => {
-                // Special case: when making major changes like detaching or demoting to secondary-only,
-                // we need to force the scheduling mode to Active, or nothing will happen.
-                Some(ShardSchedulingPolicy::Active)
-            }
-            LocationConfigMode::AttachedMulti
-            | LocationConfigMode::AttachedSingle
-            | LocationConfigMode::AttachedStale => {
-                // While attached, continue to respect whatever the existing scheduling mode is.
-                None
-            }
+        // When detaching, force scheduling-policy to Active so the caller's
+        // intent actually takes effect.
+        let scheduling_policy = if attaching {
+            None
+        } else {
+            Some(ShardSchedulingPolicy::Active)
         };
 
         let mut create = true;
@@ -2953,19 +2933,13 @@ impl Service {
             // Saw an existing shard: this is not a creation
             create = false;
 
-            // Shards may have initially been created by a Secondary request, where we
-            // would have left generation as None.
-            //
-            // We only update generation the first time we see an attached-mode request,
-            // and if there is no existing generation set. The caller is responsible for
-            // ensuring that no non-storage-controller pageserver ever uses a higher
-            // generation than they passed in here.
-            use LocationConfigMode::*;
-            let set_generation = match req.config.mode {
-                AttachedMulti | AttachedSingle | AttachedStale if shard.generation.is_none() => {
-                    req.config.generation.map(Generation::new)
-                }
-                _ => None,
+            // We only set the generation the first time we see an attach
+            // request and no existing generation is set. The caller must
+            // never reuse a generation across pageservers.
+            let set_generation = if attaching && shard.generation.is_none() {
+                req.config.generation.map(Generation::new)
+            } else {
+                None
             };
 
             updates.push(ShardUpdate {
@@ -2978,14 +2952,9 @@ impl Service {
         }
 
         if create {
-            use LocationConfigMode::*;
-            let generation = match req.config.mode {
-                AttachedMulti | AttachedSingle | AttachedStale => req.config.generation,
-                // If a caller provided a generation in a non-attached request, ignore it
-                // and leave our generation as None: this enables a subsequent update to set
-                // the generation when setting an attached mode for the first time.
-                _ => None,
-            };
+            // On a non-attach create, leave generation None; the first
+            // subsequent attach request fills it in.
+            let generation = if attaching { req.config.generation } else { None };
 
             TenantCreateOrUpdate::Create(
                 // Synthesize a creation request
@@ -3463,20 +3432,16 @@ impl Service {
                         "We want tenant to be attached in shard with tenant_shard_id={shard_id}"
                     )));
                 }
-                let maybe_attached = shard
-                    .observed
-                    .locations
-                    .iter()
-                    .filter_map(|(node_id, observed_location)| {
+                let maybe_attached =
+                    shard.observed.locations.iter().find(|(_, observed_location)| {
                         observed_location
                             .conf
                             .as_ref()
-                            .map(|loc| (node_id, observed_location, loc.mode))
-                    })
-                    .find(|(_, _, mode)| *mode != LocationConfigMode::Detached);
-                if let Some((node_id, _observed_location, mode)) = maybe_attached {
+                            .is_some_and(|loc| loc.generation.is_some())
+                    });
+                if let Some((node_id, _observed_location)) = maybe_attached {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                        "We observed attached={mode:?} tenant in node_id={node_id} shard with tenant_shard_id={shard_id}"
+                        "Observed attached tenant on node_id={node_id} shard with tenant_shard_id={shard_id}"
                     )));
                 }
             }
@@ -5859,9 +5824,7 @@ impl Service {
                 .with_client_retries(
                     |client| async move {
                         let config = LocationConfig {
-                            mode: LocationConfigMode::Detached,
                             generation: None,
-                            secondary_conf: None,
                             shard_number: child_id.shard_number.0,
                             shard_count: child_id.shard_count.literal(),
                             // Stripe size and tenant config don't matter when detaching
@@ -7674,13 +7637,16 @@ impl Service {
                 (false, true) => Some(true),
                 (false, false) => None,
             };
-            let is_observed_secondary = if let Some(ObservedStateLocation { conf: Some(conf) }) =
-                tenant.observed.locations.get(&node_id)
-            {
-                Some(conf.secondary_conf.is_some())
-            } else {
-                None
-            };
+            // yb-mode has no Secondary location concept; the observed
+            // side is always either attached (`generation: Some`) or
+            // absent. Always emit `Some(false)` when we have an
+            // observation so the response shape stays stable.
+            let is_observed_secondary = tenant
+                .observed
+                .locations
+                .get(&node_id)
+                .and_then(|loc| loc.conf.as_ref())
+                .map(|_| false);
             if is_intended_secondary.is_some() || is_observed_secondary.is_some() {
                 shards.push(NodeShard {
                     tenant_shard_id: *tid,

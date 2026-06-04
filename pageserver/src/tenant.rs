@@ -55,7 +55,7 @@ use utils::try_rcu::ArcSwapExt;
 use utils::zstd::{create_zst_tarball, extract_zst_tarball};
 use utils::{backoff, completion, failpoint_support, fs_ext, pausable_failpoint};
 
-use self::config::{AttachedLocationConfig, AttachmentMode, LocationConf};
+use self::config::LocationConf;
 use self::metadata::TimelineMetadata;
 use self::mgr::{GetActiveTenantError, GetTenantError};
 use self::remote_timeline_client::upload::upload_tenant_manifest;
@@ -77,7 +77,6 @@ use crate::metrics::{
     remove_tenant_metrics,
 };
 use crate::task_mgr::TaskKind;
-use crate::tenant::config::LocationMode;
 use crate::tenant::gc_result::GcResult;
 pub use crate::tenant::remote_timeline_client::index::IndexPart;
 use crate::tenant::remote_timeline_client::{
@@ -152,7 +151,8 @@ pub struct TenantSharedResources {
 #[derive(Clone)]
 pub(super) struct AttachedTenantConf {
     tenant_conf: pageserver_api::models::TenantConfig,
-    location: AttachedLocationConfig,
+    /// storage_controller-assigned generation used to fence YB writes.
+    pub(super) generation: Generation,
     /// The deadline before which we are blocked from GC so that
     /// leases have a chance to be renewed.
     lsn_lease_deadline: Option<tokio::time::Instant>,
@@ -162,27 +162,20 @@ impl AttachedTenantConf {
     fn new(
         conf: &'static PageServerConf,
         tenant_conf: pageserver_api::models::TenantConfig,
-        location: AttachedLocationConfig,
+        generation: Generation,
     ) -> Self {
         // Sets a deadline before which we cannot proceed to GC due to lsn lease.
-        //
-        // We do this as the leases mapping are not persisted to disk. By delaying GC by lease
-        // length, we guarantee that all the leases we granted before will have a chance to renew
-        // when we run GC for the first time after restart / transition from AttachedMulti to AttachedSingle.
-        let lsn_lease_deadline = if location.attach_mode == AttachmentMode::Single {
-            Some(
-                tokio::time::Instant::now()
-                    + TenantShard::get_lsn_lease_length_impl(conf, &tenant_conf),
-            )
-        } else {
-            // We don't use `lsn_lease_deadline` to delay GC in AttachedMulti and AttachedStale
-            // because we don't do GC in these modes.
-            None
-        };
+        // The leases mapping is not persisted to disk; delaying GC by one
+        // lease length gives the leases we granted before restart a chance
+        // to renew when we run GC for the first time after attaching.
+        let lsn_lease_deadline = Some(
+            tokio::time::Instant::now()
+                + TenantShard::get_lsn_lease_length_impl(conf, &tenant_conf),
+        );
 
         Self {
             tenant_conf,
-            location,
+            generation,
             lsn_lease_deadline,
         }
     }
@@ -191,8 +184,7 @@ impl AttachedTenantConf {
         conf: &'static PageServerConf,
         location_conf: LocationConf,
     ) -> anyhow::Result<Self> {
-        let LocationMode::Attached(attach_conf) = &location_conf.mode;
-        Ok(Self::new(conf, location_conf.tenant_conf, *attach_conf))
+        Ok(Self::new(conf, location_conf.tenant_conf, location_conf.generation))
     }
 
     fn is_gc_blocked_by_lsn_lease_deadline(&self) -> bool {
@@ -1089,8 +1081,7 @@ impl TenantShard {
             fpu_page_store,
         } = resources;
 
-        let attach_mode = attached_conf.location.attach_mode;
-        let generation = attached_conf.location.generation;
+        let generation = attached_conf.generation;
 
         let tenant = Arc::new(TenantShard::new(
             TenantState::Attaching,
@@ -1124,10 +1115,7 @@ impl TenantShard {
             "attach tenant",
             async move {
 
-                info!(
-                    ?attach_mode,
-                    "Attaching tenant"
-                );
+                info!("Attaching tenant");
 
                 let _gate_guard = attach_gate_guard;
 
@@ -2193,22 +2181,9 @@ impl TenantShard {
             return Err(GcError::NotActive);
         }
 
-        {
-            let conf = self.tenant_conf.load();
-
-            // If we may not delete layers, then simply skip GC.  Even though a tenant
-            // in AttachedMulti state could do GC and just enqueue the blocked deletions,
-            // the only advantage to doing it is to perhaps shrink the LayerMap metadata
-            // a bit sooner than we would achieve by waiting for AttachedSingle status.
-            if !conf.location.may_delete_layers_hint() {
-                info!("Skipping GC in location state {:?}", conf.location);
-                return Ok(GcResult::default());
-            }
-
-            if conf.is_gc_blocked_by_lsn_lease_deadline() {
-                info!("Skipping GC because lsn lease deadline is not reached");
-                return Ok(GcResult::default());
-            }
+        if self.tenant_conf.load().is_gc_blocked_by_lsn_lease_deadline() {
+            info!("Skipping GC because lsn lease deadline is not reached");
+            return Ok(GcResult::default());
         }
 
         let _guard = match self.gc_block.start().await {
@@ -2225,31 +2200,23 @@ impl TenantShard {
 
     /// Performs periodic housekeeping, via the tenant housekeeping background task.
     async fn housekeeping(&self) {
-        // Call through to all timelines to freeze ephemeral layers as needed. This usually happens
-        // during ingest, but we don't want idle timelines to hold open layers for too long.
-        //
-        // We don't do this if the tenant can't upload layers (i.e. it's in stale attachment mode).
-        // We don't run compaction in this case either, and don't want to keep flushing tiny L0
-        // layers that won't be compacted down.
-        if self.tenant_conf.load().location.may_upload_layers_hint() {
-            let timelines = self
-                .timelines
-                .lock()
-                .unwrap()
-                .values()
-                .filter(|tli| tli.is_active())
-                .cloned()
-                .collect_vec();
-
-            for timeline in timelines {
-                // Include a span with the timeline ID. The parent span already has the tenant ID.
-                let span =
-                    info_span!("maybe_freeze_ephemeral_layer", timeline_id = %timeline.timeline_id);
-                timeline
-                    .maybe_freeze_ephemeral_layer()
-                    .instrument(span)
-                    .await;
-            }
+        // Freeze ephemeral layers on idle timelines so they don't sit
+        // open indefinitely.
+        let timelines = self
+            .timelines
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|tli| tli.is_active())
+            .cloned()
+            .collect_vec();
+        for timeline in timelines {
+            let span =
+                info_span!("maybe_freeze_ephemeral_layer", timeline_id = %timeline.timeline_id);
+            timeline
+                .maybe_freeze_ephemeral_layer()
+                .instrument(span)
+                .await;
         }
 
         // Shut down walredo if idle.
@@ -2257,7 +2224,6 @@ impl TenantShard {
         if let Some(ref walredo_mgr) = self.walredo_mgr {
             walredo_mgr.maybe_quiesce(WALREDO_IDLE_TIMEOUT);
         }
-
     }
 
     pub fn timeline_has_no_attached_children(&self, timeline_id: TimelineId) -> bool {
@@ -2684,26 +2650,12 @@ impl TenantShard {
         }
     }
 
-    pub(crate) fn get_attach_mode(&self) -> AttachmentMode {
-        self.tenant_conf.load().location.attach_mode
-    }
-
-    /// For API access: generate a LocationConfig equivalent to the one that would be used to
-    /// create a Tenant in the same state.  Do not use this in hot paths: it's for relatively
-    /// rare external API calls, like a reconciliation at startup.
+    /// For API access: generate a `LocationConfig` equivalent to the one
+    /// that would be used to create this attachment. Not for hot paths.
     pub(crate) fn get_location_conf(&self) -> models::LocationConfig {
         let attached_tenant_conf = self.tenant_conf.load();
-
-        let location_config_mode = match attached_tenant_conf.location.attach_mode {
-            AttachmentMode::Single => models::LocationConfigMode::AttachedSingle,
-            AttachmentMode::Multi => models::LocationConfigMode::AttachedMulti,
-            AttachmentMode::Stale => models::LocationConfigMode::AttachedStale,
-        };
-
         models::LocationConfig {
-            mode: location_config_mode,
             generation: self.generation.into(),
-            secondary_conf: None,
             shard_number: self.shard_identity.number.0,
             shard_count: self.shard_identity.count.literal(),
             shard_stripe_size: self.shard_identity.stripe_size.0,
@@ -2890,7 +2842,7 @@ impl TenantShard {
             .try_rcu(|attached_conf| -> Result<_, anyhow::Error> {
                 Ok(Arc::new(AttachedTenantConf {
                     tenant_conf: update(attached_conf.tenant_conf.clone())?,
-                    location: attached_conf.location,
+                    generation: attached_conf.generation,
                     lsn_lease_deadline: attached_conf.lsn_lease_deadline,
                 }))
             })?;
@@ -3017,7 +2969,7 @@ impl TenantShard {
         compute_page_store: Arc<crate::page_store::PageStore>,
         fpu_page_store: Arc<crate::page_store::PageStore>,
     ) -> TenantShard {
-        assert!(!attached_conf.location.generation.is_none());
+        assert!(!attached_conf.generation.is_none());
 
         let (state, mut rx) = watch::channel(state);
 
@@ -3077,7 +3029,7 @@ impl TenantShard {
         TenantShard {
             tenant_shard_id,
             shard_identity,
-            generation: attached_conf.location.generation,
+            generation: attached_conf.generation,
             conf,
             // using now here is good enough approximation to catch tenants with really long
             // activation times.

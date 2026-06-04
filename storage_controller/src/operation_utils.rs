@@ -53,20 +53,17 @@ impl TenantShardDrain {
 
         if *tenant_shard.intent.get_attached() != Some(self.drained_node) {
             // If the intent attached node is not the drained node, check the observed state
-            // of the shard on the drained node. If it is Attached*, it means the shard is
-            // beeing migrated from the drained node. The drain loop needs to wait for the
-            // reconciliation to complete for a smooth draining.
-
-            use pageserver_api::models::LocationConfigMode::*;
-
-            let attach_mode = tenant_shard
+            // of the shard on the drained node. If it is still attached there, the shard is
+            // being migrated off the drained node. Wait for that reconciliation to complete.
+            let attached_on_drained = tenant_shard
                 .observed
                 .locations
                 .get(&self.drained_node)
-                .and_then(|observed| observed.conf.as_ref().map(|conf| conf.mode));
+                .and_then(|observed| observed.conf.as_ref())
+                .is_some_and(|conf| conf.generation.is_some());
 
-            return match (attach_mode, tenant_shard.intent.get_attached()) {
-                (Some(AttachedSingle | AttachedMulti | AttachedStale), Some(intent_node_id)) => {
+            return match (attached_on_drained, tenant_shard.intent.get_attached()) {
+                (true, Some(intent_node_id)) => {
                     TenantShardDrainAction::Reconcile(*intent_node_id)
                 }
                 _ => TenantShardDrainAction::Skip,

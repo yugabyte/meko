@@ -945,38 +945,17 @@ mod throttle_config_tests {
     }
 }
 
-/// A flattened analog of a `pagesever::tenant::LocationMode`, which
-/// lists out all possible states (and the virtual "Detached" state)
-/// in a flat form rather than using rust-style enums.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Eq, PartialEq)]
-pub enum LocationConfigMode {
-    AttachedSingle,
-    AttachedMulti,
-    AttachedStale,
-    Secondary,
-    Detached,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub struct LocationConfigSecondary {
-    pub warm: bool,
-}
-
-/// An alternative representation of `pageserver::tenant::LocationConf`,
-/// for use in external-facing APIs.
+/// Wire form of [`crate::tenant::LocationConf`]. yb-mode has no
+/// multi-mode attach state: `generation: Some(g)` requests attach in
+/// generation `g`; `generation: None` requests detach.
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct LocationConfig {
-    pub mode: LocationConfigMode,
-    /// If attaching, in what generation?
+    /// `Some(g)` → attach in this generation; `None` → detach.
     #[serde(default)]
     pub generation: Option<u32>,
 
-    // If requesting mode `Secondary`, configuration for that.
-    #[serde(default)]
-    pub secondary_conf: Option<LocationConfigSecondary>,
-
-    // Shard parameters: if shard_count is nonzero, then other shard_* fields
-    // must be set accurately.
+    /// Shard parameters: if `shard_count` is nonzero, other `shard_*`
+    /// fields must be set accurately.
     #[serde(default)]
     pub shard_number: u8,
     #[serde(default)]
@@ -984,9 +963,7 @@ pub struct LocationConfig {
     #[serde(default)]
     pub shard_stripe_size: u32,
 
-    // This configuration only affects attached mode, but should be provided irrespective
-    // of the mode, as a secondary location might transition on startup if the response
-    // to the `/re-attach` control plane API requests it.
+    /// Pan-cluster tenant tunables, identical on every pageserver.
     pub tenant_conf: TenantConfig,
 }
 

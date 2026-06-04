@@ -8,7 +8,7 @@ use utils::generation::Generation;
 use utils::id::{NodeId, TimelineId};
 
 use crate::controller_api::NodeRegisterRequest;
-use crate::models::{LocationConfigMode, ShardImportStatus};
+use crate::models::ShardImportStatus;
 use crate::shard::{ShardStripeSize, TenantShardId};
 
 /// Upcall message sent by the pageserver to the configured `control_plane_api` on
@@ -34,9 +34,8 @@ pub struct ReAttachRequest {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ReAttachResponseTenant {
     pub id: TenantShardId,
-    /// Mandatory if LocationConfigMode is None or set to an Attached* mode
+    /// `Some(g)` → re-attach in generation `g`; `None` → not attached.
     pub r#gen: Option<u32>,
-    pub mode: LocationConfigMode,
     pub stripe_size: ShardStripeSize,
 }
 #[derive(Serialize, Deserialize)]

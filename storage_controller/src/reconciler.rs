@@ -5,9 +5,7 @@ use std::time::{Duration, Instant};
 
 use json_structural_diff::JsonDiff;
 use pageserver_api::controller_api::{AvailabilityZone, MigrationConfig, PlacementPolicy};
-use pageserver_api::models::{
-    LocationConfig, LocationConfigMode, LocationConfigSecondary, TenantConfig, TenantWaitLsnRequest,
-};
+use pageserver_api::models::{LocationConfig, TenantConfig, TenantWaitLsnRequest};
 use pageserver_api::shard::{ShardIdentity, TenantShardId};
 use pageserver_client::mgmt_api;
 use reqwest::StatusCode;
@@ -272,7 +270,7 @@ impl Reconciler {
         flush_ms: Option<Duration>,
         lazy: bool,
     ) -> Result<(), ReconcileError> {
-        if !node.is_available() && config.mode == LocationConfigMode::Detached {
+        if !node.is_available() && config.generation.is_none() {
             // [`crate::service::Service::node_activate_reconcile`] will update the observed state
             // when the node comes back online. At that point, the intent and observed states will
             // be mismatched and a background reconciliation will detach.
@@ -315,15 +313,12 @@ impl Reconciler {
         };
         tracing::info!("location_config({node}) complete: {:?}", config);
 
-        match config.mode {
-            LocationConfigMode::Detached => {
-                self.observed.locations.remove(&node.get_id());
-            }
-            _ => {
-                self.observed
-                    .locations
-                    .insert(node.get_id(), ObservedStateLocation { conf: Some(config) });
-            }
+        if config.generation.is_none() {
+            self.observed.locations.remove(&node.get_id());
+        } else {
+            self.observed
+                .locations
+                .insert(node.get_id(), ObservedStateLocation { conf: Some(config) });
         }
 
         Ok(())
@@ -353,42 +348,25 @@ impl Reconciler {
     }
 
     async fn maybe_live_migrate(&mut self) -> Result<(), ReconcileError> {
-        let destination = if let Some(node) = &self.intent.attached {
-            match self.observed.locations.get(&node.get_id()) {
-                Some(conf) => {
-                    // We will do a live migration only if the intended destination is not
-                    // currently in an attached state.
-                    match &conf.conf {
-                        Some(conf) if conf.mode == LocationConfigMode::Secondary => {
-                            // Fall through to do a live migration
-                            node
-                        }
-                        None | Some(_) => {
-                            // Attached or uncertain: don't do a live migration, proceed
-                            // with a general-case reconciliation
-                            tracing::info!("maybe_live_migrate: destination is None or attached");
-                            return Ok(());
-                        }
-                    }
-                }
-                None => {
-                    // Our destination is not attached: maybe live migrate if some other
-                    // node is currently attached.  Fall through.
-                    node
-                }
-            }
-        } else {
-            // No intent to be attached
+        let Some(destination) = self.intent.attached.as_ref() else {
             tracing::info!("maybe_live_migrate: no attached intent");
             return Ok(());
         };
 
+        if self.observed.locations.contains_key(&destination.get_id()) {
+            // The destination is already known to be attached (or in an
+            // uncertain state): let general reconciliation handle it.
+            tracing::info!("maybe_live_migrate: destination is None or attached");
+            return Ok(());
+        }
+
         let mut origin = None;
         for (node_id, state) in &self.observed.locations {
             if let Some(observed_conf) = &state.conf {
-                if observed_conf.mode == LocationConfigMode::AttachedSingle {
-                    // We will only attempt live migration if the origin is not offline: this
-                    // avoids trying to do it while reconciling after responding to an HA failover.
+                if observed_conf.generation.is_some() {
+                    // We will only attempt live migration if the origin is not offline:
+                    // this avoids trying to do it while reconciling after responding to
+                    // an HA failover.
                     if let Some(node) = self.get_node(node_id) {
                         if node.is_available() {
                             origin = Some(node.clone());
@@ -628,20 +606,16 @@ impl Reconciler {
         origin_ps: Node,
         dest_ps: Node,
     ) -> Result<(), ReconcileError> {
-        // `maybe_live_migrate` is responsibble for sanity of inputs
+        // `maybe_live_migrate` is responsible for sanity of inputs
         assert!(origin_ps.get_id() != dest_ps.get_id());
 
         fn build_location_config(
             shard: &ShardIdentity,
             config: &TenantConfig,
-            mode: LocationConfigMode,
             generation: Option<Generation>,
-            secondary_conf: Option<LocationConfigSecondary>,
         ) -> LocationConfig {
             LocationConfig {
-                mode,
-                generation: generation.map(|g| g.into().unwrap()),
-                secondary_conf,
+                generation: generation.and_then(|g| g.into()),
                 tenant_conf: config.clone(),
                 shard_number: shard.number.0,
                 shard_count: shard.count.literal(),
@@ -649,36 +623,15 @@ impl Reconciler {
             }
         }
 
-        tracing::info!("🔁 Switching origin node {origin_ps} to stale mode",);
-
-        // FIXME: it is incorrect to use self.generation here, we should use the generation
-        // from the ObservedState of the origin pageserver (it might be older than self.generation)
-        let stale_conf = build_location_config(
-            &self.shard,
-            &self.config,
-            LocationConfigMode::AttachedStale,
-            self.generation,
-            None,
-        );
-        self.location_config(&origin_ps, stale_conf, Some(Duration::from_secs(10)), false)
-            .await?;
+        // yb-mode live migration: pages live in YB and writes are
+        // generation-fenced server-side, so there's no multi-step
+        // layer-file handoff to coordinate. Bump the generation,
+        // attach the destination, notify compute, detach the origin.
 
         let baseline_lsns = Some(self.get_lsns(self.tenant_shard_id, &origin_ps).await?);
 
-        // If we are migrating to a destination that has a secondary location, warm it up first
-        if let Some(destination_conf) = self.observed.locations.get(&dest_ps.get_id()) {
-            if let Some(destination_conf) = &destination_conf.conf {
-                if destination_conf.mode == LocationConfigMode::Secondary {
-                    tracing::info!("🔁 Downloading latest layers to destination node {dest_ps}",);
-                    self.secondary_download(self.tenant_shard_id, &dest_ps)
-                        .await?;
-                }
-            }
-        }
-
         pausable_failpoint!("reconciler-live-migrate-pre-generation-inc");
 
-        // Increment generation before attaching to new pageserver
         self.generation = Some(
             self.persistence
                 .increment_generation(self.tenant_shard_id, dest_ps.get_id())
@@ -687,16 +640,9 @@ impl Reconciler {
 
         pausable_failpoint!("reconciler-live-migrate-post-generation-inc");
 
-        let dest_conf = build_location_config(
-            &self.shard,
-            &self.config,
-            LocationConfigMode::AttachedMulti,
-            self.generation,
-            None,
-        );
-
+        let dest_conf = build_location_config(&self.shard, &self.config, self.generation);
         tracing::info!("🔁 Attaching to pageserver {dest_ps}");
-        self.location_config(&dest_ps, dest_conf, None, false)
+        self.location_config(&dest_ps, dest_conf.clone(), None, false)
             .await?;
 
         pausable_failpoint!("reconciler-live-migrate-pre-await-lsn");
@@ -710,49 +656,26 @@ impl Reconciler {
         }
 
         tracing::info!("🔁 Notifying compute to use pageserver {dest_ps}");
-
-        // During a live migration it is unhelpful to proceed if we couldn't notify compute: if we detach
-        // the origin without notifying compute, we will render the tenant unavailable.
         self.compute_notify_blocking(&origin_ps).await?;
         pausable_failpoint!("reconciler-live-migrate-post-notify");
 
-        // Downgrade the origin to secondary.  If the tenant's policy is PlacementPolicy::Attached(0), then
-        // this location will be deleted in the general case reconciliation that runs after this.
-        let origin_secondary_conf = build_location_config(
-            &self.shard,
-            &self.config,
-            LocationConfigMode::Secondary,
-            None,
-            Some(LocationConfigSecondary { warm: true }),
-        );
-        self.location_config(&origin_ps, origin_secondary_conf.clone(), None, false)
+        // Detach the origin: `generation: None`.
+        let origin_detach_conf = build_location_config(&self.shard, &self.config, None);
+        self.location_config(&origin_ps, origin_detach_conf.clone(), None, false)
             .await?;
-        // TODO: we should also be setting the ObservedState on earlier API calls, in case we fail
-        // partway through.  In fact, all location conf API calls should be in a wrapper that sets
-        // the observed state to None, then runs, then sets it to what we wrote.
         self.observed.locations.insert(
             origin_ps.get_id(),
             ObservedStateLocation {
-                conf: Some(origin_secondary_conf),
+                conf: Some(origin_detach_conf),
             },
         );
 
         pausable_failpoint!("reconciler-live-migrate-post-detach");
 
-        tracing::info!("🔁 Switching to AttachedSingle mode on node {dest_ps}",);
-        let dest_final_conf = build_location_config(
-            &self.shard,
-            &self.config,
-            LocationConfigMode::AttachedSingle,
-            self.generation,
-            None,
-        );
-        self.location_config(&dest_ps, dest_final_conf.clone(), None, false)
-            .await?;
         self.observed.locations.insert(
             dest_ps.get_id(),
             ObservedStateLocation {
-                conf: Some(dest_final_conf),
+                conf: Some(dest_conf),
             },
         );
 
@@ -881,13 +804,10 @@ impl Reconciler {
                         Some(ObservedStateLocation {
                             conf: Some(observed),
                         }) => {
-                            let generations_match = observed.generation == wanted_conf.generation;
-
-                            // We may skip incrementing the generation if the location is already in the expected mode and
-                            // generation.  In principle it would also be safe to skip from certain other modes (e.g. AttachedStale),
-                            // but such states are handled inside `live_migrate`, and if we see that state here we're cleaning up
-                            // after a restart/crash, so fall back to the universally safe path of incrementing generation.
-                            !generations_match || (observed.mode != wanted_conf.mode)
+                            // Skip the generation bump only if the observed
+                            // location's generation already matches what we
+                            // want; otherwise bump.
+                            observed.generation != wanted_conf.generation
                         }
                     };
 
@@ -969,9 +889,7 @@ impl Reconciler {
             changes.push((
                 node.clone(),
                 LocationConfig {
-                    mode: LocationConfigMode::Detached,
                     generation: None,
-                    secondary_conf: None,
                     shard_number: self.shard.number.0,
                     shard_count: self.shard.count.literal(),
                     shard_stripe_size: self.shard.stripe_size.0,
@@ -1163,19 +1081,13 @@ impl Reconciler {
                 .await
             {
                 Some(Ok(Some(location_conf))) => {
-                    if matches!(
-                        location_conf.mode,
-                        LocationConfigMode::AttachedMulti
-                            | LocationConfigMode::AttachedSingle
-                            | LocationConfigMode::AttachedStale
-                    ) {
+                    if location_conf.generation.is_some() {
                         tracing::debug!(
                             "Still attached to {origin}, will wait & retry compute notification"
                         );
                     } else {
                         tracing::info!(
-                            "Giving up on compute notification because {origin} is in state {:?}",
-                            location_conf.mode
+                            "Giving up on compute notification because {origin} is no longer attached"
                         );
                         return Ok(());
                     }
@@ -1232,19 +1144,11 @@ pub(crate) fn attached_location_conf(
     generation: Generation,
     shard: &ShardIdentity,
     config: &TenantConfig,
-    policy: &PlacementPolicy,
-    secondary_count: usize,
+    _policy: &PlacementPolicy,
+    _secondary_count: usize,
 ) -> LocationConfig {
-    let has_secondaries = match policy {
-        PlacementPolicy::Detached | PlacementPolicy::Secondary => false,
-        PlacementPolicy::Attached(0) => secondary_count > 0,
-        PlacementPolicy::Attached(_) => true,
-    };
-
     LocationConfig {
-        mode: LocationConfigMode::AttachedSingle,
         generation: generation.into(),
-        secondary_conf: None,
         shard_number: shard.number.0,
         shard_count: shard.count.literal(),
         shard_stripe_size: shard.stripe_size.0,
@@ -1252,14 +1156,15 @@ pub(crate) fn attached_location_conf(
     }
 }
 
+/// Build a detach-shaped `LocationConfig`. Secondary mode is gone in
+/// yb-mode; this kept its old name so storage_controller callsites
+/// don't need to learn a new vocabulary.
 pub(crate) fn secondary_location_conf(
     shard: &ShardIdentity,
     config: &TenantConfig,
 ) -> LocationConfig {
     LocationConfig {
-        mode: LocationConfigMode::Secondary,
         generation: None,
-        secondary_conf: Some(LocationConfigSecondary { warm: true }),
         shard_number: shard.number.0,
         shard_count: shard.count.literal(),
         shard_stripe_size: shard.stripe_size.0,
