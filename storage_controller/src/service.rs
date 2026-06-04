@@ -2717,6 +2717,16 @@ impl Service {
             Err(e) => return Err(ApiError::InternalServerError(anyhow::anyhow!(e))),
         };
 
+        // Task 17.c: mirror the tenant's pan-cluster `TenantConfig`
+        // into the YB-side `pageserver.tenant_config` table so the
+        // attaching pageserver picks it up without `tenant_conf`
+        // having to ride along on the location_config wire. Upsert
+        // is idempotent under the retry above.
+        self.persistence
+            .save_tenant_config(tenant_id, &create_req.config)
+            .await
+            .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!(e)))?;
+
         let mut schedule_context = ScheduleContext::default();
         let mut schedule_error = None;
         let mut response_shards = Vec::new();
@@ -3175,6 +3185,17 @@ impl Service {
                         )
                         .await?;
                 }
+                // Task 17.c: mirror to YB-side `pageserver.tenant_config`.
+                // Every shard in `updates` has the same tenant_config; one
+                // save_tenant_config per unique tenant_id covers all of them.
+                if let Some(first) = updates.first() {
+                    self.persistence
+                        .save_tenant_config(
+                            first.tenant_shard_id.tenant_id,
+                            &first.tenant_config,
+                        )
+                        .await?;
+                }
 
                 // Apply updates in-memory
                 let mut waiters = Vec::new();
@@ -3328,6 +3349,13 @@ impl Service {
                 None,
                 None,
             )
+            .await?;
+
+        // Task 17.c: mirror to the YB-side `pageserver.tenant_config`
+        // table so attaching pageservers see the same config without
+        // it being threaded through the location_config wire.
+        self.persistence
+            .save_tenant_config(tenant_id, &config)
             .await?;
 
         let waiters = {

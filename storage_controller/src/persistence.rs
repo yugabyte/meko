@@ -127,6 +127,7 @@ pub(crate) enum DatabaseOperation {
     UpdateTenantShard,
     DeleteTenant,
     UpdateTenantConfig,
+    SaveTenantConfigYb,
     UpdateMetadataHealth,
     ListMetadataHealth,
     ListMetadataHealthUnhealthy,
@@ -949,6 +950,44 @@ impl Persistence {
         .await?;
 
         Ok(())
+    }
+
+    /// Upsert the tenant's `TenantConfig` into the YB-side
+    /// `pageserver.tenant_config` table. This is the per-tenant
+    /// authoritative copy that every attaching pageserver re-reads
+    /// from on PUT location_config + at startup (task 17.c).
+    ///
+    /// Uses `diesel::sql_query` rather than the storage_controller's
+    /// schema-scoped query DSL because the target table lives in the
+    /// `pageserver` schema, not `storage_controller`. The connection
+    /// pool's search_path is set to `storage_controller`; we
+    /// schema-qualify the table explicitly.
+    pub(crate) async fn save_tenant_config(
+        &self,
+        tenant_id: TenantId,
+        config: &TenantConfig,
+    ) -> DatabaseResult<()> {
+        let tenant_id_str = tenant_id.to_string();
+        let config_json = serde_json::to_string(config)
+            .expect("TenantConfig is always JSON-serialisable");
+        self.with_measured_conn(DatabaseOperation::SaveTenantConfigYb, move |conn| {
+            let tenant_id_str = tenant_id_str.clone();
+            let config_json = config_json.clone();
+            Box::pin(async move {
+                diesel::sql_query(
+                    "INSERT INTO pageserver.tenant_config (tenant_id, config) \
+                     VALUES ($1, $2::jsonb) \
+                     ON CONFLICT (tenant_id) DO UPDATE \
+                       SET config = EXCLUDED.config, updated_at = NOW()",
+                )
+                .bind::<diesel::sql_types::Text, _>(tenant_id_str)
+                .bind::<diesel::sql_types::Text, _>(config_json)
+                .execute(conn)
+                .await?;
+                Ok(())
+            })
+        })
+        .await
     }
 
     /// Note that passing None for a shard clears the preferred AZ (rather than leaving it unmodified)
