@@ -2188,7 +2188,6 @@ pub(crate) mod tests {
             ObservedStateLocation {
                 conf: Some(LocationConfig {
                     generation: Some(2),
-                    tenant_conf: TenantConfig::default(),
                 }),
             },
         );
@@ -2198,7 +2197,6 @@ pub(crate) mod tests {
             ObservedStateLocation {
                 conf: Some(LocationConfig {
                     generation: Some(1),
-                    tenant_conf: TenantConfig::default(),
                 }),
             },
         );

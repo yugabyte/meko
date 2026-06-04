@@ -609,14 +609,9 @@ impl Reconciler {
         // `maybe_live_migrate` is responsible for sanity of inputs
         assert!(origin_ps.get_id() != dest_ps.get_id());
 
-        fn build_location_config(
-            shard: &ShardIdentity,
-            config: &TenantConfig,
-            generation: Option<Generation>,
-        ) -> LocationConfig {
+        fn build_location_config(generation: Option<Generation>) -> LocationConfig {
             LocationConfig {
                 generation: generation.and_then(|g| g.into()),
-                tenant_conf: config.clone(),
             }
         }
 
@@ -637,7 +632,7 @@ impl Reconciler {
 
         pausable_failpoint!("reconciler-live-migrate-post-generation-inc");
 
-        let dest_conf = build_location_config(&self.shard, &self.config, self.generation);
+        let dest_conf = build_location_config(self.generation);
         tracing::info!("🔁 Attaching to pageserver {dest_ps}");
         self.location_config(&dest_ps, dest_conf.clone(), None, false)
             .await?;
@@ -657,7 +652,7 @@ impl Reconciler {
         pausable_failpoint!("reconciler-live-migrate-post-notify");
 
         // Detach the origin: `generation: None`.
-        let origin_detach_conf = build_location_config(&self.shard, &self.config, None);
+        let origin_detach_conf = build_location_config(None);
         self.location_config(&origin_ps, origin_detach_conf.clone(), None, false)
             .await?;
         self.observed.locations.insert(
@@ -885,10 +880,7 @@ impl Reconciler {
         for node in &self.detach {
             changes.push((
                 node.clone(),
-                LocationConfig {
-                    generation: None,
-                    tenant_conf: self.config.clone(),
-                },
+                LocationConfig { generation: None },
             ));
         }
 
@@ -1136,14 +1128,13 @@ impl Reconciler {
 
 pub(crate) fn attached_location_conf(
     generation: Generation,
-    shard: &ShardIdentity,
-    config: &TenantConfig,
+    _shard: &ShardIdentity,
+    _config: &TenantConfig,
     _policy: &PlacementPolicy,
     _secondary_count: usize,
 ) -> LocationConfig {
     LocationConfig {
         generation: generation.into(),
-        tenant_conf: config.clone(),
     }
 }
 
@@ -1151,11 +1142,8 @@ pub(crate) fn attached_location_conf(
 /// yb-mode; this kept its old name so storage_controller callsites
 /// don't need to learn a new vocabulary.
 pub(crate) fn secondary_location_conf(
-    shard: &ShardIdentity,
-    config: &TenantConfig,
+    _shard: &ShardIdentity,
+    _config: &TenantConfig,
 ) -> LocationConfig {
-    LocationConfig {
-        generation: None,
-        tenant_conf: config.clone(),
-    }
+    LocationConfig { generation: None }
 }

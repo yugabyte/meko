@@ -1220,7 +1220,6 @@ impl Service {
                     tenant_shard_id,
                     LocationConfig {
                         generation: None,
-                        tenant_conf: models::TenantConfig::default(),
                     },
                     None,
                     false,
@@ -2323,7 +2322,6 @@ impl Service {
                     |client| async move {
                         let config = LocationConfig {
                             generation: None,
-                            tenant_conf: models::TenantConfig::default(),
                         };
                         client
                             .location_config(tenant_shard_id, config, None, false)
@@ -2949,7 +2947,11 @@ impl Service {
             updates.push(ShardUpdate {
                 tenant_shard_id: *shard_id,
                 placement_policy: placement_policy.clone(),
-                tenant_config: req.config.tenant_conf.clone(),
+                // Task 17.c: location_config no longer carries
+                // `tenant_conf` on the wire. Preserve the existing
+                // in-memory copy; operators change tenant_conf via
+                // the dedicated `tenant_config_set` / patch endpoints.
+                tenant_config: shard.config.clone(),
                 generation: set_generation,
                 scheduling_policy,
             });
@@ -2972,7 +2974,9 @@ impl Service {
                         stripe_size: DEFAULT_STRIPE_SIZE,
                     },
                     placement_policy: Some(placement_policy),
-                    config: req.config.tenant_conf,
+                    // Default config; operators set the real one via
+                    // `tenant_config_set` after the create.
+                    config: TenantConfig::default(),
                 },
             )
         } else {
@@ -5847,7 +5851,6 @@ impl Service {
                     |client| async move {
                         let config = LocationConfig {
                             generation: None,
-                            tenant_conf: TenantConfig::default(),
                         };
 
                         client.location_config(child_id, config, None, false).await

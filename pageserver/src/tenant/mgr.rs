@@ -595,17 +595,17 @@ pub async fn init_tenant_mgr(
             Ok(None) => {
                 tracing::info!(
                     tenant_id = %tenant_shard_id.tenant_id,
-                    "no pageserver.tenant_config row, using on-disk fallback"
+                    "no pageserver.tenant_config row, using default tenant_conf"
                 );
-                location_conf.tenant_conf
+                pageserver_api::models::TenantConfig::default()
             }
             Err(e) => {
                 tracing::warn!(
                     tenant_id = %tenant_shard_id.tenant_id,
                     error = %e,
-                    "failed to load tenant_config from YB, using on-disk fallback"
+                    "failed to load tenant_config from YB, using default tenant_conf"
                 );
-                location_conf.tenant_conf
+                pageserver_api::models::TenantConfig::default()
             }
         };
         let slot = TenantSlot::Attached(
@@ -727,38 +727,40 @@ impl TenantManager {
     pub(crate) async fn upsert_location(
         &self,
         tenant_shard_id: TenantShardId,
-        mut new_location_config: LocationConf,
+        new_location_config: LocationConf,
         flush: Option<Duration>,
         mut spawn_mode: SpawnMode,
         ctx: &RequestContext,
     ) -> Result<Option<Arc<TenantShard>>, UpsertLocationError> {
         debug_assert_current_span_has_tenant_id();
 
-        // Task 17.c: source of truth for `tenant_conf` is the YB-side
-        // `pageserver.tenant_config` table. storage_controller writes
-        // it before sending us this PUT, so a present row reflects
-        // the operator's latest intent. Fall back to the request
-        // body for races where the YB write hasn't propagated yet
+        // Task 17.c: `LocationConfig` no longer carries `tenant_conf`
+        // on the wire. Source of truth for the tenant's `TenantConfig`
+        // is `pageserver.tenant_config` in YB; storage_controller
+        // writes the row before sending us this PUT. Fall back to
+        // the default when the row hasn't propagated yet
         // (e.g. first attach right after tenant_create).
-        match self
+        let tenant_conf = match self
             .resources
             .fpu_page_store
             .load_tenant_config(tenant_shard_id.tenant_id)
             .await
         {
-            Ok(Some(yb_conf)) => new_location_config.tenant_conf = yb_conf,
+            Ok(Some(yb_conf)) => yb_conf,
             Ok(None) => {
                 tracing::info!(
-                    "no pageserver.tenant_config row yet, using request body's tenant_conf"
+                    "no pageserver.tenant_config row yet, using default tenant_conf"
                 );
+                pageserver_api::models::TenantConfig::default()
             }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "failed to load tenant_config from YB, using request body's tenant_conf"
+                    "failed to load tenant_config from YB, using default tenant_conf"
                 );
+                pageserver_api::models::TenantConfig::default()
             }
-        }
+        };
 
         info!("configuring tenant location to state {new_location_config:?}");
 
@@ -784,6 +786,7 @@ impl TenantManager {
                                 AttachedTenantConf::try_from(
                                     self.conf,
                                     new_location_config.clone(),
+                                    tenant_conf.clone(),
                                 )
                                 .map_err(UpsertLocationError::BadRequest)?,
                             );
@@ -917,8 +920,9 @@ impl TenantManager {
             // Testing hack: if we are configured with no control plane, then drop the generation
             // from upserts.  This enables creating generation-less tenants even though neon_local
             // always uses generations when calling the location conf API.
-            let attached_conf = AttachedTenantConf::try_from(self.conf, new_location_config)
-                .map_err(UpsertLocationError::BadRequest)?;
+            let attached_conf =
+                AttachedTenantConf::try_from(self.conf, new_location_config, tenant_conf.clone())
+                    .map_err(UpsertLocationError::BadRequest)?;
 
             let tenant = tenant_spawn(
                 self.conf,
@@ -1112,12 +1116,21 @@ impl TenantManager {
         }
 
         let shard_identity = config.shard;
+        // Task 17.c: tenant_conf source of truth is YB.
+        let tenant_conf = self
+            .resources
+            .fpu_page_store
+            .load_tenant_config(tenant_shard_id.tenant_id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let tenant = tenant_spawn(
             self.conf,
             tenant_shard_id,
             &tenant_path,
             self.resources.clone(),
-            AttachedTenantConf::try_from(self.conf, config)?,
+            AttachedTenantConf::try_from(self.conf, config, tenant_conf)?,
             shard_identity,
             None,
             SpawnMode::Eager,

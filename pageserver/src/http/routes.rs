@@ -1437,7 +1437,6 @@ async fn update_tenant_config_handler(
     // API to use is the location_config/ endpoint, which lets the caller provide
     // the full LocationConf.
     let location_conf = LocationConf::attached(
-        new_tenant_conf.clone(),
         tenant.get_generation(),
         ShardParameters::from(tenant.get_shard_identity()),
     );
@@ -1484,8 +1483,8 @@ async fn patch_tenant_config_handler(
     // This is a legacy API that only operates on attached tenants: the preferred
     // API to use is the location_config/ endpoint, which lets the caller provide
     // the full LocationConf.
+    let _ = updated;
     let location_conf = LocationConf::attached(
-        updated,
         tenant.get_generation(),
         ShardParameters::from(tenant.get_shard_identity()),
     );

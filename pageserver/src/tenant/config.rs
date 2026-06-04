@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 use utils::critical;
 use utils::generation::Generation;
 
-/// Per-tenant, per-pageserver attachment record. All pageservers use
-/// the same `tenant_conf`; the generation is per-attachment.
+/// Per-tenant, per-pageserver attachment record, serialised into
+/// the local `<workdir>/tenants/<id>/config-v1` toml. The pan-cluster
+/// `TenantConfig` is no longer stored here — task 17.c moved it to
+/// the YB-side `pageserver.tenant_config` table.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LocationConf {
     /// storage_controller-assigned generation, used to fence YB writes
@@ -24,11 +26,6 @@ pub(crate) struct LocationConf {
     /// the explicit `ShardIdentity` lets us compute key→shard mappings
     /// and agree with storage_controller on the intended stripe size.
     pub(crate) shard: ShardIdentity,
-
-    /// Pan-cluster tenant tunables; identical on every pageserver
-    /// that attaches the tenant. Will eventually move to YB
-    /// (task 17.c).
-    pub(crate) tenant_conf: pageserver_api::models::TenantConfig,
 }
 
 impl std::fmt::Debug for LocationConf {
@@ -41,14 +38,12 @@ impl LocationConf {
     /// Construct an attachment record. Equivalent to the old
     /// `attached_single` — there is no other attachment mode in yb-mode.
     pub(crate) fn attached(
-        tenant_conf: pageserver_api::models::TenantConfig,
         generation: Generation,
         shard_params: models::ShardParameters,
     ) -> Self {
         Self {
             generation,
             shard: ShardIdentity::from_params(ShardNumber(0), shard_params),
-            tenant_conf,
         }
     }
 
@@ -85,7 +80,6 @@ impl LocationConf {
         Ok(Self {
             generation,
             shard: ShardIdentity::unsharded(),
-            tenant_conf: conf.tenant_conf.clone(),
         })
     }
 }
@@ -97,7 +91,6 @@ impl Default for LocationConf {
     fn default() -> Self {
         Self {
             generation: Generation::none(),
-            tenant_conf: pageserver_api::models::TenantConfig::default(),
             shard: ShardIdentity::unsharded(),
         }
     }

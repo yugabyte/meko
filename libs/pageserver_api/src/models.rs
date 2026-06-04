@@ -948,14 +948,16 @@ mod throttle_config_tests {
 /// Wire form of [`crate::tenant::LocationConf`]. yb-mode has no
 /// multi-mode attach state: `generation: Some(g)` requests attach in
 /// generation `g`; `generation: None` requests detach.
+///
+/// `tenant_conf` is intentionally *not* on the wire — the
+/// authoritative copy lives in `pageserver.tenant_config`
+/// (task 17.c). storage_controller writes the row before sending
+/// this PUT; the pageserver re-reads from YB on receipt.
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct LocationConfig {
     /// `Some(g)` → attach in this generation; `None` → detach.
     #[serde(default)]
     pub generation: Option<u32>,
-
-    /// Pan-cluster tenant tunables, identical on every pageserver.
-    pub tenant_conf: TenantConfig,
 }
 
 #[derive(Serialize, Deserialize)]

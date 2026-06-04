@@ -183,8 +183,9 @@ impl AttachedTenantConf {
     fn try_from(
         conf: &'static PageServerConf,
         location_conf: LocationConf,
+        tenant_conf: pageserver_api::models::TenantConfig,
     ) -> anyhow::Result<Self> {
-        Ok(Self::new(conf, location_conf.tenant_conf, location_conf.generation))
+        Ok(Self::new(conf, tenant_conf, location_conf.generation))
     }
 
     fn is_gc_blocked_by_lsn_lease_deadline(&self) -> bool {
@@ -2653,10 +2654,8 @@ impl TenantShard {
     /// For API access: generate a `LocationConfig` equivalent to the one
     /// that would be used to create this attachment. Not for hot paths.
     pub(crate) fn get_location_conf(&self) -> models::LocationConfig {
-        let attached_tenant_conf = self.tenant_conf.load();
         models::LocationConfig {
             generation: self.generation.into(),
-            tenant_conf: attached_tenant_conf.tenant_conf.clone(),
         }
     }
 
