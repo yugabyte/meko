@@ -798,8 +798,26 @@ fn build_pg_config(
     application_name: &str,
 ) -> Result<tokio_postgres::Config> {
     let mut pg_config = tokio_postgres::Config::new();
+    // YbConnConfig.host accepts a comma-separated list of YB tservers
+    // (e.g. "10.0.0.1,10.0.0.2,10.0.0.3"). Add each as its own host on
+    // pg_config — tokio_postgres tries them in order on connect (libpq
+    // failover semantics). Trailing/leading whitespace is tolerated so
+    // operators can write `"a, b, c"` if they prefer.
+    let hosts: Vec<&str> = cfg
+        .host
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    anyhow::ensure!(
+        !hosts.is_empty(),
+        "YbConnConfig.host must contain at least one host (got {:?})",
+        cfg.host
+    );
+    for h in &hosts {
+        pg_config.host(h);
+    }
     pg_config
-        .host(&cfg.host)
         .port(cfg.port)
         .user(&cfg.user)
         .dbname(&cfg.dbname)
