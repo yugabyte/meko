@@ -32,10 +32,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    metadata_health (tenant_id, shard_number, shard_count) {
+    metadata_health (tenant_id) {
         tenant_id -> Varchar,
-        shard_number -> Int4,
-        shard_count -> Int4,
         healthy -> Bool,
         last_scrubbed_at -> Timestamptz,
     }
@@ -82,15 +80,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    tenant_shards (tenant_id, shard_number, shard_count) {
+    tenant_shards (tenant_id) {
         tenant_id -> Varchar,
-        shard_number -> Int4,
-        shard_count -> Int4,
-        shard_stripe_size -> Int4,
         generation -> Nullable<Int4>,
         generation_pageserver -> Nullable<Int8>,
         placement_policy -> Varchar,
-        splitting -> Int2,
         config -> Text,
         scheduling_policy -> Varchar,
         preferred_az_id -> Nullable<Varchar>,

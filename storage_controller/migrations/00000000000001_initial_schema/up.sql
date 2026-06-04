@@ -13,25 +13,21 @@ CREATE SCHEMA IF NOT EXISTS pageserver;
 -- storage_controller.* — controller's own tables.
 -- =====================================================================
 
--- Pageserver shard placement and configuration.
+-- Per-tenant placement record. yb-mode doesn't shard tenants
+-- across pageservers (YB tablet-shards the keyspace itself), so
+-- this is keyed only by `tenant_id`.
 CREATE TABLE storage_controller.tenant_shards (
     tenant_id              VARCHAR NOT NULL,
-    shard_number           INTEGER NOT NULL,
-    shard_count            INTEGER NOT NULL,
-    shard_stripe_size      INTEGER NOT NULL,
-    -- NULL once the shard has been detached / never attached.
+    -- NULL once the tenant has been detached / never attached.
     generation             INTEGER,
     generation_pageserver  BIGINT,
     placement_policy       VARCHAR NOT NULL,
-    splitting              SMALLINT NOT NULL,
     -- JSON-encoded TenantConfig; opaque to the database.
     config                 TEXT NOT NULL,
     scheduling_policy      VARCHAR NOT NULL DEFAULT '"Active"',
     preferred_az_id        VARCHAR,
-    PRIMARY KEY (tenant_id, shard_number, shard_count)
+    PRIMARY KEY (tenant_id)
 );
-
-CREATE INDEX tenant_shards_tenant_id ON storage_controller.tenant_shards (tenant_id);
 
 -- Pageserver registry.
 CREATE TABLE storage_controller.nodes (
@@ -63,17 +59,15 @@ CREATE TABLE storage_controller.safekeepers (
     PRIMARY KEY (id)
 );
 
--- Per-shard metadata-scrubber health summary; FK cascade so a shard
--- removal cleans up its row.
+-- Per-tenant metadata-scrubber health summary; FK cascade so a
+-- tenant removal cleans up its row.
 CREATE TABLE storage_controller.metadata_health (
     tenant_id        VARCHAR NOT NULL,
-    shard_number     INTEGER NOT NULL,
-    shard_count      INTEGER NOT NULL,
     healthy          BOOLEAN NOT NULL DEFAULT TRUE,
     last_scrubbed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (tenant_id, shard_number, shard_count),
-    FOREIGN KEY (tenant_id, shard_number, shard_count)
-        REFERENCES storage_controller.tenant_shards (tenant_id, shard_number, shard_count)
+    PRIMARY KEY (tenant_id),
+    FOREIGN KEY (tenant_id)
+        REFERENCES storage_controller.tenant_shards (tenant_id)
         ON DELETE CASCADE
 );
 

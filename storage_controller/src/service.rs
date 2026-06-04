@@ -1953,14 +1953,10 @@ impl Service {
             let config = attach_req.config.clone().unwrap_or_default();
             let tsp = TenantShardPersistence {
                 tenant_id: attach_req.tenant_shard_id.tenant_id.to_string(),
-                shard_number: attach_req.tenant_shard_id.shard_number.0 as i32,
-                shard_count: attach_req.tenant_shard_id.shard_count.literal() as i32,
-                shard_stripe_size: 0,
                 generation: attach_req.generation_override.or(Some(0)),
                 generation_pageserver: None,
                 placement_policy: serde_json::to_string(&PlacementPolicy::Attached(0)).unwrap(),
                 config: serde_json::to_string(&config).unwrap(),
-                splitting: SplitState::default(),
                 scheduling_policy: serde_json::to_string(&ShardSchedulingPolicy::default())
                     .unwrap(),
                 preferred_az_id: None,
@@ -2578,16 +2574,12 @@ impl Service {
             .iter()
             .map(|tenant_shard_id| TenantShardPersistence {
                 tenant_id: tenant_shard_id.tenant_id.to_string(),
-                shard_number: tenant_shard_id.shard_number.0 as i32,
-                shard_count: tenant_shard_id.shard_count.literal() as i32,
-                shard_stripe_size: create_req.shard_parameters.stripe_size.0 as i32,
                 generation: initial_generation.map(|g| g.into().unwrap() as i32),
                 // The pageserver is not known until scheduling happens: we will set this column when
                 // incrementing the generation the first time we attach to a pageserver.
                 generation_pageserver: None,
                 placement_policy: serde_json::to_string(&placement_policy).unwrap(),
                 config: serde_json::to_string(&create_req.config).unwrap(),
-                splitting: SplitState::default(),
                 scheduling_policy: serde_json::to_string(&ShardSchedulingPolicy::default())
                     .unwrap(),
                 preferred_az_id: preferred_az_id.as_ref().map(|az| az.to_string()),
@@ -6145,10 +6137,9 @@ impl Service {
         };
 
         let mut persistent_shards = self.persistence.load_active_tenant_shards().await?;
-        persistent_shards
-            .sort_by_key(|tsp| (tsp.tenant_id.clone(), tsp.shard_number, tsp.shard_count));
+        persistent_shards.sort_by_key(|tsp| tsp.tenant_id.clone());
 
-        expect_shards.sort_by_key(|tsp| (tsp.tenant_id.clone(), tsp.shard_number, tsp.shard_count));
+        expect_shards.sort_by_key(|tsp| tsp.tenant_id.clone());
 
         // Because JSON contents of persistent tenants might disagree with the fields in current `TenantConfig`
         // definition, we will do an encode/decode cycle to ensure any legacy fields are dropped and any new

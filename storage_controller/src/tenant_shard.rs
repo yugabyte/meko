@@ -1907,7 +1907,7 @@ impl TenantShard {
             observed: ObservedState::new(),
             config: serde_json::from_str(&tsp.config).unwrap(),
             reconciler: None,
-            splitting: tsp.splitting,
+            splitting: SplitState::default(),
             // Filled in during [`Service::startup_reconcile`]
             importing: TimelineImportState::Idle,
             waiter: Arc::new(SeqWait::new(Sequence::initial())),
@@ -1924,14 +1924,10 @@ impl TenantShard {
     pub(crate) fn to_persistent(&self) -> TenantShardPersistence {
         TenantShardPersistence {
             tenant_id: self.tenant_shard_id.tenant_id.to_string(),
-            shard_number: self.tenant_shard_id.shard_number.0 as i32,
-            shard_count: self.tenant_shard_id.shard_count.literal() as i32,
-            shard_stripe_size: self.shard.stripe_size.0 as i32,
             generation: self.generation.map(|g| g.into().unwrap_or(0) as i32),
             generation_pageserver: self.intent.get_attached().map(|n| n.0 as i64),
             placement_policy: serde_json::to_string(&self.policy).unwrap(),
             config: serde_json::to_string(&self.config).unwrap(),
-            splitting: SplitState::default(),
             scheduling_policy: serde_json::to_string(&self.scheduling_policy).unwrap(),
             preferred_az_id: self.intent.preferred_az_id.as_ref().map(|az| az.0.clone()),
         }

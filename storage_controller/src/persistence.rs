@@ -589,8 +589,6 @@ impl Persistence {
             .iter()
             .map(|t| MetadataHealthPersistence {
                 tenant_id: t.tenant_id.clone(),
-                shard_number: t.shard_number,
-                shard_count: t.shard_count,
                 healthy: true,
                 last_scrubbed_at: now,
             })
@@ -704,12 +702,10 @@ impl Persistence {
 
         let mut result = HashMap::new();
         for tsp in updated {
-            let tenant_shard_id = TenantShardId {
-                tenant_id: TenantId::from_str(tsp.tenant_id.as_str())
+            let tenant_shard_id = TenantShardId::unsharded(
+                TenantId::from_str(tsp.tenant_id.as_str())
                     .map_err(|e| DatabaseError::Logical(format!("Malformed tenant id: {e}")))?,
-                shard_number: ShardNumber(tsp.shard_number as u8),
-                shard_count: ShardCount::new(tsp.shard_count as u8),
-            };
+            );
 
             let Some(g) = tsp.generation else {
                 // If the generation_pageserver column was non-NULL, then the generation column should also be non-NULL:
@@ -738,8 +734,6 @@ impl Persistence {
                 Box::pin(async move {
                     let updated = diesel::update(tenant_shards)
                         .filter(tenant_id.eq(tenant_shard_id.tenant_id.to_string()))
-                        .filter(shard_number.eq(tenant_shard_id.shard_number.0 as i32))
-                        .filter(shard_count.eq(tenant_shard_id.shard_count.literal() as i32))
                         .set((
                             generation.eq(generation + 1),
                             generation_pageserver.eq(node_id.0 as i64),
@@ -786,7 +780,6 @@ impl Persistence {
                     let result = tenant_shards
                         .filter(tenant_id.eq(filter_tenant_id.to_string()))
                         .select(TenantShardPersistence::as_select())
-                        .order(shard_number)
                         .load(conn)
                         .await?;
                     Ok(result)
@@ -893,8 +886,6 @@ impl Persistence {
                 let query = match tenant {
                     TenantFilter::Shard(tenant_shard_id) => diesel::update(tenant_shards)
                         .filter(tenant_id.eq(tenant_shard_id.tenant_id.to_string()))
-                        .filter(shard_number.eq(tenant_shard_id.shard_number.0 as i32))
-                        .filter(shard_count.eq(tenant_shard_id.shard_count.literal() as i32))
                         .into_boxed(),
                     TenantFilter::Tenant(input_tenant_id) => diesel::update(tenant_shards)
                         .filter(tenant_id.eq(input_tenant_id.to_string()))
@@ -994,8 +985,6 @@ impl Persistence {
                 for (tenant_shard_id, preferred_az) in preferred_azs.iter() {
                     let updated = diesel::update(tenant_shards)
                         .filter(tenant_id.eq(tenant_shard_id.tenant_id.to_string()))
-                        .filter(shard_number.eq(tenant_shard_id.shard_number.0 as i32))
-                        .filter(shard_count.eq(tenant_shard_id.shard_count.literal() as i32))
                         .set(preferred_az_id.eq(preferred_az.as_ref().map(|az| az.0.clone())))
                         .execute(conn)
                         .await?;
@@ -1017,8 +1006,6 @@ impl Persistence {
             Box::pin(async move {
                 let updated = diesel::update(tenant_shards)
                     .filter(tenant_id.eq(tenant_shard_id.tenant_id.to_string()))
-                    .filter(shard_number.eq(tenant_shard_id.shard_number.0 as i32))
-                    .filter(shard_count.eq(tenant_shard_id.shard_count.literal() as i32))
                     .set((
                         generation_pageserver.eq(Option::<i64>::None),
                         placement_policy
@@ -1059,7 +1046,7 @@ impl Persistence {
             Box::pin(async move {
                 diesel::insert_into(metadata_health)
                     .values(healthy_records)
-                    .on_conflict((tenant_id, shard_number, shard_count))
+                    .on_conflict(tenant_id)
                     .do_update()
                     .set((healthy.eq(true), last_scrubbed_at.eq(now)))
                     .execute(conn)
@@ -1067,7 +1054,7 @@ impl Persistence {
 
                 diesel::insert_into(metadata_health)
                     .values(unhealthy_records)
-                    .on_conflict((tenant_id, shard_number, shard_count))
+                    .on_conflict(tenant_id)
                     .do_update()
                     .set((healthy.eq(false), last_scrubbed_at.eq(now)))
                     .execute(conn)
@@ -2227,12 +2214,6 @@ fn log_postgres_connstr_info(config_str: &str) -> anyhow::Result<()> {
 pub(crate) struct TenantShardPersistence {
     #[serde(default)]
     pub(crate) tenant_id: String,
-    #[serde(default)]
-    pub(crate) shard_number: i32,
-    #[serde(default)]
-    pub(crate) shard_count: i32,
-    #[serde(default)]
-    pub(crate) shard_stripe_size: i32,
 
     // Latest generation number: next time we attach, increment this
     // and use the incremented number when attaching.
@@ -2248,8 +2229,6 @@ pub(crate) struct TenantShardPersistence {
     #[serde(default)]
     pub(crate) placement_policy: String,
     #[serde(default)]
-    pub(crate) splitting: SplitState,
-    #[serde(default)]
     pub(crate) config: String,
     #[serde(default)]
     pub(crate) scheduling_policy: String,
@@ -2261,50 +2240,14 @@ pub(crate) struct TenantShardPersistence {
 }
 
 impl TenantShardPersistence {
-    fn get_shard_count(&self) -> Result<ShardCount, ShardConfigError> {
-        self.shard_count
-            .try_into()
-            .map(ShardCount)
-            .map_err(|_| ShardConfigError::InvalidCount)
-    }
-
-    fn get_shard_number(&self) -> Result<ShardNumber, ShardConfigError> {
-        self.shard_number
-            .try_into()
-            .map(ShardNumber)
-            .map_err(|_| ShardConfigError::InvalidNumber)
-    }
-
-    fn get_stripe_size(&self) -> Result<ShardStripeSize, ShardConfigError> {
-        self.shard_stripe_size
-            .try_into()
-            .map(ShardStripeSize)
-            .map_err(|_| ShardConfigError::InvalidStripeSize)
-    }
-
     pub(crate) fn get_shard_identity(&self) -> Result<ShardIdentity, ShardConfigError> {
-        if self.shard_count == 0 {
-            // NB: carry over the stripe size from the persisted record, to avoid consistency check
-            // failures if the persisted value differs from the default stripe size. The stripe size
-            // doesn't really matter for unsharded tenants anyway.
-            Ok(ShardIdentity::unsharded_with_stripe_size(
-                self.get_stripe_size()?,
-            ))
-        } else {
-            Ok(ShardIdentity::new(
-                self.get_shard_number()?,
-                self.get_shard_count()?,
-                self.get_stripe_size()?,
-            )?)
-        }
+        Ok(ShardIdentity::unsharded())
     }
 
     pub(crate) fn get_tenant_shard_id(&self) -> anyhow::Result<TenantShardId> {
-        Ok(TenantShardId {
-            tenant_id: TenantId::from_str(self.tenant_id.as_str())?,
-            shard_number: self.get_shard_number()?,
-            shard_count: self.get_shard_count()?,
-        })
+        Ok(TenantShardId::unsharded(TenantId::from_str(
+            self.tenant_id.as_str(),
+        )?))
     }
 }
 
@@ -2331,10 +2274,6 @@ pub(crate) struct NodePersistence {
 pub(crate) struct MetadataHealthPersistence {
     #[serde(default)]
     pub(crate) tenant_id: String,
-    #[serde(default)]
-    pub(crate) shard_number: i32,
-    #[serde(default)]
-    pub(crate) shard_count: i32,
 
     pub(crate) healthy: bool,
     pub(crate) last_scrubbed_at: chrono::DateTime<chrono::Utc>,
@@ -2346,14 +2285,8 @@ impl MetadataHealthPersistence {
         healthy: bool,
         last_scrubbed_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
-        let tenant_id = tenant_shard_id.tenant_id.to_string();
-        let shard_number = tenant_shard_id.shard_number.0 as i32;
-        let shard_count = tenant_shard_id.shard_count.literal() as i32;
-
         MetadataHealthPersistence {
-            tenant_id,
-            shard_number,
-            shard_count,
+            tenant_id: tenant_shard_id.tenant_id.to_string(),
             healthy,
             last_scrubbed_at,
         }
@@ -2361,11 +2294,9 @@ impl MetadataHealthPersistence {
 
     #[allow(dead_code)]
     pub(crate) fn get_tenant_shard_id(&self) -> Result<TenantShardId, hex::FromHexError> {
-        Ok(TenantShardId {
-            tenant_id: TenantId::from_str(self.tenant_id.as_str())?,
-            shard_number: ShardNumber(self.shard_number as u8),
-            shard_count: ShardCount::new(self.shard_count as u8),
-        })
+        Ok(TenantShardId::unsharded(TenantId::from_str(
+            self.tenant_id.as_str(),
+        )?))
     }
 }
 
