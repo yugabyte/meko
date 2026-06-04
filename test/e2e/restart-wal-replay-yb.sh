@@ -197,6 +197,14 @@ if (( WEDGE_HITS > 5 )); then
     echo
     echo "  --- safekeeper log tail ---"
     tail -n 60 "$NEON_REPO_DIR/safekeepers/sk1/safekeeper-1.log" 2>/dev/null || true
+    echo
+    echo "  --- yb_storage.wals layout (per-segno min/max/count) ---"
+    PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yb_storage -c \
+        "SELECT segno, min(chunk_offset) AS min_off,
+                max(chunk_offset + chunk_size) AS max_end,
+                min(chunk_seq) AS min_seq, max(chunk_seq) AS max_seq,
+                count(*) AS chunks
+         FROM wals GROUP BY segno ORDER BY segno" 2>/dev/null || true
     exit 1
 fi
 echo "  ok — $WEDGE_HITS 'interpreted wal reader finished' occurrence(s) (threshold 5)"
