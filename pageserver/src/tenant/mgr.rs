@@ -579,13 +579,42 @@ pub async fn init_tenant_mgr(
         let tenant_dir_path = conf.tenant_path(&tenant_shard_id);
         let shard_identity = location_conf.shard;
         let generation = location_conf.generation;
+        // Task 17.c: refresh `tenant_conf` from the YB-side
+        // `pageserver.tenant_config` table. The local `config-v1`
+        // copy is a stale snapshot; storage_controller is the
+        // source of truth and may have updated it since the last
+        // location_config notification. If the YB row is missing
+        // (e.g. a tenant created before this migration), fall back
+        // to the disk copy.
+        let tenant_conf = match resources
+            .fpu_page_store
+            .load_tenant_config(tenant_shard_id.tenant_id)
+            .await
+        {
+            Ok(Some(yb_conf)) => yb_conf,
+            Ok(None) => {
+                tracing::info!(
+                    tenant_id = %tenant_shard_id.tenant_id,
+                    "no pageserver.tenant_config row, using on-disk fallback"
+                );
+                location_conf.tenant_conf
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant_id = %tenant_shard_id.tenant_id,
+                    error = %e,
+                    "failed to load tenant_config from YB, using on-disk fallback"
+                );
+                location_conf.tenant_conf
+            }
+        };
         let slot = TenantSlot::Attached(
             tenant_spawn(
                 conf,
                 tenant_shard_id,
                 &tenant_dir_path,
                 resources.clone(),
-                AttachedTenantConf::new(conf, location_conf.tenant_conf, generation),
+                AttachedTenantConf::new(conf, tenant_conf, generation),
                 shard_identity,
                 Some(init_order.clone()),
                 SpawnMode::Lazy,
@@ -698,12 +727,39 @@ impl TenantManager {
     pub(crate) async fn upsert_location(
         &self,
         tenant_shard_id: TenantShardId,
-        new_location_config: LocationConf,
+        mut new_location_config: LocationConf,
         flush: Option<Duration>,
         mut spawn_mode: SpawnMode,
         ctx: &RequestContext,
     ) -> Result<Option<Arc<TenantShard>>, UpsertLocationError> {
         debug_assert_current_span_has_tenant_id();
+
+        // Task 17.c: source of truth for `tenant_conf` is the YB-side
+        // `pageserver.tenant_config` table. storage_controller writes
+        // it before sending us this PUT, so a present row reflects
+        // the operator's latest intent. Fall back to the request
+        // body for races where the YB write hasn't propagated yet
+        // (e.g. first attach right after tenant_create).
+        match self
+            .resources
+            .fpu_page_store
+            .load_tenant_config(tenant_shard_id.tenant_id)
+            .await
+        {
+            Ok(Some(yb_conf)) => new_location_config.tenant_conf = yb_conf,
+            Ok(None) => {
+                tracing::info!(
+                    "no pageserver.tenant_config row yet, using request body's tenant_conf"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to load tenant_config from YB, using request body's tenant_conf"
+                );
+            }
+        }
+
         info!("configuring tenant location to state {new_location_config:?}");
 
         enum FastPathModified {
