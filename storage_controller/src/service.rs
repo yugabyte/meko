@@ -1220,9 +1220,6 @@ impl Service {
                     tenant_shard_id,
                     LocationConfig {
                         generation: None,
-                        shard_number: tenant_shard_id.shard_number.0,
-                        shard_count: tenant_shard_id.shard_count.literal(),
-                        shard_stripe_size: 0,
                         tenant_conf: models::TenantConfig::default(),
                     },
                     None,
@@ -2326,9 +2323,6 @@ impl Service {
                     |client| async move {
                         let config = LocationConfig {
                             generation: None,
-                            shard_number: tenant_shard_id.shard_number.0,
-                            shard_count: tenant_shard_id.shard_count.literal(),
-                            shard_stripe_size: 0,
                             tenant_conf: models::TenantConfig::default(),
                         };
                         client
@@ -5825,10 +5819,6 @@ impl Service {
                     |client| async move {
                         let config = LocationConfig {
                             generation: None,
-                            shard_number: child_id.shard_number.0,
-                            shard_count: child_id.shard_count.literal(),
-                            // Stripe size and tenant config don't matter when detaching
-                            shard_stripe_size: 0,
                             tenant_conf: TenantConfig::default(),
                         };
 

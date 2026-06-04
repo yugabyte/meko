@@ -82,23 +82,9 @@ impl LocationConf {
             .map(Generation::new)
             .ok_or_else(|| anyhow::anyhow!("Generation must be set when attaching"))?;
 
-        let shard = if conf.shard_count == 0 {
-            // NB: carry over the persisted stripe size instead of
-            // using the default. Unsharded tenants don't use the
-            // stripe size, but storage_controller and the pageserver
-            // need to agree on it for future splits.
-            ShardIdentity::unsharded_with_stripe_size(ShardStripeSize(conf.shard_stripe_size))
-        } else {
-            ShardIdentity::new(
-                ShardNumber(conf.shard_number),
-                ShardCount::new(conf.shard_count),
-                ShardStripeSize(conf.shard_stripe_size),
-            )?
-        };
-
         Ok(Self {
             generation,
-            shard,
+            shard: ShardIdentity::unsharded(),
             tenant_conf: conf.tenant_conf.clone(),
         })
     }

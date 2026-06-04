@@ -617,9 +617,6 @@ impl Reconciler {
             LocationConfig {
                 generation: generation.and_then(|g| g.into()),
                 tenant_conf: config.clone(),
-                shard_number: shard.number.0,
-                shard_count: shard.count.literal(),
-                shard_stripe_size: shard.stripe_size.0,
             }
         }
 
@@ -890,9 +887,6 @@ impl Reconciler {
                 node.clone(),
                 LocationConfig {
                     generation: None,
-                    shard_number: self.shard.number.0,
-                    shard_count: self.shard.count.literal(),
-                    shard_stripe_size: self.shard.stripe_size.0,
                     tenant_conf: self.config.clone(),
                 },
             ));
@@ -1149,9 +1143,6 @@ pub(crate) fn attached_location_conf(
 ) -> LocationConfig {
     LocationConfig {
         generation: generation.into(),
-        shard_number: shard.number.0,
-        shard_count: shard.count.literal(),
-        shard_stripe_size: shard.stripe_size.0,
         tenant_conf: config.clone(),
     }
 }
@@ -1165,9 +1156,6 @@ pub(crate) fn secondary_location_conf(
 ) -> LocationConfig {
     LocationConfig {
         generation: None,
-        shard_number: shard.number.0,
-        shard_count: shard.count.literal(),
-        shard_stripe_size: shard.stripe_size.0,
         tenant_conf: config.clone(),
     }
 }

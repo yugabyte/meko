@@ -2188,9 +2188,6 @@ pub(crate) mod tests {
             ObservedStateLocation {
                 conf: Some(LocationConfig {
                     generation: Some(2),
-                    shard_number: tenant_shard.shard.number.0,
-                    shard_count: tenant_shard.shard.count.literal(),
-                    shard_stripe_size: tenant_shard.shard.stripe_size.0,
                     tenant_conf: TenantConfig::default(),
                 }),
             },
@@ -2201,9 +2198,6 @@ pub(crate) mod tests {
             ObservedStateLocation {
                 conf: Some(LocationConfig {
                     generation: Some(1),
-                    shard_number: tenant_shard.shard.number.0,
-                    shard_count: tenant_shard.shard.count.literal(),
-                    shard_stripe_size: tenant_shard.shard.stripe_size.0,
                     tenant_conf: TenantConfig::default(),
                 }),
             },

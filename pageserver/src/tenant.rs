@@ -2656,9 +2656,6 @@ impl TenantShard {
         let attached_tenant_conf = self.tenant_conf.load();
         models::LocationConfig {
             generation: self.generation.into(),
-            shard_number: self.shard_identity.number.0,
-            shard_count: self.shard_identity.count.literal(),
-            shard_stripe_size: self.shard_identity.stripe_size.0,
             tenant_conf: attached_tenant_conf.tenant_conf.clone(),
         }
     }

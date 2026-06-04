@@ -954,15 +954,6 @@ pub struct LocationConfig {
     #[serde(default)]
     pub generation: Option<u32>,
 
-    /// Shard parameters: if `shard_count` is nonzero, other `shard_*`
-    /// fields must be set accurately.
-    #[serde(default)]
-    pub shard_number: u8,
-    #[serde(default)]
-    pub shard_count: u8,
-    #[serde(default)]
-    pub shard_stripe_size: u32,
-
     /// Pan-cluster tenant tunables, identical on every pageserver.
     pub tenant_conf: TenantConfig,
 }
