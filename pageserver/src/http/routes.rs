@@ -1436,14 +1436,7 @@ async fn update_tenant_config_handler(
     // This is a legacy API that only operates on attached tenants: the preferred
     // API to use is the location_config/ endpoint, which lets the caller provide
     // the full LocationConf.
-    let location_conf = LocationConf::attached(
-        tenant.get_generation(),
-        ShardParameters::from(tenant.get_shard_identity()),
-    );
-
-    tenant
-        .get_shard_identity()
-        .assert_equal(location_conf.shard); // not strictly necessary since we construct it above
+    let location_conf = LocationConf::attached(tenant.get_generation());
 
     crate::tenant::TenantShard::persist_tenant_config(state.conf, &tenant_shard_id, &location_conf)
         .await
@@ -1484,14 +1477,7 @@ async fn patch_tenant_config_handler(
     // API to use is the location_config/ endpoint, which lets the caller provide
     // the full LocationConf.
     let _ = updated;
-    let location_conf = LocationConf::attached(
-        tenant.get_generation(),
-        ShardParameters::from(tenant.get_shard_identity()),
-    );
-
-    tenant
-        .get_shard_identity()
-        .assert_equal(location_conf.shard); // not strictly necessary since we construct it above
+    let location_conf = LocationConf::attached(tenant.get_generation());
 
     crate::tenant::TenantShard::persist_tenant_config(state.conf, &tenant_shard_id, &location_conf)
         .await

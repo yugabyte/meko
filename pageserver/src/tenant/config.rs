@@ -3,29 +3,21 @@
 //! In yb-mode a tenant is either *attached* to this pageserver (with a
 //! storage_controller-assigned generation number used for fencing YB
 //! writes) or it isn't here at all. Detachment is represented by
-//! absence of the on-disk config file, so [`LocationConf`] only models
-//! the attached state.
+//! absence of the on-disk config file. yb-mode tenants are always
+//! unsharded — YugabyteDB tablet-shards the keyspace internally — so
+//! `LocationConf` has nothing left but the generation.
+//!
+//! `TenantConfig` lives in `pageserver.tenant_config` (task 17.c).
 
 use pageserver_api::models;
-use pageserver_api::shard::{ShardCount, ShardIdentity, ShardNumber, ShardStripeSize};
 use serde::{Deserialize, Serialize};
-use utils::critical;
 use utils::generation::Generation;
 
-/// Per-tenant, per-pageserver attachment record, serialised into
-/// the local `<workdir>/tenants/<id>/config-v1` toml. The pan-cluster
-/// `TenantConfig` is no longer stored here — task 17.c moved it to
-/// the YB-side `pageserver.tenant_config` table.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LocationConf {
     /// storage_controller-assigned generation, used to fence YB writes
     /// against stale pageservers during failover.
     pub(crate) generation: Generation,
-
-    /// Full shard identity. Already implied by `TenantShardId`, but
-    /// the explicit `ShardIdentity` lets us compute key→shard mappings
-    /// and agree with storage_controller on the intended stripe size.
-    pub(crate) shard: ShardIdentity,
 }
 
 impl std::fmt::Debug for LocationConf {
@@ -35,36 +27,15 @@ impl std::fmt::Debug for LocationConf {
 }
 
 impl LocationConf {
-    /// Construct an attachment record. Equivalent to the old
-    /// `attached_single` — there is no other attachment mode in yb-mode.
-    pub(crate) fn attached(
-        generation: Generation,
-        shard_params: models::ShardParameters,
-    ) -> Self {
-        Self {
-            generation,
-            shard: ShardIdentity::from_params(ShardNumber(0), shard_params),
-        }
+    /// Construct an attachment record.
+    pub(crate) fn attached(generation: Generation) -> Self {
+        Self { generation }
     }
 
     /// Update the generation stored in this record. Called on
     /// attach / re-attach.
-    pub(crate) fn attach_in_generation(
-        &mut self,
-        generation: Generation,
-        stripe_size: ShardStripeSize,
-    ) {
+    pub(crate) fn attach_in_generation(&mut self, generation: Generation) {
         self.generation = generation;
-        // This should never happen.
-        // TODO: turn this into a proper assertion.
-        if stripe_size != self.shard.stripe_size {
-            critical!(
-                "stripe size mismatch: {} != {}",
-                self.shard.stripe_size,
-                stripe_size,
-            );
-        }
-        self.shard.stripe_size = stripe_size;
     }
 
     /// Decode an external `LocationConfig` request into a
@@ -76,11 +47,7 @@ impl LocationConf {
             .generation
             .map(Generation::new)
             .ok_or_else(|| anyhow::anyhow!("Generation must be set when attaching"))?;
-
-        Ok(Self {
-            generation,
-            shard: ShardIdentity::unsharded(),
-        })
+        Ok(Self { generation })
     }
 }
 
@@ -91,7 +58,6 @@ impl Default for LocationConf {
     fn default() -> Self {
         Self {
             generation: Generation::none(),
-            shard: ShardIdentity::unsharded(),
         }
     }
 }

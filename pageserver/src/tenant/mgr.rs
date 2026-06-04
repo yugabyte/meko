@@ -111,16 +111,15 @@ pub(crate) enum ShardSelector {
 ///
 /// This represents the subset of a LocationConfig that we receive during re-attach.
 pub(crate) enum TenantStartupMode {
-    Attached((Generation, ShardStripeSize)),
+    Attached(Generation),
 }
 
 impl TenantStartupMode {
-    /// Return the generation & stripe size that should be used when
-    /// starting this tenant, or `None` if the re-attach response says
-    /// the tenant is not attached here.
+    /// Return the generation that should be used when starting this
+    /// tenant, or `None` if the re-attach response says the tenant is
+    /// not attached here.
     fn from_reattach_tenant(rart: ReAttachResponseTenant) -> Option<Self> {
-        rart.r#gen
-            .map(|g| Self::Attached((Generation::new(g), rart.stripe_size)))
+        rart.r#gen.map(|g| Self::Attached(Generation::new(g)))
     }
 }
 
@@ -277,10 +276,7 @@ fn emergency_generations(
                 Ok(lc) => lc,
                 Err(_) => return None,
             };
-            Some((
-                *tid,
-                TenantStartupMode::Attached((lc.generation, lc.shard.stripe_size)),
-            ))
+            Some((*tid, TenantStartupMode::Attached(lc.generation)))
         })
         .collect()
 }
@@ -321,7 +317,7 @@ async fn init_load_generations(
     let attached_tenants = generations
         .iter()
         .map(|(id, start_mode)| {
-            let TenantStartupMode::Attached((generation, _stripe_size)) = start_mode;
+            let TenantStartupMode::Attached(generation) = start_mode;
             (*id, *generation)
         })
         .collect();
@@ -531,7 +527,7 @@ pub async fn init_tenant_mgr(
                     // We deleted local content: move on to next tenant, don't try and spawn this one.
                     continue;
                 }
-                Some(TenantStartupMode::Attached((generation, stripe_size))) => {
+                Some(TenantStartupMode::Attached(generation)) => {
                     if &location_conf.generation > generation {
                         tracing::error!(tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(),
                             "Control plane gave decreasing generation ({generation:?}) in re-attach response for tenant that was attached in generation {:?}; skipping",
@@ -539,7 +535,7 @@ pub async fn init_tenant_mgr(
                         );
                         continue;
                     }
-                    location_conf.attach_in_generation(*generation, *stripe_size);
+                    location_conf.attach_in_generation(*generation);
                 }
             }
         } else {
@@ -577,7 +573,7 @@ pub async fn init_tenant_mgr(
         config_write_result.fatal_err("write tenant shard config file");
 
         let tenant_dir_path = conf.tenant_path(&tenant_shard_id);
-        let shard_identity = location_conf.shard;
+        let shard_identity = pageserver_api::shard::ShardIdentity::unsharded();
         let generation = location_conf.generation;
         // Task 17.c: refresh `tenant_conf` from the YB-side
         // `pageserver.tenant_config` table. The local `config-v1`
@@ -817,9 +813,6 @@ impl TenantManager {
         // phase of writing config and/or waiting for flush, before returning.
         match fast_path_taken {
             Some(FastPathModified::Attached(tenant)) => {
-                tenant
-                    .shard_identity
-                    .assert_equal(new_location_config.shard);
                 TenantShard::persist_tenant_config(
                     self.conf,
                     &tenant_shard_id,
@@ -854,10 +847,6 @@ impl TenantManager {
 
         match slot_guard.get_old_value() {
             Some(TenantSlot::Attached(tenant)) => {
-                tenant
-                    .shard_identity
-                    .assert_equal(new_location_config.shard);
-
                 // The case where we keep a Tenant alive was covered above in the special case
                 // for Attached->Attached transitions in the same generation.  By this point,
                 // if we see an attached tenant we know it will be discarded and should be
@@ -915,7 +904,7 @@ impl TenantManager {
             .fatal_err("write tenant shard config");
 
         let new_slot = {
-            let shard_identity = new_location_config.shard;
+            let shard_identity = pageserver_api::shard::ShardIdentity::unsharded();
 
             // Testing hack: if we are configured with no control plane, then drop the generation
             // from upserts.  This enables creating generation-less tenants even though neon_local
@@ -1115,7 +1104,7 @@ impl TenantManager {
             }
         }
 
-        let shard_identity = config.shard;
+        let shard_identity = pageserver_api::shard::ShardIdentity::unsharded();
         // Task 17.c: tenant_conf source of truth is YB.
         let tenant_conf = self
             .resources
