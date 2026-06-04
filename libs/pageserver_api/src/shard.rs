@@ -366,43 +366,27 @@ mod tests {
 
     #[test]
     fn tenant_shard_id_string() -> Result<(), hex::FromHexError> {
-        let example = TenantShardId {
-            tenant_id: TenantId::from_str(EXAMPLE_TENANT_ID).unwrap(),
-            shard_count: ShardCount(10),
-            shard_number: ShardNumber(7),
-        };
-
+        // yb-mode: always-unsharded encoding == TenantId encoding.
+        let example = TenantShardId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
         let encoded = format!("{example}");
-
-        let expected = format!("{EXAMPLE_TENANT_ID}-070a");
-        assert_eq!(&encoded, &expected);
-
+        assert_eq!(&encoded, EXAMPLE_TENANT_ID);
         let decoded = TenantShardId::from_str(&encoded)?;
-
         assert_eq!(example, decoded);
-
         Ok(())
     }
 
     #[test]
     fn tenant_shard_id_binary() -> Result<(), hex::FromHexError> {
-        let example = TenantShardId {
-            tenant_id: TenantId::from_str(EXAMPLE_TENANT_ID).unwrap(),
-            shard_count: ShardCount(10),
-            shard_number: ShardNumber(7),
-        };
-
+        // yb-mode: binary encoding is the 16-byte TenantId.
+        let example = TenantShardId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
         let encoded = bincode::serialize(&example).unwrap();
-        let expected: [u8; 18] = [
+        let expected: [u8; 16] = [
             0x1f, 0x35, 0x9d, 0xd6, 0x25, 0xe5, 0x19, 0xa1, 0xa4, 0xe8, 0xd7, 0x50, 0x96, 0x90,
-            0xf6, 0xfc, 0x07, 0x0a,
+            0xf6, 0xfc,
         ];
         assert_eq!(Hex(&encoded), Hex(&expected));
-
         let decoded = bincode::deserialize(&encoded).unwrap();
-
         assert_eq!(example, decoded);
-
         Ok(())
     }
 
@@ -443,23 +427,15 @@ mod tests {
 
     #[test]
     fn tenant_shard_id_legacy_binary() -> Result<(), hex::FromHexError> {
-        // Unlike in human readable encoding, binary encoding does not
-        // do any special handling of legacy unsharded TenantIds: this test
-        // is equivalent to the main test for binary encoding, just verifying
-        // that the same behavior applies when we have used `unsharded()` to
-        // construct a TenantShardId.
+        // yb-mode: the legacy "tenant-id only, shard fields zero" 18-byte
+        // encoding is gone — there's only the 16-byte TenantId form now.
+        // Kept as a duplicate of the main binary test to flag if anyone
+        // resurrects the multi-byte encoding.
         let example = TenantShardId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
         let encoded = bincode::serialize(&example).unwrap();
-
-        let expected: [u8; 18] = [
-            0x1f, 0x35, 0x9d, 0xd6, 0x25, 0xe5, 0x19, 0xa1, 0xa4, 0xe8, 0xd7, 0x50, 0x96, 0x90,
-            0xf6, 0xfc, 0x00, 0x00,
-        ];
-        assert_eq!(Hex(&encoded), Hex(&expected));
-
+        assert_eq!(encoded.len(), 16);
         let decoded = bincode::deserialize::<TenantShardId>(&encoded).unwrap();
         assert_eq!(example, decoded);
-
         Ok(())
     }
 
@@ -550,107 +526,4 @@ mod tests {
         assert_eq!(shard, ShardNumber(8));
     }
 
-    #[test]
-    fn shard_id_split() {
-        let tenant_id = TenantId::generate();
-        let parent = TenantShardId::unsharded(tenant_id);
-
-        // Unsharded into 2
-        assert_eq!(
-            parent.split(ShardCount(2)),
-            vec![
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(2),
-                    shard_number: ShardNumber(0)
-                },
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(2),
-                    shard_number: ShardNumber(1)
-                }
-            ]
-        );
-
-        // Unsharded into 4
-        assert_eq!(
-            parent.split(ShardCount(4)),
-            vec![
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(4),
-                    shard_number: ShardNumber(0)
-                },
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(4),
-                    shard_number: ShardNumber(1)
-                },
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(4),
-                    shard_number: ShardNumber(2)
-                },
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(4),
-                    shard_number: ShardNumber(3)
-                }
-            ]
-        );
-
-        // count=1 into 2 (check this works the same as unsharded.)
-        let parent = TenantShardId {
-            tenant_id,
-            shard_count: ShardCount(1),
-            shard_number: ShardNumber(0),
-        };
-        assert_eq!(
-            parent.split(ShardCount(2)),
-            vec![
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(2),
-                    shard_number: ShardNumber(0)
-                },
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(2),
-                    shard_number: ShardNumber(1)
-                }
-            ]
-        );
-
-        // count=2 into count=8
-        let parent = TenantShardId {
-            tenant_id,
-            shard_count: ShardCount(2),
-            shard_number: ShardNumber(1),
-        };
-        assert_eq!(
-            parent.split(ShardCount(8)),
-            vec![
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(8),
-                    shard_number: ShardNumber(1)
-                },
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(8),
-                    shard_number: ShardNumber(3)
-                },
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(8),
-                    shard_number: ShardNumber(5)
-                },
-                TenantShardId {
-                    tenant_id,
-                    shard_count: ShardCount(8),
-                    shard_number: ShardNumber(7)
-                },
-            ]
-        );
-    }
 }

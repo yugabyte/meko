@@ -4578,19 +4578,7 @@ mod tests {
                 lsn: Lsn::from_str("0/16ABCDE").unwrap(),
             })
         );
-        let tenant_shard_id = TenantShardId::split(&tenant_shard_id, ShardCount(8))[1];
-        let cmd = PageServiceCmd::parse(&format!(
-            "lease lsn {tenant_shard_id} {timeline_id} 0/16ABCDE"
-        ))
-        .unwrap();
-        assert_eq!(
-            cmd,
-            PageServiceCmd::LeaseLsn(LeaseLsnCmd {
-                tenant_shard_id,
-                timeline_id,
-                lsn: Lsn::from_str("0/16ABCDE").unwrap(),
-            })
-        );
+        // yb-mode: TenantShardId::split is gone.
         let cmd = PageServiceCmd::parse("set a = b").unwrap();
         assert_eq!(cmd, PageServiceCmd::Set);
         let cmd = PageServiceCmd::parse("SET foo").unwrap();
