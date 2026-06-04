@@ -1310,30 +1310,6 @@ async fn handle_metadata_health_list_outdated(
         MetadataHealthListOutdatedResponse { health_records },
     )
 }
-
-async fn handle_tenant_shard_split(
-    service: Arc<Service>,
-    req: Request<Body>,
-) -> Result<Response<Body>, ApiError> {
-    check_permissions(&req, Scope::Admin)?;
-    // NB: don't rate limit: admin operation.
-
-    let mut req = match maybe_forward(req).await {
-        ForwardOutcome::Forwarded(res) => {
-            return res;
-        }
-        ForwardOutcome::NotForwarded(req) => req,
-    };
-
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let split_req = json_request::<TenantShardSplitRequest>(&mut req).await?;
-
-    json_response(
-        StatusCode::OK,
-        service.tenant_shard_split(tenant_id, split_req).await?,
-    )
-}
-
 async fn handle_tenant_shard_migrate(
     service: Arc<Service>,
     req: Request<Body>,
@@ -2470,13 +2446,6 @@ pub fn make_router(
                 )
             },
         )
-        .put("/control/v1/tenant/:tenant_id/shard_split", |r| {
-            tenant_service_handler(
-                r,
-                handle_tenant_shard_split,
-                RequestName("control_v1_tenant_shard_split"),
-            )
-        })
         .get("/control/v1/tenant/:tenant_id", |r| {
             tenant_service_handler(
                 r,

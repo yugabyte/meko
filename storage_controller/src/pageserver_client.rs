@@ -3,8 +3,8 @@ use std::time::Duration;
 use pageserver_api::models::detach_ancestor::AncestorDetached;
 use pageserver_api::models::{
     DetachBehavior, LocationConfig, LocationConfigListResponse, LsnLease, PageserverUtilization,
-    SecondaryProgress, TenantScanRemoteStorageResponse, TenantShardSplitRequest,
-    TenantShardSplitResponse, TenantWaitLsnRequest, TimelineArchivalConfigRequest,
+    SecondaryProgress, TenantScanRemoteStorageResponse, TenantWaitLsnRequest,
+    TimelineArchivalConfigRequest,
     TimelineCreateRequest, TimelineInfo, TopTenantShardsRequest, TopTenantShardsResponse,
 };
 use pageserver_api::shard::TenantShardId;
@@ -282,19 +282,6 @@ impl PageserverClient {
             self.inner
                 .timeline_detail(tenant_shard_id, timeline_id)
                 .await
-        )
-    }
-
-    pub(crate) async fn tenant_shard_split(
-        &self,
-        tenant_shard_id: TenantShardId,
-        req: TenantShardSplitRequest,
-    ) -> Result<TenantShardSplitResponse> {
-        measured_request!(
-            "tenant_shard_split",
-            crate::metrics::Method::Put,
-            &self.node_id_label,
-            self.inner.tenant_shard_split(tenant_shard_id, req).await
         )
     }
 

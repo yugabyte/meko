@@ -113,9 +113,6 @@ pub(crate) enum DatabaseOperation {
     DeleteNode,
     ListNodes,
     ListTombstones,
-    BeginShardSplit,
-    CompleteShardSplit,
-    AbortShardSplit,
     Detach,
     ReAttach,
     IncrementGeneration,
@@ -151,14 +148,6 @@ pub(crate) enum DatabaseOperation {
     DeleteTimelineImport,
     ListTimelineImports,
     IsTenantImportingTimeline,
-}
-
-#[must_use]
-pub(crate) enum AbortShardSplitStatus {
-    /// We aborted the split in the database by reverting to the parent shards
-    Aborted,
-    /// The split had already been persisted.
-    Complete,
 }
 
 pub(crate) type DatabaseResult<T> = Result<T, DatabaseError>;
@@ -1051,160 +1040,6 @@ impl Persistence {
     //
     // We create the child shards here, so that they will be available for increment_generation calls
     // if some pageserver holding a child shard needs to restart before the overall tenant split is complete.
-    pub(crate) async fn begin_shard_split(
-        &self,
-        old_shard_count: ShardCount,
-        split_tenant_id: TenantId,
-        parent_to_children: Vec<(TenantShardId, Vec<TenantShardPersistence>)>,
-    ) -> DatabaseResult<()> {
-        use crate::schema::tenant_shards::dsl::*;
-        let parent_to_children = parent_to_children.as_slice();
-        self.with_measured_conn(DatabaseOperation::BeginShardSplit, move |conn| {
-            Box::pin(async move {
-            // Mark parent shards as splitting
-
-            let updated = diesel::update(tenant_shards)
-                .filter(tenant_id.eq(split_tenant_id.to_string()))
-                .filter(shard_count.eq(old_shard_count.literal() as i32))
-                .set((splitting.eq(1),))
-                .execute(conn).await?;
-            if u8::try_from(updated)
-                .map_err(|_| DatabaseError::Logical(
-                    format!("Overflow existing shard count {updated} while splitting"))
-                )? != old_shard_count.count() {
-                // Perhaps a deletion or another split raced with this attempt to split, mutating
-                // the parent shards that we intend to split. In this case the split request should fail.
-                return Err(DatabaseError::Logical(
-                    format!("Unexpected existing shard count {updated} when preparing tenant for split (expected {})", old_shard_count.count())
-                ));
-            }
-
-            // FIXME: spurious clone to sidestep closure move rules
-            let parent_to_children = parent_to_children.to_vec();
-
-            // Insert child shards
-            for (parent_shard_id, children) in parent_to_children {
-                let mut parent = crate::schema::tenant_shards::table
-                    .filter(tenant_id.eq(parent_shard_id.tenant_id.to_string()))
-                    .filter(shard_number.eq(parent_shard_id.shard_number.0 as i32))
-                    .filter(shard_count.eq(parent_shard_id.shard_count.literal() as i32))
-                    .load::<TenantShardPersistence>(conn).await?;
-                let parent = if parent.len() != 1 {
-                    return Err(DatabaseError::Logical(format!(
-                        "Parent shard {parent_shard_id} not found"
-                    )));
-                } else {
-                    parent.pop().unwrap()
-                };
-                for mut shard in children {
-                    // Carry the parent's generation into the child
-                    shard.generation = parent.generation;
-
-                    debug_assert!(shard.splitting == SplitState::Splitting);
-                    diesel::insert_into(tenant_shards)
-                        .values(shard)
-                        .execute(conn).await?;
-                }
-            }
-
-            Ok(())
-        })
-        })
-        .await
-    }
-
-    // When we finish shard splitting, we must atomically clean up the old shards
-    // and insert the new shards, and clear the splitting marker.
-    pub(crate) async fn complete_shard_split(
-        &self,
-        split_tenant_id: TenantId,
-        old_shard_count: ShardCount,
-        new_shard_count: ShardCount,
-    ) -> DatabaseResult<()> {
-        use crate::schema::tenant_shards::dsl::*;
-        self.with_measured_conn(DatabaseOperation::CompleteShardSplit, move |conn| {
-            Box::pin(async move {
-                // Sanity: child shards must still exist, as we're deleting parent shards
-                let child_shards_query = tenant_shards
-                    .filter(tenant_id.eq(split_tenant_id.to_string()))
-                    .filter(shard_count.eq(new_shard_count.literal() as i32));
-                let child_shards = child_shards_query
-                    .load::<TenantShardPersistence>(conn)
-                    .await?;
-                if child_shards.len() != new_shard_count.count() as usize {
-                    return Err(DatabaseError::Logical(format!(
-                        "Unexpected child shard count {} while completing split to \
-                            count {new_shard_count:?} on tenant {split_tenant_id}",
-                        child_shards.len()
-                    )));
-                }
-
-                // Drop parent shards
-                diesel::delete(tenant_shards)
-                    .filter(tenant_id.eq(split_tenant_id.to_string()))
-                    .filter(shard_count.eq(old_shard_count.literal() as i32))
-                    .execute(conn)
-                    .await?;
-
-                // Clear sharding flag
-                let updated = diesel::update(tenant_shards)
-                    .filter(tenant_id.eq(split_tenant_id.to_string()))
-                    .filter(shard_count.eq(new_shard_count.literal() as i32))
-                    .set((splitting.eq(0),))
-                    .execute(conn)
-                    .await?;
-                assert!(updated == new_shard_count.count() as usize);
-
-                Ok(())
-            })
-        })
-        .await
-    }
-
-    /// Used when the remote part of a shard split failed: we will revert the database state to have only
-    /// the parent shards, with SplitState::Idle.
-    pub(crate) async fn abort_shard_split(
-        &self,
-        split_tenant_id: TenantId,
-        new_shard_count: ShardCount,
-    ) -> DatabaseResult<AbortShardSplitStatus> {
-        use crate::schema::tenant_shards::dsl::*;
-        self.with_measured_conn(DatabaseOperation::AbortShardSplit, move |conn| {
-            Box::pin(async move {
-                // Clear the splitting state on parent shards
-                let updated = diesel::update(tenant_shards)
-                    .filter(tenant_id.eq(split_tenant_id.to_string()))
-                    .filter(shard_count.ne(new_shard_count.literal() as i32))
-                    .set((splitting.eq(0),))
-                    .execute(conn)
-                    .await?;
-
-                // Parent shards are already gone: we cannot abort.
-                if updated == 0 {
-                    return Ok(AbortShardSplitStatus::Complete);
-                }
-
-                // Sanity check: if parent shards were present, their cardinality should
-                // be less than the number of child shards.
-                if updated >= new_shard_count.count() as usize {
-                    return Err(DatabaseError::Logical(format!(
-                        "Unexpected parent shard count {updated} while aborting split to \
-                            count {new_shard_count:?} on tenant {split_tenant_id}"
-                    )));
-                }
-
-                // Erase child shards
-                diesel::delete(tenant_shards)
-                    .filter(tenant_id.eq(split_tenant_id.to_string()))
-                    .filter(shard_count.eq(new_shard_count.literal() as i32))
-                    .execute(conn)
-                    .await?;
-
-                Ok(AbortShardSplitStatus::Aborted)
-            })
-        })
-        .await
-    }
 
     /// Stores all the latest metadata health updates durably. Updates existing entry on conflict.
     ///
