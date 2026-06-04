@@ -2,10 +2,8 @@
 //
 //   1. Old password    — current Cognito password (the BE verifies via
 //                        ChangePassword's PreviousPassword arg).
-//   2. New password    — must clear the same min-length bar the
-//                        ForgotPassword flow uses (kept consistent so
-//                        users don't get conflicting messages between
-//                        the two surfaces).
+//   2. New password    — must clear the same Cognito password policy
+//                        shown on signup/reset flows.
 //   3. Confirm         — must match new password before submit.
 //
 // Validation runs client-side first; on submit we POST to the BE. Errors
@@ -29,11 +27,14 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { changePassword, getApiErrorMessage } from "@/lib/mekoApi";
+import {
+  getPasswordPolicyError,
+  PasswordPolicyPanel,
+} from "@/features/auth/components/PasswordPolicyPanel";
 
-/** Lower bound matches `ForgotPasswordPage.MIN_NEW_PASSWORD_LEN` so the
- *  two flows stay consistent. Cognito's actual policy may be stricter;
- *  any additional failure surfaces verbatim from the BE response. */
-const MIN_NEW_PASSWORD_LEN = 7;
+const passwordInputClass: string =
+  "h-11 border-border bg-input text-foreground placeholder:text-muted-foreground";
+const passwordMismatchMessage: string = "New password and confirmation do not match.";
 
 function validate(
   oldPassword: string,
@@ -41,14 +42,13 @@ function validate(
   confirmPassword: string,
 ): string | null {
   if (!oldPassword) return "Enter your current password.";
-  if (newPassword.length < MIN_NEW_PASSWORD_LEN) {
-    return `New password must be at least ${MIN_NEW_PASSWORD_LEN} characters.`;
-  }
+  const policyError = getPasswordPolicyError(newPassword);
+  if (policyError) return policyError;
   if (newPassword === oldPassword) {
     return "New password must be different from the current one.";
   }
   if (newPassword !== confirmPassword) {
-    return "New password and confirmation do not match.";
+    return passwordMismatchMessage;
   }
   return null;
 }
@@ -56,12 +56,14 @@ function validate(
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  username?: string;
 };
 
-export function UpdatePasswordDialog({ open, onOpenChange }: Props) {
+export function UpdatePasswordDialog({ open, onOpenChange, username }: Props) {
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [confirmPasswordTouched, setConfirmPasswordTouched] = useState(false);
   const [showPasswords, setShowPasswords] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,17 +75,24 @@ export function UpdatePasswordDialog({ open, onOpenChange }: Props) {
       setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      setConfirmPasswordTouched(false);
       setShowPasswords(false);
       setError(null);
     }
   }, [open]);
 
+  const confirmPasswordMismatch =
+    confirmPasswordTouched &&
+    confirmPassword.length > 0 &&
+    newPassword !== confirmPassword;
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (submitting) return;
+    setConfirmPasswordTouched(true);
     const validationErr = validate(oldPassword, newPassword, confirmPassword);
     if (validationErr) {
-      setError(validationErr);
+      setError(validationErr === passwordMismatchMessage ? null : validationErr);
       return;
     }
     setSubmitting(true);
@@ -108,23 +117,32 @@ export function UpdatePasswordDialog({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Update password</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+          <input
+            type="email"
+            name="username"
+            autoComplete="section-current-password username"
+            value={username ?? ""}
+            readOnly
+            hidden
+          />
           <div className="space-y-1.5">
             <Label htmlFor="settings-old-password">Current password</Label>
             <Input
               id="settings-old-password"
               type={showPasswords ? "text" : "password"}
-              autoComplete="current-password"
+              name="current-password"
+              autoComplete="section-current-password current-password"
               value={oldPassword}
               onChange={(e) => setOldPassword(e.target.value)}
               disabled={submitting}
               required
-              autoFocus
+              className={passwordInputClass}
             />
           </div>
 
@@ -133,15 +151,20 @@ export function UpdatePasswordDialog({ open, onOpenChange }: Props) {
             <Input
               id="settings-new-password"
               type={showPasswords ? "text" : "password"}
-              autoComplete="new-password"
+              name="new-password"
+              autoComplete="section-new-password new-password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
+              aria-describedby="settings-password-policy"
               disabled={submitting}
               required
+              className={passwordInputClass}
             />
-            <p className="text-[11px] text-muted-foreground">
-              At least {MIN_NEW_PASSWORD_LEN} characters.
-            </p>
+            <PasswordPolicyPanel
+              id="settings-password-policy"
+              password={newPassword}
+              className="mt-3"
+            />
           </div>
 
           <div className="space-y-1.5">
@@ -151,12 +174,38 @@ export function UpdatePasswordDialog({ open, onOpenChange }: Props) {
             <Input
               id="settings-confirm-password"
               type={showPasswords ? "text" : "password"}
-              autoComplete="new-password"
+              name="confirm-new-password"
+              autoComplete="section-new-password new-password"
               value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+                if (!confirmPasswordTouched) setConfirmPasswordTouched(true);
+              }}
+              onBlur={() => setConfirmPasswordTouched(true)}
+              aria-describedby={
+                confirmPasswordMismatch
+                  ? "settings-confirm-password-help settings-confirm-password-error"
+                  : "settings-confirm-password-help"
+              }
+              aria-invalid={confirmPasswordMismatch}
               disabled={submitting}
               required
+              className={passwordInputClass}
             />
+            <p
+              id="settings-confirm-password-help"
+              className="text-xs text-muted-foreground"
+            >
+              Re-enter your new password. It must match exactly.
+            </p>
+            {confirmPasswordMismatch ? (
+              <p
+                id="settings-confirm-password-error"
+                className="text-xs text-red-600 dark:text-red-300"
+              >
+                {passwordMismatchMessage}
+              </p>
+            ) : null}
           </div>
 
           <div className="flex items-center justify-between text-xs">

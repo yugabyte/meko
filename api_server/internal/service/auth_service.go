@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"meko/api_server/internal/auth"
 	"meko/api_server/internal/models"
@@ -61,8 +62,18 @@ var ErrInvitePasswordExpired = errors.New("invite temporary password expired; a 
 // HTTP 400 VALIDATION_ERROR explicitly instead of falling through to a
 // generic 500.
 var (
-	ErrPasswordTooShort = errors.New("password must be more than 6 characters")
-	ErrPasswordMismatch = errors.New("password and confirmation do not match")
+	ErrPasswordTooShort         = errors.New("password must be at least 8 characters long")
+	ErrPasswordTooLong          = errors.New("password must be 256 characters or fewer")
+	ErrPasswordMissingLowercase = errors.New("password must include at least one lowercase letter")
+	ErrPasswordMissingUppercase = errors.New("password must include at least one uppercase letter")
+	ErrPasswordMissingNumber    = errors.New("password must include at least one number")
+	ErrPasswordMissingSymbol    = errors.New("password must include at least one special character")
+	ErrPasswordMismatch         = errors.New("password and confirmation do not match")
+)
+
+const (
+	minPasswordLength = 8
+	maxPasswordLength = 256
 )
 
 // AccountStore abstracts the account repository operations used by
@@ -289,9 +300,6 @@ type ForgotPasswordConfirmRequest struct {
 	ConfirmPassword string `json:"confirm_password"`
 }
 
-// minForgotPasswordLen is client+server minimum; Cognito pool policy may require more.
-const minForgotPasswordLen = 7 // strictly more than 6 characters
-
 // ConfirmForgotPasswordReset validates input and calls Cognito ConfirmForgotPassword.
 func (s *AuthService) ConfirmForgotPasswordReset(
 	ctx context.Context, req ForgotPasswordConfirmRequest,
@@ -306,8 +314,8 @@ func (s *AuthService) ConfirmForgotPasswordReset(
 	if code == "" {
 		return fmt.Errorf("verification code is required")
 	}
-	if len(newPw) < minForgotPasswordLen {
-		return ErrPasswordTooShort
+	if err := validateCognitoPasswordPolicy(newPw); err != nil {
+		return err
 	}
 	if newPw != confirm {
 		return ErrPasswordMismatch
@@ -467,8 +475,8 @@ func (s *AuthService) CompleteNewPassword(
 	if req.Session == "" {
 		return nil, fmt.Errorf("session is required")
 	}
-	if len(req.NewPassword) < minForgotPasswordLen {
-		return nil, ErrPasswordTooShort
+	if err := validateCognitoPasswordPolicy(req.NewPassword); err != nil {
+		return nil, err
 	}
 	if req.NewPassword != req.ConfirmPassword {
 		return nil, ErrPasswordMismatch
@@ -525,10 +533,11 @@ type ChangePasswordRequest struct {
 }
 
 // ChangePasswordWithToken validates the request body and delegates to
-// Cognito ChangePassword. Cognito itself enforces the password policy on
-// the new value (length, character classes, history), so we only do
-// minimum-sanity checks here:
+// Cognito ChangePassword. We mirror the user-pool password policy here
+// so browser-less clients (curl/scripts) receive immediate, specific
+// validation errors before the Cognito round-trip:
 //   - all three fields present
+//   - new password matches the Cognito policy shown in the UI
 //   - new == confirm
 //   - new ≠ old (cheap guard so we don't waste a Cognito round-trip
 //     on the obvious mistake)
@@ -545,11 +554,8 @@ func (s *AuthService) ChangePasswordWithToken(
 	if req.OldPassword == "" {
 		return fmt.Errorf("old password is required")
 	}
-	// Re-use the same min-length sentinel the forgot-password flow uses
-	// (`minForgotPasswordLen`) so the handler maps the response
-	// identically across both surfaces.
-	if len(req.NewPassword) < minForgotPasswordLen {
-		return ErrPasswordTooShort
+	if err := validateCognitoPasswordPolicy(req.NewPassword); err != nil {
+		return err
 	}
 	if req.NewPassword != req.ConfirmPassword {
 		return ErrPasswordMismatch
@@ -706,6 +712,9 @@ func validateSignupRequest(req SignupRequest) error {
 	if req.Password == "" {
 		return fmt.Errorf("password is required")
 	}
+	if err := validateCognitoPasswordPolicy(req.Password); err != nil {
+		return err
+	}
 	if req.FirstName == "" {
 		return fmt.Errorf("first name is required")
 	}
@@ -713,4 +722,41 @@ func validateSignupRequest(req SignupRequest) error {
 		return fmt.Errorf("last name is required")
 	}
 	return nil
+}
+
+func validateCognitoPasswordPolicy(password string) error {
+	length := utf8.RuneCountInString(password)
+	if length < minPasswordLength {
+		return ErrPasswordTooShort
+	}
+	if length > maxPasswordLength {
+		return ErrPasswordTooLong
+	}
+
+	var hasLower, hasUpper, hasNumber, hasSymbol bool
+	for _, r := range password {
+		switch {
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r >= '0' && r <= '9':
+			hasNumber = true
+		case strings.ContainsRune("!@#$%^&*()_+-=[]{}|;':\",./<>?`~\\", r):
+			hasSymbol = true
+		}
+	}
+
+	switch {
+	case !hasLower:
+		return ErrPasswordMissingLowercase
+	case !hasUpper:
+		return ErrPasswordMissingUppercase
+	case !hasNumber:
+		return ErrPasswordMissingNumber
+	case !hasSymbol:
+		return ErrPasswordMissingSymbol
+	default:
+		return nil
+	}
 }

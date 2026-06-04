@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,21 +17,23 @@ import { dispatchAppEvent } from "@/lib/browserEvents";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
+import {
+  getPasswordPolicyError,
+  PasswordPolicyPanel,
+} from "@/features/auth/components/PasswordPolicyPanel";
+
+const passwordMismatchMessage = "Password and confirmation do not match.";
 
 export type CompleteNewPasswordLocationState = {
   session: string;
   email: string;
 };
 
-/** Same rule as forgot-password flow: strictly more than 6 characters (minimum 7). */
-const MIN_NEW_PASSWORD_LEN = 7;
-
 function validateNewPasswords(newPassword: string, confirm: string): string | null {
-  if (newPassword.length < MIN_NEW_PASSWORD_LEN) {
-    return `Password must be more than 6 characters (at least ${MIN_NEW_PASSWORD_LEN}).`;
-  }
+  const policyError = getPasswordPolicyError(newPassword);
+  if (policyError) return policyError;
   if (newPassword !== confirm) {
-    return "Password and confirmation do not match.";
+    return passwordMismatchMessage;
   }
   return null;
 }
@@ -48,6 +51,8 @@ export default function CompleteNewPasswordPage() {
   const [lastName, setLastName] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [confirmPasswordTouched, setConfirmPasswordTouched] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,9 +80,10 @@ export default function CompleteNewPasswordPage() {
       return;
     }
 
+    setConfirmPasswordTouched(true);
     const pwErr = validateNewPasswords(newPassword, confirmPassword);
     if (pwErr) {
-      setError(pwErr);
+      setError(pwErr === passwordMismatchMessage ? null : pwErr);
       return;
     }
 
@@ -110,6 +116,11 @@ export default function CompleteNewPasswordPage() {
     }
   };
 
+  const confirmPasswordMismatch =
+    confirmPasswordTouched &&
+    confirmPassword.length > 0 &&
+    newPassword !== confirmPassword;
+
   return (
     <AuthPageShell>
       <div className="fixed top-4 right-4 z-10">
@@ -128,16 +139,35 @@ export default function CompleteNewPasswordPage() {
             <Label htmlFor="cnp-password" className="text-muted-foreground">
               Password
             </Label>
-            <Input
-              id="cnp-password"
-              type="password"
-              placeholder="Choose a password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              autoComplete="new-password"
-              required
-              minLength={MIN_NEW_PASSWORD_LEN}
-              className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
+            <div className="relative">
+              <Input
+                id="cnp-password"
+                type={showPasswords ? "text" : "password"}
+                placeholder="Choose a password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+                aria-describedby="complete-password-policy"
+                required
+                className="h-12 border-border bg-input pr-12 text-foreground placeholder:text-muted-foreground"
+              />
+              <button
+                type="button"
+                aria-label={showPasswords ? "Hide passwords" : "Show passwords"}
+                aria-pressed={showPasswords}
+                className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                onClick={() => setShowPasswords((value) => !value)}
+              >
+                {showPasswords ? (
+                  <EyeOff className="h-4 w-4" aria-hidden />
+                ) : (
+                  <Eye className="h-4 w-4" aria-hidden />
+                )}
+              </button>
+            </div>
+            <PasswordPolicyPanel
+              id="complete-password-policy"
+              password={newPassword}
             />
           </div>
           <div className="space-y-2">
@@ -146,15 +176,35 @@ export default function CompleteNewPasswordPage() {
             </Label>
             <Input
               id="cnp-confirm"
-              type="password"
+              type={showPasswords ? "text" : "password"}
               placeholder="Re-enter password"
               value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+                if (!confirmPasswordTouched) setConfirmPasswordTouched(true);
+              }}
+              onBlur={() => setConfirmPasswordTouched(true)}
               autoComplete="new-password"
+              aria-describedby={
+                confirmPasswordMismatch
+                  ? "cnp-confirm-help cnp-confirm-error"
+                  : "cnp-confirm-help"
+              }
+              aria-invalid={confirmPasswordMismatch}
               required
-              minLength={MIN_NEW_PASSWORD_LEN}
               className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
             />
+            <p id="cnp-confirm-help" className="text-xs text-muted-foreground">
+              Re-enter your new password. It must match exactly.
+            </p>
+            {confirmPasswordMismatch ? (
+              <p
+                id="cnp-confirm-error"
+                className="text-xs text-red-600 dark:text-red-300"
+              >
+                {passwordMismatchMessage}
+              </p>
+            ) : null}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">

@@ -149,6 +149,7 @@ export default function SettingsPage() {
       <UpdatePasswordDialog
         open={passwordDialogOpen}
         onOpenChange={setPasswordDialogOpen}
+        username={user?.email}
       />
     </div>
   );

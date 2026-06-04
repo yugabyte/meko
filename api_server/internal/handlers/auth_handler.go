@@ -444,6 +444,11 @@ func (h *AuthHandler) classifyAuthErr(
 			"VALIDATION_ERROR",
 			"password does not meet requirements")
 	case errors.Is(err, service.ErrPasswordTooShort),
+		errors.Is(err, service.ErrPasswordTooLong),
+		errors.Is(err, service.ErrPasswordMissingLowercase),
+		errors.Is(err, service.ErrPasswordMissingUppercase),
+		errors.Is(err, service.ErrPasswordMissingNumber),
+		errors.Is(err, service.ErrPasswordMissingSymbol),
 		errors.Is(err, service.ErrPasswordMismatch):
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", err.Error())

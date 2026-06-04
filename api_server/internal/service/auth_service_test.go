@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -242,6 +243,32 @@ func TestAuthService_Signup_ValidationError(t *testing.T) {
 				t.Error("expected validation error, got nil")
 			}
 		})
+	}
+}
+
+func TestAuthService_Signup_RejectsWeakPasswordBeforeCognito(t *testing.T) {
+	called := false
+	cog := &mockCognito{
+		signUpFn: func(
+			_ context.Context, _, _, _, _ string,
+		) (string, error) {
+			called = true
+			return "sub-should-not-happen", nil
+		},
+	}
+	svc := service.NewAuthService(cog, nil)
+
+	_, err := svc.Signup(context.Background(), service.SignupRequest{
+		Email:     "curl@example.com",
+		Password:  "lowercase1",
+		FirstName: "Curl",
+		LastName:  "User",
+	})
+	if !errors.Is(err, service.ErrPasswordMissingUppercase) {
+		t.Fatalf("expected missing uppercase error, got %v", err)
+	}
+	if called {
+		t.Fatal("expected weak password to be rejected before Cognito SignUp")
 	}
 }
 
@@ -737,8 +764,8 @@ func TestAuthService_CompleteNewPassword_ValidationErrors(t *testing.T) {
 		{
 			"empty email",
 			service.CompleteNewPasswordRequest{
-				NewPassword:     "abcdefg",
-				ConfirmPassword: "abcdefg",
+				NewPassword:     "NewP@ssw0rd!",
+				ConfirmPassword: "NewP@ssw0rd!",
 				Session:         "s",
 			},
 			nil,
@@ -747,8 +774,8 @@ func TestAuthService_CompleteNewPassword_ValidationErrors(t *testing.T) {
 			"empty session",
 			service.CompleteNewPasswordRequest{
 				Email:           "u@example.com",
-				NewPassword:     "abcdefg",
-				ConfirmPassword: "abcdefg",
+				NewPassword:     "NewP@ssw0rd!",
+				ConfirmPassword: "NewP@ssw0rd!",
 			},
 			nil,
 		},
@@ -766,7 +793,7 @@ func TestAuthService_CompleteNewPassword_ValidationErrors(t *testing.T) {
 			"password mismatch",
 			service.CompleteNewPasswordRequest{
 				Email:           "u@example.com",
-				NewPassword:     "abcdefg",
+				NewPassword:     "NewP@ssw0rd!",
 				ConfirmPassword: "different",
 				Session:         "s",
 			},
@@ -800,13 +827,43 @@ func TestAuthService_CompleteNewPassword_CognitoError(t *testing.T) {
 		context.Background(),
 		service.CompleteNewPasswordRequest{
 			Email:           "u@example.com",
-			NewPassword:     "abcdefg",
-			ConfirmPassword: "abcdefg",
+			NewPassword:     "NewP@ssw0rd!",
+			ConfirmPassword: "NewP@ssw0rd!",
 			Session:         "s",
 		},
 	)
 	if !errors.Is(err, auth.ErrInvalidPassword) {
 		t.Errorf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+func TestAuthService_ForgotPasswordConfirm_RejectsTooLongPasswordBeforeCognito(t *testing.T) {
+	called := false
+	cog := &mockCognito{
+		confirmForgotPasswordFn: func(
+			_ context.Context, _, _, _ string,
+		) error {
+			called = true
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, nil)
+	tooLongPassword := "Aa1!" + strings.Repeat("x", 253)
+
+	err := svc.ConfirmForgotPasswordReset(
+		context.Background(),
+		service.ForgotPasswordConfirmRequest{
+			Email:           "curl@example.com",
+			Code:            "123456",
+			NewPassword:     tooLongPassword,
+			ConfirmPassword: tooLongPassword,
+		},
+	)
+	if !errors.Is(err, service.ErrPasswordTooLong) {
+		t.Fatalf("expected too-long password error, got %v", err)
+	}
+	if called {
+		t.Fatal("expected too-long password to be rejected before Cognito reset")
 	}
 }
 

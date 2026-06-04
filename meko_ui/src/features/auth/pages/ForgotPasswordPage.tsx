@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -10,6 +11,13 @@ import {
 import { ROUTES } from "@/app/routes/paths";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
+import {
+  getPasswordPolicyError,
+  PasswordPolicyPanel,
+} from "@/features/auth/components/PasswordPolicyPanel";
+
+const passwordMismatchMessage =
+  "New password and confirmation do not match.";
 
 /** Matches HTML5-style email; server still validates. */
 function isValidEmailFormat(value: string): boolean {
@@ -18,18 +26,14 @@ function isValidEmailFormat(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 }
 
-/** Same rule as API: strictly more than 6 characters (minimum 7). */
-const MIN_NEW_PASSWORD_LEN = 7;
-
 function validateNewPasswords(
   newPassword: string,
   confirm: string,
 ): string | null {
-  if (newPassword.length < MIN_NEW_PASSWORD_LEN) {
-    return `Password must be more than 6 characters (at least ${MIN_NEW_PASSWORD_LEN}).`;
-  }
+  const policyError = getPasswordPolicyError(newPassword);
+  if (policyError) return policyError;
   if (newPassword !== confirm) {
-    return "New password and confirmation do not match.";
+    return passwordMismatchMessage;
   }
   return null;
 }
@@ -50,6 +54,8 @@ export default function ForgotPasswordPage() {
   const [code, setCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [confirmPasswordTouched, setConfirmPasswordTouched] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
 
@@ -78,9 +84,10 @@ export default function ForgotPasswordPage() {
   const handleUpdatePassword = async (e: FormEvent) => {
     e.preventDefault();
     setUpdateError(null);
+    setConfirmPasswordTouched(true);
     const pwErr = validateNewPasswords(newPassword, confirmPassword);
     if (pwErr) {
-      setUpdateError(pwErr);
+      setUpdateError(pwErr === passwordMismatchMessage ? null : pwErr);
       return;
     }
     setUpdateLoading(true);
@@ -98,6 +105,11 @@ export default function ForgotPasswordPage() {
       setUpdateLoading(false);
     }
   };
+
+  const confirmPasswordMismatch =
+    confirmPasswordTouched &&
+    confirmPassword.length > 0 &&
+    newPassword !== confirmPassword;
 
   return (
     <AuthPageShell>
@@ -152,7 +164,7 @@ export default function ForgotPasswordPage() {
           <Button
             type="button"
             variant="secondary"
-            className="h-10 w-full bg-white/10 text-white hover:bg-white/15"
+            className="h-10 w-full bg-secondary text-secondary-foreground hover:bg-secondary/80"
             disabled={!codeSent}
             onClick={() => setShowActivationSection(true)}
           >
@@ -176,27 +188,73 @@ export default function ForgotPasswordPage() {
               autoComplete="one-time-code"
               className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
             />
-            <Input
-              type="password"
-              placeholder="Enter new password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              required
-              autoComplete="new-password"
-              className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
-            />
-            <Input
-              type="password"
-              placeholder="Confirm new password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-              autoComplete="new-password"
-              className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
-            />
-            <p className="text-xs text-muted-foreground">
-              Password must be more than 6 characters. Both fields must match.
-            </p>
+            <div className="space-y-3">
+              <div className="relative">
+                <Input
+                  id="reset-new-password"
+                  type={showPasswords ? "text" : "password"}
+                  placeholder="Enter new password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                  aria-describedby="reset-password-policy"
+                  className="h-12 border-border bg-input pr-12 text-foreground placeholder:text-muted-foreground"
+                />
+                <button
+                  type="button"
+                  aria-label={showPasswords ? "Hide passwords" : "Show passwords"}
+                  aria-pressed={showPasswords}
+                  className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                  onClick={() => setShowPasswords((value) => !value)}
+                >
+                  {showPasswords ? (
+                    <EyeOff className="h-4 w-4" aria-hidden />
+                  ) : (
+                    <Eye className="h-4 w-4" aria-hidden />
+                  )}
+                </button>
+              </div>
+              <Input
+                id="reset-confirm-password"
+                type={showPasswords ? "text" : "password"}
+                placeholder="Confirm new password"
+                aria-label="Confirm new password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  if (!confirmPasswordTouched) setConfirmPasswordTouched(true);
+                }}
+                onBlur={() => setConfirmPasswordTouched(true)}
+                required
+                autoComplete="new-password"
+                aria-describedby={
+                  confirmPasswordMismatch
+                    ? "reset-confirm-password-help reset-confirm-password-error"
+                    : "reset-confirm-password-help"
+                }
+                aria-invalid={confirmPasswordMismatch}
+                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
+              />
+              <PasswordPolicyPanel
+                id="reset-password-policy"
+                password={newPassword}
+              />
+              <p
+                id="reset-confirm-password-help"
+                className="text-xs text-muted-foreground"
+              >
+                Re-enter your new password. It must match exactly.
+              </p>
+              {confirmPasswordMismatch ? (
+                <p
+                  id="reset-confirm-password-error"
+                  className="text-xs text-red-600 dark:text-red-300"
+                >
+                  {passwordMismatchMessage}
+                </p>
+              ) : null}
+            </div>
             {updateError ? <p className="text-sm text-red-600">{updateError}</p> : null}
             <Button
               type="submit"

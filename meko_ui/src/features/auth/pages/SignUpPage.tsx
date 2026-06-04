@@ -1,24 +1,16 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Eye, EyeOff } from "lucide-react";
 import { getApiErrorMessage, signup, confirmSignup } from "@/lib/mekoApi";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
-
-function getPasswordPolicyError(password: string): string | null {
-  if (password.length < 8) return "Password must be at least 8 characters long.";
-  if (!/[a-z]/.test(password))
-    return "Password must include at least one lowercase letter.";
-  if (!/[A-Z]/.test(password))
-    return "Password must include at least one uppercase letter.";
-  if (!/[0-9]/.test(password))
-    return "Password must include at least one number.";
-  if (!/[^A-Za-z0-9]/.test(password))
-    return "Password must include at least one special character.";
-  return null;
-}
+import {
+  getPasswordPolicyError,
+  PasswordPolicyPanel,
+} from "@/features/auth/components/PasswordPolicyPanel";
 
 export default function SignUpPage() {
   const navigate = useNavigate();
@@ -29,6 +21,7 @@ export default function SignUpPage() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [awaitingCode, setAwaitingCode] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -129,22 +122,41 @@ export default function SignUpPage() {
                 required
                 className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
               />
-              <Input
-                type="password"
-                autoComplete="new-password"
-                name="password"
-                aria-label="Password"
-                enterKeyHint="go"
-                placeholder="Create password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="h-12 border-border bg-input text-foreground placeholder:text-muted-foreground"
-              />
-              <p className="text-xs text-muted-foreground">
-                Use 8+ chars with uppercase, lowercase, number, and special
-                character.
-              </p>
+              <div className="space-y-3">
+                <div className="relative">
+                  <Input
+                    id="signup-password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    name="password"
+                    aria-label="Password"
+                    aria-describedby="signup-password-policy"
+                    enterKeyHint="go"
+                    placeholder="Create password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    className="h-12 border-border bg-input pr-12 text-foreground placeholder:text-muted-foreground"
+                  />
+                  <button
+                    type="button"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
+                    className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => setShowPassword((value) => !value)}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4" aria-hidden />
+                    ) : (
+                      <Eye className="h-4 w-4" aria-hidden />
+                    )}
+                  </button>
+                </div>
+                <PasswordPolicyPanel
+                  id="signup-password-policy"
+                  password={password}
+                />
+              </div>
             </>
           ) : (
             <>
