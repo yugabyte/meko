@@ -3,6 +3,7 @@
 
 -- pageserver.* and its schema.
 DROP TABLE IF EXISTS pageserver.timeline_state;
+DROP TABLE IF EXISTS pageserver.tenant_config;
 DROP TABLE IF EXISTS pageserver.meta;
 DROP TABLE IF EXISTS pageserver.slru_pages;
 DROP TABLE IF EXISTS pageserver.pages;
