@@ -2064,18 +2064,7 @@ pub(crate) mod tests {
     use crate::scheduler::test_utils::make_test_nodes;
 
     fn make_test_tenant_shard(policy: PlacementPolicy) -> TenantShard {
-        let tenant_id = TenantId::generate();
-        let shard_number = ShardNumber(0);
-        let shard_count = ShardCount::new(1);
-        let stripe_size = DEFAULT_STRIPE_SIZE;
-
-        let tenant_shard_id = tenant_id;
-        TenantShard::new(
-            tenant_shard_id,
-            ShardIdentity::new(shard_number, shard_count, stripe_size).unwrap(),
-            policy,
-            None,
-        )
+        TenantShard::new(TenantId::generate(), ShardIdentity::unsharded(), policy, None)
     }
 
     pub(crate) fn make_test_tenant(

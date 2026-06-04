@@ -964,6 +964,7 @@ mod tests {
         );
     }
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn sharded_range_relation_gap() {
         let shard_identity =
             ShardIdentity::new(ShardNumber(0), ShardCount::new(4), DEFAULT_STRIPE_SIZE).unwrap();
@@ -981,6 +982,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn shard_identity_keyspaces_single_key() {
         let shard_identity =
             ShardIdentity::new(ShardNumber(1), ShardCount::new(4), DEFAULT_STRIPE_SIZE).unwrap();
@@ -1026,6 +1028,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn shard_identity_keyspaces_forkno_gap() {
         let shard_identity =
             ShardIdentity::new(ShardNumber(1), ShardCount::new(4), DEFAULT_STRIPE_SIZE).unwrap();
@@ -1045,6 +1048,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn shard_identity_keyspaces_one_relation() {
         for shard_number in 0..4 {
             let shard_identity = ShardIdentity::new(
@@ -1132,6 +1136,7 @@ mod tests {
     /// Really simple tests for fragment(), on a range that just contains a single stripe
     /// for a single tenant.
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn sharded_range_fragment_simple() {
         const SHARD_COUNT: u8 = 4;
         const STRIPE_SIZE: u32 = DEFAULT_STRIPE_SIZE.0;
@@ -1177,6 +1182,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn sharded_range_fragment_multi_stripe() {
         const SHARD_COUNT: u8 = 4;
         const STRIPE_SIZE: u32 = DEFAULT_STRIPE_SIZE.0;
@@ -1231,6 +1237,7 @@ mod tests {
     /// Test our calculations work correctly when we start a range from the logical size key of
     /// a previous relation.
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn sharded_range_fragment_starting_from_logical_size() {
         const SHARD_COUNT: u8 = 4;
         const STRIPE_SIZE: u32 = DEFAULT_STRIPE_SIZE.0;
@@ -1289,6 +1296,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn sharded_range_fragment_cross_relation() {
         let shard_identity = ShardIdentity::unsharded();
 
@@ -1310,6 +1318,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn sharded_range_fragment_tiny_nblocks() {
         let shard_identity = ShardIdentity::unsharded();
 
@@ -1331,6 +1340,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
     fn sharded_range_fragment_fuzz() {
         // Use a fixed seed: we don't want to explicitly pick values, but we do want
         // the test to be reproducible.
