@@ -30,7 +30,6 @@ use utils::id::{NodeId, TimelineId};
 use utils::logging::{LogFormat, SecretString};
 
 use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
-use crate::virtual_file::io_engine;
 use crate::{TENANT_LOCATION_CONFIG_NAME, virtual_file};
 
 /// Global state of pageserver.
@@ -167,8 +166,6 @@ pub struct PageServerConf {
     /// Maximum number of WAL records to be ingested and committed at the same time
     pub ingest_batch_size: u64,
 
-    pub virtual_file_io_engine: virtual_file::IoEngineKind,
-
     pub max_vectored_read_bytes: MaxVectoredReadBytes,
 
     /// Maximum number of keys to be read in a single get_vectored call.
@@ -185,9 +182,6 @@ pub struct PageServerConf {
     ///
     /// Setting this to zero disables limits on total ephemeral layer size.
     pub ephemeral_bytes_per_memory_kb: usize,
-
-    /// Direct IO settings
-    pub virtual_file_io_mode: virtual_file::IoMode,
 
     /// Optionally disable disk syncs (unsafe!)
     pub no_sync: bool,
@@ -393,10 +387,8 @@ impl PageServerConf {
             timeline_offloading,
             ephemeral_bytes_per_memory_kb,
             l0_flush: _,
-            virtual_file_io_mode,
             concurrent_tenant_warmup,
             concurrent_tenant_size_logical_size_queries,
-            virtual_file_io_engine,
             tenant_config,
             no_sync,
             page_service_pipelining,
@@ -499,22 +491,6 @@ impl PageServerConf {
                 // re-use `concurrent_tenant_size_logical_size_queries`
                 concurrent_tenant_size_logical_size_queries,
             ),
-            virtual_file_io_engine: match virtual_file_io_engine {
-                Some(v) => v,
-                None => match crate::virtual_file::io_engine_feature_test()
-                    .context("auto-detect virtual_file_io_engine")?
-                {
-                    io_engine::FeatureTestResult::PlatformPreferred(v) => v, // make no noise
-                    io_engine::FeatureTestResult::Worse { engine, remark } => {
-                        // TODO: bubble this up to the caller so we can tracing::warn! it.
-                        eprintln!(
-                            "auto-detected IO engine is not platform-preferred: engine={engine:?} remark={remark:?}"
-                        );
-                        engine
-                    }
-                },
-            },
-            virtual_file_io_mode: virtual_file_io_mode.unwrap_or(virtual_file::IoMode::preferred()),
             no_sync: no_sync.unwrap_or(false),
             enable_read_path_debugging: enable_read_path_debugging.unwrap_or(false),
             validate_wal_contiguity: validate_wal_contiguity.unwrap_or(false),

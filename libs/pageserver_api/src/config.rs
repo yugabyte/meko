@@ -204,7 +204,6 @@ pub struct ConfigToml {
     pub import_pgdata_aws_endpoint_url: Option<reqwest::Url>,
     pub heatmap_upload_concurrency: usize,
     pub secondary_download_concurrency: usize,
-    pub virtual_file_io_engine: Option<crate::models::virtual_file::IoEngineKind>,
     pub ingest_batch_size: u64,
     pub max_vectored_read_bytes: MaxVectoredReadBytes,
     pub max_get_vectored_keys: MaxGetVectoredKeys,
@@ -212,7 +211,6 @@ pub struct ConfigToml {
     pub timeline_offloading: bool,
     pub ephemeral_bytes_per_memory_kb: usize,
     pub l0_flush: Option<crate::models::L0FlushConfig>,
-    pub virtual_file_io_mode: Option<crate::models::virtual_file::IoMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_sync: Option<bool>,
     pub page_service_pipelining: PageServicePipeliningConfig,
@@ -923,8 +921,6 @@ impl Default for ConfigToml {
 
             ingest_batch_size: (DEFAULT_INGEST_BATCH_SIZE),
 
-            virtual_file_io_engine: None,
-
             max_vectored_read_bytes: (MaxVectoredReadBytes(
                 NonZeroUsize::new(DEFAULT_MAX_VECTORED_READ_BYTES).unwrap(),
             )),
@@ -935,7 +931,6 @@ impl Default for ConfigToml {
             timeline_offloading: true,
             ephemeral_bytes_per_memory_kb: (DEFAULT_EPHEMERAL_BYTES_PER_MEMORY_KB),
             l0_flush: None,
-            virtual_file_io_mode: None,
             tenant_config: TenantConfigToml::default(),
             no_sync: None,
             page_service_pipelining: PageServicePipeliningConfig::Pipelined(

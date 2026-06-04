@@ -27,7 +27,6 @@ use http_utils::{RequestExt, RouterBuilder};
 use humantime::format_rfc3339;
 use hyper::{Body, Request, Response, StatusCode, Uri, header};
 use metrics::launch_timestamp::LaunchTimestamp;
-use pageserver_api::models::virtual_file::IoMode;
 use pageserver_api::models::{
     IngestAuxFilesRequest,
     ListAuxFilesRequest, LocationConfig, LocationConfigListResponse, LocationConfigMode, LsnLease,
@@ -2068,26 +2067,6 @@ async fn post_tracing_event_handler(
     json_response(StatusCode::OK, ())
 }
 
-async fn put_io_engine_handler(
-    mut r: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    check_permission(&r, None)?;
-    let kind: crate::virtual_file::IoEngineKind = json_request(&mut r).await?;
-    crate::virtual_file::io_engine::set(kind);
-    json_response(StatusCode::OK, ())
-}
-
-async fn put_io_mode_handler(
-    mut r: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    check_permission(&r, None)?;
-    let mode: IoMode = json_request(&mut r).await?;
-    crate::virtual_file::set_io_mode(mode);
-    json_response(StatusCode::OK, ())
-}
-
 /// Polled by control plane.
 ///
 /// See [`crate::utilization`].
@@ -2797,8 +2776,6 @@ pub fn make_router(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/keyspace",
             |r| api_handler(r, timeline_collect_keyspace),
         )
-        .put("/v1/io_engine", |r| api_handler(r, put_io_engine_handler))
-        .put("/v1/io_mode", |r| api_handler(r, put_io_mode_handler))
         .get("/v1/utilization", |r| api_handler(r, get_utilization))
         .get("/v1/list_tenant_visible_size", |r| api_handler(r, list_tenant_visible_size_handler))
         .post(

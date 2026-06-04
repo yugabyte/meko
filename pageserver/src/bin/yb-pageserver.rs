@@ -162,8 +162,6 @@ fn main() -> anyhow::Result<()> {
 
     // Log configuration items for feature-flag-like config
     // (maybe we should automate this with a visitor?).
-    info!(?conf.virtual_file_io_engine, "starting with virtual_file IO engine");
-    info!(?conf.virtual_file_io_mode, "starting with virtual_file IO mode");
     info!(?conf.validate_wal_contiguity, "starting with WAL contiguity validation");
     info!(?conf.page_service_pipelining, "starting with page service pipelining config");
     info!(?conf.get_vectored_concurrent_io, "starting with get_vectored IO concurrency config");
@@ -210,15 +208,7 @@ fn main() -> anyhow::Result<()> {
 
     // Basic initialization of things that don't change after startup
     tracing::info!("Initializing virtual_file...");
-    virtual_file::init(
-        conf.virtual_file_io_engine,
-        conf.virtual_file_io_mode,
-        if conf.no_sync {
-            virtual_file::SyncMode::UnsafeNoSync
-        } else {
-            virtual_file::SyncMode::Sync
-        },
-    );
+    virtual_file::init();
     start_pageserver(launch_ts, conf, ignored, otel_guard).context("Failed to start pageserver")?;
 
     scenario.teardown();
