@@ -1899,81 +1899,14 @@ impl Timeline {
         (status.unwrap_or(RelSizeMigration::Legacy), migrated_at)
     }
 
-    pub fn get_compaction_l0_first(&self) -> bool {
-        let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
-        tenant_conf
-            .compaction_l0_first
-            .unwrap_or(self.conf.default_tenant_conf.compaction_l0_first)
-    }
-
-    pub fn get_compaction_l0_semaphore(&self) -> bool {
-        let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
-        tenant_conf
-            .compaction_l0_semaphore
-            .unwrap_or(self.conf.default_tenant_conf.compaction_l0_semaphore)
-    }
-
-
-
-
-    // HADRON
-    pub fn get_compaction_shard_ancestor(&self) -> bool {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .compaction_shard_ancestor
-            .unwrap_or(self.conf.default_tenant_conf.compaction_shard_ancestor)
-    }
-
-    fn get_evictions_low_residence_duration_metric_threshold(
-        tenant_conf: &pageserver_api::models::TenantConfig,
-        default_tenant_conf: &pageserver_api::config::TenantConfigToml,
-    ) -> Duration {
-        tenant_conf
-            .evictions_low_residence_duration_metric_threshold
-            .unwrap_or(default_tenant_conf.evictions_low_residence_duration_metric_threshold)
-    }
-
-
-
-
     pub(super) fn tenant_conf_updated(&self, new_conf: &AttachedTenantConf) {
         // NB: Most tenant conf options are read by background loops, so,
         // changes will automatically be picked up.
-
-        // The threshold is embedded in the metric. So, we need to update it.
-        {
-            let new_threshold = Self::get_evictions_low_residence_duration_metric_threshold(
-                &new_conf.tenant_conf,
-                &self.conf.default_tenant_conf,
-            );
-
-            let tenant_id_str = self.tenant_shard_id.tenant_id.to_string();
-            let shard_id_str = format!("{}", self.tenant_shard_id.shard_slug());
-
-            let timeline_id_str = self.timeline_id.to_string();
-
-            // yb-mode: RTC config update was for tuning the
-            // deletion-block drain. Deletions don't exist anymore
-            // (no layer files), so there's nothing to retune.
-
-            let mut rel_size_cache = self.rel_size_snapshot_cache.lock().unwrap();
-            if let Some(new_capacity) = new_conf.tenant_conf.relsize_snapshot_cache_capacity {
-                if new_capacity != rel_size_cache.capacity() {
-                    rel_size_cache.set_capacity(new_capacity);
-                }
+        let mut rel_size_cache = self.rel_size_snapshot_cache.lock().unwrap();
+        if let Some(new_capacity) = new_conf.tenant_conf.relsize_snapshot_cache_capacity {
+            if new_capacity != rel_size_cache.capacity() {
+                rel_size_cache.set_capacity(new_capacity);
             }
-
-            self.metrics
-                .evictions_with_low_residence_duration
-                .write()
-                .unwrap()
-                .change_threshold(
-                    &tenant_id_str,
-                    &shard_id_str,
-                    &timeline_id_str,
-                    new_threshold,
-                );
         }
     }
 
@@ -2004,13 +1937,13 @@ impl Timeline {
         let disk_consistent_lsn = metadata.disk_consistent_lsn();
         let (state, _) = watch::channel(state);
 
-        let evictions_low_residence_duration_metric_threshold = {
-            let loaded_tenant_conf = tenant_conf.load();
-            Self::get_evictions_low_residence_duration_metric_threshold(
-                &loaded_tenant_conf.tenant_conf,
-                &conf.default_tenant_conf,
-            )
-        };
+        // Embedded threshold for the EvictionsWithLowResidenceDuration
+        // metric. The metric tracks layer-file evictions that fired
+        // before reaching the residency target; yb-mode has no layer
+        // files, so this never fires. The threshold is still a
+        // required constructor arg — use the upstream default (24 h).
+        let evictions_low_residence_duration_metric_threshold =
+            Duration::from_secs(24 * 3600);
 
         if let Some(ancestor) = &ancestor {
             let mut ancestor_gc_info = ancestor.gc_info.write().unwrap();

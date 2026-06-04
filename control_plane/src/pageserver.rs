@@ -388,97 +388,18 @@ impl PageServerNode {
     }
     pub fn parse_config(mut settings: HashMap<&str, &str>) -> anyhow::Result<models::TenantConfig> {
         let result = models::TenantConfig {
-            checkpoint_distance: settings
-                .remove("checkpoint_distance")
-                .map(|x| x.parse::<u64>())
-                .transpose()
-                .context("Failed to parse 'checkpoint_distance' as an integer")?,
-            checkpoint_timeout: settings
-                .remove("checkpoint_timeout")
-                .map(humantime::parse_duration)
-                .transpose()
-                .context("Failed to parse 'checkpoint_timeout' as duration")?,
-            compaction_target_size: settings
-                .remove("compaction_target_size")
-                .map(|x| x.parse::<u64>())
-                .transpose()
-                .context("Failed to parse 'compaction_target_size' as an integer")?,
-            compaction_period: settings
-                .remove("compaction_period")
-                .map(humantime::parse_duration)
-                .transpose()
-                .context("Failed to parse 'compaction_period' as duration")?,
-            compaction_threshold: settings
-                .remove("compaction_threshold")
-                .map(|x| x.parse::<usize>())
-                .transpose()
-                .context("Failed to parse 'compaction_threshold' as an integer")?,
-            compaction_upper_limit: settings
-                .remove("compaction_upper_limit")
-                .map(|x| x.parse::<usize>())
-                .transpose()
-                .context("Failed to parse 'compaction_upper_limit' as an integer")?,
-            compaction_algorithm: settings
-                .remove("compaction_algorithm")
-                .map(serde_json::from_str)
-                .transpose()
-                .context("Failed to parse 'compaction_algorithm' json")?,
-            compaction_shard_ancestor: settings
-                .remove("compaction_shard_ancestor")
-                .map(|x| x.parse::<bool>())
-                .transpose()
-                .context("Failed to parse 'compaction_shard_ancestor' as a bool")?,
-            compaction_l0_first: settings
-                .remove("compaction_l0_first")
-                .map(|x| x.parse::<bool>())
-                .transpose()
-                .context("Failed to parse 'compaction_l0_first' as a bool")?,
-            compaction_l0_semaphore: settings
-                .remove("compaction_l0_semaphore")
-                .map(|x| x.parse::<bool>())
-                .transpose()
-                .context("Failed to parse 'compaction_l0_semaphore' as a bool")?,
-            l0_flush_delay_threshold: settings
-                .remove("l0_flush_delay_threshold")
-                .map(|x| x.parse::<usize>())
-                .transpose()
-                .context("Failed to parse 'l0_flush_delay_threshold' as an integer")?,
-            l0_flush_stall_threshold: settings
-                .remove("l0_flush_stall_threshold")
-                .map(|x| x.parse::<usize>())
-                .transpose()
-                .context("Failed to parse 'l0_flush_stall_threshold' as an integer")?,
             gc_horizon: settings
                 .remove("gc_horizon")
                 .map(|x| x.parse::<u64>())
                 .transpose()
                 .context("Failed to parse 'gc_horizon' as an integer")?,
-            gc_period: settings.remove("gc_period")
+            gc_period: settings
+                .remove("gc_period")
                 .map(humantime::parse_duration)
                 .transpose()
                 .context("Failed to parse 'gc_period' as duration")?,
-            image_creation_threshold: settings
-                .remove("image_creation_threshold")
-                .map(|x| x.parse::<usize>())
-                .transpose()
-                .context("Failed to parse 'image_creation_threshold' as non zero integer")?,
-            // HADRON
-            image_layer_force_creation_period: settings
-                .remove("image_layer_force_creation_period")
-                .map(humantime::parse_duration)
-                .transpose()
-                .context("Failed to parse 'image_layer_force_creation_period' as duration")?,
-            image_layer_creation_check_threshold: settings
-                .remove("image_layer_creation_check_threshold")
-                .map(|x| x.parse::<u8>())
-                .transpose()
-                .context("Failed to parse 'image_creation_check_threshold' as integer")?,
-            image_creation_preempt_threshold: settings
-                .remove("image_creation_preempt_threshold")
-                .map(|x| x.parse::<usize>())
-                .transpose()
-                .context("Failed to parse 'image_creation_preempt_threshold' as integer")?,
-            pitr_interval: settings.remove("pitr_interval")
+            pitr_interval: settings
+                .remove("pitr_interval")
                 .map(humantime::parse_duration)
                 .transpose()
                 .context("Failed to parse 'pitr_interval' as duration")?,
@@ -497,26 +418,6 @@ impl PageServerNode {
                 .map(|x| x.parse::<NonZeroU64>())
                 .transpose()
                 .context("Failed to parse 'max_lsn_wal_lag' as non zero integer")?,
-            eviction_policy: settings
-                .remove("eviction_policy")
-                .map(serde_json::from_str)
-                .transpose()
-                .context("Failed to parse 'eviction_policy' json")?,
-            min_resident_size_override: settings
-                .remove("min_resident_size_override")
-                .map(|x| x.parse::<u64>())
-                .transpose()
-                .context("Failed to parse 'min_resident_size_override' as integer")?,
-            evictions_low_residence_duration_metric_threshold: settings
-                .remove("evictions_low_residence_duration_metric_threshold")
-                .map(humantime::parse_duration)
-                .transpose()
-                .context("Failed to parse 'evictions_low_residence_duration_metric_threshold' as duration")?,
-            heatmap_period: settings
-                .remove("heatmap_period")
-                .map(humantime::parse_duration)
-                .transpose()
-                .context("Failed to parse 'heatmap_period' as duration")?,
             lazy_slru_download: settings
                 .remove("lazy_slru_download")
                 .map(|x| x.parse::<bool>())
@@ -527,7 +428,8 @@ impl PageServerNode {
                 .map(serde_json::from_str)
                 .transpose()
                 .context("parse `timeline_get_throttle` from json")?,
-            lsn_lease_length: settings.remove("lsn_lease_length")
+            lsn_lease_length: settings
+                .remove("lsn_lease_length")
                 .map(humantime::parse_duration)
                 .transpose()
                 .context("Failed to parse 'lsn_lease_length' as duration")?,
@@ -536,43 +438,18 @@ impl PageServerNode {
                 .map(humantime::parse_duration)
                 .transpose()
                 .context("Failed to parse 'lsn_lease_length_for_ts' as duration")?,
-            timeline_offloading: settings
-                .remove("timeline_offloading")
-                .map(|x| x.parse::<bool>())
-                .transpose()
-                .context("Failed to parse 'timeline_offloading' as bool")?,
             rel_size_v2_enabled: settings
                 .remove("rel_size_v2_enabled")
                 .map(|x| x.parse::<bool>())
                 .transpose()
                 .context("Failed to parse 'rel_size_v2_enabled' as bool")?,
-            gc_compaction_enabled: settings
-                .remove("gc_compaction_enabled")
-                .map(|x| x.parse::<bool>())
-                .transpose()
-                .context("Failed to parse 'gc_compaction_enabled' as bool")?,
-            gc_compaction_verification: settings
-                .remove("gc_compaction_verification")
-                .map(|x| x.parse::<bool>())
-                .transpose()
-                .context("Failed to parse 'gc_compaction_verification' as bool")?,
-            gc_compaction_initial_threshold_kb: settings
-                .remove("gc_compaction_initial_threshold_kb")
-                .map(|x| x.parse::<u64>())
-                .transpose()
-                .context("Failed to parse 'gc_compaction_initial_threshold_kb' as integer")?,
-            gc_compaction_ratio_percent: settings
-                .remove("gc_compaction_ratio_percent")
-                .map(|x| x.parse::<u64>())
-                .transpose()
-                .context("Failed to parse 'gc_compaction_ratio_percent' as integer")?,
             sampling_ratio: settings
                 .remove("sampling_ratio")
                 .map(serde_json::from_str)
                 .transpose()
                 .context("Failed to parse 'sampling_ratio'")?,
             relsize_snapshot_cache_capacity: settings
-                .remove("relsize snapshot cache capacity")
+                .remove("relsize_snapshot_cache_capacity")
                 .map(|x| x.parse::<usize>())
                 .transpose()
                 .context("Failed to parse 'relsize_snapshot_cache_capacity' as integer")?,

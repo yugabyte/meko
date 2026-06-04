@@ -563,39 +563,9 @@ impl<T: Serialize> Serialize for FieldPatch<T> {
 #[serde(default)]
 pub struct TenantConfigPatch {
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub checkpoint_distance: FieldPatch<u64>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub checkpoint_timeout: FieldPatch<String>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub compaction_target_size: FieldPatch<u64>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub compaction_period: FieldPatch<String>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub compaction_threshold: FieldPatch<usize>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub compaction_upper_limit: FieldPatch<usize>,
-    // defer parsing compaction_algorithm, like eviction_policy
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub compaction_algorithm: FieldPatch<CompactionAlgorithmSettings>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub compaction_shard_ancestor: FieldPatch<bool>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub compaction_l0_first: FieldPatch<bool>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub compaction_l0_semaphore: FieldPatch<bool>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub l0_flush_delay_threshold: FieldPatch<usize>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub l0_flush_stall_threshold: FieldPatch<usize>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_horizon: FieldPatch<u64>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_period: FieldPatch<String>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub image_creation_threshold: FieldPatch<usize>,
-    // HADRON
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub image_layer_force_creation_period: FieldPatch<String>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub pitr_interval: FieldPatch<String>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
@@ -605,37 +575,15 @@ pub struct TenantConfigPatch {
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub max_lsn_wal_lag: FieldPatch<NonZeroU64>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub eviction_policy: FieldPatch<EvictionPolicy>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub min_resident_size_override: FieldPatch<u64>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub evictions_low_residence_duration_metric_threshold: FieldPatch<String>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub heatmap_period: FieldPatch<String>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub lazy_slru_download: FieldPatch<bool>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub timeline_get_throttle: FieldPatch<ThrottleConfig>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub image_layer_creation_check_threshold: FieldPatch<u8>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub image_creation_preempt_threshold: FieldPatch<usize>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub lsn_lease_length: FieldPatch<String>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub lsn_lease_length_for_ts: FieldPatch<String>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub timeline_offloading: FieldPatch<bool>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub rel_size_v2_enabled: FieldPatch<bool>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub gc_compaction_enabled: FieldPatch<bool>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub gc_compaction_verification: FieldPatch<bool>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub gc_compaction_initial_threshold_kb: FieldPatch<u64>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub gc_compaction_ratio_percent: FieldPatch<u64>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub sampling_ratio: FieldPatch<Option<Ratio>>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
@@ -652,57 +600,11 @@ pub struct TenantConfigPatch {
 #[serde(default)] // this maps omitted fields in deserialization to None
 pub struct TenantConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub checkpoint_distance: Option<u64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "humantime_serde")]
-    pub checkpoint_timeout: Option<Duration>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compaction_target_size: Option<u64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "humantime_serde")]
-    pub compaction_period: Option<Duration>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compaction_threshold: Option<usize>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compaction_upper_limit: Option<usize>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compaction_algorithm: Option<CompactionAlgorithmSettings>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compaction_shard_ancestor: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compaction_l0_first: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compaction_l0_semaphore: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub l0_flush_delay_threshold: Option<usize>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub l0_flush_stall_threshold: Option<usize>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub gc_horizon: Option<u64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "humantime_serde")]
     pub gc_period: Option<Duration>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_creation_threshold: Option<usize>,
-
-    // HADRON
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "humantime_serde")]
-    pub image_layer_force_creation_period: Option<Duration>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "humantime_serde")]
@@ -720,30 +622,10 @@ pub struct TenantConfig {
     pub max_lsn_wal_lag: Option<NonZeroU64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub eviction_policy: Option<EvictionPolicy>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_resident_size_override: Option<u64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "humantime_serde")]
-    pub evictions_low_residence_duration_metric_threshold: Option<Duration>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(with = "humantime_serde")]
-    pub heatmap_period: Option<Duration>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub lazy_slru_download: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeline_get_throttle: Option<ThrottleConfig>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_layer_creation_check_threshold: Option<u8>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_creation_preempt_threshold: Option<usize>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "humantime_serde")]
@@ -754,22 +636,7 @@ pub struct TenantConfig {
     pub lsn_lease_length_for_ts: Option<Duration>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeline_offloading: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub rel_size_v2_enabled: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gc_compaction_enabled: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gc_compaction_verification: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gc_compaction_initial_threshold_kb: Option<u64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gc_compaction_ratio_percent: Option<u64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling_ratio: Option<Option<Ratio>>,
@@ -787,90 +654,27 @@ impl TenantConfig {
         patch: TenantConfigPatch,
     ) -> Result<TenantConfig, humantime::DurationError> {
         let Self {
-            mut checkpoint_distance,
-            mut checkpoint_timeout,
-            mut compaction_target_size,
-            mut compaction_period,
-            mut compaction_threshold,
-            mut compaction_upper_limit,
-            mut compaction_algorithm,
-            mut compaction_shard_ancestor,
-            mut compaction_l0_first,
-            mut compaction_l0_semaphore,
-            mut l0_flush_delay_threshold,
-            mut l0_flush_stall_threshold,
             mut gc_horizon,
             mut gc_period,
-            mut image_creation_threshold,
-            mut image_layer_force_creation_period,
             mut pitr_interval,
             mut walreceiver_connect_timeout,
             mut lagging_wal_timeout,
             mut max_lsn_wal_lag,
-            mut eviction_policy,
-            mut min_resident_size_override,
-            mut evictions_low_residence_duration_metric_threshold,
-            mut heatmap_period,
             mut lazy_slru_download,
             mut timeline_get_throttle,
-            mut image_layer_creation_check_threshold,
-            mut image_creation_preempt_threshold,
             mut lsn_lease_length,
             mut lsn_lease_length_for_ts,
-            mut timeline_offloading,
             mut rel_size_v2_enabled,
-            mut gc_compaction_enabled,
-            mut gc_compaction_verification,
-            mut gc_compaction_initial_threshold_kb,
-            mut gc_compaction_ratio_percent,
             mut sampling_ratio,
             mut relsize_snapshot_cache_capacity,
             mut basebackup_cache_enabled,
         } = self;
 
-        patch.checkpoint_distance.apply(&mut checkpoint_distance);
-        patch
-            .checkpoint_timeout
-            .map(|v| humantime::parse_duration(&v))?
-            .apply(&mut checkpoint_timeout);
-        patch
-            .compaction_target_size
-            .apply(&mut compaction_target_size);
-        patch
-            .compaction_period
-            .map(|v| humantime::parse_duration(&v))?
-            .apply(&mut compaction_period);
-        patch.compaction_threshold.apply(&mut compaction_threshold);
-        patch
-            .compaction_upper_limit
-            .apply(&mut compaction_upper_limit);
-        patch.compaction_algorithm.apply(&mut compaction_algorithm);
-        patch
-            .compaction_shard_ancestor
-            .apply(&mut compaction_shard_ancestor);
-        patch.compaction_l0_first.apply(&mut compaction_l0_first);
-        patch
-            .compaction_l0_semaphore
-            .apply(&mut compaction_l0_semaphore);
-        patch
-            .l0_flush_delay_threshold
-            .apply(&mut l0_flush_delay_threshold);
-        patch
-            .l0_flush_stall_threshold
-            .apply(&mut l0_flush_stall_threshold);
         patch.gc_horizon.apply(&mut gc_horizon);
         patch
             .gc_period
             .map(|v| humantime::parse_duration(&v))?
             .apply(&mut gc_period);
-        patch
-            .image_creation_threshold
-            .apply(&mut image_creation_threshold);
-        // HADRON
-        patch
-            .image_layer_force_creation_period
-            .map(|v| humantime::parse_duration(&v))?
-            .apply(&mut image_layer_force_creation_period);
         patch
             .pitr_interval
             .map(|v| humantime::parse_duration(&v))?
@@ -884,28 +688,10 @@ impl TenantConfig {
             .map(|v| humantime::parse_duration(&v))?
             .apply(&mut lagging_wal_timeout);
         patch.max_lsn_wal_lag.apply(&mut max_lsn_wal_lag);
-        patch.eviction_policy.apply(&mut eviction_policy);
-        patch
-            .min_resident_size_override
-            .apply(&mut min_resident_size_override);
-        patch
-            .evictions_low_residence_duration_metric_threshold
-            .map(|v| humantime::parse_duration(&v))?
-            .apply(&mut evictions_low_residence_duration_metric_threshold);
-        patch
-            .heatmap_period
-            .map(|v| humantime::parse_duration(&v))?
-            .apply(&mut heatmap_period);
         patch.lazy_slru_download.apply(&mut lazy_slru_download);
         patch
             .timeline_get_throttle
             .apply(&mut timeline_get_throttle);
-        patch
-            .image_layer_creation_check_threshold
-            .apply(&mut image_layer_creation_check_threshold);
-        patch
-            .image_creation_preempt_threshold
-            .apply(&mut image_creation_preempt_threshold);
         patch
             .lsn_lease_length
             .map(|v| humantime::parse_duration(&v))?
@@ -914,20 +700,7 @@ impl TenantConfig {
             .lsn_lease_length_for_ts
             .map(|v| humantime::parse_duration(&v))?
             .apply(&mut lsn_lease_length_for_ts);
-        patch.timeline_offloading.apply(&mut timeline_offloading);
         patch.rel_size_v2_enabled.apply(&mut rel_size_v2_enabled);
-        patch
-            .gc_compaction_enabled
-            .apply(&mut gc_compaction_enabled);
-        patch
-            .gc_compaction_verification
-            .apply(&mut gc_compaction_verification);
-        patch
-            .gc_compaction_initial_threshold_kb
-            .apply(&mut gc_compaction_initial_threshold_kb);
-        patch
-            .gc_compaction_ratio_percent
-            .apply(&mut gc_compaction_ratio_percent);
         patch.sampling_ratio.apply(&mut sampling_ratio);
         patch
             .relsize_snapshot_cache_capacity
@@ -937,42 +710,17 @@ impl TenantConfig {
             .apply(&mut basebackup_cache_enabled);
 
         Ok(Self {
-            checkpoint_distance,
-            checkpoint_timeout,
-            compaction_target_size,
-            compaction_period,
-            compaction_threshold,
-            compaction_upper_limit,
-            compaction_algorithm,
-            compaction_shard_ancestor,
-            compaction_l0_first,
-            compaction_l0_semaphore,
-            l0_flush_delay_threshold,
-            l0_flush_stall_threshold,
             gc_horizon,
             gc_period,
-            image_creation_threshold,
-            image_layer_force_creation_period,
             pitr_interval,
             walreceiver_connect_timeout,
             lagging_wal_timeout,
             max_lsn_wal_lag,
-            eviction_policy,
-            min_resident_size_override,
-            evictions_low_residence_duration_metric_threshold,
-            heatmap_period,
             lazy_slru_download,
             timeline_get_throttle,
-            image_layer_creation_check_threshold,
-            image_creation_preempt_threshold,
             lsn_lease_length,
             lsn_lease_length_for_ts,
-            timeline_offloading,
             rel_size_v2_enabled,
-            gc_compaction_enabled,
-            gc_compaction_verification,
-            gc_compaction_initial_threshold_kb,
-            gc_compaction_ratio_percent,
             sampling_ratio,
             relsize_snapshot_cache_capacity,
             basebackup_cache_enabled,
@@ -984,52 +732,8 @@ impl TenantConfig {
         global_conf: crate::config::TenantConfigToml,
     ) -> crate::config::TenantConfigToml {
         crate::config::TenantConfigToml {
-            checkpoint_distance: self
-                .checkpoint_distance
-                .unwrap_or(global_conf.checkpoint_distance),
-            checkpoint_timeout: self
-                .checkpoint_timeout
-                .unwrap_or(global_conf.checkpoint_timeout),
-            compaction_target_size: self
-                .compaction_target_size
-                .unwrap_or(global_conf.compaction_target_size),
-            compaction_period: self
-                .compaction_period
-                .unwrap_or(global_conf.compaction_period),
-            compaction_threshold: self
-                .compaction_threshold
-                .unwrap_or(global_conf.compaction_threshold),
-            compaction_upper_limit: self
-                .compaction_upper_limit
-                .unwrap_or(global_conf.compaction_upper_limit),
-            compaction_algorithm: self
-                .compaction_algorithm
-                .as_ref()
-                .unwrap_or(&global_conf.compaction_algorithm)
-                .clone(),
-            compaction_shard_ancestor: self
-                .compaction_shard_ancestor
-                .unwrap_or(global_conf.compaction_shard_ancestor),
-            compaction_l0_first: self
-                .compaction_l0_first
-                .unwrap_or(global_conf.compaction_l0_first),
-            compaction_l0_semaphore: self
-                .compaction_l0_semaphore
-                .unwrap_or(global_conf.compaction_l0_semaphore),
-            l0_flush_delay_threshold: self
-                .l0_flush_delay_threshold
-                .or(global_conf.l0_flush_delay_threshold),
-            l0_flush_stall_threshold: self
-                .l0_flush_stall_threshold
-                .or(global_conf.l0_flush_stall_threshold),
             gc_horizon: self.gc_horizon.unwrap_or(global_conf.gc_horizon),
             gc_period: self.gc_period.unwrap_or(global_conf.gc_period),
-            image_creation_threshold: self
-                .image_creation_threshold
-                .unwrap_or(global_conf.image_creation_threshold),
-            image_layer_force_creation_period: self
-                .image_layer_force_creation_period
-                .or(global_conf.image_layer_force_creation_period),
             pitr_interval: self.pitr_interval.unwrap_or(global_conf.pitr_interval),
             walreceiver_connect_timeout: self
                 .walreceiver_connect_timeout
@@ -1038,14 +742,6 @@ impl TenantConfig {
                 .lagging_wal_timeout
                 .unwrap_or(global_conf.lagging_wal_timeout),
             max_lsn_wal_lag: self.max_lsn_wal_lag.unwrap_or(global_conf.max_lsn_wal_lag),
-            eviction_policy: self.eviction_policy.unwrap_or(global_conf.eviction_policy),
-            min_resident_size_override: self
-                .min_resident_size_override
-                .or(global_conf.min_resident_size_override),
-            evictions_low_residence_duration_metric_threshold: self
-                .evictions_low_residence_duration_metric_threshold
-                .unwrap_or(global_conf.evictions_low_residence_duration_metric_threshold),
-            heatmap_period: self.heatmap_period.unwrap_or(global_conf.heatmap_period),
             lazy_slru_download: self
                 .lazy_slru_download
                 .unwrap_or(global_conf.lazy_slru_download),
@@ -1053,36 +749,15 @@ impl TenantConfig {
                 .timeline_get_throttle
                 .clone()
                 .unwrap_or(global_conf.timeline_get_throttle),
-            image_layer_creation_check_threshold: self
-                .image_layer_creation_check_threshold
-                .unwrap_or(global_conf.image_layer_creation_check_threshold),
-            image_creation_preempt_threshold: self
-                .image_creation_preempt_threshold
-                .unwrap_or(global_conf.image_creation_preempt_threshold),
             lsn_lease_length: self
                 .lsn_lease_length
                 .unwrap_or(global_conf.lsn_lease_length),
             lsn_lease_length_for_ts: self
                 .lsn_lease_length_for_ts
                 .unwrap_or(global_conf.lsn_lease_length_for_ts),
-            timeline_offloading: self
-                .timeline_offloading
-                .unwrap_or(global_conf.timeline_offloading),
             rel_size_v2_enabled: self
                 .rel_size_v2_enabled
                 .unwrap_or(global_conf.rel_size_v2_enabled),
-            gc_compaction_enabled: self
-                .gc_compaction_enabled
-                .unwrap_or(global_conf.gc_compaction_enabled),
-            gc_compaction_verification: self
-                .gc_compaction_verification
-                .unwrap_or(global_conf.gc_compaction_verification),
-            gc_compaction_initial_threshold_kb: self
-                .gc_compaction_initial_threshold_kb
-                .unwrap_or(global_conf.gc_compaction_initial_threshold_kb),
-            gc_compaction_ratio_percent: self
-                .gc_compaction_ratio_percent
-                .unwrap_or(global_conf.gc_compaction_ratio_percent),
             sampling_ratio: self.sampling_ratio.unwrap_or(global_conf.sampling_ratio),
             relsize_snapshot_cache_capacity: self
                 .relsize_snapshot_cache_capacity
@@ -1128,41 +803,6 @@ pub enum AuxFilePolicy {
     /// on the read path.
     #[strum(ascii_case_insensitive)]
     CrossValidation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind")]
-pub enum EvictionPolicy {
-    NoEviction,
-    LayerAccessThreshold(EvictionPolicyLayerAccessThreshold),
-    OnlyImitiate(EvictionPolicyLayerAccessThreshold),
-}
-
-impl EvictionPolicy {
-    pub fn discriminant_str(&self) -> &'static str {
-        match self {
-            EvictionPolicy::NoEviction => "NoEviction",
-            EvictionPolicy::LayerAccessThreshold(_) => "LayerAccessThreshold",
-            EvictionPolicy::OnlyImitiate(_) => "OnlyImitiate",
-        }
-    }
-}
-
-#[derive(
-    Eq,
-    PartialEq,
-    Debug,
-    Copy,
-    Clone,
-    strum_macros::EnumString,
-    strum_macros::Display,
-    serde_with::DeserializeFromStr,
-    serde_with::SerializeDisplay,
-)]
-#[strum(serialize_all = "kebab-case")]
-pub enum CompactionAlgorithm {
-    Legacy,
-    Tiered,
 }
 
 #[derive(
@@ -1217,24 +857,11 @@ impl Display for ImageCompressionAlgorithm {
     }
 }
 
-#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
-pub struct CompactionAlgorithmSettings {
-    pub kind: CompactionAlgorithm,
-}
-
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub enum L0FlushConfig {
     #[serde(rename_all = "snake_case")]
     Direct { max_concurrency: NonZeroUsize },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EvictionPolicyLayerAccessThreshold {
-    #[serde(with = "humantime_serde")]
-    pub period: Duration,
-    #[serde(with = "humantime_serde")]
-    pub threshold: Duration,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -2050,16 +1677,16 @@ mod tests {
         let patch_request = TenantConfigPatchRequest {
             tenant_id: TenantId::from_str("17c6d121946a61e5ab0fe5a2fd4d8215").unwrap(),
             config: TenantConfigPatch {
-                checkpoint_distance: FieldPatch::Upsert(42),
                 gc_horizon: FieldPatch::Remove,
-                compaction_threshold: FieldPatch::Noop,
+                pitr_interval: FieldPatch::Upsert("30 days".to_string()),
+                rel_size_v2_enabled: FieldPatch::Noop,
                 ..TenantConfigPatch::default()
             },
         };
 
         let json = serde_json::to_string(&patch_request).unwrap();
 
-        let expected = r#"{"tenant_id":"17c6d121946a61e5ab0fe5a2fd4d8215","checkpoint_distance":42,"gc_horizon":null}"#;
+        let expected = r#"{"tenant_id":"17c6d121946a61e5ab0fe5a2fd4d8215","gc_horizon":null,"pitr_interval":"30 days"}"#;
         assert_eq!(json, expected);
 
         let decoded: TenantConfigPatchRequest = serde_json::from_str(&json).unwrap();
@@ -2067,22 +1694,21 @@ mod tests {
         assert_eq!(decoded.config, patch_request.config);
 
         // Now apply the patch to a config to demonstrate semantics
-
         let base = TenantConfig {
-            checkpoint_distance: Some(28),
             gc_horizon: Some(100),
-            compaction_target_size: Some(1024),
+            pitr_interval: Some(Duration::from_secs(7 * 24 * 3600)),
+            rel_size_v2_enabled: Some(true),
             ..Default::default()
         };
 
         let expected = TenantConfig {
-            checkpoint_distance: Some(42),
             gc_horizon: None,
-            ..base.clone()
+            pitr_interval: Some(Duration::from_secs(30 * 24 * 3600)),
+            rel_size_v2_enabled: Some(true),
+            ..Default::default()
         };
 
         let patched = base.apply_patch(decoded.config).unwrap();
-
         assert_eq!(patched, expected);
     }
 }

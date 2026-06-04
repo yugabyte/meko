@@ -14,7 +14,7 @@ use pageserver_api::controller_api::{
     TenantShardMigrateRequest, TenantShardMigrateResponse, TimelineSafekeeperMigrateRequest,
 };
 use pageserver_api::models::{
-    EvictionPolicy, EvictionPolicyLayerAccessThreshold, ShardParameters, TenantConfig,
+    ShardParameters, TenantConfig,
     TenantConfigPatchRequest, TenantConfigRequest, TenantShardSplitRequest,
     TenantShardSplitResponse,
 };
@@ -211,14 +211,6 @@ enum Command {
         node_id: NodeId,
         #[arg(long)]
         unclean: bool,
-    },
-    TenantSetTimeBasedEviction {
-        #[arg(long)]
-        tenant_id: TenantId,
-        #[arg(long)]
-        period: humantime::Duration,
-        #[arg(long)]
-        threshold: humantime::Duration,
     },
     // Migrate away from a set of specified pageservers by moving the primary attachments to pageservers
     // outside of the specified set.
@@ -1029,27 +1021,6 @@ async fn main() -> anyhow::Result<()> {
                 ]);
             }
             println!("{table}");
-        }
-        Command::TenantSetTimeBasedEviction {
-            tenant_id,
-            period,
-            threshold,
-        } => {
-            vps_client
-                .set_tenant_config(&TenantConfigRequest {
-                    tenant_id,
-                    config: TenantConfig {
-                        eviction_policy: Some(EvictionPolicy::LayerAccessThreshold(
-                            EvictionPolicyLayerAccessThreshold {
-                                period: period.into(),
-                                threshold: threshold.into(),
-                            },
-                        )),
-                        heatmap_period: Some(Duration::from_secs(300)),
-                        ..Default::default()
-                    },
-                })
-                .await?;
         }
         Command::BulkMigrate {
             nodes,

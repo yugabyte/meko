@@ -26,7 +26,6 @@ use crate::persistence::Persistence;
 use crate::tenant_shard::{IntentState, ObservedState, ObservedStateDelta, ObservedStateLocation};
 use crate::{compute_hook, service};
 
-const DEFAULT_HEATMAP_PERIOD: Duration = Duration::from_secs(60);
 
 /// Object with the lifetime of the background reconcile task that is created
 /// for tenants which have a difference between their intent and observed states.
@@ -1229,21 +1228,6 @@ impl Reconciler {
     }
 }
 
-/// We tweak the externally-set TenantConfig while configuring
-/// locations, using our awareness of whether secondary locations
-/// are in use to automatically enable/disable heatmap uploads.
-fn ha_aware_config(config: &TenantConfig, has_secondaries: bool) -> TenantConfig {
-    let mut config = config.clone();
-    if has_secondaries {
-        if config.heatmap_period.is_none() {
-            config.heatmap_period = Some(DEFAULT_HEATMAP_PERIOD);
-        }
-    } else {
-        config.heatmap_period = None;
-    }
-    config
-}
-
 pub(crate) fn attached_location_conf(
     generation: Generation,
     shard: &ShardIdentity,
@@ -1264,7 +1248,7 @@ pub(crate) fn attached_location_conf(
         shard_number: shard.number.0,
         shard_count: shard.count.literal(),
         shard_stripe_size: shard.stripe_size.0,
-        tenant_conf: ha_aware_config(config, has_secondaries),
+        tenant_conf: config.clone(),
     }
 }
 
@@ -1279,6 +1263,6 @@ pub(crate) fn secondary_location_conf(
         shard_number: shard.number.0,
         shard_count: shard.count.literal(),
         shard_stripe_size: shard.stripe_size.0,
-        tenant_conf: ha_aware_config(config, true),
+        tenant_conf: config.clone(),
     }
 }

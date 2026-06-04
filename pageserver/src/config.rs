@@ -30,7 +30,7 @@ use utils::id::{NodeId, TimelineId};
 use utils::logging::{LogFormat, SecretString};
 
 use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
-use crate::{TENANT_LOCATION_CONFIG_NAME, virtual_file};
+use crate::TENANT_LOCATION_CONFIG_NAME;
 
 /// Global state of pageserver.
 ///

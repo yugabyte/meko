@@ -8,7 +8,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
-use pageserver_api::config::tenant_conf_defaults::DEFAULT_COMPACTION_PERIOD;
+/// Cadence of the tenant housekeeping loop. Originally
+/// `default_tenant_conf.compaction_period`; the compaction-period
+/// knob is gone in yb-mode, so we use a hardcoded 20s mirror of
+/// upstream's default.
+const TENANT_HOUSEKEEPING_PERIOD: Duration = Duration::from_secs(20);
 use rand::Rng;
 use scopeguard::defer;
 use tokio::sync::{Semaphore, SemaphorePermit};
@@ -261,12 +265,9 @@ async fn tenant_housekeeping_loop(tenant: Arc<TenantShard>, cancel: Cancellation
             return;
         }
 
-        // Use the same period as compaction; it's not worth a separate setting. But if it's set to
-        // zero (to disable compaction), then use a reasonable default. Jitter it by 5%.
-        let period = match tenant.get_compaction_period() {
-            Duration::ZERO => humantime::parse_duration(DEFAULT_COMPACTION_PERIOD).unwrap(),
-            period => period,
-        };
+        // Tenant housekeeping ticks at a constant cadence. Used to be
+        // tied to `compaction_period`; that knob is gone in yb-mode.
+        let period = TENANT_HOUSEKEEPING_PERIOD;
 
         let Ok(period) = sleep_jitter(period, period * 5 / 100, &cancel).await else {
             break;
