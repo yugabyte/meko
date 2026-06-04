@@ -4,6 +4,7 @@ use std::task::{Context, Poll};
 use crate::send_wal::EndWatch;
 use crate::timeline::WalResidentTimeline;
 use crate::wal_storage::WalReader;
+use anyhow::Context as _;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
@@ -155,7 +156,17 @@ impl WalReaderStreamState {
     async fn read(&mut self) -> anyhow::Result<WalBytes> {
         // Create reader if needed
         if self.wal_reader.reader.is_none() {
-            self.wal_reader.reader = Some(self.tli.get_walreader(self.wal_reader.start).await?);
+            self.wal_reader.reader = self
+                .tli
+                .get_walreader(self.wal_reader.start)
+                .await
+                .map(Some)
+                .with_context(|| {
+                    format!(
+                        "get_walreader failed at start={} (ttid={})",
+                        self.wal_reader.start, self.tli.ttid
+                    )
+                })?;
         }
 
         let have_something_to_send = self.wal_reader.end > self.wal_reader.start;
@@ -168,7 +179,13 @@ impl WalReaderStreamState {
             self.wal_reader.end = self
                 .end_watch
                 .wait_for_lsn(self.wal_reader.start, self.term)
-                .await?;
+                .await
+                .with_context(|| {
+                    format!(
+                        "wait_for_lsn failed at start={} (term={:?})",
+                        self.wal_reader.start, self.term
+                    )
+                })?;
             tracing::debug!(
                 "Done waiting for wal: start={}, end={}",
                 self.wal_reader.end,
@@ -195,9 +212,12 @@ impl WalReaderStreamState {
         let buffer = &mut self.buffer[..send_size];
 
         // Read WAL
+        let read_start = self.wal_reader.start;
         let send_size = {
             let _term_guard = if let Some(t) = self.term {
-                Some(self.tli.acquire_term(t).await?)
+                Some(self.tli.acquire_term(t).await.with_context(|| {
+                    format!("acquire_term({t}) failed at start={read_start}")
+                })?)
             } else {
                 None
             };
@@ -206,7 +226,13 @@ impl WalReaderStreamState {
                 .as_mut()
                 .unwrap()
                 .read(buffer)
-                .await?
+                .await
+                .with_context(|| {
+                    format!(
+                        "WalReader::read failed at start={read_start} \
+                         (chunk_end={chunk_end_pos}, send_size={send_size})"
+                    )
+                })?
         };
 
         let wal = Bytes::copy_from_slice(&buffer[..send_size]);
