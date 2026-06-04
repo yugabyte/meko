@@ -428,25 +428,17 @@ impl<T: Types> Cache<T> {
                 continue;
             };
 
-            let first_handle_shard_identity = first_handle.get_shard_identity();
-            let make_shard_index = |shard_num: ShardNumber| ShardIndex {
-                shard_number: shard_num,
-                shard_count: first_handle_shard_identity.count,
-            };
-
+            // yb-mode: tenants are single-shard; any selector resolves to the unsharded index.
             let need_idx = match shard_selector {
-                ShardSelector::Page(key) => {
-                    make_shard_index(first_handle_shard_identity.get_shard_number(&key))
-                }
-                ShardSelector::Zero => make_shard_index(ShardNumber(0)),
                 ShardSelector::Known(shard_idx) => shard_idx,
+                _ => ShardIndex::unsharded(),
             };
             let need_shard_timeline_id = ShardTimelineId {
                 shard_index: need_idx,
                 timeline_id,
             };
             let first_handle_shard_timeline_id = ShardTimelineId {
-                shard_index: first_handle_shard_identity.shard_index(),
+                shard_index: ShardIndex::unsharded(),
                 timeline_id: first_handle.shard_timeline_id().timeline_id,
             };
 

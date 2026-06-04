@@ -1497,39 +1497,11 @@ impl TenantManager {
                         }
                     };
 
-                    match selector {
-                        // yb-mode: always shard 0, so Zero always matches.
-                        ShardSelector::Zero => {
-                            return ShardResolveResult::Found(tenant.clone());
-                        }
-                        ShardSelector::Page(key) => {
-                            // Each time we find an attached slot with a different shard count,
-                            // recompute the expected shard number: during shard splits we might
-                            // have multiple shards with the old shard count.
-                            if want_shard.is_none()
-                                || want_shard.unwrap().shard_count != tenant.shard_identity.count
-                            {
-                                want_shard = Some(ShardIndex {
-                                    shard_number: tenant.shard_identity.get_shard_number(&key),
-                                    shard_count: tenant.shard_identity.count,
-                                });
-                            }
-
-                            if Some(ShardIndex {
-                                shard_number: tenant.shard_identity.number,
-                                shard_count: tenant.shard_identity.count,
-                            }) == want_shard
-                            {
-                                return ShardResolveResult::Found(tenant.clone());
-                            }
-                        }
-                        ShardSelector::Known(shard)
-                            if tenant.shard_identity.shard_index() == shard =>
-                        {
-                            return ShardResolveResult::Found(tenant.clone());
-                        }
-                        _ => continue,
-                    }
+                    // yb-mode: tenants are single-shard. Every
+                    // selector — Zero, Page, Known(unsharded) —
+                    // matches the one shard we have.
+                    let _ = (selector, &mut want_shard);
+                    return ShardResolveResult::Found(tenant.clone());
                 }
 
                 // Fall through: we didn't find a slot that was in Attached state & matched our selector.  If

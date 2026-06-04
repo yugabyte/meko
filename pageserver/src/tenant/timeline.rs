@@ -778,10 +778,7 @@ impl Timeline {
             return Err(PageReconstructError::Other(anyhow::anyhow!("Invalid LSN")));
         }
 
-        // This check is debug-only because of the cost of hashing, and because it's a double-check: we
-        // already checked the key against the shard_identity when looking up the Timeline from
-        // page_service.
-        debug_assert!(!self.shard_identity.is_key_disposable(&key));
+        // yb-mode: tenants are single-shard, so every key is local.
 
         let query = VersionedKeySpaceQuery::uniform(KeySpace::single(key..key.next()), lsn);
 
@@ -805,7 +802,7 @@ impl Timeline {
             None => Err(PageReconstructError::MissingKey(Box::new(
                 MissingKeyError {
                     keyspace: KeySpace::single(key..key.next()),
-                    shard: self.shard_identity.get_shard_number(&key),
+                    shard: ShardNumber(0),
                     original_hwm_lsn: lsn,
                     ancestor_lsn: None,
                     backtrace: None,
@@ -837,13 +834,7 @@ impl Timeline {
             ));
         }
 
-        for range in &total_keyspace.ranges {
-            let mut key = range.start;
-            while key != range.end {
-                assert!(!self.shard_identity.is_key_disposable(&key));
-                key = key.next();
-            }
-        }
+        // yb-mode: single-shard, every key is local; no disposability check.
 
         trace!(
             "get vectored query {} from task kind {:?}",
@@ -2761,10 +2752,7 @@ impl Timeline {
     #[inline(always)]
     pub(crate) fn shard_timeline_id(&self) -> ShardTimelineId {
         ShardTimelineId {
-            shard_index: ShardIndex {
-                shard_number: self.shard_identity.number,
-                shard_count: self.shard_identity.count,
-            },
+            shard_index: ShardIndex::unsharded(),
             timeline_id: self.timeline_id,
         }
     }
@@ -2795,10 +2783,7 @@ impl Timeline {
     /// this Timeline is shut down.  Calling this function will cause the initial
     /// logical size calculation to skip waiting for the background jobs barrier.
     pub(crate) async fn await_initial_logical_size(self: Arc<Self>) {
-        if !self.shard_identity.is_shard_zero() {
-            // We don't populate logical size on shard >0: skip waiting for it.
-            return;
-        }
+        // yb-mode: tenants are single-shard (== shard 0), always populate logical size.
 
         if self
             .remote_state
@@ -2879,50 +2864,33 @@ impl Timeline {
         ctx: &RequestContext,
     ) -> Result<Option<Lsn>, PageReconstructError> {
         debug_assert_current_span_has_tenant_and_timeline_id();
-        if self.shard_identity.is_shard_zero() {
-            // Shard Zero has SLRU data and can calculate the PITR time -> LSN mapping itself
-            let time_range = if pitr == Duration::ZERO {
-                humantime::parse_duration(DEFAULT_PITR_INTERVAL).expect("constant is invalid")
-            } else {
-                pitr
-            };
-
-            // If PITR is so large or `now` is so small that this underflows, we will retain no history (highly unexpected case)
-            let time_cutoff = now.checked_sub(time_range).unwrap_or(now);
-            let timestamp = to_pg_timestamp(time_cutoff);
-
-            let time_cutoff = match self.find_lsn_for_timestamp(timestamp, cancel, ctx).await? {
-                LsnForTimestamp::Present(lsn) => Some(lsn),
-                LsnForTimestamp::Future(lsn) => {
-                    // The timestamp is in the future. That sounds impossible,
-                    // but what it really means is that there hasn't been
-                    // any commits since the cutoff timestamp.
-                    //
-                    // In this case we should use the LSN of the most recent commit,
-                    // which is implicitly the last LSN in the log.
-                    debug!("future({})", lsn);
-                    Some(self.get_last_record_lsn())
-                }
-                LsnForTimestamp::Past(lsn) => {
-                    debug!("past({})", lsn);
-                    None
-                }
-                LsnForTimestamp::NoData(lsn) => {
-                    debug!("nodata({})", lsn);
-                    None
-                }
-            };
-            Ok(time_cutoff)
+        // yb-mode: single-shard, so we always have the SLRU data
+        // locally and compute the PITR time -> LSN mapping ourselves.
+        let time_range = if pitr == Duration::ZERO {
+            humantime::parse_duration(DEFAULT_PITR_INTERVAL).expect("constant is invalid")
         } else {
-            // yb-mode is single-shard (all timelines run on shard 0);
-            // the non-shard-zero branch that used `download_foreign_index`
-            // to learn shard zero's GC cutoff is unreachable. Sharding
-            // is on the roadmap (see architecture/yb-pageserver.md
-            // "Time travel and branching"); when it lands, restore the
-            // shard-zero-index lookup or replace with a YB-native
-            // cross-shard read.
-            unreachable!("yb-mode is single-shard; shard_identity.is_shard_zero() always true")
-        }
+            pitr
+        };
+
+        let time_cutoff = now.checked_sub(time_range).unwrap_or(now);
+        let timestamp = to_pg_timestamp(time_cutoff);
+
+        let time_cutoff = match self.find_lsn_for_timestamp(timestamp, cancel, ctx).await? {
+            LsnForTimestamp::Present(lsn) => Some(lsn),
+            LsnForTimestamp::Future(lsn) => {
+                debug!("future({})", lsn);
+                Some(self.get_last_record_lsn())
+            }
+            LsnForTimestamp::Past(lsn) => {
+                debug!("past({})", lsn);
+                None
+            }
+            LsnForTimestamp::NoData(lsn) => {
+                debug!("nodata({})", lsn);
+                None
+            }
+        };
+        Ok(time_cutoff)
     }
 
     /// Find the Lsns above which layer files need to be retained on
@@ -3174,20 +3142,7 @@ impl TimelineWriter<'_> {
             return Ok(());
         }
 
-        // In debug builds, assert that we don't write any keys that don't belong to this shard.
-        if cfg!(debug_assertions) {
-            for metadata in &batch.metadata {
-                if let ValueMeta::Serialized(metadata) = metadata {
-                    let key = Key::from_compact(metadata.key);
-                    assert!(
-                        self.shard_identity.is_key_local(&key)
-                            || self.shard_identity.is_key_global(&key),
-                        "key {key} does not belong on shard {}",
-                        self.shard_identity.shard_index()
-                    );
-                }
-            }
-        }
+        // yb-mode: single-shard, so every key trivially belongs to this shard.
 
         let batch_max_lsn = batch.max_lsn;
 

@@ -1008,12 +1008,8 @@ impl ConnectionManagerState {
                     return None; // no connection string, ignore sk
                 }
 
-                let shard_identity = self.timeline.get_shard_identity();
-                let (shard_number, shard_count, shard_stripe_size) = (
-                    Some(shard_identity.number.0),
-                    Some(shard_identity.count.0),
-                    Some(shard_identity.stripe_size.0),
-                );
+                // yb-mode: single-shard, so these all carry their unsharded constants.
+                let (shard_number, shard_count, shard_stripe_size) = (Some(0), Some(0), Some(0));
 
                 let connection_conf_args = ConnectionConfigArgs {
                     protocol: self.conf.protocol,

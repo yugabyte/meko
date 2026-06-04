@@ -3,7 +3,7 @@ use std::ops::Range;
 use itertools::Itertools;
 
 use crate::key::Key;
-use crate::shard::{ShardCount, ShardIdentity};
+use crate::shard::ShardIdentity;
 
 ///
 /// Represents a set of Keys, in a compact form.
@@ -38,10 +38,14 @@ pub struct SparseKeySpace(pub KeySpace);
 ///
 /// The start + end keys may not belong to the shard: these specify where layer files should
 /// start  + end, but we will never actually read/write those keys.
+/// yb-mode: shard-awareness is gone, so this is just a thin wrapper
+/// around a `Range<Key>` whose methods compute unsharded
+/// fragment/size answers. Kept as a struct so the `'a` lifetime in
+/// the public API stays unchanged for upstream-API parity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShardedRange<'a> {
-    pub shard_identity: &'a ShardIdentity,
     pub range: Range<Key>,
+    _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 // Calculate the size of a range within the blocks of the same relation, or spanning only the
@@ -75,172 +79,61 @@ pub fn is_contiguous_range(range: &Range<Key>) -> bool {
 }
 
 impl<'a> ShardedRange<'a> {
-    pub fn new(range: Range<Key>, shard_identity: &'a ShardIdentity) -> Self {
+    pub fn new(range: Range<Key>, _shard_identity: &'a ShardIdentity) -> Self {
         Self {
-            shard_identity,
             range,
+            _phantom: std::marker::PhantomData,
         }
     }
 
-    /// Break up this range into chunks, each of which has at least one local key in it if the
-    /// total range has at least one local key.
+    /// Break up this range into chunks of at most `target_nblocks`.
+    /// yb-mode: no key is disposable (single-shard), so every block
+    /// counts and the chunking is purely size-based.
     pub fn fragment(self, target_nblocks: u32) -> Vec<(u32, Range<Key>)> {
-        // Optimization for single-key case (e.g. logical size keys)
         if self.range.end == self.range.start.add(1) {
-            return vec![(
-                if self.shard_identity.is_key_disposable(&self.range.start) {
-                    0
-                } else {
-                    1
-                },
-                self.range,
-            )];
+            return vec![(1, self.range)];
         }
 
         if !is_contiguous_range(&self.range) {
-            // Ranges that span relations are not fragmented.  We only get these ranges as a result
-            // of operations that act on existing layers, so we trust that the existing range is
-            // reasonably small.
             return vec![(u32::MAX, self.range)];
         }
 
         let mut fragments: Vec<(u32, Range<Key>)> = Vec::new();
-
         let mut cursor = self.range.start;
         while cursor < self.range.end {
-            let advance_by = self.distance_to_next_boundary(cursor);
-            let is_fragment_disposable = self.shard_identity.is_key_disposable(&cursor);
-
-            // If the previous fragment is undersized, then we seek to consume enough
-            // blocks to complete it.
-            let (want_blocks, merge_last_fragment) = match fragments.last_mut() {
-                Some(frag) if frag.0 < target_nblocks => (target_nblocks - frag.0, Some(frag)),
-                Some(frag) => {
-                    // Prev block is complete, want the full number.
-                    (
-                        target_nblocks,
-                        if is_fragment_disposable {
-                            // If this current range will be empty (not shard-local data), we will merge into previous
-                            Some(frag)
-                        } else {
-                            None
-                        },
-                    )
-                }
-                None => {
-                    // First iteration, want the full number
-                    (target_nblocks, None)
-                }
+            let distance_to_end = contiguous_range_len(&(cursor..self.range.end));
+            let want_blocks = match fragments.last() {
+                Some(frag) if frag.0 < target_nblocks => target_nblocks - frag.0,
+                _ => target_nblocks,
             };
-
-            let advance_by = if is_fragment_disposable {
-                advance_by
-            } else {
-                std::cmp::min(advance_by, want_blocks)
-            };
-
+            let advance_by = std::cmp::min(distance_to_end, want_blocks);
             let next_cursor = cursor.add(advance_by);
-
-            let this_frag = (
-                if is_fragment_disposable {
-                    0
-                } else {
-                    advance_by
-                },
-                cursor..next_cursor,
-            );
+            let this_frag = (advance_by, cursor..next_cursor);
             cursor = next_cursor;
 
-            if let Some(last_fragment) = merge_last_fragment {
-                // Previous fragment was short or this one is empty, merge into it
-                last_fragment.0 += this_frag.0;
-                last_fragment.1.end = this_frag.1.end;
-            } else {
-                fragments.push(this_frag);
+            match fragments.last_mut() {
+                Some(frag) if frag.0 < target_nblocks => {
+                    frag.0 += this_frag.0;
+                    frag.1.end = this_frag.1.end;
+                }
+                _ => fragments.push(this_frag),
             }
         }
 
         fragments
     }
 
-    /// Estimate the physical pages that are within this range, on this shard.  This returns
-    /// u32::MAX if the range spans relations: this return value should be interpreted as "large".
+    /// Estimate the physical pages that are within this range.
+    /// yb-mode: single-shard, so this is just the contiguous range
+    /// length (or `u32::MAX` for non-contiguous ranges).
     pub fn page_count(&self) -> u32 {
-        // Special cases for single keys like logical sizes
         if self.range.end == self.range.start.add(1) {
-            return if self.shard_identity.is_key_disposable(&self.range.start) {
-                0
-            } else {
-                1
-            };
+            return 1;
         }
-
-        // We can only do an authentic calculation of contiguous key ranges
         if !is_contiguous_range(&self.range) {
             return u32::MAX;
         }
-
-        // Special case for single sharded tenants: our logical and physical sizes are the same
-        if self.shard_identity.count < ShardCount::new(2) {
-            return contiguous_range_len(&self.range);
-        }
-
-        // Normal path: step through stripes and part-stripes in the range, evaluate whether each one belongs
-        // to Self, and add the stripe's block count to our total if so.
-        let mut result: u64 = 0;
-        let mut cursor = self.range.start;
-        while cursor < self.range.end {
-            // Count up to the next stripe_size boundary or end of range
-            let advance_by = self.distance_to_next_boundary(cursor);
-
-            // If this blocks in this stripe belong to us, add them to our count
-            if !self.shard_identity.is_key_disposable(&cursor) {
-                result += advance_by as u64;
-            }
-
-            cursor = cursor.add(advance_by);
-        }
-
-        if result > u32::MAX as u64 {
-            u32::MAX
-        } else {
-            result as u32
-        }
-    }
-
-    /// Advance the cursor to the next potential fragment boundary: this is either
-    /// a stripe boundary, or the end of the range.
-    fn distance_to_next_boundary(&self, cursor: Key) -> u32 {
-        let distance_to_range_end = contiguous_range_len(&(cursor..self.range.end));
-
-        if self.shard_identity.count < ShardCount::new(2) {
-            // Optimization: don't bother stepping through stripes if the tenant isn't sharded.
-            return distance_to_range_end;
-        }
-
-        if cursor.field6 == 0xffffffff {
-            // We are wrapping from one relation's logical size to the next relation's first data block
-            return 1;
-        }
-
-        let stripe_index = cursor.field6 / self.shard_identity.stripe_size.0;
-        let stripe_remainder = self.shard_identity.stripe_size.0
-            - (cursor.field6 - stripe_index * self.shard_identity.stripe_size.0);
-
-        if cfg!(debug_assertions) {
-            // We should never overflow field5 and field6 -- our callers check this earlier
-            // and would have returned their u32::MAX cases if the input range violated this.
-            let next_cursor = cursor.add(stripe_remainder);
-            debug_assert!(
-                next_cursor.field1 == cursor.field1
-                    && next_cursor.field2 == cursor.field2
-                    && next_cursor.field3 == cursor.field3
-                    && next_cursor.field4 == cursor.field4
-                    && next_cursor.field5 == cursor.field5
-            )
-        }
-
-        std::cmp::min(stripe_remainder, distance_to_range_end)
+        contiguous_range_len(&self.range)
     }
 
     /// Whereas `page_count` estimates the number of pages physically in this range on this shard,

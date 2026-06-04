@@ -35,7 +35,7 @@ use pageserver_api::models::{
     TimelineArchivalState, TimelineState, TopTenantShardItem,
     WalRedoManagerStatus,
 };
-use pageserver_api::shard::{ShardIdentity, ShardStripeSize};
+use pageserver_api::shard::{DEFAULT_STRIPE_SIZE, ShardIdentity, ShardStripeSize};
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
 use remote_timeline_client::index::GcCompactionState;
@@ -2664,7 +2664,7 @@ impl TenantShard {
     }
 
     pub(crate) fn get_shard_stripe_size(&self) -> ShardStripeSize {
-        self.shard_identity.stripe_size
+        DEFAULT_STRIPE_SIZE
     }
 
     pub(crate) fn get_generation(&self) -> Generation {
