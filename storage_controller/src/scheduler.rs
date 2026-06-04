@@ -981,7 +981,7 @@ mod tests {
     use pageserver_api::models::utilization::test_utilization;
     use pageserver_api::shard::ShardIdentity;
     use utils::id::TenantId;
-    use utils::shard::{ShardCount, ShardNumber, ShardStripeSize, TenantShardId};
+    use utils::shard::{ShardCount, ShardNumber, ShardStripeSize};
 
     use super::*;
     use crate::tenant_shard::IntentState;
@@ -1289,6 +1289,7 @@ mod tests {
 
     /// Test that when selecting AZs for many new tenants, we get the expected balance across nodes
     #[test]
+    #[ignore = "yb-mode: single-shard tenants, multi-shard AZ balancing doesn't apply"]
     fn az_selection_many() {
         let az_a_tag = AvailabilityZone("az-a".to_string());
         let az_b_tag = AvailabilityZone("az-b".to_string());
@@ -1328,15 +1329,11 @@ mod tests {
             node_home_counts.sort_by_key(|i| i.0);
             eprintln!("Selected {preferred_az}, vs nodes {node_home_counts:?}");
 
-            let tenant_shard_id = TenantShardId {
-                tenant_id: TenantId::generate(),
-                shard_number: ShardNumber(0),
-                shard_count: ShardCount(1),
-            };
+            let tenant_shard_id = TenantId::generate();
 
             let shard_identity = ShardIdentity::new(
-                tenant_shard_id.shard_number,
-                tenant_shard_id.shard_count,
+                ShardNumber(0),
+                ShardCount(0),
                 ShardStripeSize(1),
             )
             .unwrap();
@@ -1371,6 +1368,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: single-shard tenants, odd-shards-vs-nodes scheduling doesn't apply"]
     /// Make sure that when we have an odd number of nodes and an even number of shards, we still
     /// get scheduling stability.
     fn odd_nodes_stability() {
@@ -1400,7 +1398,7 @@ mod tests {
         let mut context = ScheduleContext::default();
 
         fn schedule_shard(
-            tenant_shard_id: TenantShardId,
+            tenant_shard_id: TenantId,
             expect_attached: NodeId,
             expect_secondary: NodeId,
             scheduled_shards: &mut Vec<TenantShard>,
@@ -1409,8 +1407,8 @@ mod tests {
             context: &mut ScheduleContext,
         ) {
             let shard_identity = ShardIdentity::new(
-                tenant_shard_id.shard_number,
-                tenant_shard_id.shard_count,
+                ShardNumber(0),
+                ShardCount(0),
                 ShardStripeSize(1),
             )
             .unwrap();
@@ -1435,11 +1433,7 @@ mod tests {
         let tenant_id = TenantId::generate();
 
         schedule_shard(
-            TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(0),
-                shard_count: ShardCount(8),
-            },
+            tenant_id,
             NodeId(1),
             NodeId(6),
             &mut scheduled_shards,
@@ -1449,11 +1443,7 @@ mod tests {
         );
 
         schedule_shard(
-            TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(1),
-                shard_count: ShardCount(8),
-            },
+            tenant_id,
             NodeId(2),
             NodeId(7),
             &mut scheduled_shards,
@@ -1463,11 +1453,7 @@ mod tests {
         );
 
         schedule_shard(
-            TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(2),
-                shard_count: ShardCount(8),
-            },
+            tenant_id,
             NodeId(3),
             NodeId(8),
             &mut scheduled_shards,
@@ -1477,11 +1463,7 @@ mod tests {
         );
 
         schedule_shard(
-            TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(3),
-                shard_count: ShardCount(8),
-            },
+            tenant_id,
             NodeId(4),
             NodeId(9),
             &mut scheduled_shards,
@@ -1491,11 +1473,7 @@ mod tests {
         );
 
         schedule_shard(
-            TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(4),
-                shard_count: ShardCount(8),
-            },
+            tenant_id,
             NodeId(5),
             NodeId(10),
             &mut scheduled_shards,
@@ -1505,11 +1483,7 @@ mod tests {
         );
 
         schedule_shard(
-            TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(5),
-                shard_count: ShardCount(8),
-            },
+            tenant_id,
             NodeId(1),
             NodeId(6),
             &mut scheduled_shards,
@@ -1519,11 +1493,7 @@ mod tests {
         );
 
         schedule_shard(
-            TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(6),
-                shard_count: ShardCount(8),
-            },
+            tenant_id,
             NodeId(2),
             NodeId(7),
             &mut scheduled_shards,
@@ -1533,11 +1503,7 @@ mod tests {
         );
 
         schedule_shard(
-            TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(7),
-                shard_count: ShardCount(8),
-            },
+            tenant_id,
             NodeId(3),
             NodeId(8),
             &mut scheduled_shards,
@@ -1557,6 +1523,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: single-shard tenants, multi-shard AZ-preference rebalancing doesn't apply"]
     fn change_preferred_az() {
         let az_a = AvailabilityZone("az-a".to_string());
         let az_b = AvailabilityZone("az-b".to_string());
@@ -1565,14 +1532,10 @@ mod tests {
         let nodes = test_utils::make_test_nodes(2, &[az_a.clone(), az_b.clone()]);
         let mut scheduler = Scheduler::new(nodes.values());
 
-        let tenant_shard_id = TenantShardId {
-            tenant_id: TenantId::generate(),
-            shard_number: ShardNumber(0),
-            shard_count: ShardCount(1),
-        };
+        let tenant_shard_id = TenantId::generate();
         let shard_identity = ShardIdentity::new(
-            tenant_shard_id.shard_number,
-            tenant_shard_id.shard_count,
+            ShardNumber(0),
+            ShardCount(0),
             ShardStripeSize(1),
         )
         .unwrap();

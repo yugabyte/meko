@@ -6,13 +6,13 @@ use std::time::{Duration, Instant};
 use json_structural_diff::JsonDiff;
 use pageserver_api::controller_api::{AvailabilityZone, MigrationConfig, PlacementPolicy};
 use pageserver_api::models::{LocationConfig, TenantConfig, TenantWaitLsnRequest};
-use pageserver_api::shard::{ShardIdentity, TenantShardId};
+use pageserver_api::shard::{ShardIdentity};
 use pageserver_client::mgmt_api;
 use reqwest::StatusCode;
 use tokio_util::sync::CancellationToken;
 use utils::backoff::exponential_backoff;
 use utils::generation::Generation;
-use utils::id::{NodeId, TimelineId};
+use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::pausable_failpoint;
 use utils::sync::gate::GateGuard;
@@ -30,7 +30,7 @@ use crate::{compute_hook, service};
 pub(super) struct Reconciler {
     /// See [`crate::tenant_shard::TenantShard`] for the meanings of these fields: they are a snapshot
     /// of a tenant's state from when we spawned a reconcile task.
-    pub(super) tenant_shard_id: TenantShardId,
+    pub(super) tenant_shard_id: TenantId,
     pub(crate) shard: ShardIdentity,
     pub(crate) placement_policy: PlacementPolicy,
     pub(crate) generation: Option<Generation>,
@@ -392,7 +392,7 @@ impl Reconciler {
     async fn wait_lsn(
         &self,
         node: &Node,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timelines: HashMap<TimelineId, Lsn>,
     ) -> Result<StatusCode, ReconcileError> {
         const TIMEOUT: Duration = Duration::from_secs(10);
@@ -418,7 +418,7 @@ impl Reconciler {
 
     async fn get_lsns(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         node: &Node,
     ) -> anyhow::Result<HashMap<TimelineId, Lsn>> {
         let client = PageserverClient::new(
@@ -437,7 +437,7 @@ impl Reconciler {
 
     async fn secondary_download(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         node: &Node,
     ) -> Result<(), ReconcileError> {
         // This is not the timeout for a request, but the total amount of time we're willing to wait
@@ -528,7 +528,7 @@ impl Reconciler {
     /// This function does not respect [`Self::cancel`], callers should handle that.
     async fn await_lsn(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         node: &Node,
         baseline: HashMap<TimelineId, Lsn>,
     ) -> anyhow::Result<()> {

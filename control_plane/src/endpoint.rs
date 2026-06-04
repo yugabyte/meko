@@ -793,8 +793,8 @@ impl Endpoint {
             let mut connstrings = Vec::new();
             for shard_no in 0..num_shards {
                 let shard_index = ShardIndex {
-                    shard_count: args.pageserver_conninfo.shard_count,
                     shard_number: ShardNumber(shard_no),
+                    shard_count: args.pageserver_conninfo.shard_count,
                 };
                 let shard = args
                     .pageserver_conninfo

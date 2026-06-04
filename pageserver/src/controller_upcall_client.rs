@@ -5,7 +5,6 @@ use futures::Future;
 use pageserver_api::config::NodeMetadata;
 use pageserver_api::controller_api::{AvailabilityZone, NodeRegisterRequest};
 use pageserver_api::models::ShardImportStatus;
-use pageserver_api::shard::TenantShardId;
 use pageserver_api::upcall_api::{
     PutTimelineImportStatusRequest, ReAttachRequest, ReAttachResponse, ReAttachResponseTenant,
     TimelineImportStatusRequest, ValidateRequest, ValidateRequestTenant, ValidateResponse,
@@ -16,7 +15,7 @@ use serde::de::DeserializeOwned;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use utils::generation::Generation;
-use utils::id::{NodeId, TimelineId};
+use utils::id::{NodeId, TenantId, TimelineId};
 use utils::{backoff, failpoint_support, ip_address};
 
 use crate::config::PageServerConf;
@@ -44,22 +43,22 @@ pub trait StorageControllerUpcallApi {
         conf: &PageServerConf,
         empty_local_disk: bool,
     ) -> impl Future<
-        Output = Result<HashMap<TenantShardId, ReAttachResponseTenant>, RetryForeverError>,
+        Output = Result<HashMap<TenantId, ReAttachResponseTenant>, RetryForeverError>,
     > + Send;
     fn validate(
         &self,
-        tenants: Vec<(TenantShardId, Generation)>,
-    ) -> impl Future<Output = Result<HashMap<TenantShardId, bool>, RetryForeverError>> + Send;
+        tenants: Vec<(TenantId, Generation)>,
+    ) -> impl Future<Output = Result<HashMap<TenantId, bool>, RetryForeverError>> + Send;
     fn put_timeline_import_status(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         generation: Generation,
         status: ShardImportStatus,
     ) -> impl Future<Output = Result<(), RetryForeverError>> + Send;
     fn get_timeline_import_status(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         generation: Generation,
     ) -> impl Future<Output = Result<ShardImportStatus, RetryForeverError>> + Send;
@@ -157,7 +156,7 @@ impl StorageControllerUpcallApi for StorageControllerUpcallClient {
         &self,
         conf: &PageServerConf,
         empty_local_disk: bool,
-    ) -> Result<HashMap<TenantShardId, ReAttachResponseTenant>, RetryForeverError> {
+    ) -> Result<HashMap<TenantId, ReAttachResponseTenant>, RetryForeverError> {
         let url = self
             .base_url
             .join("re-attach")
@@ -254,8 +253,8 @@ impl StorageControllerUpcallApi for StorageControllerUpcallClient {
     #[tracing::instrument(skip_all)] // so that warning logs from retry_http_forever have context
     async fn validate(
         &self,
-        tenants: Vec<(TenantShardId, Generation)>,
-    ) -> Result<HashMap<TenantShardId, bool>, RetryForeverError> {
+        tenants: Vec<(TenantId, Generation)>,
+    ) -> Result<HashMap<TenantId, bool>, RetryForeverError> {
         let url = self
             .base_url
             .join("validate")
@@ -264,7 +263,7 @@ impl StorageControllerUpcallApi for StorageControllerUpcallClient {
         // When sending validate requests, break them up into chunks so that we
         // avoid possible edge cases of generating any HTTP requests that
         // require database I/O across many thousands of tenants.
-        let mut result: HashMap<TenantShardId, bool> = HashMap::with_capacity(tenants.len());
+        let mut result: HashMap<TenantId, bool> = HashMap::with_capacity(tenants.len());
         for tenant_chunk in (tenants).chunks(128) {
             let request = ValidateRequest {
                 tenants: tenant_chunk
@@ -305,7 +304,7 @@ impl StorageControllerUpcallApi for StorageControllerUpcallClient {
     #[tracing::instrument(skip_all)] // so that warning logs from retry_http_forever have context
     async fn put_timeline_import_status(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         generation: Generation,
         status: ShardImportStatus,
@@ -329,7 +328,7 @@ impl StorageControllerUpcallApi for StorageControllerUpcallClient {
     #[tracing::instrument(skip_all)] // so that warning logs from retry_http_forever have context
     async fn get_timeline_import_status(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         generation: Generation,
     ) -> Result<ShardImportStatus, RetryForeverError> {

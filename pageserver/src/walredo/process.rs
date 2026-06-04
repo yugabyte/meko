@@ -11,10 +11,10 @@ use std::time::Duration;
 use anyhow::Context;
 use bytes::Bytes;
 use pageserver_api::reltag::RelTag;
-use pageserver_api::shard::TenantShardId;
 use postgres_ffi::{BLCKSZ, PgMajorVersion};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{Instrument, debug, error, instrument};
+use utils::id::TenantId;
 use utils::lsn::Lsn;
 use utils::poison::Poison;
 use wal_decoder::models::record::NeonWalRecord;
@@ -29,7 +29,7 @@ pub struct WalRedoProcess {
     #[allow(dead_code)]
     conf: &'static PageServerConf,
     #[cfg(feature = "testing")]
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     // Some() on construction, only becomes None on Drop.
     child: Option<NoLeakChild>,
     stdout: tokio::sync::Mutex<Poison<ProcessOutput>>,
@@ -57,7 +57,7 @@ impl WalRedoProcess {
     #[instrument(skip_all,fields(pg_version=pg_version.major_version_num()))]
     pub(crate) fn launch(
         conf: &'static PageServerConf,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         pg_version: PgMajorVersion,
     ) -> anyhow::Result<Self> {
         crate::span::debug_assert_current_span_has_tenant_id();
@@ -151,7 +151,7 @@ impl WalRedoProcess {
                         error!(error=?e, "failed to read from walredo stderr");
                     }
                 }
-            }.instrument(tracing::info_span!(parent: None, "wal-redo-postgres-stderr", pid = child.id(), tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %pg_version))
+            }.instrument(tracing::info_span!(parent: None, "wal-redo-postgres-stderr", pid = child.id(), tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug(), %pg_version))
         );
 
         Ok(Self {

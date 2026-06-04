@@ -12,7 +12,6 @@ use tokio_util::sync::CancellationToken;
 use utils::{
     id::{TenantId, TenantTimelineId, TimelineId},
     lsn::Lsn,
-    shard::TenantShardId,
 };
 
 use crate::{
@@ -30,7 +29,7 @@ use crate::{
 };
 
 pub struct BasebackupPrepareRequest {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
     pub timeline_id: TimelineId,
     pub lsn: Lsn,
 }
@@ -138,7 +137,7 @@ impl BasebackupCache {
     /// Send a basebackup prepare request to the background task.
     /// The basebackup will be prepared asynchronously, it does not block the caller.
     /// The request will be skipped if any cache limits are exceeded.
-    pub fn send_prepare(&self, tenant_shard_id: TenantShardId, timeline_id: TimelineId, lsn: Lsn) {
+    pub fn send_prepare(&self, tenant_shard_id: TenantId, timeline_id: TimelineId, lsn: Lsn) {
         let req = BasebackupPrepareRequest {
             tenant_shard_id,
             timeline_id,
@@ -155,7 +154,7 @@ impl BasebackupCache {
                 TrySendError::Full(_) => {
                     // Basebackup prepares are pretty rare, normally we should not hit this.
                     tracing::info!(
-                        tenant_id = %tenant_shard_id.tenant_id,
+                        tenant_id = %tenant_shard_id,
                         %timeline_id,
                         %lsn,
                         "Basebackup prepare channel is full, skipping the request"
@@ -164,7 +163,7 @@ impl BasebackupCache {
                 TrySendError::Closed(_) => {
                     // Normal during shutdown, not critical.
                     tracing::info!(
-                        tenant_id = %tenant_shard_id.tenant_id,
+                        tenant_id = %tenant_shard_id,
                         %timeline_id,
                         %lsn,
                         "Basebackup prepare channel is closed, skipping the request"
@@ -318,7 +317,7 @@ impl BackgroundTask {
             let TenantSlot::Attached(tenant) = tenant_slot else {
                 continue;
             };
-            let tenant_id = tenant_shard_id.tenant_id;
+            let tenant_id = tenant_shard_id;
 
             for timeline in tenant.list_timelines() {
                 let tti = TenantTimelineId::new(tenant_id, timeline.timeline_id);
@@ -530,18 +529,18 @@ impl BackgroundTask {
     /// location to make the operation atomic.
     async fn prepare_basebackup(
         &mut self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         req_lsn: Lsn,
     ) -> anyhow::Result<()> {
         tracing::info!(
-            tenant_id = %tenant_shard_id.tenant_id,
+            tenant_id = %tenant_shard_id,
             %timeline_id,
             %req_lsn,
             "Preparing basebackup for timeline",
         );
 
-        let tti = TenantTimelineId::new(tenant_shard_id.tenant_id, timeline_id);
+        let tti = TenantTimelineId::new(tenant_shard_id, timeline_id);
 
         // TODO(diko): I don't think we will hit the limit,
         // but if we do, it makes sense to try to evict oldest entries. here
@@ -591,7 +590,7 @@ impl BackgroundTask {
         if tenant_state != TenantState::Active {
             anyhow::bail!(
                 "Tenant {} is not active, current state: {:?}",
-                tenant_shard_id.tenant_id,
+                tenant_shard_id,
                 tenant_state
             )
         }
@@ -610,7 +609,7 @@ impl BackgroundTask {
             return Ok(());
         }
 
-        let entry_tmp_path = self.entry_tmp_path(tenant_shard_id.tenant_id, timeline_id, req_lsn);
+        let entry_tmp_path = self.entry_tmp_path(tenant_shard_id, timeline_id, req_lsn);
 
         let res = self
             .prepare_basebackup_tmp(&entry_tmp_path, &timeline, req_lsn)
@@ -640,10 +639,10 @@ impl BackgroundTask {
         // from the main directory, and the entry access will cause a cache miss.
         let entry_path = self
             .c
-            .entry_path(tenant_shard_id.tenant_id, timeline_id, req_lsn);
+            .entry_path(tenant_shard_id, timeline_id, req_lsn);
         tokio::fs::rename(&entry_tmp_path, &entry_path).await?;
 
-        self.upsert_entry(tenant_shard_id.tenant_id, timeline_id, entry)
+        self.upsert_entry(tenant_shard_id, timeline_id, entry)
             .await;
 
         self.prepare_ok_count.inc();

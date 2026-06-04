@@ -16,7 +16,6 @@ use pageserver_api::key::Key;
 use pageserver_api::keyspace::KeySpaceAccum;
 use pageserver_api::pagestream_api::{PagestreamGetPageRequest, PagestreamRequest};
 use pageserver_api::reltag::RelTag;
-use pageserver_api::shard::TenantShardId;
 use pageserver_client_grpc::{self as client_grpc, ShardSpec};
 use pageserver_page_api as page_api;
 use rand::prelude::*;
@@ -24,7 +23,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
-use utils::id::TenantTimelineId;
+use utils::id::{TenantId, TenantTimelineId};
 use utils::lsn::Lsn;
 use utils::shard::ShardIndex;
 
@@ -207,7 +206,7 @@ async fn main_impl(
                 async move {
                     let partitioning = mgmt_api_client
                         .keyspace(
-                            TenantShardId::unsharded(timeline.tenant_id),
+                            TenantId::unsharded(timeline.tenant_id),
                             timeline.timeline_id,
                         )
                         .await?;

@@ -3,8 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use pageserver_api::models::{TenantConfig, TenantConfigRequest};
-use pageserver_api::shard::TenantShardId;
-use utils::id::TenantTimelineId;
+use utils::id::{TenantId, TenantTimelineId};
 use utils::lsn::Lsn;
 
 /// Ingest aux files into the pageserver.
@@ -59,7 +58,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     .await?;
 
     let timeline = timelines[0];
-    let tenant_shard_id = TenantShardId::unsharded(timeline.tenant_id);
+    let tenant_shard_id = TenantId::unsharded(timeline.tenant_id);
     let timeline_id = timeline.timeline_id;
 
     println!("operating on timeline {timeline}");

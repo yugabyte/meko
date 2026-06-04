@@ -35,7 +35,6 @@ use pageserver_api::pagestream_api::{
     PagestreamProtocolVersion, PagestreamRequest,
 };
 use pageserver_api::reltag::SlruKind;
-use pageserver_api::shard::TenantShardId;
 use pageserver_page_api::proto;
 use pageserver_page_api::{self as page_api, GetPageSplitter};
 use postgres_backend::{
@@ -2323,7 +2322,7 @@ impl PageServerHandler {
     async fn handle_make_lsn_lease<IO>(
         &mut self,
         pgb: &mut PostgresBackend<IO>,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         lsn: Lsn,
         ctx: &RequestContext,
@@ -2336,7 +2335,7 @@ impl PageServerHandler {
             .as_mut()
             .unwrap()
             .get(
-                tenant_shard_id.tenant_id,
+                tenant_shard_id,
                 timeline_id,
                 ShardSelector::Known(tenant_shard_id.to_index()),
             )
@@ -2525,7 +2524,7 @@ impl PageServerHandler {
                     info_span!(
                         target: PERF_TRACE_TARGET,
                         "GET_VECTORED",
-                        tenant_id = %timeline.tenant_shard_id.tenant_id,
+                        tenant_id = %timeline.tenant_shard_id,
                         timeline_id = %timeline.timeline_id,
                         shard = %timeline.tenant_shard_id.shard_slug(),
                         %max_effective_lsn
@@ -2865,7 +2864,7 @@ struct PageStreamCmd {
 /// `lease lsn tenant timeline lsn`
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct LeaseLsnCmd {
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     timeline_id: TimelineId,
     lsn: Lsn,
 }
@@ -3012,7 +3011,7 @@ impl LeaseLsnCmd {
                 query
             );
         }
-        let tenant_shard_id = TenantShardId::from_str(parameters[0])
+        let tenant_shard_id = TenantId::from_str(parameters[0])
             .with_context(|| format!("Failed to parse tenant id from {}", parameters[0]))?;
         let timeline_id = TimelineId::from_str(parameters[1])
             .with_context(|| format!("Failed to parse timeline id from {}", parameters[1]))?;
@@ -3291,7 +3290,7 @@ where
                     .record("tenant_id", field::display(tenant_shard_id))
                     .record("timeline_id", field::display(timeline_id));
 
-                self.check_permission(Some(tenant_shard_id.tenant_id))?;
+                self.check_permission(Some(tenant_shard_id))?;
 
                 COMPUTE_COMMANDS_COUNTERS
                     .for_command(ComputeCommandKind::LeaseLsn)
@@ -4565,7 +4564,7 @@ mod tests {
                 prev_lsn: Some(Lsn::from_str("0/16ABCDF").unwrap()),
             })
         );
-        let tenant_shard_id = TenantShardId::unsharded(tenant_id);
+        let tenant_shard_id = TenantId::unsharded(tenant_id);
         let cmd = PageServiceCmd::parse(&format!(
             "lease lsn {tenant_shard_id} {timeline_id} 0/16ABCDE"
         ))
@@ -4578,7 +4577,7 @@ mod tests {
                 lsn: Lsn::from_str("0/16ABCDE").unwrap(),
             })
         );
-        // yb-mode: TenantShardId::split is gone.
+        // yb-mode: TenantId::split is gone.
         let cmd = PageServiceCmd::parse("set a = b").unwrap();
         assert_eq!(cmd, PageServiceCmd::Set);
         let cmd = PageServiceCmd::parse("SET foo").unwrap();

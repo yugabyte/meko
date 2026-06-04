@@ -18,7 +18,7 @@ use pageserver_api::models::{
     TenantConfigPatchRequest, TenantConfigRequest, TenantShardSplitRequest,
     TenantShardSplitResponse,
 };
-use pageserver_api::shard::{ShardStripeSize, TenantShardId};
+use pageserver_api::shard::{ShardStripeSize};
 use pageserver_client::mgmt_api::{self};
 use reqwest::{Certificate, Method, StatusCode, Url};
 use safekeeper_api::models::TimelineLocateResponse;
@@ -144,7 +144,7 @@ enum Command {
     /// Migrate the attached location for a tenant shard to a specific pageserver.
     TenantShardMigrate {
         #[arg(long)]
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         #[arg(long)]
         node: NodeId,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
@@ -155,19 +155,19 @@ enum Command {
     /// Watch the location of a tenant shard evolve, e.g. while expecting it to migrate
     TenantShardWatch {
         #[arg(long)]
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     },
     /// Migrate the secondary location for a tenant shard to a specific pageserver.
     TenantShardMigrateSecondary {
         #[arg(long)]
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         #[arg(long)]
         node: NodeId,
     },
     /// Cancel any ongoing reconciliation for this shard
     TenantShardCancelReconcile {
         #[arg(long)]
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     },
     /// Set the pageserver tenant configuration of a tenant: this is the configuration structure
     /// that is passed through to pageservers, and does not affect storage controller behavior.
@@ -271,7 +271,7 @@ enum Command {
         /// the operation is performed on all shards. When a sharded tenant ID is
         /// specified, the operation is only performed on the specified shard.
         #[arg(long)]
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         #[arg(long)]
         timeline_id: TimelineId,
         /// Optional: Maximum download concurrency (default is 16)
@@ -492,7 +492,7 @@ async fn main() -> anyhow::Result<()> {
                     Method::POST,
                     "v1/tenant".to_string(),
                     Some(TenantCreateRequest {
-                        new_tenant_id: TenantShardId::unsharded(tenant_id),
+                        new_tenant_id: TenantId::unsharded(tenant_id),
                         generation: None,
                         shard_parameters: ShardParameters::default(),
                         placement_policy: Some(PlacementPolicy::Attached(1)),
@@ -503,7 +503,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::TenantDelete { tenant_id } => {
             let status = vps_client
-                .tenant_delete(TenantShardId::unsharded(tenant_id))
+                .tenant_delete(TenantId::unsharded(tenant_id))
                 .await?;
             tracing::info!("Delete status: {}", status);
         }
@@ -632,7 +632,8 @@ async fn main() -> anyhow::Result<()> {
                             .as_ref()
                             .cloned()
                             .unwrap_or("".to_string()),
-                        format!("{}", shard_zero.tenant_shard_id.shard_count.literal()),
+                        // yb-mode: always single-shard (count = 1).
+                        "1".to_string(),
                         format!("{:?}", tenant.stripe_size),
                         format!("{:?}", tenant.policy),
                         format!("{:?}", shard_zero.scheduling_policy),
@@ -1098,7 +1099,7 @@ async fn main() -> anyhow::Result<()> {
             let mut selected_node_idx = 0;
 
             struct MigrationMove {
-                tenant_shard_id: TenantShardId,
+                tenant_shard_id: TenantId,
                 from: NodeId,
                 to: NodeId,
             }
@@ -1394,7 +1395,7 @@ static WATCH_INTERVAL: Duration = Duration::from_secs(5);
 
 async fn watch_tenant_shard(
     storcon_client: Client,
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     until_migrated_to: Option<NodeId>,
 ) -> anyhow::Result<()> {
     if let Some(until_migrated_to) = until_migrated_to {
@@ -1407,7 +1408,7 @@ async fn watch_tenant_shard(
         let desc = storcon_client
             .dispatch::<(), TenantDescribeResponse>(
                 Method::GET,
-                format!("control/v1/tenant/{}", tenant_shard_id.tenant_id),
+                format!("control/v1/tenant/{}", tenant_shard_id),
                 None,
             )
             .await?;

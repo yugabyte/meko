@@ -35,7 +35,7 @@ use pageserver_api::models::{
     TimelineArchivalState, TimelineState, TopTenantShardItem,
     WalRedoManagerStatus,
 };
-use pageserver_api::shard::{ShardIdentity, ShardStripeSize, TenantShardId};
+use pageserver_api::shard::{ShardIdentity, ShardStripeSize};
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
 use remote_timeline_client::index::GcCompactionState;
@@ -93,7 +93,7 @@ use crate::{InitializationOrder, TEMP_FILE_SUFFIX, import_datadir, span, task_mg
 static INIT_DB_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(8));
 use utils::crashsafe;
 use utils::generation::Generation;
-use utils::id::TimelineId;
+use utils::id::{TenantId, TimelineId};
 use utils::lsn::{Lsn, RecordLsn};
 
 
@@ -264,7 +264,7 @@ pub struct TenantShard {
     // This is necessary to allow global config updates.
     tenant_conf: Arc<ArcSwap<AttachedTenantConf>>,
 
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
 
     // The detailed sharding information, beyond the number/count in tenant_shard_id
     shard_identity: ShardIdentity,
@@ -455,7 +455,7 @@ impl WalRedoManager {
 /// This type has a much smaller memory impact than [`Timeline`], and thus we can store many
 /// more offloaded timelines than we can manage ones that aren't.
 pub struct OffloadedTimeline {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
     pub timeline_id: TimelineId,
     pub ancestor_timeline_id: Option<TimelineId>,
     /// Whether to retain the branch lsn at the ancestor or not
@@ -499,7 +499,7 @@ impl Drop for OffloadedTimelineMetricsGuard {
 impl OffloadedTimeline {
     /// Obtains an offloaded timeline from a given timeline object.
     ///
-    fn from_manifest(tenant_shard_id: TenantShardId, manifest: &OffloadedTimelineManifest) -> Self {
+    fn from_manifest(tenant_shard_id: TenantId, manifest: &OffloadedTimelineManifest) -> Self {
         // We expect to reach this case in tenant loading, where the `retain_lsn` is populated in the parent's `gc_info`
         // by the `initialize_gc_info` function.
         let OffloadedTimelineManifest {
@@ -552,7 +552,7 @@ impl OffloadedTimeline {
                     .unwrap()
                     .remove_child_offloaded(self.timeline_id);
                 if !removal_happened {
-                    tracing::error!(tenant_id = %self.tenant_shard_id.tenant_id, shard_id = %self.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id,
+                    tracing::error!(tenant_id = %self.tenant_shard_id, shard_id = %self.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id,
                         "Couldn't remove retain_lsn entry from offloaded timeline's parent: already removed");
                 }
             }
@@ -607,7 +607,7 @@ impl TimelineOrOffloaded {
             }
         }
     }
-    pub fn tenant_shard_id(&self) -> TenantShardId {
+    pub fn tenant_shard_id(&self) -> TenantId {
         self.arc_ref().tenant_shard_id()
     }
     pub fn timeline_id(&self) -> TimelineId {
@@ -633,7 +633,7 @@ pub enum TimelineOrOffloadedArcRef<'a> {
 }
 
 impl TimelineOrOffloadedArcRef<'_> {
-    pub fn tenant_shard_id(&self) -> TenantShardId {
+    pub fn tenant_shard_id(&self) -> TenantId {
         match self {
             TimelineOrOffloadedArcRef::Timeline(timeline) => timeline.tenant_shard_id,
             TimelineOrOffloadedArcRef::Offloaded(offloaded) => offloaded.tenant_shard_id,
@@ -665,13 +665,13 @@ pub enum GetTimelineError {
     ShuttingDown,
     #[error("Timeline {tenant_id}/{timeline_id} is not active, state: {state:?}")]
     NotActive {
-        tenant_id: TenantShardId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         state: TimelineState,
     },
     #[error("Timeline {tenant_id}/{timeline_id} was not found")]
     NotFound {
-        tenant_id: TenantShardId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
     },
 }
@@ -1062,7 +1062,7 @@ impl TenantShard {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn(
         conf: &'static PageServerConf,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         resources: TenantSharedResources,
         attached_conf: AttachedTenantConf,
         shard_identity: ShardIdentity,
@@ -1273,7 +1273,7 @@ impl TenantShard {
 
                 Ok(())
             }
-            .instrument(tracing::info_span!(parent: None, "attach", tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(), gen=?generation)),
+            .instrument(tracing::info_span!(parent: None, "attach", tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(), gen=?generation)),
         );
         Ok(tenant)
     }
@@ -1290,7 +1290,7 @@ impl TenantShard {
         // `pageserver.timeline_state`; one SQL fetch builds the full
         // preload. Offloaded timelines aren't supported in yb-mode, so
         // the tenant-manifest blob is also skipped.
-        let tenant_id = self.tenant_shard_id.tenant_id;
+        let tenant_id = self.tenant_shard_id;
         let rows = tokio::select! {
             r = self.compute_page_store.list_timelines(tenant_id) => r?,
             _ = cancel.cancelled() => anyhow::bail!("cancelled"),
@@ -1827,7 +1827,7 @@ impl TenantShard {
             })
     }
 
-    pub(crate) fn tenant_shard_id(&self) -> TenantShardId {
+    pub(crate) fn tenant_shard_id(&self) -> TenantId {
         self.tenant_shard_id
     }
 
@@ -2273,7 +2273,7 @@ impl TenantShard {
                     *current_state = TenantState::Activating(ActivatingFrom::Attaching);
                 }
             }
-            debug!(tenant_id = %self.tenant_shard_id.tenant_id, shard_id = %self.tenant_shard_id.shard_slug(), "Activating tenant");
+            debug!(tenant_id = %self.tenant_shard_id, shard_id = %self.tenant_shard_id.shard_slug(), "Activating tenant");
             activating = true;
             // Continue outside the closure. We need to grab timelines.lock()
             // and we plan to turn it into a tokio::sync::Mutex in a future patch.
@@ -2302,7 +2302,7 @@ impl TenantShard {
                 activated_timelines += 1;
             }
 
-            let tid = self.tenant_shard_id.tenant_id.to_string();
+            let tid = self.tenant_shard_id.to_string();
             let shard_id = self.tenant_shard_id.shard_slug().to_string();
             let offloaded_timeline_count = timelines_offloaded_accessor.len();
             TENANT_OFFLOADED_TIMELINES
@@ -2323,7 +2323,7 @@ impl TenantShard {
                 // times to activate. see https://github.com/neondatabase/neon/issues/4025
                 info!(
                     since_creation_millis = elapsed.as_millis(),
-                    tenant_id = %self.tenant_shard_id.tenant_id,
+                    tenant_id = %self.tenant_shard_id,
                     shard_id = %self.tenant_shard_id.shard_slug(),
                     activated_timelines,
                     total_timelines,
@@ -2691,9 +2691,8 @@ impl TenantShard {
             );
         }
 
-        result.max_logical_size_per_shard = result
-            .max_logical_size
-            .div_ceil(self.tenant_shard_id.shard_count.count() as u64);
+        // yb-mode: always single-shard.
+        result.max_logical_size_per_shard = result.max_logical_size;
 
         result
     }
@@ -2958,7 +2957,7 @@ impl TenantShard {
         attached_conf: AttachedTenantConf,
         shard_identity: ShardIdentity,
         walredo_mgr: Option<Arc<WalRedoManager>>,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         remote_storage: GenericRemoteStorage,
         deletion_queue_client: DeletionQueueClient,
         basebackup_cache: Arc<BasebackupCache>,
@@ -3060,7 +3059,7 @@ impl TenantShard {
     /// Locate and load config
     pub(super) fn load_tenant_config(
         conf: &'static PageServerConf,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
     ) -> Result<LocationConf, LoadConfigError> {
         let config_path = conf.tenant_location_config_path(tenant_shard_id);
 
@@ -3096,10 +3095,10 @@ impl TenantShard {
     ///
     /// NB: make sure to call `ShardIdentity::assert_equal` before persisting a new config, to avoid
     /// changes to shard parameters that may result in data corruption.
-    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug()))]
+    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()))]
     pub(super) async fn persist_tenant_config(
         conf: &'static PageServerConf,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
         location_conf: &LocationConf,
     ) -> std::io::Result<()> {
         let config_path = conf.tenant_location_config_path(tenant_shard_id);
@@ -3107,9 +3106,9 @@ impl TenantShard {
         Self::persist_tenant_config_at(tenant_shard_id, &config_path, location_conf).await
     }
 
-    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug()))]
+    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()))]
     pub(super) async fn persist_tenant_config_at(
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
         config_path: &Utf8Path,
         location_conf: &LocationConf,
     ) -> std::io::Result<()> {
@@ -3660,7 +3659,7 @@ impl TenantShard {
             || async {
                 self::remote_timeline_client::upload_initdb_dir(
                     &self.remote_storage,
-                    &self.tenant_shard_id.tenant_id,
+                    &self.tenant_shard_id,
                     timeline_id,
                     pgdata_zstd.try_clone().await?,
                     tar_zst_size,
@@ -3732,11 +3731,11 @@ impl TenantShard {
         if let Some(existing_initdb_timeline_id) = load_existing_initdb {
             if existing_initdb_timeline_id != timeline_id {
                 let source_path = &remote_initdb_archive_path(
-                    &self.tenant_shard_id.tenant_id,
+                    &self.tenant_shard_id,
                     &existing_initdb_timeline_id,
                 );
                 let dest_path =
-                    &remote_initdb_archive_path(&self.tenant_shard_id.tenant_id, &timeline_id);
+                    &remote_initdb_archive_path(&self.tenant_shard_id, &timeline_id);
 
                 // if this fails, it will get retried by retried control plane requests
                 self.remote_storage

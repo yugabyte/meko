@@ -6,7 +6,6 @@ use bytes::Bytes;
 use detach_ancestor::AncestorDetached;
 use http_utils::error::HttpErrorBody;
 use pageserver_api::models::*;
-use pageserver_api::shard::TenantShardId;
 use postgres_versioninfo::PgMajorVersion;
 pub use reqwest::Body as ReqwestBody;
 use reqwest::{IntoUrl, Method, StatusCode, Url};
@@ -107,7 +106,7 @@ impl Client {
 
     pub async fn tenant_details(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<pageserver_api::models::TenantDetails> {
         let uri = format!("{}/v1/tenant/{tenant_shard_id}", self.mgmt_api_endpoint);
         self.get(uri)
@@ -119,7 +118,7 @@ impl Client {
 
     pub async fn list_timelines(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<Vec<pageserver_api::models::TimelineInfo>> {
         let uri = format!(
             "{}/v1/tenant/{tenant_shard_id}/timeline",
@@ -134,7 +133,7 @@ impl Client {
 
     pub async fn timeline_info(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         force_await_logical_size: ForceAwaitLogicalSize,
     ) -> Result<pageserver_api::models::TimelineInfo> {
@@ -157,7 +156,7 @@ impl Client {
 
     pub async fn keyspace(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
     ) -> Result<pageserver_api::models::partitioning::Partitioning> {
         let uri = format!(
@@ -221,7 +220,7 @@ impl Client {
     /// The tenant deletion API can return 202 if deletion is incomplete, or
     /// 404 if it is complete.  Callers are responsible for checking the status
     /// code and retrying.  Error codes other than 404 will return Err().
-    pub async fn tenant_delete(&self, tenant_shard_id: TenantShardId) -> Result<StatusCode> {
+    pub async fn tenant_delete(&self, tenant_shard_id: TenantId) -> Result<StatusCode> {
         let uri = format!("{}/v1/tenant/{tenant_shard_id}", self.mgmt_api_endpoint);
 
         match self.request(Method::DELETE, &uri, ()).await {
@@ -239,7 +238,7 @@ impl Client {
 
     pub async fn tenant_time_travel_remote_storage(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timestamp: &str,
         done_if_after: &str,
     ) -> Result<()> {
@@ -253,7 +252,7 @@ impl Client {
 
     pub async fn tenant_timeline_compact(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         force_image_layer_creation: bool,
         must_force_image_layer_creation: bool,
@@ -292,7 +291,7 @@ impl Client {
     /* BEGIN_HADRON */
     pub async fn tenant_timeline_describe(
         &self,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
         timeline_id: &TimelineId,
     ) -> Result<TimelineInfo> {
         let mut path = reqwest::Url::parse(&format!(
@@ -308,7 +307,7 @@ impl Client {
         Ok(body)
     }
 
-    pub async fn list_tenant_visible_size(&self) -> Result<BTreeMap<TenantShardId, u64>> {
+    pub async fn list_tenant_visible_size(&self) -> Result<BTreeMap<TenantId, u64>> {
         let uri = format!("{}/v1/list_tenant_visible_size", self.mgmt_api_endpoint);
         let resp = self.get(&uri).await?;
         resp.json().await.map_err(Error::ReceiveBody)
@@ -342,7 +341,7 @@ impl Client {
 
     pub async fn tenant_secondary_download(
         &self,
-        tenant_id: TenantShardId,
+        tenant_id: TenantId,
         wait: Option<std::time::Duration>,
     ) -> Result<(StatusCode, SecondaryProgress)> {
         let mut path = reqwest::Url::parse(&format!(
@@ -364,7 +363,7 @@ impl Client {
 
     pub async fn tenant_secondary_status(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<SecondaryProgress> {
         let path = reqwest::Url::parse(&format!(
             "{}/v1/tenant/{}/secondary/status",
@@ -379,7 +378,7 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn tenant_heatmap_upload(&self, tenant_id: TenantShardId) -> Result<()> {
+    pub async fn tenant_heatmap_upload(&self, tenant_id: TenantId) -> Result<()> {
         let path = reqwest::Url::parse(&format!(
             "{}/v1/tenant/{}/heatmap_upload",
             self.mgmt_api_endpoint, tenant_id
@@ -392,7 +391,7 @@ impl Client {
 
     pub async fn location_config(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         config: LocationConfig,
         flush_ms: Option<std::time::Duration>,
         lazy: bool,
@@ -430,7 +429,7 @@ impl Client {
 
     pub async fn get_location_config(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<Option<LocationConfig>> {
         let path = format!(
             "{}/v1/location_config/{tenant_shard_id}",
@@ -445,7 +444,7 @@ impl Client {
 
     pub async fn timeline_create(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         req: &TimelineCreateRequest,
     ) -> Result<TimelineInfo> {
         let uri = format!(
@@ -464,7 +463,7 @@ impl Client {
     /// code and retrying.  Error codes other than 403 will return Err().
     pub async fn timeline_delete(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
     ) -> Result<StatusCode> {
         let uri = format!(
@@ -487,7 +486,7 @@ impl Client {
 
     pub async fn timeline_detail(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
     ) -> Result<TimelineInfo> {
         let uri = format!(
@@ -504,7 +503,7 @@ impl Client {
 
     pub async fn timeline_archival_config(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         req: &TimelineArchivalConfigRequest,
     ) -> Result<()> {
@@ -522,7 +521,7 @@ impl Client {
 
     pub async fn timeline_detach_ancestor(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         behavior: Option<DetachBehavior>,
     ) -> Result<AncestorDetached> {
@@ -547,7 +546,7 @@ impl Client {
 
     pub async fn timeline_block_unblock_gc(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         dir: BlockUnblock,
     ) -> Result<()> {
@@ -561,7 +560,7 @@ impl Client {
 
     pub async fn timeline_download_heatmap_layers(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         concurrency: Option<usize>,
         recurse: bool,
@@ -583,7 +582,7 @@ impl Client {
         self.request(Method::POST, path, ()).await.map(|_| ())
     }
 
-    pub async fn tenant_reset(&self, tenant_shard_id: TenantShardId) -> Result<()> {
+    pub async fn tenant_reset(&self, tenant_shard_id: TenantId) -> Result<()> {
         let uri = format!(
             "{}/v1/tenant/{}/reset",
             self.mgmt_api_endpoint, tenant_shard_id
@@ -597,7 +596,7 @@ impl Client {
 
     pub async fn tenant_shard_split(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         req: TenantShardSplitRequest,
     ) -> Result<TenantShardSplitResponse> {
         let uri = format!(
@@ -613,7 +612,7 @@ impl Client {
 
     pub async fn timeline_list(
         &self,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
     ) -> Result<Vec<TimelineInfo>> {
         let uri = format!(
             "{}/v1/tenant/{}/timeline",
@@ -628,7 +627,7 @@ impl Client {
 
     pub async fn tenant_synthetic_size(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<TenantHistorySize> {
         let uri = format!(
             "{}/v1/tenant/{}/synthetic_size",
@@ -664,7 +663,7 @@ impl Client {
 
     pub async fn ingest_aux_files(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         aux_files: HashMap<String, String>,
     ) -> Result<bool> {
@@ -688,7 +687,7 @@ impl Client {
 
     pub async fn list_aux_files(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         lsn: Lsn,
     ) -> Result<HashMap<String, Bytes>> {
@@ -768,7 +767,7 @@ impl Client {
 
     pub async fn timeline_init_lsn_lease(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         lsn: Lsn,
     ) -> Result<LsnLease> {
@@ -802,7 +801,7 @@ impl Client {
 
     pub async fn wait_lsn(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         request: TenantWaitLsnRequest,
     ) -> Result<StatusCode> {
         let uri = format!(
@@ -817,7 +816,7 @@ impl Client {
 
     pub async fn activate_post_import(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         activate_timeline_timeout: Duration,
     ) -> Result<TimelineInfo> {

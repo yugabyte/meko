@@ -6,8 +6,6 @@ use std::str::FromStr;
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 
-use crate::id::TenantId;
-
 #[derive(Ord, PartialOrd, Eq, PartialEq, Clone, Copy, Serialize, Deserialize, Debug, Hash)]
 pub struct ShardNumber(pub u8);
 
@@ -18,7 +16,7 @@ pub struct ShardCount(pub u8);
 ///
 /// For use within the context of a particular tenant, when we need to know which shard we're
 /// dealing with, but do not need to know the full ShardIdentity (because we won't be doing
-/// any page->shard mapping), and do not need to know the fully qualified TenantShardId.
+/// any page->shard mapping), and do not need to know the fully qualified TenantId.
 #[derive(Eq, PartialEq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct ShardIndex {
     pub shard_number: ShardNumber,
@@ -31,29 +29,12 @@ pub struct ShardIndex {
 #[derive(Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Debug)]
 pub struct ShardStripeSize(pub u32);
 
-/// Formatting helper, for generating the `shard_id` label in traces.
-pub struct ShardSlug<'a>(&'a TenantShardId);
-
-/// TenantShardId globally identifies a particular shard in a particular tenant.
-///
-/// These are written as `<TenantId>-<ShardSlug>`, for example:
-///   # The second shard in a two-shard tenant
-///   072f1291a5310026820b2fe4b2968934-0102
-///
-/// If the `ShardCount` is _unsharded_, the `TenantShardId` is written without
-/// a shard suffix and is equivalent to the encoding of a `TenantId`: this enables
-/// an unsharded [`TenantShardId`] to be used interchangably with a [`TenantId`].
-///
-/// The human-readable encoding of an unsharded TenantShardId, such as used in API URLs,
-/// is both forward and backward compatible with TenantId: a legacy TenantId can be
-/// decoded as a TenantShardId, and when re-encoded it will be parseable
-/// as a TenantId.
-#[derive(Eq, PartialEq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct TenantShardId {
-    pub tenant_id: TenantId,
-    pub shard_number: ShardNumber,
-    pub shard_count: ShardCount,
-}
+// yb-mode: tenants are never split across pageservers (YugabyteDB
+// tablet-shards the keyspace itself), so the upstream
+// `TenantShardId`/`TenantId` pair has been collapsed to a single
+// `TenantId`. This module re-exports it (via `use`) and hangs the
+// yb-mode shim helpers below.
+pub use crate::id::TenantId;
 
 impl ShardCount {
     pub const MAX: Self = Self(u8::MAX);
@@ -64,8 +45,8 @@ impl ShardCount {
     }
 
     /// The internal value of a ShardCount may be zero, which means "1 shard, but use
-    /// legacy format for TenantShardId that excludes the shard suffix", also known
-    /// as [`TenantShardId::unsharded`].
+    /// legacy format for TenantId that excludes the shard suffix", also known
+    /// as [`TenantId::unsharded`].
     ///
     /// This method returns the actual number of shards, i.e. if our internal value is
     /// zero, we return 1 (unsharded tenants have 1 shard).
@@ -81,7 +62,7 @@ impl ShardCount {
     }
 
     /// Whether the `ShardCount` is for an unsharded tenant, so uses one shard but
-    /// uses the legacy format for `TenantShardId`. See also the documentation for
+    /// uses the legacy format for `TenantId`. See also the documentation for
     /// [`Self::count`].
     pub fn is_unsharded(&self) -> bool {
         self.0 == 0
@@ -98,62 +79,39 @@ impl ShardNumber {
     pub const MAX: Self = Self(u8::MAX);
 }
 
-impl TenantShardId {
+/// yb-mode shims: `TenantId` is just `TenantId`, so these methods
+/// live on `TenantId` itself. They exist so upstream call-sites that
+/// reference the sharded API keep compiling without conditional code.
+impl TenantId {
+    /// Identity shim — yb-mode tenants are always unsharded.
     pub fn unsharded(tenant_id: TenantId) -> Self {
-        Self {
-            tenant_id,
-            shard_number: ShardNumber(0),
-            shard_count: ShardCount(0),
-        }
+        tenant_id
     }
 
-    /// The range of all TenantShardId that belong to a particular TenantId.  This is useful when
-    /// you have a BTreeMap of TenantShardId, and are querying by TenantId.
+    /// Degenerate single-value range — yb-mode tenants are single-shard.
     pub fn tenant_range(tenant_id: TenantId) -> RangeInclusive<Self> {
-        RangeInclusive::new(
-            Self {
-                tenant_id,
-                shard_number: ShardNumber(0),
-                shard_count: ShardCount(0),
-            },
-            Self {
-                tenant_id,
-                shard_number: ShardNumber::MAX,
-                shard_count: ShardCount::MAX,
-            },
-        )
+        RangeInclusive::new(tenant_id, tenant_id)
     }
 
     pub fn range(&self) -> RangeInclusive<Self> {
         RangeInclusive::new(*self, *self)
     }
 
-    pub fn shard_slug(&self) -> impl std::fmt::Display + '_ {
-        ShardSlug(self)
+    pub fn shard_slug(&self) -> &'static str {
+        "0000"
     }
 
-    /// Convenience for code that has special behavior on the 0th shard.
     pub fn is_shard_zero(&self) -> bool {
-        self.shard_number == ShardNumber(0)
+        true
     }
 
-    /// The "unsharded" value is distinct from simply having a single shard: it represents
-    /// a tenant which is not shard-aware at all, and whose storage paths will not include
-    /// a shard suffix.
     pub fn is_unsharded(&self) -> bool {
-        self.shard_number == ShardNumber(0) && self.shard_count.is_unsharded()
+        true
     }
 
-    /// Convenience for dropping the tenant_id and just getting the ShardIndex: this
-    /// is useful when logging from code that is already in a span that includes tenant ID, to
-    /// keep messages reasonably terse.
     pub fn to_index(&self) -> ShardIndex {
-        ShardIndex {
-            shard_number: self.shard_number,
-            shard_count: self.shard_count,
-        }
+        ShardIndex::unsharded()
     }
-
 }
 
 impl std::fmt::Display for ShardNumber {
@@ -174,39 +132,9 @@ impl std::fmt::Display for ShardStripeSize {
     }
 }
 
-impl std::fmt::Display for ShardSlug<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:02x}{:02x}",
-            self.0.shard_number.0, self.0.shard_count.0
-        )
-    }
-}
-
-impl std::fmt::Display for TenantShardId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // yb-mode tenants are always unsharded: never emit a shard suffix.
-        self.tenant_id.fmt(f)
-    }
-}
-
-impl std::fmt::Debug for TenantShardId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Debug is the same as Display: the compact hex representation
-        write!(f, "{self}")
-    }
-}
-
-impl std::str::FromStr for TenantShardId {
-    type Err = hex::FromHexError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // yb-mode: 32-char tenant-id hex only — sharded suffix form
-        // (`-<shard_slug>`) is no longer accepted.
-        Ok(Self::unsharded(TenantId::from_str(s)?))
-    }
-}
+// yb-mode: `TenantId` is `TenantId`, so Display/Debug/FromStr
+// come from `TenantId` directly — see `crate::id`. The encoded form
+// is the 32-char tenant-id hex (no shard suffix).
 
 impl ShardIndex {
     pub fn new(number: ShardNumber, count: ShardCount) -> Self {
@@ -230,7 +158,7 @@ impl ShardIndex {
     }
 
     /// For use in constructing remote storage paths: concatenate this with a TenantId
-    /// to get a fully qualified TenantShardId.
+    /// to get a fully qualified TenantId.
     ///
     /// Backward compat: this function returns an empty string if Self::is_unsharded, such
     /// that the legacy pre-sharding remote key format is preserved.
@@ -284,26 +212,7 @@ impl From<[u8; 2]> for ShardIndex {
     }
 }
 
-impl Serialize for TenantShardId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // Forward to TenantId — yb-mode tenants are always unsharded,
-        // so the encoded form is just the 32-char tenant-id hex
-        // (human) / 16-byte array (binary).
-        self.tenant_id.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for TenantShardId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        TenantId::deserialize(deserializer).map(Self::unsharded)
-    }
-}
+// yb-mode: Serialize/Deserialize for TenantId come from `TenantId`.
 
 impl Serialize for ShardIndex {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

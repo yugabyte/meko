@@ -231,7 +231,7 @@ impl<'t> UninitializedTimeline<'t> {
 impl Drop for UninitializedTimeline<'_> {
     fn drop(&mut self) {
         if let Some((timeline, create_guard)) = self.raw_timeline.take() {
-            let _entered = info_span!("drop_uninitialized_timeline", tenant_id = %self.owning_tenant.tenant_shard_id.tenant_id, shard_id = %self.owning_tenant.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id).entered();
+            let _entered = info_span!("drop_uninitialized_timeline", tenant_id = %self.owning_tenant.tenant_shard_id, shard_id = %self.owning_tenant.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id).entered();
             if self.needs_shutdown && !timeline.gate.close_complete() {
                 // This should not happen: caller should call [`Self::abort`] on failures
                 tracing::warn!(

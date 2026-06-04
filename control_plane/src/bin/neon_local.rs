@@ -45,7 +45,7 @@ use pageserver_api::controller_api::{
 use pageserver_api::models::{
     ShardParameters, TenantConfigRequest, TimelineCreateRequest, TimelineInfo,
 };
-use pageserver_api::shard::{DEFAULT_STRIPE_SIZE, ShardCount, ShardStripeSize, TenantShardId};
+use pageserver_api::shard::{DEFAULT_STRIPE_SIZE, ShardCount, ShardStripeSize};
 use postgres_backend::AuthType;
 use safekeeper_api::membership::{SafekeeperGeneration, SafekeeperId};
 use safekeeper_api::{
@@ -242,7 +242,7 @@ enum TimelineCmd {
 struct TimelineListCmdArgs {
     /// Tenant ID, as a 32-byte hexadecimal string.
     #[clap(long = "tenant-id")]
-    tenant_shard_id: Option<TenantShardId>,
+    tenant_shard_id: Option<TenantId>,
 }
 
 /// Create a new timeline, branching off from another timeline.
@@ -537,7 +537,7 @@ enum EndpointCmd {
 struct EndpointListCmdArgs {
     /// Tenant ID, as a 32-byte hexadecimal string.
     #[clap(long = "tenant-id")]
-    tenant_shard_id: Option<TenantShardId>,
+    tenant_shard_id: Option<TenantId>,
 }
 
 /// Create a compute endpoint.
@@ -860,7 +860,7 @@ fn print_timelines_tree(
                     info: t.clone(),
                     children: BTreeSet::new(),
                     name: timeline_name_mappings
-                        .remove(&TenantTimelineId::new(t.tenant_id.tenant_id, t.timeline_id)),
+                        .remove(&TenantTimelineId::new(t.tenant_id, t.timeline_id)),
                 },
             )
         })
@@ -976,13 +976,13 @@ fn get_tenant_id(
 /// Helper function to get tenant-shard ID from an optional --tenant_id option or from the config file,
 /// for commands that accept a shard suffix
 fn get_tenant_shard_id(
-    tenant_shard_id_arg: Option<TenantShardId>,
+    tenant_shard_id_arg: Option<TenantId>,
     env: &local_env::LocalEnv,
-) -> anyhow::Result<TenantShardId> {
+) -> anyhow::Result<TenantId> {
     if let Some(tenant_id_from_arguments) = tenant_shard_id_arg {
         Ok(tenant_id_from_arguments)
     } else if let Some(default_id) = env.default_tenant_id {
-        Ok(TenantShardId::unsharded(default_id))
+        Ok(TenantId::unsharded(default_id))
     } else {
         anyhow::bail!("No tenant shard id. Use --tenant-id, or set a default tenant");
     }
@@ -1147,7 +1147,7 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
                     // storage controller expects a shard-naive tenant_id in this attribute, and the TenantCreateRequest
                     // type is used both in the storage controller (for creating tenants) and in the pageserver (for
                     // creating shards)
-                    new_tenant_id: TenantShardId::unsharded(tenant_id),
+                    new_tenant_id: TenantId::unsharded(tenant_id),
                     generation: None,
                     shard_parameters: ShardParameters {
                         count: ShardCount::new(args.shard_count),
@@ -1277,7 +1277,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                 println!("Creating timeline on safekeeper ...");
                 let timeline_info = pageserver
                     .timeline_info(
-                        TenantShardId::unsharded(tenant_id),
+                        TenantId::unsharded(tenant_id),
                         timeline_id,
                         pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
                     )
@@ -1385,7 +1385,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
             for (endpoint_id, endpoint) in cplane
                 .endpoints
                 .iter()
-                .filter(|(_, endpoint)| endpoint.tenant_id == tenant_shard_id.tenant_id)
+                .filter(|(_, endpoint)| endpoint.tenant_id == tenant_shard_id)
             {
                 let lsn_str = match endpoint.mode {
                     ComputeMode::Static(lsn) => {
@@ -1402,7 +1402,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
 
                 let branch_name = timeline_name_mappings
                     .get(&TenantTimelineId::new(
-                        tenant_shard_id.tenant_id,
+                        tenant_shard_id,
                         endpoint.timeline_id,
                     ))
                     .map(|name| name.as_str())

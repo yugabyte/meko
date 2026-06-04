@@ -7,7 +7,6 @@ use pageserver_api::models::{
     TimelineArchivalConfigRequest,
     TimelineCreateRequest, TimelineInfo, TopTenantShardsRequest, TopTenantShardsResponse,
 };
-use pageserver_api::shard::TenantShardId;
 use pageserver_client::BlockUnblock;
 use pageserver_client::mgmt_api::{Client, Result};
 use reqwest::StatusCode;
@@ -63,7 +62,7 @@ impl PageserverClient {
         }
     }
 
-    pub(crate) async fn tenant_delete(&self, tenant_shard_id: TenantShardId) -> Result<StatusCode> {
+    pub(crate) async fn tenant_delete(&self, tenant_shard_id: TenantId) -> Result<StatusCode> {
         measured_request!(
             "tenant",
             crate::metrics::Method::Delete,
@@ -74,7 +73,7 @@ impl PageserverClient {
 
     pub(crate) async fn tenant_time_travel_remote_storage(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timestamp: &str,
         done_if_after: &str,
     ) -> Result<()> {
@@ -91,7 +90,7 @@ impl PageserverClient {
     #[expect(dead_code)]
     pub(crate) async fn tenant_timeline_compact(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         force_image_layer_creation: bool,
         wait_until_done: bool,
@@ -116,7 +115,7 @@ impl PageserverClient {
     /* BEGIN_HADRON */
     pub(crate) async fn tenant_timeline_describe(
         &self,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
         timeline_id: &TimelineId,
     ) -> Result<TimelineInfo> {
         measured_request!(
@@ -155,7 +154,7 @@ impl PageserverClient {
 
     pub(crate) async fn tenant_secondary_download(
         &self,
-        tenant_id: TenantShardId,
+        tenant_id: TenantId,
         wait: Option<std::time::Duration>,
     ) -> Result<(StatusCode, SecondaryProgress)> {
         measured_request!(
@@ -168,7 +167,7 @@ impl PageserverClient {
 
     pub(crate) async fn tenant_secondary_status(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<SecondaryProgress> {
         measured_request!(
             "tenant_secondary_status",
@@ -178,7 +177,7 @@ impl PageserverClient {
         )
     }
 
-    pub(crate) async fn tenant_heatmap_upload(&self, tenant_id: TenantShardId) -> Result<()> {
+    pub(crate) async fn tenant_heatmap_upload(&self, tenant_id: TenantId) -> Result<()> {
         measured_request!(
             "tenant_heatmap_upload",
             crate::metrics::Method::Post,
@@ -189,7 +188,7 @@ impl PageserverClient {
 
     pub(crate) async fn location_config(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         config: LocationConfig,
         flush_ms: Option<std::time::Duration>,
         lazy: bool,
@@ -215,7 +214,7 @@ impl PageserverClient {
 
     pub(crate) async fn get_location_config(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<Option<LocationConfig>> {
         measured_request!(
             "location_config",
@@ -227,7 +226,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_create(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         req: &TimelineCreateRequest,
     ) -> Result<TimelineInfo> {
         measured_request!(
@@ -240,7 +239,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_delete(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
     ) -> Result<StatusCode> {
         measured_request!(
@@ -255,7 +254,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_lease_lsn(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         lsn: Lsn,
     ) -> Result<LsnLease> {
@@ -272,7 +271,7 @@ impl PageserverClient {
     #[allow(unused)]
     pub(crate) async fn timeline_detail(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
     ) -> Result<TimelineInfo> {
         measured_request!(
@@ -287,7 +286,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_list(
         &self,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
     ) -> Result<Vec<TimelineInfo>> {
         measured_request!(
             "timelines",
@@ -299,7 +298,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_archival_config(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         req: &TimelineArchivalConfigRequest,
     ) -> Result<()> {
@@ -315,7 +314,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_detach_ancestor(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         behavior: Option<DetachBehavior>,
     ) -> Result<AncestorDetached> {
@@ -331,7 +330,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_block_unblock_gc(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         dir: BlockUnblock,
     ) -> Result<()> {
@@ -349,7 +348,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_download_heatmap_layers(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         concurrency: Option<usize>,
         recurse: bool,
@@ -402,7 +401,7 @@ impl PageserverClient {
 
     pub(crate) async fn wait_lsn(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         request: TenantWaitLsnRequest,
     ) -> Result<StatusCode> {
         measured_request!(
@@ -415,7 +414,7 @@ impl PageserverClient {
 
     pub(crate) async fn activate_post_import(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         timeline_activate_timeout: Duration,
     ) -> Result<TimelineInfo> {

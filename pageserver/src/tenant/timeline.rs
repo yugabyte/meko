@@ -29,7 +29,7 @@ use pageserver_api::models::{
     LsnLease, PageTraceEvent, RelSizeMigration, TimelineState,
 };
 use pageserver_api::reltag::{BlockNumber, RelTag};
-use pageserver_api::shard::{ShardIdentity, ShardIndex, ShardNumber, TenantShardId};
+use pageserver_api::shard::{ShardIdentity, ShardIndex, ShardNumber};
 use postgres_connection::PgConnectionConfig;
 use postgres_ffi::v14::xlog_utils;
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE, to_pg_timestamp};
@@ -40,7 +40,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::generation::Generation;
-use utils::id::TimelineId;
+use utils::id::{TenantId, TimelineId};
 use utils::logging::{MonitorSlowFutureCallback, monitor_slow_future};
 use utils::lsn::{AtomicLsn, Lsn, RecordLsn};
 use utils::postgres_client::PostgresClientProtocol;
@@ -102,7 +102,7 @@ pub struct Timeline {
 
     myself: Weak<Self>,
 
-    pub(crate) tenant_shard_id: TenantShardId,
+    pub(crate) tenant_shard_id: TenantId,
     pub timeline_id: TimelineId,
 
     /// The generation of the tenant that instantiated us: this is used for safety when writing remote objects.
@@ -1112,7 +1112,7 @@ impl Timeline {
             None
         };
         let row = crate::page_store::TimelineRow {
-            tenant_id: self.tenant_shard_id.tenant_id,
+            tenant_id: self.tenant_shard_id,
             timeline_id: self.timeline_id,
             disk_consistent_lsn: dc_lsn,
             applied_gc_cutoff_lsn: gc_cutoff,
@@ -1164,7 +1164,7 @@ impl Timeline {
         match pw
             .fpu_page_store()
             .cas_bump_generation_on_attach(
-                self.tenant_shard_id.tenant_id,
+                self.tenant_shard_id,
                 self.timeline_id,
                 self.generation,
             )
@@ -1180,7 +1180,7 @@ impl Timeline {
                 // shutdown via stale_gen detection on the live PS.
                 anyhow::bail!(
                     "attach refused: timeline {tenant}/{timeline} has live generation {live} > our generation {ours:?}",
-                    tenant = self.tenant_shard_id.tenant_id,
+                    tenant = self.tenant_shard_id,
                     timeline = self.timeline_id,
                     live = live_generation,
                     ours = self.generation,
@@ -1459,14 +1459,14 @@ impl Timeline {
     /// yb-mode: equivalent to `freeze_and_flush` (drain `PageWriter`
     /// row buffer into YB). The `u64` return is a legacy flush-token
     /// from the Neon flush_loop machinery — always 0 in yb-mode.
-    #[instrument(skip(self), fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id))]
+    #[instrument(skip(self), fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id))]
     pub(crate) async fn freeze(&self) -> Result<u64, FlushLayerError> {
         self.freeze_and_flush0().await?;
         Ok(0)
     }
 
     /// Freeze and flush the open in-memory layer, waiting for it to be written to disk.
-    #[instrument(skip(self), fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id))]
+    #[instrument(skip(self), fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id))]
     /// yb-pageserver durability checkpoint: drain the `PageWriter`
     /// row-INSERT buffer into YugabyteDB.
     ///
@@ -1770,7 +1770,7 @@ impl Timeline {
     /// Try to get a basebackup from the on-disk cache.
     pub(crate) async fn get_cached_basebackup(&self, lsn: Lsn) -> Option<tokio::fs::File> {
         self.basebackup_cache
-            .get(self.tenant_shard_id.tenant_id, self.timeline_id, lsn)
+            .get(self.tenant_shard_id, self.timeline_id, lsn)
             .await
     }
 
@@ -1920,7 +1920,7 @@ impl Timeline {
         metadata: &TimelineMetadata,
         ancestor: Option<Arc<Timeline>>,
         timeline_id: TimelineId,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         generation: Generation,
         shard_identity: ShardIdentity,
         walredo_mgr: Option<Arc<super::WalRedoManager>>,
@@ -1968,7 +1968,7 @@ impl Timeline {
             let internal_ps = &resources.fpu_page_store;
             let pw_cfg = &conf.yb_page_writer;
             let mut writer = crate::page_writer::PageWriter::new(
-                tenant_shard_id.tenant_id,
+                tenant_shard_id,
                 timeline_id,
                 generation,
                 compute_ps.clone(),
@@ -2016,7 +2016,7 @@ impl Timeline {
                     let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
                         .expect("invalid pg_version in timeline init");
                     Some(crate::image_materializer::ImageMaterializer::spawn(
-                        tenant_shard_id.tenant_id,
+                        tenant_shard_id,
                         timeline_id,
                         writer.clone(),
                         internal_ps.clone(),
@@ -2354,7 +2354,7 @@ impl Timeline {
                     .await;
                 Ok(())
             }
-            .instrument(info_span!(parent: None, "initial_size_calculation", tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id)),
+            .instrument(info_span!(parent: None, "initial_size_calculation", tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id)),
         );
     }
 
@@ -2853,14 +2853,14 @@ impl Drop for Timeline {
             // an unwrap(), to avoid panicking in a destructor and thereby aborting the process.
             if let Ok(mut gc_info) = ancestor.gc_info.write() {
                 if !gc_info.remove_child_not_offloaded(self.timeline_id) {
-                    tracing::error!(tenant_id = %self.tenant_shard_id.tenant_id, shard_id = %self.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id,
+                    tracing::error!(tenant_id = %self.tenant_shard_id, shard_id = %self.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id,
                         "Couldn't remove retain_lsn entry from timeline's parent on drop: already removed");
                 }
             }
         }
         info!(
             "Timeline {} for tenant {} is being dropped",
-            self.timeline_id, self.tenant_shard_id.tenant_id
+            self.timeline_id, self.tenant_shard_id
         );
     }
 }
@@ -3114,10 +3114,8 @@ impl Timeline {
 
 impl Timeline {
     pub(crate) fn get_shard_index(&self) -> ShardIndex {
-        ShardIndex {
-            shard_number: self.tenant_shard_id.shard_number,
-            shard_count: self.tenant_shard_id.shard_count,
-        }
+        // yb-mode: always single-shard.
+        ShardIndex::unsharded()
     }
 
     /// Persistently blocks gc for `Manual` reason.

@@ -80,7 +80,7 @@ pub(super) async fn connection_manager_loop_step(
     }
 
     let id = TenantTimelineId {
-        tenant_id: connection_manager_state.timeline.tenant_shard_id.tenant_id,
+        tenant_id: connection_manager_state.timeline.tenant_shard_id,
         timeline_id: connection_manager_state.timeline.timeline_id,
     };
 
@@ -511,7 +511,7 @@ impl ConnectionManagerState {
         cancel: CancellationToken,
     ) -> Self {
         let id = TenantTimelineId {
-            tenant_id: timeline.tenant_shard_id.tenant_id,
+            tenant_id: timeline.tenant_shard_id,
             timeline_id: timeline.timeline_id,
         };
         Self {

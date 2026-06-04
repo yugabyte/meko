@@ -42,7 +42,7 @@ use pageserver_api::models::{
     TimelineInfo, TopTenantShardItem, TopTenantShardsRequest,
 };
 use pageserver_api::shard::{
-    DEFAULT_STRIPE_SIZE, ShardCount, ShardIdentity, ShardNumber, ShardStripeSize, TenantShardId,
+    DEFAULT_STRIPE_SIZE, ShardCount, ShardIdentity, ShardNumber, ShardStripeSize,
 };
 use pageserver_api::upcall_api::{
     PutTimelineImportStatusRequest, ReAttachRequest, ReAttachResponse, ReAttachResponseTenant,
@@ -222,7 +222,7 @@ const MAX_DELAYED_RECONCILES: usize = 10000;
 struct ServiceState {
     leadership_status: LeadershipStatus,
 
-    tenants: BTreeMap<TenantShardId, TenantShard>,
+    tenants: BTreeMap<TenantId, TenantShard>,
 
     nodes: Arc<HashMap<NodeId, Node>>,
 
@@ -238,7 +238,7 @@ struct ServiceState {
     ongoing_operation: Option<OperationHandler>,
 
     /// Queue of tenants who are waiting for concurrency limits to permit them to reconcile
-    delayed_reconcile_rx: tokio::sync::mpsc::Receiver<TenantShardId>,
+    delayed_reconcile_rx: tokio::sync::mpsc::Receiver<TenantId>,
 
     /// Tracks ongoing timeline import finalization tasks
     imports_finalizing: BTreeMap<(TenantId, TimelineId), FinalizingImport>,
@@ -301,9 +301,9 @@ impl ServiceState {
     fn new(
         nodes: HashMap<NodeId, Node>,
         safekeepers: HashMap<NodeId, Safekeeper>,
-        tenants: BTreeMap<TenantShardId, TenantShard>,
+        tenants: BTreeMap<TenantId, TenantShard>,
         scheduler: Scheduler,
-        delayed_reconcile_rx: tokio::sync::mpsc::Receiver<TenantShardId>,
+        delayed_reconcile_rx: tokio::sync::mpsc::Receiver<TenantId>,
         initial_leadership_status: LeadershipStatus,
         reconcilers_cancel: CancellationToken,
     ) -> Self {
@@ -326,7 +326,7 @@ impl ServiceState {
         &mut self,
     ) -> (
         &mut Arc<HashMap<NodeId, Node>>,
-        &mut BTreeMap<TenantShardId, TenantShard>,
+        &mut BTreeMap<TenantId, TenantShard>,
         &mut Scheduler,
     ) {
         (&mut self.nodes, &mut self.tenants, &mut self.scheduler)
@@ -338,7 +338,7 @@ impl ServiceState {
     ) -> (
         &mut Arc<HashMap<NodeId, Node>>,
         &mut Arc<HashMap<NodeId, Safekeeper>>,
-        &mut BTreeMap<TenantShardId, TenantShard>,
+        &mut BTreeMap<TenantId, TenantShard>,
         &mut Scheduler,
     ) {
         (
@@ -545,7 +545,7 @@ pub struct Service {
     /// Note that this state logically lives inside ServiceState, but carrying Sender here makes the code simpler
     /// by avoiding needing a &mut ref to something inside the ServiceState.  This could be optimized to
     /// use a VecDeque instead of a channel to reduce synchronization overhead, at the cost of some code complexity.
-    delayed_reconcile_tx: tokio::sync::mpsc::Sender<TenantShardId>,
+    delayed_reconcile_tx: tokio::sync::mpsc::Sender<TenantId>,
 
     // Process shutdown will fire this token
     cancel: CancellationToken,
@@ -619,9 +619,9 @@ enum ShardSplitAction {
 
 // A parent shard which will be split
 struct ShardSplitTarget {
-    parent_id: TenantShardId,
+    parent_id: TenantId,
     node: Node,
-    child_ids: Vec<TenantShardId>,
+    child_ids: Vec<TenantId>,
 }
 
 /// When we tenant shard split operation fails, we may not be able to clean up immediately, because nodes
@@ -650,7 +650,6 @@ enum TenantShardSplitAbortError {
 /// Inputs for computing a target shard count for a tenant.
 struct ShardSplitInputs {
     /// Current shard count.
-    shard_count: ShardCount,
     /// Total size of largest timeline summed across all shards.
     max_logical_size: u64,
     /// Size-based split threshold. Zero if size-based splits are disabled.
@@ -664,7 +663,7 @@ struct ShardSplitInputs {
 }
 
 struct ShardUpdate {
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     placement_policy: PlacementPolicy,
     tenant_config: TenantConfig,
 
@@ -708,7 +707,7 @@ pub(crate) struct ShardMutationLocations {
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct TenantMutationLocations(pub BTreeMap<TenantShardId, ShardMutationLocations>);
+pub(crate) struct TenantMutationLocations(pub BTreeMap<TenantId, ShardMutationLocations>);
 
 struct ReconcileAllResult {
     spawned_reconciles: usize,
@@ -740,26 +739,19 @@ impl ReconcileAllResult {
     }
 }
 
-enum TenantIdOrShardId {
-    TenantId(TenantId),
-    TenantShardId(TenantShardId),
-}
+// yb-mode: TenantId is now TenantId, so the upstream
+// TenantId/TenantId discriminator is redundant — there's only a
+// single tenant id space. The wrapper is kept to minimize churn at
+// call-sites.
+struct TenantIdOrShardId(TenantId);
 
 impl TenantIdOrShardId {
     fn tenant_id(&self) -> TenantId {
-        match self {
-            TenantIdOrShardId::TenantId(tenant_id) => *tenant_id,
-            TenantIdOrShardId::TenantShardId(tenant_shard_id) => tenant_shard_id.tenant_id,
-        }
+        self.0
     }
 
-    fn matches(&self, tenant_shard_id: &TenantShardId) -> bool {
-        match self {
-            TenantIdOrShardId::TenantId(tenant_id) => tenant_shard_id.tenant_id == *tenant_id,
-            TenantIdOrShardId::TenantShardId(this_tenant_shard_id) => {
-                this_tenant_shard_id == tenant_shard_id
-            }
-        }
+    fn matches(&self, tenant_shard_id: &TenantId) -> bool {
+        &self.0 == tenant_shard_id
     }
 }
 
@@ -780,7 +772,7 @@ impl Service {
         current_leader: Option<ControllerPersistence>,
         leader_step_down_state: Option<GlobalObservedState>,
         bg_compute_notify_result_tx: tokio::sync::mpsc::Sender<
-            Result<(), (TenantShardId, NotifyError)>,
+            Result<(), (TenantId, NotifyError)>,
         >,
     ) {
         // Startup reconciliation does I/O to other services: whether they
@@ -863,7 +855,7 @@ impl Service {
             // Populate each tenant's intent state
             let mut schedule_context = ScheduleContext::default();
             for (tenant_shard_id, tenant_shard) in tenants.iter_mut() {
-                if tenant_shard_id.shard_number == ShardNumber(0) {
+                if ShardNumber(0) == ShardNumber(0) {
                     // Reset scheduling context each time we advance to the next Tenant
                     schedule_context = ScheduleContext::default();
                 }
@@ -986,7 +978,7 @@ impl Service {
                     for import in &imports {
                         locked
                             .tenants
-                            .range_mut(TenantShardId::tenant_range(import.tenant_id))
+                            .range_mut(TenantId::tenant_range(import.tenant_id))
                             .for_each(|(_id, shard)| {
                                 shard.importing = TimelineImportState::Importing
                             });
@@ -1187,11 +1179,11 @@ impl Service {
     /// Used during [`Self::startup_reconcile`] and shard splits: detach a list of unknown-to-us
     /// tenants from pageservers.
     ///
-    /// This is safe to run in the background, because if we don't have this TenantShardId in our map of
+    /// This is safe to run in the background, because if we don't have this TenantId in our map of
     /// tenants, then it is probably something incompletely deleted before: we will not fight with any
     /// other task trying to attach it.
     #[instrument(skip_all)]
-    async fn cleanup_locations(&self, cleanup: Vec<(TenantShardId, NodeId)>) {
+    async fn cleanup_locations(&self, cleanup: Vec<(TenantId, NodeId)>) {
         let nodes = self.inner.read().unwrap().nodes.clone();
 
         for (tenant_shard_id, node_id) in cleanup {
@@ -1449,7 +1441,7 @@ impl Service {
     /// will indicate that reconciliation is not needed.
     #[instrument(skip_all, fields(
         seq=%result.sequence,
-        tenant_id=%result.tenant_shard_id.tenant_id,
+        tenant_id=%result.tenant_shard_id,
         shard_id=%result.tenant_shard_id.shard_slug(),
     ))]
     fn process_result(&self, result: ReconcileResult) {
@@ -1540,11 +1532,11 @@ impl Service {
             // from concurrent execution wrt a request handler that might expect the tenant to remain in memory for the
             // duration of the request.
             let guard = self.tenant_op_locks.try_exclusive(
-                tenant.tenant_shard_id.tenant_id,
+                tenant.tenant_shard_id,
                 TenantOperations::DropDetached,
             );
             if let Some(guard) = guard {
-                self.maybe_drop_tenant(tenant.tenant_shard_id.tenant_id, &mut locked, &guard);
+                self.maybe_drop_tenant(tenant.tenant_shard_id, &mut locked, &guard);
             }
         }
 
@@ -1571,7 +1563,7 @@ impl Service {
         &self,
         mut result_rx: tokio::sync::mpsc::UnboundedReceiver<ReconcileResultRequest>,
         mut bg_compute_hook_result_rx: tokio::sync::mpsc::Receiver<
-            Result<(), (TenantShardId, NotifyError)>,
+            Result<(), (TenantId, NotifyError)>,
         >,
     ) {
         loop {
@@ -1930,7 +1922,7 @@ impl Service {
     ) -> anyhow::Result<AttachHookResponse> {
         let _tenant_lock = trace_exclusive_lock(
             &self.tenant_op_locks,
-            attach_req.tenant_shard_id.tenant_id,
+            attach_req.tenant_shard_id,
             TenantOperations::AttachHook,
         )
         .await;
@@ -1940,7 +1932,7 @@ impl Service {
         // shards with default state.
         let insert = {
             match self
-                .maybe_load_tenant(attach_req.tenant_shard_id.tenant_id, &_tenant_lock)
+                .maybe_load_tenant(attach_req.tenant_shard_id, &_tenant_lock)
                 .await
             {
                 Ok(_) => false,
@@ -1952,7 +1944,7 @@ impl Service {
         if insert {
             let config = attach_req.config.clone().unwrap_or_default();
             let tsp = TenantShardPersistence {
-                tenant_id: attach_req.tenant_shard_id.tenant_id.to_string(),
+                tenant_id: attach_req.tenant_shard_id.to_string(),
                 generation: attach_req.generation_override.or(Some(0)),
                 generation_pageserver: None,
                 placement_policy: serde_json::to_string(&PlacementPolicy::Attached(0)).unwrap(),
@@ -2481,12 +2473,12 @@ impl Service {
         &self,
         create_req: TenantCreateRequest,
     ) -> Result<TenantCreateResponse, ApiError> {
-        let tenant_id = create_req.new_tenant_id.tenant_id;
+        let tenant_id = create_req.new_tenant_id;
 
         // Exclude any concurrent attempts to create/access the same tenant ID
         let _tenant_lock = trace_exclusive_lock(
             &self.tenant_op_locks,
-            create_req.new_tenant_id.tenant_id,
+            tenant_id,
             TenantOperations::Create,
         )
         .await;
@@ -2518,7 +2510,7 @@ impl Service {
                 "Attempted to create a specific shard, this API is for creating the whole tenant"
             )));
         } else {
-            create_req.new_tenant_id.tenant_id
+            create_req.new_tenant_id
         };
 
         tracing::info!(
@@ -2527,13 +2519,8 @@ impl Service {
             create_req.shard_parameters.count,
         );
 
-        let create_ids = (0..create_req.shard_parameters.count.count())
-            .map(|i| TenantShardId {
-                tenant_id,
-                shard_number: ShardNumber(i),
-                shard_count: create_req.shard_parameters.count,
-            })
-            .collect::<Vec<_>>();
+        // yb-mode: always single shard regardless of requested count.
+        let create_ids = vec![TenantId::unsharded(tenant_id)];
 
         // If the caller specifies a None generation, it means "start from default".  This is different
         // to [`Self::tenant_location_config`], where a None generation is used to represent
@@ -2573,7 +2560,7 @@ impl Service {
         let persist_tenant_shards = create_ids
             .iter()
             .map(|tenant_shard_id| TenantShardPersistence {
-                tenant_id: tenant_shard_id.tenant_id.to_string(),
+                tenant_id: tenant_shard_id.to_string(),
                 generation: initial_generation.map(|g| g.into().unwrap() as i32),
                 // The pageserver is not known until scheduling happens: we will set this column when
                 // incrementing the generation the first time we attach to a pageserver.
@@ -2662,7 +2649,7 @@ impl Service {
                 .tenant_creation_hint(true)
                 .build();
             tenants
-                .range_mut(TenantShardId::tenant_range(tenant_id))
+                .range_mut(TenantId::tenant_range(tenant_id))
                 .filter_map(|(_shard_id, shard)| {
                     self.maybe_configured_reconcile_shard(shard, nodes, config)
                 })
@@ -2682,7 +2669,7 @@ impl Service {
     #[allow(clippy::too_many_arguments)]
     async fn do_initial_shard_scheduling(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         initial_generation: Option<Generation>,
         shard_params: ShardParameters,
         config: TenantConfig,
@@ -2719,7 +2706,7 @@ impl Service {
             Entry::Vacant(entry) => {
                 let state = entry.insert(TenantShard::new(
                     tenant_shard_id,
-                    ShardIdentity::from_params(tenant_shard_id.shard_number, shard_params),
+                    ShardIdentity::from_params(ShardNumber(0), shard_params),
                     placement_policy,
                     preferred_az_id.cloned(),
                 ));
@@ -2796,7 +2783,7 @@ impl Service {
         let mut updates = Vec::new();
         let mut locked = self.inner.write().unwrap();
         let (nodes, tenants, _scheduler) = locked.parts_mut();
-        let tenant_shard_id = TenantShardId::unsharded(tenant_id);
+        let tenant_shard_id = TenantId::unsharded(tenant_id);
 
         // Derive placement policy + scheduling intent from the request:
         // `generation: Some` = attach, `None` = detach. Secondary/Multi/Stale
@@ -2823,7 +2810,7 @@ impl Service {
         };
 
         let mut create = true;
-        for (shard_id, shard) in tenants.range_mut(TenantShardId::tenant_range(tenant_id)) {
+        for (shard_id, shard) in tenants.range_mut(TenantId::tenant_range(tenant_id)) {
             // Saw an existing shard: this is not a creation
             create = false;
 
@@ -2860,7 +2847,7 @@ impl Service {
                     new_tenant_id: tenant_shard_id,
                     generation,
                     shard_parameters: ShardParameters {
-                        count: tenant_shard_id.shard_count,
+                        count: ShardCount(0),
                         // We only import un-sharded or single-sharded tenants, so stripe
                         // size can be made up arbitrarily here.
                         stripe_size: DEFAULT_STRIPE_SIZE,
@@ -2894,7 +2881,7 @@ impl Service {
             let locked = self.inner.read().unwrap();
             let existing = locked
                 .tenants
-                .range(TenantShardId::tenant_range(tenant_id))
+                .range(TenantId::tenant_range(tenant_id))
                 .next();
 
             // If the tenant is not present in memory, we expect to load it from database,
@@ -2974,7 +2961,7 @@ impl Service {
         locked: &mut std::sync::RwLockWriteGuard<ServiceState>,
         _guard: &TracingExclusiveGuard<TenantOperations>,
     ) {
-        let mut tenant_shards = locked.tenants.range(TenantShardId::tenant_range(tenant_id));
+        let mut tenant_shards = locked.tenants.range(TenantId::tenant_range(tenant_id));
         if tenant_shards.all(|(_id, shard)| {
             shard.policy == PlacementPolicy::Detached
                 && shard.reconciler.is_none()
@@ -2982,7 +2969,7 @@ impl Service {
         }) {
             let keys = locked
                 .tenants
-                .range(TenantShardId::tenant_range(tenant_id))
+                .range(TenantId::tenant_range(tenant_id))
                 .map(|(id, _)| id)
                 .copied()
                 .collect::<Vec<_>>();
@@ -3008,13 +2995,13 @@ impl Service {
     /// - Call with mode Detached to switch to PolicyMode::Detached
     pub(crate) async fn tenant_location_config(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         req: TenantLocationConfigRequest,
     ) -> Result<TenantLocationConfigResponse, ApiError> {
         // We require an exclusive lock, because we are updating both persistent and in-memory state
         let _tenant_lock = trace_exclusive_lock(
             &self.tenant_op_locks,
-            tenant_shard_id.tenant_id,
+            tenant_shard_id,
             TenantOperations::LocationConfig,
         )
         .await;
@@ -3024,7 +3011,7 @@ impl Service {
                 "This API is for importing single-sharded or unsharded tenants"
             )));
         } else {
-            tenant_shard_id.tenant_id
+            tenant_shard_id
         };
 
         // In case we are waking up a Detached tenant
@@ -3087,7 +3074,7 @@ impl Service {
                 if let Some(first) = updates.first() {
                     self.persistence
                         .save_tenant_config(
-                            first.tenant_shard_id.tenant_id,
+                            first.tenant_shard_id,
                             &first.tenant_config,
                         )
                         .await?;
@@ -3184,7 +3171,7 @@ impl Service {
             let locked = self.inner.read().unwrap();
             let shards = locked
                 .tenants
-                .range(TenantShardId::tenant_range(req.tenant_id));
+                .range(TenantId::tenant_range(req.tenant_id));
 
             let mut configs = shards.map(|(_sid, shard)| &shard.config).peekable();
 
@@ -3258,7 +3245,7 @@ impl Service {
             let mut waiters = Vec::new();
             let mut locked = self.inner.write().unwrap();
             let (nodes, tenants, _scheduler) = locked.parts_mut();
-            for (_shard_id, shard) in tenants.range_mut(TenantShardId::tenant_range(tenant_id)) {
+            for (_shard_id, shard) in tenants.range_mut(TenantId::tenant_range(tenant_id)) {
                 shard.config = config.clone();
                 if let Some(waiter) =
                     self.maybe_reconcile_shard(shard, nodes, ReconcilerPriority::High)
@@ -3288,7 +3275,7 @@ impl Service {
 
             match locked
                 .tenants
-                .range(TenantShardId::tenant_range(tenant_id))
+                .range(TenantId::tenant_range(tenant_id))
                 .next()
             {
                 Some((_tenant_shard_id, shard)) => shard.config.clone(),
@@ -3343,7 +3330,7 @@ impl Service {
             // detached everywhere, and nothing writes to S3 storage. Here, we verify that,
             // but only at the start of the process, so it's really just to prevent operator
             // mistakes.
-            for (shard_id, shard) in locked.tenants.range(TenantShardId::tenant_range(tenant_id)) {
+            for (shard_id, shard) in locked.tenants.range(TenantId::tenant_range(tenant_id)) {
                 if shard.intent.get_attached().is_some() || !shard.intent.get_secondary().is_empty()
                 {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
@@ -3385,13 +3372,9 @@ impl Service {
         counts.sort_unstable();
 
         for count in counts {
-            let shard_ids = (0..count.count())
-                .map(|i| TenantShardId {
-                    tenant_id,
-                    shard_number: ShardNumber(i),
-                    shard_count: count,
-                })
-                .collect::<Vec<_>>();
+            // yb-mode: always single shard regardless of the historical shard counts.
+            let _ = count;
+            let shard_ids = vec![TenantId::unsharded(tenant_id)];
             for tenant_shard_id in shard_ids {
                 let client = PageserverClient::new(
                     node.get_id(),
@@ -3438,7 +3421,7 @@ impl Service {
             let mut targets = Vec::new();
 
             for (tenant_shard_id, shard) in
-                locked.tenants.range(TenantShardId::tenant_range(tenant_id))
+                locked.tenants.range(TenantId::tenant_range(tenant_id))
             {
                 for node_id in shard.intent.get_secondary() {
                     let node = locked
@@ -3538,7 +3521,7 @@ impl Service {
             let mut detach_waiters = Vec::new();
             let mut locked = self.inner.write().unwrap();
             let (nodes, tenants, scheduler) = locked.parts_mut();
-            for (_, shard) in tenants.range_mut(TenantShardId::tenant_range(tenant_id)) {
+            for (_, shard) in tenants.range_mut(TenantId::tenant_range(tenant_id)) {
                 // Update the tenant's intent to remove all attachments
                 shard.policy = PlacementPolicy::Detached;
                 shard
@@ -3582,7 +3565,7 @@ impl Service {
             .with_client_retries(
                 |client| async move {
                     client
-                        .tenant_delete(TenantShardId::unsharded(tenant_id))
+                        .tenant_delete(TenantId::unsharded(tenant_id))
                         .await
                 },
                 &self.http_client,
@@ -3623,12 +3606,12 @@ impl Service {
 
             // Dereference Scheduler from shards before dropping them
             for (_tenant_shard_id, shard) in
-                tenants.range_mut(TenantShardId::tenant_range(tenant_id))
+                tenants.range_mut(TenantId::tenant_range(tenant_id))
             {
                 shard.intent.clear(scheduler);
             }
 
-            tenants.retain(|tenant_shard_id, _shard| tenant_shard_id.tenant_id != tenant_id);
+            tenants.retain(|tenant_shard_id, _shard| *tenant_shard_id != tenant_id);
             tracing::info!(
                 "Deleted tenant {tenant_id}, now have {} tenants",
                 locked.tenants.len()
@@ -3690,18 +3673,18 @@ impl Service {
         let mut schedule_context = ScheduleContext::default();
         let mut locked = self.inner.write().unwrap();
         let (nodes, tenants, scheduler) = locked.parts_mut();
-        for (shard_id, shard) in tenants.range_mut(TenantShardId::tenant_range(tenant_id)) {
+        for (shard_id, shard) in tenants.range_mut(TenantId::tenant_range(tenant_id)) {
             if let Some(placement) = &placement {
                 shard.policy = placement.clone();
 
-                tracing::info!(tenant_id=%shard_id.tenant_id, shard_id=%shard_id.shard_slug(),
+                tracing::info!(tenant_id=%shard_id, shard_id=%shard_id.shard_slug(),
                                "Updated placement policy to {placement:?}");
             }
 
             if let Some(scheduling) = &scheduling {
                 shard.set_scheduling_policy(*scheduling);
 
-                tracing::info!(tenant_id=%shard_id.tenant_id, shard_id=%shard_id.shard_slug(),
+                tracing::info!(tenant_id=%shard_id, shard_id=%shard_id.shard_slug(),
                                "Updated scheduling policy to {scheduling:?}");
             }
 
@@ -3736,7 +3719,7 @@ impl Service {
             assert!(shard_zero_tid.is_shard_zero());
 
             async fn create_one(
-                tenant_shard_id: TenantShardId,
+                tenant_shard_id: TenantId,
                 locations: ShardMutationLocations,
                 http_client: reqwest::Client,
                 jwt: Option<String>,
@@ -3846,7 +3829,7 @@ impl Service {
                         .iter()
                         .map(|t| (*t.0, t.1.latest.node.clone()))
                         .collect(),
-                    |tenant_shard_id: TenantShardId, _node: Node| {
+                    |tenant_shard_id: TenantId, _node: Node| {
                         let create_req = create_req.clone();
                         let mutation_locations = targets.0.remove(&tenant_shard_id).unwrap();
                         Box::pin(create_one(
@@ -3906,7 +3889,7 @@ impl Service {
             let locked = self.inner.read().unwrap();
             let splitting = locked
                 .tenants
-                .range(TenantShardId::tenant_range(tenant_id))
+                .range(TenantId::tenant_range(tenant_id))
                 .any(|(_id, shard)| shard.splitting != SplitState::Idle);
 
             if splitting {
@@ -3923,7 +3906,7 @@ impl Service {
                 let locked = self.inner.read().unwrap();
                 locked
                     .tenants
-                    .range(TenantShardId::tenant_range(tenant_id))
+                    .range(TenantId::tenant_range(tenant_id))
                     .map(|(ts_id, _)| ts_id.to_index())
                     .collect::<Vec<_>>()
             };
@@ -3956,7 +3939,7 @@ impl Service {
                 .write()
                 .unwrap()
                 .tenants
-                .range_mut(TenantShardId::tenant_range(tenant_id))
+                .range_mut(TenantId::tenant_range(tenant_id))
                 .for_each(|(_id, shard)| shard.importing = TimelineImportState::Importing);
 
             match inserted {
@@ -3990,7 +3973,7 @@ impl Service {
     }
 
     #[instrument(skip_all, fields(
-        tenant_id=%req.tenant_shard_id.tenant_id,
+        tenant_id=%req.tenant_shard_id,
         shard_id=%req.tenant_shard_id.shard_slug(),
         timeline_id=%req.timeline_id,
     ))]
@@ -4018,14 +4001,14 @@ impl Service {
 
         let maybe_import = self
             .persistence
-            .get_timeline_import(req.tenant_shard_id.tenant_id, req.timeline_id)
+            .get_timeline_import(req.tenant_shard_id, req.timeline_id)
             .await?;
 
         let import = maybe_import.ok_or_else(|| {
             ApiError::NotFound(
                 format!(
                     "import for {}/{} not found",
-                    req.tenant_shard_id.tenant_id, req.timeline_id
+                    req.tenant_shard_id, req.timeline_id
                 )
                 .into(),
             )
@@ -4044,7 +4027,7 @@ impl Service {
     }
 
     #[instrument(skip_all, fields(
-        tenant_id=%req.tenant_shard_id.tenant_id,
+        tenant_id=%req.tenant_shard_id,
         shard_id=%req.tenant_shard_id.shard_slug(),
         timeline_id=%req.timeline_id,
     ))]
@@ -4089,7 +4072,7 @@ impl Service {
         };
 
         tracing::info!(
-            tenant_id=%req.tenant_shard_id.tenant_id,
+            tenant_id=%req.tenant_shard_id,
             timeline_id=%req.timeline_id,
             shard_id=%req.tenant_shard_id.shard_slug(),
             "Updated timeline import status to: {timeline_import:?}");
@@ -4110,7 +4093,7 @@ impl Service {
     /// database state which is authoritative.
     async fn validate_shard_generation(
         self: &Arc<Self>,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         generation: Generation,
     ) -> Result<ShardGenerationValidity, ApiError> {
         {
@@ -4299,7 +4282,7 @@ impl Service {
             .write()
             .unwrap()
             .tenants
-            .range_mut(TenantShardId::tenant_range(tenant_id))
+            .range_mut(TenantId::tenant_range(tenant_id))
             .for_each(|(_id, shard)| shard.importing = TimelineImportState::Idle);
 
         Ok(())
@@ -4328,7 +4311,7 @@ impl Service {
 
                 for (tenant_shard_id, shard) in locked
                     .tenants
-                    .range(TenantShardId::tenant_range(import.tenant_id))
+                    .range(TenantId::tenant_range(import.tenant_id))
                 {
                     if !import
                         .shard_statuses
@@ -4430,7 +4413,7 @@ impl Service {
             let locked = self.inner.read().unwrap();
             locked
                 .tenants
-                .range(TenantShardId::tenant_range(tenant_id))
+                .range(TenantId::tenant_range(tenant_id))
                 .any(|(_tid, shard)| shard.importing == TimelineImportState::Importing)
         };
 
@@ -4480,7 +4463,7 @@ impl Service {
                 ));
             }
             async fn config_one(
-                tenant_shard_id: TenantShardId,
+                tenant_shard_id: TenantId,
                 timeline_id: TimelineId,
                 node: Node,
                 http_client: reqwest::Client,
@@ -4548,7 +4531,7 @@ impl Service {
             }
 
             async fn detach_one(
-                tenant_shard_id: TenantShardId,
+                tenant_shard_id: TenantId,
                 timeline_id: TimelineId,
                 node: Node,
                 http_client: reqwest::Client,
@@ -4587,7 +4570,7 @@ impl Service {
                             other => passthrough_api_error(&node, other),
                         }
                     })
-                    .map(|res| (tenant_shard_id.shard_number, res))
+                    .map(|res| (ShardNumber(0), res))
             }
 
             // no shard needs to go first/last; the operation should be idempotent
@@ -4649,7 +4632,7 @@ impl Service {
             }
 
             async fn do_one(
-                tenant_shard_id: TenantShardId,
+                tenant_shard_id: TenantId,
                 timeline_id: TimelineId,
                 node: Node,
                 http_client: reqwest::Client,
@@ -4782,14 +4765,14 @@ impl Service {
 
     pub(crate) async fn tenant_timeline_download_heatmap_layers(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         concurrency: Option<usize>,
         recurse: bool,
     ) -> Result<(), ApiError> {
         let _tenant_lock = trace_shared_lock(
             &self.tenant_op_locks,
-            tenant_shard_id.tenant_id,
+            tenant_shard_id,
             TenantOperations::DownloadHeatmapLayers,
         )
         .await;
@@ -4801,7 +4784,7 @@ impl Service {
             // If the request got an unsharded tenant id, then apply
             // the operation to all shards. Otherwise, apply it to a specific shard.
             let shards_range = if tenant_shard_id.is_unsharded() {
-                TenantShardId::tenant_range(tenant_shard_id.tenant_id)
+                TenantId::tenant_range(tenant_shard_id)
             } else {
                 tenant_shard_id.range()
             };
@@ -4847,12 +4830,12 @@ impl Service {
     /// and returned element at index `i` is the result for `req_fn(op(locations[i])`.
     async fn tenant_for_shards<F, R>(
         &self,
-        locations: Vec<(TenantShardId, Node)>,
+        locations: Vec<(TenantId, Node)>,
         mut req_fn: F,
     ) -> Result<Vec<R>, ApiError>
     where
         F: FnMut(
-            TenantShardId,
+            TenantId,
             Node,
         )
             -> std::pin::Pin<Box<dyn futures::Future<Output = Result<R, ApiError>> + Send>>,
@@ -4879,7 +4862,7 @@ impl Service {
     /// and returned element at index `i` is the result for `op(locations[i])`.
     pub(crate) async fn tenant_for_shards_api<T, O, F>(
         &self,
-        locations: Vec<(TenantShardId, Node)>,
+        locations: Vec<(TenantId, Node)>,
         op: O,
         warn_threshold: u32,
         max_retries: u32,
@@ -4887,7 +4870,7 @@ impl Service {
         cancel: &CancellationToken,
     ) -> Vec<(Node, mgmt_api::Result<T>)>
     where
-        O: Fn(TenantShardId, PageserverClient) -> F + Copy,
+        O: Fn(TenantId, PageserverClient) -> F + Copy,
         F: std::future::Future<Output = mgmt_api::Result<T>>,
     {
         let mut futs = FuturesUnordered::new();
@@ -4933,20 +4916,20 @@ impl Service {
         O: FnOnce(TenantMutationLocations) -> F,
         F: std::future::Future<Output = R>,
     {
-        self.tenant_remote_mutation_inner(TenantIdOrShardId::TenantId(tenant_id), op)
+        self.tenant_remote_mutation_inner(TenantIdOrShardId(tenant_id), op)
             .await
     }
 
     pub(crate) async fn tenant_shard_remote_mutation<R, O, F>(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         op: O,
     ) -> Result<R, ApiError>
     where
         O: FnOnce(TenantMutationLocations) -> F,
         F: std::future::Future<Output = R>,
     {
-        self.tenant_remote_mutation_inner(TenantIdOrShardId::TenantShardId(tenant_shard_id), op)
+        self.tenant_remote_mutation_inner(TenantIdOrShardId(tenant_shard_id), op)
             .await
     }
 
@@ -4988,7 +4971,7 @@ impl Service {
                 let locked = self.inner.read().unwrap();
                 let tenant_shards = locked
                     .tenants
-                    .range(TenantShardId::tenant_range(
+                    .range(TenantId::tenant_range(
                         tenant_id_or_shard_id.tenant_id(),
                     ))
                     .filter(|(shard_id, _)| tenant_id_or_shard_id.matches(shard_id))
@@ -5164,7 +5147,7 @@ impl Service {
             assert!(shard_zero_tid.is_shard_zero());
 
             async fn delete_one(
-                tenant_shard_id: TenantShardId,
+                tenant_shard_id: TenantId,
                 timeline_id: TimelineId,
                 node: Node,
                 http_client: reqwest::Client,
@@ -5198,7 +5181,7 @@ impl Service {
 
             let locations = targets.0.iter().map(|t| (*t.0, t.1.latest.node.clone())).collect();
             let statuses = self
-                .tenant_for_shards(locations, |tenant_shard_id: TenantShardId, node: Node| {
+                .tenant_for_shards(locations, |tenant_shard_id: TenantId, node: Node| {
                     Box::pin(delete_one(
                         tenant_shard_id,
                         timeline_id,
@@ -5244,12 +5227,12 @@ impl Service {
     pub(crate) async fn tenant_shard0_node(
         &self,
         tenant_id: TenantId,
-    ) -> Result<(Node, TenantShardId), ApiError> {
+    ) -> Result<(Node, TenantId), ApiError> {
         let tenant_shard_id = {
             let locked = self.inner.read().unwrap();
             let Some((tenant_shard_id, _shard)) = locked
                 .tenants
-                .range(TenantShardId::tenant_range(tenant_id))
+                .range(TenantId::tenant_range(tenant_id))
                 .next()
             else {
                 return Err(ApiError::NotFound(
@@ -5271,7 +5254,7 @@ impl Service {
     /// Returns the intent node and whether it is consistent with the observed state.
     pub(crate) async fn tenant_shard_node(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<Node, ApiError> {
         // Look up in-memory state and maybe use the node from there.
         {
@@ -5284,7 +5267,7 @@ impl Service {
 
             let Some(intent_node_id) = shard.intent.get_attached() else {
                 tracing::warn!(
-                    tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(),
+                    tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(),
                     "Shard not scheduled (policy {:?}), cannot generate pass-through URL",
                     shard.policy
                 );
@@ -5312,7 +5295,7 @@ impl Service {
         // the case where they call through to the pageserver and get a 404.
         let db_result = self
             .persistence
-            .tenant_generations(tenant_shard_id.tenant_id)
+            .tenant_generations(tenant_shard_id)
             .await?;
         let Some(ShardGenerationState {
             tenant_shard_id: _,
@@ -5350,7 +5333,7 @@ impl Service {
         let mut result = Vec::new();
         let mut shard_params: Option<ShardParameters> = None;
 
-        for (tenant_shard_id, shard) in locked.tenants.range(TenantShardId::tenant_range(tenant_id))
+        for (tenant_shard_id, shard) in locked.tenants.range(TenantId::tenant_range(tenant_id))
         {
             let node_id =
                 shard
@@ -5446,7 +5429,7 @@ impl Service {
         let shard_zero = shard_zero?;
 
         Some(TenantDescribeResponse {
-            tenant_id: shard_zero.tenant_shard_id.tenant_id,
+            tenant_id: shard_zero.tenant_shard_id,
             shards: describe_shards,
             stripe_size: shard_zero.shard.stripe_size,
             policy: shard_zero.policy.clone(),
@@ -5463,7 +5446,7 @@ impl Service {
         self.tenant_describe_impl(
             locked
                 .tenants
-                .range(TenantShardId::tenant_range(tenant_id))
+                .range(TenantId::tenant_range(tenant_id))
                 .map(|(_k, v)| v),
         )
         .ok_or_else(|| ApiError::NotFound(anyhow::anyhow!("Tenant {tenant_id} not found").into()))
@@ -5482,7 +5465,7 @@ impl Service {
                 ));
             };
 
-            let locations: Vec<(TenantShardId, Node)> = locations
+            let locations: Vec<(TenantId, Node)> = locations
                 .0
                 .iter()
                 .map(|t| (*t.0, t.1.latest.node.clone()))
@@ -5569,17 +5552,13 @@ impl Service {
         // Apply start_from parameter
         let shard_range = match start_after {
             None => locked.tenants.range(..),
-            Some(tenant_id) => locked.tenants.range(
-                TenantShardId {
-                    tenant_id,
-                    shard_number: ShardNumber(u8::MAX),
-                    shard_count: ShardCount(u8::MAX),
-                }..,
-            ),
+            Some(tenant_id) => locked
+                .tenants
+                .range((std::ops::Bound::Excluded(TenantId::unsharded(tenant_id)), std::ops::Bound::Unbounded)),
         };
 
         let mut result = Vec::new();
-        for (_tenant_id, tenant_shards) in &shard_range.group_by(|(id, _shard)| id.tenant_id) {
+        for (_tenant_id, tenant_shards) in &shard_range.group_by(|(id, _shard)| **id) {
             result.push(
                 self.tenant_describe_impl(tenant_shards.map(|(_k, v)| v))
                     .expect("Groups are always non-empty"),
@@ -5672,7 +5651,7 @@ impl Service {
 
     pub(crate) async fn tenant_shard_migrate(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         migrate_req: TenantShardMigrateRequest,
     ) -> Result<TenantShardMigrateResponse, ApiError> {
         // Depending on whether the migration is a change and whether it's graceful or immediate, we might
@@ -5710,7 +5689,7 @@ impl Service {
             // Calculate the ScheduleContext for this tenant
             let mut schedule_context = ScheduleContext::default();
             for (_shard_id, shard) in
-                tenants.range(TenantShardId::tenant_range(tenant_shard_id.tenant_id))
+                tenants.range(TenantId::tenant_range(tenant_shard_id))
             {
                 schedule_context.avoid(&shard.intent.all_pageservers());
             }
@@ -5837,7 +5816,7 @@ impl Service {
 
     pub(crate) async fn tenant_shard_migrate_secondary(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         migrate_req: TenantShardMigrateRequest,
     ) -> Result<TenantShardMigrateResponse, ApiError> {
         let waiter = {
@@ -5903,7 +5882,7 @@ impl Service {
     /// 'cancel' in this context means cancel any ongoing reconcile
     pub(crate) async fn tenant_shard_cancel_reconcile(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<(), ApiError> {
         // Take state lock and fire the cancellation token, after which we drop lock and wait for any ongoing reconcile to complete
         let waiter = {
@@ -5945,7 +5924,7 @@ impl Service {
         let mut locked = self.inner.write().unwrap();
         let (_nodes, tenants, scheduler) = locked.parts_mut();
         let mut shards = Vec::new();
-        for (tenant_shard_id, _) in tenants.range(TenantShardId::tenant_range(tenant_id)) {
+        for (tenant_shard_id, _) in tenants.range(TenantId::tenant_range(tenant_id)) {
             shards.push(*tenant_shard_id);
         }
 
@@ -5996,7 +5975,7 @@ impl Service {
         let Some(shard_count) = scan_result
             .shards
             .iter()
-            .map(|s| s.tenant_shard_id.shard_count)
+            .map(|s| ShardCount(0))
             .max()
         else {
             return Err(ApiError::NotFound(
@@ -6019,11 +5998,11 @@ impl Service {
         let stripe_size = scan_result
             .shards
             .iter()
-            .find(|s| s.tenant_shard_id.shard_count == shard_count && s.generation == generation)
+            .find(|s| ShardCount(0) == shard_count && s.generation == generation)
             .expect("we validated >0 shards above")
             .stripe_size
             .unwrap_or_else(|| {
-                if shard_count.count() > 1 {
+                if ShardCount::unsharded().count() > 1 {
                     warn!("unknown stripe size, assuming {ORIGINAL_STRIPE_SIZE}");
                 }
                 ORIGINAL_STRIPE_SIZE
@@ -6031,7 +6010,7 @@ impl Service {
 
         let (response, waiters) = self
             .do_tenant_create(TenantCreateRequest {
-                new_tenant_id: TenantShardId::unsharded(tenant_id),
+                new_tenant_id: TenantId::unsharded(tenant_id),
                 generation,
 
                 shard_parameters: ShardParameters {
@@ -6422,7 +6401,7 @@ impl Service {
 
                 // Calculate a schedule context here to avoid borrow checker issues.
                 let mut schedule_context = ScheduleContext::default();
-                for (_, shard) in tenants.range(TenantShardId::tenant_range(tid.tenant_id)) {
+                for (_, shard) in tenants.range(TenantId::tenant_range(tid)) {
                     schedule_context.avoid(&shard.intent.all_pageservers());
                 }
 
@@ -6442,7 +6421,7 @@ impl Service {
                     ShardSchedulingPolicy::Pause | ShardSchedulingPolicy::Stop => {
                         // If we have been asked to avoid rescheduling this shard, then do not migrate it during a deletion
                         tracing::warn!(
-                            tenant_id=%tid.tenant_id, shard_id=%tid.shard_slug(),
+                            tenant_id=%tid, shard_id=%tid.shard_slug(),
                             "Skip migration during deletion because shard scheduling policy {:?} disallows it",
                             tenant_shard.get_scheduling_policy(),
                         );
@@ -7572,7 +7551,7 @@ impl Service {
         let units = match self.get_reconciler_units(reconciler_config.priority) {
             Ok(u) => u,
             Err(_) => {
-                tracing::info!(tenant_id=%shard.tenant_shard_id.tenant_id, shard_id=%shard.tenant_shard_id.shard_slug(),
+                tracing::info!(tenant_id=%shard.tenant_shard_id, shard_id=%shard.tenant_shard_id.shard_slug(),
                     "Concurrency limited: enqueued for reconcile later");
                 if !shard.delayed_reconcile {
                     match self.delayed_reconcile_tx.try_send(shard.tenant_shard_id) {
@@ -7678,7 +7657,7 @@ impl Service {
                     // Count shards that are stuck, butwe still want to reconcile them.
                     // We don't want to consider them when deciding to run optimizations.
                     tracing::warn!(
-                        tenant_id=%shard.tenant_shard_id.tenant_id,
+                        tenant_id=%shard.tenant_shard_id,
                         shard_id=%shard.tenant_shard_id.shard_slug(),
                         "Shard reconciliation is stuck: {} consecutive launches",
                         shard.consecutive_reconciles_count
@@ -7697,14 +7676,14 @@ impl Service {
             // If this tenant is detached, try dropping it from memory. This is usually done
             // proactively in [`Self::process_results`], but we do it here to handle the edge
             // case where a reconcile completes while someone else is holding an op lock for the tenant.
-            if shard.tenant_shard_id.shard_number == ShardNumber(0)
+            if ShardNumber(0) == ShardNumber(0)
                 && shard.policy == PlacementPolicy::Detached
             {
                 if let Some(guard) = self.tenant_op_locks.try_exclusive(
-                    shard.tenant_shard_id.tenant_id,
+                    shard.tenant_shard_id,
                     TenantOperations::DropDetached,
                 ) {
-                    drop_detached_tenants.push((shard.tenant_shard_id.tenant_id, guard));
+                    drop_detached_tenants.push((shard.tenant_shard_id, guard));
                 }
             }
         }
@@ -7801,7 +7780,7 @@ impl Service {
         reconciles_spawned
     }
 
-    fn optimize_all_plan(&self) -> Vec<(TenantShardId, ScheduleOptimization)> {
+    fn optimize_all_plan(&self) -> Vec<(TenantId, ScheduleOptimization)> {
         // How many candidate optimizations we will generate, before evaluating them for readniess: setting
         // this higher than the execution limit gives us a chance to execute some work even if the first
         // few optimizations we find are not ready.
@@ -7900,8 +7879,8 @@ impl Service {
 
     async fn optimize_all_validate(
         &self,
-        candidate_work: Vec<(TenantShardId, ScheduleOptimization)>,
-    ) -> Vec<(TenantShardId, ScheduleOptimization)> {
+        candidate_work: Vec<(TenantId, ScheduleOptimization)>,
+    ) -> Vec<(TenantId, ScheduleOptimization)> {
         // Take a clone of the node map to use outside the lock in async validation phase
         let validation_nodes = { self.inner.read().unwrap().nodes.clone() };
 
@@ -8015,7 +7994,7 @@ impl Service {
     /// happens on multi-minute timescales in the field, which is fine because optimisation is meant
     /// to be a lazy background thing. However, when testing, it is not practical to wait around, so
     /// we have this helper to move things along faster.
-    async fn kick_secondary_download(&self, tenant_shard_id: TenantShardId) {
+    async fn kick_secondary_download(&self, tenant_shard_id: TenantId) {
         if !self.config.kick_secondary_downloads {
             // No-op if kick_secondary_downloads functionaliuty is not configured
             return;
@@ -8160,7 +8139,6 @@ impl Service {
     /// NB: the thresholds are exclusive, since TopTenantShardsRequest uses where_gt.
     fn compute_split_shards(inputs: ShardSplitInputs) -> Option<ShardCount> {
         let ShardSplitInputs {
-            shard_count,
             max_logical_size,
             split_threshold,
             max_split_shards,
@@ -8168,7 +8146,7 @@ impl Service {
             initial_split_shards,
         } = inputs;
 
-        let mut new_shard_count: u8 = shard_count.count();
+        let mut new_shard_count: u8 = ShardCount::unsharded().count();
 
         // Size-based splits. Ensures max_logical_size / new_shard_count <= split_threshold, using
         // power-of-two shard counts.
@@ -8176,7 +8154,7 @@ impl Service {
         // If the current shard count is not a power of two, and does not exceed split_threshold,
         // then we leave it alone rather than forcing a power-of-two split.
         if split_threshold > 0
-            && max_logical_size.div_ceil(split_threshold) > shard_count.count() as u64
+            && max_logical_size.div_ceil(split_threshold) > ShardCount::unsharded().count() as u64
         {
             new_shard_count = max_logical_size
                 .div_ceil(split_threshold)
@@ -8190,7 +8168,7 @@ impl Service {
         // applies to unsharded tenants, i.e. changes to initial_split_threshold or
         // initial_split_shards are not retroactive for sharded tenants.
         if initial_split_threshold > 0
-            && shard_count.count() <= 1
+            && ShardCount::unsharded().count() <= 1
             && max_logical_size > initial_split_threshold
         {
             new_shard_count = new_shard_count.max(initial_split_shards);
@@ -8200,7 +8178,7 @@ impl Service {
         new_shard_count = new_shard_count.min(max_split_shards);
 
         // Don't split if we're not increasing the shard count.
-        if new_shard_count <= shard_count.count() {
+        if new_shard_count <= ShardCount::unsharded().count() {
             return None;
         }
 
@@ -8345,7 +8323,7 @@ impl Service {
     async fn secondary_lag(
         &self,
         secondary: &NodeId,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> Result<Option<u64>, mgmt_api::Error> {
         let nodes = self.inner.read().unwrap().nodes.clone();
         let node = nodes.get(secondary).ok_or(mgmt_api::Error::ApiError(
@@ -8458,21 +8436,21 @@ impl Service {
                     }
                     Ok(Some(lag)) => {
                         tracing::info!(
-                            tenant_id=%tid.tenant_id, shard_id=%tid.shard_slug(),
+                            tenant_id=%tid, shard_id=%tid.shard_slug(),
                             "Secondary on node {dest_node_id} is lagging by {lag}. Skipping reconcile."
                         );
                         continue;
                     }
                     Ok(None) => {
                         tracing::info!(
-                            tenant_id=%tid.tenant_id, shard_id=%tid.shard_slug(),
+                            tenant_id=%tid, shard_id=%tid.shard_slug(),
                             "Could not determine lag for secondary on node {dest_node_id}. Skipping reconcile."
                         );
                         continue;
                     }
                     Err(err) => {
                         tracing::warn!(
-                            tenant_id=%tid.tenant_id, shard_id=%tid.shard_slug(),
+                            tenant_id=%tid, shard_id=%tid.shard_slug(),
                             "Failed to get secondary lag from node {dest_node_id}. Skipping reconcile: {err}"
                         );
                         continue;
@@ -8564,7 +8542,7 @@ impl Service {
     /// 2. If after step 1 we have not migrated enough shards for this node to have its fair share of
     ///    attached shards, we will promote more shards from the nodes with the most attached shards, unless
     ///    those shards have a home AZ that doesn't match the node we're filling.
-    fn fill_node_plan(&self, node_id: NodeId) -> Vec<TenantShardId> {
+    fn fill_node_plan(&self, node_id: NodeId) -> Vec<TenantId> {
         let mut locked = self.inner.write().unwrap();
         let (nodes, tenants, _scheduler) = locked.parts_mut();
 
@@ -8578,7 +8556,7 @@ impl Service {
         let mut plan = Vec::new();
 
         // Collect shards which do not have a preferred AZ & are elegible for moving in stage 2
-        let mut free_tids_by_node: HashMap<NodeId, Vec<TenantShardId>> = HashMap::new();
+        let mut free_tids_by_node: HashMap<NodeId, Vec<TenantId>> = HashMap::new();
 
         // Don't respect AZ preferences if there is only one AZ.  This comes up in tests, but it could
         // conceivably come up in real life if deploying a single-AZ region intentionally.
@@ -8670,11 +8648,10 @@ impl Service {
                 match free_tids_by_node.get_mut(&node_id) {
                     Some(tids) => match tids.pop() {
                         Some(tid) => {
-                            let max_promote_for_tenant = std::cmp::max(
-                                tid.shard_count.count() as usize / locked.nodes.len(),
-                                1,
-                            );
-                            let promoted = promoted_per_tenant.entry(tid.tenant_id).or_default();
+                            // yb-mode: single-shard tenants, so the per-tenant
+                            // promote cap is just 1.
+                            let max_promote_for_tenant = 1usize;
+                            let promoted = promoted_per_tenant.entry(tid).or_default();
                             if *promoted < max_promote_for_tenant {
                                 plan.push(tid);
                                 *promoted += 1;
@@ -8769,13 +8746,13 @@ impl Service {
                             match tenant_shard.reschedule_to_secondary(Some(node_id), scheduler) {
                                 Err(e) => {
                                     tracing::warn!(
-                                        tenant_id=%tid.tenant_id, shard_id=%tid.shard_slug(),
+                                        tenant_id=%tid, shard_id=%tid.shard_slug(),
                                         "Scheduling error when filling pageserver {} : {e}", node_id
                                     );
                                 }
                                 Ok(()) => {
                                     tracing::info!(
-                                        tenant_id=%tid.tenant_id, shard_id=%tid.shard_slug(),
+                                        tenant_id=%tid, shard_id=%tid.shard_slug(),
                                         "Rescheduled shard while filling node {}: {:?} -> {}",
                                         node_id,
                                         previously_attached_to,
@@ -8878,7 +8855,7 @@ impl Service {
     /// Lists the tenant shards that has unhealthy metadata status.
     pub(crate) async fn metadata_health_list_unhealthy(
         &self,
-    ) -> Result<Vec<TenantShardId>, ApiError> {
+    ) -> Result<Vec<TenantId>, ApiError> {
         let result = self
             .persistence
             .list_unhealthy_metadata_health_records()
@@ -9018,12 +8995,12 @@ mod tests {
     /// than bytes. Note that max_logical_size is the total logical size of the largest timeline
     /// summed across all shards.
     #[test]
+    #[ignore = "yb-mode: shard splitting removed, only single-shard tenants exist"]
     fn compute_split_shards() {
         // Size-based split: two shards have a 500 GB timeline, which need to split into 8 shards
         // that are <= 64 GB,
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(2),
                 max_logical_size: 500,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9036,7 +9013,6 @@ mod tests {
         // Size-based split: noop at or below threshold, fires above.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(2),
                 max_logical_size: 127,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9047,7 +9023,6 @@ mod tests {
         );
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(2),
                 max_logical_size: 128,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9058,7 +9033,6 @@ mod tests {
         );
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(2),
                 max_logical_size: 129,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9071,7 +9045,6 @@ mod tests {
         // Size-based split: clamped to max_split_shards.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(2),
                 max_logical_size: 10000,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9084,7 +9057,6 @@ mod tests {
         // Size-based split: tenant already at or beyond max_split_shards is not split.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(16),
                 max_logical_size: 10000,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9096,7 +9068,6 @@ mod tests {
 
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(32),
                 max_logical_size: 10000,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9110,7 +9081,6 @@ mod tests {
         // exceeds split_threshold (i.e. a 3-shard tenant splits into 8, not 6).
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(3),
                 max_logical_size: 320,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9124,7 +9094,6 @@ mod tests {
         // existing shards are below or at split_threshold, but splits into 4 if it exceeds it.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(3),
                 max_logical_size: 191,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9135,7 +9104,6 @@ mod tests {
         );
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(3),
                 max_logical_size: 192,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9146,7 +9114,6 @@ mod tests {
         );
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(3),
                 max_logical_size: 193,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9159,7 +9126,6 @@ mod tests {
         // Initial split: tenant has a 10 GB timeline, split into 4 shards.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 10,
                 split_threshold: 0,
                 max_split_shards: 16,
@@ -9172,7 +9138,6 @@ mod tests {
         // Initial split: 0 ShardCount is equivalent to 1.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(0),
                 max_logical_size: 10,
                 split_threshold: 0,
                 max_split_shards: 16,
@@ -9185,7 +9150,6 @@ mod tests {
         // Initial split: at or below threshold is noop.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 7,
                 split_threshold: 0,
                 max_split_shards: 16,
@@ -9196,7 +9160,6 @@ mod tests {
         );
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 8,
                 split_threshold: 0,
                 max_split_shards: 16,
@@ -9207,7 +9170,6 @@ mod tests {
         );
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 9,
                 split_threshold: 0,
                 max_split_shards: 16,
@@ -9221,7 +9183,6 @@ mod tests {
         // shard count.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(2),
                 max_logical_size: 20,
                 split_threshold: 0,
                 max_split_shards: 16,
@@ -9234,7 +9195,6 @@ mod tests {
         // Initial split: clamped to max_shards.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 10,
                 split_threshold: 0,
                 max_split_shards: 3,
@@ -9247,7 +9207,6 @@ mod tests {
         // Initial+size split: tenant eligible for both will use the larger shard count.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 10,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9258,7 +9217,6 @@ mod tests {
         );
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 500,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9271,7 +9229,6 @@ mod tests {
         // Initial+size split: sharded tenant is only eligible for size-based split.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(2),
                 max_logical_size: 200,
                 split_threshold: 64,
                 max_split_shards: 16,
@@ -9285,7 +9242,6 @@ mod tests {
         // split_threshold.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 10,
                 split_threshold: 4,
                 max_split_shards: 16,
@@ -9300,7 +9256,6 @@ mod tests {
         // shards will split according to split_threshold.
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 65,
                 split_threshold: 64,
                 max_split_shards: 8,
@@ -9312,7 +9267,6 @@ mod tests {
 
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(1),
                 max_logical_size: 64,
                 split_threshold: 64,
                 max_split_shards: 8,
@@ -9324,7 +9278,6 @@ mod tests {
 
         assert_eq!(
             Service::compute_split_shards(ShardSplitInputs {
-                shard_count: ShardCount(2),
                 max_logical_size: 129,
                 split_threshold: 64,
                 max_split_shards: 8,

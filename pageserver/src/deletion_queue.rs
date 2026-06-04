@@ -18,10 +18,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use pageserver_api::shard::TenantShardId;
 use remote_storage::GenericRemoteStorage;
 use thiserror::Error;
 use utils::generation::Generation;
+use utils::id::TenantId;
 
 use crate::config::PageServerConf;
 use crate::controller_upcall_client::StorageControllerUpcallApi;
@@ -68,7 +68,7 @@ impl DeletionQueueClient {
     /// is a no-op.
     pub(crate) fn recover(
         &self,
-        _attached_tenants: HashMap<TenantShardId, Generation>,
+        _attached_tenants: HashMap<TenantId, Generation>,
     ) -> Result<(), DeletionQueueError> {
         Ok(())
     }

@@ -10,7 +10,6 @@ use postgres::{NoTls, SimpleQueryMessage};
 use tracing::{info, warn};
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
-use utils::shard::TenantShardId;
 
 use crate::compute::ComputeNode;
 
@@ -119,11 +118,8 @@ fn try_acquire_lsn_lease(
     let mut leases = Vec::new();
 
     for (shard_index, shard) in conninfo.shards.into_iter() {
-        let tenant_shard_id = TenantShardId {
-            tenant_id,
-            shard_number: shard_index.shard_number,
-            shard_count: shard_index.shard_count,
-        };
+        let _ = shard_index;
+        let tenant_shard_id = TenantId::unsharded(tenant_id);
 
         // XXX: If there are more than pageserver for the one shard, do we need to get a
         // leas on all of them? Currently, that's what we assume, but this is hypothetical
@@ -158,7 +154,7 @@ fn try_acquire_lsn_lease(
 fn acquire_lsn_lease_libpq(
     connstring: &str,
     auth: Option<&str>,
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     timeline_id: TimelineId,
     lsn: Lsn,
 ) -> Result<Option<SystemTime>> {
@@ -194,14 +190,14 @@ fn acquire_lsn_lease_libpq(
 fn acquire_lsn_lease_grpc(
     connstring: &str,
     auth: Option<&str>,
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     timeline_id: TimelineId,
     lsn: Lsn,
 ) -> Result<Option<SystemTime>> {
     tokio::runtime::Handle::current().block_on(async move {
         let mut client = page_api::Client::connect(
             connstring.to_string(),
-            tenant_shard_id.tenant_id,
+            tenant_shard_id,
             timeline_id,
             tenant_shard_id.to_index(),
             auth.map(String::from),

@@ -24,7 +24,7 @@ use pageserver_api::controller_api::{
 };
 use pageserver_api::models::{ShardImportStatus, TenantConfig};
 use pageserver_api::shard::{
-    ShardConfigError, ShardCount, ShardIdentity, ShardNumber, ShardStripeSize, TenantShardId,
+    ShardConfigError, ShardCount, ShardIdentity, ShardNumber, ShardStripeSize,
 };
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
@@ -87,7 +87,7 @@ pub(crate) const SC_SCHEMA: &str = "storage_controller";
 /// Legacy format, for use in JSON compat objects in test environment
 #[derive(Serialize, Deserialize)]
 struct JsonPersistence {
-    tenants: HashMap<TenantShardId, TenantShardPersistence>,
+    tenants: HashMap<TenantId, TenantShardPersistence>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -156,12 +156,12 @@ pub(crate) type DatabaseResult<T> = Result<T, DatabaseError>;
 #[derive(Clone)]
 pub(crate) enum TenantFilter {
     Tenant(TenantId),
-    Shard(TenantShardId),
+    Shard(TenantId),
 }
 
 /// Represents the results of looking up generation+pageserver for the shards of a tenant
 pub(crate) struct ShardGenerationState {
-    pub(crate) tenant_shard_id: TenantShardId,
+    pub(crate) tenant_shard_id: TenantId,
     pub(crate) generation: Option<Generation>,
     pub(crate) generation_pageserver: Option<NodeId>,
 }
@@ -637,7 +637,7 @@ impl Persistence {
     pub(crate) async fn re_attach(
         &self,
         input_node_id: NodeId,
-    ) -> DatabaseResult<HashMap<TenantShardId, Generation>> {
+    ) -> DatabaseResult<HashMap<TenantId, Generation>> {
         use crate::schema::nodes::dsl::{scheduling_policy, *};
         use crate::schema::tenant_shards::dsl::*;
         let updated = self
@@ -702,7 +702,7 @@ impl Persistence {
 
         let mut result = HashMap::new();
         for tsp in updated {
-            let tenant_shard_id = TenantShardId::unsharded(
+            let tenant_shard_id = TenantId::unsharded(
                 TenantId::from_str(tsp.tenant_id.as_str())
                     .map_err(|e| DatabaseError::Logical(format!("Malformed tenant id: {e}")))?,
             );
@@ -725,7 +725,7 @@ impl Persistence {
     /// [`Self::re_attach`] we can do a bulk UPDATE on the generations for that node.
     pub(crate) async fn increment_generation(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         node_id: NodeId,
     ) -> anyhow::Result<Generation> {
         use crate::schema::tenant_shards::dsl::*;
@@ -733,7 +733,7 @@ impl Persistence {
             .with_measured_conn(DatabaseOperation::IncrementGeneration, move |conn| {
                 Box::pin(async move {
                     let updated = diesel::update(tenant_shards)
-                        .filter(tenant_id.eq(tenant_shard_id.tenant_id.to_string()))
+                        .filter(tenant_id.eq(tenant_shard_id.to_string()))
                         .set((
                             generation.eq(generation + 1),
                             generation_pageserver.eq(node_id.0 as i64),
@@ -804,8 +804,8 @@ impl Persistence {
     /// Output is unsorted.  Output may not include values for all inputs, if they are missing in the database.
     pub(crate) async fn shard_generations(
         &self,
-        mut tenant_shard_ids: impl Iterator<Item = &TenantShardId>,
-    ) -> Result<Vec<(TenantShardId, Option<Generation>)>, DatabaseError> {
+        mut tenant_shard_ids: impl Iterator<Item = &TenantId>,
+    ) -> Result<Vec<(TenantId, Option<Generation>)>, DatabaseError> {
         let mut rows = Vec::with_capacity(tenant_shard_ids.size_hint().0);
 
         // We will chunk our input to avoid composing arbitrarily long `IN` clauses.  Typically we are
@@ -821,7 +821,7 @@ impl Persistence {
                 .map(|tsid| {
                     format!(
                         "('{}', {}, {})",
-                        tsid.tenant_id, tsid.shard_number.0, tsid.shard_count.0
+                        tsid, ShardNumber(0).0, ShardCount(0).0
                     )
                 })
                 .join(",");
@@ -885,7 +885,7 @@ impl Persistence {
             Box::pin(async move {
                 let query = match tenant {
                     TenantFilter::Shard(tenant_shard_id) => diesel::update(tenant_shards)
-                        .filter(tenant_id.eq(tenant_shard_id.tenant_id.to_string()))
+                        .filter(tenant_id.eq(tenant_shard_id.to_string()))
                         .into_boxed(),
                     TenantFilter::Tenant(input_tenant_id) => diesel::update(tenant_shards)
                         .filter(tenant_id.eq(input_tenant_id.to_string()))
@@ -973,8 +973,8 @@ impl Persistence {
     /// Note that passing None for a shard clears the preferred AZ (rather than leaving it unmodified)
     pub(crate) async fn set_tenant_shard_preferred_azs(
         &self,
-        preferred_azs: Vec<(TenantShardId, Option<AvailabilityZone>)>,
-    ) -> DatabaseResult<Vec<(TenantShardId, Option<AvailabilityZone>)>> {
+        preferred_azs: Vec<(TenantId, Option<AvailabilityZone>)>,
+    ) -> DatabaseResult<Vec<(TenantId, Option<AvailabilityZone>)>> {
         use crate::schema::tenant_shards::dsl::*;
 
         let preferred_azs = preferred_azs.as_slice();
@@ -984,7 +984,7 @@ impl Persistence {
 
                 for (tenant_shard_id, preferred_az) in preferred_azs.iter() {
                     let updated = diesel::update(tenant_shards)
-                        .filter(tenant_id.eq(tenant_shard_id.tenant_id.to_string()))
+                        .filter(tenant_id.eq(tenant_shard_id.to_string()))
                         .set(preferred_az_id.eq(preferred_az.as_ref().map(|az| az.0.clone())))
                         .execute(conn)
                         .await?;
@@ -1000,12 +1000,12 @@ impl Persistence {
         .await
     }
 
-    pub(crate) async fn detach(&self, tenant_shard_id: TenantShardId) -> anyhow::Result<()> {
+    pub(crate) async fn detach(&self, tenant_shard_id: TenantId) -> anyhow::Result<()> {
         use crate::schema::tenant_shards::dsl::*;
         self.with_measured_conn(DatabaseOperation::Detach, move |conn| {
             Box::pin(async move {
                 let updated = diesel::update(tenant_shards)
-                    .filter(tenant_id.eq(tenant_shard_id.tenant_id.to_string()))
+                    .filter(tenant_id.eq(tenant_shard_id.to_string()))
                     .set((
                         generation_pageserver.eq(Option::<i64>::None),
                         placement_policy
@@ -1923,7 +1923,7 @@ impl Persistence {
     /// are covered by the outer [`DatabaseError`].
     pub(crate) async fn update_timeline_import(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         shard_status: ShardImportStatus,
     ) -> DatabaseResult<Result<Option<TimelineImport>, TimelineImportUpdateError>> {
@@ -1937,7 +1937,7 @@ impl Persistence {
                     let mut from_db: Vec<TimelineImportPersistence> = dsl::timeline_imports
                         .filter(
                             dsl::tenant_id
-                                .eq(tenant_shard_id.tenant_id.to_string())
+                                .eq(tenant_shard_id.to_string())
                                 .and(dsl::timeline_id.eq(timeline_id.to_string())),
                         )
                         .load(conn)
@@ -1949,7 +1949,7 @@ impl Persistence {
                         Some(some) => TimelineImport::from_persistent(some).unwrap(),
                         None => {
                             return Ok(Err(TimelineImportUpdateError::ImportNotFound {
-                                tenant_id: tenant_shard_id.tenant_id,
+                                tenant_id: tenant_shard_id,
                                 timeline_id,
                             }));
                         }
@@ -1971,7 +1971,7 @@ impl Persistence {
                             let updated = diesel::update(dsl::timeline_imports)
                                 .filter(
                                     dsl::tenant_id
-                                        .eq(tenant_shard_id.tenant_id.to_string())
+                                        .eq(tenant_shard_id.to_string())
                                         .and(dsl::timeline_id.eq(timeline_id.to_string())),
                                 )
                                 .set(dsl::shard_statuses.eq(new_persistent.shard_statuses))
@@ -1980,7 +1980,7 @@ impl Persistence {
 
                             if updated != 1 {
                                 return Ok(Err(TimelineImportUpdateError::ImportNotFound {
-                                    tenant_id: tenant_shard_id.tenant_id,
+                                    tenant_id: tenant_shard_id,
                                     timeline_id,
                                 }));
                             }
@@ -2244,8 +2244,8 @@ impl TenantShardPersistence {
         Ok(ShardIdentity::unsharded())
     }
 
-    pub(crate) fn get_tenant_shard_id(&self) -> anyhow::Result<TenantShardId> {
-        Ok(TenantShardId::unsharded(TenantId::from_str(
+    pub(crate) fn get_tenant_shard_id(&self) -> anyhow::Result<TenantId> {
+        Ok(TenantId::unsharded(TenantId::from_str(
             self.tenant_id.as_str(),
         )?))
     }
@@ -2281,20 +2281,20 @@ pub(crate) struct MetadataHealthPersistence {
 
 impl MetadataHealthPersistence {
     pub fn new(
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         healthy: bool,
         last_scrubbed_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         MetadataHealthPersistence {
-            tenant_id: tenant_shard_id.tenant_id.to_string(),
+            tenant_id: tenant_shard_id.to_string(),
             healthy,
             last_scrubbed_at,
         }
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_tenant_shard_id(&self) -> Result<TenantShardId, hex::FromHexError> {
-        Ok(TenantShardId::unsharded(TenantId::from_str(
+    pub(crate) fn get_tenant_shard_id(&self) -> Result<TenantId, hex::FromHexError> {
+        Ok(TenantId::unsharded(TenantId::from_str(
             self.tenant_id.as_str(),
         )?))
     }

@@ -140,7 +140,7 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
                 TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
                 defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
                 gc_loop(tenant, cancel)
-                    .instrument(info_span!("gc_loop", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug()))
+                    .instrument(info_span!("gc_loop", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug()))
                     .await;
                 Ok(())
             }
@@ -165,7 +165,7 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
                 TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
                 defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
                 tenant_housekeeping_loop(tenant, cancel)
-                    .instrument(info_span!("tenant_housekeeping_loop", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug()))
+                    .instrument(info_span!("tenant_housekeeping_loop", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug()))
                     .await;
                 Ok(())
             }

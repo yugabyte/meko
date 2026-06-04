@@ -19,14 +19,13 @@ use pageserver_api::config::{
     PageServicePipeliningConfig, PageServicePipeliningConfigPipelined,
 };
 use pageserver_api::models::ImageCompressionAlgorithm;
-use pageserver_api::shard::TenantShardId;
 use pem::Pem;
 use postgres_backend::AuthType;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{RemotePath, RemoteStorageConfig};
 use reqwest::Url;
 use storage_broker::Uri;
-use utils::id::{NodeId, TimelineId};
+use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::{LogFormat, SecretString};
 
 use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
@@ -284,7 +283,7 @@ impl PageServerConf {
         self.deletion_prefix().join(format!("header-{VERSION:02x}"))
     }
 
-    pub fn tenant_path(&self, tenant_shard_id: &TenantShardId) -> Utf8PathBuf {
+    pub fn tenant_path(&self, tenant_shard_id: &TenantId) -> Utf8PathBuf {
         self.tenants_path().join(tenant_shard_id.to_string())
     }
 
@@ -292,20 +291,20 @@ impl PageServerConf {
     /// where certain tenant's LocationConf be stored.
     pub(crate) fn tenant_location_config_path(
         &self,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
     ) -> Utf8PathBuf {
         self.tenant_path(tenant_shard_id)
             .join(TENANT_LOCATION_CONFIG_NAME)
     }
 
-    pub fn timelines_path(&self, tenant_shard_id: &TenantShardId) -> Utf8PathBuf {
+    pub fn timelines_path(&self, tenant_shard_id: &TenantId) -> Utf8PathBuf {
         self.tenant_path(tenant_shard_id)
             .join(TIMELINES_SEGMENT_NAME)
     }
 
     pub fn timeline_path(
         &self,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
         timeline_id: &TimelineId,
     ) -> Utf8PathBuf {
         self.timelines_path(tenant_shard_id)

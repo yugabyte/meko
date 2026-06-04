@@ -38,7 +38,6 @@ use pageserver_api::models::{
     TimelinePatchIndexPartRequest, TimelineVisibilityState, TimelinesInfoAndOffloaded,
     TopTenantShardItem, TopTenantShardsRequest, TopTenantShardsResponse,
 };
-use pageserver_api::shard::TenantShardId;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage};
 use scopeguard::defer;
@@ -543,9 +542,9 @@ async fn timeline_create_handler(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let request_data: TimelineCreateRequest = json_request(&mut request).await?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let new_timeline_id = request_data.new_timeline_id;
     // fill in the default pg_version if not provided & convert request into domain model
@@ -641,7 +640,7 @@ async fn timeline_create_handler(
         }
     }
     .instrument(info_span!("timeline_create",
-        tenant_id = %tenant_shard_id.tenant_id,
+        tenant_id = %tenant_shard_id,
         shard_id = %tenant_shard_id.shard_slug(),
         timeline_id = %new_timeline_id,
     ))
@@ -652,14 +651,14 @@ async fn timeline_list_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let include_non_incremental_logical_size: Option<bool> =
         parse_query_param(&request, "include-non-incremental-logical-size")?;
     let force_await_initial_logical_size: Option<bool> =
         parse_query_param(&request, "force-await-initial-logical-size")?;
     let include_image_consistent_lsn: Option<bool> =
         parse_query_param(&request, "include-image-consistent-lsn")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let state = get_state(&request);
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
@@ -692,7 +691,7 @@ async fn timeline_list_handler(
         Ok::<Vec<TimelineInfo>, ApiError>(response_data)
     }
     .instrument(info_span!("timeline_list",
-                tenant_id = %tenant_shard_id.tenant_id,
+                tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug()))
     .await?;
 
@@ -703,7 +702,7 @@ async fn timeline_and_offloaded_list_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let include_non_incremental_logical_size: Option<bool> =
         parse_query_param(&request, "include-non-incremental-logical-size")?;
     let force_await_initial_logical_size: Option<bool> =
@@ -711,7 +710,7 @@ async fn timeline_and_offloaded_list_handler(
     let include_image_consistent_lsn: Option<bool> =
         parse_query_param(&request, "include-image-consistent-lsn")?;
 
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let state = get_state(&request);
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
@@ -752,7 +751,7 @@ async fn timeline_and_offloaded_list_handler(
         Ok::<TimelinesInfoAndOffloaded, ApiError>(res)
     }
     .instrument(info_span!("timeline_and_offloaded_list",
-                tenant_id = %tenant_shard_id.tenant_id,
+                tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug()))
     .await?;
 
@@ -763,9 +762,9 @@ async fn timeline_preserve_initdb_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
 
     // Part of the process for disaster recovery from safekeeper-stored WAL:
@@ -789,7 +788,7 @@ async fn timeline_preserve_initdb_handler(
         Ok::<_, ApiError>(())
     }
     .instrument(info_span!("timeline_preserve_initdb_archive",
-                tenant_id = %tenant_shard_id.tenant_id,
+                tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug(),
                 %timeline_id))
     .await?;
@@ -801,13 +800,13 @@ async fn timeline_archival_config_handler(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
 
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Warn);
 
     let request_data: TimelineArchivalConfigRequest = json_request(&mut request).await?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
 
     async {
@@ -828,7 +827,7 @@ async fn timeline_archival_config_handler(
         Ok::<_, ApiError>(())
     }
     .instrument(info_span!("timeline_archival_config",
-                tenant_id = %tenant_shard_id.tenant_id,
+                tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug(),
                 state = ?request_data.state,
                 %timeline_id))
@@ -852,7 +851,7 @@ async fn timeline_patch_index_part_handler(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
 
     let request_data: TimelinePatchIndexPartRequest = json_request(&mut request).await?;
@@ -896,7 +895,7 @@ async fn timeline_patch_index_part_handler(
         Ok::<_, ApiError>(())
     }
     .instrument(info_span!("timeline_patch_index_part",
-                tenant_id = %tenant_shard_id.tenant_id,
+                tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug(),
                 %timeline_id))
     .await?;
@@ -908,7 +907,7 @@ async fn timeline_detail_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     let include_non_incremental_logical_size: Option<bool> =
         parse_query_param(&request, "include-non-incremental-logical-size")?;
@@ -917,7 +916,7 @@ async fn timeline_detail_handler(
     // HADRON
     let include_image_consistent_lsn: Option<bool> =
         parse_query_param(&request, "include-image-consistent-lsn")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     // Logical size calculation needs downloading.
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
@@ -947,7 +946,7 @@ async fn timeline_detail_handler(
         Ok::<_, ApiError>(timeline_info)
     }
     .instrument(info_span!("timeline_detail",
-                tenant_id = %tenant_shard_id.tenant_id,
+                tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug(),
                 %timeline_id))
     .await?;
@@ -959,8 +958,8 @@ async fn get_lsn_by_timestamp_handler(
     request: Request<Body>,
     cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
 
     if !tenant_shard_id.is_shard_zero() {
@@ -1034,8 +1033,8 @@ async fn get_timestamp_of_lsn_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
 
     if !tenant_shard_id.is_shard_zero() {
@@ -1077,9 +1076,9 @@ async fn timeline_delete_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let state = get_state(&request);
 
@@ -1099,7 +1098,7 @@ async fn timeline_delete_handler(
             }
         })?;
     tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
-    tenant.delete_timeline(timeline_id).instrument(info_span!("timeline_delete", tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(), %timeline_id))
+    tenant.delete_timeline(timeline_id).instrument(info_span!("timeline_delete", tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(), %timeline_id))
         .await?;
 
     json_response(StatusCode::ACCEPTED, ())
@@ -1109,8 +1108,8 @@ async fn tenant_reset_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let drop_cache: Option<bool> = parse_query_param(&request, "drop_cache")?;
 
@@ -1158,8 +1157,8 @@ async fn tenant_status(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
 
     // In tests, sometimes we want to query the state of a tenant without auto-activating it if it's currently waiting.
@@ -1206,7 +1205,7 @@ async fn tenant_status(
         })
     }
     .instrument(info_span!("tenant_status_handler",
-                tenant_id = %tenant_shard_id.tenant_id,
+                tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug()))
     .await?;
 
@@ -1218,8 +1217,8 @@ async fn tenant_delete_handler(
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
     // TODO openapi spec
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let state = get_state(&request);
 
@@ -1227,7 +1226,7 @@ async fn tenant_delete_handler(
         .tenant_manager
         .delete_tenant(tenant_shard_id)
         .instrument(info_span!("tenant_delete_handler",
-            tenant_id = %tenant_shard_id.tenant_id,
+            tenant_id = %tenant_shard_id,
             shard_id = %tenant_shard_id.shard_slug()
         ))
         .await?;
@@ -1268,7 +1267,7 @@ async fn timeline_page_trace_handler(
     request: Request<Body>,
     cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     let state = get_state(&request);
     check_permission(&request, None)?;
@@ -1334,8 +1333,8 @@ async fn block_or_unblock_gc(
     request: Request<Body>,
     block: bool,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     let state = get_state(&request);
 
@@ -1357,7 +1356,7 @@ async fn block_or_unblock_gc(
 
     let span = tracing::info_span!(
         "block_or_unblock_gc",
-        tenant_id = %tenant_shard_id.tenant_id,
+        tenant_id = %tenant_shard_id,
         shard_id = %tenant_shard_id.shard_slug(),
         timeline_id = %timeline_id,
         block = block,
@@ -1388,8 +1387,8 @@ async fn get_tenant_config_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
 
     let tenant = state
@@ -1426,7 +1425,7 @@ async fn update_tenant_config_handler(
 
     let state = get_state(&request);
 
-    let tenant_shard_id = TenantShardId::unsharded(tenant_id);
+    let tenant_shard_id = TenantId::unsharded(tenant_id);
 
     let tenant = state
         .tenant_manager
@@ -1459,7 +1458,7 @@ async fn patch_tenant_config_handler(
 
     let state = get_state(&request);
 
-    let tenant_shard_id = TenantShardId::unsharded(tenant_id);
+    let tenant_shard_id = TenantId::unsharded(tenant_id);
 
     let tenant = state
         .tenant_manager
@@ -1490,12 +1489,12 @@ async fn put_tenant_location_config_handler(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
 
     let request_data: TenantLocationConfigRequest = json_request(&mut request).await?;
     let flush = parse_query_param(&request, "flush_ms")?.map(Duration::from_millis);
     let lazy = parse_query_param(&request, "lazy")?.unwrap_or(false);
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Warn);
     let state = get_state(&request);
@@ -1513,7 +1512,7 @@ async fn put_tenant_location_config_handler(
             .tenant_manager
             .detach_tenant(conf, tenant_shard_id, &state.deletion_queue_client)
             .instrument(info_span!("tenant_detach",
-                tenant_id = %tenant_shard_id.tenant_id,
+                tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug()
             ))
             .await
@@ -1558,11 +1557,8 @@ async fn put_tenant_location_config_handler(
             shard_id: tenant_shard_id,
             node_id: state.conf.id,
         });
-        if tenant_shard_id.shard_count.count() > 1 {
-            // Stripe size should be set if we are attached
-            debug_assert!(stripe_size.is_some());
-            response.stripe_size = stripe_size;
-        }
+        // yb-mode: always single-shard, no stripe size to populate.
+        let _ = stripe_size;
     }
 
     json_response(StatusCode::OK, response)
@@ -1594,7 +1590,7 @@ async fn get_location_config_handler(
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
     let state = get_state(&request);
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let slot = state.tenant_manager.get(tenant_shard_id);
 
     let Some(slot) = slot else {
@@ -1616,7 +1612,7 @@ async fn handle_tenant_break(
     r: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&r, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&r, "tenant_shard_id")?;
 
     let state = get_state(&r);
     state
@@ -1633,9 +1629,9 @@ async fn lsn_lease_handler(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let lsn = json_request::<LsnLeaseRequest>(&mut request).await?.lsn;
 
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
@@ -1655,7 +1651,7 @@ async fn lsn_lease_handler(
                 )
             })
     }
-    .instrument(info_span!("init_lsn_lease", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
+    .instrument(info_span!("init_lsn_lease", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
     .await?;
 
     json_response(StatusCode::OK, result)
@@ -1666,9 +1662,9 @@ async fn timeline_gc_handler(
     mut request: Request<Body>,
     cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let gc_req: TimelineGcRequest = json_request(&mut request).await?;
 
@@ -1686,9 +1682,9 @@ async fn timeline_mark_invisible_handler(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let compact_request = json_request_maybe::<Option<MarkInvisibleRequest>>(&mut request).await?;
 
@@ -1715,7 +1711,7 @@ async fn timeline_mark_invisible_handler(
         );
         json_response(StatusCode::OK, ())
     }
-    .instrument(info_span!("manual_timeline_mark_invisible", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
+    .instrument(info_span!("manual_timeline_mark_invisible", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
     .await
 }
 
@@ -1724,9 +1720,9 @@ async fn timeline_checkpoint_handler(
     request: Request<Body>,
     cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let state = get_state(&request);
 
@@ -1772,7 +1768,7 @@ async fn timeline_checkpoint_handler(
 
         json_response(StatusCode::OK, ())
     }
-    .instrument(info_span!("manual_checkpoint", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
+    .instrument(info_span!("manual_checkpoint", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
     .await
 }
 
@@ -1820,9 +1816,9 @@ async fn timeline_collect_keyspace(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
 
     let at_lsn: Option<Lsn> = parse_query_param(&request, "at_lsn")?;
@@ -1842,13 +1838,13 @@ async fn timeline_collect_keyspace(
 
         json_response(StatusCode::OK, res)
     }
-    .instrument(info_span!("timeline_collect_keyspace", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
+    .instrument(info_span!("timeline_collect_keyspace", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug(), %timeline_id))
     .await
 }
 
 async fn active_timeline_of_active_tenant(
     tenant_manager: &TenantManager,
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     timeline_id: TimelineId,
 ) -> Result<Arc<Timeline>, ApiError> {
     let tenant = tenant_manager.get_attached_tenant_shard(tenant_shard_id)?;
@@ -1902,7 +1898,7 @@ async fn tenant_scan_remote_handler(
                 &cancel,
             )
             .instrument(info_span!("download_index_part",
-                         tenant_id=%tenant_shard_id.tenant_id,
+                         tenant_id=%tenant_shard_id,
                          shard_id=%tenant_shard_id.shard_slug(),
                          %timeline_id))
             .await
@@ -1931,7 +1927,7 @@ async fn tenant_scan_remote_handler(
         let result =
             download_tenant_manifest(&state.remote_storage, &tenant_shard_id, generation, &cancel)
                 .instrument(info_span!("download_tenant_manifest",
-                            tenant_id=%tenant_shard_id.tenant_id,
+                            tenant_id=%tenant_shard_id,
                             shard_id=%tenant_shard_id.shard_slug()))
                 .await;
         let stripe_size = match result {
@@ -1960,7 +1956,7 @@ async fn wait_lsn_handler(
     mut request: Request<Body>,
     cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let wait_lsn_request: TenantWaitLsnRequest = json_request(&mut request).await?;
 
     let state = get_state(&request);
@@ -2134,10 +2130,10 @@ async fn list_aux_files(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     let body: ListAuxFilesRequest = json_request(&mut request).await?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let state = get_state(&request);
 
@@ -2155,10 +2151,10 @@ async fn ingest_aux_files(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_shard_id: TenantShardId = parse_request_param(&request, "tenant_shard_id")?;
+    let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     let body: IngestAuxFilesRequest = json_request(&mut request).await?;
-    check_permission(&request, Some(tenant_shard_id.tenant_id))?;
+    check_permission(&request, Some(tenant_shard_id))?;
 
     let state = get_state(&request);
 
@@ -2226,12 +2222,8 @@ async fn post_top_tenants(
 
     // FIXME: this is a lot of clones to take this tenant list
     for (tenant_shard_id, tenant_slot) in state.tenant_manager.list() {
-        if let Some(shards_lt) = request.where_shards_lt {
-            // Ignore tenants which already have >= this many shards
-            if tenant_shard_id.shard_count >= shards_lt {
-                continue;
-            }
-        }
+        // yb-mode: always single-shard, so `where_shards_lt` is a no-op.
+        let _ = request.where_shards_lt;
 
         let sizes = match tenant_slot {
             TenantSlot::Attached(tenant) => tenant.get_sizes(),
@@ -2290,7 +2282,7 @@ async fn put_tenant_timeline_import_basebackup(
 
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Warn);
 
-    let tenant_shard_id = TenantShardId::unsharded(tenant_id);
+    let tenant_shard_id = TenantId::unsharded(tenant_id);
 
     let span = info_span!("import_basebackup",
         tenant_id=%tenant_id, timeline_id=%timeline_id, shard_id=%tenant_shard_id.shard_slug(),
@@ -2373,7 +2365,7 @@ async fn put_tenant_timeline_import_wal(
     async move {
         let state = get_state(&request);
 
-        let timeline = active_timeline_of_active_tenant(&state.tenant_manager, TenantShardId::unsharded(tenant_id), timeline_id).await?;
+        let timeline = active_timeline_of_active_tenant(&state.tenant_manager, TenantId::unsharded(tenant_id), timeline_id).await?;
         let ctx = RequestContextBuilder::new(TaskKind::MgmtRequest)
             .download_behavior(DownloadBehavior::Warn)
             .scope(context::Scope::new_timeline(&timeline))

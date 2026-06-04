@@ -6,8 +6,7 @@ use pageserver_api::controller_api::ShardSchedulingPolicy;
 use rand::Rng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use tokio_util::sync::CancellationToken;
-use utils::id::NodeId;
-use utils::shard::TenantShardId;
+use utils::id::{NodeId, TenantId};
 
 use super::{Node, Scheduler, Service, TenantShard};
 
@@ -117,9 +116,9 @@ impl ChaosInjector {
     /// Only modifies tenants if they're in Active scheduling policy.
     fn maybe_migrate_to_secondary(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         nodes: &Arc<HashMap<NodeId, Node>>,
-        tenants: &mut BTreeMap<TenantShardId, TenantShard>,
+        tenants: &mut BTreeMap<TenantId, TenantShard>,
         scheduler: &mut Scheduler,
     ) {
         let shard = tenants

@@ -9,14 +9,14 @@
 //!   which identifies a tenant which is not shard-aware.  This means its storage paths do not include
 //!   a shard suffix.
 //! - [`ShardNumber`] is simply the zero-based index of a shard within a tenant.
-//! - [`ShardIndex`] is the 2-tuple of `ShardCount` and `ShardNumber`, it's just like a `TenantShardId`
+//! - [`ShardIndex`] is the 2-tuple of `ShardCount` and `ShardNumber`, it's just like a `TenantId`
 //!   without the tenant ID.  This is useful for things that are implicitly scoped to a particular
 //!   tenant, such as layer files.
 //! - [`ShardIdentity`]` is the full description of a particular shard's parameters, in sufficient
 //!   detail to convert a [`Key`] to a [`ShardNumber`] when deciding where to write/read.
 //! - The [`ShardSlug`] is a terse formatter for ShardCount and ShardNumber, written as
 //!   four hex digits.  An unsharded tenant is `0000`.
-//! - [`TenantShardId`] is the unique ID of a particular shard within a particular tenant
+//! - [`TenantId`] is the unique ID of a particular shard within a particular tenant
 //!
 //! Types used to describe the parameters for data distribution in a sharded tenant:
 //! - [`ShardStripeSize`] controls how long contiguous runs of [`Key`]s (stripes) are when distributed across
@@ -339,17 +339,11 @@ pub fn key_to_shard_number(
 #[allow(unused)] // used by debug formatting by pagectl
 struct KeyShardingInfo {
     shard0: bool,
-    shard_number: ShardNumber,
 }
 
-pub fn describe(
-    key: &Key,
-    shard_count: ShardCount,
-    stripe_size: ShardStripeSize,
-) -> impl std::fmt::Debug {
+pub fn describe(key: &Key, _stripe_size: ShardStripeSize) -> impl std::fmt::Debug {
     KeyShardingInfo {
         shard0: key_is_shard0(key),
-        shard_number: key_to_shard_number(shard_count, stripe_size, key),
     }
 }
 
@@ -367,10 +361,10 @@ mod tests {
     #[test]
     fn tenant_shard_id_string() -> Result<(), hex::FromHexError> {
         // yb-mode: always-unsharded encoding == TenantId encoding.
-        let example = TenantShardId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
+        let example = TenantId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
         let encoded = format!("{example}");
         assert_eq!(&encoded, EXAMPLE_TENANT_ID);
-        let decoded = TenantShardId::from_str(&encoded)?;
+        let decoded = TenantId::from_str(&encoded)?;
         assert_eq!(example, decoded);
         Ok(())
     }
@@ -378,7 +372,7 @@ mod tests {
     #[test]
     fn tenant_shard_id_binary() -> Result<(), hex::FromHexError> {
         // yb-mode: binary encoding is the 16-byte TenantId.
-        let example = TenantShardId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
+        let example = TenantId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
         let encoded = bincode::serialize(&example).unwrap();
         let expected: [u8; 16] = [
             0x1f, 0x35, 0x9d, 0xd6, 0x25, 0xe5, 0x19, 0xa1, 0xa4, 0xe8, 0xd7, 0x50, 0x96, 0x90,
@@ -392,28 +386,26 @@ mod tests {
 
     #[test]
     fn tenant_shard_id_backward_compat() -> Result<(), hex::FromHexError> {
-        // Test that TenantShardId can decode a TenantId in human
+        // Test that TenantId can decode a TenantId in human
         // readable form
         let example = TenantId::from_str(EXAMPLE_TENANT_ID).unwrap();
         let encoded = format!("{example}");
 
         assert_eq!(&encoded, EXAMPLE_TENANT_ID);
 
-        let decoded = TenantShardId::from_str(&encoded)?;
+        let decoded = TenantId::from_str(&encoded)?;
 
-        assert_eq!(example, decoded.tenant_id);
-        assert_eq!(decoded.shard_count, ShardCount(0));
-        assert_eq!(decoded.shard_number, ShardNumber(0));
+        assert_eq!(example, decoded);
 
         Ok(())
     }
 
     #[test]
     fn tenant_shard_id_forward_compat() -> Result<(), hex::FromHexError> {
-        // Test that a legacy TenantShardId encodes into a form that
+        // Test that a legacy TenantId encodes into a form that
         // can be decoded as TenantId
         let example_tenant_id = TenantId::from_str(EXAMPLE_TENANT_ID).unwrap();
-        let example = TenantShardId::unsharded(example_tenant_id);
+        let example = TenantId::unsharded(example_tenant_id);
         let encoded = format!("{example}");
 
         assert_eq!(&encoded, EXAMPLE_TENANT_ID);
@@ -431,10 +423,10 @@ mod tests {
         // encoding is gone — there's only the 16-byte TenantId form now.
         // Kept as a duplicate of the main binary test to flag if anyone
         // resurrects the multi-byte encoding.
-        let example = TenantShardId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
+        let example = TenantId::unsharded(TenantId::from_str(EXAMPLE_TENANT_ID).unwrap());
         let encoded = bincode::serialize(&example).unwrap();
         assert_eq!(encoded.len(), 16);
-        let decoded = bincode::deserialize::<TenantShardId>(&encoded).unwrap();
+        let decoded = bincode::deserialize::<TenantId>(&encoded).unwrap();
         assert_eq!(example, decoded);
         Ok(())
     }
@@ -473,8 +465,8 @@ mod tests {
     #[test]
     fn shard_index_human_encoding() -> Result<(), hex::FromHexError> {
         let example = ShardIndex {
-            shard_number: ShardNumber(13),
-            shard_count: ShardCount(17),
+            shard_number: ShardNumber(0x0d),
+            shard_count: ShardCount(0x11),
         };
         let expected: String = "0d11".to_string();
         let encoded = format!("{example}");
@@ -488,8 +480,8 @@ mod tests {
     #[test]
     fn shard_index_binary_encoding() -> Result<(), hex::FromHexError> {
         let example = ShardIndex {
-            shard_number: ShardNumber(13),
-            shard_count: ShardCount(17),
+            shard_number: ShardNumber(0x0d),
+            shard_count: ShardCount(0x11),
         };
         let expected: [u8; 2] = [0x0d, 0x11];
 

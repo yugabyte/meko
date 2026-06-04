@@ -42,13 +42,12 @@ use std::time::Duration;
 
 use futures::FutureExt;
 use once_cell::sync::Lazy;
-use pageserver_api::shard::TenantShardId;
 use tokio::task::JoinHandle;
 use tokio::task_local;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use utils::env;
-use utils::id::TimelineId;
+use utils::id::{TenantId, TimelineId};
 
 use crate::metrics::set_tokio_runtime_setup;
 
@@ -378,7 +377,7 @@ struct PageServerTask {
 
     /// Tasks may optionally be launched for a particular tenant/timeline, enabling
     /// later cancelling tasks for that tenant/timeline in [`shutdown_tasks`]
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     timeline_id: Option<TimelineId>,
 
     mutable: Mutex<MutableTaskState>,
@@ -390,7 +389,7 @@ struct PageServerTask {
 pub fn spawn<F>(
     runtime: &tokio::runtime::Handle,
     kind: TaskKind,
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     timeline_id: Option<TimelineId>,
     name: &str,
     future: F,
@@ -526,7 +525,7 @@ where
 ///
 pub async fn shutdown_tasks(
     kind: Option<TaskKind>,
-    tenant_shard_id: Option<TenantShardId>,
+    tenant_shard_id: Option<TenantId>,
     timeline_id: Option<TimelineId>,
 ) {
     let mut victim_tasks = Vec::new();

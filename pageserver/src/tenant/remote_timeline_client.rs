@@ -187,7 +187,6 @@ pub(crate) use download::{
     download_index_part, download_initdb_tar_zst, download_tenant_manifest,
     list_remote_tenant_shards, list_remote_timelines,
 };
-use pageserver_api::shard::TenantShardId;
 use regex::Regex;
 use remote_storage::{DownloadError, GenericRemoteStorage, RemotePath};
 use tokio_util::sync::CancellationToken;
@@ -239,7 +238,7 @@ pub enum MaybeDeletedIndexPart {
 /// reconcile. The struct is consumed and dropped right after the
 /// download — see `Tenant::load_timeline_metadata`.
 pub(crate) struct RemoteTimelineClient {
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     timeline_id: TimelineId,
     generation: Generation,
     storage_impl: GenericRemoteStorage,
@@ -249,7 +248,7 @@ pub(crate) struct RemoteTimelineClient {
 impl RemoteTimelineClient {
     pub(crate) fn new(
         remote_storage: GenericRemoteStorage,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         generation: Generation,
     ) -> RemoteTimelineClient {
@@ -342,13 +341,13 @@ impl RemoteTimelineClient {
     }
 }
 
-pub fn remote_tenant_path(tenant_shard_id: &TenantShardId) -> RemotePath {
+pub fn remote_tenant_path(tenant_shard_id: &TenantId) -> RemotePath {
     let path = format!("tenants/{tenant_shard_id}");
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 
 pub fn remote_tenant_manifest_path(
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     generation: Generation,
 ) -> RemotePath {
     let path = format!(
@@ -359,18 +358,18 @@ pub fn remote_tenant_manifest_path(
 }
 
 /// Prefix to all generations' manifest objects in a tenant shard
-pub fn remote_tenant_manifest_prefix(tenant_shard_id: &TenantShardId) -> RemotePath {
+pub fn remote_tenant_manifest_prefix(tenant_shard_id: &TenantId) -> RemotePath {
     let path = format!("tenants/{tenant_shard_id}/tenant-manifest",);
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 
-pub fn remote_timelines_path(tenant_shard_id: &TenantShardId) -> RemotePath {
+pub fn remote_timelines_path(tenant_shard_id: &TenantId) -> RemotePath {
     let path = format!("tenants/{tenant_shard_id}/{TIMELINES_SEGMENT_NAME}");
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 
 pub fn remote_timeline_path(
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     timeline_id: &TimelineId,
 ) -> RemotePath {
     remote_timelines_path(tenant_shard_id).join(Utf8Path::new(&timeline_id.to_string()))
@@ -396,7 +395,7 @@ pub fn remote_initdb_preserved_archive_path(
 }
 
 pub fn remote_index_path(
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     timeline_id: &TimelineId,
     generation: Generation,
 ) -> RemotePath {

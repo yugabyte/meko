@@ -114,7 +114,7 @@ impl WalReceiver {
                 *loop_status.write().unwrap() = None;
                 info!("task exits");
             }
-            .instrument(info_span!(parent: None, "wal_connection_manager", tenant_id = %tenant_shard_id.tenant_id, shard_id = %tenant_shard_id.shard_slug(), timeline_id = %timeline_id))
+            .instrument(info_span!(parent: None, "wal_connection_manager", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug(), timeline_id = %timeline_id))
         });
 
         Self {

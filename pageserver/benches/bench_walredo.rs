@@ -67,7 +67,6 @@ use once_cell::sync::Lazy;
 use pageserver::config::PageServerConf;
 use pageserver::walredo::{PostgresRedoManager, RedoAttemptType};
 use pageserver_api::key::Key;
-use pageserver_api::shard::TenantShardId;
 use postgres_ffi::{BLCKSZ, PgMajorVersion};
 use tokio::sync::Barrier;
 use tokio::task::JoinSet;
@@ -133,7 +132,7 @@ where
 
     let conf = PageServerConf::dummy_conf(repo_dir.path().to_path_buf());
     let conf = Box::leak(Box::new(conf));
-    let tenant_shard_id = TenantShardId::unsharded(TenantId::generate());
+    let tenant_shard_id = TenantId::unsharded(TenantId::generate());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

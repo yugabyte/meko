@@ -2,15 +2,15 @@ use std::io;
 use std::ops::{Deref, DerefMut};
 use std::process::{Child, Command};
 
-use pageserver_api::shard::TenantShardId;
 use tracing::{error, info, instrument};
+use utils::id::TenantId;
 
 use crate::metrics::{WAL_REDO_PROCESS_COUNTERS, WalRedoKillCause};
 
 /// Wrapper type around `std::process::Child` which guarantees that the child
 /// will be killed and waited-for by this process before being dropped.
 pub(crate) struct NoLeakChild {
-    pub(crate) tenant_id: TenantShardId,
+    pub(crate) tenant_id: TenantId,
     pub(crate) child: Option<Child>,
 }
 
@@ -29,7 +29,7 @@ impl DerefMut for NoLeakChild {
 }
 
 impl NoLeakChild {
-    pub(crate) fn spawn(tenant_id: TenantShardId, command: &mut Command) -> io::Result<Self> {
+    pub(crate) fn spawn(tenant_id: TenantId, command: &mut Command) -> io::Result<Self> {
         let child = command.spawn()?;
         Ok(NoLeakChild {
             tenant_id,
@@ -94,7 +94,7 @@ impl Drop for NoLeakChild {
                 // This thread here is going to outlive of our dropper.
                 let span = tracing::info_span!(
                     "walredo",
-                    tenant_id = %tenant_shard_id.tenant_id,
+                    tenant_id = %tenant_shard_id,
                     shard_id = %tenant_shard_id.shard_slug()
                 );
                 let _entered = span.enter();
@@ -106,11 +106,11 @@ impl Drop for NoLeakChild {
 }
 
 pub(crate) trait NoLeakChildCommandExt {
-    fn spawn_no_leak_child(&mut self, tenant_id: TenantShardId) -> io::Result<NoLeakChild>;
+    fn spawn_no_leak_child(&mut self, tenant_id: TenantId) -> io::Result<NoLeakChild>;
 }
 
 impl NoLeakChildCommandExt for Command {
-    fn spawn_no_leak_child(&mut self, tenant_id: TenantShardId) -> io::Result<NoLeakChild> {
+    fn spawn_no_leak_child(&mut self, tenant_id: TenantId) -> io::Result<NoLeakChild> {
         NoLeakChild::spawn(tenant_id, self)
     }
 }

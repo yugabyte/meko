@@ -27,7 +27,6 @@ use pageserver_api::controller_api::{
 use pageserver_api::models::{
     TenantConfig, TenantConfigRequest, TimelineCreateRequest, TimelineInfo,
 };
-use pageserver_api::shard::TenantShardId;
 use pageserver_client::mgmt_api::ResponseErrorMessageExt;
 use pem::Pem;
 use postgres_backend::AuthType;
@@ -99,7 +98,7 @@ impl NeonStorageControllerStopArgs {
 
 #[derive(Serialize, Deserialize)]
 pub struct AttachHookRequest {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
     pub node_id: Option<NodeId>,
     pub generation_override: Option<i32>, // only new tenants
     pub config: Option<TenantConfig>,     // only new tenants
@@ -113,7 +112,7 @@ pub struct AttachHookResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct InspectRequest {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1059,7 +1058,7 @@ impl StorageController {
     #[instrument(skip(self))]
     pub async fn attach_hook(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         pageserver_id: NodeId,
     ) -> anyhow::Result<Option<u32>> {
         let request = AttachHookRequest {
@@ -1119,7 +1118,7 @@ impl StorageController {
     #[instrument(skip(self))]
     pub async fn inspect(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> anyhow::Result<Option<(u32, NodeId)>> {
         let request = InspectRequest { tenant_shard_id };
 

@@ -414,8 +414,8 @@ impl YbStore {
         if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
             return true;
         }
-        // sharded TenantShardId: `<32hex>-<4hex>` = 37 chars, one dash.
-        // Emitted by `TenantShardId::Display` (libs/utils/src/shard.rs)
+        // sharded TenantId: `<32hex>-<4hex>` = 37 chars, one dash.
+        // Emitted by `TenantId::Display` (libs/utils/src/shard.rs)
         // for any tenant with `shard_count != 0`. The previous form
         // accepted here (32+1+4+1+4 = 42 chars, two dashes) doesn't
         // exist in the codebase — leaving sharded tenants
@@ -1232,11 +1232,11 @@ fn escape_like(s: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Real-shape unsharded TenantShardId: bare 32-hex.
+    /// Real-shape unsharded TenantId: bare 32-hex.
     const T_LEGACY: &str = "5b36a8400fc88e7eeec19878ef7fbe30";
 
-    /// Real-shape sharded TenantShardId: `<32hex>-<4hex>` (37 chars,
-    /// one dash). Format emitted by `TenantShardId::Display` whenever
+    /// Real-shape sharded TenantId: `<32hex>-<4hex>` (37 chars,
+    /// one dash). Format emitted by `TenantId::Display` whenever
     /// `shard_count != 0` — i.e., for every non-legacy tenant.
     const T_SHARDED: &str = "5b36a8400fc88e7eeec19878ef7fbe30-0001";
 

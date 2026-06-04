@@ -32,9 +32,9 @@ use anyhow::Context;
 use bytes::{Bytes, BytesMut};
 use pageserver_api::key::Key;
 use pageserver_api::models::{WalRedoManagerProcessStatus, WalRedoManagerStatus};
-use pageserver_api::shard::TenantShardId;
 use postgres_ffi::PgMajorVersion;
 use tracing::*;
+use utils::id::TenantId;
 use utils::lsn::Lsn;
 use utils::sync::gate::GateError;
 use utils::sync::heavier_once_cell;
@@ -53,7 +53,7 @@ use crate::metrics::{
 /// Mutex. In the future, we might want to launch a pool of processes to allow
 /// concurrent replay of multiple records.
 pub struct PostgresRedoManager {
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     conf: &'static PageServerConf,
     last_redo_at: std::sync::Mutex<Option<Instant>>,
     /// We use [`heavier_once_cell`] for
@@ -278,7 +278,7 @@ impl PostgresRedoManager {
     ///
     pub fn new(
         conf: &'static PageServerConf,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
     ) -> PostgresRedoManager {
         // The actual process is launched lazily, on first request.
         PostgresRedoManager {

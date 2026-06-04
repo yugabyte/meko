@@ -21,12 +21,11 @@ use pageserver_api::config::{
     PageServicePipeliningConfig, PageServicePipeliningConfigPipelined,
     PageServiceProtocolPipelinedBatchingStrategy, PageServiceProtocolPipelinedExecutionStrategy,
 };
-use pageserver_api::shard::TenantShardId;
 use postgres_backend::{QueryError, is_expected_io_error};
 use pq_proto::framed::ConnectionError;
 use strum::{EnumCount, IntoEnumIterator as _, VariantNames};
 use strum_macros::{IntoStaticStr, VariantNames};
-use utils::id::TimelineId;
+use utils::id::{TenantId, TimelineId};
 
 use crate::config;
 use crate::config::PageServerConf;
@@ -1713,11 +1712,11 @@ static PAGE_SERVICE_SMGR_BATCH_WAIT_TIME_GLOBAL: Lazy<Histogram> = Lazy::new(|| 
 
 impl SmgrQueryTimePerTimeline {
     pub(crate) fn new(
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
         timeline_id: &TimelineId,
         pagestream_throttle_metrics: Arc<tenant_throttling::Pagestream>,
     ) -> Self {
-        let tenant_id = tenant_shard_id.tenant_id.to_string();
+        let tenant_id = tenant_shard_id.to_string();
         let shard_slug = format!("{}", tenant_shard_id.shard_slug());
         let timeline_id = timeline_id.to_string();
         let global_started = std::array::from_fn(|i| {
@@ -2696,11 +2695,11 @@ pub(crate) struct TimelineMetrics {
 
 impl TimelineMetrics {
     pub fn new(
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
         timeline_id_raw: &TimelineId,
         evictions_with_low_residence_duration_builder: EvictionsWithLowResidenceDurationBuilder,
     ) -> Self {
-        let tenant_id = tenant_shard_id.tenant_id.to_string();
+        let tenant_id = tenant_shard_id.to_string();
         let shard_id = format!("{}", tenant_shard_id.shard_slug());
         let timeline_id = timeline_id_raw.to_string();
         let logical_size_histo = StorageTimeMetrics::new(
@@ -2748,7 +2747,7 @@ impl TimelineMetrics {
             let tenant_shard_id = *tenant_shard_id;
             let timeline_id_raw = *timeline_id_raw;
             move || {
-                let tenant_id = tenant_shard_id.tenant_id.to_string();
+                let tenant_id = tenant_shard_id.to_string();
                 let shard_id = format!("{}", tenant_shard_id.shard_slug());
                 let timeline_id = timeline_id_raw.to_string();
                 let gauge: UIntGauge = DIRECTORY_ENTRIES_COUNT
@@ -2944,8 +2943,8 @@ impl TimelineMetrics {
     }
 }
 
-pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantShardId) {
-    let tid = tenant_shard_id.tenant_id.to_string();
+pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantId) {
+    let tid = tenant_shard_id.to_string();
     let shard_id = tenant_shard_id.shard_slug().to_string();
 
     let _ = TENANT_OFFLOADED_TIMELINES.remove_label_values(&[&tid, &shard_id]);
@@ -2989,8 +2988,8 @@ pub(crate) struct RemoteTimelineClientMetrics {
 }
 
 impl RemoteTimelineClientMetrics {
-    pub fn new(tenant_shard_id: &TenantShardId, timeline_id: &TimelineId) -> Self {
-        let tenant_id_str = tenant_shard_id.tenant_id.to_string();
+    pub fn new(tenant_shard_id: &TenantId, timeline_id: &TimelineId) -> Self {
+        let tenant_id_str = tenant_shard_id.to_string();
         let shard_id_str = format!("{}", tenant_shard_id.shard_slug());
         let timeline_id_str = timeline_id.to_string();
 
@@ -3473,7 +3472,7 @@ impl GlobalAndPerTenantIntCounter {
 pub(crate) mod tenant_throttling {
     use metrics::register_int_counter_vec;
     use once_cell::sync::Lazy;
-    use utils::shard::TenantShardId;
+    use utils::shard::TenantId;
 
     use super::GlobalAndPerTenantIntCounter;
 
@@ -3554,10 +3553,10 @@ pub(crate) mod tenant_throttling {
     pub type Pagestream = Metrics<0>;
 
     impl<const KIND: usize> Metrics<KIND> {
-        pub(crate) fn new(tenant_shard_id: &TenantShardId) -> Self {
+        pub(crate) fn new(tenant_shard_id: &TenantId) -> Self {
             let per_tenant_label_values = &[
                 KINDS[KIND],
-                &tenant_shard_id.tenant_id.to_string(),
+                &tenant_shard_id.to_string(),
                 &tenant_shard_id.shard_slug().to_string(),
             ];
             Metrics {
@@ -3600,7 +3599,7 @@ pub(crate) mod tenant_throttling {
         Lazy::force(&WAIT_COUNT);
     }
 
-    pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantShardId) {
+    pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantId) {
         for m in &[
             &COUNT_ACCOUNTED_START_PER_TENANT,
             &COUNT_ACCOUNTED_FINISH_PER_TENANT,
@@ -3610,7 +3609,7 @@ pub(crate) mod tenant_throttling {
             for kind in KINDS {
                 let _ = m.remove_label_values(&[
                     kind,
-                    &tenant_shard_id.tenant_id.to_string(),
+                    &tenant_shard_id.to_string(),
                     &tenant_shard_id.shard_slug().to_string(),
                 ]);
             }

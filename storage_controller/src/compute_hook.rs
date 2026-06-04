@@ -15,7 +15,7 @@ use futures::StreamExt;
 use hyper::StatusCode;
 use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT;
 use pageserver_api::controller_api::AvailabilityZone;
-use pageserver_api::shard::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize, TenantShardId};
+use pageserver_api::shard::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
 use postgres_connection::parse_host_port;
 use safekeeper_api::membership::SafekeeperGeneration;
 use serde::{Deserialize, Serialize};
@@ -109,16 +109,16 @@ enum ComputeHookTenant {
 impl ComputeHookTenant {
     /// Construct with at least one shard's information
     fn new(
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         stripe_size: ShardStripeSize,
         preferred_az: Option<AvailabilityZone>,
         node_id: NodeId,
     ) -> Self {
-        if tenant_shard_id.shard_count.count() > 1 {
+        if ShardCount(0).count() > 1 {
             Self::Sharded(ShardedComputeHookTenant {
-                shards: vec![(tenant_shard_id.shard_number, node_id)],
+                shards: vec![(ShardNumber(0), node_id)],
                 stripe_size,
-                shard_count: tenant_shard_id.shard_count,
+                shard_count: ShardCount::unsharded(),
                 preferred_az,
                 send_lock: Arc::default(),
             })
@@ -144,17 +144,17 @@ impl ComputeHookTenant {
 
     /// Clear compute hook state for the specified shard.
     /// Only valid for [`ComputeHookTenant::Sharded`] instances.
-    fn remove_shard(&mut self, tenant_shard_id: TenantShardId, stripe_size: ShardStripeSize) {
+    fn remove_shard(&mut self, tenant_shard_id: TenantId, stripe_size: ShardStripeSize) {
         match self {
             ComputeHookTenant::Sharded(sharded) => {
                 if sharded.stripe_size != stripe_size
-                    || sharded.shard_count != tenant_shard_id.shard_count
+                    || sharded.shard_count != ShardCount(0)
                 {
                     tracing::warn!("Shard split detected while handling detach")
                 }
 
                 let shard_idx = sharded.shards.iter().position(|(shard_number, _node_id)| {
-                    *shard_number == tenant_shard_id.shard_number
+                    *shard_number == ShardNumber(0)
                 });
 
                 if let Some(shard_idx) = shard_idx {
@@ -181,7 +181,7 @@ impl ComputeHookTenant {
         let preferred_az = shard_update.preferred_az;
 
         match self {
-            Self::Unsharded(unsharded_tenant) if tenant_shard_id.shard_count.count() == 1 => {
+            Self::Unsharded(unsharded_tenant) if ShardCount(0).count() == 1 => {
                 unsharded_tenant.node_id = node_id;
                 if unsharded_tenant.preferred_az.as_ref()
                     != preferred_az.as_ref().map(|az| az.as_ref())
@@ -191,18 +191,18 @@ impl ComputeHookTenant {
             }
             Self::Sharded(sharded_tenant)
                 if sharded_tenant.stripe_size == stripe_size
-                    && sharded_tenant.shard_count == tenant_shard_id.shard_count =>
+                    && sharded_tenant.shard_count == ShardCount(0) =>
             {
                 if let Some(existing) = sharded_tenant
                     .shards
                     .iter()
-                    .position(|s| s.0 == tenant_shard_id.shard_number)
+                    .position(|s| s.0 == ShardNumber(0))
                 {
                     sharded_tenant.shards.get_mut(existing).unwrap().1 = node_id;
                 } else {
                     sharded_tenant
                         .shards
-                        .push((tenant_shard_id.shard_number, node_id));
+                        .push((ShardNumber(0), node_id));
                     sharded_tenant.shards.sort_by_key(|s| s.0)
                 }
 
@@ -327,8 +327,8 @@ impl ApiMethod for ComputeHookTimeline {
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 struct NotifyAttachRequestShard {
-    node_id: NodeId,
     shard_number: ShardNumber,
+    node_id: NodeId,
 }
 
 /// Request body that we send to the control plane to notify it of where a tenant is attached
@@ -602,7 +602,7 @@ pub(super) struct ComputeHook {
 /// other code notifying us of a shard's status, rather than being the final notification
 /// that we send upwards to the control plane for the whole tenant.
 pub(crate) struct ShardUpdate<'a> {
-    pub(crate) tenant_shard_id: TenantShardId,
+    pub(crate) tenant_shard_id: TenantId,
     pub(crate) node_id: NodeId,
     pub(crate) stripe_size: ShardStripeSize,
     pub(crate) preferred_az: Option<Cow<'a, AvailabilityZone>>,
@@ -783,7 +783,7 @@ impl ComputeHook {
         use std::collections::hash_map::Entry;
         let tenant_shard_id = shard_update.tenant_shard_id;
 
-        let tenant = match tenants_locked.entry(tenant_shard_id.tenant_id) {
+        let tenant = match tenants_locked.entry(tenant_shard_id) {
             Entry::Vacant(e) => {
                 let ShardUpdate {
                     tenant_shard_id,
@@ -804,7 +804,7 @@ impl ComputeHook {
                 tenant
             }
         };
-        tenant.maybe_send(tenant_shard_id.tenant_id, None)
+        tenant.maybe_send(tenant_shard_id, None)
     }
 
     fn notify_safekeepers_prepare(
@@ -952,7 +952,7 @@ impl ComputeHook {
     pub(super) fn notify_attach_background(
         self: &Arc<Self>,
         notifications: Vec<ShardUpdate>,
-        result_tx: tokio::sync::mpsc::Sender<Result<(), (TenantShardId, NotifyError)>>,
+        result_tx: tokio::sync::mpsc::Sender<Result<(), (TenantId, NotifyError)>>,
         cancel: &CancellationToken,
     ) {
         let mut maybe_sends = Vec::new();
@@ -980,7 +980,7 @@ impl ComputeHook {
                             .notify_execute(&this.tenants, maybe_send_result, &cancel)
                             .await.map_err(|e| (tenant_shard_id, e))
                     }.instrument(info_span!(
-                        "notify_attach_background", tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug()
+                        "notify_attach_background", tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()
                     ))
                 })
                 .buffered(API_CONCURRENCY);
@@ -1022,7 +1022,7 @@ impl ComputeHook {
     /// periods, but we don't retry forever.  The **caller** is responsible for handling failures and
     /// ensuring that they eventually call again to ensure that the compute is eventually notified of
     /// the proper pageserver nodes for a tenant.
-    #[tracing::instrument(skip_all, fields(tenant_id=%shard_update.tenant_shard_id.tenant_id, shard_id=%shard_update.tenant_shard_id.shard_slug(), node_id))]
+    #[tracing::instrument(skip_all, fields(tenant_id=%shard_update.tenant_shard_id, shard_id=%shard_update.tenant_shard_id.shard_slug(), node_id))]
     pub(super) async fn notify_attach<'a>(
         &self,
         shard_update: ShardUpdate<'a>,
@@ -1047,16 +1047,16 @@ impl ComputeHook {
     ///
     /// The goal is to avoid sending compute notifications with stale information (i.e.
     /// including detach pageservers).
-    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug()))]
+    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()))]
     pub(super) fn handle_detach(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         stripe_size: ShardStripeSize,
     ) {
         use std::collections::hash_map::Entry;
 
         let mut tenants_locked = self.tenants.lock().unwrap();
-        match tenants_locked.entry(tenant_shard_id.tenant_id) {
+        match tenants_locked.entry(tenant_shard_id) {
             Entry::Vacant(_) => {
                 // This is a valid but niche case, where the tenant was previously attached
                 // as a Secondary location and then detached, so has no previously notified
@@ -1085,15 +1085,12 @@ pub(crate) mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "yb-mode: single-shard tenants, multi-shard compute-hook coalescing doesn't apply"]
     fn tenant_updates() -> anyhow::Result<()> {
         let tenant_id = TenantId::generate();
         let stripe_size = DEFAULT_STRIPE_SIZE;
         let mut tenant_state = ComputeHookTenant::new(
-            TenantShardId {
-                tenant_id,
-                shard_count: ShardCount::new(0),
-                shard_number: ShardNumber(0),
-            },
+            tenant_id,
             ShardStripeSize(12345),
             None,
             NodeId(1),
@@ -1123,11 +1120,7 @@ pub(crate) mod tests {
         // resets the tenant state and puts it in an non-notifying state (need to
         // see all shards)
         tenant_state.update(ShardUpdate {
-            tenant_shard_id: TenantShardId {
-                tenant_id,
-                shard_count: ShardCount::new(2),
-                shard_number: ShardNumber(1),
-            },
+            tenant_shard_id: tenant_id,
             stripe_size,
             preferred_az: None,
             node_id: NodeId(1),
@@ -1139,11 +1132,7 @@ pub(crate) mod tests {
 
         // Writing the second shard makes it ready to notify
         tenant_state.update(ShardUpdate {
-            tenant_shard_id: TenantShardId {
-                tenant_id,
-                shard_count: ShardCount::new(2),
-                shard_number: ShardNumber(0),
-            },
+            tenant_shard_id: tenant_id,
             stripe_size,
             preferred_az: None,
             node_id: NodeId(1),

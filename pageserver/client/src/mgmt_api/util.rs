@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use pageserver_api::shard::TenantShardId;
 use tokio::task::JoinSet;
 use utils::id::{TenantId, TenantTimelineId};
 
@@ -23,7 +22,7 @@ pub async fn get_pageserver_tenant_timelines_unsharded(
                 ti.id
             );
         }
-        tenants.push(ti.id.tenant_id)
+        tenants.push(ti.id)
     }
     let mut js = JoinSet::new();
     for tenant_id in tenants {
@@ -33,7 +32,7 @@ pub async fn get_pageserver_tenant_timelines_unsharded(
                 (
                     tenant_id,
                     mgmt_api_client
-                        .tenant_details(TenantShardId::unsharded(tenant_id))
+                        .tenant_details(TenantId::unsharded(tenant_id))
                         .await
                         .unwrap(),
                 )

@@ -8,7 +8,6 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use futures::TryStreamExt as _;
-use pageserver_api::shard::TenantShardId;
 use pageserver_client::mgmt_api::ForceAwaitLogicalSize;
 use pageserver_client::page_service::BasebackupRequest;
 use pageserver_page_api as page_api;
@@ -21,7 +20,7 @@ use tokio_util::io::StreamReader;
 use tonic::async_trait;
 use tracing::{info, instrument};
 use url::Url;
-use utils::id::TenantTimelineId;
+use utils::id::{TenantId, TenantTimelineId};
 use utils::lsn::Lsn;
 use utils::shard::ShardIndex;
 
@@ -105,7 +104,7 @@ async fn main_impl(
             let timeline = *timeline;
             let info = mgmt_api_client
                 .timeline_info(
-                    TenantShardId::unsharded(timeline.tenant_id),
+                    TenantId::unsharded(timeline.tenant_id),
                     timeline.timeline_id,
                     ForceAwaitLogicalSize::No,
                 )

@@ -581,7 +581,8 @@ pub(super) async fn handle_walreceiver_connection(
                 disk_consistent_lsn,
                 remote_consistent_lsn,
                 replytime: ts,
-                shard_number: timeline.tenant_shard_id.shard_number.0 as u32,
+                // yb-mode: always shard 0.
+                shard_number: 0,
                 corruption_detected: timeline
                     .corruption_detected
                     .load(std::sync::atomic::Ordering::Relaxed),

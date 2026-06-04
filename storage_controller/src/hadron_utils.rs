@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use rand::Rng;
-use utils::shard::TenantShardId;
+use utils::id::TenantId;
 
 static CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()";
 
@@ -19,11 +19,11 @@ pub fn generate_random_password(length: usize) -> String {
 
 pub(crate) struct TenantShardSizeMap {
     #[expect(dead_code)]
-    pub map: BTreeMap<TenantShardId, u64>,
+    pub map: BTreeMap<TenantId, u64>,
 }
 
 impl TenantShardSizeMap {
-    pub fn new(map: BTreeMap<TenantShardId, u64>) -> Self {
+    pub fn new(map: BTreeMap<TenantId, u64>) -> Self {
         Self { map }
     }
 }

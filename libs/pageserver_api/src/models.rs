@@ -19,9 +19,7 @@ use utils::{completion, serde_system_time};
 
 use crate::config::Ratio;
 use crate::key::{CompactKey, Key};
-use crate::shard::{
-    DEFAULT_STRIPE_SIZE, ShardCount, ShardIdentity, ShardStripeSize, TenantShardId,
-};
+use crate::shard::{DEFAULT_STRIPE_SIZE, ShardCount, ShardIdentity, ShardStripeSize};
 
 /// The state of a tenant in this pageserver.
 ///
@@ -469,7 +467,7 @@ pub struct TenantShardSplitRequest {
 
 #[derive(Serialize, Deserialize)]
 pub struct TenantShardSplitResponse {
-    pub new_shards: Vec<TenantShardId>,
+    pub new_shards: Vec<TenantId>,
 }
 
 /// Parameters that apply to all shards in a tenant.  Used during tenant creation.
@@ -962,7 +960,7 @@ pub struct LocationConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct LocationConfigListResponse {
-    pub tenant_shards: Vec<(TenantShardId, Option<LocationConfig>)>,
+    pub tenant_shards: Vec<(TenantId, Option<LocationConfig>)>,
 }
 
 #[derive(Serialize)]
@@ -986,7 +984,7 @@ pub struct TenantTimeTravelRequest {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TenantShardLocation {
-    pub shard_id: TenantShardId,
+    pub shard_id: TenantId,
     pub node_id: NodeId,
 }
 
@@ -1047,7 +1045,7 @@ pub enum TenantAttachmentStatus {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TenantInfo {
-    pub id: TenantShardId,
+    pub id: TenantId,
     // NB: intentionally not part of OpenAPI, we don't want to commit to a specific set of TenantState's
     pub state: TenantState,
     /// Sum of the size of all layer files.
@@ -1109,7 +1107,7 @@ pub struct TimelinesInfoAndOffloaded {
 /// Analog of [`TimelineInfo`] for offloaded timelines.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OffloadedTimelineInfo {
-    pub tenant_id: TenantShardId,
+    pub tenant_id: TenantId,
     pub timeline_id: TimelineId,
     /// Whether the timeline has a parent it has been branched off from or not
     pub ancestor_timeline_id: Option<TimelineId>,
@@ -1137,7 +1135,7 @@ pub enum RelSizeMigration {
 /// This represents the output of the "timeline_detail" and "timeline_list" API calls.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TimelineInfo {
-    pub tenant_id: TenantShardId,
+    pub tenant_id: TenantId,
     pub timeline_id: TimelineId,
 
     pub ancestor_timeline_id: Option<TimelineId>,
@@ -1366,7 +1364,7 @@ pub struct SecondaryProgress {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TenantScanRemoteStorageShard {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
     pub generation: Option<u32>,
     pub stripe_size: Option<ShardStripeSize>,
 }
@@ -1414,7 +1412,7 @@ pub struct TopTenantShardsRequest {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct TopTenantShardItem {
-    pub id: TenantShardId,
+    pub id: TenantId,
 
     /// Total size of layers on local disk for all timelines in this shard.
     pub resident_size: u64,
@@ -1483,7 +1481,7 @@ mod tests {
     fn test_tenantinfo_serde() {
         // Test serialization/deserialization of TenantInfo
         let original_active = TenantInfo {
-            id: TenantShardId::unsharded(TenantId::generate()),
+            id: TenantId::unsharded(TenantId::generate()),
             state: TenantState::Active,
             current_physical_size: Some(42),
             attachment_status: TenantAttachmentStatus::Attached,
@@ -1503,7 +1501,7 @@ mod tests {
         });
 
         let original_broken = TenantInfo {
-            id: TenantShardId::unsharded(TenantId::generate()),
+            id: TenantId::unsharded(TenantId::generate()),
             state: TenantState::Broken {
                 reason: "reason".into(),
                 backtrace: "backtrace info".into(),

@@ -5,13 +5,12 @@ use pageserver_api::controller_api::{
     AvailabilityZone, NodeAvailability, NodeDescribeResponse, NodeLifecycle, NodeRegisterRequest,
     NodeSchedulingPolicy, TenantLocateResponseShard,
 };
-use pageserver_api::shard::TenantShardId;
 use pageserver_client::mgmt_api;
 use reqwest::StatusCode;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use utils::backoff;
-use utils::id::NodeId;
+use utils::id::{NodeId, TenantId};
 
 use crate::pageserver_client::PageserverClient;
 use crate::persistence::NodePersistence;
@@ -152,7 +151,7 @@ impl Node {
 
     /// For a shard located on this node, populate a response object
     /// with this node's address information.
-    pub(crate) fn shard_location(&self, shard_id: TenantShardId) -> TenantLocateResponseShard {
+    pub(crate) fn shard_location(&self, shard_id: TenantId) -> TenantLocateResponseShard {
         TenantLocateResponseShard {
             shard_id,
             node_id: self.id,

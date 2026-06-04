@@ -5,7 +5,6 @@ use std::io::SeekFrom;
 use anyhow::{Context, bail};
 use bytes::Bytes;
 use fail::fail_point;
-use pageserver_api::shard::TenantShardId;
 use remote_storage::GenericRemoteStorage;
 use tokio::fs::File;
 use tokio::io::AsyncSeekExt;
@@ -23,7 +22,7 @@ use crate::tenant::remote_timeline_client::{
 /// Serializes and uploads the given tenant manifest data to the remote storage.
 pub(crate) async fn upload_tenant_manifest(
     storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     generation: Generation,
     tenant_manifest: &TenantManifest,
     cancel: &CancellationToken,

@@ -2,10 +2,9 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use pageserver_api::models::TimelineState;
-use pageserver_api::shard::TenantShardId;
 use tokio::sync::OwnedMutexGuard;
 use tracing::{Instrument, error, info, instrument};
-use utils::id::TimelineId;
+use utils::id::{TenantId, TimelineId};
 use utils::{crashsafe, fs_ext, pausable_failpoint};
 
 use crate::config::PageServerConf;
@@ -31,7 +30,7 @@ use crate::virtual_file::MaybeFatalIo;
 // pub(super): documentation link
 pub(super) async fn delete_local_timeline_directory(
     conf: &PageServerConf,
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     timeline: &Timeline,
 ) {
     // Always ensure the lock order is compaction -> gc.
@@ -259,7 +258,7 @@ impl DeleteTimelineFlow {
                 };
                 Ok(())
             }
-            .instrument(tracing::info_span!(parent: None, "delete_timeline", tenant_id=%tenant_shard_id.tenant_id, shard_id=%tenant_shard_id.shard_slug(),timeline_id=%timeline_id)),
+            .instrument(tracing::info_span!(parent: None, "delete_timeline", tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(),timeline_id=%timeline_id)),
         );
     }
 
@@ -291,7 +290,7 @@ impl DeleteTimelineFlow {
         // `pages`, `slru_pages`, `meta`, `timeline_state`.
         tenant
             .fpu_page_store
-            .delete_all_for_timeline(tenant.tenant_shard_id.tenant_id, timeline.timeline_id())
+            .delete_all_for_timeline(tenant.tenant_shard_id, timeline.timeline_id())
             .await
             .map_err(DeleteTimelineError::Other)?;
 

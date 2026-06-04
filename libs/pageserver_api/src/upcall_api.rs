@@ -9,7 +9,7 @@ use utils::id::{NodeId, TimelineId};
 
 use crate::controller_api::NodeRegisterRequest;
 use crate::models::ShardImportStatus;
-use crate::shard::{ShardStripeSize, TenantShardId};
+use crate::shard::{ShardStripeSize, TenantId};
 
 /// Upcall message sent by the pageserver to the configured `control_plane_api` on
 /// startup.
@@ -33,7 +33,7 @@ pub struct ReAttachRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ReAttachResponseTenant {
-    pub id: TenantShardId,
+    pub id: TenantId,
     /// `Some(g)` → re-attach in generation `g`; `None` → not attached.
     pub r#gen: Option<u32>,
     pub stripe_size: ShardStripeSize,
@@ -45,7 +45,7 @@ pub struct ReAttachResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct ValidateRequestTenant {
-    pub id: TenantShardId,
+    pub id: TenantId,
     pub r#gen: u32,
 }
 
@@ -61,20 +61,20 @@ pub struct ValidateResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct ValidateResponseTenant {
-    pub id: TenantShardId,
+    pub id: TenantId,
     pub valid: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct TimelineImportStatusRequest {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
     pub timeline_id: TimelineId,
     pub generation: Generation,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct PutTimelineImportStatusRequest {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
     pub timeline_id: TimelineId,
     pub status: ShardImportStatus,
     pub generation: Generation,

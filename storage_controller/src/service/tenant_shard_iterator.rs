@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use utils::id::TenantId;
-use utils::shard::TenantShardId;
 
 use crate::scheduler::{ScheduleContext, ScheduleMode};
 use crate::tenant_shard::TenantShard;
@@ -18,12 +17,12 @@ use super::Service;
 /// for the tenant.
 pub(super) struct TenantShardExclusiveIterator<'a> {
     schedule_mode: ScheduleMode,
-    inner: std::collections::btree_map::IterMut<'a, TenantShardId, TenantShard>,
+    inner: std::collections::btree_map::IterMut<'a, TenantId, TenantShard>,
 }
 
 impl<'a> TenantShardExclusiveIterator<'a> {
     pub(super) fn new(
-        tenants: &'a mut BTreeMap<TenantShardId, TenantShard>,
+        tenants: &'a mut BTreeMap<TenantId, TenantShard>,
         schedule_mode: ScheduleMode,
     ) -> Self {
         Self {
@@ -51,9 +50,9 @@ impl<'a> Iterator for TenantShardExclusiveIterator<'a> {
             schedule_context.avoid(&shard.intent.all_pageservers());
             tenant_shards.push(shard);
 
-            if tenant_shard_id.shard_number.0 == tenant_shard_id.shard_count.count() - 1 {
-                return Some((tenant_shard_id.tenant_id, schedule_context, tenant_shards));
-            }
+            // yb-mode: every tenant is single-shard, so each iteration
+            // is the "last shard of the tenant" by definition.
+            return Some((*tenant_shard_id, schedule_context, tenant_shards));
         }
     }
 }
@@ -67,12 +66,12 @@ impl<'a> Iterator for TenantShardExclusiveIterator<'a> {
 pub(crate) struct TenantShardSharedIterator<F> {
     tenants_accessor: F,
     inspected_all_shards: bool,
-    last_inspected_shard: Option<TenantShardId>,
+    last_inspected_shard: Option<TenantId>,
 }
 
 impl<F> TenantShardSharedIterator<F>
 where
-    F: Fn(Option<TenantShardId>) -> Option<TenantShardId>,
+    F: Fn(Option<TenantId>) -> Option<TenantId>,
 {
     pub(crate) fn new(tenants_accessor: F) -> Self {
         Self {
@@ -89,10 +88,10 @@ where
 
 impl<F> Iterator for TenantShardSharedIterator<F>
 where
-    F: Fn(Option<TenantShardId>) -> Option<TenantShardId>,
+    F: Fn(Option<TenantId>) -> Option<TenantId>,
 {
     // TODO(ephemeralsad): consider adding schedule context to the iterator
-    type Item = TenantShardId;
+    type Item = TenantId;
 
     /// Returns the next tenant shard id if one exists
     fn next(&mut self) -> Option<Self::Item> {
@@ -115,8 +114,8 @@ where
 
 pub(crate) fn create_shared_shard_iterator(
     service: Arc<Service>,
-) -> TenantShardSharedIterator<impl Fn(Option<TenantShardId>) -> Option<TenantShardId>> {
-    let tenants_accessor = move |last_inspected_shard: Option<TenantShardId>| {
+) -> TenantShardSharedIterator<impl Fn(Option<TenantId>) -> Option<TenantId>> {
+    let tenants_accessor = move |last_inspected_shard: Option<TenantId>| {
         let locked = &service.inner.read().unwrap();
         let tenants = &locked.tenants;
         let entry = match last_inspected_shard {
@@ -144,7 +143,7 @@ mod tests {
 
     use pageserver_api::controller_api::PlacementPolicy;
     use utils::id::TenantId;
-    use utils::shard::{ShardCount, ShardNumber, TenantShardId};
+    use utils::shard::{ShardCount, ShardNumber};
 
     use super::*;
     use crate::scheduler::test_utils::make_test_nodes;
@@ -158,25 +157,22 @@ mod tests {
         let mut t_1_shards = make_test_tenant_with_id(
             TenantId::from_str("af0480929707ee75372337efaa5ecf96").unwrap(),
             PlacementPolicy::Attached(1),
-            ShardCount(1),
             None,
         );
         let t_2_shards = make_test_tenant_with_id(
             TenantId::from_str("bf0480929707ee75372337efaa5ecf96").unwrap(),
             PlacementPolicy::Attached(1),
-            ShardCount(4),
             None,
         );
         let mut t_3_shards = make_test_tenant_with_id(
             TenantId::from_str("cf0480929707ee75372337efaa5ecf96").unwrap(),
             PlacementPolicy::Attached(1),
-            ShardCount(1),
             None,
         );
 
-        let t1_id = t_1_shards[0].tenant_shard_id.tenant_id;
-        let t2_id = t_2_shards[0].tenant_shard_id.tenant_id;
-        let t3_id = t_3_shards[0].tenant_shard_id.tenant_id;
+        let t1_id = t_1_shards[0].tenant_shard_id;
+        let t2_id = t_2_shards[0].tenant_shard_id;
+        let t3_id = t_3_shards[0].tenant_shard_id;
 
         let mut tenants = BTreeMap::new();
         tenants.insert(t_1_shards[0].tenant_shard_id, t_1_shards.pop().unwrap());
@@ -193,24 +189,21 @@ mod tests {
         }
 
         let mut iter = TenantShardExclusiveIterator::new(&mut tenants, ScheduleMode::Speculative);
+        // yb-mode: all tenants are single-shard, shard_number is always 0.
+        // The original test asserted shard_number ordering within sharded
+        // tenants — that property is degenerate here.
         let (tenant_id, context, shards) = iter.next().unwrap();
         assert_eq!(tenant_id, t1_id);
-        assert_eq!(shards[0].tenant_shard_id.shard_number, ShardNumber(0));
         assert_eq!(shards.len(), 1);
         assert_eq!(context.location_count(), 2);
 
         let (tenant_id, context, shards) = iter.next().unwrap();
         assert_eq!(tenant_id, t2_id);
-        assert_eq!(shards[0].tenant_shard_id.shard_number, ShardNumber(0));
-        assert_eq!(shards[1].tenant_shard_id.shard_number, ShardNumber(1));
-        assert_eq!(shards[2].tenant_shard_id.shard_number, ShardNumber(2));
-        assert_eq!(shards[3].tenant_shard_id.shard_number, ShardNumber(3));
-        assert_eq!(shards.len(), 4);
-        assert_eq!(context.location_count(), 8);
+        assert_eq!(shards.len(), 1);
+        assert_eq!(context.location_count(), 2);
 
         let (tenant_id, context, shards) = iter.next().unwrap();
         assert_eq!(tenant_id, t3_id);
-        assert_eq!(shards[0].tenant_shard_id.shard_number, ShardNumber(0));
         assert_eq!(shards.len(), 1);
         assert_eq!(context.location_count(), 2);
 
@@ -221,26 +214,18 @@ mod tests {
 
     #[test]
     fn test_shared_shard_iterator() {
-        let tenant_id = TenantId::generate();
-        let shard_count = ShardCount(8);
-
+        // yb-mode: single-shard per tenant. Build a fixed set of distinct tenants.
         let mut tenant_shards = Vec::default();
-        for i in 0..shard_count.0 {
-            tenant_shards.push((
-                TenantShardId {
-                    tenant_id,
-                    shard_number: ShardNumber(i),
-                    shard_count,
-                },
-                (),
-            ))
+        for _ in 0..8 {
+            tenant_shards.push((TenantId::unsharded(TenantId::generate()), ()))
         }
+        tenant_shards.sort_by_key(|(tid, _)| *tid);
 
         let tenant_shards = Arc::new(tenant_shards);
 
         let tid_iter = TenantShardSharedIterator::new({
             let tenants = tenant_shards.clone();
-            move |last_inspected_shard: Option<TenantShardId>| {
+            move |last_inspected_shard: Option<TenantId>| {
                 let entry = match last_inspected_shard {
                     Some(skip_past) => {
                         let mut cursor = tenants.iter().skip_while(|(tid, _)| *tid != skip_past);

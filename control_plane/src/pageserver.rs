@@ -18,7 +18,6 @@ use anyhow::{Context, bail};
 use camino::Utf8PathBuf;
 use pageserver_api::config::{DEFAULT_GRPC_LISTEN_PORT, DEFAULT_HTTP_LISTEN_PORT};
 use pageserver_api::models::{self, TenantInfo, TimelineInfo};
-use pageserver_api::shard::TenantShardId;
 use pageserver_client::mgmt_api;
 use postgres_backend::AuthType;
 use postgres_connection::{PgConnectionConfig, parse_host_port};
@@ -481,7 +480,7 @@ impl PageServerNode {
 
     pub async fn timeline_list(
         &self,
-        tenant_shard_id: &TenantShardId,
+        tenant_shard_id: &TenantId,
     ) -> anyhow::Result<Vec<TimelineInfo>> {
         Ok(self.http_client.list_timelines(*tenant_shard_id).await?)
     }
@@ -542,7 +541,7 @@ impl PageServerNode {
     }
     pub async fn timeline_info(
         &self,
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         timeline_id: TimelineId,
         force_await_logical_size: mgmt_api::ForceAwaitLogicalSize,
     ) -> anyhow::Result<TimelineInfo> {

@@ -10,7 +10,6 @@ use std::time::SystemTime;
 
 use anyhow::Context;
 use camino::Utf8PathBuf;
-use pageserver_api::shard::TenantShardId;
 use remote_storage::{
     DownloadError, DownloadKind, DownloadOpts, GenericRemoteStorage, ListingMode, RemotePath,
 };
@@ -83,15 +82,15 @@ pub(crate) async fn list_remote_tenant_shards(
     storage: &GenericRemoteStorage,
     tenant_id: TenantId,
     cancel: CancellationToken,
-) -> anyhow::Result<(HashSet<TenantShardId>, HashSet<String>)> {
-    let remote_path = remote_tenant_path(&TenantShardId::unsharded(tenant_id));
-    list_identifiers::<TenantShardId>(storage, remote_path, cancel).await
+) -> anyhow::Result<(HashSet<TenantId>, HashSet<String>)> {
+    let remote_path = remote_tenant_path(&TenantId::unsharded(tenant_id));
+    list_identifiers::<TenantId>(storage, remote_path, cancel).await
 }
 
 /// List timelines of given tenant shard in remote storage
 pub async fn list_remote_timelines(
     storage: &GenericRemoteStorage,
-    tenant_shard_id: TenantShardId,
+    tenant_shard_id: TenantId,
     cancel: CancellationToken,
 ) -> anyhow::Result<(HashSet<TimelineId>, HashSet<String>)> {
     fail::fail_point!("storage-sync-list-remote-timelines", |_| {
@@ -104,7 +103,7 @@ pub async fn list_remote_timelines(
     // parsing the response. The S3 listing exists because S3 has no
     // other way to enumerate; YB does.
     if let GenericRemoteStorage::YbStore(yb) = storage {
-        let tenant_id_str = tenant_shard_id.tenant_id.to_string();
+        let tenant_id_str = tenant_shard_id.to_string();
         let ids = tokio::select! {
             r = yb.list_timelines_for_tenant_via_controller(&tenant_id_str) => r?,
             _ = cancel.cancelled() => anyhow::bail!("cancelled"),
@@ -149,7 +148,7 @@ async fn do_download_remote_path_retry_forever(
 
 async fn do_download_tenant_manifest(
     storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     _timeline_id: Option<&TimelineId>,
     generation: Generation,
     cancel: &CancellationToken,
@@ -173,7 +172,7 @@ async fn do_download_tenant_manifest(
 
 async fn do_download_index_part(
     storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     timeline_id: Option<&TimelineId>,
     index_generation: Generation,
     cancel: &CancellationToken,
@@ -219,7 +218,7 @@ async fn do_download_index_part(
 #[tracing::instrument(skip_all, fields(generation=?my_generation))]
 pub(crate) async fn download_generation_object<'a, T, DF, DFF, PF>(
     storage: &'a GenericRemoteStorage,
-    tenant_shard_id: &'a TenantShardId,
+    tenant_shard_id: &'a TenantId,
     timeline_id: Option<&'a TimelineId>,
     my_generation: Generation,
     what: &str,
@@ -231,7 +230,7 @@ pub(crate) async fn download_generation_object<'a, T, DF, DFF, PF>(
 where
     DF: Fn(
         &'a GenericRemoteStorage,
-        &'a TenantShardId,
+        &'a TenantId,
         Option<&'a TimelineId>,
         Generation,
         &'a CancellationToken,
@@ -341,7 +340,7 @@ where
 /// See "Finding the remote indices for timelines" in docs/rfcs/025-generation-numbers.md
 pub(crate) async fn download_index_part(
     storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     timeline_id: &TimelineId,
     my_generation: Generation,
     cancel: &CancellationToken,
@@ -365,7 +364,7 @@ pub(crate) async fn download_index_part(
 
 pub(crate) async fn download_tenant_manifest(
     storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     my_generation: Generation,
     cancel: &CancellationToken,
 ) -> Result<(TenantManifest, Generation, SystemTime), DownloadError> {
@@ -388,16 +387,16 @@ pub(crate) async fn download_tenant_manifest(
 pub(crate) async fn download_initdb_tar_zst(
     conf: &'static PageServerConf,
     storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantShardId,
+    tenant_shard_id: &TenantId,
     timeline_id: &TimelineId,
     cancel: &CancellationToken,
 ) -> Result<(Utf8PathBuf, File), DownloadError> {
     debug_assert_current_span_has_tenant_and_timeline_id();
 
-    let remote_path = remote_initdb_archive_path(&tenant_shard_id.tenant_id, timeline_id);
+    let remote_path = remote_initdb_archive_path(&tenant_shard_id, timeline_id);
 
     let remote_preserved_path =
-        remote_initdb_preserved_archive_path(&tenant_shard_id.tenant_id, timeline_id);
+        remote_initdb_preserved_archive_path(&tenant_shard_id, timeline_id);
 
     let timeline_path = conf.timelines_path(tenant_shard_id);
 

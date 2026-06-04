@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use http_utils::error::HttpErrorBody;
 use hyper::Uri;
-use pageserver_api::shard::TenantShardId;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use utils::backoff;
+use utils::id::TenantId;
 
 use crate::tenant_shard::ObservedState;
 
@@ -56,7 +56,7 @@ impl ResponseErrorMessageExt for reqwest::Response {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub(crate) struct GlobalObservedState(pub(crate) HashMap<TenantShardId, ObservedState>);
+pub(crate) struct GlobalObservedState(pub(crate) HashMap<TenantId, ObservedState>);
 
 const STEP_DOWN_RETRIES: u32 = 8;
 const STEP_DOWN_TIMEOUT: Duration = Duration::from_secs(1);

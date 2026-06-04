@@ -12,17 +12,17 @@ use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 
 use crate::models::{PageserverUtilization, ShardParameters, TenantConfig, TimelineInfo};
-use crate::shard::{ShardStripeSize, TenantShardId};
+use crate::shard::ShardStripeSize;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TenantCreateRequest {
-    pub new_tenant_id: TenantShardId,
+    pub new_tenant_id: TenantId,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<u32>,
 
-    // If omitted, create a single shard with TenantShardId::unsharded()
+    // If omitted, create a single shard with TenantId::unsharded()
     #[serde(default)]
     #[serde(skip_serializing_if = "ShardParameters::is_unsharded")]
     pub shard_parameters: ShardParameters,
@@ -37,7 +37,7 @@ pub struct TenantCreateRequest {
 
 #[derive(Serialize, Deserialize)]
 pub struct TenantCreateResponseShard {
-    pub shard_id: TenantShardId,
+    pub shard_id: TenantId,
     pub node_id: NodeId,
     pub generation: u32,
 }
@@ -94,17 +94,17 @@ impl Display for AvailabilityZone {
 #[derive(Serialize, Deserialize)]
 pub struct ShardsPreferredAzsRequest {
     #[serde(flatten)]
-    pub preferred_az_ids: HashMap<TenantShardId, Option<AvailabilityZone>>,
+    pub preferred_az_ids: HashMap<TenantId, Option<AvailabilityZone>>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct ShardsPreferredAzsResponse {
-    pub updated: Vec<TenantShardId>,
+    pub updated: Vec<TenantId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TenantLocateResponseShard {
-    pub shard_id: TenantShardId,
+    pub shard_id: TenantId,
     pub node_id: NodeId,
 
     pub listen_pg_addr: String,
@@ -147,7 +147,7 @@ pub struct NodeShardResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodeShard {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
     /// Whether the shard is observed secondary on a specific node. True = yes, False = no, None = not on this node.
     pub is_observed_secondary: Option<bool>,
     /// Whether the shard is intended to be a secondary on a specific node. True = yes, False = no, None = not on this node.
@@ -175,7 +175,7 @@ pub struct NodeDescribeResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TenantDescribeResponseShard {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
 
     pub node_attached: Option<NodeId>,
     pub node_secondary: Vec<NodeId>,
@@ -504,15 +504,15 @@ pub struct TenantShardMigrateResponse {}
 /// Metadata health record posted from scrubber.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthRecord {
-    pub tenant_shard_id: TenantShardId,
+    pub tenant_shard_id: TenantId,
     pub healthy: bool,
     pub last_scrubbed_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthUpdateRequest {
-    pub healthy_tenant_shards: HashSet<TenantShardId>,
-    pub unhealthy_tenant_shards: HashSet<TenantShardId>,
+    pub healthy_tenant_shards: HashSet<TenantId>,
+    pub unhealthy_tenant_shards: HashSet<TenantId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -520,7 +520,7 @@ pub struct MetadataHealthUpdateResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthListUnhealthyResponse {
-    pub unhealthy_tenant_shards: Vec<TenantShardId>,
+    pub unhealthy_tenant_shards: Vec<TenantId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

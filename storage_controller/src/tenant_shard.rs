@@ -6,13 +6,13 @@ use futures::future::{self, Either};
 use itertools::Itertools;
 use pageserver_api::controller_api::{AvailabilityZone, PlacementPolicy, ShardSchedulingPolicy};
 use pageserver_api::models::{LocationConfig, TenantConfig};
-use pageserver_api::shard::{ShardIdentity, TenantShardId};
+use pageserver_api::shard::{ShardIdentity};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, instrument};
 use utils::generation::Generation;
-use utils::id::NodeId;
+use utils::id::{NodeId, TenantId};
 use utils::seqwait::{SeqWait, SeqWaitError};
 use utils::shard::ShardCount;
 use utils::sync::gate::GateGuard;
@@ -57,7 +57,7 @@ where
 /// itself: see [`crate::persistence`] for the subset of tenant shard state that is persisted.
 #[derive(Serialize)]
 pub(crate) struct TenantShard {
-    pub(crate) tenant_shard_id: TenantShardId,
+    pub(crate) tenant_shard_id: TenantId,
 
     pub(crate) shard: ShardIdentity,
 
@@ -417,7 +417,7 @@ pub(crate) struct ObservedStateLocation {
 pub(crate) struct ReconcilerWaiter {
     // For observability purposes, remember the ID of the shard we're
     // waiting for.
-    pub(crate) tenant_shard_id: TenantShardId,
+    pub(crate) tenant_shard_id: TenantId,
 
     seq_wait: std::sync::Arc<SeqWait<Sequence, Sequence>>,
     error_seq_wait: std::sync::Arc<SeqWait<Sequence, Sequence>>,
@@ -434,11 +434,11 @@ pub(crate) enum ReconcilerStatus {
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum ReconcileWaitError {
     #[error("Timeout waiting for shard {0}")]
-    Timeout(TenantShardId),
+    Timeout(TenantId),
     #[error("shutting down")]
     Shutdown,
     #[error("Reconcile error on shard {0}: {1}")]
-    Failed(TenantShardId, Arc<ReconcileError>),
+    Failed(TenantId, Arc<ReconcileError>),
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -561,7 +561,7 @@ pub(crate) struct ReconcileResult {
     /// not be removed from parent tenant state)
     pub(crate) result: Result<(), ReconcileError>,
 
-    pub(crate) tenant_shard_id: TenantShardId,
+    pub(crate) tenant_shard_id: TenantId,
     pub(crate) generation: Option<Generation>,
     pub(crate) observed_deltas: Vec<ObservedStateDelta>,
 
@@ -583,7 +583,7 @@ impl ObservedState {
 
 impl TenantShard {
     pub(crate) fn new(
-        tenant_shard_id: TenantShardId,
+        tenant_shard_id: TenantId,
         shard: ShardIdentity,
         policy: PlacementPolicy,
         preferred_az_id: Option<AvailabilityZone>,
@@ -686,7 +686,7 @@ impl TenantShard {
     }
 
     #[instrument(skip_all, fields(
-        tenant_id=%self.tenant_shard_id.tenant_id,
+        tenant_id=%self.tenant_shard_id,
         shard_id=%self.tenant_shard_id.shard_slug(),
         sequence=%self.sequence
     ))]
@@ -718,7 +718,7 @@ impl TenantShard {
             ShardSchedulingPolicy::Active | ShardSchedulingPolicy::Essential => {}
             ShardSchedulingPolicy::Pause | ShardSchedulingPolicy::Stop => {
                 // Warn to make it obvious why other things aren't happening/working, if we skip scheduling
-                tracing::warn!(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug(),
+                tracing::warn!(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(),
                     "Scheduling is disabled by policy {:?}", self.scheduling_policy);
                 return Ok(());
             }
@@ -1003,7 +1003,7 @@ impl TenantShard {
     ///
     /// `schedule_context` should have been populated with all shards in the tenant, including
     /// the one we're trying to optimize (this function will subtract its own contribution before making scoring decisions)
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug()))]
     pub(crate) fn optimize_attachment(
         &self,
         scheduler: &mut Scheduler,
@@ -1171,7 +1171,7 @@ impl TenantShard {
         }
     }
 
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug()))]
     pub(crate) fn optimize_secondary(
         &self,
         scheduler: &mut Scheduler,
@@ -1472,7 +1472,7 @@ impl TenantShard {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug()))]
     pub(crate) fn get_reconcile_needed(
         &mut self,
         pageservers: &Arc<HashMap<NodeId, Node>>,
@@ -1639,7 +1639,7 @@ impl TenantShard {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id.tenant_id, shard_id=%self.tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug()))]
     pub(crate) fn spawn_reconciler(
         &mut self,
         reason: ReconcileReason,
@@ -1707,7 +1707,7 @@ impl TenantShard {
         tracing::info!(seq=%reconcile_seq, "Spawning Reconciler ({reason:?})");
         let must_notify = self.pending_compute_notification;
         let reconciler_span = tracing::info_span!(parent: None, "reconciler", seq=%reconcile_seq,
-                                                        tenant_id=%reconciler.tenant_shard_id.tenant_id,
+                                                        tenant_id=%reconciler.tenant_shard_id,
                                                         shard_id=%reconciler.tenant_shard_id.shard_slug());
         metrics::METRICS_REGISTRY
             .metrics_group
@@ -1741,8 +1741,8 @@ impl TenantShard {
 
                 let (tenant_id_label, shard_number_label, sequence_label) = {
                     (
-                        reconciler.tenant_shard_id.tenant_id.to_string(),
-                        reconciler.tenant_shard_id.shard_number.0.to_string(),
+                        reconciler.tenant_shard_id.to_string(),
+                        "0".to_string(),
                         reconcile_seq.to_string(),
                     )
                 };
@@ -1923,7 +1923,7 @@ impl TenantShard {
 
     pub(crate) fn to_persistent(&self) -> TenantShardPersistence {
         TenantShardPersistence {
-            tenant_id: self.tenant_shard_id.tenant_id.to_string(),
+            tenant_id: self.tenant_shard_id.to_string(),
             generation: self.generation.map(|g| g.into().unwrap_or(0) as i32),
             generation_pageserver: self.intent.get_attached().map(|n| n.0 as i64),
             placement_policy: serde_json::to_string(&self.policy).unwrap(),
@@ -2069,11 +2069,7 @@ pub(crate) mod tests {
         let shard_count = ShardCount::new(1);
         let stripe_size = DEFAULT_STRIPE_SIZE;
 
-        let tenant_shard_id = TenantShardId {
-            tenant_id,
-            shard_number,
-            shard_count,
-        };
+        let tenant_shard_id = tenant_id;
         TenantShard::new(
             tenant_shard_id,
             ShardIdentity::new(shard_number, shard_count, stripe_size).unwrap(),
@@ -2084,36 +2080,24 @@ pub(crate) mod tests {
 
     pub(crate) fn make_test_tenant(
         policy: PlacementPolicy,
-        shard_count: ShardCount,
         preferred_az: Option<AvailabilityZone>,
     ) -> Vec<TenantShard> {
-        make_test_tenant_with_id(TenantId::generate(), policy, shard_count, preferred_az)
+        make_test_tenant_with_id(TenantId::generate(), policy, preferred_az)
     }
 
+    /// yb-mode: every tenant is single-shard.
     pub(crate) fn make_test_tenant_with_id(
         tenant_id: TenantId,
         policy: PlacementPolicy,
-        shard_count: ShardCount,
         preferred_az: Option<AvailabilityZone>,
     ) -> Vec<TenantShard> {
-        let stripe_size = DEFAULT_STRIPE_SIZE;
-        (0..shard_count.count())
-            .map(|i| {
-                let shard_number = ShardNumber(i);
-
-                let tenant_shard_id = TenantShardId {
-                    tenant_id,
-                    shard_number,
-                    shard_count,
-                };
-                TenantShard::new(
-                    tenant_shard_id,
-                    ShardIdentity::new(shard_number, shard_count, stripe_size).unwrap(),
-                    policy.clone(),
-                    preferred_az.clone(),
-                )
-            })
-            .collect()
+        let tenant_shard_id = TenantId::unsharded(tenant_id);
+        vec![TenantShard::new(
+            tenant_shard_id,
+            ShardIdentity::unsharded(),
+            policy,
+            preferred_az,
+        )]
     }
 
     /// Test the scheduling behaviors used when a tenant configured for HA is subject
@@ -2490,6 +2474,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: single-shard tenants, multi-shard affinity logic doesn't apply"]
     /// Check that multi-step migration works when moving to somewhere that is only better by
     /// 1 AffinityScore -- this ensures that we don't have a bug like the intermediate secondary
     /// counting toward the affinity score such that it prevents the rest of the migration from happening.
@@ -2499,7 +2484,7 @@ pub(crate) mod tests {
 
         // Multi-sharded tenant, we will craft a situation where affinity
         // scores differ only slightly
-        let mut shards = make_test_tenant(PlacementPolicy::Attached(0), ShardCount::new(4), None);
+        let mut shards = make_test_tenant(PlacementPolicy::Attached(0), None);
 
         // 1 attached on node 1
         shards[0]
@@ -2807,6 +2792,7 @@ pub(crate) mod tests {
     /// Test the balancing behavior of shard scheduling: that it achieves a balance, and
     /// that it converges.
     #[test]
+    #[ignore = "yb-mode: single-shard tenants, multi-shard balancing logic doesn't apply"]
     fn optimize_add_nodes() -> anyhow::Result<()> {
         let nodes = make_test_nodes(
             9,
@@ -2833,7 +2819,6 @@ pub(crate) mod tests {
 
         let mut shards = make_test_tenant(
             PlacementPolicy::Attached(1),
-            ShardCount::new(4),
             Some(AvailabilityZone("az-a".to_string())),
         );
         let mut schedule_context = ScheduleContext::default();
@@ -2903,6 +2888,7 @@ pub(crate) mod tests {
     /// This test is an example of the scheduling issue described in
     /// https://github.com/neondatabase/neon/issues/8969
     #[test]
+    #[ignore = "yb-mode: single-shard tenants, multi-shard scheduling optimality doesn't apply"]
     fn initial_scheduling_is_optimal() -> anyhow::Result<()> {
         use itertools::Itertools;
 
@@ -2912,10 +2898,10 @@ pub(crate) mod tests {
         scheduler.node_upsert(nodes.get(&NodeId(1)).unwrap());
         scheduler.node_upsert(nodes.get(&NodeId(2)).unwrap());
 
-        let mut a = make_test_tenant(PlacementPolicy::Attached(1), ShardCount::new(4), None);
+        let mut a = make_test_tenant(PlacementPolicy::Attached(1), None);
         let a_context = Rc::new(RefCell::new(ScheduleContext::default()));
 
-        let mut b = make_test_tenant(PlacementPolicy::Attached(1), ShardCount::new(4), None);
+        let mut b = make_test_tenant(PlacementPolicy::Attached(1), None);
         let b_context = Rc::new(RefCell::new(ScheduleContext::default()));
 
         let a_shards_with_context = a.iter_mut().map(|shard| (shard, a_context.clone()));
@@ -2942,6 +2928,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "yb-mode: single-shard tenants, randomized multi-shard AZ scheduling doesn't apply"]
     fn random_az_shard_scheduling() -> anyhow::Result<()> {
         use rand::seq::SliceRandom;
 
@@ -2965,14 +2952,11 @@ pub(crate) mod tests {
             let mut az_picker = azs.iter().cycle().cloned();
             for i in 0..100 {
                 let az = az_picker.next().unwrap();
-                let shard_count = i % 4 + 1;
-                *shards_per_az.entry(az.clone()).or_default() += shard_count;
+                // yb-mode: always single-shard.
+                *shards_per_az.entry(az.clone()).or_default() += 1;
 
-                let tenant_shards = make_test_tenant(
-                    PlacementPolicy::Attached(1),
-                    ShardCount::new(shard_count.try_into().unwrap()),
-                    Some(az),
-                );
+                let tenant_shards =
+                    make_test_tenant(PlacementPolicy::Attached(1), Some(az));
                 let context = Rc::new(RefCell::new(ScheduleContext::default()));
 
                 contexts.push(context.clone());
