@@ -1,15 +1,81 @@
 ---
-status: in_progress
+status: done
 severity: high
 area: safekeeper
 opened: 2026-05-20
+closed: 2026-06-05
 ---
 
-## Wave 1 — DONE (2026-06-05)
+## Status: DONE
 
-~3700 LOC of dead consensus + S3-offloader + local-FS-eviction
-code removed across 6 commits. Wave 2 (consensus state-machine
-slimming in `safekeeper.rs` + `state.rs`) is the remaining work.
+Both waves landed across two sessions (~8200 LOC of dead
+safekeeper code removed total).
+
+### Wave 1 — single-SK cleanup (~3700 LOC)
+
+6 commits. Killed pull_timeline + Hadron HCC orchestration,
+timeline_eviction, eviction/partial-backup runtime state,
+copy_timeline, the S3 WAL-offloader half of wal_backup, the
+partial-segment uploader, and the dead CLI args + metrics that
+went with them. See section "Wave 1 commits" below.
+
+### Wave 2 — wire-protocol + simulator + bindings (~4540 LOC)
+
+3 commits:
+
+- `045fce42d` — drop wire-protocol v2 from both the safekeeper
+  (`safekeeper/src/safekeeper.rs`) and the C walproposer
+  (`pgxn/neon/walproposer.c`, `walproposer.h`). The two sides
+  already spoke v3 since last session's commit_lsn /
+  peer_horizon_lsn removal; v2 was parallel deadweight. Deleted
+  `ProposerGreetingV2` / `VoteRequestV2` / `AppendRequestHeaderV2`
+  structs, `TermHistory::from_bytes_le`, and the v2 branches in
+  `parse` / `serialize` / `PAMessageSerialize` / `AsyncReadMessage`.
+  ~700 LOC.
+
+- `81552c8db` — delete `safekeeper/tests/walproposer_sim/` plus the
+  three driver tests (`misc_test`, `random_test`, `simple_test`).
+  The simulator was a deterministic event-loop harness for
+  multi-SK consensus dynamics — already broken since last
+  session's commit_lsn removal and exercising dynamics that don't
+  exist in single-SK mode anyway. Also stripped the dead
+  `advertise_pg_addr_tenant_only` field and the bare
+  `BEGIN_HADRON`/`END_HADRON` markers. ~2500 LOC.
+
+- `9cf39b17b` — delete `libs/walproposer` (Rust bindgen bindings
+  to the C walproposer, only used by the deleted simulator).
+  ~1330 LOC.
+
+## What was NOT touched (deliberately)
+
+The acceptor state machine itself (`handle_greeting`,
+`handle_vote_request`, `handle_elected`, `handle_append_request`,
+`handle_flush` + `AcceptorState`, `TermHistory`,
+`find_highest_common_point`) survives intact. It still does real
+work even in single-SK mode: walproposer can restart with a fresh
+term and the SK must refuse stale terms, accept higher ones,
+truncate WAL beyond the divergence point, and serve the
+acceptor-greeting → vote-response → append-response wire
+protocol. The original task's "~600 LOC of consensus state in
+safekeeper.rs" estimate was made before our prior cleanups
+(commit_lsn, peer_horizon_lsn, peer recovery) and the v2 protocol
+removal — the actual remaining surface is the bare minimum
+walproposer needs to talk to one SK.
+
+Persistent state leftovers (still part of the control-file
+format, still serialised in YB but no longer mutated at runtime):
+`partial_backup`, `eviction_state`, `backup_lsn`. Removing them
+needs either a versioned migration or a clean break of the
+on-disk format — gated on task 19 (SK control file → YB columns).
+
+`RateLimiter` is still threaded through `Manager` /
+`GlobalTimelines` even though both semaphores have no callers —
+trivial to delete, a wider edit than warranted as cleanup.
+
+`safekeeper_api::PullTimeline{Request,Response}` are still on the
+API surface for the storage_controller's still-living multi-SK
+reconciler. Their deletion is gated on a separate
+storage_controller slim.
 
 ## Wave 1 commits
 
