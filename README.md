@@ -375,6 +375,24 @@ Both default to a local `neon_local` cluster (`127.0.0.1:5433`,
 `yugabyte`/`yb_storage`) and accept `--host`/`--port`/`--user`/
 `--db-name`/`--password-env` overrides for remote clusters.
 
+## Operational runbooks
+
+[`runbooks/`](runbooks/) — incident-time playbooks for common failure
+modes on a running ybLight deployment. Each runbook is structured as
+"symptom → quick diagnosis → fix"; read them in advance once so the
+shape is familiar, then jump straight to the relevant one during an
+incident.
+
+- [`runbooks/startup-failures.md`](runbooks/startup-failures.md) —
+  a component (PS / SK / compute / storage_controller) won't start,
+  won't register, or the compute can't serve queries.
+- [`runbooks/throughput-troubleshooting.md`](runbooks/throughput-troubleshooting.md)
+  — low throughput on TPC-C load / execute or any OLTP workload;
+  isolating compute vs. PS vs. SK vs. YB as the bottleneck.
+- [`runbooks/perf-investigation.md`](runbooks/perf-investigation.md) —
+  broader performance investigation: memory growth, pageserver
+  internals, WAL backlog, materialiser pacing.
+
 ## Flamegraphs
 
 [`flamegraph-rs`](https://github.com/flamegraph-rs/flamegraph) works
