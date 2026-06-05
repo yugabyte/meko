@@ -1,7 +1,7 @@
 ---
 title: Meko Documentation
 headerTitle: Meko Documentation
-linkTitle: Introduction
+linkTitle: Docs
 headcontent: Meko is the agent-native data layer for multi-agent systems. Agents share knowledge, build collective memory, and every step is auditable end-to-end.
 description: Simplify the Agent-Native Data Layer
 body_class: full-width

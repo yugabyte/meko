@@ -95,6 +95,17 @@ body {
           -webkit-text-fill-color: transparent;
         }
       }
+
+      // Second level (### headings) — lighter weight
+      ul ul a {
+        font-weight: 400;
+      }
+
+      // Third level (#### headings) — lightest
+      ul ul ul a {
+        font-weight: 300;
+        font-size: 0.9em;
+      }
     }
   }
 
