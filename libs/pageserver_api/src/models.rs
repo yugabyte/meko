@@ -1470,7 +1470,9 @@ pub struct WalRedoManagerProcessStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalRedoManagerStatus {
     pub last_redo_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub process: Option<WalRedoManagerProcessStatus>,
+    /// One entry per live slot in the per-tenant walredo pool. Empty
+    /// when no process has been spawned yet or the manager is shut down.
+    pub processes: Vec<WalRedoManagerProcessStatus>,
 }
 
 /// The progress of a secondary tenant.

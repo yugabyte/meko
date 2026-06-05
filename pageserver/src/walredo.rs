@@ -26,6 +26,7 @@ pub(crate) mod apply_neon;
 
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -49,56 +50,39 @@ use crate::metrics::{
 /// The real implementation that uses a Postgres process to
 /// perform WAL replay.
 ///
-/// Only one thread can use the process at a time, that is controlled by the
-/// Mutex. In the future, we might want to launch a pool of processes to allow
-/// concurrent replay of multiple records.
+/// Per-tenant pool of walredo subprocesses. A single redo request
+/// flows through one slot's process at a time (each subprocess is
+/// stdin/stdout-bound), but the per-tenant cap on in-flight redo is
+/// `walredo_pool_size` rather than 1. Slots are picked round-robin via
+/// [`Self::next_slot`].
 pub struct PostgresRedoManager {
     tenant_shard_id: TenantId,
     conf: &'static PageServerConf,
     last_redo_at: std::sync::Mutex<Option<Instant>>,
-    /// We use [`heavier_once_cell`] for
+    /// One [`heavier_once_cell`] per pool slot. Each cell:
     ///
-    /// 1. coalescing the lazy spawning of walredo processes ([`ProcessOnceCell::Spawned`])
-    /// 2. prevent new processes from being spawned on [`Self::shutdown`] (=> [`ProcessOnceCell::ManagerShutDown`]).
+    /// 1. coalesces the lazy spawning of its walredo process
+    ///    ([`ProcessOnceCell::Spawned`]).
+    /// 2. is poisoned to [`ProcessOnceCell::ManagerShutDown`] on
+    ///    [`Self::shutdown`] so no new process is spawned.
     ///
-    /// # Spawning
-    ///
-    /// Redo requests use the once cell to coalesce onto one call to [`process::WalRedoProcess::launch`].
-    ///
-    /// Notably, requests don't use the [`heavier_once_cell::Guard`] to keep ahold of the
-    /// their process object; we use [`Arc::clone`] for that.
-    ///
-    /// This is primarily because earlier implementations that didn't  use [`heavier_once_cell`]
-    /// had that behavior; it's probably unnecessary.
-    /// The only merit of it is that if one walredo process encounters an error,
-    /// it can take it out of rotation (= using [`heavier_once_cell::Guard::take_and_deinit`].
-    /// and retry redo, thereby starting the new process, while other redo tasks might
-    /// still be using the old redo process. But, those other tasks will most likely
-    /// encounter an error as well, and errors are an unexpected condition anyway.
-    /// So, probably we could get rid of the `Arc` in the future.
-    ///
-    /// # Shutdown
-    ///
-    /// See [`Self::launched_processes`].
-    redo_process: heavier_once_cell::OnceCell<ProcessOnceCell>,
+    /// Requests use the once-cell only to coalesce launch; they hold
+    /// the process via `Arc::clone` so a faulting slot can be evicted
+    /// (`take_and_deinit`) without disturbing other concurrent users
+    /// of the same `Arc<Process>`.
+    redo_pool: Vec<heavier_once_cell::OnceCell<ProcessOnceCell>>,
+
+    /// Round-robin slot picker. Wraps modulo `redo_pool.len()`.
+    next_slot: AtomicUsize,
 
     /// Gate that is entered when launching a walredo process and held open
     /// until the process has been `kill()`ed and `wait()`ed upon.
     ///
-    /// Manager shutdown waits for this gate to close after setting the
-    /// [`ProcessOnceCell::ManagerShutDown`] state in [`Self::redo_process`].
-    ///
-    /// This type of usage is a bit unusual because gates usually keep track of
-    /// concurrent operations, e.g., every [`Self::request_redo`] that is inflight.
-    /// But we use it here to keep track of the _processes_ that we have launched,
-    /// which may outlive any individual redo request because
-    /// - we keep walredo process around until its quiesced to amortize spawn cost and
-    /// - the Arc may be held by multiple concurrent redo requests, so, just because
-    ///   you replace the [`Self::redo_process`] cell's content doesn't mean the
-    ///   process gets killed immediately.
-    ///
-    /// We could simplify this by getting rid of the [`Arc`].
-    /// See the comment on [`Self::redo_process`] for more details.
+    /// Manager shutdown waits for this gate to close after setting every
+    /// slot to [`ProcessOnceCell::ManagerShutDown`]. The gate tracks
+    /// _processes_, not requests — a process may outlive any single
+    /// request because we keep it around until quiesce and because the
+    /// `Arc` may be held by concurrent requests.
     launched_processes: utils::sync::gate::Gate,
 }
 
@@ -264,10 +248,18 @@ impl PostgresRedoManager {
                     chrono::Utc::now().checked_sub_signed(chrono::Duration::from_std(age).ok()?)
                 })
             },
-            process: self.redo_process.get().and_then(|p| match &*p {
-                ProcessOnceCell::Spawned(p) => Some(WalRedoManagerProcessStatus { pid: p.id() }),
-                ProcessOnceCell::ManagerShutDown => None,
-            }),
+            processes: self
+                .redo_pool
+                .iter()
+                .filter_map(|slot| {
+                    slot.get().and_then(|p| match &*p {
+                        ProcessOnceCell::Spawned(p) => {
+                            Some(WalRedoManagerProcessStatus { pid: p.id() })
+                        }
+                        ProcessOnceCell::ManagerShutDown => None,
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -280,12 +272,17 @@ impl PostgresRedoManager {
         conf: &'static PageServerConf,
         tenant_shard_id: TenantId,
     ) -> PostgresRedoManager {
-        // The actual process is launched lazily, on first request.
+        // The actual processes are launched lazily, on first request to each slot.
+        let pool_size = conf.walredo_pool_size.get();
+        let redo_pool = (0..pool_size)
+            .map(|_| heavier_once_cell::OnceCell::default())
+            .collect();
         PostgresRedoManager {
             tenant_shard_id,
             conf,
             last_redo_at: std::sync::Mutex::default(),
-            redo_process: heavier_once_cell::OnceCell::default(),
+            redo_pool,
+            next_slot: AtomicUsize::new(0),
             launched_processes: utils::sync::gate::Gate::default(),
         }
     }
@@ -305,31 +302,32 @@ impl PostgresRedoManager {
     ///
     /// This method is cancellation-safe.
     pub async fn shutdown(&self) -> bool {
-        // prevent new processes from being spawned
-        let maybe_permit = match self.redo_process.get_or_init_detached().await {
-            Ok(guard) => {
-                if matches!(&*guard, ProcessOnceCell::ManagerShutDown) {
-                    None
-                } else {
-                    let (proc, permit) = guard.take_and_deinit();
-                    drop(proc); // this just drops the Arc, its refcount may not be zero yet
-                    Some(permit)
+        // Poison every slot so no slot can spawn a new process. Track
+        // whether *any* slot transitioned (i.e. we initiated shutdown).
+        let mut any_transitioned = false;
+        for slot in &self.redo_pool {
+            let maybe_permit = match slot.get_or_init_detached().await {
+                Ok(guard) => {
+                    if matches!(&*guard, ProcessOnceCell::ManagerShutDown) {
+                        None
+                    } else {
+                        let (proc, permit) = guard.take_and_deinit();
+                        drop(proc); // drops the Arc; refcount may not be zero yet
+                        Some(permit)
+                    }
                 }
+                Err(permit) => Some(permit),
+            };
+            if let Some(permit) = maybe_permit {
+                slot.set(ProcessOnceCell::ManagerShutDown, permit);
+                any_transitioned = true;
             }
-            Err(permit) => Some(permit),
-        };
-        let it_was_us = if let Some(permit) = maybe_permit {
-            self.redo_process
-                .set(ProcessOnceCell::ManagerShutDown, permit);
-            true
-        } else {
-            false
-        };
+        }
         // wait for ongoing requests to drain and the refcounts of all Arc<WalRedoProcess> that
         // we ever launched to drop to zero, which when it happens synchronously kill()s & wait()s
         // for the underlying process.
         self.launched_processes.close().await;
-        it_was_us
+        any_transitioned
     }
 
     /// This type doesn't have its own background task to check for idleness: we
@@ -340,7 +338,9 @@ impl PostgresRedoManager {
             if let Some(last_redo_at) = *g {
                 if last_redo_at.elapsed() >= idle_timeout {
                     drop(g);
-                    drop(self.redo_process.get().map(|guard| guard.take_and_deinit()));
+                    for slot in &self.redo_pool {
+                        drop(slot.get().map(|guard| guard.take_and_deinit()));
+                    }
                 }
             }
         }
@@ -349,6 +349,13 @@ impl PostgresRedoManager {
     /// # Cancel-Safety
     ///
     /// This method is cancel-safe iff `closure` is cancel-safe.
+    /// Pick a pool slot in round-robin order. Wraps modulo
+    /// `redo_pool.len()`; safe to call concurrently.
+    fn pick_slot(&self) -> usize {
+        let idx = self.next_slot.fetch_add(1, Ordering::Relaxed);
+        idx % self.redo_pool.len()
+    }
+
     async fn do_with_walredo_process<
         F: FnOnce(Arc<Process>) -> Fut,
         Fut: Future<Output = Result<O, Error>>,
@@ -358,7 +365,9 @@ impl PostgresRedoManager {
         pg_version: PgMajorVersion,
         closure: F,
     ) -> Result<O, Error> {
-        let proc: Arc<Process> = match self.redo_process.get_or_init_detached().await {
+        let slot_idx = self.pick_slot();
+        let slot = &self.redo_pool[slot_idx];
+        let proc: Arc<Process> = match slot.get_or_init_detached().await {
             Ok(guard) => match &*guard {
                 ProcessOnceCell::Spawned(proc) => Arc::clone(proc),
                 ProcessOnceCell::ManagerShutDown => {
@@ -372,7 +381,7 @@ impl PostgresRedoManager {
                 let _launched_processes_guard = match self.launched_processes.enter() {
                     Ok(guard) => guard,
                     Err(GateError::GateClosed) => unreachable!(
-                        "shutdown sets the once cell to `ManagerShutDown` state before closing the gate"
+                        "shutdown sets every once cell to `ManagerShutDown` state before closing the gate"
                     ),
                 };
                 let proc = Arc::new(Process {
@@ -389,10 +398,10 @@ impl PostgresRedoManager {
                 info!(
                     elapsed_ms = duration.as_millis(),
                     pid = proc.id(),
+                    slot = slot_idx,
                     "launched walredo process"
                 );
-                self.redo_process
-                    .set(ProcessOnceCell::Spawned(Arc::clone(&proc)), permit);
+                slot.set(ProcessOnceCell::Spawned(Arc::clone(&proc)), permit);
                 proc
             }
         };
@@ -401,39 +410,28 @@ impl PostgresRedoManager {
         let result = closure(proc.clone()).await;
 
         if result.is_err() {
-            // Avoid concurrent callers hitting the same issue by taking `proc` out of the rotation.
-            // Note that there may be other tasks concurrent with us that also hold `proc`.
-            // We have to deal with that here.
-            // Also read the doc comment on field `self.redo_process`.
+            // Take the faulty process out of its slot. Other concurrent
+            // tasks may still hold the same `Arc<Process>`; the last one
+            // to drop it will SIGKILL/wait the subprocess.
             //
-            // NB: there may still be other concurrent threads using `proc`.
-            // The last one will send SIGKILL when the underlying Arc reaches refcount 0.
-            //
-            // NB: the drop impl blocks the dropping thread with a wait() system call for
-            // the child process. In some ways the blocking is actually good: if we
-            // deferred the waiting into the background / to tokio if we used `tokio::process`,
-            // it could happen that if walredo always fails immediately, we spawn processes faster
-            // than we can SIGKILL & `wait` for them to exit. By doing it the way we do here,
-            // we limit this risk of run-away to at most $num_runtimes * $num_executor_threads.
-            // This probably needs revisiting at some later point.
-            match self.redo_process.get() {
-                None => (),
-                Some(guard) => {
-                    match &*guard {
-                        ProcessOnceCell::ManagerShutDown => {}
-                        ProcessOnceCell::Spawned(guard_proc) => {
-                            if Arc::ptr_eq(&proc, guard_proc) {
-                                // We're the first to observe an error from `proc`, it's our job to take it out of rotation.
-                                guard.take_and_deinit();
-                            } else {
-                                // Another task already spawned another redo process (further up in this method)
-                                // and put it into `redo_process`. Do nothing, our view of the world is behind.
-                            }
+            // NB: drop blocks on wait(). If walredo always errors
+            // immediately, this caps runaway respawn at
+            // $num_runtimes * $num_executor_threads.
+            if let Some(guard) = slot.get() {
+                match &*guard {
+                    ProcessOnceCell::ManagerShutDown => {}
+                    ProcessOnceCell::Spawned(guard_proc) => {
+                        if Arc::ptr_eq(&proc, guard_proc) {
+                            // First to observe the error — take it out of rotation.
+                            guard.take_and_deinit();
+                        } else {
+                            // Another task already evicted this slot and put a fresh
+                            // process there. Do nothing — our view is stale.
                         }
                     }
                 }
             }
-            // The last task that does this `drop()` of `proc` will do a blocking `wait()` syscall.
+            // The last task to drop `proc` runs the blocking wait().
             drop(proc);
         }
 

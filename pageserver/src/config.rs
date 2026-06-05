@@ -84,6 +84,12 @@ pub struct PageServerConf {
     // How long to wait for WAL redo to complete.
     pub wal_redo_timeout: Duration,
 
+    /// Per-tenant walredo subprocess pool size. Base default 2,
+    /// multiplied by `scale_factor`. Each slot is a separate
+    /// long-lived postgres-walredo process; requests round-robin across
+    /// them so a single tenant can replay multiple records in parallel.
+    pub walredo_pool_size: NonZeroUsize,
+
     pub superuser: String,
     pub locale: String,
 
@@ -416,6 +422,11 @@ impl PageServerConf {
             );
             NonZeroUsize::new(scaled).expect("scale_count clamps to >= 1")
         });
+        let walredo_pool_size = NonZeroUsize::new(pageserver_api::config::scale_count(
+            2,
+            scale_factor,
+        ))
+        .expect("scale_count clamps to >= 1");
 
         let mut conf = PageServerConf {
             // ------------------------------------------------------------
@@ -431,6 +442,7 @@ impl PageServerConf {
             availability_zone,
             wait_lsn_timeout,
             wal_redo_timeout,
+            walredo_pool_size,
             superuser,
             locale,
             http_auth_type,
