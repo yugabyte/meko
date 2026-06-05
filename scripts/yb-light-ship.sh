@@ -42,11 +42,21 @@ PG_INSTALL_CACHED=1 make neon-pg-ext-v17 >/dev/null
 echo
 echo ">>> Staging bundle at ${BUNDLE}"
 rm -rf "${BUNDLE}"
-mkdir -p "${BUNDLE}/lib"
+mkdir -p "${BUNDLE}/lib" "${BUNDLE}/scripts"
 
 # Binaries actually launched by neon_local (see local_env.rs).
 for bin in yb-pageserver neon_local safekeeper storage_broker storage_controller compute_ctl endpoint_storage; do
     cp -v "target/release/${bin}" "${BUNDLE}/${bin}"
+done
+
+# Operator-side diagnostic scripts. Anything in scripts/ that's
+# marked as a deploy-target tool gets shipped — currently the
+# `yb-dump-*` helpers for inspecting the row-store tables during an
+# incident. Keep this list explicit (vs. `cp scripts/*`) so we don't
+# accidentally ship build-host-only utilities like
+# yb-light-ship.sh itself.
+for script in yb-dump-pages yb-dump-wals; do
+    cp -v "scripts/${script}" "${BUNDLE}/scripts/${script}"
 done
 
 # Runtime libs not present on stock AlmaLinux/RHEL 9 (OpenSSL 1.1, ICU 60).
