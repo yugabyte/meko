@@ -1114,7 +1114,8 @@ where
             generation: self.state.mconf.generation,
             term: self.state.acceptor_state.term,
             flush_lsn: self.flush_lsn(),
-            commit_lsn: self.state.commit_lsn,
+            // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+            commit_lsn: self.flush_lsn(),
             // will be filled by the upper code to avoid bothering safekeeper
             hs_feedback: HotStandbyFeedback::empty(),
             pageserver_feedback: None,
@@ -1193,14 +1194,15 @@ where
         }
 
         // We are also expected to never attempt to truncate committed data.
+        // yb-mode: commit_lsn ≡ flush_lsn, so the invariant is identical to
+        // "don't truncate before our durable end-of-WAL".
         assert!(
-            msg.start_streaming_at >= self.state.inmem.commit_lsn,
-            "attempt to truncate committed data: start_streaming_at={}, commit_lsn={}, term={}, sk_th={:?} flush_lsn={}, wp_th={:?}",
+            msg.start_streaming_at >= self.flush_lsn(),
+            "attempt to truncate committed data: start_streaming_at={}, flush_lsn={}, term={}, sk_th={:?}, wp_th={:?}",
             msg.start_streaming_at,
-            self.state.inmem.commit_lsn,
+            self.flush_lsn(),
             self.state.acceptor_state.term,
             sk_th,
-            self.flush_lsn(),
             msg.term_history,
         );
 
@@ -1242,14 +1244,7 @@ where
                 state.local_start_lsn = msg.start_streaming_at;
                 info!("setting local_start_lsn to {:?}", state.local_start_lsn);
             }
-            // Initializing commit_lsn before acking first flushed record is
-            // important to let find_end_of_wal skip the hole in the beginning
-            // of the first segment.
-            //
-            // NB: on new clusters, this happens at the same time as
-            // timeline_start_lsn initialization, it is taken outside to provide
-            // upgrade.
-            state.commit_lsn = max(state.commit_lsn, state.timeline_start_lsn);
+            // yb-mode: commit_lsn collapsed to flush_lsn; nothing to seed.
 
             // Initializing backup_lsn is useful to avoid making backup think it should upload 0 segment.
             state.backup_lsn = max(state.backup_lsn, state.timeline_start_lsn);
@@ -1274,23 +1269,14 @@ where
         Ok(None)
     }
 
-    /// Snap `commit_lsn` to the local flush watermark. yb-mode single-SK
-    /// quorum makes `commit_lsn == flush_lsn` by definition; we no longer
-    /// take the walproposer's lagged view into account.
-    async fn update_commit_lsn_to_flush(&mut self) -> Result<()> {
+    /// If a write/flush moved `flush_lsn` across `term_start_lsn`, force a
+    /// control-file sync — walproposer in sync-safekeepers mode polls for
+    /// this.
+    async fn maybe_sync_on_term_crossing(&mut self, prev_flush: Lsn) -> Result<()> {
         let flush_lsn = self.flush_lsn();
-        if flush_lsn <= self.state.inmem.commit_lsn {
-            return Ok(());
-        }
-        let prev_commit_lsn = self.state.commit_lsn;
-        self.state.inmem.commit_lsn = flush_lsn;
-
-        // If the new commit_lsn crosses the term switch, force a control-file
-        // sync — walproposer in sync-safekeepers mode polls for this.
-        if flush_lsn >= self.term_start_lsn && prev_commit_lsn < self.term_start_lsn {
+        if flush_lsn >= self.term_start_lsn && prev_flush < self.term_start_lsn {
             self.state.flush().await?;
         }
-
         Ok(())
     }
 
@@ -1366,12 +1352,11 @@ where
             self.wal_store.flush_wal().await?;
         }
 
-        // commit_lsn collapses to flush_lsn in single-SK yb-mode: quorum
-        // size 1 means every flush is by definition committed. Update from
-        // our own flush watermark instead of the walproposer's view (which
-        // lags by an RTT). msg.h.commit_lsn / msg.h.truncate_lsn are
-        // ignored — peer recovery doesn't apply.
-        self.update_commit_lsn_to_flush().await?;
+        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum). The
+        // walproposer's `msg.h.commit_lsn` / `msg.h.truncate_lsn` are
+        // ignored — peer recovery doesn't apply. Sync the control file
+        // if this write crossed the term boundary.
+        self.maybe_sync_on_term_crossing(flush_lsn).await?;
 
         trace!(
             "processed AppendRequest of len {}, begin_lsn={}, end_lsn={:?}, commit_lsn={:?}, truncate_lsn={:?}, flushed={:?}",
@@ -1777,7 +1762,6 @@ mod tests {
             },
             timeline_start_lsn: Lsn(0x12345600),
             local_start_lsn: Lsn(0x12),
-            commit_lsn: Lsn(1234567800),
             backup_lsn: Lsn(1234567300),
             remote_consistent_lsn: Lsn(1234560000),
             partial_backup: crate::wal_backup_partial::State::default(),

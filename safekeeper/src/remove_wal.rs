@@ -34,7 +34,8 @@ pub(crate) fn calc_horizon_lsn(
     // Min by local commit_lsn to be able to begin reading WAL from somewhere on
     // sk start. Technically we don't allow local commit_lsn to be higher than
     // flush_lsn, but let's be double safe by including it as well.
-    horizon_lsn = min(horizon_lsn, state.cfile_commit_lsn);
+    // yb-mode: commit_lsn collapsed into flush_lsn; the flush_lsn cap below
+    // already provides "don't trim past local end-of-WAL".
     horizon_lsn = min(horizon_lsn, state.flush_lsn);
     if let Some(extra_horizon_lsn) = extra_horizon_lsn {
         horizon_lsn = min(horizon_lsn, extra_horizon_lsn);

@@ -872,7 +872,8 @@ impl Collector for TimelineCollector {
 
             self.commit_lsn
                 .with_label_values(labels)
-                .set(tli.mem_state.commit_lsn.into());
+                // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+                .set(tli.flush_lsn.into());
             self.backup_lsn
                 .with_label_values(labels)
                 .set(tli.mem_state.backup_lsn.into());

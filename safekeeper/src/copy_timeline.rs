@@ -64,8 +64,9 @@ pub async fn handle_request(
     let backup_lsn = mem_state.backup_lsn;
 
     {
-        let commit_lsn = mem_state.commit_lsn;
+        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
         let flush_lsn = source_tli.get_flush_lsn().await;
+        let commit_lsn = flush_lsn;
 
         info!(
             "collected info about source timeline: start_lsn={}, backup_lsn={}, commit_lsn={}, flush_lsn={}",
@@ -152,7 +153,6 @@ pub async fn handle_request(
         Configuration::empty(),
         state.server.clone(),
         start_lsn,
-        request.until_lsn,
     )?;
     new_state.timeline_start_lsn = start_lsn;
     new_state.backup_lsn = new_backup_lsn;

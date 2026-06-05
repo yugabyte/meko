@@ -352,7 +352,6 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> NetworkReader<'_, IO> {
                             Configuration::empty(),
                             server_info,
                             Lsn::INVALID,
-                            Lsn::INVALID,
                         )
                         .await
                         .context("create timeline")?

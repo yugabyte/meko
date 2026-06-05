@@ -39,12 +39,10 @@ use crate::wal_backup_partial::{self, PartialBackup, PartialRemoteSegment};
 
 pub(crate) struct StateSnapshot {
     // inmem values
-    pub(crate) commit_lsn: Lsn,
     pub(crate) backup_lsn: Lsn,
     pub(crate) remote_consistent_lsn: Lsn,
 
     // persistent control file values
-    pub(crate) cfile_commit_lsn: Lsn,
     pub(crate) cfile_remote_consistent_lsn: Lsn,
     pub(crate) cfile_backup_lsn: Lsn,
 
@@ -64,10 +62,8 @@ impl StateSnapshot {
     fn new(read_guard: ReadGuardSharedState, heartbeat_timeout: Duration) -> Self {
         let state = read_guard.sk.state();
         Self {
-            commit_lsn: state.inmem.commit_lsn,
             backup_lsn: state.inmem.backup_lsn,
             remote_consistent_lsn: state.inmem.remote_consistent_lsn,
-            cfile_commit_lsn: state.commit_lsn,
             cfile_remote_consistent_lsn: state.remote_consistent_lsn,
             cfile_backup_lsn: state.backup_lsn,
             flush_lsn: read_guard.sk.flush_lsn(),
@@ -80,8 +76,7 @@ impl StateSnapshot {
     }
 
     fn has_unflushed_inmem_state(state: &TimelineState<ControlFileStorage>) -> bool {
-        state.inmem.commit_lsn > state.commit_lsn
-            || state.inmem.backup_lsn > state.backup_lsn
+        state.inmem.backup_lsn > state.backup_lsn
             || state.inmem.remote_consistent_lsn > state.remote_consistent_lsn
     }
 }
@@ -483,16 +478,17 @@ impl Manager {
         num_computes: usize,
         state: &StateSnapshot,
     ) {
+        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
         let is_active = is_wal_backup_required
             || num_computes > 0
-            || state.remote_consistent_lsn < state.commit_lsn;
+            || state.remote_consistent_lsn < state.flush_lsn;
 
         // update the broker timeline set
         if self.tli_broker_active.set(is_active) {
             // write log if state has changed
             info!(
-                "timeline active={} now, remote_consistent_lsn={}, commit_lsn={}",
-                is_active, state.remote_consistent_lsn, state.commit_lsn,
+                "timeline active={} now, remote_consistent_lsn={}, flush_lsn={}",
+                is_active, state.remote_consistent_lsn, state.flush_lsn,
             );
 
             MANAGER_ACTIVE_CHANGES.inc();
@@ -514,12 +510,7 @@ impl Manager {
             return;
         }
 
-        if state.cfile_last_persist_at.elapsed() > self.conf.control_file_save_interval
-            // If the control file's commit_lsn lags more than one segment behind the current
-            // commit_lsn, flush immediately to limit recovery time in case of a crash. We don't do
-            // this on the WAL ingest hot path since it incurs fsync latency.
-            || state.commit_lsn.saturating_sub(state.cfile_commit_lsn).0 >= self.wal_seg_size as u64
-        {
+        if state.cfile_last_persist_at.elapsed() > self.conf.control_file_save_interval {
             let mut write_guard = self.tli.write_shared_state().await;
             // it should be done in the background because it blocks manager task, but flush() should
             // be fast enough not to be a problem now

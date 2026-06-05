@@ -411,9 +411,10 @@ pub(crate) fn needs_uploading(
 ) -> bool {
     match uploaded {
         Some(uploaded) => {
+            // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
             uploaded.status != UploadStatus::Uploaded
                 || uploaded.flush_lsn != state.flush_lsn
-                || uploaded.commit_lsn != state.commit_lsn
+                || uploaded.commit_lsn != state.flush_lsn
                 || uploaded.term != state.last_log_term
         }
         None => true,

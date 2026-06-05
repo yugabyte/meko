@@ -114,7 +114,6 @@ async fn timeline_create_handler(mut request: Request<Body>) -> Result<Response<
             request_data.mconf,
             server_info,
             request_data.start_lsn,
-            request_data.commit_lsn.unwrap_or(request_data.start_lsn),
         )
         .await
         .map_err(ApiError::InternalServerError)?;
@@ -207,7 +206,8 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
         flush_lsn,
         timeline_start_lsn: state.timeline_start_lsn,
         local_start_lsn: state.local_start_lsn,
-        commit_lsn: inmem.commit_lsn,
+        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+        commit_lsn: flush_lsn,
         backup_lsn: inmem.backup_lsn,
         remote_consistent_lsn: inmem.remote_consistent_lsn,
         peers: tli.get_peers(conf).await,

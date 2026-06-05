@@ -46,9 +46,6 @@ pub struct TimelinePersistentState {
     /// All WAL segments next to one containing local_start_lsn are
     /// filled with data from the beginning.
     pub local_start_lsn: Lsn,
-    /// Part of WAL acknowledged by quorum *and available locally*. Always points
-    /// to record boundary.
-    pub commit_lsn: Lsn,
     /// LSN that points to the end of the last backed up segment. Useful to
     /// persist to avoid finding out offloading progress on boot.
     pub backup_lsn: Lsn,
@@ -83,14 +80,13 @@ pub struct MembershipSwitchResult {
 }
 
 impl TimelinePersistentState {
-    /// commit_lsn is the same as start_lsn in the normal creaiton; see
-    /// `TimelineCreateRequest` comments.`
+    /// yb-mode: `commit_lsn` collapsed into `flush_lsn`, so creation only
+    /// needs `start_lsn`. Term history is seeded when `start_lsn` is known.
     pub fn new(
         ttid: &TenantTimelineId,
         mconf: Configuration,
         server_info: ServerInfo,
         start_lsn: Lsn,
-        commit_lsn: Lsn,
     ) -> anyhow::Result<TimelinePersistentState> {
         if server_info.wal_seg_size == 0 {
             bail!(TimelineError::UninitializedWalSegSize(*ttid));
@@ -100,20 +96,12 @@ impl TimelinePersistentState {
             bail!(TimelineError::UninitialinzedPgVersion(*ttid));
         }
 
-        if commit_lsn < start_lsn {
-            bail!(
-                "commit_lsn {} is smaller than start_lsn {}",
-                commit_lsn,
-                start_lsn
-            );
-        }
-
         // If we are given with init LSN, initialize term history with it. It
         // ensures that walproposer always must be able to find a common point
         // in histories; if it can't something is corrupted. Not having LSN here
         // is so far left for legacy case where timeline is created by compute
         // and LSN during creation is not known yet.
-        let term_history = if commit_lsn != Lsn::INVALID {
+        let term_history = if start_lsn != Lsn::INVALID {
             TermHistory(vec![TermLsn {
                 term: INITIAL_TERM,
                 lsn: start_lsn,
@@ -134,7 +122,6 @@ impl TimelinePersistentState {
             proposer_uuid: [0; 16],
             timeline_start_lsn: start_lsn,
             local_start_lsn: start_lsn,
-            commit_lsn,
             backup_lsn: start_lsn,
             remote_consistent_lsn: Lsn(0),
             partial_backup: wal_backup_partial::State::default(),
@@ -153,7 +140,6 @@ impl TimelinePersistentState {
                 wal_seg_size: WAL_SEGMENT_SIZE as u32,
             },
             Lsn::INVALID,
-            Lsn::INVALID,
         )
         .unwrap()
     }
@@ -163,7 +149,6 @@ impl TimelinePersistentState {
 // In memory safekeeper state. Fields mirror ones in `SafeKeeperPersistentState`; values
 // are not flushed yet.
 pub struct TimelineMemState {
-    pub commit_lsn: Lsn,
     pub backup_lsn: Lsn,
     pub remote_consistent_lsn: Lsn,
     #[serde(with = "hex")]
@@ -189,7 +174,6 @@ where
     pub fn new(state: CTRL) -> Self {
         TimelineState {
             inmem: TimelineMemState {
-                commit_lsn: state.commit_lsn,
                 backup_lsn: state.backup_lsn,
                 remote_consistent_lsn: state.remote_consistent_lsn,
                 proposer_uuid: state.proposer_uuid,
@@ -203,7 +187,6 @@ where
     /// 2) atomically persist it with finish_change.
     pub fn start_change(&self) -> TimelinePersistentState {
         let mut s = self.pers.clone();
-        s.commit_lsn = self.inmem.commit_lsn;
         s.backup_lsn = self.inmem.backup_lsn;
         s.remote_consistent_lsn = self.inmem.remote_consistent_lsn;
         s.proposer_uuid = self.inmem.proposer_uuid;
@@ -219,7 +202,6 @@ where
         }
 
         // keep in memory values up to date
-        self.inmem.commit_lsn = s.commit_lsn;
         self.inmem.backup_lsn = s.backup_lsn;
         self.inmem.remote_consistent_lsn = s.remote_consistent_lsn;
         self.inmem.proposer_uuid = s.proposer_uuid;

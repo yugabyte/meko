@@ -112,7 +112,10 @@ impl Drop for WriteGuardSharedState<'_> {
     fn drop(&mut self) {
         let term_flush_lsn =
             TermLsn::from((self.guard.sk.last_log_term(), self.guard.sk.flush_lsn()));
-        let commit_lsn = self.guard.sk.state().inmem.commit_lsn;
+        // yb-mode: commit_lsn = flush_lsn (single-SK quorum, every flush is
+        // committed). The watcher subscribers (walsenders, wal_backup) see
+        // updates every time flush_lsn advances.
+        let commit_lsn = self.guard.sk.flush_lsn();
 
         let _ = self.tli.term_flush_lsn_watch_tx.send_if_modified(|old| {
             if *old != term_flush_lsn {
@@ -382,8 +385,8 @@ impl SharedState {
             term: self.sk.state().acceptor_state.term,
             last_log_term: self.sk.last_log_term(),
             flush_lsn: self.sk.flush_lsn().0,
-            // note: this value is not flushed to control file yet and can be lost
-            commit_lsn: self.sk.state().inmem.commit_lsn.0,
+            // yb-mode: commit_lsn collapsed to flush_lsn (single-SK quorum).
+            commit_lsn: self.sk.flush_lsn().0,
             remote_consistent_lsn: self.sk.state().inmem.remote_consistent_lsn.0,
             // peer_horizon_lsn was removed (single-SK yb-mode); zero on the wire.
             peer_horizon_lsn: 0,
@@ -512,8 +515,9 @@ impl Timeline {
         conf: Arc<SafeKeeperConf>,
         wal_backup: Arc<WalBackup>,
     ) -> Arc<Self> {
+        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
         let (commit_lsn_watch_tx, commit_lsn_watch_rx) =
-            watch::channel(shared_state.sk.state().commit_lsn);
+            watch::channel(shared_state.sk.flush_lsn());
         let (term_flush_lsn_watch_tx, term_flush_lsn_watch_rx) = watch::channel(TermLsn::from((
             shared_state.sk.last_log_term(),
             shared_state.sk.flush_lsn(),
@@ -1077,8 +1081,8 @@ impl WalResidentTimeline {
         }
         let shared_state = self.read_shared_state().await;
         if self.walreceivers.get_num() == 0 {
-            return shared_state.sk.state().inmem.commit_lsn == Lsn(0) || // no data at all yet
-            reported_remote_consistent_lsn >= shared_state.sk.state().inmem.commit_lsn;
+            let flush_lsn = shared_state.sk.flush_lsn();
+            return flush_lsn == Lsn(0) || reported_remote_consistent_lsn >= flush_lsn;
         }
         false
     }
@@ -1244,10 +1248,10 @@ impl ManagerTimeline {
             );
         }
 
-        if partial.commit_lsn != pstate.commit_lsn {
+        if partial.commit_lsn != shared.sk.flush_lsn() {
             bail!(
                 "commit_lsn mismatch in partial backup, expected {}, got {}",
-                pstate.commit_lsn,
+                shared.sk.flush_lsn(),
                 partial.commit_lsn
             );
         }

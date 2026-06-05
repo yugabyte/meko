@@ -237,18 +237,17 @@ impl YbWalStorage {
             &tenant_id_str,
             &timeline_id_str,
             wal_seg_size,
-            state.commit_lsn,
+            state.timeline_start_lsn,
         )
         .await?;
         tracing::info!(
             tenant_id = %tenant_id_str,
             timeline_id = %timeline_id_str,
             %write_lsn,
-            cfile_commit_lsn = %state.commit_lsn,
             cfile_local_start_lsn = %state.local_start_lsn,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
             "YbWalStorage::new — rehydrated write_lsn from yb_storage.wals \
-             (falls back to cfile_commit_lsn on empty)",
+             (falls back to timeline_start_lsn on empty)",
         );
 
         // PhysicalStorage holds the LSN tracker + WAL decoder for this
@@ -1141,7 +1140,6 @@ mod tests {
         let mut state = TimelinePersistentState::empty();
         state.tenant_id = ttid.tenant_id;
         state.timeline_id = ttid.timeline_id;
-        state.commit_lsn = start_lsn;
         state.timeline_start_lsn = start_lsn;
         state.local_start_lsn = start_lsn;
 

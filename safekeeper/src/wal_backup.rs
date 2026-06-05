@@ -60,7 +60,8 @@ pub(crate) fn is_wal_backup_required(
 ) -> bool {
     num_computes > 0 ||
     // Currently only the whole segment is offloaded, so compare segment numbers.
-    (state.commit_lsn.segment_number(wal_seg_size) > state.backup_lsn.segment_number(wal_seg_size))
+    // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+    (state.flush_lsn.segment_number(wal_seg_size) > state.backup_lsn.segment_number(wal_seg_size))
 }
 
 /// Based on peer information determine which safekeeper should offload; if it
@@ -174,7 +175,8 @@ fn hadron_determine_offloader(mgr: &Manager, state: &StateSnapshot) -> (Option<N
 
     let offloader_sk_id = offloader.unwrap();
 
-    let backup_lag = state.commit_lsn.checked_sub(state.backup_lsn);
+    // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+    let backup_lag = state.flush_lsn.checked_sub(state.backup_lsn);
     if backup_lag.is_none() {
         debug!("Backup lag is None. Skipping re-election.");
         return (offloader, election_dbg_str);

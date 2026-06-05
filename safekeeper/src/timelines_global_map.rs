@@ -289,7 +289,6 @@ impl GlobalTimelines {
         mconf: Configuration,
         server_info: ServerInfo,
         start_lsn: Lsn,
-        commit_lsn: Lsn,
     ) -> Result<Arc<Timeline>> {
         let generation = Some(mconf.generation);
 
@@ -314,7 +313,7 @@ impl GlobalTimelines {
 
         // TODO: currently we create only cfile. It would be reasonable to
         // immediately initialize first WAL segment as well.
-        let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn, commit_lsn)?;
+        let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn)?;
         let remote_storage = wal_backup
             .get_storage()
             .context("control-file create requires remote storage")?;
@@ -683,10 +682,9 @@ pub async fn create_temp_timeline_dir(
 }
 
 /// Validate a freshly-created temp timeline by reading its control-file
-/// blob back from remote storage and checking generation bounds. The
-/// returned `(commit_lsn, flush_lsn)` matches what callers expected from
-/// the old local-FS implementation; flush_lsn is the same as commit_lsn
-/// here because there's no separately-tracked on-disk WAL.
+/// blob back from remote storage and checking generation bounds.
+/// Returns `(commit_lsn, flush_lsn)` which in yb-mode both collapse to
+/// `timeline_start_lsn` at creation time.
 pub async fn validate_temp_timeline(
     _conf: &SafeKeeperConf,
     ttid: TenantTimelineId,
@@ -712,8 +710,8 @@ pub async fn validate_temp_timeline(
         }
     }
 
-    let commit_lsn = control_store.commit_lsn;
-    Ok((commit_lsn, commit_lsn))
+    let lsn = control_store.timeline_start_lsn;
+    Ok((lsn, lsn))
 }
 
 /// A tombstone for a deleted timeline.

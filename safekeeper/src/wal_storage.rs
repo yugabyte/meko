@@ -110,8 +110,8 @@ impl PhysicalStorage {
     ) -> Result<PhysicalStorage> {
         let wal_seg_size = state.server.wal_seg_size as usize;
         debug!(
-            "initialized WAL bookkeeping for timeline {}, write_lsn={}, commit_lsn={}",
-            ttid.timeline_id, write_lsn, state.commit_lsn,
+            "initialized WAL bookkeeping for timeline {}, write_lsn={}",
+            ttid.timeline_id, write_lsn,
         );
         Ok(PhysicalStorage {
             metrics: WalStorageMetrics::default(),

@@ -435,12 +435,11 @@ impl SafekeeperPostgresHandler {
 
         // Write row if timeline exists
         if let Some(tli) = tli {
-            let (inmem, _state) = tli.get_state().await;
             let flush_lsn = tli.get_flush_lsn().await;
-            let commit_lsn = inmem.commit_lsn;
+            // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
             pgb.write_message_noflush(&BeMessage::DataRow(&[
                 Some(flush_lsn.to_string().as_bytes()),
-                Some(commit_lsn.to_string().as_bytes()),
+                Some(flush_lsn.to_string().as_bytes()),
             ]))?;
         }
 
@@ -460,14 +459,9 @@ impl SafekeeperPostgresHandler {
             .get(self.ttid)
             .map_err(|e| QueryError::Other(e.into()))?;
 
-        let lsn = if self.is_walproposer_recovery() {
-            // walproposer should get all local WAL until flush_lsn
-            tli.get_flush_lsn().await
-        } else {
-            // other clients shouldn't get any uncommitted WAL
-            tli.get_state().await.0.commit_lsn
-        }
-        .to_string();
+        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum), so both
+        // branches return the same value.
+        let lsn = tli.get_flush_lsn().await.to_string();
 
         let sysid = tli.get_state().await.1.server.system_id.to_string();
         let lsn_bytes = lsn.as_bytes();
