@@ -58,7 +58,6 @@ pub static FLUSH_WAL_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_flush_wal_seconds histogram")
 });
-/* BEGIN_HADRON */
 // Counter of all ProposerAcceptorMessage requests received
 pub static PROPOSER_ACCEPTOR_MESSAGES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
@@ -85,7 +84,6 @@ pub static WAL_STORAGE_LIMIT_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_wal_storage_limit_errors counter")
 });
-/* END_HADRON */
 pub static PERSIST_CONTROL_FILE_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "safekeeper_persist_control_file_seconds",
@@ -900,7 +898,6 @@ async fn collect_timeline_metrics(global_timelines: Arc<GlobalTimelines>) -> Vec
     res
 }
 
-/* BEGIN_HADRON */
 // Metrics reporting the time spent to perform each safekeeper filesystem utilization check.
 pub static GLOBAL_DISK_UTIL_CHECK_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     // Buckets from 1ms up to 10s
@@ -912,4 +909,3 @@ pub static GLOBAL_DISK_UTIL_CHECK_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_global_disk_utilization_check_seconds histogram")
 });
-/* END_HADRON */

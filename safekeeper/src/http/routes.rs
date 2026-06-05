@@ -609,11 +609,9 @@ pub fn make_router(
             })
         })
         .get("/v1/utilization", |r| request_span(r, utilization_handler))
-        /* BEGIN_HADRON */
         .get("/v1/debug/filesystem_usage", |r| {
             request_span(r, filesystem_usage_handler)
         })
-        /* END_HADRON */
         .delete("/v1/tenant/:tenant_id", |r| {
             request_span(r, tenant_delete_handler)
         })

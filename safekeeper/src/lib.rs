@@ -107,9 +107,6 @@ pub struct SafeKeeperConf {
     pub listen_https_addr: Option<String>,
     pub advertise_pg_addr: Option<String>,
     pub availability_zone: Option<String>,
-    /* BEGIN_HADRON */
-    pub advertise_pg_addr_tenant_only: Option<String>,
-    /* END_HADRON */
     pub heartbeat_timeout: Duration,
     pub remote_storage: Option<RemoteStorageConfig>,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
@@ -292,9 +289,6 @@ impl SafeKeeperConf {
             use_https_safekeeper_api: false,
             enable_tls_wal_service_api: false,
             force_metric_collection_on_scrape: true,
-            /* BEGIN_HADRON */
-            advertise_pg_addr_tenant_only: None,
-            /* END_HADRON */
         }
     }
 }

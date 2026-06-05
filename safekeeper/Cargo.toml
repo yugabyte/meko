@@ -82,9 +82,7 @@ workspace_hack.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 itertools.workspace = true
-walproposer.workspace = true
 rand.workspace = true
-desim.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["json"] }
 

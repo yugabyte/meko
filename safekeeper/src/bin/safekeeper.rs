@@ -153,12 +153,10 @@ struct Args {
     /// scaled default.
     #[arg(long, default_value_t = safekeeper::DEFAULT_SCALE_FACTOR)]
     scale_factor: f64,
-    /* BEGIN_HADRON */
     /// Safekeeper will stop accepting new WALs if the timeline disk usage exceeds this value in bytes.
     /// Setting this value to 0 disables the limit.
     #[arg(long, default_value_t = DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES)]
     max_timeline_disk_usage_bytes: u64,
-    /* END_HADRON */
     /// If given, enables auth on incoming connections to WAL service endpoint
     /// (--listen-pg). Value specifies path to a .pem public key used for
     /// validations of JWT tokens. Empty string is allowed and means disabling
@@ -227,7 +225,6 @@ struct Args {
     /// Run in development mode (disables security checks)
     #[arg(long, help = "Run in development mode (disables security checks)")]
     dev: bool,
-    /* BEGIN_HADRON */
     /// How often to scan entire data-dir for total disk usage
     #[arg(long, value_parser=humantime::parse_duration, default_value = DEFAULT_GLOBAL_DISK_CHECK_INTERVAL)]
     global_disk_check_interval: Duration,
@@ -237,7 +234,6 @@ struct Args {
     /// Set to 0 to disable the global disk usage limit.
     #[arg(long, default_value_t = DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO)]
     max_global_disk_usage_ratio: f64,
-    /* END_HADRON */
 }
 
 // Like PathBufValueParser, but allows empty string.
@@ -397,9 +393,7 @@ async fn main() -> anyhow::Result<()> {
                 args.scale_factor,
             )
         }),
-        /* BEGIN_HADRON */
         max_timeline_disk_usage_bytes: args.max_timeline_disk_usage_bytes,
-        /* END_HADRON */
         pg_auth,
         pg_tenant_only_auth,
         http_auth,
@@ -415,11 +409,8 @@ async fn main() -> anyhow::Result<()> {
         use_https_safekeeper_api: args.use_https_safekeeper_api,
         enable_tls_wal_service_api: args.enable_tls_wal_service_api,
         force_metric_collection_on_scrape: args.force_metric_collection_on_scrape,
-        /* BEGIN_HADRON */
-        advertise_pg_addr_tenant_only: None,
         global_disk_check_interval: args.global_disk_check_interval,
         max_global_disk_usage_ratio: args.max_global_disk_usage_ratio,
-        /* END_HADRON */
     });
 
     start_safekeeper(conf).await
@@ -562,7 +553,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
         .map(|res| ("Timeline map housekeeping".to_owned(), res));
     tasks_handles.push(Box::pin(timeline_housekeeping_handle));
 
-    /* BEGIN_HADRON */
     // Spawn global disk usage watcher task, if a global disk usage limit is specified.
     let interval = conf.global_disk_check_interval;
     let data_dir = conf.workdir.clone();
@@ -604,7 +594,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
             .map(|res| ("Global disk usage watcher".to_string(), res));
         tasks_handles.push(Box::pin(disk_usage_watch_handle));
     }
-    /* END_HADRON */
     if let Some(pg_listener_tenant_only) = pg_listener_tenant_only {
         let wal_service_handle = current_thread_rt
             .as_ref()
@@ -648,7 +637,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
         tasks_handles.push(Box::pin(https_handle));
     }
 
-    /* BEGIN_HADRON */
     if conf.force_metric_collection_on_scrape {
         let metrics_handle = current_thread_rt
             .as_ref()
@@ -666,7 +654,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
             .map(|res| ("broker main".to_owned(), res));
         tasks_handles.push(Box::pin(metrics_handle));
     }
-    /* END_HADRON */
 
     set_build_info_metric(GIT_VERSION, BUILD_TAG);
 
