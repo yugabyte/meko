@@ -18,7 +18,6 @@ use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
 
 use crate::http::routes::DeleteOrExcludeError;
-use crate::rate_limit::RateLimiter;
 use crate::state::TimelinePersistentState;
 use crate::timeline::{Timeline, TimelineError, delete_dir, get_tenant_dir, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
@@ -51,7 +50,6 @@ struct GlobalTimelinesState {
 
     conf: Arc<SafeKeeperConf>,
     broker_active_set: Arc<TimelinesSet>,
-    global_rate_limiter: RateLimiter,
     wal_backup: Arc<WalBackup>,
 }
 
@@ -59,16 +57,10 @@ impl GlobalTimelinesState {
     /// Get dependencies for a timeline constructor.
     fn get_dependencies(
         &self,
-    ) -> (
-        Arc<SafeKeeperConf>,
-        Arc<TimelinesSet>,
-        RateLimiter,
-        Arc<WalBackup>,
-    ) {
+    ) -> (Arc<SafeKeeperConf>, Arc<TimelinesSet>, Arc<WalBackup>) {
         (
             self.conf.clone(),
             self.broker_active_set.clone(),
-            self.global_rate_limiter.clone(),
             self.wal_backup.clone(),
         )
     }
@@ -153,7 +145,6 @@ impl GlobalTimelines {
                 tenant_tombstones: HashMap::new(),
                 conf,
                 broker_active_set: Arc::new(TimelinesSet::default()),
-                global_rate_limiter: RateLimiter::new(1, 1),
                 wal_backup,
             }),
         }
@@ -164,13 +155,7 @@ impl GlobalTimelines {
         // clippy isn't smart enough to understand that drop(state) releases the
         // lock, so use explicit block
         let tenants_dir = {
-            let mut state = self.state.lock().unwrap();
-            // RateLimiter survives only as a Manager field; its
-            // partial-backup + eviction semaphores have no callers
-            // post Phase 9 Wave 1. Construct with cap = 1 so it stays
-            // benign if anything tries to acquire.
-            state.global_rate_limiter = RateLimiter::new(1, 1);
-
+            let state = self.state.lock().unwrap();
             // Iterate through all directories and load tenants for all directories
             // named as a valid tenant_id.
             state.conf.workdir.clone()
@@ -211,7 +196,7 @@ impl GlobalTimelines {
     /// just lock and unlock it for each timeline -- this function is called
     /// during init when nothing else is running, so this is fine.
     async fn load_tenant_timelines(&self, tenant_id: TenantId) -> Result<()> {
-        let (conf, broker_active_set, partial_backup_rate_limiter, wal_backup) = {
+        let (conf, broker_active_set, wal_backup) = {
             let state = self.state.lock().unwrap();
             state.get_dependencies()
         };
@@ -238,7 +223,6 @@ impl GlobalTimelines {
                                     &mut shared_state,
                                     &conf,
                                     broker_active_set.clone(),
-                                    partial_backup_rate_limiter.clone(),
                                     wal_backup.clone(),
                                 );
                             }
@@ -292,7 +276,7 @@ impl GlobalTimelines {
     ) -> Result<Arc<Timeline>> {
         let generation = Some(mconf.generation);
 
-        let (conf, _, _, wal_backup) = {
+        let (conf, _, wal_backup) = {
             let state = self.state.lock().unwrap();
             if let Ok(timeline) = state.get(&ttid) {
                 // Timeline already exists, return it.
@@ -342,7 +326,7 @@ impl GlobalTimelines {
         generation: Option<SafekeeperGeneration>,
     ) -> Result<Arc<Timeline>> {
         // Check for existence and mark that we're creating it.
-        let (conf, broker_active_set, partial_backup_rate_limiter, wal_backup) = {
+        let (conf, broker_active_set, wal_backup) = {
             let mut state = self.state.lock().unwrap();
             match state.timelines.get(&ttid) {
                 Some(GlobalMapTimeline::CreationInProgress) => {
@@ -396,7 +380,6 @@ impl GlobalTimelines {
                     &mut timeline_shared_state,
                     &conf,
                     broker_active_set,
-                    partial_backup_rate_limiter,
                     wal_backup,
                 );
                 drop(timeline_shared_state);

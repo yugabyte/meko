@@ -27,7 +27,6 @@ use crate::control_file::{ControlFileStorage, Storage};
 use crate::metrics::{
     MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS,
 };
-use crate::rate_limit::{RateLimiter, rand_duration};
 use crate::remove_wal::calc_horizon_lsn;
 use crate::send_wal::WalSenders;
 use crate::state::TimelineState;
@@ -205,7 +204,6 @@ pub(crate) struct Manager {
 
     // misc
     pub(crate) access_service: AccessService,
-    pub(crate) global_rate_limiter: RateLimiter,
 }
 
 /// This task gets spawned alongside each timeline and is responsible for managing the timeline's
@@ -218,7 +216,6 @@ pub async fn main_task(
     broker_active_set: Arc<TimelinesSet>,
     manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
     mut manager_rx: tokio::sync::mpsc::UnboundedReceiver<ManagerCtlMessage>,
-    global_rate_limiter: RateLimiter,
     wal_backup: Arc<WalBackup>,
 ) {
     tli.set_status(Status::Started);
@@ -237,7 +234,6 @@ pub async fn main_task(
         conf,
         broker_active_set,
         manager_tx,
-        global_rate_limiter,
         wal_backup,
     )
     .await;
@@ -316,7 +312,6 @@ impl Manager {
         conf: SafeKeeperConf,
         broker_active_set: Arc<TimelinesSet>,
         manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
-        global_rate_limiter: RateLimiter,
         wal_backup: Arc<WalBackup>,
     ) -> Manager {
         Manager {
@@ -330,7 +325,6 @@ impl Manager {
             wal_removal_task: None,
             access_service: AccessService::new(manager_tx),
             tli,
-            global_rate_limiter,
             conf,
         }
     }

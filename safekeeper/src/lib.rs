@@ -22,7 +22,6 @@ pub mod handler;
 pub mod http;
 pub mod metrics;
 pub mod patch_control_file;
-pub mod rate_limit;
 pub mod receive_wal;
 pub mod remove_wal;
 pub mod safekeeper;

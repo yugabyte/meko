@@ -30,7 +30,6 @@ use crate::metrics::{
 };
 
 use crate::hadron::GLOBAL_DISK_LIMIT_EXCEEDED;
-use crate::rate_limit::RateLimiter;
 use crate::receive_wal::WalReceivers;
 use crate::safekeeper::{AcceptorProposerMessage, ProposerAcceptorMessage, SafeKeeper, TermLsn};
 use crate::send_wal::{WalSenders, WalSendersTimelineMetricValues};
@@ -531,7 +530,6 @@ impl Timeline {
         _shared_state: &mut WriteGuardSharedState<'_>,
         conf: &SafeKeeperConf,
         broker_active_set: Arc<TimelinesSet>,
-        partial_backup_rate_limiter: RateLimiter,
         wal_backup: Arc<WalBackup>,
     ) {
         let (tx, rx) = self.manager_ctl.bootstrap_manager();
@@ -554,7 +552,6 @@ impl Timeline {
                     broker_active_set,
                     tx,
                     rx,
-                    partial_backup_rate_limiter,
                     wal_backup,
                 )
                 .await

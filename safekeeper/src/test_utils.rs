@@ -7,7 +7,6 @@ use safekeeper_api::membership::SafekeeperGeneration as Generation;
 use utils::id::{NodeId, TenantTimelineId};
 use utils::lsn::Lsn;
 
-use crate::rate_limit::RateLimiter;
 use crate::receive_wal::WalAcceptor;
 use crate::safekeeper::{
     AcceptorProposerMessage, AppendRequest, AppendRequestHeader, ProposerAcceptorMessage,
@@ -92,7 +91,6 @@ impl Env {
             &mut timeline.write_shared_state().await,
             &conf,
             Arc::new(TimelinesSet::default()), // ignored for now
-            RateLimiter::new(0, 0),
             wal_backup,
         );
         Ok(timeline)
