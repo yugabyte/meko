@@ -34,7 +34,6 @@ members = [
     "libs/tracing-utils",
     "libs/postgres_ffi/wal_craft",
     "libs/vm_monitor",
-    "libs/walproposer",
     "libs/wal_decoder",
     "libs/postgres_initdb",
     "libs/proxy/json",
@@ -280,7 +279,6 @@ tracing-utils = { version = "0.1", path = "./libs/tracing-utils/" }
 utils = { version = "0.1", path = "./libs/utils/" }
 vm_monitor = { version = "0.1", path = "./libs/vm_monitor/" }
 wal_decoder = { version = "0.1", path = "./libs/wal_decoder" }
-walproposer = { version = "0.1", path = "./libs/walproposer/" }
 ysql_client = { version = "0.1", path = "./libs/ysql_client/" }
 
 ## Common library dependency
