@@ -155,7 +155,6 @@ pub async fn handle_request(
         request.until_lsn,
     )?;
     new_state.timeline_start_lsn = start_lsn;
-    new_state.peer_horizon_lsn = request.until_lsn;
     new_state.backup_lsn = new_backup_lsn;
 
     ControlFileStorage::create_new(storage.clone(), &request.destination_ttid, new_state.clone())

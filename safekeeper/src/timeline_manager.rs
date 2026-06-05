@@ -82,7 +82,6 @@ impl StateSnapshot {
     fn has_unflushed_inmem_state(state: &TimelineState<ControlFileStorage>) -> bool {
         state.inmem.commit_lsn > state.commit_lsn
             || state.inmem.backup_lsn > state.backup_lsn
-            || state.inmem.peer_horizon_lsn > state.peer_horizon_lsn
             || state.inmem.remote_consistent_lsn > state.remote_consistent_lsn
     }
 }

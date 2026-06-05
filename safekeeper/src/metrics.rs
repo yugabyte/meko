@@ -571,7 +571,6 @@ pub struct TimelineCollector {
     backup_lsn: GenericGaugeVec<AtomicU64>,
     flush_lsn: GenericGaugeVec<AtomicU64>,
     epoch_start_lsn: GenericGaugeVec<AtomicU64>,
-    peer_horizon_lsn: GenericGaugeVec<AtomicU64>,
     remote_consistent_lsn: GenericGaugeVec<AtomicU64>,
     ps_last_received_lsn: GenericGaugeVec<AtomicU64>,
     feedback_last_time_seconds: GenericGaugeVec<AtomicU64>,
@@ -634,16 +633,6 @@ impl TimelineCollector {
         )
         .unwrap();
         descs.extend(epoch_start_lsn.desc().into_iter().cloned());
-
-        let peer_horizon_lsn = GenericGaugeVec::new(
-            Opts::new(
-                "safekeeper_peer_horizon_lsn",
-                "LSN of the most lagging safekeeper",
-            ),
-            &["tenant_id", "timeline_id"],
-        )
-        .unwrap();
-        descs.extend(peer_horizon_lsn.desc().into_iter().cloned());
 
         let remote_consistent_lsn = GenericGaugeVec::new(
             Opts::new(
@@ -808,7 +797,6 @@ impl TimelineCollector {
             backup_lsn,
             flush_lsn,
             epoch_start_lsn,
-            peer_horizon_lsn,
             remote_consistent_lsn,
             ps_last_received_lsn,
             feedback_last_time_seconds,
@@ -843,7 +831,6 @@ impl Collector for TimelineCollector {
         self.backup_lsn.reset();
         self.flush_lsn.reset();
         self.epoch_start_lsn.reset();
-        self.peer_horizon_lsn.reset();
         self.remote_consistent_lsn.reset();
         self.ps_last_received_lsn.reset();
         self.feedback_last_time_seconds.reset();
@@ -895,9 +882,6 @@ impl Collector for TimelineCollector {
             self.epoch_start_lsn
                 .with_label_values(labels)
                 .set(tli.epoch_start_lsn.into());
-            self.peer_horizon_lsn
-                .with_label_values(labels)
-                .set(tli.mem_state.peer_horizon_lsn.into());
             self.remote_consistent_lsn
                 .with_label_values(labels)
                 .set(tli.mem_state.remote_consistent_lsn.into());
@@ -963,7 +947,6 @@ impl Collector for TimelineCollector {
         mfs.extend(self.backup_lsn.collect());
         mfs.extend(self.flush_lsn.collect());
         mfs.extend(self.epoch_start_lsn.collect());
-        mfs.extend(self.peer_horizon_lsn.collect());
         mfs.extend(self.remote_consistent_lsn.collect());
         mfs.extend(self.ps_last_received_lsn.collect());
         mfs.extend(self.feedback_last_time_seconds.collect());

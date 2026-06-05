@@ -196,7 +196,6 @@ pub struct TimelineStatus {
     pub local_start_lsn: Lsn,
     pub commit_lsn: Lsn,
     pub backup_lsn: Lsn,
-    pub peer_horizon_lsn: Lsn,
     pub remote_consistent_lsn: Lsn,
     pub peers: Vec<PeerInfo>,
     pub walsenders: Vec<WalSenderState>,
@@ -249,8 +248,6 @@ pub struct SkTimelineInfo {
     /// LSN of last checkpoint uploaded by pageserver.
     #[serde(default = "lsn_invalid")]
     pub remote_consistent_lsn: Lsn,
-    #[serde(default = "lsn_invalid")]
-    pub peer_horizon_lsn: Lsn,
     #[serde(default = "lsn_invalid")]
     pub local_start_lsn: Lsn,
     /// A connection string to use for WAL receiving.

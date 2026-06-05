@@ -238,10 +238,6 @@ impl StateSK {
         sync_control_file |=
             state.remote_consistent_lsn + wal_seg_size < state.inmem.remote_consistent_lsn;
 
-        state.inmem.peer_horizon_lsn =
-            max(Lsn(sk_info.peer_horizon_lsn), state.inmem.peer_horizon_lsn);
-        sync_control_file |= state.peer_horizon_lsn + wal_seg_size < state.inmem.peer_horizon_lsn;
-
         if sync_control_file {
             state.flush().await?;
         }
@@ -389,7 +385,8 @@ impl SharedState {
             // note: this value is not flushed to control file yet and can be lost
             commit_lsn: self.sk.state().inmem.commit_lsn.0,
             remote_consistent_lsn: self.sk.state().inmem.remote_consistent_lsn.0,
-            peer_horizon_lsn: self.sk.state().inmem.peer_horizon_lsn.0,
+            // peer_horizon_lsn was removed (single-SK yb-mode); zero on the wire.
+            peer_horizon_lsn: 0,
             safekeeper_connstr: conf
                 .advertise_pg_addr
                 .to_owned()

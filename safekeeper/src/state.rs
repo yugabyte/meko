@@ -52,12 +52,6 @@ pub struct TimelinePersistentState {
     /// LSN that points to the end of the last backed up segment. Useful to
     /// persist to avoid finding out offloading progress on boot.
     pub backup_lsn: Lsn,
-    /// Minimal LSN which may be needed for recovery of some safekeeper (end_lsn
-    /// of last record streamed to everyone). Persisting it helps skipping
-    /// recovery in walproposer, generally we compute it from peers. In
-    /// walproposer proto called 'truncate_lsn'. Updates are currently drived
-    /// only by walproposer.
-    pub peer_horizon_lsn: Lsn,
     /// LSN of the oldest known checkpoint made by pageserver and successfully
     /// pushed to s3. We don't remove WAL beyond it. Persisted only for
     /// informational purposes, we receive it from pageserver (or broker).
@@ -142,7 +136,6 @@ impl TimelinePersistentState {
             local_start_lsn: start_lsn,
             commit_lsn,
             backup_lsn: start_lsn,
-            peer_horizon_lsn: start_lsn,
             remote_consistent_lsn: Lsn(0),
             partial_backup: wal_backup_partial::State::default(),
             eviction_state: EvictionState::Present,
@@ -172,7 +165,6 @@ impl TimelinePersistentState {
 pub struct TimelineMemState {
     pub commit_lsn: Lsn,
     pub backup_lsn: Lsn,
-    pub peer_horizon_lsn: Lsn,
     pub remote_consistent_lsn: Lsn,
     #[serde(with = "hex")]
     pub proposer_uuid: PgUuid,
@@ -199,7 +191,6 @@ where
             inmem: TimelineMemState {
                 commit_lsn: state.commit_lsn,
                 backup_lsn: state.backup_lsn,
-                peer_horizon_lsn: state.peer_horizon_lsn,
                 remote_consistent_lsn: state.remote_consistent_lsn,
                 proposer_uuid: state.proposer_uuid,
             },
@@ -214,7 +205,6 @@ where
         let mut s = self.pers.clone();
         s.commit_lsn = self.inmem.commit_lsn;
         s.backup_lsn = self.inmem.backup_lsn;
-        s.peer_horizon_lsn = self.inmem.peer_horizon_lsn;
         s.remote_consistent_lsn = self.inmem.remote_consistent_lsn;
         s.proposer_uuid = self.inmem.proposer_uuid;
         s
@@ -231,7 +221,6 @@ where
         // keep in memory values up to date
         self.inmem.commit_lsn = s.commit_lsn;
         self.inmem.backup_lsn = s.backup_lsn;
-        self.inmem.peer_horizon_lsn = s.peer_horizon_lsn;
         self.inmem.remote_consistent_lsn = s.remote_consistent_lsn;
         self.inmem.proposer_uuid = s.proposer_uuid;
         Ok(())

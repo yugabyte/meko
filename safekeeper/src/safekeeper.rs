@@ -1088,7 +1088,11 @@ where
             term: self.state.acceptor_state.term,
             vote_given: false,
             flush_lsn: self.flush_lsn(),
-            truncate_lsn: self.state.inmem.peer_horizon_lsn,
+            // peer_horizon_lsn was removed in yb-mode (single SK = no peer
+            // recovery), but the walproposer C extension asserts on a zero
+            // truncate_lsn in VoteResponse — report flush_lsn so the field
+            // is non-zero and means "I have everything durable up to here".
+            truncate_lsn: self.flush_lsn(),
             term_history: self.get_term_history(),
         };
         if self.state.acceptor_state.term < msg.term {
@@ -1234,11 +1238,6 @@ where
                 }
             }
 
-            if state.peer_horizon_lsn == Lsn(0) {
-                // Update peer_horizon_lsn as soon as we know where timeline starts.
-                // It means that peer_horizon_lsn cannot be zero after we know timeline_start_lsn.
-                state.peer_horizon_lsn = state.timeline_start_lsn;
-            }
             if state.local_start_lsn == Lsn(0) {
                 state.local_start_lsn = msg.start_streaming_at;
                 info!("setting local_start_lsn to {:?}", state.local_start_lsn);
@@ -1381,14 +1380,8 @@ where
         if msg.h.commit_lsn != Lsn(0) {
             self.update_commit_lsn(msg.h.commit_lsn).await?;
         }
-        // Value calculated by walproposer can always lag:
-        // - safekeepers can forget inmem value and send to proposer lower
-        //   persisted one on restart;
-        // - if we make safekeepers always send persistent value,
-        //   any compute restart would pull it down.
-        // Thus, take max before adopting.
-        self.state.inmem.peer_horizon_lsn =
-            max(self.state.inmem.peer_horizon_lsn, msg.h.truncate_lsn);
+        // msg.h.truncate_lsn (walproposer's "you can trim WAL up to here for
+        // peer recovery") is ignored in yb-mode — single-SK means no peers.
 
         trace!(
             "processed AppendRequest of len {}, begin_lsn={}, end_lsn={:?}, commit_lsn={:?}, truncate_lsn={:?}, flushed={:?}",
@@ -1799,7 +1792,6 @@ mod tests {
             local_start_lsn: Lsn(0x12),
             commit_lsn: Lsn(1234567800),
             backup_lsn: Lsn(1234567300),
-            peer_horizon_lsn: Lsn(9999999),
             remote_consistent_lsn: Lsn(1234560000),
             partial_backup: crate::wal_backup_partial::State::default(),
             eviction_state: EvictionState::Present,

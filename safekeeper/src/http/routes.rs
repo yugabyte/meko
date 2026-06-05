@@ -209,7 +209,6 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
         local_start_lsn: state.local_start_lsn,
         commit_lsn: inmem.commit_lsn,
         backup_lsn: inmem.backup_lsn,
-        peer_horizon_lsn: inmem.peer_horizon_lsn,
         remote_consistent_lsn: inmem.remote_consistent_lsn,
         peers: tli.get_peers(conf).await,
         walsenders: tli.get_walsenders().get_all_public(),
@@ -569,7 +568,9 @@ async fn record_safekeeper_info(mut request: Request<Body>) -> Result<Response<B
         flush_lsn: sk_info.flush_lsn.0,
         commit_lsn: sk_info.commit_lsn.0,
         remote_consistent_lsn: sk_info.remote_consistent_lsn.0,
-        peer_horizon_lsn: sk_info.peer_horizon_lsn.0,
+        // peer_horizon_lsn was removed from SK state; the broker proto still
+        // carries the field, send 0.
+        peer_horizon_lsn: 0,
         safekeeper_connstr: sk_info.safekeeper_connstr.unwrap_or_else(|| "".to_owned()),
         http_connstr: sk_info.http_connstr.unwrap_or_else(|| "".to_owned()),
         https_connstr: sk_info.https_connstr,
