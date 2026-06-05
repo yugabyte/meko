@@ -23,7 +23,6 @@ cargo build --release \
     -p pageserver \
     -p control_plane \
     -p safekeeper \
-    -p storage_broker \
     -p storage_controller \
     -p compute_tools \
     -p endpoint_storage
@@ -45,7 +44,7 @@ rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/lib" "${BUNDLE}/tools"
 
 # Binaries actually launched by neon_local (see local_env.rs).
-for bin in yb-pageserver neon_local safekeeper storage_broker storage_controller compute_ctl endpoint_storage; do
+for bin in yb-pageserver neon_local safekeeper storage_controller compute_ctl endpoint_storage; do
     cp -v "target/release/${bin}" "${BUNDLE}/${bin}"
 done
 
