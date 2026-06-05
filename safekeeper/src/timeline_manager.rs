@@ -35,7 +35,6 @@ use crate::timeline::{ManagerTimeline, ReadGuardSharedState, StateSK, WalResiden
 use crate::timeline_guard::{AccessService, GuardId, ResidenceGuard};
 use crate::timelines_set::{TimelineSetGuard, TimelinesSet};
 use crate::wal_backup::{self, WalBackup, WalBackupTaskHandle};
-use crate::wal_backup_partial::{self, PartialBackup, PartialRemoteSegment};
 
 pub(crate) struct StateSnapshot {
     // inmem values
@@ -607,8 +606,6 @@ pub enum Status {
     UpdateBackup,
     UpdateControlFile,
     UpdateWalRemoval,
-    UpdatePartialBackup,
-    EvictTimeline,
     Wait,
     HandleMessage,
     Exiting,
