@@ -5,9 +5,13 @@ area: safekeeper
 opened: 2026-05-20
 ---
 
-## Wave 1 progress (2026-06-05)
+## Wave 1 — DONE (2026-06-05)
 
-Commits landed so far (~1907 LOC of dead code removed):
+~3700 LOC of dead consensus + S3-offloader + local-FS-eviction
+code removed across 6 commits. Wave 2 (consensus state-machine
+slimming in `safekeeper.rs` + `state.rs`) is the remaining work.
+
+## Wave 1 commits
 
 - `419e88627` — delete `pull_timeline.rs` (787 LOC) + slim `hadron.rs`
   (459 → 78 LOC: kept disk-usage helpers, dropped HCC register +
@@ -34,31 +38,59 @@ Commits landed so far (~1907 LOC of dead code removed):
 - `42cc5948c` — drop unused `wal_backup_partial` import + the
   `UpdatePartialBackup` / `EvictTimeline` `Status` enum arms.
 
-## Wave 1 remaining
+- `1a32d69b4` — slim `wal_backup.rs` (921 → 197 LOC: dropped the S3
+  offloader half, kept the YB-WAL plumbing + delete_timeline), slim
+  `wal_backup_partial.rs` (579 → 56 LOC: kept only the
+  `PartialRemoteSegment` / `State` / `UploadStatus` types that are
+  persisted in the control file), delete `copy_timeline.rs` (256
+  LOC: S3 + local-FS WAL copy, neither substrate exists in
+  yb-light), and remove `bootstrap_mgr` / `switch_to_offloaded` /
+  `switch_to_present` from `timeline.rs`.
 
-- **wal_backup.rs slim** (~700 LOC potential). The struct still holds
-  the YB-WAL plumbing (`ysql_fpu_client`, `wal_yb_table`, `wal_cache`)
-  used by `wal_storage.rs::WalReader.read_segment`. The
-  S3-upload-task half (`WalBackupTaskHandle`, `update_task`,
-  `is_wal_backup_required`, `Segment` + helpers,
-  `hadron_determine_offloader`, `determine_offloader`,
-  `backup_lsn_range`, `backup_single_segment`, `backup_partial_segment`,
-  `read_object`, `delete_timeline`, `copy_s3_segments`,
-  `remote_timeline_path`) is dead. Strip those; keep struct + getters.
-- **wal_backup_partial.rs slim** (~450 LOC potential). Keep `State`,
-  `PartialRemoteSegment`, `UploadStatus` (persisted in
-  `TimelinePersistentState.partial_backup`). Delete `PartialBackup`
-  struct, `main_task`, `needs_uploading`, `ReplaceUploadedSegment`.
-- **timeline.rs cleanup**: `bootstrap_mgr`, `switch_to_offloaded`,
-  `switch_to_present` are now unreachable.
-- **state.rs**: `eviction_state` and `backup_lsn` fields are
-  effectively dead but persisted in the control file. Removing them
-  requires a versioned migration or a clean break of the on-disk
-  format — out of scope for Wave 1.
-- **conf**: `wal_backup_enabled`, `enable_offload`,
-  `eviction_min_resident`, `partial_backup_timeout`,
-  `partial_backup_concurrency`, `max_offloader_lag_bytes` are dead
-  CLI args.
+- `2db5da006` — drop dead CLI args (`--max-offloader-lag`,
+  `--wal-backup-parallel-jobs`, `--disable-wal-backup`,
+  `--partial-backup-timeout`, `--enable-offload`,
+  `--partial-backup-concurrency`, `--eviction-min-resident`, etc.),
+  the matching `SafeKeeperConf` fields, the `defaults` constants
+  (`DEFAULT_PARTIAL_BACKUP_TIMEOUT`, `DEFAULT_EVICTION_MIN_RESIDENT`,
+  ...), the `debug_dump::Config` fields, and the dead Prometheus
+  metrics (`safekeeper_backed_up_segments_total`,
+  `safekeeper_partial_backup_uploads_total`,
+  `safekeeper_wal_backup_tasks_*`,
+  `safekeeper_evicted_timelines`, ...).
+
+## Wave 1 leftovers (not blocking; cleanup-only)
+
+- **state.rs**: `partial_backup`, `eviction_state`, `backup_lsn`
+  fields are dead at runtime but persisted in the control file
+  format. Removing them needs either a versioned migration or a
+  clean break — gated on task 19 (SK control file → YB columns).
+- **RateLimiter**: still threaded through `Manager` /
+  `GlobalTimelines` even though both semaphores (partial_backup +
+  eviction) have no callers. Trivial to delete, just a wider edit.
+- **`safekeeper_api::PullTimelineRequest`/`Response`**: kept on the
+  API surface because the storage_controller's multi-SK reconciler
+  still composes them. Their deletion cascades into
+  `SafekeeperTimelineOpKind::Pull` and the timeline-creation flow —
+  out of scope; the storage_controller slim is a separate task.
+
+## Wave 2 — consensus state-machine slimming (PENDING)
+
+The single-SK simplification of the acceptor state machine itself:
+
+- ~600 LOC of consensus state in `safekeeper.rs` (currently 1815
+  LOC; some of this was already trimmed when `peer_horizon_lsn` /
+  `commit_lsn` came out in commits `c4b76b479` / `2a6e1eb9c` /
+  `f050b9c0e` last session — actual remaining surface is smaller
+  than 600 LOC).
+- ~150 LOC of peer state in `state.rs`.
+- Term tracking collapses to "highest term seen, accept anything
+  from it, reject earlier."
+
+Wave 2 is the harder half because it edits the same state machine
+the C-side walproposer (`pgxn/neon/walproposer.c`) drives — any
+state change needs paired Rust+C edits and a live-compute smoke
+run.
 
 ---
 
