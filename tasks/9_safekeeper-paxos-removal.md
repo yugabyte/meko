@@ -1,9 +1,67 @@
 ---
-status: pending
+status: in_progress
 severity: high
 area: safekeeper
 opened: 2026-05-20
 ---
+
+## Wave 1 progress (2026-06-05)
+
+Commits landed so far (~1907 LOC of dead code removed):
+
+- `419e88627` — delete `pull_timeline.rs` (787 LOC) + slim `hadron.rs`
+  (459 → 78 LOC: kept disk-usage helpers, dropped HCC register +
+  `hcc_pull_timeline*`). Removed `--enable-pull-timeline-on-startup`
+  / `--hcc-base-url` CLI args and the 4 `SK_RECOVERY_PULL_TIMELINE_*`
+  metrics. SK's `POST /v1/pull_timeline` + snapshot route gone. The
+  `PullTimelineRequest/Response` types are intentionally kept in
+  `libs/safekeeper_api/src/models.rs` because the storage_controller's
+  multi-SK reconciler still composes them (deleting them cascades into
+  `SafekeeperTimelineOpKind::Pull` and the timeline-creation flow —
+  out of scope for the SK-side slim).
+
+- `34382d296` — delete `timeline_eviction.rs` (415 LOC) + remove the
+  eviction block from `timeline_manager::main_task`.
+
+- `76dc8fff8` — strip `is_offloaded`, `evict_not_before`,
+  `partial_backup_task`, `partial_backup_uploaded` fields from
+  `Manager` + the associated `update_partial_backup`,
+  `update_partial_backup_end`, `backup_partial_reset` methods.
+  `BackupPartialReset` ctl-message handler now returns
+  `Ok(Vec::new())` (no-op) so the HTTP route keeps working until it
+  too can be removed.
+
+- `42cc5948c` — drop unused `wal_backup_partial` import + the
+  `UpdatePartialBackup` / `EvictTimeline` `Status` enum arms.
+
+## Wave 1 remaining
+
+- **wal_backup.rs slim** (~700 LOC potential). The struct still holds
+  the YB-WAL plumbing (`ysql_fpu_client`, `wal_yb_table`, `wal_cache`)
+  used by `wal_storage.rs::WalReader.read_segment`. The
+  S3-upload-task half (`WalBackupTaskHandle`, `update_task`,
+  `is_wal_backup_required`, `Segment` + helpers,
+  `hadron_determine_offloader`, `determine_offloader`,
+  `backup_lsn_range`, `backup_single_segment`, `backup_partial_segment`,
+  `read_object`, `delete_timeline`, `copy_s3_segments`,
+  `remote_timeline_path`) is dead. Strip those; keep struct + getters.
+- **wal_backup_partial.rs slim** (~450 LOC potential). Keep `State`,
+  `PartialRemoteSegment`, `UploadStatus` (persisted in
+  `TimelinePersistentState.partial_backup`). Delete `PartialBackup`
+  struct, `main_task`, `needs_uploading`, `ReplaceUploadedSegment`.
+- **timeline.rs cleanup**: `bootstrap_mgr`, `switch_to_offloaded`,
+  `switch_to_present` are now unreachable.
+- **state.rs**: `eviction_state` and `backup_lsn` fields are
+  effectively dead but persisted in the control file. Removing them
+  requires a versioned migration or a clean break of the on-disk
+  format — out of scope for Wave 1.
+- **conf**: `wal_backup_enabled`, `enable_offload`,
+  `eviction_min_resident`, `partial_backup_timeout`,
+  `partial_backup_concurrency`, `max_offloader_lag_bytes` are dead
+  CLI args.
+
+---
+
 
 # Phase 9 — Safekeeper Paxos / multi-SK consensus removal
 
