@@ -1,19 +1,20 @@
 // One user prompt + one assistant response, rendered as a bubble pair.
 //
 // The thread API returns each turn as a single ThreadMessage carrying both
-// `input` (user) and `output` (assistant); reasoning, when present, sits
-// between the avatar and the answer as a collapsible block.
+// `input` (user) and `output` (assistant); reasoning now renders inside
+// the Decision Trace panel when present.
 //
 // Per-turn telemetry (latency / memories extracted / llm calls) lives in
 // the footer below the assistant bubble, with the memories badge wrapped
 // in `<MemoryHoverCard>` so the user can peek the extracted texts without
 // opening the trace drawer.
 
-import { Activity, Bot, Brain, ChevronDown, ChevronUp, Clock, Cpu, User } from "lucide-react";
+import { Activity, Bot, Clock, Cpu, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { formatLatencyLabel } from "@/components/conversation-telemetry";
 import type { DatapackThreadMessage } from "@/lib/mekoApi";
+import { DecisionTrace } from "@/components/decision-trace-viewer";
 import { MemoryHoverCard } from "./MemoryHoverCard";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { normalizeMarkdownText } from "./markdownNormalize";
@@ -21,8 +22,6 @@ import { normalizeMarkdownText } from "./markdownNormalize";
 export type ThreadTurnProps = {
   message: DatapackThreadMessage;
   now: number;
-  reasoningExpanded: boolean;
-  onToggleReasoning: () => void;
   onOpenTrace: () => void;
   /** Variant of `onOpenTrace` that also shimmers this bubble briefly when
    *  the drawer opens — used for the memoryId deep-link flow so the user
@@ -32,23 +31,25 @@ export type ThreadTurnProps = {
   datapackName: string;
   datapackId?: string;
   conversationId: string;
+  /** Required to build the deep-link footer / "Open in Langfuse" anchors
+   *  inside the per-turn Decision Trace card. Empty string is treated
+   *  the same as missing (the card hides the link rather than rendering
+   *  a dead button). */
+  langfuseProjectId?: string;
 };
 
 export function ThreadTurn({
   message,
   now,
-  reasoningExpanded,
-  onToggleReasoning,
   onOpenTrace,
   onOpenTraceWithMemoryShimmer,
   isShimmering = false,
   datapackName,
   datapackId,
   conversationId,
+  langfuseProjectId,
 }: ThreadTurnProps) {
-  const normalizedReasoning = normalizeMarkdownText(message.reasoning);
   const normalizedOutput = normalizeMarkdownText(message.output);
-  const hasReasoning = normalizedReasoning.length > 0;
   const hasOutput = normalizedOutput.length > 0;
   const relTime = formatRelativeTime(message.started_at, now);
   const latencyLabel = formatLatencyLabel(message.latency_ms);
@@ -73,8 +74,8 @@ export function ThreadTurn({
               {message.input}
             </div>
           </div>
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-emerald-500/40 bg-emerald-500/15">
-            <User className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
+            <User className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
           </div>
         </div>
       ) : null}
@@ -89,39 +90,17 @@ export function ThreadTurn({
         <div className="min-w-0 flex-1">
           <div className="mb-1 font-mono text-[10px] text-muted-foreground">{relTime}</div>
 
-          {hasReasoning ? (
-            <div className="mb-2">
-              <button
-                type="button"
-                onClick={onToggleReasoning}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-[11px] transition-colors",
-                  reasoningExpanded
-                    ? "border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-200"
-                    : "border-border bg-card text-muted-foreground hover:border-purple-500/30 hover:text-foreground",
-                )}
-              >
-                <Brain className="h-3 w-3" aria-hidden />
-                <span className="flex-1 text-left">Agent reasoning</span>
-                {reasoningExpanded ? (
-                  <ChevronUp className="h-3 w-3" aria-hidden />
-                ) : (
-                  <ChevronDown className="h-3 w-3" aria-hidden />
-                )}
-              </button>
-              {reasoningExpanded ? (
-                <div className="mt-1 rounded-md border border-purple-500/20 bg-purple-500/5 px-3 py-2.5 text-[12.5px] italic leading-relaxed text-purple-700 dark:text-purple-100/90 whitespace-pre-wrap">
-                  <MarkdownMessage text={normalizedReasoning} />
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+          <DecisionTrace
+            message={message}
+            conversationId={conversationId}
+            langfuseProjectId={langfuseProjectId}
+          />
 
           <div className="relative overflow-hidden rounded-2xl">
             {hasOutput ? (
               <div className={cn(
                 "rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-relaxed text-foreground/95 whitespace-pre-wrap transition-colors duration-300",
-                isShimmering ? "border-white/30 bg-card" : "border-border bg-card",
+                isShimmering ? "border-foreground/20 bg-muted" : "border-border bg-card",
               )}>
                 <MarkdownMessage text={normalizedOutput} />
               </div>
@@ -171,10 +150,12 @@ export function ThreadTurn({
             <button
               type="button"
               onClick={onOpenTrace}
-              className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-purple-700 dark:text-purple-300 hover:bg-card hover:text-purple-700 dark:text-purple-200 transition-colors"
+              className="inline-flex cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-purple-700 dark:text-purple-300 hover:bg-card hover:text-purple-800 dark:hover:text-purple-200 transition-colors"
+              aria-label="View execution trace"
+              title="Open the Langfuse execution trace for this message"
             >
               <Activity className="h-3 w-3" aria-hidden />
-              View decision trace
+              View execution trace
             </button>
           </div>
         </div>

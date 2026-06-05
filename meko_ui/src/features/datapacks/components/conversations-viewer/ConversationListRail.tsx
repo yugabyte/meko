@@ -17,6 +17,7 @@ import {
   Loader2,
   MessageSquare,
   Search,
+  User,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,11 @@ type Props = {
    *  can auto-select the newest conversation when no `:conversationId`
    *  was provided in the URL. */
   onFirstPageLoaded?: (conversations: DatapackConversation[]) => void;
+  /** Reports the `user_email_id` of the currently selected conversation
+   *  (or `undefined` when not selected / not yet loaded). The detail
+   *  endpoint behind the thread pane doesn't return the author email, so
+   *  the parent forwards this rail-sourced value to the thread header. */
+  onSelectedEmailChange?: (email: string | undefined) => void;
   className?: string;
 };
 
@@ -53,6 +59,7 @@ export function ConversationListRail({
   selectedId,
   onSelect,
   onFirstPageLoaded,
+  onSelectedEmailChange,
   className,
 }: Props) {
   const [conversations, setConversations] = useState<DatapackConversation[]>([]);
@@ -141,6 +148,15 @@ export function ConversationListRail({
     return () => io.disconnect();
   }, [hasMore, loading, loadPage]);
 
+  // Surface the selected conversation's author email to the parent so the
+  // thread header can show it — the detail endpoint behind the pane doesn't
+  // return `user_email_id`, but the list rows do. Reports `undefined` until
+  // the selected row is in the loaded pages (click path or recent deep link).
+  const selectedEmail = conversations.find((c) => c.id === selectedId)?.user_email_id;
+  useEffect(() => {
+    onSelectedEmailChange?.(selectedEmail);
+  }, [selectedEmail, onSelectedEmailChange]);
+
   const showEmpty = firstLoadDone && conversations.length === 0 && !error;
 
   return (
@@ -203,7 +219,7 @@ export function ConversationListRail({
                   type="button"
                   onClick={() => onSelect(c.id)}
                   className={cn(
-                    "block w-full border-b border-border/60 px-4 py-3 text-left transition-colors",
+                    "block w-full cursor-pointer border-b border-border/60 px-4 py-3 text-left transition-colors",
                     "border-l-2",
                     active
                       ? "bg-input border-l-purple-400"
@@ -265,6 +281,18 @@ export function ConversationListRail({
                           {c.memories_added.toLocaleString()}
                         </span>
                       </>
+                    ) : null}
+                    {c.user_email_id ? (
+                      // Author of the conversation, right-aligned. Truncates
+                      // (with full value on hover) so long emails don't push
+                      // the msg/memory counts around in the narrow rail.
+                      <span
+                        className="ml-auto inline-flex min-w-0 items-center gap-1 text-muted-foreground"
+                        title={c.user_email_id}
+                      >
+                        <User className="h-2.5 w-2.5 shrink-0" aria-hidden />
+                        <span className="truncate">{c.user_email_id}</span>
+                      </span>
                     ) : null}
                   </div>
                 </button>

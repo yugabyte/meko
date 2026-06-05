@@ -1,12 +1,13 @@
 /**
  * Sticky top bar shared across workspace pages: optional leading title and,
- * when `showUserAvatar` is true, invite notifications plus “Signed in as …” from {@link getCurrentUser}.
+ * when `showUserAvatar` is true, invite notifications plus “Signed in as …”
+ * from the shared {@link useCurrentUser} query.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { IncomingShareNotificationsBell } from "@/features/layout/IncomingShareNotificationsBell";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 import { ROUTES } from "@/app/routes/paths";
@@ -28,28 +29,11 @@ export function AppWorkspaceHeader({
   sticky = true,
   className,
 }: AppWorkspaceHeaderProps) {
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  const [userLoading, setUserLoading] = useState(showUserAvatar);
-
-  useEffect(() => {
-    if (!showUserAvatar) {
-      setUserLoading(false);
-      return;
-    }
-    const ac = new AbortController();
-    setUserLoading(true);
-    void getCurrentUser({ signal: ac.signal })
-      .then((u) => {
-        setCurrentUser(u);
-      })
-      .catch(() => {
-        setCurrentUser(null);
-      })
-      .finally(() => {
-        setUserLoading(false);
-      });
-    return () => ac.abort();
-  }, [showUserAvatar]);
+  // Shared, session-cached identity (one `/me` fetch app-wide). Gated by
+  // `showUserAvatar` so routes that hide the avatar don't fetch.
+  const { data: currentUser = null, isLoading: userLoading } = useCurrentUser({
+    enabled: showUserAvatar,
+  });
 
   const hasLeft = Boolean(leading);
   const hasRight = showUserAvatar;

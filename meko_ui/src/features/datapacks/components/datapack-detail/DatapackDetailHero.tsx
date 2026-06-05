@@ -32,7 +32,7 @@ type Props = {
 
 function ActiveStatusPill() {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/45 bg-emerald-950/45 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-emerald-700 dark:text-emerald-100/95">
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/45 bg-emerald-500/10 dark:bg-emerald-950/45 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-emerald-700 dark:text-emerald-100/95">
       <span className="size-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.65)]" aria-hidden />
       active
     </span>
@@ -41,7 +41,7 @@ function ActiveStatusPill() {
 
 function NewDatapackPill() {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/45 bg-blue-950/40 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-blue-700 dark:text-blue-100/95">
+    <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/45 bg-blue-500/10 dark:bg-blue-950/40 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-blue-700 dark:text-blue-100/95">
       <Sparkles className="size-3 shrink-0 text-blue-700 dark:text-blue-300/95" aria-hidden />
       new
     </span>

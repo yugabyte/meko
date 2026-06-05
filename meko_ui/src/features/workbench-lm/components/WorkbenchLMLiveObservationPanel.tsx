@@ -33,12 +33,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   deleteMemory,
   formatMemoryAuthor,
   getApiErrorMessage,
-  getCurrentUser,
   listMemories,
   listPromotedMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
@@ -359,9 +359,12 @@ function LearningsSection({
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // account_id captured during fetch — needed for promoteMemories and to
-  // gate the per-tile delete button (only the author can delete).
-  const [accountId, setAccountId] = useState<string>("");
+  // account_id — needed for promoteMemories and to gate the per-tile
+  // delete button (only the author can delete). Resolved ONCE per session
+  // via react-query (cached, `staleTime: Infinity`) instead of inside the
+  // polled fetch below, so `/me` no longer rides along on every poll tick.
+  const { data: currentUser } = useCurrentUser();
+  const accountId = currentUser?.account_id ?? "";
   // Memory id currently being promoted (drives spinner + button disable).
   // Single-string state since one promote at a time keeps the UX predictable.
   const [promotingId, setPromotingId] = useState<string | null>(null);
@@ -374,7 +377,10 @@ function LearningsSection({
 
   const fetchMemories = useCallback(
     async (signal?: AbortSignal) => {
-      if (!datapackId) {
+      // Wait for the cached identity before listing — listMemories is
+      // scoped by user_id. While it's resolving (first paint) we simply
+      // skip; the effect re-runs once `accountId` lands.
+      if (!datapackId || !accountId) {
         setItems([]);
         setTotal(0);
         return;
@@ -382,12 +388,10 @@ function LearningsSection({
       setLoading(true);
       setError(null);
       try {
-        const user = await getCurrentUser({ signal });
-        setAccountId(user.account_id);
         const resp = await listMemories(
           {
             datapack_id: datapackId,
-            user_id: user.account_id,
+            user_id: accountId,
             user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
             page: 1,
             page_size: TOP_N,
@@ -405,7 +409,7 @@ function LearningsSection({
         setLoading(false);
       }
     },
-    [datapackId],
+    [datapackId, accountId],
   );
 
   useEffect(() => {
@@ -544,7 +548,7 @@ function LearningsSection({
                     {m.agent_id ? `agent · ${m.agent_id}` : " "}
                   </span>
                   <div className="flex shrink-0 items-center gap-1">
-                   {/* {isMine ? (
+                    {/* {isMine ? (
                       <button
                         type="button"
                         onClick={() => void handleDelete(m.id)}

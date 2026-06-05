@@ -7,7 +7,7 @@
 // focused on data + layout while this component owns the presentation of
 // the conversation's metadata.
 
-import { Bot, Cpu, ExternalLink, MessageSquare, Send } from "lucide-react";
+import { Bot, Cpu, ExternalLink, MessageSquare, Send, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryIcon } from "@/components/conversation-telemetry";
 import type { DatapackConversationDetail } from "@/lib/mekoApi";
@@ -20,6 +20,11 @@ type Props = {
   detail: DatapackConversationDetail;
   conversationId: string;
   langfuseProjectId: string;
+  /** Author email, forwarded from the rail's list rows because the
+   *  conversation-detail endpoint doesn't return `user_email_id`. The
+   *  detail's own value is preferred when present (future-proofs against
+   *  the backend later including it). */
+  userEmail?: string;
   /** Current epoch ms — ticks via `useNowMs` in the parent so the
    *  "last activity" relative time stays fresh without a per-component
    *  timer. */
@@ -30,10 +35,12 @@ export function ConversationThreadHeader({
   detail,
   conversationId,
   langfuseProjectId,
+  userEmail,
   now,
 }: Props) {
   const headline = detail.title || detail.first_message || "(no messages yet)";
   const startedDisplay = formatDatapackCreatedAtUtc(detail.started_at);
+  const authorEmail = detail.user_email_id || userEmail;
 
   return (
     <header className="border-b border-border bg-card px-6 py-4 shrink-0">
@@ -70,6 +77,11 @@ export function ConversationThreadHeader({
             {(detail.llm_calls ?? 0) > 0 ? (
               <Chip icon={<Cpu className="h-3 w-3" />} accent="amber">
                 {detail.llm_calls.toLocaleString()} llm calls
+              </Chip>
+            ) : null}
+            {authorEmail ? (
+              <Chip icon={<User className="h-3 w-3" />} accent="slate">
+                {authorEmail}
               </Chip>
             ) : null}
           </div>

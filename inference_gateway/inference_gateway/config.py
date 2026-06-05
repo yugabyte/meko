@@ -33,7 +33,7 @@ DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
 )
 
 # Per the SessionStart hook from the meko MCP server: always use "agent".
-DEFAULT_AGENT_ID = "meko"
+DEFAULT_AGENT_ID = "WorkbenchLM"
 
 # Sliding-window size for in-memory session history.
 # Override via `--max-history` flag or `INFERENCE_MAX_HISTORY` env var.

@@ -423,6 +423,9 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	g.GET("/datapacks/:name/conversations/:conversation_id/messages/:message_id/trace", observeH.MessageTrace,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
+	g.GET("/datapacks/:name/conversations/:conversation_id/messages/:message_id/decision-trace", observeH.MessageDecisionTrace,
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
 
 	// Pending outgoing invites: owner or maintainer only.
 	g.GET("/datapacks/:name/outgoing-shares", shareH.OutgoingShares,

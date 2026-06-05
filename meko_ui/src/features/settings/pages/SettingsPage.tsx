@@ -6,38 +6,24 @@
 // mount so deep-links into `/settings` from external nav still work without
 // requiring the header to have loaded first.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Copy, KeyRound, Loader2, Mail, User as UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
-import {
-  getApiErrorMessage,
-  getCurrentUser,
-  type CurrentUser,
-} from "@/lib/mekoApi";
+import { getApiErrorMessage } from "@/lib/mekoApi";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { UpdatePasswordDialog } from "@/features/settings/components/UpdatePasswordDialog";
 import { SecurityTokensSection } from "@/features/settings/components/SecurityTokensSection";
 
 export default function SettingsPage() {
-  const [user, setUser] = useState<CurrentUser | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Shared, session-cached identity — usually already warmed by the
+  // header, so deep-linking into /settings reads from cache.
+  const { data: user = null, isLoading: loading, error } = useCurrentUser();
+  const errorMessage = error
+    ? getApiErrorMessage(error, "Failed to load your account.")
+    : null;
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
-
-  useEffect(() => {
-    const ac = new AbortController();
-    setLoading(true);
-    setError(null);
-    void getCurrentUser({ signal: ac.signal })
-      .then((u) => setUser(u))
-      .catch((err) => {
-        if ((err as { name?: string })?.name === "CanceledError") return;
-        setError(getApiErrorMessage(err, "Failed to load your account."));
-      })
-      .finally(() => setLoading(false));
-    return () => ac.abort();
-  }, []);
 
   // Convenience helper for the "copy account id" button — UUIDs are awkward
   // to retype, and support / debugging frequently asks for them.
@@ -69,9 +55,9 @@ export default function SettingsPage() {
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
               Loading your account…
             </div>
-          ) : error ? (
+          ) : errorMessage ? (
             <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-300">
-              {error}
+              {errorMessage}
             </div>
           ) : user ? (
             <>

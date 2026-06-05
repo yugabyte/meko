@@ -85,6 +85,16 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional datapack scope. When null, MCP uses the caller's default datapack.",
     )
+    conversation_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Resume an existing conversation. When set, the gateway adopts "
+            "this conversation_id instead of minting a new one via MCP — "
+            "every turn of a resumed chat appends to the same conversation "
+            "row in Langfuse. Set by the UI when the user picked a previous "
+            "chat from the dropdown; absent for fresh chats."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):
@@ -149,6 +159,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
             session_id=session_id,
             user_message=req.message,
             datapack_id=req.datapack_id,
+            resume_conversation_id=req.conversation_id,
         )
     except RuntimeError as exc:
         # Raised by chain when a required MCP tool is missing or returns

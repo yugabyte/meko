@@ -17,6 +17,7 @@ import {
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
+import { setLocalItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 
@@ -82,7 +83,7 @@ export default function SignInPage() {
       let nextPath: (typeof ROUTES)["datapacks" | "onboarding"] = ROUTES.onboarding;
       try {
         const user = await getCurrentUser();
-        localStorage.setItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
+        setLocalItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
         dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
           has_completed_onboarding: user.has_completed_onboarding,
         });

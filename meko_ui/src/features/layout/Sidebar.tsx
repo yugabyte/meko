@@ -24,15 +24,16 @@ import {
   AUTH_LOGOUT_EVENT,
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
-  getCurrentUser,
   listDatapacks,
   logout,
   ONBOARDING_STATUS_CACHE_KEY,
   PROVISION_STATUS_CACHE_KEY,
-  type CurrentUser,
   type Datapack,
 } from "@/lib/mekoApi";
+import { queryClient } from "@/lib/queryClient";
+import { CURRENT_USER_QUERY_KEY, useCurrentUser } from "@/hooks/useCurrentUser";
 import { addAppEventListener, dispatchAppEvent, removeAppEventListener } from "@/lib/browserEvents";
+import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
 import { ROUTES, datapackDetailPath } from "@/app/routes/paths";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 
@@ -62,22 +63,17 @@ export default function Sidebar() {
   const [datapackList, setDatapackList] = useState<Datapack[]>([]);
   const [datapacksExpanded, setDatapacksExpanded] = useState(true);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  // Loaded once for the Feedback dialog (account_id + email). Same `/auth/me`
-  // endpoint other components hit; cheap and lets the dialog open instantly.
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  // For the Feedback dialog (account_id + email). Shared session-cached
+  // identity — only fetched when the dialog opens, and reuses the same
+  // `/auth/me` cache entry other components hit (no extra request).
+  const { data: currentUser = null } = useCurrentUser({ enabled: feedbackOpen });
 
+  // Clear the shared `/me` cache when the user signs out so the next
+  // sign-in (possibly as a different user) re-fetches instead of serving
+  // the stale cached identity. One removal here clears it for every
+  // component reading `useCurrentUser`, since they share one query key.
   useEffect(() => {
-    if (!feedbackOpen || currentUser !== null) return;
-    const ac = new AbortController();
-    void getCurrentUser({ signal: ac.signal })
-      .then((u) => setCurrentUser(u))
-      .catch(() => setCurrentUser(null));
-    return () => ac.abort();
-  }, [feedbackOpen, currentUser]);
-
-  // Drop the cached user when the user signs out so the next sign-in re-fetches.
-  useEffect(() => {
-    const onLogout = () => setCurrentUser(null);
+    const onLogout = () => queryClient.removeQueries({ queryKey: [CURRENT_USER_QUERY_KEY] });
     addAppEventListener(AUTH_LOGOUT_EVENT, onLogout);
     return () => removeAppEventListener(AUTH_LOGOUT_EVENT, onLogout);
   }, []);
@@ -150,8 +146,8 @@ export default function Sidebar() {
     setLoggingOut(true);
     try {
       await logout();
-      sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
-      localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
+      removeSessionItem(PROVISION_STATUS_CACHE_KEY);
+      removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
       dispatchAppEvent(AUTH_LOGOUT_EVENT);
       navigate(ROUTES.login, { replace: true });
     } catch (err) {

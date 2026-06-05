@@ -33,6 +33,11 @@ export type GatewayChatRequest = {
   session_id?: string;
   /** Optional datapack scope. When null, MCP uses the caller's default. */
   datapack_id?: string | null;
+  /** Resume an existing conversation: when set, the gateway adopts this
+   *  conversation_id instead of minting a new one via MCP. The UI sends
+   *  it when the user picked a previous chat from the dropdown — keeps
+   *  every new turn appended to the same conversation row in Langfuse. */
+  conversation_id?: string | null;
 };
 
 /** One structured memory hit returned by `memory_search`. `kind`
@@ -86,6 +91,14 @@ export type ProcessingStep = {
    *  Null for steps with no extra args worth showing (llm_invoke,
    *  conversation_add_message, fire-and-forget memory_add). */
   tool_args?: Record<string, unknown>;
+  /** Langfuse observation id for this step. Used by the Decision Trace
+   *  card to deep-link the row to the matching span. Missing for
+   *  synthesized rows that don't map to a single observation. */
+  span_id?: string;
+  /** Sub-timings rolled up under this step (e.g. `vector_ms`, `graph_ms`
+   *  for retrieval). Empty/undefined when the step has no surfaced
+   *  child spans. */
+  sub_timings?: Record<string, number>;
 };
 
 /** Response shape from POST /chat. */

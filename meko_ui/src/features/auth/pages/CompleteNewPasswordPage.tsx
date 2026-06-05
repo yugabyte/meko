@@ -14,6 +14,7 @@ import {
   AUTH_LOGOUT_EVENT
 } from "@/lib/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
+import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
@@ -102,8 +103,8 @@ export default function CompleteNewPasswordPage() {
       });
       try {
         await logout();
-        sessionStorage.removeItem(PROVISION_STATUS_CACHE_KEY);
-        localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
+        removeSessionItem(PROVISION_STATUS_CACHE_KEY);
+        removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
         dispatchAppEvent(AUTH_LOGOUT_EVENT);
       } catch {
         // Still land on sign-in; user can retry sign-in if cookies were not cleared.

@@ -1,5 +1,10 @@
 import { useEffect } from "react";
 import axios from "axios";
+import {
+  getLocalItem,
+  removeLocalItem,
+  setLocalItem,
+} from "@/lib/browserStorage";
 import { getCurrentUser, ONBOARDING_STATUS_CACHE_KEY } from "@/lib/mekoApi";
 
 type Args = {
@@ -9,11 +14,11 @@ type Args = {
 };
 
 export function readOnboardingStatusCache(): boolean | null {
-  const raw = localStorage.getItem(ONBOARDING_STATUS_CACHE_KEY);
+  const raw = getLocalItem(ONBOARDING_STATUS_CACHE_KEY);
   if (raw == null) return null;
   if (raw === "true") return true;
   if (raw === "false") return false;
-  localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
+  removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
   return null;
 }
 
@@ -31,7 +36,7 @@ export function useAuthBootstrap({
         if (controller.signal.aborted) return;
         setAuthenticated(true);
         setHasCompletedOnboarding(user.has_completed_onboarding);
-        localStorage.setItem(
+        setLocalItem(
           ONBOARDING_STATUS_CACHE_KEY,
           String(user.has_completed_onboarding),
         );
@@ -42,7 +47,7 @@ export function useAuthBootstrap({
         // be stale.
         if (controller.signal.aborted || axios.isCancel(err)) return;
         setAuthenticated(false);
-        localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
+        removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
       })
       .finally(() => {
         if (controller.signal.aborted) return;

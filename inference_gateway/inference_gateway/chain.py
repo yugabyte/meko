@@ -366,17 +366,54 @@ async def run_chat_turn(
     session_id: str,
     user_message: str,
     datapack_id: Optional[str],
+    resume_conversation_id: Optional[str] = None,
 ) -> ChatTurnResult:
     """Run one chat turn end-to-end. Returns the assistant text + Langfuse
     message_id + structured retrieval hits + a processing-steps timeline
-    the UI's Agent Reasoning panel renders."""
+    the UI's Agent Reasoning panel renders.
+
+    When `resume_conversation_id` is supplied AND the session store has no
+    mapping yet for this `session_id`, the gateway adopts the supplied id
+    instead of minting a new conversation via MCP — used by the UI when
+    the user picks a previous chat from the dropdown. Every subsequent
+    turn of that session reads the id back from the store, so the caller
+    only has to send `conversation_id` once. If the session already has
+    a mapping, the supplied id is ignored (the existing one wins — we
+    don't want to silently switch conversations mid-session).
+    """
     # Step list grows in invocation order as the pipeline runs; surfaces
     # to the UI as the per-turn observability timeline.
     steps: List[ProcessingStep] = []
 
     # 1. Ensure we have an MCP conversation_id for this session.
+    #
+    # Three branches, in priority order:
+    #   a) Session already mapped — reuse (no step recorded; cache hit).
+    #   b) Caller supplied `resume_conversation_id` — adopt it, seed the
+    #      session store, record a "skipped" conversation_create step so
+    #      the Agent Reasoning panel still has a timeline entry for this
+    #      stage. No MCP round-trip.
+    #   c) Otherwise — mint a fresh conversation via MCP.
     conversation_id = await session_store.get_conversation_id(session_id)
-    if conversation_id is None:
+    if conversation_id is None and resume_conversation_id:
+        # Branch (b): adopt the resumed id.
+        await session_store.set_conversation_id(session_id, resume_conversation_id)
+        conversation_id = resume_conversation_id
+        steps.append(
+            ProcessingStep(
+                "conversation_create",
+                0,
+                "skipped",
+                "resumed existing conversation",
+                tool_args={"conversation_id": resume_conversation_id},
+            )
+        )
+        logger.info(
+            "resumed MCP conversation %s for session %s",
+            resume_conversation_id, session_id,
+        )
+    elif conversation_id is None:
+        # Branch (c): mint a fresh one.
         step_start = time.monotonic()
         # Pre-compute the title so we can surface it on the step's
         # `tool_args` for the Agent Reasoning panel without recomputing.

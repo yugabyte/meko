@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { DatapackShareGrant } from "./datapackShareGrants";
+import type { KbHit, MemoryHit, ProcessingStep } from "./inferenceGateway";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 
 type ApiError = {
@@ -918,6 +919,12 @@ export async function bootstrapObserveSession() {
 export type DatapackConversation = {
   id: string;
   agent_id?: string;
+  /** account_id of the user who owns this conversation. Lets the
+   *  WorkbenchLM "previous chats" dropdown scope to the signed-in user's
+   *  own sessions (the datapack may be shared with several members). */
+  user_id?: string;
+  /** Email of that user — display convenience alongside `user_id`. */
+  user_email_id?: string;
   /** Falls back to the truncated first message when MCP didn't pass a
    *  title to conversation_create. May be empty for very old sessions
    *  that have neither. */
@@ -1005,6 +1012,23 @@ export type DatapackThreadMessage = {
    *  to the specific message that extracted a given memory. */
   memory_ids?: string[];
   llm_calls: number;
+  /** Sum of `usage_details.total` across every GENERATION span in this
+   *  turn's window. Always present; 0 when no usage was reported. */
+  total_tokens: number;
+  /** LLM identifier sourced from Langfuse's `provided_model_name` on the
+   *  matched Reasoning generation. Empty when the agent's harness didn't
+   *  supply it. */
+  model?: string;
+  /** Structured checklist persisted on the Reasoning generation's
+   *  `metadata.plan`. Empty / undefined for legacy rows where the plan
+   *  was embedded in the reasoning prose. */
+  plan?: string[];
+  /** Same structured shape as the Playground response. Populated from
+   *  Langfuse observations so the DecisionTrace card can render retrieval
+   *  + steps above historical assistant replies. */
+  memory_hits?: MemoryHit[];
+  kb_hits?: KbHit[];
+  processing_steps?: ProcessingStep[];
 };
 
 export type DatapackConversationDetail = DatapackConversation & {
@@ -1101,6 +1125,60 @@ export async function getDatapackMessageTrace(
       `/datapacks/${encodeURIComponent(datapackName)}/conversations/${encodeURIComponent(
         conversationId,
       )}/messages/${encodeURIComponent(messageId)}/trace`,
+      options.datapackId,
+    ),
+    "GET",
+    undefined,
+    options,
+  );
+}
+
+/** Slim per-message decision-trace payload — the exact subset of fields
+ *  the `DecisionTrace` card reads (reasoning / plan / retrieval hits /
+ *  processing steps + per-turn telemetry). Mirrors the BE
+ *  `MessageDecisionTrace` struct; the server projects it out of one
+ *  message's window in the Langfuse thread, so no whole-thread payload
+ *  is transferred. */
+export type DatapackMessageDecisionTrace = {
+  message_id: string;
+  model?: string;
+  latency_ms: number;
+  total_tokens: number;
+  llm_calls: number;
+  memories_extracted: number;
+  reasoning?: string;
+  plan?: string[];
+  memory_hits?: MemoryHit[];
+  kb_hits?: KbHit[];
+  processing_steps?: ProcessingStep[];
+};
+
+export type GetDatapackMessageDecisionTraceResponse = {
+  datapack_id: string;
+  datapack_name: string;
+  langfuse_project_id?: string;
+  conversation_id: string;
+  decision_trace: DatapackMessageDecisionTrace;
+};
+
+/**
+ * Fetch the decision-trace for a SINGLE message by message_id (the same
+ * id `POST /chat` returns). Used by the WorkbenchLM live chat to lazily
+ * populate a turn's "Decision trace" block when the user expands it —
+ * by which point Langfuse has typically finished indexing the turn.
+ * Caller must have datapack access.
+ */
+export async function getDatapackMessageDecisionTrace(
+  datapackName: string,
+  conversationId: string,
+  messageId: string,
+  options: DatapackRouteOptions = {},
+) {
+  return request<GetDatapackMessageDecisionTraceResponse>(
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/conversations/${encodeURIComponent(
+        conversationId,
+      )}/messages/${encodeURIComponent(messageId)}/decision-trace`,
       options.datapackId,
     ),
     "GET",

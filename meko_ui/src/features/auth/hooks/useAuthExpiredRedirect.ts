@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
+import { removeLocalItem } from "@/lib/browserStorage";
 import { AUTH_EXPIRED_EVENT, ONBOARDING_STATUS_CACHE_KEY } from "@/lib/mekoApi";
 import type { NavigateFunction } from "react-router-dom";
 
@@ -20,7 +21,7 @@ export function useAuthExpiredRedirect({
     const onAuthExpired = () => {
       setAuthenticated(false);
       setAuthLoading(false);
-      localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
+      removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
       navigate(redirectTo, { replace: true });
     };
 

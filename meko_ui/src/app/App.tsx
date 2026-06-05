@@ -22,6 +22,7 @@ import {
 import { useAuthExpiredRedirect } from "@/features/auth/hooks/useAuthExpiredRedirect";
 import { useOnboardingStatusSync } from "@/features/onboarding/hooks/useOnboardingStatusSync";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
+import { removeLocalItem, setLocalItem } from "@/lib/browserStorage";
 import {
   AUTH_LOGIN_SUCCESS_EVENT,
   AUTH_LOGOUT_EVENT,
@@ -73,14 +74,14 @@ function AppRouter() {
         if (signal.aborted) return;
         setAuthenticated(true);
         setHasCompletedOnboarding(user.has_completed_onboarding);
-        localStorage.setItem(
+        setLocalItem(
           ONBOARDING_STATUS_CACHE_KEY,
           String(user.has_completed_onboarding),
         );
       } catch (err) {
         if (signal.aborted || axios.isCancel(err)) return;
         setAuthenticated(false);
-        localStorage.removeItem(ONBOARDING_STATUS_CACHE_KEY);
+        removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
       } finally {
         if (!signal.aborted) {
           setAuthLoading(false);

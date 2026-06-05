@@ -11,17 +11,17 @@
 // turn and reused for the lifetime of the page (or until the user changes
 // datapack). Switching datapacks resets the chat.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Download } from "lucide-react";
 import {
   getInferenceGatewayErrorMessage,
   postChat,
 } from "@/lib/inferenceGateway";
+import type { DatapackThreadMessage } from "@/lib/mekoApi";
 import { ChatBubble, ThinkingBubble } from "./workbench-lm-chat/ChatBubble";
 import { ChatInput } from "./workbench-lm-chat/ChatInput";
 import { EmptyState } from "./workbench-lm-chat/EmptyState";
 import { downloadChat } from "./workbench-lm-chat/downloadChat";
-import { enrichAssistantTurn } from "./workbench-lm-chat/enrichAssistantTurn";
 import type { KnowledgeReadiness, Message } from "./workbench-lm-chat/types";
 
 // Re-export so existing call sites (`WorkbenchLMPage`) keep working without
@@ -53,6 +53,22 @@ export type WorkbenchLMChatProps = {
   /** Fired when the user clicks "View trace" on an assistant message.
    *  Parent owns the trace drawer state so it can persist across re-renders. */
   onOpenTrace?: (messageId: string, conversationId: string) => void;
+  /** id of a previous conversation the user is resuming. Set by the
+   *  page after the user picks an entry from the "Previous chats"
+   *  dropdown; `null` means a fresh chat. When set, `loadedThread`
+   *  carries the existing messages and every new turn we send to the
+   *  gateway includes this id so the backend appends to the same
+   *  conversation row instead of creating a new one. */
+  loadedConversationId?: string | null;
+  /** Thread fetched from `getDatapackConversation` when the user picks
+   *  a previous chat. Each entry becomes a user + assistant bubble.
+   *  `null` when no resume is in flight. */
+  loadedThread?: DatapackThreadMessage[] | null;
+  /** Langfuse project id for the resumed conversation (from the same
+   *  `getDatapackConversation` response that produced `loadedThread`).
+   *  Forwarded into each historical bubble's DecisionTrace so its
+   *  "open in Langfuse" deep-links resolve. */
+  loadedLangfuseProjectId?: string | null;
 };
 
 export function WorkbenchLMChat({
@@ -64,6 +80,9 @@ export function WorkbenchLMChat({
   hasSampleKnowledge,
   onTurnComplete,
   onOpenTrace,
+  loadedConversationId = null,
+  loadedThread = null,
+  loadedLangfuseProjectId = null,
 }: WorkbenchLMChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -85,6 +104,74 @@ export function WorkbenchLMChat({
     setInput("");
     setError(null);
   }, [datapackId]);
+
+  // Resume / reset the chat based on the page's "loaded thread" state.
+  //
+  // Three transitions land here:
+  //   a) Page hands us a resumed thread (user picked from dropdown) →
+  //      synthesise bubbles, adopt the conversation_id so the next
+  //      /chat call carries it (gateway then skips conversation_create
+  //      and appends to the same Langfuse row).
+  //   b) Page clears the resume state (user clicked "+ New chat") →
+  //      wipe the chat back to empty so the EmptyState shows. Without
+  //      this, the previous thread would stay rendered and the next
+  //      message would append to a phantom history.
+  //   c) Initial mount before any resume → both null, branch (b) runs
+  //      against already-empty state. Idempotent, no flicker.
+  //
+  // Old turns deliberately leave `memoryHits` / `kbHits` /
+  // `processingSteps` undefined on the synthesised `Message`: the
+  // historical agentic thinking block is rendered NOT from these
+  // fields but from the raw `DatapackThreadMessage` via `DecisionTrace`
+  // (see `traceByMessageId` below + the bubble render). That component
+  // reads `reasoning` / `plan` / `memory_hits` / `kb_hits` /
+  // `processing_steps` straight off the loaded thread — the same data
+  // the Conversations viewer renders — and self-hides if a given turn
+  // has none. Live turns use the SAME DecisionTrace, lazily fetched by
+  // message_id on expand (see LiveDecisionTrace). "View trace" still
+  // works on every assistant bubble because `langfuseMessageId` is
+  // preserved.
+  useEffect(() => {
+    if (!loadedConversationId || !loadedThread) {
+      // Branch (b)/(c): fresh chat requested. Mirror the datapack-change
+      // reset above — chatting forward from here mints a brand-new
+      // conversation_id on the gateway side.
+      setMessages([]);
+      setConversationId(null);
+      setSessionId(null);
+      setInput("");
+      setError(null);
+      return;
+    }
+    const synthesised: Message[] = [];
+    for (const m of loadedThread) {
+      synthesised.push({
+        id: `loaded-user-${m.message_id}`,
+        role: "user",
+        content: m.input ?? "",
+      });
+      synthesised.push({
+        id: `loaded-assistant-${m.message_id}`,
+        role: "assistant",
+        content: m.output ?? "",
+        langfuseMessageId: m.message_id,
+        latencyMs: m.latency_ms ?? undefined,
+        memoriesExtracted: m.memories_extracted ?? undefined,
+        llmCalls: m.llm_calls ?? undefined,
+        // memoryHits / kbHits / processingSteps intentionally left
+        // undefined — historical turns render DecisionTrace from the raw
+        // thread message (traceByMessageId), not from these fields.
+      });
+    }
+    setMessages(synthesised);
+    setConversationId(loadedConversationId);
+    // Fresh in-memory session: the gateway will mint a new session_id
+    // on the next turn, but `conversation_id` from the body keeps the
+    // server-side conversation pinned to the resumed thread.
+    setSessionId(null);
+    setInput("");
+    setError(null);
+  }, [loadedConversationId, loadedThread]);
 
   // Auto-scroll to the latest message / "thinking" indicator.
   useEffect(() => {
@@ -148,6 +235,12 @@ export function WorkbenchLMChat({
           // Subsequent calls: reuse what the gateway returned.
           session_id: sessionId ?? undefined,
           datapack_id: datapackId ?? undefined,
+          // Carry the active conversation_id when present so the
+          // gateway appends to that conversation instead of minting a
+          // new one. Always set after the first turn of any session
+          // (gateway responses populate it); also set when the user
+          // resumed a previous chat from the dropdown.
+          conversation_id: conversationId ?? undefined,
         });
         if (resp.session_id) setSessionId(resp.session_id);
         if (resp.conversation_id) setConversationId(resp.conversation_id);
@@ -157,54 +250,41 @@ export function WorkbenchLMChat({
           role: "assistant",
           content: resp.message,
           // Empty when the gateway couldn't capture it — that's fine; the
-          // View trace button just won't render for that one bubble.
+          // trace block + "View trace" just won't render for that bubble.
+          // The turn's retrieval / steps / telemetry are no longer stored
+          // on the message: the bubble renders them via the per-message
+          // `getDatapackMessageDecisionTrace` query (react-query cached),
+          // so the gateway's `memory_hits` / `kb_hits` / `processing_steps`
+          // / `memory_context` / `kb_context` go unused here.
           langfuseMessageId: resp.message_id || undefined,
-          // Bulleted strings kept for parity / debug; the panel reads
-          // the structured hits below.
-          memoryContext: resp.memory_context || "",
-          kbContext: resp.kb_context || "",
-          // Structured grounding context + per-turn timeline. The Agent
-          // Reasoning panel renders these directly so chunks group by
-          // document and each hit shows its score.
-          memoryHits: resp.memory_hits ?? [],
-          kbHits: resp.kb_hits ?? [],
-          processingSteps: resp.processing_steps ?? [],
         };
         setMessages((prev) => [...prev, assistantMsg]);
         onTurnComplete?.();
-
-        // Fire-and-forget: pull this turn's per-message telemetry (latency,
-        // memories extracted, llm call count) from `getDatapackConversation`
-        // and merge it into the bubble. Best-effort — Langfuse may not have
-        // indexed the message yet on the very first poll; the helper retries
-        // once briefly. `memories_extracted` typically lags more (Mem0's
-        // background extractor takes 30–60s); a refresh will catch it.
-        if (resp.message_id && resp.conversation_id && datapackName) {
-          void enrichAssistantTurn({
-            datapackName,
-            datapackId: datapackId ?? null,
-            conversationId: resp.conversation_id,
-            messageId: resp.message_id,
-            onMeta: (meta) => {
-              setMessages((prev) =>
-                prev.map((m) => (m.id === assistantMsgId ? { ...m, ...meta } : m)),
-              );
-            },
-          });
-        }
       } catch (err) {
         setError(getInferenceGatewayErrorMessage(err));
       } finally {
         setSending(false);
       }
     },
-    [datapackName, userId, userToken, sending, sessionId, datapackId, gatedReadiness, onTurnComplete],
+    [datapackName, userId, userToken, sending, sessionId, conversationId, datapackId, gatedReadiness, onTurnComplete],
   );
 
   const handleSubmit = useCallback(() => {
     if (inputDisabled || input.trim().length === 0) return;
     void send(input);
   }, [inputDisabled, input, send]);
+
+  // message_id → raw thread message, for the resumed conversation only.
+  // Live bubbles aren't in here (their langfuseMessageId comes from the
+  // fresh POST /chat response, not `loadedThread`), so ChatBubble routes
+  // them to LiveDecisionTrace (lazy fetch by message_id) instead.
+  const traceByMessageId = useMemo(() => {
+    const map = new Map<string, DatapackThreadMessage>();
+    for (const m of loadedThread ?? []) {
+      if (m.message_id) map.set(m.message_id, m);
+    }
+    return map;
+  }, [loadedThread]);
 
   const canDownload = messages.length > 0;
   const handleDownload = useCallback(() => {
@@ -247,17 +327,32 @@ export function WorkbenchLMChat({
           />
         ) : (
           <div className="mx-auto w-full max-w-3xl space-y-5 px-6 py-6">
-            {messages.map((m) => (
-              <ChatBubble
-                key={m.id}
-                message={m}
-                onOpenTrace={
-                  m.langfuseMessageId && conversationId && onOpenTrace
-                    ? () => onOpenTrace(m.langfuseMessageId!, conversationId)
-                    : undefined
-                }
-              />
-            ))}
+            {messages.map((m) => {
+              // Historical assistant turns match a loaded thread row by
+              // message_id → render the full DecisionTrace. Live turns
+              // (and user bubbles) miss the map and keep their existing
+              // rendering path inside ChatBubble.
+              const traceMessage =
+                m.role === "assistant" && m.langfuseMessageId
+                  ? traceByMessageId.get(m.langfuseMessageId)
+                  : undefined;
+              return (
+                <ChatBubble
+                  key={m.id}
+                  message={m}
+                  onOpenTrace={
+                    m.langfuseMessageId && conversationId && onOpenTrace
+                      ? () => onOpenTrace(m.langfuseMessageId!, conversationId)
+                      : undefined
+                  }
+                  traceMessage={traceMessage}
+                  conversationId={conversationId ?? undefined}
+                  langfuseProjectId={loadedLangfuseProjectId ?? undefined}
+                  datapackName={datapackName}
+                  datapackId={datapackId}
+                />
+              );
+            })}
             {sending && <ThinkingBubble />}
             <div ref={endRef} />
           </div>

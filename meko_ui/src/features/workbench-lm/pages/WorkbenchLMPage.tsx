@@ -16,15 +16,18 @@ import { TraceDrawer } from "@/features/datapacks/components/conversations-viewe
 import {
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
-  getCurrentUser,
+  getDatapackConversation,
   getDatapackProvisionStatus,
   listAgents,
+  listDatapackConversations,
   listDatapacks,
   type Agent,
-  type CurrentUser,
   type Datapack,
+  type DatapackConversation,
+  type DatapackThreadMessage,
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import {
   getPersistedItem,
@@ -43,6 +46,12 @@ const DEV_MCP_TOKEN = (import.meta.env.VITE_MEKO_MCP_BEARER as string | undefine
 // `/workbench-lm` with no query string (typical bookmark / nav-link case).
 
 const DATAPACK_ID_STORAGE_KEY = "workbench-lm:selected-datapack-id";
+
+// agent_id the inference gateway stamps on every WorkbenchLM conversation
+// (mirrors `inference_gateway` config `DEFAULT_AGENT_ID`). The "previous
+// chats" dropdown filters sessions to this agent so conversations written
+// to the same datapack by other agents (CLI / MCP clients) don't appear.
+const WORKBENCH_LM_AGENT_ID = "WorkbenchLM";
 
 type Props = {
   /**
@@ -87,8 +96,9 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   // Agents fetched for the selected datapack — kept in state for future use
   // (e.g. agent picker on the header).
   const [, setAgents] = useState<Agent[]>([]);
-  // Account id is required by the gateway's `/chat` endpoint; load once.
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  // Account id is required by the gateway's `/chat` endpoint. Shared,
+  // session-cached identity — one `/me` fetch app-wide.
+  const { data: currentUser = null } = useCurrentUser();
   // KB docs are owned by `WorkbenchLMKnowledgePanel`; we mirror them here so
   // `WorkbenchLMChat` can gate the input until at least one doc is COMPLETED.
   // `null` (vs `[]`) distinguishes "not loaded yet" from "no docs."
@@ -102,6 +112,18 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   // existing TraceDrawer (same one the Conversations viewer uses). Owning it
   // at the page level so the drawer survives chat re-renders cleanly.
   const [traceTarget, setTraceTarget] = useState<{ messageId: string; conversationId: string } | null>(null);
+
+
+  // --- Sessions / resume-previous-chat state ------------------------------
+  const SESSIONS_FETCH_LIMIT = 20;
+  const [sessions, setSessions] = useState<DatapackConversation[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [loadedConversationId, setLoadedConversationId] = useState<string | null>(null);
+  const [loadedThread, setLoadedThread] = useState<DatapackThreadMessage[] | null>(null);
+  // Langfuse project id for the resumed conversation — captured from the
+  // same getDatapackConversation response as `loadedThread` and forwarded
+  // to the chat so each historical turn's DecisionTrace can deep-link.
+  const [loadedLangfuseProjectId, setLoadedLangfuseProjectId] = useState<string | null>(null);
 
   // Datapacks the user can actually use in the WorkbenchLM: own them, OR
   // were shared in as maintainer / contributor. Viewers are excluded
@@ -123,11 +145,109 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   const [refreshTick, setRefreshTick] = useState(0);
 
   // Reset our mirrored KB doc list + MCP token whenever the active datapack
-  // changes so we don't reuse the previous datapack's state.
+  // changes so we don't reuse the previous datapack's state. Sessions /
+  // loaded thread also reset — they're per-datapack scoped.
   useEffect(() => {
     setKbDocs(null);
     setMcpToken(null);
+    setSessions([]);
+    setLoadedConversationId(null);
+    setLoadedThread(null);
+    setLoadedLangfuseProjectId(null);
   }, [selectedDatapack?.datapack_id]);
+
+  // Pull recent sessions for the active datapack — drives the dropdown.
+  // Stable fetcher so both the datapack-change effect and the
+  // "+ New chat" handler can reuse it. Errors are swallowed: a missing
+  // sessions list shouldn't block the chat itself.
+  const accountId = currentUser?.account_id ?? "";
+  const refreshSessions = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!selectedName) {
+        setSessions([]);
+        return;
+      }
+      setSessionsLoading(true);
+      try {
+        const resp = await listDatapackConversations(
+          selectedName,
+          { limit: SESSIONS_FETCH_LIMIT, offset: 0 },
+          {
+            signal,
+            datapackId: selectedDatapack?.datapack_id,
+          },
+        );
+        // Scope the dropdown to THIS user's WorkbenchLM sessions: the
+        // datapack can be shared across members and written to by other
+        // agents (CLI / MCP), so filter by agent_id + user_id. While the
+        // cached identity is still resolving (`accountId === ""`) this
+        // yields an empty list — deliberately, so we never flash other
+        // members' sessions. The effect re-runs once `accountId` lands
+        // (it's in this callback's deps) and fills the list.
+        const conversations = (resp.conversations ?? []).filter(
+          (c) => c.agent_id === WORKBENCH_LM_AGENT_ID
+            && c.user_id === accountId,
+        );
+        setSessions(conversations);
+      } catch (err) {
+        if ((err as { name?: string })?.name === "CanceledError") return;
+        // Non-fatal: the dropdown just stays empty. Logged for debugging.
+        // eslint-disable-next-line no-console
+        console.warn("Failed to load sessions list:", err);
+        setSessions([]);
+      } finally {
+        setSessionsLoading(false);
+      }
+    },
+    [selectedDatapack?.datapack_id, accountId],
+  );
+
+  // Fetch sessions on datapack change.
+  useEffect(() => {
+    if (!selectedName) return;
+    const ac = new AbortController();
+    void refreshSessions(ac.signal);
+    return () => ac.abort();
+  }, [selectedDatapack?.datapack_id, refreshSessions]);
+
+  // Load a previous conversation into the chat. Fetches the full thread
+  // (limit=100 covers the vast majority; threads beyond that page would
+  // need "load older" which we can add later if anyone hits it).
+  const handleSelectConversation = useCallback(
+    async (conversationId: string) => {
+      if (!selectedName || !conversationId) return;
+      try {
+        const resp = await getDatapackConversation(
+          selectedName,
+          conversationId,
+          { messagesLimit: 100, messagesOffset: 0 },
+          { datapackId: selectedDatapack?.datapack_id },
+        );
+        // Set the loaded id FIRST so the chat's useEffect that resets on
+        // datapack/conversation changes sees the new value when it
+        // processes the thread below.
+        setLoadedConversationId(conversationId);
+        setLoadedThread(resp.conversation.thread ?? []);
+        setLoadedLangfuseProjectId(resp.langfuse_project_id ?? null);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("Failed to load conversation:", err);
+      }
+    },
+    [selectedDatapack?.datapack_id],
+  );
+
+  // Start a fresh chat. Clears the loaded thread + id, then refetches
+  // sessions so a conversation just completed (or one created from
+  // another tab) shows up the next time the user opens the dropdown.
+  const handleNewChat = useCallback(() => {
+    setLoadedConversationId(null);
+    setLoadedThread(null);
+    setLoadedLangfuseProjectId(null);
+    void refreshSessions();
+  }, [refreshSessions]);
+
+
 
   // Pull the per-datapack mcp_api_key from /provision-status; the gateway
   // forwards it as `Authorization: Bearer <token>` to MCP. A failure here
@@ -336,16 +456,6 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
     };
   }, [selectedName]);
 
-  // Load the signed-in user once. The gateway requires user_id on every /chat
-  // call; we cache it here instead of asking each chat turn to fetch.
-  useEffect(() => {
-    const ac = new AbortController();
-    void getCurrentUser({ signal: ac.signal })
-      .then((u) => setCurrentUser(u))
-      .catch(() => setCurrentUser(null));
-    return () => ac.abort();
-  }, []);
-
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background text-foreground">
       <AppWorkspaceHeader
@@ -368,6 +478,11 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           datapackName={selectedName}
           onDocumentsChange={handleKbDocsChange}
           paused={!isRouteActive}
+          sessions={sessions}
+          sessionsLoading={sessionsLoading}
+          loadedConversationId={loadedConversationId}
+          onSelectConversation={(id) => void handleSelectConversation(id)}
+          onNewChat={handleNewChat}
         />
         <WorkbenchLMChat
           datapackName={selectedName}
@@ -384,6 +499,9 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           onOpenTrace={(messageId, conversationId) =>
             setTraceTarget({ messageId, conversationId })
           }
+          loadedConversationId={loadedConversationId}
+          loadedThread={loadedThread}
+          loadedLangfuseProjectId={loadedLangfuseProjectId}
         />
         <WorkbenchLMLiveObservationPanel
           datapackId={selectedDatapack?.datapack_id ?? null}

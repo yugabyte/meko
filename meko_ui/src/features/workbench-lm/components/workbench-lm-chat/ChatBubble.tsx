@@ -5,18 +5,72 @@
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "@/components/markdown-message";
-import { AgentReasoningBlock } from "./AgentReasoningBlock";
+import { DecisionTrace } from "@/components/decision-trace-viewer";
+import type { DatapackThreadMessage } from "@/lib/mekoApi";
 import { AssistantMetaRow } from "./AssistantMetaRow";
+import { LiveDecisionTrace } from "./LiveDecisionTrace";
+import { useMessageDecisionTrace } from "./useMessageDecisionTrace";
 import type { Message } from "./types";
 
 export function ChatBubble({
   message,
   onOpenTrace,
+  traceMessage,
+  conversationId,
+  langfuseProjectId,
+  datapackName,
+  datapackId,
 }: {
   message: Message;
   onOpenTrace?: () => void;
+  /** When this assistant turn was loaded from a previous conversation,
+   *  the raw `DatapackThreadMessage` (matched by message_id) is passed
+   *  in so we render the full `DecisionTrace` straight from the already-
+   *  fetched thread data. Undefined for live turns. */
+  traceMessage?: DatapackThreadMessage;
+  /** Active conversation id — used by the historical DecisionTrace's
+   *  deep-links and as the lookup key for the live trace fetch. */
+  conversationId?: string;
+  /** Langfuse project id for the resumed conversation (historical turns
+   *  only — the live trace fetch returns its own). */
+  langfuseProjectId?: string;
+  /** Live-fetch context: present for live turns so the bubble can lazily
+   *  pull this message's decision trace on expand. */
+  datapackName?: string | null;
+  datapackId?: string | null;
 }) {
   const isUser = message.role === "user";
+  // Live assistant turns (not loaded from history) fetch their decision
+  // trace by message_id. The trace block (LiveDecisionTrace) reads it
+  // lazily on expand; this eager subscription fills the footer chips.
+  // Both share one react-query cache entry, so they coalesce into a
+  // single network call — see useMessageDecisionTrace.
+  const canFetchLiveTrace =
+    !traceMessage &&
+    message.role === "assistant" &&
+    !!message.langfuseMessageId &&
+    !!conversationId &&
+    !!datapackName;
+
+  // Always called (rules of hooks); `enabled` gates the actual fetch so
+  // user bubbles and historical turns never hit the network here.
+  const liveTrace = useMessageDecisionTrace(
+    {
+      datapackName,
+      datapackId,
+      conversationId,
+      messageId: message.langfuseMessageId ?? null,
+    },
+    { enabled: canFetchLiveTrace },
+  );
+  const liveDt = liveTrace.data?.decision_trace;
+
+  // Chip values: historical turns carry them on the synthesised Message;
+  // live turns read them off the eager query (undefined until it lands).
+  const latencyMs = message.latencyMs ?? liveDt?.latency_ms;
+  const memoriesExtracted = message.memoriesExtracted ?? liveDt?.memories_extracted;
+  const llmCalls = message.llmCalls ?? liveDt?.llm_calls;
+
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div
@@ -32,16 +86,32 @@ export function ChatBubble({
         ) : (
           <>
             {/*
-              Agent reasoning sits ABOVE the answer per spec — gives the
-              user a one-glance signal of what the agent grounded against
-              before scrolling into the response. Self-hides when no
-              memories / KB chunks / steps are present.
+              Agentic thinking ("Decision trace") sits ABOVE the answer
+              per spec. Both paths use the SAME DecisionTrace component so
+              live and historical turns read identically; each self-hides
+              when there's nothing to show.
+
+              - Historical turns (resumed from a previous conversation):
+                the full trace is already in `traceMessage` (from
+                getDatapackConversation) → render DecisionTrace directly.
+              - Live turns (just sent via POST /chat): only the message_id
+                is known up front; LiveDecisionTrace lazily fetches the
+                trace by that id when the user expands the block.
             */}
-            <AgentReasoningBlock
-              memoryHits={message.memoryHits ?? []}
-              kbHits={message.kbHits ?? []}
-              processingSteps={message.processingSteps ?? []}
-            />
+            {traceMessage ? (
+              <DecisionTrace
+                message={traceMessage}
+                conversationId={conversationId ?? ""}
+                langfuseProjectId={langfuseProjectId}
+              />
+            ) : canFetchLiveTrace ? (
+              <LiveDecisionTrace
+                datapackName={datapackName!}
+                datapackId={datapackId ?? undefined}
+                conversationId={conversationId!}
+                messageId={message.langfuseMessageId!}
+              />
+            ) : null}
             <MarkdownMessage text={message.content} />
           </>
         )}
@@ -49,9 +119,9 @@ export function ChatBubble({
           <AssistantMetaRow
             text={message.content}
             onOpenTrace={onOpenTrace}
-            latencyMs={message.latencyMs}
-            memoriesExtracted={message.memoriesExtracted}
-            llmCalls={message.llmCalls}
+            latencyMs={latencyMs}
+            memoriesExtracted={memoriesExtracted}
+            llmCalls={llmCalls}
           />
         )}
       </div>

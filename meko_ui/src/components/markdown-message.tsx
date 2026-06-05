@@ -102,7 +102,7 @@ export function MarkdownMessage({ text }: { text: string }) {
               href={href}
               target="_blank"
               rel="noreferrer noopener"
-              className="text-blue-700 dark:text-blue-300 underline decoration-blue-400/60 underline-offset-2 hover:text-blue-700 dark:text-blue-200"
+              className="text-blue-700 dark:text-blue-300 underline decoration-blue-400/60 underline-offset-2 hover:text-blue-800 dark:hover:text-blue-200"
             >
               {children}
             </a>
@@ -113,7 +113,7 @@ export function MarkdownMessage({ text }: { text: string }) {
             </div>
           ),
           th: ({ children }) => (
-            <th className="border border-border/60 bg-black/20 px-2 py-1 text-left font-semibold">
+            <th className="border border-border/60 bg-foreground/5 dark:bg-black/20 px-2 py-1 text-left font-semibold">
               {children}
             </th>
           ),

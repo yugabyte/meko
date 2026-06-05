@@ -29,7 +29,6 @@ import {
   datapackMemorySummaryPath,
   type ConversationSource,
 } from "@/app/routes/paths";
-import type { DatapackConversation } from "@/lib/mekoApi";
 
 /** Drives an extra breadcrumb hop when the viewer is reached from one of
  *  the summary pages, so the user can step back to where they came from.
@@ -37,15 +36,15 @@ import type { DatapackConversation } from "@/lib/mekoApi";
  *  the compiler. */
 const SOURCE_BREADCRUMB: Record<
   ConversationSource,
-  (datapackName: string, datapackId?: string) => { label: string; href: string }
+  (datapackName: string) => { label: string; href: string }
 > = {
-  [CONVERSATION_SOURCE.memorySummary]: (datapackName, datapackId) => ({
+  [CONVERSATION_SOURCE.memorySummary]: (datapackName) => ({
     label: "Memory Summary",
-    href: datapackMemorySummaryPath(datapackName, datapackId),
+    href: datapackMemorySummaryPath(datapackName),
   }),
-  [CONVERSATION_SOURCE.collectiveMemorySummary]: (datapackName, datapackId) => ({
+  [CONVERSATION_SOURCE.collectiveMemorySummary]: (datapackName) => ({
     label: "Collective Memory Summary",
-    href: datapackCollectiveMemorySummaryPath(datapackName, datapackId),
+    href: datapackCollectiveMemorySummaryPath(datapackName),
   }),
 };
 
@@ -57,7 +56,8 @@ type Props = {
   datapackName: string;
   datapackId?: string;
   /** From URL; undefined when on the bare /conversations route. The
-   *  rail will auto-select the newest conversation in that case. */
+   *  thread pane shows a "Pick a conversation" empty state until the
+   *  user explicitly picks one from the rail. */
   conversationId?: string;
 };
 
@@ -72,10 +72,8 @@ export default function DatapackConversationsViewerPage({
   const sourceCrumb = useMemo(() => {
     const from = searchParams.get(CONVERSATION_SOURCE_QUERY_PARAM) ?? "";
     if (!isConversationSource(from)) return null;
-    // Pass datapackId so the breadcrumb link preserves the
-    // `?datapack_id=` pin when the user clicks back.
-    return SOURCE_BREADCRUMB[from](datapackName, datapackId);
-  }, [searchParams, datapackName, datapackId]);
+    return SOURCE_BREADCRUMB[from](datapackName);
+  }, [searchParams, datapackName]);
 
   /** Currently open trace drawer message (null = drawer closed).
    *  Owned at the page level so the drawer survives thread re-fetches
@@ -84,6 +82,14 @@ export default function DatapackConversationsViewerPage({
   /** When true, the TraceDrawer shimmers its memories panel to draw
    *  the user's eye after opening via the memory hover card. */
   const [shimmerMemories, setShimmerMemories] = useState(false);
+  /** Author email of the selected conversation, sourced from the rail's
+   *  list rows (the thread detail endpoint omits it). Forwarded to the
+   *  header so it can render the author chip. */
+  const [selectedEmail, setSelectedEmail] = useState<string | undefined>(undefined);
+  const handleSelectedEmailChange = useCallback(
+    (email: string | undefined) => setSelectedEmail(email),
+    [],
+  );
 
   // Closing the drawer when the conversation changes prevents stale
   // trace data from shimmering while the new thread loads.
@@ -94,25 +100,9 @@ export default function DatapackConversationsViewerPage({
   const handleSelect = useCallback(
     (id: string) => {
       if (id === conversationId) return;
-      // Preserve datapack_id across in-rail switches.
-      navigate(datapackConversationsPath(datapackName, id, datapackId), { replace: false });
+      navigate(datapackConversationsPath(datapackName, id), { replace: false });
     },
-    [navigate, datapackName, datapackId, conversationId],
-  );
-
-  /** Auto-pick newest conversation when the user lands on the bare
-   *  /conversations route. Replace (not push) so the back button
-   *  doesn't bounce them between empty and selected. */
-  const handleFirstPageLoaded = useCallback(
-    (conversations: DatapackConversation[]) => {
-      if (conversationId) return;
-      const first = conversations[0];
-      if (!first) return;
-      navigate(datapackConversationsPath(datapackName, first.id, datapackId), {
-        replace: true,
-      });
-    },
-    [navigate, datapackName, datapackId, conversationId],
+    [navigate, datapackName, conversationId],
   );
 
   return (
@@ -124,7 +114,7 @@ export default function DatapackConversationsViewerPage({
           <DatapackBreadcrumbs
             items={[
               { label: "Datapacks", href: ROUTES.datapacks },
-              { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
+              { label: datapackName, href: datapackDetailPath(datapackName) },
               ...(sourceCrumb ? [sourceCrumb] : []),
               { label: "Conversations" },
             ]}
@@ -132,7 +122,7 @@ export default function DatapackConversationsViewerPage({
           />
           <div className="flex items-center gap-2.5">
             <MessageSquare
-              className="h-5 w-5 shrink-0 text-purple-700 dark:text-purple-300"
+              className="h-5 w-5 shrink-0 text-purple-300"
               aria-hidden
             />
             <h1 className="truncate text-xl font-semibold tracking-tight text-foreground">
@@ -150,7 +140,7 @@ export default function DatapackConversationsViewerPage({
             datapackId={datapackId}
             selectedId={conversationId ?? ""}
             onSelect={handleSelect}
-            onFirstPageLoaded={handleFirstPageLoaded}
+            onSelectedEmailChange={handleSelectedEmailChange}
           />
 
           <section className="min-h-0 overflow-hidden">
@@ -159,6 +149,7 @@ export default function DatapackConversationsViewerPage({
                 datapackName={datapackName}
                 datapackId={datapackId}
                 conversationId={conversationId}
+                userEmail={selectedEmail}
                 onOpenTrace={(messageId) => setTraceMessageId(messageId)}
                 onOpenTraceWithMemoryShimmer={(messageId) => {
                   setTraceMessageId(messageId);

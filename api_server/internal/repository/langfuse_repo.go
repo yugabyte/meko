@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
 
@@ -77,6 +81,15 @@ type Conversation struct {
 	Messages       int64     `json:"messages"`
 	MemoriesAdded  int64     `json:"memories_added"`
 	LLMCalls       int64     `json:"llm_calls"`
+	// UserID is the meko_system.users.user_id (UUID) MCP wrote onto
+	// clickhouse.traces.user_id at conversation_create time. The UI
+	// uses it to scope the Workbench LM list to the logged-in user.
+	UserID string `json:"user_id,omitempty"`
+	// UserEmail is the user_email matching UserID, looked up once
+	// per page from meko_system.users by the service layer. Empty
+	// when the trace's user_id has no users row (legacy / orphaned
+	// traces).
+	UserEmail string `json:"user_email_id,omitempty"`
 }
 
 // ThreadMessage is one user/assistant exchange inside a conversation,
@@ -98,18 +111,84 @@ type Conversation struct {
 // this message window. It reflects extraction attempts observed in the
 // trace, not guaranteed persisted rows in mem0.
 type ThreadMessage struct {
-	MessageID         string    `json:"message_id"`
-	ObservationID     string    `json:"observation_id"`
-	StartedAt         time.Time `json:"started_at"`
-	Input             string    `json:"input"`
-	Output            string    `json:"output"`
-	Reasoning         string    `json:"reasoning,omitempty"`
-	LatencyMs         int64     `json:"latency_ms"`
-	MemoriesExtracted int64     `json:"memories_extracted"`
+	MessageID     string    `json:"message_id"`
+	ObservationID string    `json:"observation_id"`
+	StartedAt     time.Time `json:"started_at"`
+	Input         string    `json:"input"`
+	Output        string    `json:"output"`
+	Reasoning     string    `json:"reasoning,omitempty"`
+	// Plan is the structured checklist sent by clients via the `plan`
+	// parameter of conversation_add_message. Persisted as
+	// `observation.metadata.plan` on the same Reasoning generation that
+	// carries Reasoning's prose `output`, and read independently of
+	// `Reasoning` so a turn can have one, the other, both, or neither.
+	// Nil / empty when the client didn't pass a non-empty plan array
+	// (which is the case for every row that pre-dates the structured-
+	// plan plumbing; consumers parse the legacy `**Plan:**` block out
+	// of `Reasoning` as a fallback).
+	Plan []string `json:"plan,omitempty"`
+	// Model is the LLM identifier the agent's harness used for this
+	// turn — populated when the client passes ``model`` to
+	// ``conversation_add_message`` (today: Claude Code's session hook
+	// reads it off ``message.model`` in each transcript line).
+	// Persisted on the Reasoning generation's native
+	// ``provided_model_name`` column; empty when the client didn't
+	// supply it. Sampling params (temperature / max_tokens) and TTFT
+	// are intentionally not surfaced — no supported host records them
+	// in a hook-accessible way today, and fabricated values are
+	// worse than missing.
+	Model             string `json:"model,omitempty"`
+	LatencyMs         int64  `json:"latency_ms"`
+	MemoriesExtracted int64  `json:"memories_extracted"`
 	// MemoryIDs lists the mem0 row IDs attributed to this message window.
 	// Nil/empty when the message has no associated memories.
 	MemoryIDs []string `json:"memory_ids,omitempty"`
 	LLMCalls  int64    `json:"llm_calls"`
+	// TotalTokens is the sum of usage_details.total across every
+	// GENERATION span in this turn's window — primarily mem0's nested
+	// fact-extraction LLM calls for Conversations (the external agent's
+	// own assistant call lives outside our process and contributes
+	// nothing here). Always present; 0 when no usage was reported.
+	TotalTokens     int64            `json:"total_tokens"`
+	MemoryHits      []MemoryHit      `json:"memory_hits,omitempty"`
+	KBHits          []KBHit          `json:"kb_hits,omitempty"`
+	ProcessingSteps []ProcessingStep `json:"processing_steps,omitempty"`
+}
+
+type MemoryHit struct {
+	Kind      string   `json:"kind"`
+	Text      string   `json:"text"`
+	Score     *float64 `json:"score,omitempty"`
+	CharCount int      `json:"char_count,omitempty"`
+}
+
+type KBHit struct {
+	DocumentID string   `json:"document_id"`
+	ChunkText  string   `json:"chunk_text"`
+	Score      *float64 `json:"score,omitempty"`
+	Distance   *float64 `json:"distance,omitempty"`
+	CharCount  int      `json:"char_count,omitempty"`
+}
+
+type ProcessingStep struct {
+	Name       string                 `json:"name"`
+	DurationMs int64                  `json:"duration_ms"`
+	Status     string                 `json:"status"`
+	Detail     string                 `json:"detail,omitempty"`
+	Query      string                 `json:"query,omitempty"`
+	ToolArgs   map[string]interface{} `json:"tool_args,omitempty"`
+	// SpanID is the Langfuse observation id of this step. Used by the UI
+	// to deep-link the step row to the matching span inside the Langfuse
+	// trace viewer. Empty for synthesized rows (e.g. context_assemble).
+	SpanID string `json:"span_id,omitempty"`
+	// SubTimings carries durations of child spans rolled up under this
+	// step — e.g. memory_search splits into `vector_ms` (mem0's
+	// `Searching (yugabytedb / vector)` span) and `graph_ms` (mem0's
+	// `Search Graph DB (...)` span); knowledgebase_search uses
+	// `vector_ms` for MCP's `Execute Query (yugabytedb)` wrapper. Nil
+	// when the step has no surfaced sub-spans (e.g. memory_add,
+	// llm_invoke).
+	SubTimings map[string]int64 `json:"sub_timings,omitempty"`
 }
 
 type messageWindow struct {
@@ -162,6 +241,26 @@ type TraceMemoryItem struct {
 	EntityNames []string `json:"entity_names,omitempty"`
 	// RelationNames are sampled relation labels/types linked to those nodes (if present).
 	RelationNames []string `json:"relation_names,omitempty"`
+}
+
+// MessageDecisionTrace is the slim per-turn payload the chat UI's
+// "Decision Trace" card and AssistantMetaRow chips actually read.
+// Drops fields a single-message poll doesn't need (input/output text
+// is already in the bubble; observation_id/started_at aren't surfaced
+// anywhere). Sourced by projecting one row out of the existing
+// ThreadMessage list — no new SQL path.
+type MessageDecisionTrace struct {
+	MessageID         string           `json:"message_id"`
+	Model             string           `json:"model,omitempty"`
+	LatencyMs         int64            `json:"latency_ms"`
+	TotalTokens       int64            `json:"total_tokens"`
+	LLMCalls          int64            `json:"llm_calls"`
+	MemoriesExtracted int64            `json:"memories_extracted"`
+	Reasoning         string           `json:"reasoning,omitempty"`
+	Plan              []string         `json:"plan,omitempty"`
+	MemoryHits        []MemoryHit      `json:"memory_hits,omitempty"`
+	KBHits            []KBHit          `json:"kb_hits,omitempty"`
+	ProcessingSteps   []ProcessingStep `json:"processing_steps,omitempty"`
 }
 
 // LangfuseRepo encapsulates database operations for Langfuse mappings
@@ -228,6 +327,54 @@ func (r *LangfuseRepo) GetUserEmailByID(userID string) (string, error) {
 		return "", fmt.Errorf("failed to fetch user email: %w", err)
 	}
 	return strings.TrimSpace(email), nil
+}
+
+// GetUserEmailsByIDs returns user_id → user_email for the supplied
+// user_ids in a single round-trip. Invalid UUIDs / unknown ids are
+// absent from the result. Filters Go-side and uses `uuid[]` so the
+// PK index on meko_system.users(user_id) is used.
+func (r *LangfuseRepo) GetUserEmailsByIDs(userIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(userIDs))
+	if r == nil || r.systemDB == nil || len(userIDs) == 0 {
+		return out, nil
+	}
+
+	validUUIDs := make([]string, 0, len(userIDs))
+	for _, id := range userIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, err := uuid.Parse(id); err != nil {
+			continue
+		}
+		validUUIDs = append(validUUIDs, id)
+	}
+	if len(validUUIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := r.systemDB.Query(
+		`SELECT user_id::text, user_email
+		   FROM meko_system.users
+		  WHERE user_id = ANY($1::uuid[])`,
+		pq.Array(validUUIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user emails: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, email string
+		if err := rows.Scan(&id, &email); err != nil {
+			return nil, fmt.Errorf("failed to scan user email: %w", err)
+		}
+		out[id] = strings.TrimSpace(email)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate user emails: %w", err)
+	}
+	return out, nil
 }
 
 // UpsertOrgMapping inserts or updates the org mapping for the user.
@@ -465,6 +612,7 @@ func (r *LangfuseRepo) ListConversationsForProject(projectID string, limit, offs
 SELECT
     sessions.conversation_id,
     sessions.agent_id,
+    sessions.user_id,
     sessions.started_at,
     COALESCE(obs_agg.title,
              LEFT(obs_agg.first_message, 80))               AS title,
@@ -474,10 +622,15 @@ SELECT
     COALESCE(obs_agg.llm_calls, 0)                          AS llm_calls
 
 FROM (
-    -- One row per session: earliest trace wins (agent_id, started_at).
+    -- One row per session: earliest trace wins (agent_id, user_id,
+    -- started_at). user_id is the meko user UUID written on the
+    -- trace at conversation_create time; the service layer pairs it
+    -- with the matching user_email from meko_system.users before
+    -- returning to API callers.
     SELECT DISTINCT ON (traces.session_id)
         traces.session_id              AS conversation_id,
         traces.metadata->>'agent_id'   AS agent_id,
+        traces.user_id                 AS user_id,
         traces."timestamp"             AS started_at
     FROM   clickhouse.traces AS traces
     WHERE  traces.project_id  = $1
@@ -562,6 +715,7 @@ LIMIT  $3 OFFSET $4`
 		var (
 			conv      Conversation
 			agentID   sql.NullString
+			userID    sql.NullString
 			title     sql.NullString
 			firstMsg  sql.NullString
 			startedAt sql.NullTime
@@ -570,6 +724,7 @@ LIMIT  $3 OFFSET $4`
 		if err := rows.Scan(
 			&conv.ID,
 			&agentID,
+			&userID,
 			&startedAt,
 			&title,
 			&firstMsg,
@@ -581,6 +736,9 @@ LIMIT  $3 OFFSET $4`
 		}
 		if agentID.Valid {
 			conv.AgentID = agentID.String
+		}
+		if userID.Valid {
+			conv.UserID = strings.TrimSpace(userID.String)
 		}
 		if title.Valid {
 			conv.Title = title.String
@@ -749,7 +907,16 @@ LIMIT 1`
 	const threadQ = `
 WITH raw_obs AS (
     SELECT id, parent_observation_id, type, name, start_time, end_time, input::text AS input, output::text AS output,
+           usage_details,
            metadata ->> 'message_id' AS msg_id,
+           -- Structured plan (string[]) from conversation_add_message.
+           -- Extracted as text here so the outer CTE can scan it
+           -- without re-parsing the full metadata blob. NULL when the
+           -- observation has no plan key (most non-Reasoning rows).
+           CASE WHEN metadata ? 'plan' THEN metadata ->> 'plan' END AS plan_json,
+           -- LLM identifier (carried on the Reasoning generation when
+           -- the client passes the model parameter). Langfuse-native column.
+           provided_model_name,
            (metadata ->> 'message_id' IS NOT NULL AND name = 'Conversation Message Added') AS is_bookmark
     FROM   clickhouse.observations
     WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
@@ -760,7 +927,8 @@ WITH raw_obs AS (
     FROM   raw_obs
     WHERE  is_bookmark
 ), windowed AS (
-    SELECT b.msg_id, o.id, o.parent_observation_id, o.type, o.name, o.start_time, o.end_time, o.output
+    SELECT b.msg_id, o.id, o.parent_observation_id, o.type, o.name, o.start_time, o.end_time, o.output,
+           o.usage_details, o.provided_model_name
     FROM   raw_obs o
     JOIN   bookmarks b
       ON   (o.start_time <= b.bm_time AND (b.prev_bm_time IS NULL OR o.start_time > b.prev_bm_time))
@@ -769,24 +937,75 @@ WITH raw_obs AS (
     SELECT msg_id AS message_id,
            MIN(start_time) AS root_start,
            COUNT(*) FILTER (WHERE type = 'GENERATION') AS llm_calls,
+           -- Sum of usage_details.total across every GENERATION span in
+           -- the window. For Conversations this primarily captures
+           -- mem0's nested fact-extraction LLM calls (the Reasoning span
+           -- emitted by MCP does not carry token usage today); empty
+           -- agents will report 0.
+           COALESCE(
+               SUM(
+                   CASE WHEN type = 'GENERATION'
+                            AND usage_details ? 'total'
+                        THEN (usage_details ->> 'total')::bigint
+                        ELSE 0 END
+               ),
+               0
+           )                                                                                  AS total_tokens,
            COALESCE((EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000)::bigint, 0) AS latency_ms
     FROM   windowed
     GROUP  BY msg_id
 ), reasoning AS (
-    SELECT w.msg_id AS message_id,
-           STRING_AGG(w.output, E'\n\n' ORDER BY w.start_time) AS thinking
-    FROM   windowed w
-    WHERE  w.type = 'GENERATION' AND w.name = 'Reasoning'
-    GROUP  BY w.msg_id
+    -- Reasoning is emitted by MCP as a direct child of the
+    -- "Conversation Message Added" bookmark, but its start_time is
+    -- typically 1-2 ms AFTER its parent's start_time. The preceding-
+    -- window join used for retrieval spans (above) therefore drops
+    -- each turn's Reasoning into the NEXT turn's window. Attribute by
+    -- parent_observation_id so reasoning always lands on the turn that
+    -- produced it.
+    --
+    -- plan_json is the structured checklist persisted alongside the
+    -- prose. When a turn has multiple Reasoning observations (rare,
+    -- but the schema allows it) we keep the earliest non-null plan in
+    -- start_time order -- picking later ones would silently overwrite
+    -- the plan the user actually saw render.
+    SELECT b.msg_id AS message_id,
+           STRING_AGG(r.output, E'\n\n' ORDER BY r.start_time) AS thinking,
+           (array_agg(r.plan_json ORDER BY r.start_time)
+                FILTER (WHERE r.plan_json IS NOT NULL))[1]   AS plan_json
+    FROM   raw_obs r
+    JOIN   raw_obs b
+      ON   b.id = r.parent_observation_id
+     AND   b.is_bookmark
+    WHERE  r.type = 'GENERATION' AND r.name = 'Reasoning'
+    GROUP  BY b.msg_id
+), model_pick AS (
+    -- Model from any real LLM GENERATION in the turn's window —
+    -- mem0's instrumented OpenAI / Bedrock / etc. or any future
+    -- agent-side LLM. Excludes the synthetic Reasoning row (no real
+    -- call) and CostUsage Probe (sentinel). Provider-agnostic so a
+    -- mem0 LLM_PROVIDER switch doesn't blank out the model column.
+    SELECT msg_id,
+           (array_agg(provided_model_name ORDER BY start_time)
+              FILTER (WHERE type = 'GENERATION'
+                AND name NOT IN ('Reasoning', 'CostUsage Probe')
+                AND provided_model_name IS NOT NULL
+                AND provided_model_name <> ''))[1] AS model
+    FROM   windowed
+    GROUP  BY msg_id
 )
 SELECT b.msg_id AS message_id, b.id AS observation_id, s.root_start, b.start_time,
        LEAD(s.root_start) OVER (ORDER BY s.root_start, b.start_time) AS next_start,
        b.input, b.output,
-       COALESCE(r.thinking, '') AS reasoning, s.latency_ms,
-       COALESCE(s.llm_calls, 0) AS llm_calls
+       COALESCE(r.thinking, '') AS reasoning,
+       r.plan_json AS plan_json,
+       mp.model AS model,
+       s.latency_ms,
+       COALESCE(s.llm_calls, 0) AS llm_calls,
+       COALESCE(s.total_tokens, 0) AS total_tokens
 FROM   raw_obs b
 JOIN   turn_stats s ON s.message_id = b.msg_id
 LEFT JOIN reasoning r ON r.message_id = b.msg_id
+LEFT JOIN model_pick mp ON mp.msg_id     = b.msg_id
 WHERE  b.is_bookmark
 ORDER  BY b.start_time ASC
 LIMIT  $3 OFFSET $4`
@@ -808,6 +1027,8 @@ LIMIT  $3 OFFSET $4`
 			input       sql.NullString
 			output      sql.NullString
 			reason      sql.NullString
+			planJSON    sql.NullString
+			model       sql.NullString
 		)
 		if err := threadRows.Scan(
 			&row.MessageID,
@@ -818,8 +1039,11 @@ LIMIT  $3 OFFSET $4`
 			&input,
 			&output,
 			&reason,
+			&planJSON,
+			&model,
 			&row.LatencyMs,
 			&row.LLMCalls,
+			&row.TotalTokens,
 		); err != nil {
 			return nil, fmt.Errorf("langfuse db: scan thread row: %w", err)
 		}
@@ -834,6 +1058,17 @@ LIMIT  $3 OFFSET $4`
 		}
 		if reason.Valid {
 			row.Reasoning = reason.String
+		}
+		// `plan_json` arrives as the raw `metadata->>'plan'` text — a
+		// JSON-encoded array of strings written by conversation_add_message
+		// (`plan=["step 1", "step 2", ...]`). parsePlanSteps swallows
+		// malformed payloads: the prose is independently useful and a
+		// bad plan blob should never sink a whole turn's render.
+		if planJSON.Valid {
+			row.Plan = parsePlanSteps(planJSON.String)
+		}
+		if model.Valid {
+			row.Model = model.String
 		}
 		header.Thread = append(header.Thread, row)
 		if windowStart.Valid {
@@ -867,10 +1102,17 @@ LIMIT  $3 OFFSET $4`
 		if err != nil {
 			return nil, err
 		}
+		agentRes, err := r.agentReasoningPerMessageWindow(projectID, sessionID, windows)
+		if err != nil {
+			return nil, err
+		}
 		for i := range header.Thread {
-			mid := header.Thread[i].MessageID
-			header.Thread[i].MemoriesExtracted = memRes.counts[mid]
-			header.Thread[i].MemoryIDs = memRes.memoryIDs[mid]
+			messageID := header.Thread[i].MessageID
+			header.Thread[i].MemoriesExtracted = memRes.counts[messageID]
+			header.Thread[i].MemoryIDs = memRes.memoryIDs[messageID]
+			header.Thread[i].MemoryHits = agentRes.memoryHits[messageID]
+			header.Thread[i].KBHits = agentRes.kbHits[messageID]
+			header.Thread[i].ProcessingSteps = ensureLLMInvokeStep(agentRes.processingSteps[messageID], header.Thread[i].LLMCalls)
 		}
 	}
 
@@ -981,6 +1223,586 @@ ORDER  BY meko_created_at ASC, id ASC`
 		return empty, fmt.Errorf("meta db: iterate mem0 rows: %w", err)
 	}
 	return res, nil
+}
+
+type agentReasoningWindowResult struct {
+	memoryHits      map[string][]MemoryHit
+	kbHits          map[string][]KBHit
+	processingSteps map[string][]ProcessingStep
+}
+
+type agentReasoningObservation struct {
+	ID         string
+	Name       string
+	Type       string
+	StartTime  time.Time
+	DurationMs int64
+	Input      string
+	Output     string
+}
+
+// childSubTimingClass maps the name of a child observation to the parent
+// step it belongs under and the key under which its duration should be
+// rolled up in ProcessingStep.SubTimings. Returns ("", "") when the row
+// is not a recognised sub-span.
+//
+// The three names come from:
+//   - "Searching (yugabytedb / vector)"  — mem0/vector_stores/pgvector.py
+//   - "Search Graph DB (mage / graph)" / "Search Graph DB (yugabytedb / graph)"
+//     — mem0/memory/mage_memory.py and mem0/memory/apache_age_memory.py
+//   - "Execute Query (yugabytedb)" — meko-mcp-server/src/tools.py
+//     (used by knowledgebase_search; mem0's own "Execute Query
+//     (yugabytedb / vector)" deliberately falls through here because
+//     it nests inside the "Searching" span we already account for).
+func childSubTimingClass(name string) (parentStep, subKey string) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case strings.Contains(n, "searching") && strings.Contains(n, "vector"):
+		return "memory_search", "vector_ms"
+	case strings.Contains(n, "search graph db"):
+		return "memory_search", "graph_ms"
+	case n == "execute query (yugabytedb)":
+		return "knowledgebase_search", "vector_ms"
+	}
+	return "", ""
+}
+
+func (r *LangfuseRepo) agentReasoningPerMessageWindow(
+	projectID, sessionID string,
+	windows []messageWindow,
+) (agentReasoningWindowResult, error) {
+	emptyResult := agentReasoningWindowResult{
+		memoryHits:      map[string][]MemoryHit{},
+		kbHits:          map[string][]KBHit{},
+		processingSteps: map[string][]ProcessingStep{},
+	}
+	if !r.LangfuseDBConfigured() {
+		return emptyResult, ErrLangfuseDBNotConfigured
+	}
+	if len(windows) == 0 {
+		return emptyResult, nil
+	}
+
+	// TODO(MEKO): Replace name ILIKE '%...%' matching below with a structured
+	// step marker (metadata/tag/category) emitted at trace-write time.
+	// Currently we use the name field for this, but this is not ideal for large tables and can degrade query performance.
+	// Gemini comment link: https://github.com/yugabyte/meko/pull/233#discussion_r3264939913
+	// The current fuzzy filters are robust across legacy naming variants but
+	// are not ideal for large tables and can degrade query performance.
+	const q = `
+SELECT id,
+       name,
+       type::text,
+       start_time,
+       (EXTRACT(EPOCH FROM (COALESCE(end_time, start_time) - start_time))*1000)::bigint AS dur_ms,
+       COALESCE(input::text, '') AS input,
+       COALESCE(output::text, '') AS output
+FROM   clickhouse.observations
+WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
+  AND  (
+        (type = 'TOOL' AND (
+             name ILIKE '%memory%search%'
+          OR name ILIKE '%knowledge%search%'
+          OR name ILIKE '%knowledgebase%search%'
+          OR name ILIKE '%memory%add%'
+          OR name ILIKE '%conversation%add%message%'
+        ))
+        OR name ILIKE 'Conversation Message Added'
+        -- Child spans rolled up into ProcessingStep.SubTimings. Kept in
+        -- the same query (instead of a second round-trip) so we can
+        -- attribute them by start_time within the same iteration.
+        OR (name ILIKE '%searching%vector%')
+        OR (name ILIKE '%search graph db%')
+        OR name ILIKE 'Execute Query (yugabytedb)'
+       )
+ORDER  BY start_time ASC`
+
+	rows, err := r.langfuseDB.Query(q, projectID, sessionID)
+	if err != nil {
+		return emptyResult, fmt.Errorf("langfuse db: load agent reasoning observations: %w", err)
+	}
+	defer rows.Close()
+
+	res := agentReasoningWindowResult{
+		memoryHits:      make(map[string][]MemoryHit, len(windows)),
+		kbHits:          make(map[string][]KBHit, len(windows)),
+		processingSteps: make(map[string][]ProcessingStep, len(windows)),
+	}
+	for _, w := range windows {
+		res.memoryHits[w.MessageID] = nil
+		res.kbHits[w.MessageID] = nil
+		res.processingSteps[w.MessageID] = nil
+	}
+
+	// parentRef tracks the slice index + time window of a parent step
+	// emitted into res.processingSteps[messageID]. When a child sub-span
+	// arrives we walk this slice to find the parent whose [start,end)
+	// covers the child's start_time and whose Name matches the expected
+	// parent for the child's sub-timing class. Index-based (not pointer-
+	// based) so it survives slice growth from append.
+	type parentRef struct {
+		name  string
+		idx   int
+		start time.Time
+		end   time.Time
+	}
+	parentsByMessage := make(map[string][]parentRef, len(windows))
+
+	assignChild := func(messageID string, obs agentReasoningObservation) {
+		parentName, subKey := childSubTimingClass(obs.Name)
+		if parentName == "" {
+			return
+		}
+		parents := parentsByMessage[messageID]
+		// Walk in reverse so we attribute to the most recent matching
+		// parent — multiple memory.search calls in one turn each get
+		// their own roll-up.
+		for i := len(parents) - 1; i >= 0; i-- {
+			p := parents[i]
+			if p.name != parentName {
+				continue
+			}
+			if obs.StartTime.Before(p.start) {
+				continue
+			}
+			if !p.end.IsZero() && !obs.StartTime.Before(p.end) {
+				continue
+			}
+			step := &res.processingSteps[messageID][p.idx]
+			if step.SubTimings == nil {
+				step.SubTimings = map[string]int64{}
+			}
+			step.SubTimings[subKey] += obs.DurationMs
+			return
+		}
+	}
+
+	assignParent := func(messageID string, obs agentReasoningObservation) {
+		step := processingStepFromObservation(obs)
+		if step == nil {
+			return
+		}
+		switch step.Name {
+		case "memory_search":
+			hits := extractAgentMemoryHits(parseJSONValue(obs.Output))
+			res.memoryHits[messageID] = append(res.memoryHits[messageID], hits...)
+			step.Detail = hitDetail(len(hits))
+		case "knowledgebase_search":
+			hits := extractAgentKBHits(parseJSONValue(obs.Output))
+			res.kbHits[messageID] = append(res.kbHits[messageID], hits...)
+			step.Detail = hitDetail(len(hits))
+		}
+
+		// Conversation persistence can show up as both the MCP TOOL span and the
+		// zero-duration bookmark span. Keep one row in the compact reasoning
+		// timeline, preferring the longer TOOL duration when available. Per-
+		// message step counts are tiny (≤ ~6), so a linear scan is cheaper than
+		// maintaining a side index.
+		if isDedupedStep(step.Name) {
+			existing := res.processingSteps[messageID]
+			for i := range existing {
+				if existing[i].Name == step.Name {
+					if step.DurationMs > existing[i].DurationMs {
+						preserved := existing[i].SubTimings
+						existing[i] = *step
+						if step.SubTimings == nil {
+							existing[i].SubTimings = preserved
+						}
+					}
+					return
+				}
+			}
+		}
+		res.processingSteps[messageID] = append(res.processingSteps[messageID], *step)
+		parentsByMessage[messageID] = append(parentsByMessage[messageID], parentRef{
+			name:  step.Name,
+			idx:   len(res.processingSteps[messageID]) - 1,
+			start: obs.StartTime,
+			end:   obs.StartTime.Add(time.Duration(obs.DurationMs) * time.Millisecond),
+		})
+	}
+
+	assign := func(messageID string, obs agentReasoningObservation) {
+		if parentName, _ := childSubTimingClass(obs.Name); parentName != "" {
+			assignChild(messageID, obs)
+			return
+		}
+		assignParent(messageID, obs)
+	}
+
+	winIdx := 0
+	for rows.Next() {
+		var obs agentReasoningObservation
+		if err := rows.Scan(&obs.ID, &obs.Name, &obs.Type, &obs.StartTime, &obs.DurationMs, &obs.Input, &obs.Output); err != nil {
+			return emptyResult, fmt.Errorf("langfuse db: scan agent reasoning observation: %w", err)
+		}
+		for winIdx < len(windows) {
+			w := windows[winIdx]
+			if obs.StartTime.Before(w.Start) {
+				if winIdx == 0 {
+					assign(w.MessageID, obs)
+				}
+				break
+			}
+			if w.NextStart != nil && !obs.StartTime.Before(*w.NextStart) {
+				winIdx++
+				continue
+			}
+			assign(w.MessageID, obs)
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return emptyResult, fmt.Errorf("langfuse db: iterate agent reasoning observations: %w", err)
+	}
+	return res, nil
+}
+
+const (
+	agentReasoningMaxItems       = 50
+	agentReasoningMemoryMinScore = 0.3
+	agentReasoningKBMaxDistance  = 1.2
+)
+
+func processingStepFromObservation(obs agentReasoningObservation) *ProcessingStep {
+	name := strings.ToLower(strings.TrimSpace(obs.Name))
+	stepName := ""
+	switch {
+	case strings.Contains(name, "memory") && strings.Contains(name, "search"):
+		stepName = "memory_search"
+	case strings.Contains(name, "knowledge") && strings.Contains(name, "search"):
+		stepName = "knowledgebase_search"
+	case strings.Contains(name, "conversation add message") || name == "conversation message added":
+		stepName = "conversation_add_message"
+	case strings.Contains(name, "memory add"):
+		stepName = "memory_add"
+	case strings.EqualFold(obs.Type, "GENERATION"):
+		stepName = "llm_invoke"
+	default:
+		return nil
+	}
+
+	args, query := extractToolArgsAndQuery(parseJSONValue(obs.Input))
+	return &ProcessingStep{
+		Name:       stepName,
+		DurationMs: obs.DurationMs,
+		Status:     "ok",
+		Query:      query,
+		ToolArgs:   args,
+		SpanID:     obs.ID,
+	}
+}
+
+// ensureLLMInvokeStep guarantees the timeline has one llm_invoke row whenever
+// we know at least one LLM call happened (llmCalls > 0). The agent-reasoning
+// loader focuses on TOOL/bookmark observations and may not always surface a
+// concrete GENERATION span in this step list, so we synthesize one fallback
+// row from llmCalls for UI completeness.
+func ensureLLMInvokeStep(steps []ProcessingStep, llmCalls int64) []ProcessingStep {
+	if llmCalls <= 0 {
+		return steps
+	}
+	for _, step := range steps {
+		if step.Name == "llm_invoke" {
+			return steps
+		}
+	}
+	detail := ""
+	if llmCalls > 1 {
+		detail = fmt.Sprintf("%d calls", llmCalls)
+	}
+	llmStep := ProcessingStep{Name: "llm_invoke", Status: "ok", Detail: detail}
+	out := make([]ProcessingStep, 0, len(steps)+1)
+	inserted := false
+	for _, step := range steps {
+		if !inserted && (step.Name == "conversation_add_message" || step.Name == "memory_add") {
+			out = append(out, llmStep)
+			inserted = true
+		}
+		out = append(out, step)
+	}
+	if !inserted {
+		out = append(out, llmStep)
+	}
+	return out
+}
+
+func hitDetail(n int) string {
+	if n == 1 {
+		return "1 hit"
+	}
+	return fmt.Sprintf("%d hits", n)
+}
+
+// isDedupedStep reports whether a step name should be collapsed when the same
+// pipeline stage shows up more than once for one message turn. Currently only
+// conversation_add_message is affected: it can surface as both the MCP TOOL
+// span and the zero-duration bookmark span, and we want a single row in the
+// timeline. Extend with more names if other steps grow the same pattern.
+func isDedupedStep(name string) bool {
+	return name == "conversation_add_message"
+}
+
+// Recursively parse a JSON string into a generic interface.
+func parseJSONValue(raw string) interface{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var v interface{}
+	if err := json.Unmarshal([]byte(raw), &v); err == nil {
+		if s, ok := v.(string); ok {
+			// Langfuse can store JSON payloads as JSON-encoded strings.
+			// If the inner value isn't itself JSON, fall back to the
+			// decoded plain string so callers still see the content.
+			if next := parseJSONValue(s); next != nil {
+				return next
+			}
+			return s
+		}
+		return v
+	}
+	return nil
+}
+
+func extractToolArgsAndQuery(v interface{}) (map[string]interface{}, string) {
+	args := objectFromValue(v)
+	if len(args) == 0 {
+		return nil, ""
+	}
+	query, _ := args["query"].(string)
+	delete(args, "query")
+	if len(args) == 0 {
+		args = nil
+	}
+	return args, query
+}
+
+func objectFromValue(v interface{}) map[string]interface{} {
+	obj, ok := v.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	for _, key := range []string{"args", "input", "arguments", "kwargs"} {
+		if nested, ok := obj[key].(map[string]interface{}); ok {
+			return cloneStringMap(nested)
+		}
+	}
+	return cloneStringMap(obj)
+}
+
+func cloneStringMap(in map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func extractAgentMemoryHits(v interface{}) []MemoryHit {
+	var vectorItems, relations, promoted []interface{}
+	switch payload := v.(type) {
+	case map[string]interface{}:
+		for _, key := range []string{"results", "memories", "data"} {
+			if items, ok := payload[key].([]interface{}); ok {
+				vectorItems = items
+				break
+			}
+		}
+		if items, ok := payload["relations"].([]interface{}); ok {
+			relations = items
+		}
+		if items, ok := payload["promoted_relations"].([]interface{}); ok {
+			promoted = items
+		}
+	case []interface{}:
+		vectorItems = payload
+	}
+
+	memHits := make([]MemoryHit, 0, len(vectorItems))
+	for _, item := range firstN(vectorItems, agentReasoningMaxItems) {
+		switch x := item.(type) {
+		case map[string]interface{}:
+			score, hasScore := numberField(x, "score")
+			if hasScore && score < agentReasoningMemoryMinScore {
+				continue
+			}
+			text := firstStringField(x, "memory", "data", "text", "content")
+			if text == "" {
+				continue
+			}
+			hit := MemoryHit{Kind: "mem", Text: text, CharCount: utf8.RuneCountInString(text)}
+			if hasScore {
+				hit.Score = &score
+			}
+			memHits = append(memHits, hit)
+		case string:
+			if x != "" {
+				memHits = append(memHits, MemoryHit{Kind: "mem", Text: x, CharCount: utf8.RuneCountInString(x)})
+			}
+		}
+	}
+	sort.SliceStable(memHits, func(i, j int) bool {
+		return scoreOrZero(memHits[i].Score) > scoreOrZero(memHits[j].Score)
+	})
+
+	out := make([]MemoryHit, 0, len(memHits)+len(relations)+len(promoted))
+	out = append(out, memHits...)
+	for _, item := range firstN(relations, agentReasoningMaxItems) {
+		if triple := formatRelationTriple(item); triple != "" {
+			out = append(out, MemoryHit{Kind: "graph", Text: triple, CharCount: utf8.RuneCountInString(triple)})
+		}
+	}
+	for _, item := range firstN(promoted, agentReasoningMaxItems) {
+		if triple := formatRelationTriple(item); triple != "" {
+			out = append(out, MemoryHit{Kind: "promoted", Text: triple, CharCount: utf8.RuneCountInString(triple)})
+		}
+	}
+	return out
+}
+
+func extractAgentKBHits(v interface{}) []KBHit {
+	var items []interface{}
+	switch payload := v.(type) {
+	case map[string]interface{}:
+		for _, key := range []string{"results", "matches", "documents", "data"} {
+			if candidate, ok := payload[key].([]interface{}); ok {
+				items = candidate
+				break
+			}
+		}
+	case []interface{}:
+		items = payload
+	}
+
+	hits := make([]KBHit, 0, len(items))
+	for _, item := range firstN(items, agentReasoningMaxItems) {
+		switch x := item.(type) {
+		case map[string]interface{}:
+			distance, hasDistance := numberField(x, "distance")
+			if hasDistance && distance > agentReasoningKBMaxDistance {
+				continue
+			}
+			text := firstStringField(x, "chunk_text", "text", "content", "snippet", "chunk")
+			if text == "" {
+				continue
+			}
+			source := firstStringField(x, "document_name", "source", "source_uri", "document_id")
+			if source != "" {
+				source = path.Base(source)
+			}
+			hit := KBHit{DocumentID: source, ChunkText: text, CharCount: utf8.RuneCountInString(text)}
+			if hasDistance {
+				d := distance
+				score := 1 - distance
+				if score < 0 {
+					score = 0
+				}
+				if score > 1 {
+					score = 1
+				}
+				hit.Distance = &d
+				hit.Score = &score
+			}
+			hits = append(hits, hit)
+		case string:
+			if x != "" {
+				hits = append(hits, KBHit{ChunkText: x, CharCount: utf8.RuneCountInString(x)})
+			}
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool {
+		return distanceOrInf(hits[i].Distance) < distanceOrInf(hits[j].Distance)
+	})
+	return hits
+}
+
+func firstN(items []interface{}, n int) []interface{} {
+	if len(items) <= n {
+		return items
+	}
+	return items[:n]
+}
+
+// parsePlanSteps decodes the `metadata->>'plan'` payload written by
+// conversation_add_message. Expects a JSON-encoded `[]string`; returns
+// nil for empty / malformed / non-string-array inputs so a single bad
+// row never sinks a turn's render. Trimmed; empty steps are dropped to
+// match the MCP server's pre-persist filtering.
+func parsePlanSteps(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var steps []string
+	if err := json.Unmarshal([]byte(raw), &steps); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(steps))
+	for _, s := range steps {
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func numberField(obj map[string]interface{}, key string) (float64, bool) {
+	switch v := obj[key].(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func firstStringField(obj map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if s, ok := obj[key].(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func formatRelationTriple(item interface{}) string {
+	obj, ok := item.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	source := firstStringField(obj, "source", "subject")
+	target := firstStringField(obj, "destination", "target", "object")
+	relation := firstStringField(obj, "relationship", "relation", "predicate")
+	if source == "" || target == "" || relation == "" {
+		return ""
+	}
+	return source + " " + relation + " " + target
+}
+
+func scoreOrZero(score *float64) float64 {
+	if score == nil {
+		return 0
+	}
+	return *score
+}
+
+func distanceOrInf(distance *float64) float64 {
+	if distance == nil {
+		return 1e9
+	}
+	return *distance
 }
 
 // MemoriesPerConversation returns persisted-mem0 row counts for the
@@ -1191,6 +2013,197 @@ ORDER  BY o.start_time ASC`
 	}
 	if len(out) == 0 {
 		return nil, nil
+	}
+	return out, nil
+}
+
+// GetMessageDecisionTrace returns the slim per-turn payload for one
+// message — the targeted-SQL counterpart of GetConversationThread that
+// only computes one window's stats instead of N. Reuses the same
+// (prev_bm, target_bm] windowing semantics as the thread query, then
+// reuses the existing memoriesPerMessageWindow /
+// agentReasoningPerMessageWindow helpers with a single-element slice
+// to enrich memory IDs / memory hits / kb hits / processing steps.
+//
+// Returns (nil, nil) when the message_id isn't a bookmark in this
+// trace; callers translate to 404 so live-chat clients can poll with
+// backoff.
+func (r *LangfuseRepo) GetMessageDecisionTrace(
+	projectID, datapackID, sessionID, messageID string,
+) (*MessageDecisionTrace, error) {
+	if !r.LangfuseDBConfigured() {
+		return nil, ErrLangfuseDBNotConfigured
+	}
+	if strings.TrimSpace(projectID) == "" {
+		return nil, fmt.Errorf("project_id is required")
+	}
+	if strings.TrimSpace(datapackID) == "" {
+		return nil, fmt.Errorf("datapack_id is required")
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+	if strings.TrimSpace(messageID) == "" {
+		return nil, fmt.Errorf("message_id is required")
+	}
+
+	// Same CTE chain as GetConversationThread, but `bookmarks` is
+	// filtered to the target msg_id so windowed/turn_stats/reasoning/
+	// model_pick all aggregate over a single window. next_root yields
+	// the next window's earliest observation start_time so the
+	// existing memoriesPerMessageWindow /
+	// agentReasoningPerMessageWindow helpers can correctly drop spans
+	// that belong to the next message when called with a single-
+	// element windows slice.
+	const q = `
+WITH raw_obs AS (
+    SELECT id, parent_observation_id, type, name, start_time, end_time,
+           output::text AS output,
+           usage_details,
+           metadata ->> 'message_id' AS msg_id,
+           CASE WHEN metadata ? 'plan' THEN metadata ->> 'plan' END AS plan_json,
+           provided_model_name,
+           (metadata ->> 'message_id' IS NOT NULL AND name = 'Conversation Message Added') AS is_bookmark
+    FROM   clickhouse.observations
+    WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
+), bookmark_bounds AS (
+    SELECT msg_id, id AS bookmark_id, start_time AS bm_time,
+           LAG(start_time)  OVER (ORDER BY start_time)      AS prev_bm_time,
+           (ROW_NUMBER() OVER (ORDER BY start_time DESC) = 1) AS is_last
+    FROM   raw_obs
+    WHERE  is_bookmark
+), target AS (
+    SELECT * FROM bookmark_bounds WHERE msg_id = $3
+), windowed AS (
+    SELECT o.type, o.name, o.start_time, o.end_time,
+           o.usage_details, o.provided_model_name
+    FROM   raw_obs o, target t
+    WHERE  (o.start_time <= t.bm_time AND (t.prev_bm_time IS NULL OR o.start_time > t.prev_bm_time))
+        OR (t.is_last AND o.start_time > t.bm_time)
+), turn_stats AS (
+    SELECT MIN(start_time) AS root_start,
+           COALESCE((EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000)::bigint, 0) AS latency_ms,
+           COALESCE(SUM(
+               CASE WHEN type = 'GENERATION' AND usage_details ? 'total'
+                    THEN (usage_details ->> 'total')::bigint
+                    ELSE 0 END
+           ), 0) AS total_tokens,
+           COUNT(*) FILTER (WHERE type = 'GENERATION') AS llm_calls
+    FROM   windowed
+), reasoning AS (
+    -- Same parent_observation_id attribution rule as the thread query
+    -- (Reasoning starts a few ms after its parent bookmark, so a
+    -- start_time-only window misclassifies it).
+    SELECT STRING_AGG(r.output, E'\n\n' ORDER BY r.start_time) AS thinking,
+           (array_agg(r.plan_json ORDER BY r.start_time)
+                FILTER (WHERE r.plan_json IS NOT NULL))[1] AS plan_json
+    FROM   raw_obs r, target t
+    WHERE  r.parent_observation_id = t.bookmark_id
+      AND  r.type = 'GENERATION' AND r.name = 'Reasoning'
+), model_pick AS (
+    -- Provider-agnostic — any real LLM GENERATION in the window.
+    SELECT (array_agg(provided_model_name ORDER BY start_time)
+              FILTER (WHERE type = 'GENERATION'
+                AND name NOT IN ('Reasoning', 'CostUsage Probe')
+                AND provided_model_name IS NOT NULL
+                AND provided_model_name <> ''))[1] AS model
+    FROM   windowed
+), next_root AS (
+    -- Earliest observation start_time of the next window — used as
+    -- NextStart in the messageWindow handed to the helper queries.
+    -- NULL when the target is the last bookmark in the trace.
+    SELECT MIN(o.start_time) AS next_root_start
+    FROM   raw_obs o, target t
+    WHERE  NOT t.is_last AND o.start_time > t.bm_time
+)
+SELECT t.msg_id,
+       t.bookmark_id,
+       t.bm_time,
+       s.root_start,
+       n.next_root_start,
+       COALESCE(r.thinking, '') AS reasoning,
+       r.plan_json AS plan_json,
+       mp.model AS model,
+       COALESCE(s.latency_ms, 0)   AS latency_ms,
+       COALESCE(s.llm_calls, 0)    AS llm_calls,
+       COALESCE(s.total_tokens, 0) AS total_tokens
+FROM   target t
+LEFT JOIN turn_stats s  ON true
+LEFT JOIN reasoning  r  ON true
+LEFT JOIN model_pick mp ON true
+LEFT JOIN next_root  n  ON true`
+
+	var (
+		msgID         string
+		bookmarkID    string
+		bmTime        time.Time
+		rootStart     sql.NullTime
+		nextRootStart sql.NullTime
+		reasoningStr  string
+		planJSON      sql.NullString
+		model         sql.NullString
+		latencyMs     int64
+		llmCalls      int64
+		totalTokens   int64
+	)
+	err := r.langfuseDB.QueryRow(q, projectID, sessionID, messageID).Scan(
+		&msgID, &bookmarkID, &bmTime, &rootStart, &nextRootStart,
+		&reasoningStr, &planJSON, &model,
+		&latencyMs, &llmCalls, &totalTokens,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("langfuse db: load message decision trace: %w", err)
+	}
+
+	// Hand a single-element windows slice to the existing helpers —
+	// they iterate spans by start_time and assign to the matching
+	// window, so a one-window call only attributes the target turn's
+	// rows. Helpers still scan the whole trace's name-matched
+	// observations, but the attribution loop is O(spans) regardless of
+	// thread length.
+	winStart := bmTime
+	if rootStart.Valid {
+		winStart = rootStart.Time
+	}
+	var nextPtr *time.Time
+	if nextRootStart.Valid {
+		t := nextRootStart.Time
+		nextPtr = &t
+	}
+	windows := []messageWindow{{
+		MessageID: msgID,
+		Start:     winStart,
+		NextStart: nextPtr,
+	}}
+
+	memRes, err := r.mem0PerMessageWindow(datapackID, sessionID, windows)
+	if err != nil {
+		return nil, err
+	}
+	agentRes, err := r.agentReasoningPerMessageWindow(projectID, sessionID, windows)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &MessageDecisionTrace{
+		MessageID:         msgID,
+		LatencyMs:         latencyMs,
+		TotalTokens:       totalTokens,
+		LLMCalls:          llmCalls,
+		MemoriesExtracted: memRes.counts[msgID],
+		Reasoning:         reasoningStr,
+		MemoryHits:        agentRes.memoryHits[msgID],
+		KBHits:            agentRes.kbHits[msgID],
+		ProcessingSteps:   ensureLLMInvokeStep(agentRes.processingSteps[msgID], llmCalls),
+	}
+	if model.Valid {
+		out.Model = model.String
+	}
+	if planJSON.Valid {
+		out.Plan = parsePlanSteps(planJSON.String)
 	}
 	return out, nil
 }

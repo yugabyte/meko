@@ -39,6 +39,10 @@ type Props = {
   datapackName: string;
   datapackId?: string;
   conversationId: string;
+  /** Author email of this conversation, sourced from the rail's list
+   *  rows. The detail endpoint omits `user_email_id`, so the parent
+   *  forwards it here for the header's author chip. */
+  userEmail?: string;
   /** Called when the user clicks "View trace" on an assistant turn —
    *  parent owns the drawer state so the trace panel can persist
    *  across re-renders. */
@@ -53,6 +57,7 @@ export function ConversationThreadPane({
   datapackName,
   datapackId,
   conversationId,
+  userEmail,
   onOpenTrace,
   onOpenTraceWithMemoryShimmer,
 }: Props) {
@@ -66,7 +71,6 @@ export function ConversationThreadPane({
   const [loading, setLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
 
   const now = useNowMs();
 
@@ -79,7 +83,6 @@ export function ConversationThreadPane({
       setOlderOffset(0);
       setOlderHasMore(false);
       setError(null);
-      setExpandedReasoning({});
       return;
     }
     const ac = new AbortController();
@@ -87,7 +90,6 @@ export function ConversationThreadPane({
     setError(null);
     setDetail(null);
     setOlderMessages([]);
-    setExpandedReasoning({});
     getDatapackConversation(
       datapackName,
       conversationId,
@@ -131,10 +133,6 @@ export function ConversationThreadPane({
       setLoadingOlder(false);
     }
   }, [datapackName, conversationId, olderOffset, olderHasMore, loadingOlder, datapackId]);
-
-  const toggleReasoning = useCallback((id: string) => {
-    setExpandedReasoning((prev) => ({ ...prev, [id]: !prev[id] }));
-  }, []);
 
   /** Concatenated message list. Older pages first (chronological ordering),
    *  then the initial page. */
@@ -235,6 +233,7 @@ export function ConversationThreadPane({
         detail={detail}
         conversationId={conversationId}
         langfuseProjectId={langfuseProjectId}
+        userEmail={userEmail}
         now={now}
       />
 
@@ -295,8 +294,6 @@ export function ConversationThreadPane({
             <ThreadTurn
               message={m}
               now={now}
-              reasoningExpanded={!!expandedReasoning[m.message_id]}
-              onToggleReasoning={() => toggleReasoning(m.message_id)}
               onOpenTrace={() => onOpenTrace(m.message_id)}
               onOpenTraceWithMemoryShimmer={
                 onOpenTraceWithMemoryShimmer
@@ -307,6 +304,7 @@ export function ConversationThreadPane({
               datapackName={datapackName}
               datapackId={datapackId}
               conversationId={conversationId}
+              langfuseProjectId={langfuseProjectId}
             />
           </div>
           );

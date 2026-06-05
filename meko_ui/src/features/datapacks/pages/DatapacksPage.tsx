@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Navigate, useLocation, useSearchParams } from "react-router-dom";
 import { DATAPACK_SUB_ROUTE, datapackNewConfigurePath, ROUTES } from "@/app/routes/paths";
 import DatapackConfigureWizardPage from "@/features/datapacks/pages/DatapackConfigureWizardPage";
@@ -12,7 +11,7 @@ import DatapackKnowledgeSummaryPage from "@/features/datapacks/pages/DatapackKno
 import DatapackMembersListPage from "@/features/datapacks/pages/DatapackMembersListPage";
 import DatapackSharePage from "@/features/datapacks/pages/DatapackSharePage";
 import DatapacksOverviewPage from "@/features/datapacks/pages/DatapacksOverviewPage";
-import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 
 /**
  * Datapacks area: overview at `/datapacks`, new datapack wizard at `/datapacks/new/configure`, edit at `/datapacks/:name/edit`,
@@ -28,21 +27,8 @@ export default function DatapacksPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const routeDatapackId = (searchParams.get("datapack_id") ?? "").trim() || undefined;
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void getCurrentUser()
-      .then((user) => {
-        if (!cancelled) setCurrentUser(user);
-      })
-      .catch(() => {
-        if (!cancelled) setCurrentUser(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Shared, session-cached identity — one `/me` fetch app-wide.
+  const { data: currentUser = null } = useCurrentUser();
 
   const prefix = `${ROUTES.datapacks}/`;
   if (location.pathname.startsWith(prefix)) {

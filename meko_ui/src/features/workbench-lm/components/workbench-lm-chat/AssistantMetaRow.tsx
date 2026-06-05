@@ -1,6 +1,6 @@
 // Footer strip under each assistant bubble: Copy button on the left,
 // optional telemetry chips (latency, memories extracted, llm calls), and a
-// "View trace" deep-link on the right. Mirrors
+// "View execution trace" drawer action on the right. Mirrors
 // `ConversationThreadPane`'s meta row so the two surfaces feel identical.
 
 import { useState } from "react";
@@ -91,12 +91,12 @@ export function AssistantMetaRow({
           <button
             type="button"
             onClick={onOpenTrace}
-            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-purple-700 dark:text-purple-300 hover:bg-card hover:text-purple-700 dark:text-purple-200 transition-colors"
-            aria-label="View trace"
-            title="Open the Langfuse trace for this message"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-purple-700 dark:text-purple-300 hover:bg-card hover:text-purple-800 dark:hover:text-purple-200 transition-colors"
+            aria-label="View execution trace"
+            title="Open the execution trace for this message"
           >
             <Activity className="h-3 w-3" aria-hidden />
-            View decision trace
+            View execution trace
           </button>
         </>
       ) : null}

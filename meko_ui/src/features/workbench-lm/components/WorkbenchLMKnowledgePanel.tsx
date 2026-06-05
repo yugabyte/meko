@@ -3,12 +3,29 @@
 // (seeded with europe-travel-guide.md). Both flows reuse DatapackKnowledgeUploadDialog.
 
 import { useCallback, useEffect, useState } from "react";
-import { BookOpen, ExternalLink, FileText, Sparkles, Upload } from "lucide-react";
+import {
+  BookOpen,
+  ExternalLink,
+  FileText,
+  Loader2,
+  MessageSquare,
+  Plus,
+  Sparkles,
+  Upload,
+} from "lucide-react";
 import {
   getApiErrorMessage,
   getKnowledgeBaseDocuments,
+  type DatapackConversation,
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
 import { DatapackKnowledgeUploadDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
 import {
@@ -30,6 +47,24 @@ type Props = {
    * (5s) and the steady-state refresh (30s) skip while this is true.
    */
   paused?: boolean;
+  // --- Sessions section ---------------------------------------------------
+  /** Previous conversations for this datapack — drives the dropdown.
+   *  Owned by `WorkbenchLMPage` so the same data backs both the dropdown
+   *  options and the chat's load-thread flow. */
+  sessions: DatapackConversation[];
+  /** True while the sessions list is being (re)fetched — disables the
+   *  dropdown so a user doesn't pick something mid-refresh. */
+  sessionsLoading: boolean;
+  /** id of the conversation currently loaded into the chat. `null` = a
+   *  fresh chat (no resume), which renders as the dropdown's empty state. */
+  loadedConversationId: string | null;
+  /** Fired when the user picks a session — parent fetches the full
+   *  thread and hands it to the chat. */
+  onSelectConversation: (conversationId: string) => void;
+  /** Fired when the user clicks "+ New chat". Parent: clears chat
+   *  state AND refetches `sessions` so any chat just completed shows up
+   *  in the dropdown the next time it's opened. */
+  onNewChat: () => void;
 };
 
 /** Polling interval while at least one doc is still being processed. */
@@ -40,7 +75,16 @@ const KB_POLL_INTERVAL_MS = 5_000;
  *  show up here without a hard refresh. Paused while the tab is hidden. */
 const KB_STEADY_REFRESH_MS = 30_000;
 
-export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange, paused = false }: Props) {
+export function WorkbenchLMKnowledgePanel({
+  datapackName,
+  onDocumentsChange,
+  paused = false,
+  sessions,
+  sessionsLoading,
+  loadedConversationId,
+  onSelectConversation,
+  onNewChat,
+}: Props) {
   const [docs, setDocs] = useState<KnowledgeBaseDocument[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
@@ -192,7 +236,10 @@ export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange, pau
                 No sources yet. Upload your own or add the sample below.
               </p>
             ) : (
-              <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+              // max-h-32 ≈ 128px ≈ 3 rows of the doc list item — at the
+              // 4th doc the list starts to scroll, matching the spec
+              // that 1–3 docs sit flush and only longer lists overflow.
+              <ul className="max-h-32 space-y-1.5 overflow-y-auto pr-1">
                 {docs.map((d, i) => {
                   const filename = d.document_name.split("/").pop() ?? d.document_name;
                   const display = filename.replace(/^\d+_/, "");
@@ -231,12 +278,95 @@ export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange, pau
               File
             </button>
           </section>
+
+          {/*
+            Dropdown lists previous
+            conversations for this datapack (newest first, limit set by
+            the parent's fetch); picking one tells the parent to load
+            that thread into the chat. The "+ New chat" button resets
+            the chat AND refetches the dropdown so any conversation just
+            completed shows up.
+          */}
+          <section className="shrink-0">
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Previous chats
+            </h3>
+            {/*
+              `key` flips when `loadedConversationId` resets to null
+              (e.g. after "+ New chat").
+            */}
+            <span
+              className="block"
+              title={
+                !datapackName
+                  ? "Select a datapack to see previous chats"
+                  : !sessionsLoading && sessions.length === 0
+                    ? "No previous chats with WorkbenchLM yet"
+                    : undefined
+              }
+            >
+              <Select
+                key={loadedConversationId ?? "fresh"}
+                value={loadedConversationId ?? undefined}
+                onValueChange={(value) => {
+                  if (value) onSelectConversation(value);
+                }}
+                disabled={!datapackName || sessionsLoading || sessions.length === 0}
+              >
+                <SelectTrigger
+                  className="h-9 w-full border-border/70 bg-input text-xs"
+                  aria-label="Resume a previous chat"
+                >
+                  <SelectValue
+                    placeholder={
+                      !datapackName
+                        ? "Select a datapack first"
+                        : sessionsLoading
+                          ? "Loading sessions…"
+                          : sessions.length === 0
+                            ? "No previous chats yet"
+                            : "Resume a previous chat…"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent className="max-h-80">
+                  {sessions.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      <span className="inline-flex max-w-[260px] items-center gap-2">
+                        <MessageSquare
+                          className="h-3 w-3 shrink-0 text-purple-700 dark:text-purple-300"
+                          aria-hidden
+                        />
+                        <span className="truncate" title={s.first_message || s.title || s.id}>
+                          {truncateSessionLabel(s)}
+                        </span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </span>
+            <button
+              type="button"
+              onClick={onNewChat}
+              disabled={!datapackName}
+              className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-2.5 py-2 text-xs font-medium text-purple-700 dark:text-purple-200 transition-colors hover:bg-purple-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {sessionsLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Plus className="h-3.5 w-3.5" aria-hidden />
+              )}
+              New chat
+            </button>
+          </section>
         </div>
 
         {/*
           "Get started" affordance — hide once the user has at least one source.
           Footer is outside the scroll region so it stays pinned to the bottom
-          of the panel while Loaded sources + Add your own scroll above.
+          of the panel while Loaded sources + Add your own + Previous chats
+          scroll above.
         */}
         {sourceCount === 0 ? (
           <section className="shrink-0 border-t border-border/70 px-4 pb-4 pt-3">
@@ -271,7 +401,7 @@ export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange, pau
                 <button
                   type="button"
                   onClick={handleViewSample}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-xs font-medium text-foreground/80 transition-colors hover:border-border/80 hover:text-white"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-xs font-medium text-foreground/80 transition-colors hover:border-border/80 hover:text-foreground"
                   title="Open the sample file in a new tab"
                 >
                   <ExternalLink className="h-3.5 w-3.5" aria-hidden />
@@ -293,4 +423,17 @@ export function WorkbenchLMKnowledgePanel({ datapackName, onDocumentsChange, pau
       ) : null}
     </aside>
   );
+}
+
+/**
+ * Build the dropdown label for a previous-chat row. Prefer the user's
+ * first message (most identifying), fall back to the title minted at
+ * conversation_create time, then to a stub of the session id. Trimmed
+ * to keep the dropdown row at a sensible width — the full string is
+ * still available via the `title` attribute on the row.
+ */
+function truncateSessionLabel(s: DatapackConversation): string {
+  const raw = s.first_message?.trim() || s.title?.trim() || `(session ${s.id.slice(0, 8)}…)`;
+  if (raw.length <= 60) return raw;
+  return `${raw.slice(0, 59)}…`;
 }

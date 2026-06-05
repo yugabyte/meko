@@ -619,6 +619,119 @@ async def test_processing_steps_capture_tool_args_for_observability() -> None:
     assert "query" not in ks_args
 
 
+async def test_resume_conversation_id_skips_create_and_seeds_session() -> None:
+    """When the UI hands the gateway an existing `conversation_id` (user
+    picked a previous chat from the dropdown), the chain must:
+
+      - NOT call MCP `conversation_create` (that would mint a sibling
+        conversation and split the thread in Langfuse).
+      - Adopt the supplied id into the session store so subsequent turns
+        in the same session reuse it without re-sending.
+      - Record a `conversation_create` step with status="skipped" and a
+        clear detail string — the Agent Reasoning panel still wants a
+        timeline entry for this stage.
+      - Pass the resumed id to `memory_search`, `knowledgebase_search`,
+        and `conversation_add_message` so every persisted artifact for
+        this turn references the SAME conversation row.
+    """
+    cfg = _make_cfg()
+    # Main reply + extraction call with no facts (memory_add skipped).
+    llm = _FakeLLM(["resumed-ok", ""])
+    # conversation_create must NEVER be invoked here. Wire it as an
+    # AssertionError so a regression that calls it loudly fails the test.
+    create = MagicMock()
+    create.ainvoke = AsyncMock(
+        side_effect=AssertionError(
+            "conversation_create must not run when resume_conversation_id is set",
+        )
+    )
+    mem_search = _mock_tool({"results": []})
+    kb_search = _mock_tool({"results": []})
+    addmsg = _mock_tool({"status": "accepted", "message_id": "m-resume-1"})
+    addmem = _mock_tool({"status": "accepted"})
+
+    tools = {
+        "conversation_create": create,
+        "memory_search": mem_search,
+        "knowledgebase_search": kb_search,
+        "conversation_add_message": addmsg,
+        "memory_add": addmem,
+    }
+    store = InMemorySessionStore(max_messages_per_session=10)
+
+    resumed_id = "existing-conv-uuid"
+    out = await run_chat_turn(
+        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+        session_id="s-resume", user_message="continue the trip planning",
+        datapack_id="dp-1", resume_conversation_id=resumed_id,
+    )
+
+    assert out.assistant_text == "resumed-ok"
+    # Session store seeded with the supplied id.
+    assert (await store.get_conversation_id("s-resume")) == resumed_id
+
+    # conversation_create skipped entirely.
+    create.ainvoke.assert_not_awaited()
+
+    # Downstream MCP calls all reference the resumed id.
+    mem_search.ainvoke.assert_awaited_once()
+    assert mem_search.ainvoke.call_args.args[0]["conversation_id"] == resumed_id
+    kb_search.ainvoke.assert_awaited_once()
+    assert kb_search.ainvoke.call_args.args[0]["conversation_id"] == resumed_id
+    addmsg.ainvoke.assert_awaited_once()
+    assert addmsg.ainvoke.call_args.args[0]["conversation_id"] == resumed_id
+
+    # Timeline entry surfaces the skip so the Agent Reasoning panel can
+    # show "resumed existing conversation" instead of an empty slot.
+    by_name = {s.name: s for s in out.processing_steps}
+    cc_step = by_name["conversation_create"]
+    assert cc_step.status == "skipped"
+    assert "resumed" in cc_step.detail.lower()
+    assert cc_step.tool_args == {"conversation_id": resumed_id}
+
+    await _drain_background_tasks()
+
+
+async def test_resume_conversation_id_ignored_when_session_already_has_one() -> None:
+    """Once the session store already has a conversation_id for a session
+    (e.g. the user's first turn already minted one), any subsequently
+    supplied `resume_conversation_id` is silently ignored — the existing
+    mapping wins. Prevents a misbehaving client from switching the
+    conversation row mid-session and orphaning earlier messages."""
+    cfg = _make_cfg()
+    llm = _FakeLLM(["ok", ""])
+    create = _mock_tool({"conversation_id": "minted-on-first-turn"})
+    mem_search = _mock_tool({"results": []})
+    kb_search = _mock_tool({"results": []})
+    addmsg = _mock_tool({"status": "accepted"})
+    addmem = _mock_tool({"status": "accepted"})
+
+    tools = {
+        "conversation_create": create,
+        "memory_search": mem_search,
+        "knowledgebase_search": kb_search,
+        "conversation_add_message": addmsg,
+        "memory_add": addmem,
+    }
+    store = InMemorySessionStore()
+    # Pre-seed the session store as if a previous turn had minted an id.
+    await store.set_conversation_id("s1", "minted-on-first-turn")
+
+    await run_chat_turn(
+        cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+        session_id="s1", user_message="next question",
+        datapack_id="dp-1", resume_conversation_id="some-other-id",
+    )
+
+    # conversation_create not called — session already had one.
+    create.ainvoke.assert_not_awaited()
+    # The existing mapping wins; the "some-other-id" is ignored.
+    assert (await store.get_conversation_id("s1")) == "minted-on-first-turn"
+    # Downstream calls use the existing id, not the supplied one.
+    assert mem_search.ainvoke.call_args.args[0]["conversation_id"] == "minted-on-first-turn"
+    await _drain_background_tasks()
+
+
 async def test_missing_conversation_create_raises_clearly() -> None:
     cfg = _make_cfg()
     llm = _FakeLLM(["unused"])

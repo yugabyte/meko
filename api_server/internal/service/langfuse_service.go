@@ -75,10 +75,11 @@ type ProjectKeys = repository.LangfuseProjectKeys
 // aliases so handlers/UI clients that already destructure on json
 // field names keep working.
 type (
-	Conversation       = repository.Conversation
-	ConversationDetail = repository.ConversationDetail
-	ThreadMessage      = repository.ThreadMessage
-	TraceSpan          = repository.TraceSpan
+	Conversation         = repository.Conversation
+	ConversationDetail   = repository.ConversationDetail
+	ThreadMessage        = repository.ThreadMessage
+	TraceSpan            = repository.TraceSpan
+	MessageDecisionTrace = repository.MessageDecisionTrace
 )
 
 // ErrConversationNotFound is returned by GetConversation /
@@ -759,6 +760,43 @@ func (s *LangfuseService) ListConversations(
 		}
 	}
 
+	// One batched lookup of user_email per page (deduped — shared
+	// datapacks can mix multiple owners). Best-effort: on failure
+	// UserID stays populated, UserEmail stays empty.
+	if len(conversations) > 0 {
+		seen := make(map[string]struct{}, len(conversations))
+		userIDs := make([]string, 0, len(conversations))
+		missingUserIDCount := 0
+		for _, c := range conversations {
+			if c.UserID == "" {
+				missingUserIDCount++
+				continue
+			}
+			if _, ok := seen[c.UserID]; ok {
+				continue
+			}
+			seen[c.UserID] = struct{}{}
+			userIDs = append(userIDs, c.UserID)
+		}
+		if missingUserIDCount > 0 {
+			slog.Warn("conversations: traces missing user_id",
+				"datapack_id", datapackID,
+				"missing_count", missingUserIDCount,
+			)
+		}
+		if len(userIDs) > 0 {
+			emails, eErr := s.repo.GetUserEmailsByIDs(userIDs)
+			if eErr != nil {
+				slog.Warn("conversations: failed to fetch user emails; leaving UserEmail empty",
+					"datapack_id", datapackID, "err", eErr)
+			} else {
+				for i := range conversations {
+					conversations[i].UserEmail = emails[conversations[i].UserID]
+				}
+			}
+		}
+	}
+
 	return projectID, conversations, nil
 }
 
@@ -922,6 +960,60 @@ func (s *LangfuseService) GetMessageTrace(
 		return projectID, spans, nil
 	}
 	return projectID, enriched, nil
+}
+
+// GetMessageDecisionTrace returns the slim Decision Trace payload for
+// one message — the targeted-SQL path that scopes work to the target
+// window only. Unlike GetConversation (whole-thread aggregation), this
+// runs O(window) DB work per call, so live-chat polling stays cheap
+// even on long-lived conversations.
+//
+// Returns ErrConversationNotFound when no Langfuse mapping exists or
+// the message_id isn't yet a bookmark in the trace; callers translate
+// to HTTP 404 so clients can poll with backoff. Datapack access is
+// enforced upstream by RequireDatapackAccess.
+func (s *LangfuseService) GetMessageDecisionTrace(
+	datapackID, conversationID, messageID string,
+) (string, *MessageDecisionTrace, error) {
+	if s == nil || s.repo == nil {
+		return "", nil, fmt.Errorf("langfuse service is not configured")
+	}
+	if !s.LangfuseDBConfigured() {
+		return "", nil, ErrLangfuseDBNotConfigured
+	}
+	datapackID = strings.TrimSpace(datapackID)
+	if datapackID == "" {
+		return "", nil, fmt.Errorf("datapack_id is required")
+	}
+	conversationID = normalizeSessionID(conversationID)
+	if conversationID == "" {
+		return "", nil, fmt.Errorf("conversation_id is required")
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return "", nil, fmt.Errorf("message_id is required")
+	}
+
+	mapping, err := s.repo.GetProjectMapping(datapackID)
+	if err != nil {
+		return "", nil, err
+	}
+	if mapping == nil {
+		return "", nil, ErrConversationNotFound
+	}
+	projectID := strings.TrimSpace(mapping.ProjectID)
+	if projectID == "" {
+		return "", nil, fmt.Errorf("langfuse project mapping is incomplete")
+	}
+
+	dt, err := s.repo.GetMessageDecisionTrace(projectID, datapackID, conversationID, messageID)
+	if err != nil {
+		return "", nil, err
+	}
+	if dt == nil {
+		return projectID, nil, ErrConversationNotFound
+	}
+	return projectID, dt, nil
 }
 
 // normalizeSessionID strips hyphens from the input; MCP's

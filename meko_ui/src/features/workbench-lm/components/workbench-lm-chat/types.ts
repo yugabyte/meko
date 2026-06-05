@@ -2,12 +2,6 @@
 // the bubble / meta-row / enrichment / download submodules can reference the
 // `Message` shape without circular imports back to `WorkbenchLMChat.tsx`.
 
-import type {
-  KbHit,
-  MemoryHit,
-  ProcessingStep,
-} from "@/lib/inferenceGateway";
-
 /**
  * Knowledge readiness for the active datapack:
  *   - `loading`    — first fetch hasn't returned yet
@@ -43,18 +37,11 @@ export type Message = {
   // NOTE: `langfuseProjectId` lives at the page level — it's a per-datapack
   // constant fetched once per session and passed to each bubble via prop,
   // rather than carried per-message. See `WorkbenchLMPage`.
-  /** Retrieval context the gateway fed into the system prompt for this
-   *  turn — bulleted text blocks of memories / KB chunks. Kept for the
-   *  "Show me the exact prompt" debug UX; the Agent Reasoning panel
-   *  renders the structured `memoryHits` / `kbHits` arrays instead. */
-  memoryContext?: string;
-  kbContext?: string;
-  /** Structured retrieval hits — drives the per-bubble Agent Reasoning
-   *  panel. `kbHits` are grouped by `document_id` in the UI; both
-   *  carry per-hit `score` and `char_count` for relevance / cost display. */
-  memoryHits?: MemoryHit[];
-  kbHits?: KbHit[];
-  /** Per-turn pipeline timeline. Rendered as a short list at the
-   *  bottom of the Agent Reasoning panel ("Steps"). */
-  processingSteps?: ProcessingStep[];
+  //
+  // The turn's retrieval hits / KB chunks / processing steps are NOT
+  // stored on the message: the bubble's DecisionTrace fetches them
+  // per-message via `getDatapackMessageDecisionTrace` (react-query
+  // cached). For historical turns they come inline from the loaded
+  // thread (`DatapackThreadMessage`). So nothing here mirrors the
+  // gateway's `memory_hits` / `kb_hits` / `processing_steps`.
 };

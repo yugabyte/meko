@@ -35,7 +35,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverInfoBadge } from "@/components/ui/hover-info-badge";
 import { cn } from "@/lib/utils";
 import {
   getApiErrorMessage,
@@ -299,7 +299,7 @@ export function TraceDrawer({
           spans are present to accommodate the right-side panel. */}
       <aside
         className={cn(
-          "fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l border-border bg-input shadow-2xl transition-[transform,max-width] duration-200",
+          "fixed right-0 top-0 z-50 flex h-full w-full flex-col border-l border-border bg-card shadow-2xl transition-[transform,max-width] duration-200",
           hasMemories ? "max-w-[960px]" : "max-w-[640px]",
           open ? "translate-x-0" : "translate-x-full",
         )}
@@ -308,7 +308,7 @@ export function TraceDrawer({
         <header className="flex items-center justify-between gap-3 border-b border-border px-5 py-3 shrink-0">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Zap className="h-4 w-4 text-purple-700 dark:text-purple-300" aria-hidden />
+              <Zap className="h-4 w-4 text-purple-600 dark:text-purple-300" aria-hidden />
               <h3 className="text-sm font-medium text-foreground">Message trace</h3>
               {!loading && spans.length > 0 ? (
                 <span className="text-[11px] text-muted-foreground">
@@ -402,7 +402,7 @@ export function TraceDrawer({
               ) : null}
               <div className="overflow-y-auto h-full">
                 <div className="mb-3 flex items-center gap-2">
-                  <BrainCircuit className="h-4 w-4 text-blue-700 dark:text-blue-300" aria-hidden />
+                  <BrainCircuit className="h-4 w-4 text-blue-600 dark:text-blue-300" aria-hidden />
                   <h4 className="text-[13px] font-medium text-foreground">
                     Extracted memories
                   </h4>
@@ -450,7 +450,7 @@ export function TraceDrawer({
               }).toString()}`}
               target="_blank"
               rel="noreferrer noopener"
-              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-3 py-2 text-xs font-medium text-purple-700 dark:text-purple-200 transition-colors hover:bg-purple-500/15 hover:text-purple-700 dark:text-purple-100"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-3 py-2 text-xs font-medium text-purple-700 dark:text-purple-200 transition-colors hover:bg-purple-500/15 hover:text-purple-800 dark:hover:text-purple-100"
               title="Open this conversation in the full Langfuse trace view (new tab)"
             >
               <ExternalLink className="h-3.5 w-3.5" aria-hidden />
@@ -560,7 +560,7 @@ function MemoryCard({
       onMouseLeave={() => onHoverSpan(null, "memory")}
     >
       <div className="mb-1.5 flex items-center gap-1.5">
-        <Sparkles className="h-3 w-3 shrink-0 text-blue-700 dark:text-blue-300" aria-hidden />
+        <Sparkles className="h-3 w-3 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
         <span className="truncate text-[11px] text-blue-700 dark:text-blue-200/70" title={span.name}>
           {`${span.name} #${ordinal}`}
         </span>
@@ -610,7 +610,7 @@ function MemoryCard({
         <div className="mt-1.5 space-y-1">
           {topNodes.length > 0 ? (
             <div className="flex min-w-0 items-start gap-1 text-[10px] text-blue-700 dark:text-blue-100/65">
-              <span className="shrink-0 text-blue-700 dark:text-blue-100/55">Sample nodes:</span>
+              <span className="shrink-0 text-blue-700/70 dark:text-blue-100/55">Sample nodes:</span>
               <span className="flex min-w-0 flex-1 flex-wrap gap-1">
                 {topNodes.map((name) => (
                   <span
@@ -626,7 +626,7 @@ function MemoryCard({
           ) : null}
           {topRelations.length > 0 ? (
             <div className="flex min-w-0 items-start gap-1 text-[10px] text-blue-700 dark:text-blue-100/65">
-              <span className="shrink-0 text-blue-700 dark:text-blue-100/55">Sample relations:</span>
+              <span className="shrink-0 text-blue-700/70 dark:text-blue-100/55">Sample relations:</span>
               <span className="flex min-w-0 flex-1 flex-wrap gap-1">
                 {topRelations.map((name) => (
                   <span
@@ -689,48 +689,28 @@ function MemoryMetaBadge({
       : metricName === "Relations"
       ? "Sample relations (subset)"
       : "Sample graph labels";
-  const [open, setOpen] = useState(false);
-
   return (
-    <Tooltip delayDuration={0} open={open} onOpenChange={setOpen}>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="rounded-full border border-blue-400/20 bg-blue-400/10 px-1.5 py-0.5 text-[10px] text-blue-700 dark:text-blue-200/80"
-          aria-label={`${label}: ${description}`}
-          onMouseEnter={() => setOpen(true)}
-          onMouseLeave={() => setOpen(false)}
-          onFocus={() => setOpen(true)}
-          onBlur={() => setOpen(false)}
-          onMouseDown={(e) => e.preventDefault()}
-        >
-          {label}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent
-        sideOffset={8}
-        side="top"
-        align="start"
-        collisionPadding={12}
-        className="z-[90] w-[280px] rounded-lg border border-blue-400/20 bg-input/95 px-2.5 py-2 text-left text-[10px] text-blue-700 dark:text-blue-100 shadow-lg"
-      >
-        <span className="mb-1 block text-[11px] font-medium text-blue-700 dark:text-blue-200">
+    <HoverInfoBadge
+      label={label}
+      ariaLabel={`${label}: ${description}`}
+    >
+        <span className="mb-1 block text-[11px] font-medium text-blue-200">
           {metricName}: {metricValue}
         </span>
-        <span className="block text-[10px] text-blue-700 dark:text-blue-100/85">{description}</span>
-        <span className="mt-1 block text-[10px] text-blue-700 dark:text-blue-100/65">{detail}</span>
-        <span className="mt-1 block text-[10px] text-blue-700 dark:text-blue-100/75">{dynamicSummary}</span>
-        <span className="mt-1 block text-[10px] text-blue-700 dark:text-blue-100/60">
+        <span className="block text-[10px] text-blue-100/85">{description}</span>
+        <span className="mt-1 block text-[10px] text-blue-100/65">{detail}</span>
+        <span className="mt-1 block text-[10px] text-blue-100/75">{dynamicSummary}</span>
+        <span className="mt-1 block text-[10px] text-blue-100/60">
           Span latency: {formatDuration(spanDurationMs)} · Source: persisted mem0 + graph DB
         </span>
         {sampledNames.length > 0 ? (
-          <span className="mt-1 block text-[10px] text-blue-700 dark:text-blue-100/75">
+          <span className="mt-1 block text-[10px] text-blue-100/75">
             {sampledLabel}
             <span className="mt-1 flex flex-wrap gap-1">
               {sampledNames.slice(0, 4).map((name) => (
                 <span
                   key={name}
-                  className="rounded border border-blue-300/25 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-700 dark:text-blue-100/90"
+                  className="rounded border border-blue-300/25 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-100/90"
                 >
                   {name}
                 </span>
@@ -739,12 +719,11 @@ function MemoryMetaBadge({
           </span>
         ) : null}
         {memoryId ? (
-          <span className="mt-1 block font-mono text-[10px] text-blue-700 dark:text-blue-100/60">
+          <span className="mt-1 block font-mono text-[10px] text-blue-100/60">
             Memory ID: {compactTraceMemoryID(memoryId)}
           </span>
         ) : null}
-      </TooltipContent>
-    </Tooltip>
+    </HoverInfoBadge>
   );
 }
 
@@ -833,7 +812,7 @@ function SpanTreeNode({
           "group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors duration-100 cursor-default",
           isHovered
             ? "bg-blue-500/15 ring-1 ring-inset ring-blue-400/30"
-            : "hover:bg-input",
+            : "hover:bg-muted",
           hasHoverContext && !isOnActivePath && "opacity-45",
         )}
         style={{ paddingLeft: `${depth * 14 + 6}px` }}
@@ -844,7 +823,7 @@ function SpanTreeNode({
           <button
             type="button"
             onClick={() => onToggle(spanId)}
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+            className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground hover:text-foreground"
             aria-label={isCollapsed ? "Expand" : "Collapse"}
             tabIndex={0}
           >
@@ -889,7 +868,7 @@ function SpanTreeNode({
 
           {costText ? (
             <span
-              className="hidden w-14 shrink-0 text-right tabular-nums text-[10px] text-emerald-700 dark:text-emerald-300/85 md:inline"
+              className="hidden w-14 shrink-0 text-right tabular-nums text-[10px] text-emerald-600 dark:text-emerald-300/85 md:inline"
               title={`Cost: ${costText}`}
             >
               {costText}
@@ -907,7 +886,7 @@ function SpanTreeNode({
           match. Uses left/width % so resizing the drawer reflows
           smoothly. */}
       <div
-        className="relative mb-1 h-1 rounded-full bg-input"
+        className="relative mb-1 h-1 rounded-full bg-muted"
         style={{ marginLeft: `${depth * 14 + 32}px`, marginRight: "12px" }}
       >
         <div
@@ -949,7 +928,7 @@ function TimeAxis({ totalMs }: { totalMs: number }) {
   const ticks = [0, 25, 50, 75, 100];
   return (
     <div className="mb-2 ml-8 mr-3 relative h-5">
-      <div className="absolute inset-x-0 top-2 h-px bg-white/10" />
+      <div className="absolute inset-x-0 top-2 h-px bg-border" />
       {ticks.map((pct) => (
         <div
           key={pct}
@@ -1077,7 +1056,7 @@ function spanAccent(span: DatapackTraceSpan): SpanAccent {
   if (memoryLikeName) {
     return {
       icon: <MemoryIcon className="text-[13px]" />,
-      iconColor: "text-blue-700 dark:text-blue-300",
+      iconColor: "text-blue-600 dark:text-blue-300",
       barColor: "bg-blue-400/70",
     };
   }
@@ -1085,7 +1064,7 @@ function spanAccent(span: DatapackTraceSpan): SpanAccent {
   if (databaseLikeName) {
     return {
       icon: <Database className="h-3 w-3" aria-hidden />,
-      iconColor: "text-cyan-300",
+      iconColor: "text-cyan-600 dark:text-cyan-300",
       barColor: "bg-cyan-400/70",
     };
   }
@@ -1093,28 +1072,28 @@ function spanAccent(span: DatapackTraceSpan): SpanAccent {
   if (t === "GENERATION" || t === "LLM") {
     return {
       icon: <Cpu className="h-3 w-3" aria-hidden />,
-      iconColor: "text-amber-700 dark:text-amber-300",
+      iconColor: "text-amber-600 dark:text-amber-300",
       barColor: "bg-amber-400/70",
     };
   }
   if (t === "TOOL") {
     return {
       icon: <Wrench className="h-3 w-3" aria-hidden />,
-      iconColor: "text-emerald-700 dark:text-emerald-300",
+      iconColor: "text-emerald-600 dark:text-emerald-300",
       barColor: "bg-emerald-400/70",
     };
   }
   if (t === "RETRIEVAL" || t === "EMBEDDING") {
     return {
       icon: <Database className="h-3 w-3" aria-hidden />,
-      iconColor: "text-cyan-300",
+      iconColor: "text-cyan-600 dark:text-cyan-300",
       barColor: "bg-cyan-400/70",
     };
   }
   if (t === "AGENT" || t === "SPAN") {
     return {
       icon: <Bot className="h-3 w-3" aria-hidden />,
-      iconColor: "text-purple-700 dark:text-purple-300",
+      iconColor: "text-purple-600 dark:text-purple-300",
       barColor: "bg-purple-400/70",
     };
   }

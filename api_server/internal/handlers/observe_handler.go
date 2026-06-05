@@ -319,3 +319,72 @@ func (h *ObserveHandler) MessageTrace(c echo.Context) error {
 		"spans":               spans,
 	})
 }
+
+// MessageDecisionTrace handles
+// GET /api/v1/datapacks/:name/conversations/:conversation_id/messages/:message_id/decision-trace.
+//
+// Returns the slim per-turn payload the chat UI's Decision Trace card
+// and AssistantMetaRow chips read — model, latency, tokens, llm
+// calls, memories extracted, reasoning, plan, memory hits, kb hits,
+// processing steps. Drops input/output text (already in the bubble),
+// started_at, observation_id, and memory_ids (unused by the UI).
+//
+// Reuses GetConversation under the hood and projects one ThreadMessage
+// row to the slim shape — no new SQL path. Live-chat callers can poll
+// this cheaply while Langfuse + mem0 catch up.
+//
+// Datapack access is enforced upstream by RequireDatapackAccess.
+// Returns 404 while the bookmark hasn't been ingested yet, so clients
+// can poll with backoff.
+func (h *ObserveHandler) MessageDecisionTrace(c echo.Context) error {
+	if h.langfuse == nil {
+		return apiError(c, http.StatusServiceUnavailable,
+			"SERVICE_UNAVAILABLE",
+			"langfuse service is not configured")
+	}
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+	conversationID := c.Param("conversation_id")
+	if conversationID == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "conversation_id is required")
+	}
+	messageID := c.Param("message_id")
+	if messageID == "" {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "message_id is required")
+	}
+
+	projectID, dt, err := h.langfuse.GetMessageDecisionTrace(
+		dp.ID, conversationID, messageID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrLangfuseDBNotConfigured):
+			return apiError(c, http.StatusServiceUnavailable,
+				"SERVICE_UNAVAILABLE",
+				"langfuse database is not configured on the api server")
+		case errors.Is(err, service.ErrConversationNotFound):
+			return apiError(c, http.StatusNotFound,
+				"NOT_FOUND", "message not found")
+		}
+		slog.Error("message decision-trace lookup failed",
+			"datapack_id", dp.ID,
+			"conversation_id", conversationID,
+			"message_id", messageID,
+			"error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to fetch message decision trace")
+	}
+
+	return ok(c, http.StatusOK, map[string]any{
+		"datapack_id":         dp.ID,
+		"datapack_name":       dp.Name,
+		"langfuse_project_id": projectID,
+		"conversation_id":     conversationID,
+		"decision_trace":      dt,
+	})
+}
