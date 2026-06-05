@@ -287,7 +287,7 @@ impl YbWalStorage {
         )
         .await?;
 
-        let mut me = YbWalStorage {
+        let me = YbWalStorage {
             inner,
             ysql_fpu_client,
             tenant_id: tenant_id_str,
@@ -304,17 +304,11 @@ impl YbWalStorage {
             _consumer_handle: consumer_handle,
         };
 
-        // Clean any rows past write_lsn left over from a crash where we
-        // INSERT'd but never returned to the caller. Goes direct via the
-        // sync ysql_fpu_client (consumer hasn't been handed anything yet anyway).
-        tracing::info!(
-            tenant_id = %me.tenant_id,
-            timeline_id = %me.timeline_id,
-            %write_lsn,
-            "YbWalStorage::new — calling delete_after(write_lsn) \
-             to drop any chunks past the rehydrated end-of-WAL",
-        );
-        me.delete_after(write_lsn).await?;
+        // No post-crash row scrub: `load_write_lsn` already takes the
+        // max chunk-end across the table, so any committed-but-unacked
+        // rows from a crashed run are absorbed as durable rather than
+        // discarded. yb-mode has no truncation-past-durable case that
+        // would justify a DELETE here.
         Ok(me)
     }
 
@@ -476,39 +470,6 @@ impl YbWalStorage {
         }
     }
 
-    async fn delete_after(&mut self, end_pos: Lsn) -> Result<()> {
-        // Drop any segment strictly past end_pos's segment, and any chunk whose
-        // end byte lies past end_pos within the current segment.
-        let segno_end = end_pos.segment_number(self.wal_seg_size) as i64;
-        let offset_end = end_pos.segment_offset(self.wal_seg_size) as i64;
-        let table = quote_ident(&self.table_name);
-        let sql = format!(
-            "DELETE FROM {table} \
-             WHERE tenant_id = $1 AND timeline_id = $2 \
-               AND ( segno > $3 \
-                  OR (segno = $3 AND chunk_offset + chunk_size > $4) )"
-        );
-        let params: [&(dyn ToSql + Sync); 4] =
-            [&self.tenant_id, &self.timeline_id, &segno_end, &offset_end];
-        self.ysql_fpu_client
-            .execute(&sql, &params)
-            .await
-            .context("YbWalStorage: truncate delete")?;
-        // Mirror in cache so reads can't serve stale-and-now-deleted bytes.
-        if let Some(cache) = &self.cache {
-            cache
-                .lock()
-                .unwrap()
-                .truncate_after(segno_end as u64, offset_end as u64);
-        }
-        // No in-memory chunk-seq state to maintain since the PK is now
-        // (tenant, timeline, segno, chunk_offset). A subsequent write
-        // at `end_pos` produces a chunk at chunk_offset=end_pos which
-        // cannot collide with surviving rows (they all have
-        // `chunk_offset + size <= end_pos` by definition of what the
-        // DELETE above keeps).
-        Ok(())
-    }
 }
 
 impl Storage for YbWalStorage {
@@ -595,7 +556,10 @@ impl Storage for YbWalStorage {
                 self.submitted_max_lsn,
             );
         }
-        self.delete_after(end_pos).await?;
+        // No DELETE in yb-mode: with single-SK quorum, `end_pos` is
+        // always exactly the SK's confirmed durable LSN on election,
+        // so there are no rows past `end_pos` to drop. Only the
+        // in-memory watermarks need resetting.
         self.inner.truncate_wal(end_pos).await
     }
 
