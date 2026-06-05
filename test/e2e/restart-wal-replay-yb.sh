@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
 #
-# AWS-style variant of restart-wal-replay.sh: brings up a cluster
-# whose safekeeper matches the production config from
+# Variant of restart-wal-replay.sh that brings up a cluster matching
+# the production config from
 # findings-ps-wal-replay-restart-bug-2026-06-04.md:
-#   --control-file-backend remote-storage
-#   --no-sync                      (sync = false in neon_local config)
 #   --wal-yb-config                (live WAL mirrored into yb_storage.wals)
 #   --wal-cache-size-mib 512
 #
-# The PS-restart catch-up sequence is identical to the file-backed
-# variant: write loop → stop PS → soak → stop SK → restart both →
-# verify n advanced. The point is to exercise the YB-WAL read path
-# (YbSegmentReader / wals table backfill) on PS catch-up, not the
-# local-FS WAL reader.
+# The PS-restart catch-up sequence: write loop → stop PS → soak → stop
+# SK → restart both → verify n advanced. Exercises the YB-WAL read
+# path (YbSegmentReader / wals table backfill) on PS catch-up.
 #
 # Usage: test/e2e/restart-wal-replay-yb.sh
 
@@ -76,9 +72,6 @@ remote_storage = "{ host = '127.0.0.1', port = 5433, user = 'yugabyte' }"
 id = 1
 pg_port = 5484
 http_port = 7696
-# AWS-style flags below — this is what differs from the standard config:
-sync = false                                # --no-sync
-control_file_backend = "remote-storage"     # control file in remote storage (YB blobs)
 remote_storage = "{ host = '127.0.0.1', port = 5433, user = 'yugabyte' }"
 wal_yb_config = "{ host = '127.0.0.1', port = 5433, user = 'yugabyte', table_name = 'wals' }"
 wal_cache_size_mib = 512
@@ -230,4 +223,4 @@ fi
 echo "  pageserver log clean of corruption markers"
 
 step "Final verdict"
-echo "PASS — AWS-style (YB-WAL + remote-storage CF + no-sync) catch-up across a ${SOAK_SECS}s WAL gap"
+echo "PASS — YB-WAL catch-up across a ${SOAK_SECS}s WAL gap"

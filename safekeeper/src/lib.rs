@@ -124,7 +124,6 @@ pub struct SafeKeeperConf {
     pub listen_https_addr: Option<String>,
     pub advertise_pg_addr: Option<String>,
     pub availability_zone: Option<String>,
-    pub no_sync: bool,
     /* BEGIN_HADRON */
     pub advertise_pg_addr_tenant_only: Option<String>,
     pub enable_pull_timeline_on_startup: bool,
@@ -135,9 +134,6 @@ pub struct SafeKeeperConf {
     pub heartbeat_timeout: Duration,
     pub peer_recovery_enabled: bool,
     pub remote_storage: Option<RemoteStorageConfig>,
-    /// Where to persist the per-timeline control file: local FS or the
-    /// configured `remote_storage`.
-    pub control_file_backend: control_file::ControlFileBackend,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
     /// every `write_wal` is INSERT'd into the YB table named here in
     /// addition to being written to the local-FS shadow. When `None`,
@@ -302,7 +298,6 @@ impl SafeKeeperConf {
     pub fn dummy() -> Self {
         SafeKeeperConf {
             workdir: Utf8PathBuf::from("./"),
-            no_sync: false,
             listen_pg_addr: defaults::DEFAULT_PG_LISTEN_ADDR.to_string(),
             listen_pg_addr_tenant_only: None,
             listen_http_addr: defaults::DEFAULT_HTTP_LISTEN_ADDR.to_string(),
@@ -310,7 +305,6 @@ impl SafeKeeperConf {
             advertise_pg_addr: None,
             availability_zone: None,
             remote_storage: None,
-            control_file_backend: control_file::ControlFileBackend::File,
             wal_yb_config: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
             my_id: NodeId(0),

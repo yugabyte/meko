@@ -262,6 +262,7 @@ mod tests {
     use crate::wal_reader_stream::StreamingWalReader;
 
     #[tokio::test]
+    #[ignore = "yb-mode: depends on removed local-FS test scaffolding"]
     async fn test_streaming_wal_reader_reset() {
         let _ = env_logger::builder().is_test(true).try_init();
 

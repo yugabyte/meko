@@ -89,7 +89,6 @@ use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use camino::Utf8Path;
 use futures::future::{BoxFuture, FutureExt};
 use postgres_ffi::XLogSegNo;
 use tokio::io::{AsyncRead, ReadBuf};
@@ -220,9 +219,7 @@ pub struct YbWalStorage {
 impl YbWalStorage {
     pub async fn new(
         ttid: &TenantTimelineId,
-        timeline_dir: &Utf8Path,
         state: &TimelinePersistentState,
-        _no_sync: bool,
         ysql_fpu_client: Arc<YsqlClient>,
         table_name: String,
         cache: Option<Arc<std::sync::Mutex<WalCache>>>,
@@ -254,10 +251,9 @@ impl YbWalStorage {
              (falls back to cfile_commit_lsn on empty)",
         );
 
-        // Construct the inner PhysicalStorage in `no_local_writes` mode so all
-        // of its disk operations are no-ops. The struct still holds the
-        // LSN tracker + WAL decoder, which we want to reuse.
-        let inner = PhysicalStorage::new_no_local_writes(ttid, timeline_dir, state, write_lsn)?;
+        // PhysicalStorage holds the LSN tracker + WAL decoder for this
+        // stream — durability is our job.
+        let inner = PhysicalStorage::new(ttid, state, write_lsn)?;
 
         // Producer/consumer plumbing. The watermark starts at
         // `write_lsn` so an immediately-following `flush_wal()` with
@@ -1091,87 +1087,16 @@ async fn fetch_chunk_from_yb(
     }))
 }
 
-/// Dispatcher across WAL-storage backends. Mirrors `ControlFileStorage`.
-pub enum WalStore {
-    /// Local-FS only (existing behavior).
-    Physical(PhysicalStorage),
-    /// Local FS + synchronous mirror to YB.
-    Yb(YbWalStorage),
-}
+/// WAL storage used by the safekeeper. Kept as a type alias so existing
+/// `<WAL: wal_storage::Storage>` generics on `SafeKeeper` keep working
+/// after the local-FS variant was removed.
+pub type WalStore = YbWalStorage;
 
-impl WalStore {
+impl YbWalStorage {
     /// Forwarded passthrough for `PhysicalStorage::internal_state`. Used by
     /// debug-dump / metrics endpoints.
     pub fn internal_state(&self) -> (Lsn, Lsn, Lsn, bool) {
-        match self {
-            WalStore::Physical(s) => s.internal_state(),
-            WalStore::Yb(s) => s.inner.internal_state(),
-        }
-    }
-}
-
-impl Storage for WalStore {
-    fn write_lsn(&self) -> Lsn {
-        match self {
-            WalStore::Physical(s) => s.write_lsn(),
-            WalStore::Yb(s) => s.write_lsn(),
-        }
-    }
-
-    fn flush_lsn(&self) -> Lsn {
-        match self {
-            WalStore::Physical(s) => s.flush_lsn(),
-            WalStore::Yb(s) => s.flush_lsn(),
-        }
-    }
-
-    async fn initialize_first_segment(&mut self, init_lsn: Lsn) -> Result<()> {
-        match self {
-            WalStore::Physical(s) => s.initialize_first_segment(init_lsn).await,
-            WalStore::Yb(s) => s.initialize_first_segment(init_lsn).await,
-        }
-    }
-
-    async fn write_wal(&mut self, startpos: Lsn, buf: &[u8]) -> Result<()> {
-        match self {
-            WalStore::Physical(s) => s.write_wal(startpos, buf).await,
-            WalStore::Yb(s) => s.write_wal(startpos, buf).await,
-        }
-    }
-
-    async fn truncate_wal(&mut self, end_pos: Lsn) -> Result<()> {
-        match self {
-            WalStore::Physical(s) => s.truncate_wal(end_pos).await,
-            WalStore::Yb(s) => s.truncate_wal(end_pos).await,
-        }
-    }
-
-    async fn flush_wal(&mut self) -> Result<()> {
-        match self {
-            WalStore::Physical(s) => s.flush_wal().await,
-            WalStore::Yb(s) => s.flush_wal().await,
-        }
-    }
-
-    fn remove_up_to(&self, segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
-        match self {
-            WalStore::Physical(s) => s.remove_up_to(segno_up_to),
-            WalStore::Yb(s) => s.remove_up_to(segno_up_to),
-        }
-    }
-
-    fn close(&mut self) {
-        match self {
-            WalStore::Physical(s) => s.close(),
-            WalStore::Yb(s) => s.close(),
-        }
-    }
-
-    fn get_metrics(&self) -> WalStorageMetrics {
-        match self {
-            WalStore::Physical(s) => s.get_metrics(),
-            WalStore::Yb(s) => s.get_metrics(),
-        }
+        self.inner.internal_state()
     }
 }
 
@@ -1257,11 +1182,9 @@ mod tests {
         state.local_start_lsn = start_lsn;
 
         let tmp = camino_tempfile::tempdir().expect("tempdir");
-        let dir = tmp.path().to_path_buf();
-        let storage =
-            YbWalStorage::new(&ttid, &dir, &state, true, ysql_fpu_client, table.to_string(), None)
-                .await
-                .expect("YbWalStorage::new");
+        let storage = YbWalStorage::new(&ttid, &state, ysql_fpu_client, table.to_string(), None)
+            .await
+            .expect("YbWalStorage::new");
         (storage, tmp)
     }
 

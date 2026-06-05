@@ -13,9 +13,7 @@ use camino_tempfile::Utf8TempDir;
 use safekeeper_api::membership::{Configuration, SafekeeperGeneration};
 use safekeeper_api::models::{SafekeeperUtilization, TimelineDeleteResult};
 use safekeeper_api::{ServerInfo, membership};
-use tokio::fs;
 use tracing::*;
-use utils::crashsafe::{durable_rename, fsync_async_opt};
 use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
 
@@ -26,8 +24,7 @@ use crate::state::TimelinePersistentState;
 use crate::timeline::{Timeline, TimelineError, delete_dir, get_tenant_dir, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
 use crate::wal_backup::WalBackup;
-use crate::wal_storage::Storage;
-use crate::{SafeKeeperConf, control_file, wal_storage};
+use crate::{SafeKeeperConf, control_file};
 
 // Timeline entry in the global map: either a ready timeline, or mark that it is
 // being created.
@@ -318,16 +315,10 @@ impl GlobalTimelines {
         // TODO: currently we create only cfile. It would be reasonable to
         // immediately initialize first WAL segment as well.
         let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn, commit_lsn)?;
-        let remote_storage = wal_backup.get_storage();
-        control_file::ControlFileStorage::create_new(
-            conf.control_file_backend,
-            &tmp_dir_path,
-            &ttid,
-            state,
-            conf.no_sync,
-            remote_storage.as_ref(),
-        )
-        .await?;
+        let remote_storage = wal_backup
+            .get_storage()
+            .context("control-file create requires remote storage")?;
+        control_file::ControlFileStorage::create_new(remote_storage, &ttid, state).await?;
         let timeline = self
             .load_temp_timeline(ttid, &tmp_dir_path, generation)
             .await?;
@@ -425,53 +416,16 @@ impl GlobalTimelines {
         }
     }
 
-    /// Main part of load_temp_timeline: do the move and load.
+    /// Main part of load_temp_timeline: load the timeline from remote
+    /// storage. The `tmp_path` argument is unused in YB mode — the
+    /// control-file blob already lives in `GenericRemoteStorage`, so
+    /// there's nothing to move locally.
     async fn install_temp_timeline(
         ttid: TenantTimelineId,
-        tmp_path: &Utf8PathBuf,
+        _tmp_path: &Utf8PathBuf,
         conf: Arc<SafeKeeperConf>,
         wal_backup: Arc<WalBackup>,
     ) -> Result<Arc<Timeline>> {
-        let tenant_path = get_tenant_dir(conf.as_ref(), &ttid.tenant_id);
-        let timeline_path = get_timeline_dir(conf.as_ref(), &ttid);
-
-        // We must have already checked that timeline doesn't exist in the map,
-        // but there might be existing datadir: if timeline is corrupted it is
-        // not loaded. We don't want to overwrite such a dir, so check for its
-        // existence.
-        match fs::metadata(&timeline_path).await {
-            Ok(_) => {
-                // Timeline directory exists on disk, we should leave state unchanged
-                // and return error.
-                bail!(TimelineError::Invalid(ttid));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(e.into());
-            }
-        }
-
-        info!(
-            "moving timeline {} from {} to {}",
-            ttid, tmp_path, timeline_path
-        );
-
-        // Now it is safe to move the timeline directory to the correct
-        // location. First, create tenant directory. Ignore error if it already
-        // exists.
-        if let Err(e) = tokio::fs::create_dir(&tenant_path).await {
-            if e.kind() != std::io::ErrorKind::AlreadyExists {
-                return Err(e.into());
-            }
-        }
-        // fsync it
-        fsync_async_opt(&tenant_path, !conf.no_sync).await?;
-        // and its creation
-        fsync_async_opt(&conf.workdir, !conf.no_sync).await?;
-
-        // Do the move.
-        durable_rename(tmp_path, &timeline_path, !conf.no_sync).await?;
-
         Timeline::load_timeline(conf, ttid, wal_backup).await
     }
 
@@ -728,16 +682,23 @@ pub async fn create_temp_timeline_dir(
     Ok((tli_dir, tli_dir_path))
 }
 
-/// Do basic validation of a temp timeline, before moving it to the global map.
+/// Validate a freshly-created temp timeline by reading its control-file
+/// blob back from remote storage and checking generation bounds. The
+/// returned `(commit_lsn, flush_lsn)` matches what callers expected from
+/// the old local-FS implementation; flush_lsn is the same as commit_lsn
+/// here because there's no separately-tracked on-disk WAL.
 pub async fn validate_temp_timeline(
-    conf: &SafeKeeperConf,
+    _conf: &SafeKeeperConf,
     ttid: TenantTimelineId,
-    path: &Utf8PathBuf,
+    _path: &Utf8PathBuf,
     generation: Option<SafekeeperGeneration>,
+    wal_backup: &WalBackup,
 ) -> Result<(Lsn, Lsn)> {
-    let control_path = path.join("safekeeper.control");
-
-    let control_store = control_file::FileStorage::load_control_file(control_path)?;
+    let remote_storage = wal_backup
+        .get_storage()
+        .context("control-file validate requires remote storage")?;
+    let control_store =
+        control_file::ControlFileStorage::restore_new(remote_storage, &ttid).await?;
     if control_store.server.wal_seg_size == 0 {
         bail!("wal_seg_size is not set");
     }
@@ -751,12 +712,8 @@ pub async fn validate_temp_timeline(
         }
     }
 
-    let wal_store = wal_storage::PhysicalStorage::new(&ttid, path, &control_store, conf.no_sync)?;
-
     let commit_lsn = control_store.commit_lsn;
-    let flush_lsn = wal_store.flush_lsn();
-
-    Ok((commit_lsn, flush_lsn))
+    Ok((commit_lsn, commit_lsn))
 }
 
 /// A tombstone for a deleted timeline.

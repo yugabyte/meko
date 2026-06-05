@@ -1,7 +1,6 @@
 //
 // Main entry point for the safekeeper executable
 //
-use std::fs::File;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,7 +26,7 @@ use safekeeper::hadron;
 use safekeeper::wal_backup::WalBackup;
 use safekeeper::{
     BACKGROUND_RUNTIME, BROKER_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf,
-    WAL_SERVICE_RUNTIME, broker, control_file, http, wal_service,
+    WAL_SERVICE_RUNTIME, broker, http, wal_service,
 };
 use sd_notify::NotifyState;
 use storage_broker::{DEFAULT_ENDPOINT, Uri};
@@ -123,9 +122,6 @@ struct Args {
     /// Availability zone of the safekeeper.
     #[arg(long)]
     availability_zone: Option<String>,
-    /// Do not wait for changes to be written safely to disk. Unsafe.
-    #[arg(short, long)]
-    no_sync: bool,
     /// Dump control file at path specified by this argument and exit.
     #[arg(long)]
     dump_control_file: Option<Utf8PathBuf>,
@@ -152,12 +148,6 @@ struct Args {
     /// structure on the file system.
     #[arg(long, value_parser = parse_remote_storage, verbatim_doc_comment)]
     remote_storage: Option<RemoteStorageConfig>,
-    /// Where to persist the per-timeline control file. With `remote-storage`
-    /// the safekeeper writes `safekeeper-control/<tenant>/<timeline>` into
-    /// the configured `--remote-storage` (intended for the YbStore variant)
-    /// instead of `<workdir>/<tenant>/<timeline>/safekeeper.control`.
-    #[arg(long, value_enum, default_value_t = safekeeper::control_file::ControlFileBackend::File)]
-    control_file_backend: safekeeper::control_file::ControlFileBackend,
     /// Optional YugabyteDB connection for mirroring live WAL writes. TOML
     /// inline-table format, same fields as a `YbStore` `remote_storage`
     /// entry (host, port, user, dbname, table_name, prefix?). When set,
@@ -347,10 +337,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(addr) = args.dump_control_file {
-        let state = control_file::FileStorage::load_control_file(addr)?;
-        let json = serde_json::to_string(&state)?;
-        print!("{json}");
-        return Ok(());
+        anyhow::bail!(
+            "--dump-control-file is unsupported: local-FS control files were removed. \
+             Read the blob from remote storage at safekeeper-control/<tenant>/<timeline> \
+             (input was {addr})"
+        );
     }
 
     // important to keep the order of:
@@ -457,13 +448,11 @@ async fn main() -> anyhow::Result<()> {
         listen_https_addr: args.listen_https,
         advertise_pg_addr: args.advertise_pg,
         availability_zone: args.availability_zone,
-        no_sync: args.no_sync,
         broker_endpoint: args.broker_endpoint,
         broker_keepalive_interval: args.broker_keepalive_interval,
         heartbeat_timeout: args.heartbeat_timeout,
         peer_recovery_enabled: args.peer_recovery,
         remote_storage: args.remote_storage,
-        control_file_backend: args.control_file_backend,
         wal_yb_config: args.wal_yb_config,
         wal_cache_size_mib: args.wal_cache_size_mib.unwrap_or_else(|| {
             safekeeper::scale_count(
@@ -517,18 +506,6 @@ async fn main() -> anyhow::Result<()> {
 type JoinTaskRes = Result<anyhow::Result<()>, JoinError>;
 
 async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
-    // fsync the datadir to make sure we have a consistent state on disk.
-    if !conf.no_sync {
-        let dfd = File::open(&conf.workdir).context("open datadir for syncfs")?;
-        let started = Instant::now();
-        utils::crashsafe::syncfs(dfd)?;
-        let elapsed = started.elapsed();
-        info!(
-            elapsed_ms = elapsed.as_millis(),
-            "syncfs data directory done"
-        );
-    }
-
     info!("starting safekeeper WAL service on {}", conf.listen_pg_addr);
     let pg_listener = tcp_listener::bind(conf.listen_pg_addr.clone()).map_err(|e| {
         error!("failed to bind to address {}: {}", conf.listen_pg_addr, e);

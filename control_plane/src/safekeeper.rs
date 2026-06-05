@@ -166,9 +166,6 @@ impl SafekeeperNode {
             let listen_pg_tenant_only = format!("{}:{}", self.listen_addr, pg_tenant_only_port);
             args.extend(["--listen-pg-tenant-only".to_owned(), listen_pg_tenant_only]);
         }
-        if !self.conf.sync {
-            args.push("--no-sync".to_owned());
-        }
 
         let broker_endpoint = format!("{}", self.env.broker.client_url());
         args.extend(["--broker-endpoint".to_owned(), broker_endpoint]);
@@ -183,10 +180,6 @@ impl SafekeeperNode {
 
         if let Some(ref remote_storage) = self.conf.remote_storage {
             args.extend(["--remote-storage".to_owned(), remote_storage.clone()]);
-        }
-
-        if let Some(ref backend) = self.conf.control_file_backend {
-            args.extend(["--control-file-backend".to_owned(), backend.clone()]);
         }
 
         if let Some(ref wal_yb) = self.conf.wal_yb_config {

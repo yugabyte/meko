@@ -27,13 +27,16 @@ use tokio_tar::{Archive, Builder, Header};
 use tokio_util::io::{CopyToBytes, SinkWriter};
 use tokio_util::sync::PollSender;
 use tracing::{error, info, instrument, warn};
-use utils::crashsafe::fsync_async_opt;
 use utils::id::{NodeId, TenantTimelineId};
 use utils::logging::SecretString;
 use utils::lsn::Lsn;
 use utils::pausable_failpoint;
 
-use crate::control_file::CONTROL_FILE_NAME;
+/// Legacy filename written into pull-timeline tar archives. The
+/// receiving safekeeper no longer reads this on disk (control state
+/// comes from `GenericRemoteStorage`), but the field is kept for tar
+/// compatibility with older peers.
+const CONTROL_FILE_NAME: &str = "safekeeper.control";
 use crate::state::{EvictionState, TimelinePersistentState};
 use crate::timeline::{Timeline, TimelineError, WalResidentTimeline};
 use crate::timelines_global_map::{create_temp_timeline_dir, validate_temp_timeline};
@@ -751,14 +754,12 @@ async fn pull_timeline(
         }
     }
 
-    // fsync temp timeline directory to remember its contents.
-    fsync_async_opt(&tli_dir_path, !conf.no_sync).await?;
-
     let generation = mconf.as_ref().map(|c| c.generation);
 
     // Let's create timeline from temp directory and verify that it's correct
+    let wal_backup = global_timelines.get_wal_backup();
     let (commit_lsn, flush_lsn) =
-        validate_temp_timeline(conf, ttid, &tli_dir_path, generation).await?;
+        validate_temp_timeline(conf, ttid, &tli_dir_path, generation, &wal_backup).await?;
     info!(
         "finished downloading timeline {}, commit_lsn={}, flush_lsn={}",
         ttid, commit_lsn, flush_lsn

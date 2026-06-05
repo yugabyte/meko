@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use http_utils::error::ApiError;
 use remote_storage::RemotePath;
@@ -42,7 +42,7 @@ use crate::timelines_set::TimelinesSet;
 use crate::wal_backup;
 use crate::wal_backup::{WalBackup, remote_timeline_path};
 use crate::wal_backup_partial::PartialRemoteSegment;
-use crate::wal_storage::{PhysicalStorage, Storage as wal_storage_iface, WalReader};
+use crate::wal_storage::{Storage as wal_storage_iface, WalReader};
 use crate::yb_wal_storage::{self, YbWalStorage};
 use crate::{SafeKeeperConf, control_file, debug_dump, timeline_manager};
 
@@ -328,16 +328,11 @@ impl SharedState {
         ttid: &TenantTimelineId,
         wal_backup: &WalBackup,
     ) -> Result<Self> {
-        let timeline_dir = get_timeline_dir(conf, ttid);
-        let remote_storage = wal_backup.get_storage();
-        let control_store = control_file::ControlFileStorage::restore_new(
-            conf.control_file_backend,
-            &timeline_dir,
-            ttid,
-            conf.no_sync,
-            remote_storage.as_ref(),
-        )
-        .await?;
+        let remote_storage = wal_backup
+            .get_storage()
+            .context("control-file restore requires remote storage")?;
+        let control_store =
+            control_file::ControlFileStorage::restore_new(remote_storage, ttid).await?;
         if control_store.server.wal_seg_size == 0 {
             bail!(TimelineError::UninitializedWalSegSize(*ttid));
         }
@@ -352,26 +347,11 @@ impl SharedState {
 
         let sk = match control_store.eviction_state {
             EvictionState::Present => {
-                let wal_store = match wal_backup.get_wal_yb() {
-                    Some((client, table, cache)) => yb_wal_storage::WalStore::Yb(
-                        YbWalStorage::new(
-                            ttid,
-                            &timeline_dir,
-                            &control_store,
-                            conf.no_sync,
-                            client,
-                            table,
-                            cache,
-                        )
-                        .await?,
-                    ),
-                    None => yb_wal_storage::WalStore::Physical(PhysicalStorage::new(
-                        ttid,
-                        &timeline_dir,
-                        &control_store,
-                        conf.no_sync,
-                    )?),
-                };
+                let (client, table, cache) = wal_backup
+                    .get_wal_yb()
+                    .context("WAL storage requires YB live-WAL config (--wal-yb-config)")?;
+                let wal_store =
+                    YbWalStorage::new(ttid, &control_store, client, table, cache).await?;
                 StateSK::Loaded(SafeKeeper::new(
                     TimelineState::new(control_store),
                     wal_store,
@@ -1300,26 +1280,12 @@ impl ManagerTimeline {
         let mut shared = self.write_shared_state().await;
 
         // trying to restore WAL storage
-        let wal_store = match self.wal_backup.get_wal_yb() {
-            Some((client, table, cache)) => yb_wal_storage::WalStore::Yb(
-                YbWalStorage::new(
-                    &self.ttid,
-                    &self.timeline_dir,
-                    shared.sk.state(),
-                    self.conf.no_sync,
-                    client,
-                    table,
-                    cache,
-                )
-                .await?,
-            ),
-            None => yb_wal_storage::WalStore::Physical(PhysicalStorage::new(
-                &self.ttid,
-                &self.timeline_dir,
-                shared.sk.state(),
-                self.conf.no_sync,
-            )?),
-        };
+        let (client, table, cache) = self
+            .wal_backup
+            .get_wal_yb()
+            .context("WAL storage requires YB live-WAL config (--wal-yb-config)")?;
+        let wal_store =
+            YbWalStorage::new(&self.ttid, shared.sk.state(), client, table, cache).await?;
 
         // updating control file
         let mut pstate = shared.sk.state_mut().start_change();

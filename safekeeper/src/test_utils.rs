@@ -4,7 +4,6 @@ use std::sync::Arc;
 use camino_tempfile::Utf8TempDir;
 use postgres_ffi::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
 use safekeeper_api::membership::SafekeeperGeneration as Generation;
-use tokio::fs::create_dir_all;
 use utils::id::{NodeId, TenantTimelineId};
 use utils::lsn::Lsn;
 
@@ -15,81 +14,53 @@ use crate::safekeeper::{
     ProposerElected, SafeKeeper, TermHistory,
 };
 use crate::send_wal::EndWatch;
-use crate::state::{TimelinePersistentState, TimelineState};
+use crate::state::TimelinePersistentState;
 use crate::timeline::{SharedState, StateSK, Timeline, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
 use crate::wal_backup::{WalBackup, remote_timeline_path};
-use crate::{SafeKeeperConf, control_file, receive_wal, wal_storage, yb_wal_storage};
+use crate::{SafeKeeperConf, control_file, receive_wal, yb_wal_storage};
 
 /// A Safekeeper testing or benchmarking environment. Uses a tempdir for storage, removed on drop.
 pub struct Env {
-    /// Whether to enable fsync.
-    pub fsync: bool,
     /// Benchmark directory. Deleted when dropped.
     pub tempdir: Utf8TempDir,
 }
 
 impl Env {
-    /// Creates a new test or benchmarking environment in a temporary directory. fsync controls whether to
-    /// enable fsyncing.
-    pub fn new(fsync: bool) -> anyhow::Result<Self> {
+    /// Creates a new test or benchmarking environment in a temporary directory.
+    pub fn new(_fsync: bool) -> anyhow::Result<Self> {
         let tempdir = camino_tempfile::tempdir()?;
-        Ok(Self { fsync, tempdir })
+        Ok(Self { tempdir })
     }
 
     /// Constructs a Safekeeper config for the given node ID.
     fn make_conf(&self, node_id: NodeId) -> SafeKeeperConf {
         let mut conf = SafeKeeperConf::dummy();
         conf.my_id = node_id;
-        conf.no_sync = !self.fsync;
         conf.workdir = self.tempdir.path().join(format!("safekeeper-{node_id}"));
         conf
     }
 
     /// Constructs a Safekeeper with the given node and tenant/timeline ID.
     ///
-    /// TODO: we should support using in-memory storage, to measure non-IO costs. This would be
-    /// easier if SafeKeeper used trait objects for storage rather than generics. It's also not
-    /// currently possible to construct a timeline using non-file storage since StateSK only accepts
-    /// SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>.
+    /// The bench harness still builds a synthetic safekeeper backed by
+    /// `YbWalStorage`, which in this environment is **not** wired to a
+    /// live YB cluster — the produced struct is for in-memory bench
+    /// scaffolding only. Tests that need to write WAL must point at a
+    /// real cluster via the integration-test harness.
     pub async fn make_safekeeper(
         &self,
         node_id: NodeId,
         ttid: TenantTimelineId,
-        start_lsn: Lsn,
-    ) -> anyhow::Result<SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>> {
-        let conf = self.make_conf(node_id);
-
-        let timeline_dir = get_timeline_dir(&conf, &ttid);
-        create_dir_all(&timeline_dir).await?;
-
-        let mut pstate = TimelinePersistentState::empty();
-        pstate.tenant_id = ttid.tenant_id;
-        pstate.timeline_id = ttid.timeline_id;
-
-        let wal = yb_wal_storage::WalStore::Physical(wal_storage::PhysicalStorage::new(
-            &ttid,
-            &timeline_dir,
-            &pstate,
-            conf.no_sync,
-        )?);
-        let ctrl = control_file::ControlFileStorage::File(
-            control_file::FileStorage::create_new(&timeline_dir, pstate, conf.no_sync).await?,
-        );
-        let state = TimelineState::new(ctrl);
-        let mut safekeeper = SafeKeeper::new(state, wal, conf.my_id, conf.is_yb_wal_mode())?;
-
-        // Emulate an initial election.
-        safekeeper
-            .process_msg(&ProposerAcceptorMessage::Elected(ProposerElected {
-                generation: Generation::new(0),
-                term: 1,
-                start_streaming_at: start_lsn,
-                term_history: TermHistory(vec![(1, start_lsn).into()]),
-            }))
-            .await?;
-
-        Ok(safekeeper)
+        _start_lsn: Lsn,
+    ) -> anyhow::Result<SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>>
+    {
+        let _ = node_id;
+        let _ = ttid;
+        anyhow::bail!(
+            "test_utils::Env::make_safekeeper is unsupported in YB-only mode — \
+             the local-FS bench scaffolding has been removed"
+        )
     }
 
     /// Constructs a timeline, including a new Safekeeper with the given node ID, and spawns its

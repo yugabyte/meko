@@ -1,13 +1,13 @@
-//! This module has everything to deal with WAL -- reading and writing to disk.
+//! WAL bookkeeping + reader.
 //!
-//! Safekeeper WAL is stored in the timeline directory, in format similar to pg_wal.
-//! PG timeline is always 1, so WAL segments are usually have names like this:
-//! - 000000010000000000000001
-//! - 000000010000000000000002.partial
-//!
-//! Note that last file has `.partial` suffix, that's different from postgres.
+//! Historically this module wrote WAL to a local pg_wal-style directory.
+//! yb-light keeps WAL only in YB (`public.wals`); `PhysicalStorage` is
+//! now a pure bookkeeping helper used by `YbWalStorage` to track LSN
+//! watermarks and feed the `WalStreamDecoder`. `WalReader` continues to
+//! serve WAL bytes to the WAL sender — locally from the in-memory
+//! `WalCache`, otherwise from YB.
 
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::future::Future;
 use std::io::{ErrorKind, SeekFrom};
 use std::pin::Pin;
@@ -16,24 +16,18 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use camino::{Utf8Path, Utf8PathBuf};
 use futures::future::BoxFuture;
-use postgres_ffi::v14::xlog_utils::{IsPartialXLogFileName, IsXLogFileName, XLogFromFileName};
 use postgres_ffi::waldecoder::WalStreamDecoder;
-use postgres_ffi::{PG_TLI, XLogFileName, XLogSegNo, dispatch_pgversion};
+use postgres_ffi::{PG_TLI, XLogFileName, XLogSegNo};
 use postgres_versioninfo::{PgMajorVersion, PgVersionId};
 use pq_proto::SystemId;
 use remote_storage::RemotePath;
 use std::sync::Arc;
-use tokio::fs::{self, File, OpenOptions, remove_file};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 use tracing::*;
-use utils::crashsafe::durable_rename;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
 
-use crate::metrics::{
-    REMOVED_WAL_SEGMENTS, WAL_DISK_IO_ERRORS, WAL_STORAGE_OPERATION_SECONDS, WalStorageMetrics,
-    time_io_closure,
-};
+use crate::metrics::{WAL_STORAGE_OPERATION_SECONDS, WalStorageMetrics};
 use crate::state::TimelinePersistentState;
 use crate::wal_backup::{WalBackup, read_object, remote_timeline_path};
 
@@ -75,198 +69,52 @@ pub trait Storage {
     fn get_metrics(&self) -> WalStorageMetrics;
 }
 
-/// PhysicalStorage is a storage that stores WAL on disk. Writes are separated from flushes
-/// for better performance. Storage is initialized in the constructor.
-///
-/// WAL is stored in segments, each segment is a file. Last segment has ".partial" suffix in
-/// its filename and may be not fully flushed.
+/// In-memory bookkeeping for the WAL stream: write/flush watermarks plus
+/// the `WalStreamDecoder` used to find WAL-record boundaries. No
+/// filesystem interaction — `YbWalStorage` owns durability via YB.
 ///
 /// Relationship of LSNs:
 /// `write_lsn` >= `write_record_lsn` >= `flush_record_lsn`
-///
-/// When storage is created first time, all LSNs are zeroes and there are no segments on disk.
 pub struct PhysicalStorage {
     metrics: WalStorageMetrics,
-    timeline_dir: Utf8PathBuf,
-
-    /// Disables fsync if true.
-    no_sync: bool,
-
-    /// When true, skip every local-filesystem write (open/write/truncate/
-    /// remove/fsync). LSN tracking and WAL-record decoding still run so the
-    /// in-memory state stays correct; we just don't touch disk. Used when
-    /// the safekeeper has been configured to keep WAL only in YugabyteDB
-    /// (`--wal-yb-config` set) — local files become unnecessary.
-    no_local_writes: bool,
 
     /// Size of WAL segment in bytes.
     wal_seg_size: usize,
     pg_version: PgVersionId,
     system_id: u64,
 
-    /// Written to disk, but possibly still in the cache and not fully persisted.
-    /// Also can be ahead of record_lsn, if happen to be in the middle of a WAL record.
+    /// Possibly in the middle of a WAL record.
     write_lsn: Lsn,
 
-    /// The LSN of the last WAL record written to disk. Still can be not fully
-    /// flushed.
-    ///
-    /// Note: Normally it (and flush_record_lsn) is <= write_lsn, but after xlog
-    /// switch ingest the reverse is true because we don't bump write_lsn up to
-    /// the next segment: WAL stream from the compute doesn't have the gap and
-    /// for simplicity / as a sanity check we disallow any non-sequential
-    /// writes, so write zeros as is.
-    ///
-    /// Similar effect is in theory possible due to LSN alignment: if record
-    /// ends at *2, decoder will report end lsn as *8 even though we haven't
-    /// written these zeros yet. In practice compute likely never sends
-    /// non-aligned chunks of data.
+    /// LSN of the last fully-written WAL record.
     write_record_lsn: Lsn,
 
-    /// The last LSN flushed to disk. May be in the middle of a record.
-    ///
-    /// NB: when the rest of the system refers to `flush_lsn`, it usually
-    /// actually refers to `flush_record_lsn`. This ambiguity can be dangerous
-    /// and should be resolved.
+    /// Flush watermark. May be in the middle of a record.
     flush_lsn: Lsn,
 
-    /// The LSN of the last WAL record flushed to disk.
+    /// LSN of the last fully-flushed WAL record.
     flush_record_lsn: Lsn,
 
-    /// Decoder is required for detecting boundaries of WAL records.
+    /// Used to detect WAL-record boundaries inside the byte stream.
     decoder: WalStreamDecoder,
-
-    /// Cached open file for the last segment.
-    ///
-    /// If Some(file) is open, then it always:
-    /// - has ".partial" suffix
-    /// - points to write_lsn, so no seek is needed for writing
-    /// - doesn't point to the end of the segment
-    file: Option<File>,
-
-    /// When true, WAL truncation potentially has been interrupted and we need
-    /// to finish it before allowing WAL writes; see truncate_wal for details.
-    /// In this case [`write_lsn`] can be less than actually written WAL on
-    /// disk. In particular, there can be a case with unexpected .partial file.
-    ///
-    /// Imagine the following:
-    /// - 000000010000000000000001
-    ///   - it was fully written, but the last record is split between 2
-    ///     segments
-    ///   - after restart, `find_end_of_wal()` returned 0/1FFFFF0, which is in
-    ///     the end of this segment
-    ///   - `write_lsn`, `write_record_lsn` and `flush_record_lsn` were
-    ///     initialized to 0/1FFFFF0
-    /// - 000000010000000000000002.partial
-    ///   - it has only 1 byte written, which is not enough to make a full WAL
-    ///     record
-    ///
-    /// Partial segment 002 has no WAL records, and it will be removed by the
-    /// next truncate_wal(). This flag will be set to false after the first
-    /// successful truncate_wal() call.
-    ///
-    /// [`write_lsn`]: Self::write_lsn
-    pending_wal_truncation: bool,
 }
 
 impl PhysicalStorage {
-    /// Create new storage. If commit_lsn is not zero, flush_lsn is tried to be restored from
-    /// the disk. Otherwise, all LSNs are set to zero.
+    /// Build the bookkeeping helper. `write_lsn` is supplied by the caller
+    /// (`YbWalStorage` rehydrates it from `public.wals`); all watermarks
+    /// start there.
     pub fn new(
         ttid: &TenantTimelineId,
-        timeline_dir: &Utf8Path,
-        state: &TimelinePersistentState,
-        no_sync: bool,
-    ) -> Result<PhysicalStorage> {
-        let wal_seg_size = state.server.wal_seg_size as usize;
-
-        // Find out where stored WAL ends, starting at commit_lsn which is a
-        // known recent record boundary (unless we don't have WAL at all).
-        //
-        // NB: find_end_of_wal MUST be backwards compatible with the previously
-        // written WAL. If find_end_of_wal fails to read any WAL written by an
-        // older version of the code, we could lose data forever.
-        let write_lsn = if state.commit_lsn == Lsn(0) {
-            Lsn(0)
-        } else {
-            let version = PgMajorVersion::try_from(state.server.pg_version).unwrap();
-
-            dispatch_pgversion!(
-                version,
-                pgv::xlog_utils::find_end_of_wal(
-                    timeline_dir.as_std_path(),
-                    wal_seg_size,
-                    state.commit_lsn,
-                )?,
-                bail!("unsupported postgres version: {}", version)
-            )
-        };
-
-        // note: this assumes we fsync'ed whole datadir on start.
-        let flush_lsn = write_lsn;
-
-        debug!(
-            "initialized storage for timeline {}, flush_lsn={}, commit_lsn={}, peer_horizon_lsn={}",
-            ttid.timeline_id, flush_lsn, state.commit_lsn, state.peer_horizon_lsn,
-        );
-        if flush_lsn < state.commit_lsn {
-            // note: can never happen. find_end_of_wal returns provided start_lsn
-            // (state.commit_lsn in our case) if it doesn't find anything.
-            bail!(
-                "timeline {} potential data loss: flush_lsn {} by find_end_of_wal is less than commit_lsn  {} from control file",
-                ttid.timeline_id,
-                flush_lsn,
-                state.commit_lsn
-            );
-        }
-        if flush_lsn < state.peer_horizon_lsn {
-            warn!(
-                "timeline {}: flush_lsn {} is less than cfile peer_horizon_lsn {}",
-                ttid.timeline_id, flush_lsn, state.peer_horizon_lsn
-            );
-        }
-
-        Ok(PhysicalStorage {
-            metrics: WalStorageMetrics::default(),
-            timeline_dir: timeline_dir.to_path_buf(),
-            no_sync,
-            no_local_writes: false,
-            wal_seg_size,
-            pg_version: state.server.pg_version,
-            system_id: state.server.system_id,
-            write_lsn,
-            write_record_lsn: write_lsn,
-            flush_lsn,
-            flush_record_lsn: flush_lsn,
-            decoder: WalStreamDecoder::new(
-                write_lsn,
-                PgMajorVersion::try_from(state.server.pg_version).unwrap(),
-            ),
-            file: None,
-            pending_wal_truncation: true,
-        })
-    }
-
-    /// Build an "ephemeral" PhysicalStorage that never touches the local
-    /// filesystem. Used by `YbWalStorage` when WAL is durably held in YB and
-    /// the local FS shouldn't be written. `write_lsn` is taken from the
-    /// caller (rehydrated from YB) instead of `find_end_of_wal` scanning disk.
-    pub fn new_no_local_writes(
-        ttid: &TenantTimelineId,
-        timeline_dir: &Utf8Path,
         state: &TimelinePersistentState,
         write_lsn: Lsn,
     ) -> Result<PhysicalStorage> {
         let wal_seg_size = state.server.wal_seg_size as usize;
         debug!(
-            "initialized no-local-writes WAL storage for timeline {}, write_lsn={}, commit_lsn={}",
+            "initialized WAL bookkeeping for timeline {}, write_lsn={}, commit_lsn={}",
             ttid.timeline_id, write_lsn, state.commit_lsn,
         );
         Ok(PhysicalStorage {
             metrics: WalStorageMetrics::default(),
-            timeline_dir: timeline_dir.to_path_buf(),
-            no_sync: true,
-            no_local_writes: true,
             wal_seg_size,
             pg_version: state.server.pg_version,
             system_id: state.server.system_id,
@@ -278,8 +126,6 @@ impl PhysicalStorage {
                 write_lsn,
                 PgMajorVersion::try_from(state.server.pg_version).unwrap(),
             ),
-            file: None,
-            pending_wal_truncation: false,
         })
     }
 
@@ -295,183 +141,15 @@ impl PhysicalStorage {
 
     /// Get all known state of the storage.
     pub fn internal_state(&self) -> (Lsn, Lsn, Lsn, bool) {
-        (
-            self.write_lsn,
-            self.write_record_lsn,
-            self.flush_record_lsn,
-            self.file.is_some(),
-        )
-    }
-
-    /// Call fsync if config requires so.
-    async fn fsync_file(&mut self, file: &File) -> Result<()> {
-        if !self.no_sync {
-            self.metrics
-                .observe_flush_seconds(time_io_closure(file.sync_all()).await?);
-        }
-        Ok(())
-    }
-
-    /// Call fdatasync if config requires so.
-    async fn fdatasync_file(&mut self, file: &File) -> Result<()> {
-        if !self.no_sync {
-            self.metrics
-                .observe_flush_seconds(time_io_closure(file.sync_data()).await?);
-        }
-        Ok(())
-    }
-
-    /// Open or create WAL segment file. Caller must call seek to the wanted position.
-    /// Returns `file` and `is_partial`.
-    async fn open_or_create(&mut self, segno: XLogSegNo) -> Result<(File, bool)> {
-        let (wal_file_path, wal_file_partial_path) =
-            wal_file_paths(&self.timeline_dir, segno, self.wal_seg_size);
-
-        // Try to open already completed segment
-        if let Ok(file) = OpenOptions::new().write(true).open(&wal_file_path).await {
-            Ok((file, false))
-        } else if let Ok(file) = OpenOptions::new()
-            .write(true)
-            .open(&wal_file_partial_path)
-            .await
-        {
-            // Try to open existing partial file
-            Ok((file, true))
-        } else {
-            let _timer = WAL_STORAGE_OPERATION_SECONDS
-                .with_label_values(&["initialize_segment"])
-                .start_timer();
-            // Create and fill new partial file
-            //
-            // We're using fdatasync during WAL writing, so file size must not
-            // change; to this end it is filled with zeros here. To avoid using
-            // half initialized segment, first bake it under tmp filename and
-            // then rename.
-            let tmp_path = self.timeline_dir.join("waltmp");
-            let file: File = File::create(&tmp_path).await.with_context(|| {
-                /* BEGIN_HADRON */
-                WAL_DISK_IO_ERRORS.inc();
-                /* END_HADRON */
-                format!("Failed to open tmp wal file {:?}", &tmp_path)
-            })?;
-
-            fail::fail_point!("sk-zero-segment", |_| {
-                info!("sk-zero-segment failpoint hit");
-                Err(anyhow::anyhow!("failpoint: sk-zero-segment"))
-            });
-            file.set_len(self.wal_seg_size as u64).await?;
-
-            if let Err(e) = durable_rename(&tmp_path, &wal_file_partial_path, !self.no_sync).await {
-                // Probably rename succeeded, but fsync of it failed. Remove
-                // the file then to avoid using it.
-                remove_file(wal_file_partial_path)
-                    .await
-                    .or_else(utils::fs_ext::ignore_not_found)?;
-                return Err(e.into());
-            }
-            Ok((file, true))
-        }
-    }
-
-    /// Write WAL bytes, which are known to be located in a single WAL segment. Returns true if the
-    /// segment was completed, closed, and flushed to disk.
-    async fn write_in_segment(&mut self, segno: u64, xlogoff: usize, buf: &[u8]) -> Result<bool> {
-        if self.no_local_writes {
-            // No local FS — caller (YbWalStorage) has already pushed the
-            // bytes to durable storage. Mirror the "segment completed"
-            // signal solely from `xlogoff + buf.len() == wal_seg_size` so
-            // callers behave the same.
-            let _ = segno;
-            return Ok(xlogoff + buf.len() == self.wal_seg_size);
-        }
-        let mut file = if let Some(file) = self.file.take() {
-            file
-        } else {
-            let (mut file, is_partial) = self.open_or_create(segno).await?;
-            assert!(is_partial, "unexpected write into non-partial segment file");
-            file.seek(SeekFrom::Start(xlogoff as u64)).await?;
-            file
-        };
-
-        file.write_all(buf).await?;
-        // Note: flush just ensures write above reaches the OS (this is not
-        // needed in case of sync IO as Write::write there calls directly write
-        // syscall, but needed in case of async). It does *not* fsyncs the file.
-        file.flush().await?;
-
-        if xlogoff + buf.len() == self.wal_seg_size {
-            // If we reached the end of a WAL segment, flush and close it.
-            self.fdatasync_file(&file).await?;
-
-            // Rename partial file to completed file
-            let (wal_file_path, wal_file_partial_path) =
-                wal_file_paths(&self.timeline_dir, segno, self.wal_seg_size);
-            fs::rename(wal_file_partial_path, wal_file_path).await?;
-            Ok(true)
-        } else {
-            // otherwise, file can be reused later
-            self.file = Some(file);
-            Ok(false)
-        }
-    }
-
-    /// Writes WAL to the segment files, until everything is writed. If some segments
-    /// are fully written, they are flushed to disk. The last (partial) segment can
-    /// be flushed separately later.
-    ///
-    /// Updates `write_lsn` and `flush_lsn`.
-    async fn write_exact(&mut self, pos: Lsn, mut buf: &[u8]) -> Result<()> {
-        // TODO: this shouldn't be possible, except possibly with write_lsn == 0.
-        // Rename this method to `append_exact`, and make it append-only, removing
-        // the `pos` parameter and this check. For this reason, we don't update
-        // `flush_lsn` here.
-        if self.write_lsn != pos {
-            // need to flush the file before discarding it
-            if let Some(file) = self.file.take() {
-                self.fdatasync_file(&file).await?;
-            }
-
-            self.write_lsn = pos;
-        }
-
-        while !buf.is_empty() {
-            // Extract WAL location for this block
-            let xlogoff = self.write_lsn.segment_offset(self.wal_seg_size);
-            let segno = self.write_lsn.segment_number(self.wal_seg_size);
-
-            // If crossing a WAL boundary, only write up until we reach wal segment size.
-            let bytes_write = if xlogoff + buf.len() > self.wal_seg_size {
-                self.wal_seg_size - xlogoff
-            } else {
-                buf.len()
-            };
-
-            let flushed = self
-                .write_in_segment(segno, xlogoff, &buf[..bytes_write])
-                .await
-                /* BEGIN_HADRON */
-                .inspect_err(|_| WAL_DISK_IO_ERRORS.inc())?;
-            /* END_HADRON */
-
-            self.write_lsn += bytes_write as u64;
-            if flushed {
-                self.flush_lsn = self.write_lsn;
-            }
-            buf = &buf[bytes_write..];
-        }
-
-        Ok(())
+        (self.write_lsn, self.write_record_lsn, self.flush_record_lsn, false)
     }
 }
 
 impl Storage for PhysicalStorage {
-    // Last written LSN.
     fn write_lsn(&self) -> Lsn {
         self.write_lsn
     }
-    /// flush_lsn returns LSN of last durably stored WAL record.
-    ///
-    /// TODO: flush_lsn() returns flush_record_lsn, but write_lsn() returns write_lsn: confusing.
+
     #[allow(clippy::misnamed_getters)]
     fn flush_lsn(&self) -> Lsn {
         self.flush_record_lsn
@@ -481,33 +159,16 @@ impl Storage for PhysicalStorage {
         let _timer = WAL_STORAGE_OPERATION_SECONDS
             .with_label_values(&["initialize_first_segment"])
             .start_timer();
-
+        // YB-backed `YbWalStorage` initializes the segment-header bytes in
+        // YB; nothing to do at the bookkeeping layer beyond the trace.
         let segno = init_lsn.segment_number(self.wal_seg_size);
-        if self.no_local_writes {
-            // No local FS. YbWalStorage's wrapper handles initializing the
-            // segment header bytes in YB.
-            info!(
-                "skipped local-FS initialize for segno {} at lsn {} (no_local_writes)",
-                segno, init_lsn
-            );
-            return Ok(());
-        }
-        let (mut file, _) = self.open_or_create(segno).await?;
-        let major_pg_version = PgMajorVersion::try_from(self.pg_version).unwrap();
-        let wal_seg =
-            postgres_ffi::generate_wal_segment(segno, self.system_id, major_pg_version, init_lsn)?;
-        file.seek(SeekFrom::Start(0)).await?;
-        file.write_all(&wal_seg).await?;
-        file.flush().await?;
-        info!("initialized segno {} at lsn {}", segno, init_lsn);
-        // note: file is *not* fsynced
+        info!("initialize_first_segment: segno {} at lsn {} (YB-backed)", segno, init_lsn);
         Ok(())
     }
 
-    /// Write WAL to disk.
+    /// Advance bookkeeping for `buf` bytes starting at `startpos`. Durability is
+    /// the caller's responsibility (`YbWalStorage` INSERTs into `public.wals`).
     async fn write_wal(&mut self, startpos: Lsn, buf: &[u8]) -> Result<()> {
-        // Disallow any non-sequential writes, which can result in gaps or overwrites.
-        // If we need to move the pointer, use truncate_wal() instead.
         if self.write_lsn > startpos {
             bail!(
                 "write_wal rewrites WAL written before, write_lsn={}, startpos={}",
@@ -522,35 +183,21 @@ impl Storage for PhysicalStorage {
                 startpos
             );
         }
-        if self.pending_wal_truncation {
-            bail!(
-                "write_wal called with pending WAL truncation, write_lsn={}, startpos={}",
-                self.write_lsn,
-                startpos
-            );
-        }
 
-        let write_seconds = time_io_closure(self.write_exact(startpos, buf)).await?;
-        // WAL is written, updating write metrics
-        self.metrics.observe_write_seconds(write_seconds);
+        self.write_lsn = startpos + buf.len() as u64;
+        // No per-segment fsync barrier without a local FS; keep `flush_lsn`
+        // aligned with `write_lsn` directly.
+        self.flush_lsn = self.write_lsn;
         self.metrics.observe_write_bytes(buf.len());
 
-        // Figure out the last record's end LSN and update `write_record_lsn`
-        // (if we got a whole record). The write may also have closed and
-        // flushed a segment, so update `flush_record_lsn` as well.
         if self.decoder.available() != startpos {
-            info!(
-                "restart decoder from {} to {}",
-                self.decoder.available(),
-                startpos,
-            );
+            info!("restart decoder from {} to {}", self.decoder.available(), startpos);
             let pg_version = self.decoder.pg_version;
             self.decoder = WalStreamDecoder::new(startpos, pg_version);
         }
         self.decoder.feed_bytes(buf);
 
         if self.write_record_lsn <= self.flush_lsn {
-            // We may have flushed a previously written record.
             self.flush_record_lsn = self.write_record_lsn;
         }
         while let Some((lsn, _rec)) = self.decoder.poll_decode()? {
@@ -564,51 +211,21 @@ impl Storage for PhysicalStorage {
     }
 
     async fn flush_wal(&mut self) -> Result<()> {
-        if self.flush_record_lsn == self.write_record_lsn {
-            // no need to do extra flush
-            return Ok(());
-        }
-
-        if self.no_local_writes {
-            // YB-only mode: WAL is already durable in YB after write_wal.
-            // Just advance the in-memory flush watermarks.
-            self.flush_lsn = self.write_lsn;
-            self.flush_record_lsn = self.write_record_lsn;
-            return Ok(());
-        }
-
-        if let Some(unflushed_file) = self.file.take() {
-            self.fdatasync_file(&unflushed_file)
-                .await
-                /* BEGIN_HADRON */
-                .inspect_err(|_| WAL_DISK_IO_ERRORS.inc())?;
-            /* END_HADRON */
-            self.file = Some(unflushed_file);
-        } else {
-            // We have unflushed data (write_lsn != flush_lsn), but no file. This
-            // shouldn't happen, since the segment is flushed on close.
-            bail!(
-                "unexpected unflushed data with no open file, write_lsn={}, flush_lsn={}",
-                self.write_lsn,
-                self.flush_record_lsn
-            );
-        }
-
-        // everything is flushed now, let's update flush_lsn
+        // YB-only mode: WAL is durable in YB after write_wal. Just advance
+        // the in-memory flush watermarks.
         self.flush_lsn = self.write_lsn;
         self.flush_record_lsn = self.write_record_lsn;
         Ok(())
     }
 
-    /// Truncate written WAL by removing all WAL segments after the given LSN.
-    /// end_pos must point to the end of the WAL record.
+    /// Reset bookkeeping watermarks to `end_pos`. Caller
+    /// (`YbWalStorage::truncate_wal`) has already deleted the YB rows past
+    /// `end_pos` before we get here.
     async fn truncate_wal(&mut self, end_pos: Lsn) -> Result<()> {
         let _timer = WAL_STORAGE_OPERATION_SECONDS
             .with_label_values(&["truncate_wal"])
             .start_timer();
 
-        // Streaming must not create a hole, so truncate cannot be called on
-        // non-written lsn.
         if self.write_record_lsn != Lsn(0) && end_pos > self.write_record_lsn {
             bail!(
                 "truncate_wal called on non-written WAL, write_record_lsn={}, end_pos={}",
@@ -617,136 +234,27 @@ impl Storage for PhysicalStorage {
             );
         }
 
-        // Quick exit if nothing to do and we know that the state is clean to
-        // avoid writing up to 16 MiB of zeros on disk (this happens on each
-        // connect).
-        if !self.pending_wal_truncation
-            && end_pos == self.write_lsn
-            && end_pos == self.flush_record_lsn
-        {
+        if end_pos == self.write_lsn && end_pos == self.flush_record_lsn {
             return Ok(());
         }
-
-        // Atomicity: we start with LSNs reset because once on disk deletion is
-        // started it can't be reversed. However, we might crash/error in the
-        // middle, leaving garbage above the truncation point. In theory,
-        // concatenated with previous records it might form bogus WAL (though
-        // very unlikely in practice because CRC would guard from that). To
-        // protect, set pending_wal_truncation flag before beginning: it means
-        // truncation must be retried and WAL writes are prohibited until it
-        // succeeds. Flag is also set on boot because we don't know if the last
-        // state was clean.
-        //
-        // Protocol (HandleElected before first AppendRequest) ensures we'll
-        // always try to ensure clean truncation before any writes.
-        self.pending_wal_truncation = true;
 
         self.write_lsn = end_pos;
         self.flush_lsn = end_pos;
         self.write_record_lsn = end_pos;
         self.flush_record_lsn = end_pos;
-
-        if self.no_local_writes {
-            // YB-only mode: caller (YbWalStorage::truncate_wal) has already
-            // deleted the YB rows past end_pos. Nothing else to do locally.
-            self.pending_wal_truncation = false;
-            return Ok(());
-        }
-
-        // Close previously opened file, if any
-        if let Some(unflushed_file) = self.file.take() {
-            self.fdatasync_file(&unflushed_file).await?;
-        }
-
-        let xlogoff = end_pos.segment_offset(self.wal_seg_size);
-        let segno = end_pos.segment_number(self.wal_seg_size);
-
-        // Remove all segments after the given LSN.
-        remove_segments_from_disk(&self.timeline_dir, self.wal_seg_size, |x| x > segno).await?;
-
-        let (file, is_partial) = self.open_or_create(segno).await?;
-
-        // Fill end with zeroes
-        file.set_len(xlogoff as u64).await?;
-        file.set_len(self.wal_seg_size as u64).await?;
-        self.fsync_file(&file).await?;
-
-        if !is_partial {
-            // Make segment partial once again
-            let (wal_file_path, wal_file_partial_path) =
-                wal_file_paths(&self.timeline_dir, segno, self.wal_seg_size);
-            fs::rename(wal_file_path, wal_file_partial_path).await?;
-        }
-
-        self.pending_wal_truncation = false;
         info!("truncated WAL to {}", end_pos);
         Ok(())
     }
 
-    fn remove_up_to(&self, segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
-        if self.no_local_writes {
-            return Box::pin(async move {
-                // No local files to remove. Caller (YbWalStorage) handles YB.
-                let _ = segno_up_to;
-                Ok(())
-            });
-        }
-        let timeline_dir = self.timeline_dir.clone();
-        let wal_seg_size = self.wal_seg_size;
-        Box::pin(async move {
-            remove_segments_from_disk(&timeline_dir, wal_seg_size, |x| x <= segno_up_to).await
-        })
+    fn remove_up_to(&self, _segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(async move { Ok(()) })
     }
 
-    fn close(&mut self) {
-        // close happens in destructor
-        let _open_file = self.file.take();
-    }
+    fn close(&mut self) {}
 
     fn get_metrics(&self) -> WalStorageMetrics {
         self.metrics.clone()
     }
-}
-
-/// Remove all WAL segments in timeline_dir that match the given predicate.
-async fn remove_segments_from_disk(
-    timeline_dir: &Utf8Path,
-    wal_seg_size: usize,
-    remove_predicate: impl Fn(XLogSegNo) -> bool,
-) -> Result<()> {
-    let _timer = WAL_STORAGE_OPERATION_SECONDS
-        .with_label_values(&["remove_segments_from_disk"])
-        .start_timer();
-
-    let mut n_removed = 0;
-    let mut min_removed = u64::MAX;
-    let mut max_removed = u64::MIN;
-
-    let mut entries = fs::read_dir(timeline_dir).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let entry_path = entry.path();
-        let fname = entry_path.file_name().unwrap();
-        /* Ignore files that are not XLOG segments */
-        if !IsXLogFileName(fname) && !IsPartialXLogFileName(fname) {
-            continue;
-        }
-        let (segno, _) = XLogFromFileName(fname, wal_seg_size)?;
-        if remove_predicate(segno) {
-            remove_file(entry_path).await?;
-            n_removed += 1;
-            min_removed = min(min_removed, segno);
-            max_removed = max(max_removed, segno);
-            REMOVED_WAL_SEGMENTS.inc();
-        }
-    }
-
-    if n_removed > 0 {
-        info!(
-            "removed {} WAL segments [{}; {}]",
-            n_removed, min_removed, max_removed
-        );
-    }
-    Ok(())
 }
 
 pub struct WalReader {
