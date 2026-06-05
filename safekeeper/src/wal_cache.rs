@@ -8,11 +8,14 @@
 //! seen by the WAL sender, manifesting as `xlp_magic=0` / `xl_tot_len=0`
 //! decode errors a few hundred KB into the segment.
 //!
-//! This cache is populated by `YbWalStorage::upsert_writes` *immediately*
-//! (in addition to the producer/consumer path that INSERTs into YB).
-//! Reads through [`YbSegmentReader`] consult the cache first; only if the
-//! chunk is no longer cached (evicted FIFO once the cache outgrows its
-//! byte budget) does the read fall through to YB.
+//! This cache is populated by `consumer_main` *after* the chunk has been
+//! successfully INSERT'd into `yb_storage.wals` (NOT by the producer
+//! before the INSERT — see the durability discussion in the
+//! `yb_wal_storage` module docs). So the cache only ever holds chunks
+//! that are also durable in YB. Reads through [`YbSegmentReader`]
+//! consult the cache first; only if the chunk is no longer cached
+//! (evicted FIFO once the cache outgrows its byte budget) does the read
+//! fall through to YB, which has the chunk by construction.
 //!
 //! Why a plain `Mutex`: writes and reads naturally target disjoint
 //! offsets — writes append past `flush_lsn`, reads consume up to it — so
@@ -37,8 +40,8 @@
 //! ## API summary
 //!
 //! - [`WalCache::new`] – construct with a byte capacity (e.g. 256 MiB).
-//! - [`WalCache::insert`] – called by `upsert_writes` for each chunk it
-//!   pushes onto the consumer channel.
+//! - [`WalCache::insert`] – called by `consumer_main` once a batch of
+//!   chunks has been successfully INSERT'd into `yb_storage.wals`.
 //! - [`WalCache::lookup`] – called by `YbSegmentReader` to find the chunk
 //!   covering a given `(segno, byte_offset)`. Returns the chunk's range
 //!   and a clone of its `Arc<Vec<u8>>`.
@@ -59,7 +62,6 @@ use crate::metrics::{
 #[derive(Clone)]
 struct CachedChunk {
     chunk_size: usize,
-    chunk_seq: i32,
     data: Arc<Vec<u8>>,
 }
 
@@ -100,41 +102,24 @@ impl WalCache {
     /// Insert a chunk. Caller is responsible for not inserting the
     /// init-first-segment 16 MiB blob (see module docs).
     ///
-    /// If a chunk with the same `(segno, chunk_offset)` already exists
-    /// (only happens via `initialize_first_segment` followed by a
-    /// `write_wal` starting at the same offset, which we don't cache;
-    /// or via a re-INSERT after a producer restart in pathological
-    /// timing — which can't happen with `&mut self`-serialized writes),
-    /// we keep whichever has the higher `chunk_seq`.
-    pub fn insert(&mut self, segno: u64, chunk_offset: u64, chunk_seq: i32, data: Arc<Vec<u8>>) {
+    /// If a chunk with the same `(segno, chunk_offset)` already exists,
+    /// it's an idempotent re-INSERT of the same bytes (the writer never
+    /// produces overlapping chunks; see `yb_wal_storage` module docs).
+    /// Treat it as a no-op rather than mutating the existing entry.
+    pub fn insert(&mut self, segno: u64, chunk_offset: u64, data: Arc<Vec<u8>>) {
         let chunk_size = data.len();
-        let new_chunk = CachedChunk {
-            chunk_size,
-            chunk_seq,
-            data,
-        };
+        let new_chunk = CachedChunk { chunk_size, data };
         let key = CacheKey {
             segno,
             chunk_offset,
         };
         let seg_map = self.by_segno.entry(segno).or_default();
         use std::collections::btree_map::Entry::*;
-        match seg_map.entry(chunk_offset) {
-            Vacant(v) => {
-                v.insert(new_chunk);
-                self.fifo.push_back(key);
-                self.total_bytes += chunk_size;
-                WAL_CACHE_BYTES.add(chunk_size as i64);
-            }
-            Occupied(mut o) => {
-                if chunk_seq > o.get().chunk_seq {
-                    let old_size = o.get().chunk_size;
-                    self.total_bytes = self.total_bytes - old_size + chunk_size;
-                    o.insert(new_chunk);
-                    WAL_CACHE_BYTES.add(chunk_size as i64 - old_size as i64);
-                    // fifo entry already present; leave it.
-                }
-            }
+        if let Vacant(v) = seg_map.entry(chunk_offset) {
+            v.insert(new_chunk);
+            self.fifo.push_back(key);
+            self.total_bytes += chunk_size;
+            WAL_CACHE_BYTES.add(chunk_size as i64);
         }
         self.evict_if_over_capacity();
     }
@@ -287,8 +272,8 @@ mod tests {
     #[test]
     fn insert_then_lookup_round_trip() {
         let mut c = WalCache::new(1024);
-        c.insert(7, 0, 0, data(0xAB, 100));
-        c.insert(7, 100, 1, data(0xCD, 50));
+        c.insert(7, 0, data(0xAB, 100));
+        c.insert(7, 100, data(0xCD, 50));
 
         let (off, end, d) = c.lookup(7, 0).unwrap();
         assert_eq!((off, end), (0, 100));
@@ -305,8 +290,8 @@ mod tests {
     #[test]
     fn fifo_eviction_when_over_capacity() {
         let mut c = WalCache::new(150);
-        c.insert(1, 0, 0, data(b'a', 100)); // 100 bytes
-        c.insert(2, 0, 0, data(b'b', 100)); // 200 → over 150 → evicts segno 1
+        c.insert(1, 0, data(b'a', 100)); // 100 bytes
+        c.insert(2, 0, data(b'b', 100)); // 200 → over 150 → evicts segno 1
         assert!(c.lookup(1, 0).is_none());
         assert!(c.lookup(2, 0).is_some());
     }
@@ -314,9 +299,9 @@ mod tests {
     #[test]
     fn truncate_after_drops_higher_segnos_and_overshoots() {
         let mut c = WalCache::new(10_000);
-        c.insert(5, 0, 0, data(b'x', 100));
-        c.insert(5, 200, 1, data(b'y', 100)); // end=300
-        c.insert(6, 0, 0, data(b'z', 100));
+        c.insert(5, 0, data(b'x', 100));
+        c.insert(5, 200, data(b'y', 100)); // end=300
+        c.insert(6, 0, data(b'z', 100));
         c.truncate_after(5, 150); // keep segno 5 chunks ending <= 150; drop segno 6
         assert!(c.lookup(5, 50).is_some()); // [0,100) — survives
         assert!(c.lookup(5, 250).is_none()); // [200,300) — dropped (end > 150)
@@ -326,9 +311,9 @@ mod tests {
     #[test]
     fn remove_segnos_below_clears_lower_segnos_only() {
         let mut c = WalCache::new(10_000);
-        c.insert(1, 0, 0, data(b'a', 10));
-        c.insert(2, 0, 0, data(b'b', 10));
-        c.insert(3, 0, 0, data(b'c', 10));
+        c.insert(1, 0, data(b'a', 10));
+        c.insert(2, 0, data(b'b', 10));
+        c.insert(3, 0, data(b'c', 10));
         c.remove_segnos_below(3);
         assert!(c.lookup(1, 0).is_none());
         assert!(c.lookup(2, 0).is_none());
@@ -336,10 +321,14 @@ mod tests {
     }
 
     #[test]
-    fn higher_chunk_seq_wins_at_same_offset() {
+    fn duplicate_insert_at_same_offset_is_noop() {
+        // The writer never produces two chunks at the same
+        // (segno, chunk_offset); a duplicate insert is by construction
+        // an idempotent retry of the same bytes. Cache treats it as a
+        // no-op (keep the first entry).
         let mut c = WalCache::new(10_000);
-        c.insert(0, 0, 5, data(b'n', 50));
-        c.insert(0, 0, 3, data(b'o', 50)); // lower seq, ignored
+        c.insert(0, 0, data(b'n', 50));
+        c.insert(0, 0, data(b'o', 50));
         let (_, _, d) = c.lookup(0, 0).unwrap();
         assert_eq!(d[0], b'n');
     }

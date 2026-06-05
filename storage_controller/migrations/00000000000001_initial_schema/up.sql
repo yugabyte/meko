@@ -157,12 +157,16 @@ CREATE TABLE public.wals (
     tenant_id        TEXT    NOT NULL,
     timeline_id      TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
-    chunk_seq        INT     NOT NULL,
     chunk_offset     BIGINT  NOT NULL,
     chunk_size       INT     NOT NULL,
     data             BYTEA   NOT NULL,
     last_modified_us BIGINT  NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)
+    -- PK is the chunk's natural identity within a segment. The
+    -- writer never produces overlapping chunks (truncate_wal aligns
+    -- the next write at exactly the truncation point), so the
+    -- chunk_offset alone uniquely identifies a chunk and a same-PK
+    -- INSERT is necessarily an idempotent retry of the same bytes.
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)
 );
 
 -- =====================================================================

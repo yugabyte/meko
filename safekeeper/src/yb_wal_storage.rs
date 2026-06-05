@@ -19,18 +19,21 @@
 //!     tenant_id        TEXT    NOT NULL,
 //!     timeline_id      TEXT    NOT NULL,
 //!     segno            BIGINT  NOT NULL,
-//!     chunk_seq        INT     NOT NULL,   -- monotonic per (tenant, timeline, segno)
 //!     chunk_offset     BIGINT  NOT NULL,   -- byte offset of `data` within the segment
 //!     chunk_size       INT     NOT NULL,   -- redundant: length(data)
 //!     data             BYTEA   NOT NULL,
 //!     last_modified_us BIGINT  NOT NULL,
-//!     PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)
+//!     PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)
 //! );
 //! ```
 //!
 //! Notes:
-//! - `chunk_seq` is an in-memory monotonic counter per segment. On restart it
-//!   is rehydrated by `SELECT max(chunk_seq) FROM wals WHERE ... GROUP BY segno`.
+//! - `chunk_offset` uniquely identifies a chunk within a segment because
+//!   the writer never produces overlapping chunks: `truncate_wal` aligns
+//!   each segment so the next `write_wal` starts at exactly the truncation
+//!   point. A retried same-offset INSERT is, by construction, an idempotent
+//!   replay of the same bytes — safe to silently UPSERT under
+//!   `yb_enable_upsert_mode = true`.
 //! - `truncate_wal` deletes rows whose end offset (`chunk_offset + chunk_size`)
 //!   lies entirely past the new end; rows that straddle the cut are left
 //!   intact (the local-FS truncation is the source of truth for that case —
@@ -40,9 +43,9 @@
 //! ## Batching (producer / consumer)
 //!
 //! `write_wal()` is the producer: it parses the incoming WAL byte range
-//! into one `PendingChunk` per segment, stamps each with a monotonic
-//! `chunk_seq` and an `end_lsn`, then pushes them onto a bounded `mpsc`
-//! channel. It does **not** wait for YB.
+//! into one `PendingChunk` per segment, stamps each with an `end_lsn`,
+//! then pushes them onto a bounded `mpsc` channel. It does **not** wait
+//! for YB.
 //!
 //! A background consumer task (spawned in `YbWalStorage::new`) drains the
 //! channel greedily, builds one multi-row `INSERT ... VALUES (...), (...)`
@@ -79,7 +82,6 @@
 //! segments well below the writer's current position, which the
 //! channel never holds.
 
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -126,7 +128,6 @@ const FLUSH_BYTES_THRESHOLD: usize = 4 * 1024 * 1024;
 /// the in-memory [`WalCache`] entry — the read path doesn't need a copy.
 struct PendingChunk {
     segno: u64,
-    chunk_seq: i32,
     chunk_offset: i64,
     chunk_size: i32,
     data: Arc<Vec<u8>>,
@@ -175,10 +176,6 @@ pub struct YbWalStorage {
     timeline_id: String,
     table_name: String,
     wal_seg_size: usize,
-    /// Monotonic chunk counter per segno. Allocated by the producer
-    /// (`write_wal`) before pushing onto the channel; consumer reads but
-    /// doesn't mutate. Rehydrated from YB at construction.
-    next_chunk_seq: HashMap<u64, i32>,
     /// Producer side of the chunk channel.
     tx: mpsc::Sender<PendingChunk>,
     /// Receiver side of the durability watermark.
@@ -301,7 +298,6 @@ impl YbWalStorage {
             timeline_id: timeline_id_str,
             table_name,
             wal_seg_size,
-            next_chunk_seq: HashMap::new(),
             tx,
             watermark_rx,
             flush_notify,
@@ -323,19 +319,6 @@ impl YbWalStorage {
              to drop any chunks past the rehydrated end-of-WAL",
         );
         me.delete_after(write_lsn).await?;
-        me.next_chunk_seq = Self::load_next_chunk_seq(
-            &me.ysql_fpu_client,
-            &me.table_name,
-            &me.tenant_id,
-            &me.timeline_id,
-        )
-        .await?;
-        tracing::info!(
-            tenant_id = %me.tenant_id,
-            timeline_id = %me.timeline_id,
-            next_chunk_seq = ?me.next_chunk_seq,
-            "YbWalStorage::new — loaded next chunk_seq per segno from yb_storage.wals",
-        );
         Ok(me)
     }
 
@@ -398,38 +381,6 @@ impl YbWalStorage {
         Ok(m.map(|v| v as u64).unwrap_or(0))
     }
 
-    async fn load_next_chunk_seq(
-        ysql_fpu_client: &YsqlClient,
-        table: &str,
-        tenant_id: &str,
-        timeline_id: &str,
-    ) -> Result<HashMap<u64, i32>> {
-        let sql = format!(
-            "SELECT segno, max(chunk_seq) AS m FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2 GROUP BY segno",
-            quote_ident(table)
-        );
-        let params: [&(dyn ToSql + Sync); 2] = [&tenant_id, &timeline_id];
-        let rows = ysql_fpu_client
-            .query(&sql, &params)
-            .await
-            .context("YbWalStorage: load chunk_seq state")?;
-        let mut out = HashMap::new();
-        for row in rows {
-            let segno: i64 = row.get("segno");
-            let max_seq: i32 = row.get("m");
-            out.insert(segno as u64, max_seq + 1);
-        }
-        Ok(out)
-    }
-
-    fn allocate_seq(&mut self, segno: u64) -> i32 {
-        let entry = self.next_chunk_seq.entry(segno).or_insert(0);
-        let seq = *entry;
-        *entry = seq + 1;
-        seq
-    }
-
     fn inner_pg_version_id(&self) -> postgres_versioninfo::PgVersionId {
         self.inner.pg_version_id()
     }
@@ -439,7 +390,7 @@ impl YbWalStorage {
     }
 
     /// Producer side: split the incoming WAL range at segment boundaries,
-    /// stamp each piece with `chunk_seq` + `end_lsn`, and push onto the
+    /// stamp each piece with `end_lsn`, and push onto the
     /// `mpsc` channel. The consumer task INSERTs them in batches; the
     /// caller does **not** wait for durability (use `flush_wal`).
     ///
@@ -457,7 +408,6 @@ impl YbWalStorage {
             let room_in_segment = self.wal_seg_size - offset;
             let take = remaining.len().min(room_in_segment);
             let end_lsn = Lsn(startpos.0 + take as u64);
-            let chunk_seq = self.allocate_seq(segno);
             let data: Arc<Vec<u8>> = Arc::new(remaining[..take].to_vec());
 
             // NB: do NOT populate the read-side cache here. The cache
@@ -474,7 +424,6 @@ impl YbWalStorage {
 
             let pc = PendingChunk {
                 segno,
-                chunk_seq,
                 chunk_offset: offset as i64,
                 chunk_size: take as i32,
                 data,
@@ -556,43 +505,14 @@ impl YbWalStorage {
                 .unwrap()
                 .truncate_after(segno_end as u64, offset_end as u64);
         }
-        // Re-read chunk_seq state from YB for every segno. Specifically:
-        // - Segnos strictly above `segno_end` were fully wiped — they must
-        //   drop out of `next_chunk_seq` so a later write picks up at
-        //   chunk_seq=0 against an empty key range.
-        // - Segno `segno_end` may have surviving rows below `offset_end` —
-        //   `next_chunk_seq[segno_end]` MUST be `MAX(chunk_seq) + 1` over
-        //   those survivors, otherwise the next allocate_seq returns a
-        //   chunk_seq that collides with a surviving row's PK and (with
-        //   `yb_enable_upsert_mode = true`) silently overwrites it. The
-        //   previous code was a no-op here — it did
-        //     `retain(|seg, _| (*seg as i64) < segno_end)`
-        //   which evicted segno_end, then guarded the reload behind
-        //   `if contains_key(segno_end)` which was now false. So
-        //   `allocate_seq(segno_end)` returned 0, the new chunk's PK
-        //   collided with chunk_seq=0 (or 1) survivor's PK, and the
-        //   upsert silently overwrote it. After SK restart `load_write_lsn`
-        //   read the now-overwritten rows, the PS asked for the lower
-        //   offsets that were gone, and the stream errored with
-        //   "YB WAL hole" (see findings-ps-wal-replay-restart-bug-
-        //   2026-06-04). Re-read unconditionally.
-        self.next_chunk_seq = Self::load_next_chunk_seq(
-            &self.ysql_fpu_client,
-            &self.table_name,
-            &self.tenant_id,
-            &self.timeline_id,
-        )
-        .await?;
-        tracing::info!(
-            tenant_id = %self.tenant_id,
-            timeline_id = %self.timeline_id,
-            %end_pos,
-            next_chunk_seq = ?self.next_chunk_seq,
-            "YbWalStorage::delete_after — re-read next_chunk_seq from YB",
-        );
+        // No in-memory chunk-seq state to maintain since the PK is now
+        // (tenant, timeline, segno, chunk_offset). A subsequent write
+        // at `end_pos` produces a chunk at chunk_offset=end_pos which
+        // cannot collide with surviving rows (they all have
+        // `chunk_offset + size <= end_pos` by definition of what the
+        // DELETE above keeps).
         Ok(())
     }
-
 }
 
 impl Storage for YbWalStorage {
@@ -633,7 +553,6 @@ impl Storage for YbWalStorage {
         // lazily from YB if needed.
         let pc = PendingChunk {
             segno,
-            chunk_seq: self.allocate_seq(segno),
             chunk_offset: 0,
             chunk_size: wal_seg.len() as i32,
             data: Arc::new(wal_seg.to_vec()),
@@ -853,7 +772,6 @@ async fn consumer_main(
                         guard.insert(
                             pc.segno,
                             pc.chunk_offset as u64,
-                            pc.chunk_seq,
                             pc.data.clone(),
                         );
                     }
@@ -905,18 +823,18 @@ async fn flush_batch(
     sql.push_str("INSERT INTO ");
     sql.push_str(&quote_ident(table_name));
     sql.push_str(
-        " (tenant_id, timeline_id, segno, chunk_seq, chunk_offset, \
+        " (tenant_id, timeline_id, segno, chunk_offset, \
           chunk_size, data, last_modified_us) VALUES ",
     );
     for i in 0..n {
         if i > 0 {
             sql.push_str(", ");
         }
-        let b = i * 8;
+        let b = i * 7;
         use std::fmt::Write as _;
         let _ = write!(
             sql,
-            "(${},${},${},${},${},${},${},${})",
+            "(${},${},${},${},${},${},${})",
             b + 1,
             b + 2,
             b + 3,
@@ -924,12 +842,10 @@ async fn flush_batch(
             b + 5,
             b + 6,
             b + 7,
-            b + 8
         );
     }
 
     let segno_is: Vec<i64> = batch.iter().map(|p| p.segno as i64).collect();
-    let seqs: Vec<i32> = batch.iter().map(|p| p.chunk_seq).collect();
     let offset_is: Vec<i64> = batch.iter().map(|p| p.chunk_offset).collect();
     let size_is: Vec<i32> = batch.iter().map(|p| p.chunk_size).collect();
     // `PendingChunk::data` is `Arc<Vec<u8>>` (shared with WalCache).
@@ -937,12 +853,11 @@ async fn flush_batch(
     // to a `&[u8]` for the param vector.
     let datas: Vec<&[u8]> = batch.iter().map(|p| p.data.as_slice()).collect();
 
-    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 8);
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 7);
     for i in 0..n {
         params.push(&tenant_id);
         params.push(&timeline_id);
         params.push(&segno_is[i]);
-        params.push(&seqs[i]);
         params.push(&offset_is[i]);
         params.push(&size_is[i]);
         params.push(&datas[i]);
@@ -1137,9 +1052,11 @@ impl AsyncRead for YbSegmentReader {
 }
 
 /// Fetch the chunk covering `(segno, byte_offset)` from
-/// `yb_storage.wals`. Uses `ORDER BY chunk_seq DESC LIMIT 1` so that the
-/// highest-seq chunk wins in the overlap case (segno-0 init blob vs.
-/// later write_wal chunks at the same offset).
+/// `yb_storage.wals`. By construction the writer produces at most one
+/// chunk covering any given offset within a segment (writes never
+/// overlap — see the module-level "Notes" on chunk_offset uniqueness),
+/// so the range filter selects at most one row and we don't need an
+/// ORDER BY / LIMIT tiebreaker.
 async fn fetch_chunk_from_yb(
     ysql_fpu_client: &YsqlClient,
     table: &str,
@@ -1152,7 +1069,7 @@ async fn fetch_chunk_from_yb(
         "SELECT chunk_offset, chunk_size, data FROM {} \
          WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
            AND chunk_offset <= $4 AND chunk_offset + chunk_size > $4 \
-         ORDER BY chunk_seq DESC LIMIT 1",
+         LIMIT 1",
         quote_ident(table)
     );
     let segno_i: i64 = segno as i64;
@@ -1300,12 +1217,11 @@ mod tests {
                        tenant_id        TEXT    NOT NULL,\
                        timeline_id      TEXT    NOT NULL,\
                        segno            BIGINT  NOT NULL,\
-                       chunk_seq        INT     NOT NULL,\
                        chunk_offset     BIGINT  NOT NULL,\
                        chunk_size       INT     NOT NULL,\
                        data             BYTEA   NOT NULL,\
                        last_modified_us BIGINT  NOT NULL,\
-                       PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)\
+                       PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)\
                      )"
                 ),
                 &[],
