@@ -19,13 +19,15 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use bytes::Bytes;
+use dashmap::DashMap;
+use parking_lot::Mutex as PlMutex;
 use tracing::info;
 use pageserver_api::key::{KEY_SIZE, Key};
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use utils::bin_ser::BeSer;
 use utils::id::{TenantId, TimelineId};
@@ -119,7 +121,7 @@ pub struct MaterializerHandle {
 }
 
 /// Running per-key delta tally — both count and payload bytes since
-/// the last anchor. See `WriterState::delta_counts`.
+/// the last anchor. See `PageWriter::delta_counts`.
 #[derive(Clone, Copy, Default)]
 struct DeltaTally {
     count: u32,
@@ -149,7 +151,33 @@ pub struct PageWriter {
     compute_page_store: Arc<PageStore>,
     fpu_page_store: Arc<PageStore>,
     policy: FlushPolicy,
-    state: RwLock<WriterState>,
+    /// Per-key page cache + pre-flush buffer. Internally thread-safe
+    /// — every method takes `&self`. Per-key state lives in a sharded
+    /// DashMap; aggregate counters are atomics; LRU + FIFO each have
+    /// their own small `parking_lot::Mutex`. The 300-backend getpage
+    /// fan-in goes straight to DashMap shards and never serializes on
+    /// a global lock — that was the bottleneck the per-key sharding
+    /// was introduced to fix (writer-starvation when the materialiser
+    /// was waiting hundreds of ms behind 300 concurrent read holders
+    /// on a single `RwLock<WriterState>`).
+    pages: crate::unified_pages::UnifiedPages,
+    /// Aux (non-rel) flush buffers + the "any unflushed work?"
+    /// timestamp. Touched only by put/flush — both serial from the
+    /// walreceiver and periodic flusher — plus the rare meta/SLRU
+    /// reads that blend buffered with persisted. Hot path doesn't
+    /// touch this.
+    aux: PlMutex<AuxBuffers>,
+    /// Total rows ever appended to the buffer (rel + slru + meta).
+    /// Reported in `WriterStats`; not load-bearing.
+    rows_written: AtomicU64,
+    /// Per-key tally of consecutive non-image, non-`will_init` deltas
+    /// since the last anchor for that key. Both fields advance on
+    /// each non-anchor `put`; either hitting its
+    /// `MaterializerHandle` threshold dispatches a job and removes
+    /// the entry. Shared with the flush path (post-flush trigger),
+    /// which walks the map looking for keys that crossed the
+    /// threshold during the flushed-window.
+    delta_counts: DashMap<Bytes, DeltaTally>,
     materializer: Option<MaterializerHandle>,
     /// Highest LSN successfully reported as durable to
     /// `pageserver.timeline_state.disk_consistent_lsn`. Advances only
@@ -219,25 +247,20 @@ pub struct PageWriter {
     flush_horizon_lsn: std::sync::atomic::AtomicU64,
 }
 
-struct WriterState {
-    /// Unified pre-flush buffer + post-flush LRU-ish cache for rel
-    /// pages. See [`crate::unified_pages::UnifiedPages`].
-    pages: crate::unified_pages::UnifiedPages,
+/// Non-rel flush buffers, kept under a small `parking_lot::Mutex`.
+/// Put/flush are the only producers; meta/SLRU reads briefly snapshot
+/// here too. Holds are O(rows-in-this-flush), which is tiny.
+struct AuxBuffers {
     slru_buffer: Vec<SlruPageRow>,
     meta_buffer: Vec<MetaRow>,
     /// Bytes pending durability for SLRU + meta only. Rel-page
     /// unflushed bytes live on `pages.unflushed_bytes()`. Drives the
     /// non-rel side of the size-based flush trigger.
     bytes_in_aux_buffers: usize,
+    /// Wall-clock of the first row appended after the most-recent
+    /// flush. Drives the age-based flush trigger; reset to `None`
+    /// when the buffer is empty.
     opened_at: Option<Instant>,
-    rows_written: u64,
-    /// Per-key tally of consecutive non-image, non-`will_init` deltas
-    /// since the last anchor for that key. Both fields advance on
-    /// each non-anchor `put`; either hitting its
-    /// `MaterializerHandle` threshold dispatches a job and removes
-    /// the entry. Lives under the same RwLock as the buffers so the
-    /// threshold check is atomic with the row push.
-    delta_counts: std::collections::HashMap<bytes::Bytes, DeltaTally>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -266,15 +289,15 @@ impl PageWriter {
             compute_page_store,
             fpu_page_store,
             policy,
-            state: RwLock::new(WriterState {
-                pages: crate::unified_pages::UnifiedPages::new(read_cache_bytes),
+            pages: crate::unified_pages::UnifiedPages::new(read_cache_bytes),
+            aux: PlMutex::new(AuxBuffers {
                 slru_buffer: Vec::new(),
                 meta_buffer: Vec::new(),
                 bytes_in_aux_buffers: 0,
                 opened_at: None,
-                rows_written: 0,
-                delta_counts: std::collections::HashMap::new(),
             }),
+            rows_written: AtomicU64::new(0),
+            delta_counts: DashMap::new(),
             materializer: None,
             dc_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
             dc_lsn_observed: std::sync::atomic::AtomicU64::new(0),
@@ -432,12 +455,10 @@ impl PageWriter {
                 tokio::pin!(notified);
                 notified.as_mut().enable();
 
-                {
-                    let s = self.state.read().await;
-                    let pending = s.pages.unflushed_bytes() + s.bytes_in_aux_buffers;
-                    if pending < self.policy.backpressure_bytes {
-                        break;
-                    }
+                let pending =
+                    self.pages.unflushed_bytes() + self.aux.lock().bytes_in_aux_buffers;
+                if pending < self.policy.backpressure_bytes {
+                    break;
                 }
                 if !waited {
                     waited = true;
@@ -481,35 +502,46 @@ impl PageWriter {
             .map(|m| (m.count_limit, m.payload_bytes_limit))
             .filter(|(c, b)| *c > 0 || *b > 0)
             .is_some();
-        {
-            let mut s = self.state.write().await;
-            if s.opened_at.is_none() {
-                s.opened_at = Some(Instant::now());
-            }
-            for row in rel_rows {
-                let key = row.key.clone();
-                let resets_chain = row.is_image || row.will_init;
-                let payload_len = row.payload.len() as u32;
-                s.pages.push(row);
-                s.rows_written += 1;
+        // Rel rows: per-key DashMap shards; no global lock.
+        for row in rel_rows {
+            let key = row.key.clone();
+            let resets_chain = row.is_image || row.will_init;
+            let payload_len = row.payload.len() as u32;
+            self.pages.push(row);
+            self.rows_written.fetch_add(1, Ordering::Relaxed);
 
-                if resets_chain {
-                    s.delta_counts.remove(&key);
-                } else if counting {
-                    let tally = s.delta_counts.entry(key).or_default();
-                    tally.count = tally.count.saturating_add(1);
-                    tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
-                }
+            if resets_chain {
+                self.delta_counts.remove(&key);
+            } else if counting {
+                let mut tally = self.delta_counts.entry(key).or_default();
+                tally.count = tally.count.saturating_add(1);
+                tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
+            }
+        }
+        // Aux (slru + meta) buffers under one small mutex. Holds
+        // are O(rows-in-this-batch); read paths blend buffered with
+        // persisted but only briefly snapshot here too.
+        if !slru_rows.is_empty() || !meta_rows.is_empty() {
+            let mut aux = self.aux.lock();
+            if aux.opened_at.is_none() {
+                aux.opened_at = Some(Instant::now());
             }
             for row in slru_rows {
-                s.bytes_in_aux_buffers += slru_row_size(&row);
-                s.slru_buffer.push(row);
-                s.rows_written += 1;
+                aux.bytes_in_aux_buffers += slru_row_size(&row);
+                aux.slru_buffer.push(row);
+                self.rows_written.fetch_add(1, Ordering::Relaxed);
             }
             for row in meta_rows {
-                s.bytes_in_aux_buffers += meta_row_size(&row);
-                s.meta_buffer.push(row);
-                s.rows_written += 1;
+                aux.bytes_in_aux_buffers += meta_row_size(&row);
+                aux.meta_buffer.push(row);
+                self.rows_written.fetch_add(1, Ordering::Relaxed);
+            }
+        } else {
+            // Even when only rel rows arrived we still need to arm
+            // the age-based flush timer.
+            let mut aux = self.aux.lock();
+            if aux.opened_at.is_none() {
+                aux.opened_at = Some(Instant::now());
             }
         }
 
@@ -606,10 +638,8 @@ impl PageWriter {
         let start_bytes = key_to_bytes(range.start);
         let end_bytes = key_to_bytes(range.end);
         let t_lock_start = Instant::now();
-        let cached: std::collections::HashMap<bytes::Bytes, Vec<PageRow>> = {
-            let s = self.state.read().await;
-            s.pages.lookup_range(&start_bytes, &end_bytes, target_lsn)
-        };
+        let cached: std::collections::HashMap<bytes::Bytes, Vec<PageRow>> =
+            self.pages.lookup_range(&start_bytes, &end_bytes, target_lsn);
         let t_cache = t_lock_start.elapsed();
         let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
         let cached_rows: usize = cached.values().map(|v| v.len()).sum();
@@ -710,16 +740,12 @@ impl PageWriter {
         // (image-anchor reachable from target_lsn, no eviction in
         // between), serve from RAM and skip YB entirely. This is the
         // common case for hot pages after the materialiser has run.
-        {
-            let s = self.state.read().await;
-            if let Some(chain) = s.pages.lookup_chain_if_complete(&key_bytes, target_lsn) {
-                return Ok(chain);
-            }
+        // Lock-free against put/flush/materialiser-install for
+        // different keys — only the key's DashMap shard.
+        if let Some(chain) = self.pages.lookup_chain_if_complete(&key_bytes, target_lsn) {
+            return Ok(chain);
         }
-        let cached: Vec<PageRow> = {
-            let s = self.state.read().await;
-            s.pages.lookup_chain(&key_bytes, target_lsn)
-        };
+        let cached: Vec<PageRow> = self.pages.lookup_chain(&key_bytes, target_lsn);
         let persisted = self
             .compute_page_store
             .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
@@ -763,18 +789,13 @@ impl PageWriter {
         // Cache-only fast path (durable-only variant for the
         // materialiser): same completeness criterion as `read_chain`,
         // but restricted to durable rows.
+        if let Some(chain) = self
+            .pages
+            .lookup_chain_durable_if_complete(&key_bytes, target_lsn)
         {
-            let s = self.state.read().await;
-            if let Some(chain) =
-                s.pages.lookup_chain_durable_if_complete(&key_bytes, target_lsn)
-            {
-                return Ok(chain);
-            }
+            return Ok(chain);
         }
-        let cached: Vec<PageRow> = {
-            let s = self.state.read().await;
-            s.pages.lookup_chain_durable(&key_bytes, target_lsn)
-        };
+        let cached: Vec<PageRow> = self.pages.lookup_chain_durable(&key_bytes, target_lsn);
         // Materialiser-side cache miss → the internal conn (same one
         // the materialiser's write path uses). Keeping this off
         // `compute_page_store` is the whole point of the split: a
@@ -808,27 +829,29 @@ impl PageWriter {
     /// `read_chain` / `read_chain_durable` find the image first and
     /// don't walk the chain back.
     pub async fn install_materialized_image(&self, image: PageRow) {
-        let t_acquire = Instant::now();
-        let mut s = self.state.write().await;
-        let t_held_start = Instant::now();
+        // No outer lock — `pages` is internally sharded. The three
+        // calls below only touch the image's key shard (trim, push)
+        // plus the LRU (small parking_lot::Mutex held for ns) plus
+        // evict (LRU walk + per-shard removes). Concurrent reads on
+        // other keys do not block install; reads on THIS key see a
+        // brief shard-lock blip while trim/push run.
+        let t_start = Instant::now();
         let key = image.key.clone();
         let lsn = image.lsn;
         let t_trim_start = Instant::now();
-        s.pages.trim_key_up_to(&key, lsn);
+        self.pages.trim_key_up_to(&key, lsn);
         let t_trim = t_trim_start.elapsed();
         let t_push_start = Instant::now();
-        s.pages.push_durable(image);
+        self.pages.push_durable(image);
         let t_push = t_push_start.elapsed();
         let t_evict_start = Instant::now();
-        s.pages.evict_to_capacity();
+        self.pages.evict_to_capacity();
         let t_evict = t_evict_start.elapsed();
-        let t_held = t_held_start.elapsed();
-        let t_acq = t_held_start.duration_since(t_acquire);
-        if t_held.as_millis() >= 2 || t_acq.as_millis() >= 5 {
+        let total = t_start.elapsed();
+        if total.as_millis() >= 5 {
             info!(
                 tag = "install_image",
-                acquire_ms = t_acq.as_millis() as u64,
-                held_ms = t_held.as_millis() as u64,
+                total_ms = total.as_millis() as u64,
                 trim_us = t_trim.as_micros() as u64,
                 push_us = t_push.as_micros() as u64,
                 evict_us = t_evict.as_micros() as u64,
@@ -840,28 +863,24 @@ impl PageWriter {
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
     /// the buffer is empty. Resets the policy timer.
     pub async fn flush(&self) -> Result<()> {
-        // Snapshot under the lock. UnifiedPages snapshots the unflushed
-        // prefix without removing it (rows stay visible to concurrent
-        // reads during the YB round-trip — critical for walreceiver's
-        // RMW on rel-size sentinels). After the INSERT succeeds we
-        // flip those rows from unflushed → durable in one cursor pass.
-        let (rel_count, slru_count, meta_count, rel_rows, slru_rows, meta_rows) = {
-            let s = self.state.read().await;
-            let rel_rows = s.pages.snapshot_unflushed(None);
-            (
-                rel_rows.len(),
-                s.slru_buffer.len(),
-                s.meta_buffer.len(),
-                rel_rows,
-                s.slru_buffer.clone(),
-                s.meta_buffer.clone(),
-            )
+        // Snapshot. UnifiedPages snapshots the unflushed prefix
+        // without removing it (rows stay visible to concurrent reads
+        // during the YB round-trip — critical for walreceiver's RMW
+        // on rel-size sentinels). After the INSERT succeeds we flip
+        // those rows from unflushed → durable in one FIFO pass.
+        let rel_rows = self.pages.snapshot_unflushed(None);
+        let (slru_rows, meta_rows) = {
+            let aux = self.aux.lock();
+            (aux.slru_buffer.clone(), aux.meta_buffer.clone())
         };
+        let rel_count = rel_rows.len();
+        let slru_count = slru_rows.len();
+        let meta_count = meta_rows.len();
         if rel_count == 0 && slru_count == 0 && meta_count == 0 {
             return Ok(());
         }
 
-        // INSERT to YB outside the lock so concurrent puts and reads
+        // INSERT to YB outside any lock so concurrent puts and reads
         // aren't blocked by the round-trip.
         let res = self.try_write_rows(&rel_rows, &slru_rows, &meta_rows).await;
 
@@ -876,99 +895,99 @@ impl PageWriter {
                 .chain(slru_rows.iter().map(|r| r.lsn.0))
                 .chain(meta_rows.iter().map(|r| r.lsn.0))
                 .max();
+            // Promote rel rows in-place (no copy), then opportunistically
+            // shrink the cache if it's over capacity. Both touch only
+            // per-key shards / the LRU mutex — no global lock.
+            self.pages.mark_first_n_flushed(rel_count);
+            self.pages.evict_to_capacity();
+            // Advance the materialiser's safe-to-read-from-YB watermark
+            // to the just-flushed max LSN. Until this point, YB
+            // contained a partial view of this flush's chunks
+            // (buffer_unordered dispatch order ≠ commit order) and
+            // the materialiser would have seen holes in the chain.
+            // After mark_first_n_flushed every snapshot row is durable
+            // in both cache and YB.
+            if let Some(max) = max_flushed_lsn {
+                let cur = self.flush_horizon_lsn.load(Ordering::Relaxed);
+                if max > cur {
+                    self.flush_horizon_lsn.store(max, Ordering::Relaxed);
+                }
+            }
+            // Materialiser trigger fires here, not from `put`. The
+            // trigger LSN is the just-promoted max per key in this
+            // snapshot — durable by construction (every row in
+            // `rel_rows` is now in YB AND marked durable in cache).
+            // Walking `delta_counts` finds keys whose count or
+            // payload-byte tally crossed `image_chain_limit` /
+            // `image_chain_payload_bytes_limit`; for each, find the
+            // max LSN seen in this snapshot and enqueue one job.
+            // Keys without a matching snapshot row (counter bumped
+            // by an unflushed put after the snapshot) are deferred
+            // to the next flush.
             let mut to_materialize: Vec<MaterializeJob> = Vec::new();
+            if let Some(m) = self.materializer.as_ref()
+                && (m.count_limit > 0 || m.payload_bytes_limit > 0)
             {
-                let mut s = self.state.write().await;
-                // Promote rel rows in-place (no copy), then opportunistically
-                // shrink the cache if it's over capacity.
-                s.pages.mark_first_n_flushed(rel_count);
-                s.pages.evict_to_capacity();
-                // Advance the materialiser's safe-to-read-from-YB watermark
-                // to the just-flushed max LSN. Until this point, YB contained
-                // a partial view of this flush's chunks (buffer_unordered
-                // dispatch order ≠ commit order) and the materialiser would
-                // have seen holes in the chain. After mark_first_n_flushed
-                // every snapshot row is durable in both cache and YB.
-                if let Some(max) = max_flushed_lsn {
-                    let cur = self.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed);
-                    if max > cur {
-                        self.flush_horizon_lsn
-                            .store(max, std::sync::atomic::Ordering::Relaxed);
+                let mut max_lsn_per_key: HashMap<bytes::Bytes, Lsn> = HashMap::new();
+                for row in &rel_rows {
+                    let entry = max_lsn_per_key.entry(row.key.clone()).or_insert(Lsn(0));
+                    if row.lsn > *entry {
+                        *entry = row.lsn;
                     }
                 }
-                // Materialiser trigger fires here, not from `put`. The
-                // trigger LSN is the just-promoted max per key in this
-                // snapshot — durable by construction (every row in
-                // `rel_rows` is now in YB AND marked durable in cache).
-                // Walking `delta_counts` finds keys whose count or
-                // payload-byte tally crossed `image_chain_limit` /
-                // `image_chain_payload_bytes_limit`; for each, find the
-                // max LSN seen in this snapshot and enqueue one job.
-                // Keys without a matching snapshot row (counter bumped
-                // by an unflushed put after the snapshot) are deferred
-                // to the next flush.
-                if let Some(m) = self.materializer.as_ref()
-                    && (m.count_limit > 0 || m.payload_bytes_limit > 0)
-                {
-                    let mut max_lsn_per_key: HashMap<bytes::Bytes, Lsn> = HashMap::new();
-                    for row in &rel_rows {
-                        let entry = max_lsn_per_key
-                            .entry(row.key.clone())
-                            .or_insert(Lsn(0));
-                        if row.lsn > *entry {
-                            *entry = row.lsn;
-                        }
+                let mut keys_to_clear: Vec<bytes::Bytes> = Vec::new();
+                for kv in self.delta_counts.iter() {
+                    let (key, tally) = (kv.key(), kv.value());
+                    let count_hit = m.count_limit > 0 && tally.count >= m.count_limit;
+                    let bytes_hit =
+                        m.payload_bytes_limit > 0 && tally.payload_bytes >= m.payload_bytes_limit;
+                    if !(count_hit || bytes_hit) {
+                        continue;
                     }
-                    let mut keys_to_clear: Vec<bytes::Bytes> = Vec::new();
-                    for (key, tally) in s.delta_counts.iter() {
-                        let count_hit =
-                            m.count_limit > 0 && tally.count >= m.count_limit;
-                        let bytes_hit = m.payload_bytes_limit > 0
-                            && tally.payload_bytes >= m.payload_bytes_limit;
-                        if !(count_hit || bytes_hit) {
-                            continue;
-                        }
-                        let Some(&target_lsn) = max_lsn_per_key.get(key) else {
-                            // Counter bumped after the snapshot — leave it
-                            // at >= threshold so the next flush picks it
-                            // up. Skipping is the same write-trigger gap
-                            // the old put-time logic handled with an
-                            // `in_flight` recheck.
-                            continue;
-                        };
-                        let inserted = m.in_flight.lock().unwrap().insert(key.clone());
-                        if inserted {
-                            keys_to_clear.push(key.clone());
-                            to_materialize.push(MaterializeJob {
-                                key: key.clone(),
-                                target_lsn,
-                            });
-                        }
-                    }
-                    for k in keys_to_clear {
-                        s.delta_counts.remove(&k);
+                    let Some(&target_lsn) = max_lsn_per_key.get(key) else {
+                        // Counter bumped after the snapshot — leave it
+                        // at >= threshold so the next flush picks it
+                        // up. Skipping is the same write-trigger gap
+                        // the old put-time logic handled with an
+                        // `in_flight` recheck.
+                        continue;
+                    };
+                    let inserted = m.in_flight.lock().unwrap().insert(key.clone());
+                    if inserted {
+                        keys_to_clear.push(key.clone());
+                        to_materialize.push(MaterializeJob {
+                            key: key.clone(),
+                            target_lsn,
+                        });
                     }
                 }
-                // Aux buffers drain as before.
-                let aux_drop_bytes: usize = s
+                for k in keys_to_clear {
+                    self.delta_counts.remove(&k);
+                }
+            }
+            // Aux buffers drain under their small mutex.
+            {
+                let mut aux = self.aux.lock();
+                let aux_drop_bytes: usize = aux
                     .slru_buffer
                     .iter()
                     .take(slru_count)
                     .map(slru_row_size)
                     .sum::<usize>()
-                    + s.meta_buffer
+                    + aux
+                        .meta_buffer
                         .iter()
                         .take(meta_count)
                         .map(meta_row_size)
                         .sum::<usize>();
-                s.bytes_in_aux_buffers = s.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
-                s.slru_buffer.drain(0..slru_count);
-                s.meta_buffer.drain(0..meta_count);
-                if s.pages.unflushed_count() == 0
-                    && s.slru_buffer.is_empty()
-                    && s.meta_buffer.is_empty()
+                aux.bytes_in_aux_buffers = aux.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
+                aux.slru_buffer.drain(0..slru_count);
+                aux.meta_buffer.drain(0..meta_count);
+                if self.pages.unflushed_count() == 0
+                    && aux.slru_buffer.is_empty()
+                    && aux.meta_buffer.is_empty()
                 {
-                    s.opened_at = None;
+                    aux.opened_at = None;
                 }
             }
             self.dispatch_materialize_jobs(to_materialize).await;
@@ -1103,12 +1122,12 @@ impl PageWriter {
     }
 
     pub async fn should_flush(&self) -> bool {
-        let s = self.state.read().await;
-        let unflushed_bytes = s.pages.unflushed_bytes() + s.bytes_in_aux_buffers;
+        let aux = self.aux.lock();
+        let unflushed_bytes = self.pages.unflushed_bytes() + aux.bytes_in_aux_buffers;
         if unflushed_bytes >= self.policy.max_bytes {
             return true;
         }
-        if let Some(at) = s.opened_at
+        if let Some(at) = aux.opened_at
             && at.elapsed() >= self.policy.max_age
         {
             return true;
@@ -1117,26 +1136,29 @@ impl PageWriter {
     }
 
     pub async fn stats(&self) -> WriterStats {
-        let s = self.state.read().await;
-        let bytes_in_buffer = s.pages.unflushed_bytes() + s.bytes_in_aux_buffers;
+        let (slru_len, meta_len, aux_bytes) = {
+            let aux = self.aux.lock();
+            (aux.slru_buffer.len(), aux.meta_buffer.len(), aux.bytes_in_aux_buffers)
+        };
+        let bytes_in_buffer = self.pages.unflushed_bytes() + aux_bytes;
         // Side-effect: refresh the global gauges so a periodic
         // Prometheus scrape reflects the current depth. We sample
         // here rather than at every put/flush to keep the update off
         // the hot ingest path; the next scrape after a flush picks
         // up the change.
-        let delta_counts_entries = s.delta_counts.len() as u64;
-        let by_key_entries = s.pages.by_key_entries() as u64;
+        let delta_counts_entries = self.delta_counts.len() as u64;
+        let by_key_entries = self.pages.by_key_entries() as u64;
         crate::metrics::PAGEWRITER_UNFLUSHED_BYTES.set(bytes_in_buffer as u64);
         crate::metrics::PAGEWRITER_DELTA_COUNTS_ENTRIES.set(delta_counts_entries);
         crate::metrics::PAGEWRITER_DELTA_COUNTS_APPROX_BYTES
             .set(delta_counts_entries * crate::metrics::DELTA_COUNTS_BYTES_PER_ENTRY);
         crate::metrics::UNIFIED_PAGES_BY_KEY_ENTRIES.set(by_key_entries);
         WriterStats {
-            rows_written: s.rows_written,
+            rows_written: self.rows_written.load(Ordering::Relaxed),
             bytes_in_buffer,
-            buffered_rows: s.pages.unflushed_count(),
-            buffered_slru_rows: s.slru_buffer.len(),
-            buffered_meta_rows: s.meta_buffer.len(),
+            buffered_rows: self.pages.unflushed_count(),
+            buffered_slru_rows: slru_len,
+            buffered_meta_rows: meta_len,
         }
     }
 
@@ -1189,8 +1211,8 @@ impl PageWriter {
     pub async fn read_meta(&self, key: Key, target_lsn: Lsn) -> Result<Option<MetaRow>> {
         let key_bytes = key_to_bytes(key);
         let buffered = {
-            let s = self.state.read().await;
-            s.meta_buffer
+            let aux = self.aux.lock();
+            aux.meta_buffer
                 .iter()
                 .filter(|r| r.key == key_bytes && r.lsn <= target_lsn)
                 .max_by_key(|r| r.lsn)
@@ -1217,8 +1239,8 @@ impl PageWriter {
             .compute_page_store
             .scan_meta_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
             .await?;
-        let s = self.state.read().await;
-        for row in s.meta_buffer.iter() {
+        let aux = self.aux.lock();
+        for row in aux.meta_buffer.iter() {
             if row.key.len() != KEY_SIZE || row.lsn > target_lsn {
                 continue;
             }
@@ -1246,8 +1268,8 @@ impl PageWriter {
         target_lsn: Lsn,
     ) -> Result<Vec<SlruPageRow>> {
         let mut buffered: Vec<SlruPageRow> = {
-            let s = self.state.read().await;
-            s.slru_buffer
+            let aux = self.aux.lock();
+            aux.slru_buffer
                 .iter()
                 .filter(|r| {
                     r.kind == kind && r.segno == segno && r.blknum == blknum
@@ -1282,8 +1304,8 @@ impl PageWriter {
             .scan_slru_range(self.tenant_id, self.timeline_id, kind, segno, blknum_range.clone(), target_lsn)
             .await?;
         let buffered: Vec<SlruPageRow> = {
-            let s = self.state.read().await;
-            s.slru_buffer
+            let aux = self.aux.lock();
+            aux.slru_buffer
                 .iter()
                 .filter(|r| {
                     r.kind == kind && r.segno == segno
