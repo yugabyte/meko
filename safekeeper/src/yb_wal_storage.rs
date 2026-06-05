@@ -246,6 +246,16 @@ impl YbWalStorage {
             state.commit_lsn,
         )
         .await?;
+        tracing::info!(
+            tenant_id = %tenant_id_str,
+            timeline_id = %timeline_id_str,
+            %write_lsn,
+            cfile_commit_lsn = %state.commit_lsn,
+            cfile_local_start_lsn = %state.local_start_lsn,
+            cfile_timeline_start_lsn = %state.timeline_start_lsn,
+            "YbWalStorage::new — rehydrated write_lsn from yb_storage.wals \
+             (falls back to cfile_commit_lsn on empty)",
+        );
 
         // Construct the inner PhysicalStorage in `no_local_writes` mode so all
         // of its disk operations are no-ops. The struct still holds the
@@ -305,6 +315,13 @@ impl YbWalStorage {
         // Clean any rows past write_lsn left over from a crash where we
         // INSERT'd but never returned to the caller. Goes direct via the
         // sync ysql_fpu_client (consumer hasn't been handed anything yet anyway).
+        tracing::info!(
+            tenant_id = %me.tenant_id,
+            timeline_id = %me.timeline_id,
+            %write_lsn,
+            "YbWalStorage::new — calling delete_after(write_lsn) \
+             to drop any chunks past the rehydrated end-of-WAL",
+        );
         me.delete_after(write_lsn).await?;
         me.next_chunk_seq = Self::load_next_chunk_seq(
             &me.ysql_fpu_client,
@@ -313,6 +330,12 @@ impl YbWalStorage {
             &me.timeline_id,
         )
         .await?;
+        tracing::info!(
+            tenant_id = %me.tenant_id,
+            timeline_id = %me.timeline_id,
+            next_chunk_seq = ?me.next_chunk_seq,
+            "YbWalStorage::new — loaded next chunk_seq per segno from yb_storage.wals",
+        );
         Ok(me)
     }
 
@@ -533,20 +556,40 @@ impl YbWalStorage {
                 .unwrap()
                 .truncate_after(segno_end as u64, offset_end as u64);
         }
-        // Reset in-memory chunk_seq state for affected segnos.
-        self.next_chunk_seq.retain(|seg, _| (*seg as i64) < segno_end);
-        if self.next_chunk_seq.contains_key(&(segno_end as u64)) {
-            // After a partial-segment truncate we conservatively reload that
-            // segment's seq from YB so chunk_seq stays monotonic.
-            let cur = Self::load_next_chunk_seq(
-                &self.ysql_fpu_client,
-                &self.table_name,
-                &self.tenant_id,
-                &self.timeline_id,
-            )
-            .await?;
-            self.next_chunk_seq = cur;
-        }
+        // Re-read chunk_seq state from YB for every segno. Specifically:
+        // - Segnos strictly above `segno_end` were fully wiped — they must
+        //   drop out of `next_chunk_seq` so a later write picks up at
+        //   chunk_seq=0 against an empty key range.
+        // - Segno `segno_end` may have surviving rows below `offset_end` —
+        //   `next_chunk_seq[segno_end]` MUST be `MAX(chunk_seq) + 1` over
+        //   those survivors, otherwise the next allocate_seq returns a
+        //   chunk_seq that collides with a surviving row's PK and (with
+        //   `yb_enable_upsert_mode = true`) silently overwrites it. The
+        //   previous code was a no-op here — it did
+        //     `retain(|seg, _| (*seg as i64) < segno_end)`
+        //   which evicted segno_end, then guarded the reload behind
+        //   `if contains_key(segno_end)` which was now false. So
+        //   `allocate_seq(segno_end)` returned 0, the new chunk's PK
+        //   collided with chunk_seq=0 (or 1) survivor's PK, and the
+        //   upsert silently overwrote it. After SK restart `load_write_lsn`
+        //   read the now-overwritten rows, the PS asked for the lower
+        //   offsets that were gone, and the stream errored with
+        //   "YB WAL hole" (see findings-ps-wal-replay-restart-bug-
+        //   2026-06-04). Re-read unconditionally.
+        self.next_chunk_seq = Self::load_next_chunk_seq(
+            &self.ysql_fpu_client,
+            &self.table_name,
+            &self.tenant_id,
+            &self.timeline_id,
+        )
+        .await?;
+        tracing::info!(
+            tenant_id = %self.tenant_id,
+            timeline_id = %self.timeline_id,
+            %end_pos,
+            next_chunk_seq = ?self.next_chunk_seq,
+            "YbWalStorage::delete_after — re-read next_chunk_seq from YB",
+        );
         Ok(())
     }
 
