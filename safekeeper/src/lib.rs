@@ -31,7 +31,6 @@ pub mod send_interpreted_wal;
 pub mod send_wal;
 pub mod state;
 pub mod timeline;
-pub mod timeline_eviction;
 pub mod timeline_guard;
 pub mod timeline_manager;
 pub mod timelines_set;

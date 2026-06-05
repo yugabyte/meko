@@ -254,11 +254,6 @@ pub async fn main_task(
     )
     .await;
 
-    // If timeline is evicted, reflect that in the metric.
-    if mgr.is_offloaded {
-        NUM_EVICTED_TIMELINES.inc();
-    }
-
     let last_state = 'outer: loop {
         MANAGER_ITERATIONS_TOTAL.inc();
 
@@ -266,7 +261,7 @@ pub async fn main_task(
         let state_snapshot = mgr.state_snapshot().await;
 
         let mut next_event: Option<Instant> = None;
-        if !mgr.is_offloaded {
+        {
             let num_computes = *mgr.num_computes_rx.borrow();
 
             mgr.set_status(Status::UpdateBackup);
@@ -282,36 +277,6 @@ pub async fn main_task(
 
             mgr.set_status(Status::UpdatePartialBackup);
             mgr.update_partial_backup(&state_snapshot).await;
-
-            let now = Instant::now();
-            if mgr.evict_not_before > now {
-                // we should wait until evict_not_before
-                update_next_event(&mut next_event, mgr.evict_not_before);
-            }
-
-            if mgr.conf.enable_offload
-                && mgr.evict_not_before <= now
-                && mgr.ready_for_eviction(&next_event, &state_snapshot)
-            {
-                // check rate limiter and evict timeline if possible
-                match mgr.global_rate_limiter.try_acquire_eviction() {
-                    Some(_permit) => {
-                        mgr.set_status(Status::EvictTimeline);
-                        if !mgr.evict_timeline().await {
-                            // eviction failed, try again later
-                            mgr.evict_not_before =
-                                Instant::now() + rand_duration(&mgr.conf.eviction_min_resident);
-                            update_next_event(&mut next_event, mgr.evict_not_before);
-                        }
-                    }
-                    None => {
-                        // we can't evict timeline now, will try again later
-                        mgr.evict_not_before =
-                            Instant::now() + rand_duration(&mgr.conf.eviction_min_resident);
-                        update_next_event(&mut next_event, mgr.evict_not_before);
-                    }
-                }
-            }
         }
 
         mgr.set_status(Status::Wait);
@@ -695,20 +660,9 @@ impl Manager {
         debug!("received manager message: {:?}", msg);
         match msg {
             Some(ManagerCtlMessage::GuardRequest(tx)) => {
-                if self.is_offloaded {
-                    // trying to unevict timeline, but without gurarantee that it will be successful
-                    self.unevict_timeline().await;
-                }
-
-                let guard = if self.is_offloaded {
-                    Err(anyhow::anyhow!("timeline is offloaded, can't get a guard"))
-                } else {
-                    match self.tli.gate.enter() {
-                        Ok(gate_guard) => Ok(self.access_service.create_guard(gate_guard)),
-                        Err(_) => Err(anyhow::anyhow!(
-                            "timeline is shutting down, can't get a guard"
-                        )),
-                    }
+                let guard = match self.tli.gate.enter() {
+                    Ok(gate_guard) => Ok(self.access_service.create_guard(gate_guard)),
+                    Err(_) => Err(anyhow::anyhow!("timeline is shutting down, can't get a guard")),
                 };
 
                 if tx.send(guard).is_err() {
@@ -716,13 +670,9 @@ impl Manager {
                 }
             }
             Some(ManagerCtlMessage::TryGuardRequest(tx)) => {
-                let result = if self.is_offloaded {
-                    None
-                } else {
-                    match self.tli.gate.enter() {
-                        Ok(gate_guard) => Some(self.access_service.create_guard(gate_guard)),
-                        Err(_) => None,
-                    }
+                let result = match self.tli.gate.enter() {
+                    Ok(gate_guard) => Some(self.access_service.create_guard(gate_guard)),
+                    Err(_) => None,
                 };
 
                 if tx.send(result).is_err() {
