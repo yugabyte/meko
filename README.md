@@ -352,13 +352,45 @@ rm -rf .neon    # local dev cluster state (destroys local data)
 
 ## Documentation
 
-- `architecture/yb-pageserver.md` — the row-store gateway design,
-  phase plan for the Neon-shell deletion cascade, materialiser
-  semantics, write batching shape.
-- `architecture/yb-safekeeper.md` — WAL-in-YB layout.
-- `architecture/yb-store.md` — the blob layer.
-- [`docs/sourcetree.md`](/docs/sourcetree.md) — original Neon
-  sourcetree map (still mostly accurate for the shell).
+Start here:
+
+- [`architecture/README.md`](architecture/README.md) — index page for
+  the whole architecture section; one-line summary of every component
+  doc below.
+- [`architecture/high-level.md`](architecture/high-level.md) —
+  components, processes, ports, what-talks-to-what at a single page.
+
+Per-component deep dives:
+
+- [`architecture/compute.md`](architecture/compute.md) — the patched
+  Postgres compute (unchanged in yb-light); how the `neon` smgr
+  extension wires page reads and WAL writes through the gateway.
+- [`architecture/yb-pageserver.md`](architecture/yb-pageserver.md) —
+  the row-store gateway design: schema, chain reconstruction,
+  `UnifiedPages` buffer, image materialiser semantics, write batching,
+  and the phase plan for the Neon-shell deletion cascade.
+- [`architecture/pageserver.md`](architecture/pageserver.md) — the
+  original upstream-Neon pageserver design; kept for context on
+  pieces yb-pageserver still inherits (gRPC `getpage`, walreceiver,
+  basebackup).
+- [`architecture/safekeeper.md`](architecture/safekeeper.md) — the
+  upstream-Neon safekeeper (Raft acceptor); the WAL-in-YB
+  reduction in ybLight is described inline in `yugabyte.md` and in
+  the safekeeper module docs.
+- [`architecture/storage-controller.md`](architecture/storage-controller.md)
+  — tenant placement, generation fencing, and live-migrate semantics.
+- [`architecture/remote-storage.md`](architecture/remote-storage.md)
+  — the `RemoteStorage` abstraction and the `YbStore` backend that
+  replaced S3/GCS/Azure (blob/basebackup tar/initdb layer).
+- [`architecture/yugabyte.md`](architecture/yugabyte.md) — what the
+  YB cluster looks like from ybLight's perspective: databases,
+  tables, prefixes, idempotency contract, and the DDL the operator
+  must provision.
+
+Upstream-Neon material that's still mostly accurate for the shell:
+
+- [`docs/sourcetree.md`](docs/sourcetree.md) — original Neon
+  sourcetree map.
 
 `cargo doc --no-deps --open` for rustdoc.
 
