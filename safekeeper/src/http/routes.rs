@@ -17,7 +17,7 @@ use hyper::{Body, Request, Response, StatusCode};
 use pem::Pem;
 use postgres_ffi::WAL_SEGMENT_SIZE;
 use safekeeper_api::models::{
-    AcceptorStateStatus, PullTimelineRequest, SafekeeperStatus, SkTimelineInfo, TenantDeleteResult,
+    AcceptorStateStatus, SafekeeperStatus, SkTimelineInfo, TenantDeleteResult,
     TermSwitchApiEntry, TimelineCopyRequest, TimelineCreateRequest, TimelineDeleteResult,
     TimelineStatus, TimelineTermBumpRequest,
 };
@@ -35,9 +35,7 @@ use crate::debug_dump::TimelineDigestRequest;
 use crate::hadron::{get_filesystem_capacity, get_filesystem_usage};
 use crate::safekeeper::TermLsn;
 use crate::timelines_global_map::DeleteOrExclude;
-use crate::{
-    GlobalTimelines, SafeKeeperConf, copy_timeline, debug_dump, patch_control_file, pull_timeline,
-};
+use crate::{GlobalTimelines, SafeKeeperConf, copy_timeline, debug_dump, patch_control_file};
 use serde_json::json;
 
 /// Healthcheck handler.
@@ -236,73 +234,6 @@ async fn timeline_delete_handler(mut request: Request<Body>) -> Result<Response<
         .await
         .map_err(ApiError::from)?;
     json_response(StatusCode::OK, resp)
-}
-
-/// Pull timeline from peer safekeeper instances.
-async fn timeline_pull_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-
-    let data: PullTimelineRequest = json_request(&mut request).await?;
-    let conf = get_conf(&request);
-    let global_timelines = get_global_timelines(&request);
-
-    let ca_certs = conf
-        .ssl_ca_certs
-        .iter()
-        .map(Pem::contents)
-        .map(reqwest::Certificate::from_der)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            ApiError::InternalServerError(anyhow::anyhow!("failed to parse CA certs: {e}"))
-        })?;
-
-    let resp = pull_timeline::handle_request(
-        data,
-        conf.sk_auth_token.clone(),
-        ca_certs,
-        global_timelines,
-        false,
-    )
-    .await?;
-    json_response(StatusCode::OK, resp)
-}
-
-/// Stream tar archive with all timeline data.
-async fn timeline_snapshot_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let destination = parse_request_param(&request, "destination_id")?;
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
-    check_permission(&request, Some(ttid.tenant_id))?;
-
-    let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(ttid).map_err(ApiError::from)?;
-    let storage = global_timelines.get_wal_backup().get_storage();
-
-    // To stream the body use wrap_stream which wants Stream of Result<Bytes>,
-    // so create the chan and write to it in another task.
-    let (tx, rx) = mpsc::channel(1);
-
-    let conf = get_conf(&request);
-    task::spawn(pull_timeline::stream_snapshot(
-        tli,
-        conf.my_id,
-        destination,
-        tx,
-        storage,
-    ));
-
-    let rx_stream = ReceiverStream::new(rx);
-    let body = Body::wrap_stream(rx_stream);
-
-    let response = Response::builder()
-        .status(200)
-        .header(hyper::header::CONTENT_TYPE, "application/octet-stream")
-        .body(body)
-        .unwrap();
-
-    Ok(response)
 }
 
 /// Error type for delete_or_exclude: either generation conflict or something
@@ -728,16 +659,9 @@ pub fn make_router(
         .delete("/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {
             request_span(r, timeline_delete_handler)
         })
-        .post("/v1/pull_timeline", |r| {
-            request_span(r, timeline_pull_handler)
-        })
         .put("/v1/tenant/:tenant_id/timeline/:timeline_id/exclude", |r| {
             request_span(r, timeline_exclude_handler)
         })
-        .get(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/snapshot/:destination_id",
-            |r| request_span(r, timeline_snapshot_handler),
-        )
         .put(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/membership",
             |r| request_span(r, timeline_membership_handler),

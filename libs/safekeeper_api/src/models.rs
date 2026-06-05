@@ -287,25 +287,24 @@ pub struct SafekeeperUtilization {
 }
 
 /// pull_timeline request body.
+///
+/// The safekeeper-side handler has been removed in yb-light's single-SK
+/// mode (durability is YB Raft, not SK quorum). The type is kept here
+/// because the storage_controller still references it in legacy
+/// multi-SK reconciler paths — calls to a yb-light SK's
+/// `/v1/pull_timeline` will simply 404. Those paths can be deleted
+/// when the storage_controller is also slimmed to single-SK.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PullTimelineRequest {
     pub tenant_id: TenantId,
     pub timeline_id: TimelineId,
     pub http_hosts: Vec<String>,
-    /// Membership configuration to switch to after pull.
-    /// It guarantees that if pull_timeline returns successfully, the timeline will
-    /// not be deleted by request with an older generation.
-    /// Storage controller always sets this field.
-    /// None is only allowed for manual pull_timeline requests.
     pub mconf: Option<Configuration>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PullTimelineResponse {
-    /// Donor safekeeper host.
-    /// None if no pull happened because the timeline already exists.
     pub safekeeper_host: Option<String>,
-    // TODO: add more fields?
 }
 
 /// Response to a timeline locate request.

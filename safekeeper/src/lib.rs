@@ -9,7 +9,6 @@ use once_cell::sync::Lazy;
 use pem::Pem;
 use remote_storage::RemoteStorageConfig;
 use tokio::runtime::Runtime;
-use url::Url;
 use utils::auth::SwappableJwtAuth;
 use utils::id::NodeId;
 use utils::logging::SecretString;
@@ -24,7 +23,6 @@ pub mod handler;
 pub mod http;
 pub mod metrics;
 pub mod patch_control_file;
-pub mod pull_timeline;
 pub mod rate_limit;
 pub mod receive_wal;
 pub mod remove_wal;
@@ -123,8 +121,6 @@ pub struct SafeKeeperConf {
     pub availability_zone: Option<String>,
     /* BEGIN_HADRON */
     pub advertise_pg_addr_tenant_only: Option<String>,
-    pub enable_pull_timeline_on_startup: bool,
-    pub hcc_base_url: Option<Url>,
     /* END_HADRON */
     pub heartbeat_timeout: Duration,
     pub remote_storage: Option<RemoteStorageConfig>,
@@ -332,8 +328,6 @@ impl SafeKeeperConf {
             force_metric_collection_on_scrape: true,
             /* BEGIN_HADRON */
             advertise_pg_addr_tenant_only: None,
-            enable_pull_timeline_on_startup: false,
-            hcc_base_url: None,
             /* END_HADRON */
         }
     }

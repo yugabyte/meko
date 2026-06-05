@@ -86,6 +86,10 @@ impl Client {
         Ok(resp)
     }
 
+    /// Pull a timeline from peer safekeepers. Removed from yb-light's
+    /// SK (single-SK mode) — the SK will 404 this. Kept here only
+    /// because the storage_controller's multi-SK reconciler still
+    /// composes this request type.
     pub async fn pull_timeline(&self, req: &PullTimelineRequest) -> Result<PullTimelineResponse> {
         let uri = format!("{}/v1/pull_timeline", self.mgmt_api_endpoint);
         let resp = self.post(&uri, req).await?;

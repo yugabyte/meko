@@ -22,7 +22,6 @@ use safekeeper::defaults::{
     DEFAULT_PARTIAL_BACKUP_CONCURRENCY, DEFAULT_PARTIAL_BACKUP_TIMEOUT, DEFAULT_PG_LISTEN_ADDR,
     DEFAULT_SSL_CERT_FILE, DEFAULT_SSL_CERT_RELOAD_PERIOD, DEFAULT_SSL_KEY_FILE,
 };
-use safekeeper::hadron;
 use safekeeper::wal_backup::WalBackup;
 use safekeeper::{
     BACKGROUND_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf,
@@ -264,10 +263,6 @@ struct Args {
     #[arg(long, help = "Run in development mode (disables security checks)")]
     dev: bool,
     /* BEGIN_HADRON */
-    #[arg(long)]
-    enable_pull_timeline_on_startup: bool,
-    #[arg(long)]
-    hcc_base_url: Option<url::Url>,
     /// How often to scan entire data-dir for total disk usage
     #[arg(long, value_parser=humantime::parse_duration, default_value = DEFAULT_GLOBAL_DISK_CHECK_INTERVAL)]
     global_disk_check_interval: Duration,
@@ -466,8 +461,6 @@ async fn main() -> anyhow::Result<()> {
         force_metric_collection_on_scrape: args.force_metric_collection_on_scrape,
         /* BEGIN_HADRON */
         advertise_pg_addr_tenant_only: None,
-        enable_pull_timeline_on_startup: args.enable_pull_timeline_on_startup,
-        hcc_base_url: args.hcc_base_url,
         global_disk_check_interval: args.global_disk_check_interval,
         max_global_disk_usage_ratio: args.max_global_disk_usage_ratio,
         /* END_HADRON */
@@ -547,20 +540,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
 
     // Load all timelines from disk to memory.
     global_timelines.init().await?;
-
-    /* BEGIN_HADRON */
-    if conf.enable_pull_timeline_on_startup && global_timelines.timelines_count() == 0 {
-        match hadron::hcc_pull_timelines(&conf, global_timelines.clone()).await {
-            Ok(_) => {
-                info!("Successfully pulled all timelines from peer safekeepers");
-            }
-            Err(e) => {
-                error!("Failed to pull timelines from peer safekeepers: {:?}", e);
-                return Err(e);
-            }
-        }
-    }
-    /* END_HADRON */
 
     // Run everything in current thread rt, if asked.
     if conf.current_thread_runtime {
