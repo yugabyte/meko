@@ -174,7 +174,6 @@ pub fn run_server(os: NodeOs, disk: Arc<SafekeeperDisk>) -> Result<()> {
         listen_pg_addr_tenant_only: None,
         advertise_pg_addr: None,
         availability_zone: None,
-        peer_recovery_enabled: false,
         backup_parallel_jobs: 0,
         pg_auth: None,
         pg_tenant_only_auth: None,

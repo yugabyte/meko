@@ -36,7 +36,6 @@ impl Manager {
         state: &StateSnapshot,
     ) -> bool {
         self.backup_task.is_none()
-            && self.recovery_task.is_none()
             && self.wal_removal_task.is_none()
             && self.partial_backup_task.is_none()
             && next_event.is_none()

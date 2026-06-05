@@ -28,7 +28,6 @@ use crate::metrics::{
     MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS, NUM_EVICTED_TIMELINES,
 };
 use crate::rate_limit::{RateLimiter, rand_duration};
-use crate::recovery::recovery_main;
 use crate::remove_wal::calc_horizon_lsn;
 use crate::send_wal::WalSenders;
 use crate::state::TimelineState;
@@ -211,7 +210,6 @@ pub(crate) struct Manager {
 
     // background tasks
     pub(crate) backup_task: Option<WalBackupTaskHandle>,
-    pub(crate) recovery_task: Option<JoinHandle<()>>,
     pub(crate) wal_removal_task: Option<JoinHandle<anyhow::Result<u64>>>,
 
     // partial backup
@@ -261,14 +259,6 @@ pub async fn main_task(
         wal_backup,
     )
     .await;
-
-    // Start recovery task which always runs on the timeline.
-    if !mgr.is_offloaded && mgr.conf.peer_recovery_enabled {
-        // Recovery task is only spawned if we can get a residence guard (i.e. timeline is not already shutting down)
-        if let Ok(tli) = mgr.wal_resident_timeline() {
-            mgr.recovery_task = Some(tokio::spawn(recovery_main(tli, mgr.conf.clone())));
-        }
-    }
 
     // If timeline is evicted, reflect that in the metric.
     if mgr.is_offloaded {
@@ -385,12 +375,6 @@ pub async fn main_task(
         wal_backup::update_task(&mut mgr, storage, false, &last_state).await;
     }
 
-    if let Some(recovery_task) = &mut mgr.recovery_task {
-        if let Err(e) = recovery_task.await {
-            warn!("recovery task failed: {:?}", e);
-        }
-    }
-
     if let Some((handle, cancel)) = &mut mgr.partial_backup_task {
         cancel.cancel();
         if let Err(e) = handle.await {
@@ -431,7 +415,6 @@ impl Manager {
             last_removed_segno: 0,
             is_offloaded,
             backup_task: None,
-            recovery_task: None,
             wal_removal_task: None,
             partial_backup_task: None,
             partial_backup_uploaded,

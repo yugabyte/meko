@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
-use clap::{ArgAction, Parser};
+use clap::Parser;
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
@@ -137,9 +137,6 @@ struct Args {
     /// it during this period passed as a human readable duration.
     #[arg(long, value_parser= humantime::parse_duration, default_value = DEFAULT_HEARTBEAT_TIMEOUT, verbatim_doc_comment)]
     heartbeat_timeout: Duration,
-    /// Enable/disable peer recovery.
-    #[arg(long, default_value = "false", action=ArgAction::Set)]
-    peer_recovery: bool,
     /// Remote storage configuration for WAL backup (offloading to s3) as TOML
     /// inline table, e.g.
     ///   {max_concurrent_syncs = 17, max_sync_errors = 13, bucket_name = "<BUCKETNAME>", bucket_region = "<REGION>", concurrency_limit = 119}
@@ -451,7 +448,6 @@ async fn main() -> anyhow::Result<()> {
         broker_endpoint: args.broker_endpoint,
         broker_keepalive_interval: args.broker_keepalive_interval,
         heartbeat_timeout: args.heartbeat_timeout,
-        peer_recovery_enabled: args.peer_recovery,
         remote_storage: args.remote_storage,
         wal_yb_config: args.wal_yb_config,
         wal_cache_size_mib: args.wal_cache_size_mib.unwrap_or_else(|| {

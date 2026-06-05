@@ -29,7 +29,6 @@ pub mod patch_control_file;
 pub mod pull_timeline;
 pub mod rate_limit;
 pub mod receive_wal;
-pub mod recovery;
 pub mod remove_wal;
 pub mod safekeeper;
 pub mod send_interpreted_wal;
@@ -132,7 +131,6 @@ pub struct SafeKeeperConf {
     pub broker_endpoint: Uri,
     pub broker_keepalive_interval: Duration,
     pub heartbeat_timeout: Duration,
-    pub peer_recovery_enabled: bool,
     pub remote_storage: Option<RemoteStorageConfig>,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
     /// every `write_wal` is INSERT'd into the YB table named here in
@@ -312,7 +310,6 @@ impl SafeKeeperConf {
                 .parse()
                 .expect("failed to parse default broker endpoint"),
             broker_keepalive_interval: Duration::from_secs(5),
-            peer_recovery_enabled: true,
             wal_backup_enabled: true,
             backup_parallel_jobs: 1,
             pg_auth: None,
