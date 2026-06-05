@@ -33,13 +33,13 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   }
 
   const isObserve = pathname === ROUTES.observeHub || pathname.startsWith(`${ROUTES.observeHub}/`);
-  const isHome = pathname === ROUTES.home || pathname.startsWith(`${ROUTES.home}/`);
+  const isConnect = pathname === ROUTES.connect || pathname.startsWith(`${ROUTES.connect}/`);
   const isWorkbenchLM =
     pathname === ROUTES.workbenchLm || pathname.startsWith(`${ROUTES.workbenchLm}/`);
   const isSettings =
     pathname === ROUTES.settings || pathname.startsWith(`${ROUTES.settings}/`);
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes home, observe, workbench-lm, settings. */
-  const isDatapacks = !isObserve && !isHome && !isWorkbenchLM && !isSettings;
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings. */
+  const isDatapacks = !isObserve && !isConnect && !isWorkbenchLM && !isSettings;
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden text-foreground">
@@ -47,7 +47,7 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <KbImportStatusBanner />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isHome ? "contents" : "none" }}>
+          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isConnect ? "contents" : "none" }}>
             <HomePage />
           </div>
           {/*

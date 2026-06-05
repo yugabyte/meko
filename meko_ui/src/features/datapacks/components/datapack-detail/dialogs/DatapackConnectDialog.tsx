@@ -23,6 +23,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTruncatableCodeDisplay } from "@/hooks/useTruncatableCodeDisplay";
 import { copyToClipboard } from "@/lib/clipboard";
+import { cn } from "@/lib/utils";
 import { buildMekoInstallerCommand } from "@/lib/mekoInstallerCommand";
 import {
   getApiErrorMessage,
@@ -96,6 +97,18 @@ export type DatapackConnectDialogProps = {
   loading: boolean;
   error: string | null;
   provisionStatus: ProvisionStatus | null;
+  /**
+   * Whether to render the "Datapack: <name>" row at the top of the credentials
+   * section. Default `true` — matches the per-datapack entry points (the
+   * Connect tile on the detail page) where the name reinforces context.
+   *
+   * Set to `false` when the dialog is opened from a *cross-datapack* surface
+   * (e.g. the high-level Connect CTA on the Datapacks Overview page). There,
+   * "Connect" is a Meko-level action: we still need a real provisioned
+   * datapack under the hood to mint the credentials, but exposing its name
+   * would be misleading because the user didn't pick it — we did.
+   */
+  showDatapackName?: boolean;
 };
 
 export function DatapackConnectDialog({
@@ -104,6 +117,7 @@ export function DatapackConnectDialog({
   loading,
   error,
   provisionStatus,
+  showDatapackName = true,
 }: DatapackConnectDialogProps) {
   const navigate = useNavigate();
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -183,29 +197,33 @@ export function DatapackConnectDialog({
           </div>
         ) : provisionStatus ? (
           <div className="space-y-4 px-6 pb-6 py-4 overflow-y-auto min-h-0">
-            <h3 className="text-lg font-semibold text-foreground">Datapack</h3>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground">Datapack</label>
-              <div className="flex items-center p-3 rounded-md bg-input border border-border">
-                <code className="text-sm text-foreground break-all flex-1 pr-4">
-                  {provisionStatus.datapack_name}
-                </code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-white"
-                  onClick={() => void handleCopy(provisionStatus.datapack_name, "dp")}
-                >
-                  {copiedField === "dp" ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
+            {showDatapackName ? (
+              <>
+                <h3 className="text-lg font-semibold text-foreground">Datapack</h3>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-muted-foreground">Datapack</label>
+                  <div className="flex items-center p-3 rounded-md bg-input border border-border">
+                    <code className="text-sm text-foreground break-all flex-1 pr-4">
+                      {provisionStatus.datapack_name}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-white"
+                      onClick={() => void handleCopy(provisionStatus.datapack_name, "dp")}
+                    >
+                      {copiedField === "dp" ? (
+                        <Check className="h-4 w-4 text-green-500" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            ) : null}
 
-            <h3 className="pt-2 text-lg font-semibold text-foreground">MCP Server</h3>
+            <h3 className={cn("text-lg font-semibold text-foreground", showDatapackName && "pt-2")}>MCP Server</h3>
             <div className="space-y-2">
               <label className="text-sm font-medium text-muted-foreground">URL</label>
               <div className="flex items-center p-3 rounded-md bg-input border border-border">

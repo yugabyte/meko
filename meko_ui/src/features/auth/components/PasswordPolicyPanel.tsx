@@ -43,8 +43,7 @@ const PASSWORD_REQUIREMENTS: PasswordRequirement[] = [
 
 export function getPasswordPolicyError(password?: string | null): string | null {
   const pw = password || "";
-  return PASSWORD_REQUIREMENTS.find((requirement) => !requirement.test(pw))
-    ?.error ?? null;
+  return PASSWORD_REQUIREMENTS.find((requirement) => !requirement.test(pw))?.error ?? null;
 }
 
 export function isPasswordPolicyMet(password?: string | null): boolean {
@@ -78,7 +77,7 @@ function getPolicyState(password?: string | null) {
       metCount,
       percent,
       label: "Strong password",
-      description: "All Cognito requirements are met.",
+      description: "Password requirements are met.",
       tone: "bg-emerald-500",
       textTone: "text-emerald-600 dark:text-emerald-400",
     };
@@ -125,10 +124,7 @@ export function PasswordPolicyPanel({
   return (
     <div
       id={id}
-      className={cn(
-        "rounded-xl border border-border/80 bg-muted/30 p-4 shadow-sm",
-        className,
-      )}
+      className={cn("rounded-xl border border-border/80 bg-muted/30 p-4 shadow-sm", className)}
       aria-live="polite"
     >
       <div className="flex items-start gap-3">
@@ -142,9 +138,7 @@ export function PasswordPolicyPanel({
               {state.metCount}/{PASSWORD_REQUIREMENTS.length}
             </p>
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {state.description}
-          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{state.description}</p>
           <div
             className="mt-3 h-2 overflow-hidden rounded-full bg-muted"
             role="progressbar"

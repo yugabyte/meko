@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Link as LinkIcon, Pencil, Settings, Share2, Trash2, Upload } from "lucide-react";
+import { Pencil, Settings, Share2, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -391,7 +391,11 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       <AppWorkspaceHeader />
 
       <main className="flex-1 pr-1 pt-6 pl-1 pb-3 max-w-7xl mx-auto w-full space-y-8">
-        {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = Connect, Share (if eligible), upload dialog, settings menu (maintainer/owner only) */}
+        {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = Share (if eligible), upload dialog, settings menu (maintainer/owner only).
+            Connect used to live up here but has been demoted to the body-level
+            "Connect" tile + the high-level Connect CTA on /datapacks — Meko
+            connection is conceptually a workspace-wide affordance, not a
+            per-datapack one. */}
         <DatapackDetailHero
           datapackName={datapackName}
           description={datapack?.description}
@@ -402,15 +406,6 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           statusLoading={statusLoading}
           actions={
             <>
-              <Button
-                type="button"
-                variant="outline"
-                className="gap-2 border-border bg-background/80"
-                onClick={() => setIsConnectOpen(true)}
-              >
-                <LinkIcon className="h-4 w-4 shrink-0" aria-hidden />
-                Connect
-              </Button>
               {isDatapackGrantEligibleToShare({ grant: datapackGrant }) && (
                 <Button
                   type="button"

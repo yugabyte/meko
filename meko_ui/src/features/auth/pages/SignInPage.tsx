@@ -123,10 +123,7 @@ export default function SignInPage() {
       // already verified — that's not an error from the user's POV, so
       // collapse the recovery panel and clear the failed-login banner so they
       // can just retype their password and sign in.
-      if (
-        isMekoApiRequestError(err) &&
-        err.code === API_ERROR_CODE_USER_ALREADY_CONFIRMED
-      ) {
+      if (isMekoApiRequestError(err) && err.code === API_ERROR_CODE_USER_ALREADY_CONFIRMED) {
         resetRecoveryUi();
         setError("This email is already verified. Please sign in with your password.");
         return;
@@ -147,9 +144,7 @@ export default function SignInPage() {
         <ThemeToggleButton />
       </div>
       <div className="w-full max-w-[560px] rounded-2xl border border-border bg-card p-8 shadow-sm">
-        <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">
-          Sign in to Meko
-        </h1>
+        <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">Sign in to Meko</h1>
 
         {showPasswordResetBanner ? (
           <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-950/25 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-100">
@@ -159,8 +154,8 @@ export default function SignInPage() {
 
         {showInviteExpired ? (
           <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-950/25 px-4 py-3 text-sm text-amber-700 dark:text-amber-100">
-            Your temporary password has expired. We&apos;ve emailed you a new one — check your
-            inbox and sign in again.
+            Your temporary password has expired. We&apos;ve emailed you a new one — check your inbox
+            and sign in again.
           </div>
         ) : null}
 
@@ -210,10 +205,12 @@ export default function SignInPage() {
 
         {showUnconfirmedRecovery ? (
           <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-950/20 px-4 py-3 text-sm text-amber-50/95">
-            <p className="font-medium text-amber-700 dark:text-amber-100">Finish verifying this email</p>
+            <p className="font-medium text-amber-700 dark:text-amber-100">
+              Finish verifying this email
+            </p>
             <p className="mt-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-100/80">
-              Your account exists but the email is not verified yet.
-              Resend the code to verify your email.
+              Your account exists but the email is not verified yet. Resend the code to verify your
+              email.
             </p>
             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Button
@@ -235,9 +232,13 @@ export default function SignInPage() {
               </Button>
             </div>
             {resendMessage ? (
-              <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-300/90">{resendMessage}</p>
+              <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-300/90">
+                {resendMessage}
+              </p>
             ) : null}
-            {resendError ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{resendError}</p> : null}
+            {resendError ? (
+              <p className="mt-2 text-xs text-red-700 dark:text-red-300">{resendError}</p>
+            ) : null}
           </div>
         ) : null}
 
@@ -251,7 +252,11 @@ export default function SignInPage() {
               Sign up
             </Link>
           </p> */}
-          <Button variant="outline" className="h-11 w-full border-border bg-input text-foreground hover:bg-white/10" asChild>
+          <Button
+            variant="outline"
+            className="h-11 w-full border-border bg-input text-foreground hover:bg-white/10"
+            asChild
+          >
             <a href={MEKO_REQUEST_ACCESS_URL} target="_blank" rel="noopener noreferrer">
               Request Access
             </a>

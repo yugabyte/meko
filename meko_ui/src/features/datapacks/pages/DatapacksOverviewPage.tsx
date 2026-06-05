@@ -1,24 +1,44 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Database, Sparkles, Book, ChevronDown, ChevronUp, Layers } from "lucide-react";
+import {
+  ArrowUpRight,
+  Book,
+  ChevronDown,
+  ChevronUp,
+  Database,
+  Layers,
+  Link as LinkIcon,
+  Plus,
+  Sparkles,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
+  getDatapackProvisionStatus,
   listDatapacks,
   type CurrentUser,
   type Datapack,
+  type ProvisionStatus,
 } from "@/lib/mekoApi";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import {
+  DEFAULT_ACCOUNT_DATAPACK_NAME,
   datapackDetailPath,
   datapackDetailUrlOpenConnect,
   datapackNewConfigurePath,
   datapackSharePath,
 } from "@/app/routes/paths";
 import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTilesSection";
+import { DatapackConnectDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
+
+// Local key for tracking whether the user has seen the "What is a Datapack?"
+// explainer at least once. Used to expand the panel by default on the very
+// first visit, then collapse on subsequent visits (the user can still toggle).
+// Page-local — not centralised because it's only ever read/written here.
+const DATAPACKS_OVERVIEW_INTRO_SEEN_KEY = "meko:datapacks-overview-intro-seen:v1";
 
 type OverviewProps = {
   currentUser: CurrentUser | null;
@@ -30,7 +50,40 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isProvisioningDefaultDatapack, setIsProvisioningDefaultDatapack] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isExplanationExpanded, setIsExplanationExpanded] = useState(false);
+  // First-visit treatment: expand the explainer by default if the user
+  // has never seen it.
+  //
+  // CRITICAL: the state initialiser MUST be pure — read-only.
+  //
+  // React 18 Strict Mode (and concurrent rendering more generally)
+  // intentionally invokes state initialisers more than once to surface
+  // impure behaviour. Previously this initialiser also called
+  // `localStorage.setItem(..., "true")` to mark the explainer as seen.
+  // That looked fine — but on the second Strict-Mode invocation the
+  // initialiser would re-read the now-`"true"` flag and return `false`,
+  // so the first visit collapsed instead of expanded.
+
+  const [isExplanationExpanded, setIsExplanationExpanded] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(DATAPACKS_OVERVIEW_INTRO_SEEN_KEY) !== "true";
+    } catch {
+      return false;
+    }
+  });
+
+  // Side-effect partner to the initialiser above: persist the
+  // "seen-once" flag after the first render commits, so subsequent
+  // visits start collapsed. Guarded so we don't bother writing if the
+  // flag is already set.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(DATAPACKS_OVERVIEW_INTRO_SEEN_KEY) !== "true") {
+        localStorage.setItem(DATAPACKS_OVERVIEW_INTRO_SEEN_KEY, "true");
+      }
+    } catch {
+      // private-mode / disabled-storage: silently noop.
+    }
+  }, []);
 
   useEffect(() => {
     const loadDatapacks = async () => {
@@ -114,6 +167,73 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     [datapacks],
   );
 
+  // "Fresh user" = nothing they created themselves yet. Either zero datapacks
+  // or only the auto-provisioned `meko_default_datapack`. Used to surface a
+  // gentle docs nudge so brand-new users have an explicit "I have no idea
+  // what this is — point me at the docs" affordance.
+  const isFreshUser = useMemo(() => {
+    if (isLoading) return false;
+    if (datapacks.length === 0) return true;
+    return datapacks.length === 1 && datapacks[0]?.datapack_name === DEFAULT_ACCOUNT_DATAPACK_NAME;
+  }, [isLoading, datapacks]);
+
+  // Workspace-level Connect dialog state. "Connect" is a Meko-wide action,
+  // not a per-datapack one — we just need *some* provisioned datapack the
+  // user owns to mint MCP/server credentials behind the scenes. Pick the
+  // first owner row from the list; that's the user's de-facto "home"
+  // datapack (default_datapack for fresh users, the oldest one they made
+  // otherwise).
+  const firstOwnerDatapack = useMemo(
+    () => datapacks.find((dp) => isDatapackListGrantOwner(dp)) ?? null,
+    [datapacks],
+  );
+  const [isConnectOpen, setIsConnectOpen] = useState(false);
+  const [connectLoading, setConnectLoading] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [connectProvisionStatus, setConnectProvisionStatus] = useState<ProvisionStatus | null>(
+    null,
+  );
+
+  // Fetch provision status lazily on open so we don't burn a request on
+  // every overview-page visit. Mirrors the per-detail-page pattern.
+  //
+  // We reset `connectProvisionStatus` to `null` on every (re)open and on
+  // the "no owner datapack" early-return so stale data from a previous
+  // datapack/session can't briefly leak into the dialog before the new
+  // fetch resolves. The dialog's render priority is loading → error →
+  // status, so a stale `status` wouldn't show today — but a future
+  // tweak to the priority order would silently regress without this
+  // defensive reset.
+  useEffect(() => {
+    if (!isConnectOpen) return;
+    const dpName = firstOwnerDatapack?.datapack_name;
+    const dpId = firstOwnerDatapack?.datapack_id;
+    if (!dpName) {
+      setConnectProvisionStatus(null);
+      setConnectError("No owner datapack available to connect.");
+      setConnectLoading(false);
+      return;
+    }
+    const ac = new AbortController();
+    setConnectProvisionStatus(null);
+    setConnectLoading(true);
+    setConnectError(null);
+    void getDatapackProvisionStatus(dpName, { signal: ac.signal, datapackId: dpId })
+      .then((status) => {
+        if (ac.signal.aborted) return;
+        setConnectProvisionStatus(status);
+      })
+      .catch((err) => {
+        if (ac.signal.aborted) return;
+        if ((err as { name?: string })?.name === "CanceledError") return;
+        setConnectError(getApiErrorMessage(err, "Failed to load connection details."));
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setConnectLoading(false);
+      });
+    return () => ac.abort();
+  }, [isConnectOpen, firstOwnerDatapack?.datapack_name, firstOwnerDatapack?.datapack_id]);
+
   const showProvisioningScreen =
     !isLoading && datapacks.length === 0 && isProvisioningDefaultDatapack;
 
@@ -122,7 +242,9 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
       <div className="flex-1 min-h-screen bg-background text-foreground flex items-center justify-center px-6">
         <div className="w-full max-w-xl rounded-xl border border-blue-500/40 bg-blue-500/10 px-6 py-8 text-center">
           <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-blue-300 border-t-transparent" />
-          <h2 className="text-lg font-semibold text-blue-700 dark:text-blue-100">Setting up your default datapack...</h2>
+          <h2 className="text-lg font-semibold text-blue-700 dark:text-blue-100">
+            Setting up your default datapack...
+          </h2>
           <p className="mt-2 text-sm text-blue-700 dark:text-blue-200/80">
             This may take a minute. We will show your datapack as soon as it is ready.
           </p>
@@ -154,6 +276,26 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {/* Workspace-level Connect: opens DatapackConnectDialog using
+                  the user's first owner datapack under the hood, but hides
+                  the datapack name in the dialog because "Connect to Meko"
+                  is the conceptual frame here, not "Connect to <name>". */}
+              <Button
+                type="button"
+                size="lg"
+                variant="outline"
+                className="gap-2 border-border bg-background/80 font-medium"
+                onClick={() => setIsConnectOpen(true)}
+                disabled={isLoading || !firstOwnerDatapack}
+                title={
+                  !isLoading && !firstOwnerDatapack
+                    ? "No owner datapack available to connect."
+                    : undefined
+                }
+              >
+                <LinkIcon className="w-4 h-4 shrink-0" aria-hidden />
+                Connect
+              </Button>
               <Button
                 size="lg"
                 className="gap-2 font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-70"
@@ -201,18 +343,32 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                 <Sparkles className="w-5 h-5 text-blue-400" />
                 <h2 className="text-xl font-semibold text-foreground">What is a Datapack?</h2>
               </div>
-              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-white">
-                {isExplanationExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hover:text-white"
+              >
+                {isExplanationExpanded ? (
+                  <ChevronUp className="w-5 h-5" />
+                ) : (
+                  <ChevronDown className="w-5 h-5" />
+                )}
               </Button>
             </div>
 
             {isExplanationExpanded ? (
               <div className="p-4 sm:px-10 sm:pb-10 pt-0 flex flex-col md:flex-row items-center gap-8 animate-in fade-in slide-in-from-top-4 duration-300">
                 <div className="flex-1">
-                  <p className="text-muted-foreground text-base mb-6 leading-relaxed max-w-2xl">
-                    A Datapack is a secure, scalable data store for agents. It handles agent memories,
-                    comprehensive knowledge bases, and complex transactional data natively. Each Datapack
-                    automatically maps to a dedicated YugabyteDB YSQL logical database under the hood.
+                  <p className="text-muted-foreground text-base mb-3 leading-relaxed max-w-2xl">
+                    A datapack is everything one project knows, in one place — the conversations
+                    your agents have, the memories they form, the docs you upload, and a traceable
+                    record of what each agent did. Create one per project. Any AI tool you connect
+                    over MCP can read and write to it, so your context follows you when you switch
+                    tools. Private by default, shared by choice.
+                  </p>
+                  <p className="mb-6 max-w-2xl text-xs italic text-muted-foreground/70">
+                    Under the hood, each datapack runs on a YugabyteDB (PostgreSQL-compatible)
+                    database.
                   </p>
                   <div className="flex items-center gap-3">
                     <Button
@@ -251,6 +407,27 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           </div>
         </div>
 
+        {/* First-run docs nudge — visible only while the user has nothing
+            but the auto-provisioned default datapack. The Sidebar already
+            has a "Read the docs" link, but a fresh user on this page often
+            isn't sure where to start; surfacing the same link inline next
+            to their (essentially empty) tile grid gives them an obvious
+            "I'm new, just take me to the docs" path. */}
+        {isFreshUser ? (
+          <a
+            href="https://docs.mekodata.ai/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+          >
+            New here? Read the docs
+            <ArrowUpRight
+              className="h-3.5 w-3.5 shrink-0 opacity-70 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:opacity-100"
+              aria-hidden
+            />
+          </a>
+        ) : null}
+
         <DatapacksTilesSection
           datapacks={datapacks}
           isLoading={isLoading}
@@ -266,6 +443,27 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           }
           onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_name))}
           onNewDatapack={() => navigate(datapackNewConfigurePath())}
+        />
+
+        {/* Workspace-level Connect dialog. `showDatapackName={false}` hides
+            the "Datapack: <name>" row because the user clicked a Meko-wide
+            Connect button — they didn't pick a specific datapack, so surfacing
+            our internal pick (firstOwnerDatapack) would be misleading. The
+            credentials shown (MCP URL + tokens) are still resolved through
+            that datapack on the wire. */}
+        <DatapackConnectDialog
+          open={isConnectOpen}
+          onOpenChange={(open) => {
+            setIsConnectOpen(open);
+            if (!open) {
+              setConnectError(null);
+              setConnectLoading(false);
+            }
+          }}
+          loading={connectLoading}
+          error={connectError}
+          provisionStatus={connectProvisionStatus}
+          showDatapackName={false}
         />
       </main>
     </div>

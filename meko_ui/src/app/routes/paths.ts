@@ -7,7 +7,8 @@ export const ROUTES = {
   /** First-login Cognito challenge: set password + name (from Admin-created users). */
   completeNewPassword: "/complete-new-password",
   onboarding: "/onboarding",
-  home: "/home",
+  /** Connect (MCP install) page. URL changed from `/home` → `/connect` when Connect was promoted out of the Welcome nest into a top-level sidebar item. */
+  connect: "/connect",
   // URL kept as `/workbench-lm` for backward-compat with existing bookmarks
   // and links; the product is renamed to "WorkbenchLM" elsewhere in the UI.
   workbenchLm: "/workbench-lm",
@@ -239,7 +240,7 @@ export const AUTH_ROUTES = [
 
 export const PROTECTED_ROUTE_PREFIXES = [
   ROUTES.onboarding,
-  ROUTES.home,
+  ROUTES.connect,
   ROUTES.workbenchLm,
   ROUTES.datapacks,
   ROUTES.observeHub,

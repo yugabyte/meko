@@ -107,6 +107,15 @@ export function WorkbenchLMHeader({
           </SelectContent>
         </Select>
       </div>
+      {/* One-line "what this thing is" summary — kept here in the header
+          rather than only on first visit so users who jump straight into
+          WorkbenchLM (from Onboarding's CTA or the sidebar) have an
+          always-on reminder that this is a *demo surface*, not Meko
+          itself. */}
+      <p className="text-xs italic text-muted-foreground/80">
+        A sandbox to see Meko save and recall memory. Meko itself is the data layer your own AI
+        tools connect to.
+      </p>
       <p className="truncate text-xs text-muted-foreground" title={selectedDatapackName ?? undefined}>
         {selectedDatapackName ? (
           <>

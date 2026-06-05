@@ -44,8 +44,8 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
   }
 
 
-  if (authenticated && hasCompletedOnboarding && location === ROUTES.home) {
-    return ROUTES.home;
+  if (authenticated && hasCompletedOnboarding && location === ROUTES.connect) {
+    return ROUTES.connect;
   }
 
   if (!authenticated && onProtectedRoute) {

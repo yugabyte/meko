@@ -1,13 +1,15 @@
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   Database,
   Activity,
-  ChevronLeft,
+  ArrowUpRight,
   ChevronRight,
   LogOut,
   Download,
   ChevronDown,
   MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   PlayCircle,
   Sparkles,
   BookOpen,
@@ -81,7 +83,7 @@ export default function Sidebar() {
   }, []);
 
   // Derive the active datapack from the URL: the segment after /datapacks/.
-  // Falls back to null on /home, /workbench-lm, /observe-hub, etc.
+  // Falls back to null on /connect, /workbench-lm, /observe-hub, etc.
   const activeDatapack = useMemo(() => {
     const prefix = `${ROUTES.datapacks}/`;
     if (!location.pathname.startsWith(prefix)) return null;
@@ -95,8 +97,8 @@ export default function Sidebar() {
 
   const onOnboardingRoute =
     location.pathname === ROUTES.onboarding || location.pathname.startsWith(`${ROUTES.onboarding}/`);
-  const onHomeInstallRoute =
-    location.pathname === ROUTES.home || location.pathname.startsWith(`${ROUTES.home}/`);
+  const onConnectRoute =
+    location.pathname === ROUTES.connect || location.pathname.startsWith(`${ROUTES.connect}/`);
   const onDatapacksRoute = location.pathname.startsWith(ROUTES.datapacks);
   const onWorkbenchLMRoute =
     location.pathname === ROUTES.workbenchLm ||
@@ -177,46 +179,77 @@ export default function Sidebar() {
       <Button
         variant="ghost"
         size="icon"
-        // The collapse chevron sits ON the sidebar's right edge —
+        // The collapse toggle sits ON the sidebar's right edge —
         // `bg-card` so it reads as a raised pill against both the
         // sidebar (background) on its left and the page (also
         // background) on its right.
+        //
+        // Icon choice: we deliberately use `PanelLeftClose` /
+        // `PanelLeftOpen` (lucide) instead of a bare ChevronLeft /
+        // ChevronRight. A standalone left chevron on a floating pill
+        // reads almost universally as a browser-style "back" button —
+        // users were clicking it expecting to navigate to the previous
+        // page. The panel icons literally show a left-rail sidebar with
+        // an inward/outward indicator, which matches the actual
+        // affordance and is the convention used by VS Code, Cursor,
+        // ChatGPT, etc.
         className="absolute -right-4 top-6 z-50 h-8 w-8 rounded-full border border-border bg-card shadow-md hover:bg-muted text-muted-foreground hover:text-foreground"
         onClick={() => setIsCollapsed(!isCollapsed)}
+        title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-expanded={!isCollapsed}
       >
-        {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+        {isCollapsed ? (
+          <PanelLeftOpen className="h-4 w-4" aria-hidden />
+        ) : (
+          <PanelLeftClose className="h-4 w-4" aria-hidden />
+        )}
       </Button>
 
       <div className={cn("p-4 flex items-center", isCollapsed ? "justify-center px-0" : "")}>
-        {isCollapsed ? (
-          <img src="/favicons/favicon-32x32-dark.png" alt="meko" className="w-8 h-8 animate-in fade-in" />
-        ) : (
-          <>
-            {/*
-              Render both logo variants and toggle visibility on the
-              `.dark` class so the right one shows without a render
-              flicker on theme change. `meko-logo.svg` is white-on-
-              transparent (needs dark bg); `Meko_Logo_Blk.svg` is
-              black-on-transparent (needs light bg). Tailwind's `dark:`
-              variant is wired to `.dark` ancestor — see `index.css`'s
-              `@custom-variant dark` declaration.
-            */}
-            <img
-              src="/Meko_Logo_Blk.svg"
-              alt="meko"
-              className="h-12 w-auto animate-in fade-in block dark:hidden"
-            />
-            <img
-              src="/meko-logo.svg"
-              alt="meko"
-              className="h-12 w-auto animate-in fade-in hidden dark:block"
-            />
-          </>
-        )}
+        {/* Clickable logo → /datapacks (the workspace "home"). Standard
+            convention across web apps: top-left brand mark returns the
+            user to their main surface. Wrapped as a single `Link` so
+            both collapsed (favicon) and expanded (full logo) states get
+            the same affordance with one source of truth. */}
+        <Link
+          to={ROUTES.datapacks}
+          className="inline-flex items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-foreground/40"
+          aria-label="Go to Datapacks"
+        >
+          {isCollapsed ? (
+            <img src="/favicons/favicon-32x32-dark.png" alt="meko" className="w-8 h-8 animate-in fade-in" />
+          ) : (
+            <>
+              {/*
+                Render both logo variants and toggle visibility on the
+                `.dark` class so the right one shows without a render
+                flicker on theme change. `meko-logo.svg` is white-on-
+                transparent (needs dark bg); `Meko_Logo_Blk.svg` is
+                black-on-transparent (needs light bg). Tailwind's `dark:`
+                variant is wired to `.dark` ancestor — see `index.css`'s
+                `@custom-variant dark` declaration.
+              */}
+              <img
+                src="/Meko_Logo_Blk.svg"
+                alt="meko"
+                className="h-12 w-auto animate-in fade-in block dark:hidden"
+              />
+              <img
+                src="/meko-logo.svg"
+                alt="meko"
+                className="h-12 w-auto animate-in fade-in hidden dark:block"
+              />
+            </>
+          )}
+        </Link>
       </div>
 
       <div className="flex-1 overflow-y-auto py-4 flex flex-col gap-1 px-3">
-        {/* Welcome → /onboarding; Install (MCP setup) nested under same group as Home */}
+        {/* Top-level nav: Welcome and Connect are siblings (Connect was
+            previously nested under Welcome — promoted so it's reachable
+            in one click from any page, since it's the user's primary
+            "how do I plug Meko into my agent?" surface). */}
         {isCollapsed ? (
           <>
             <NavLink
@@ -233,21 +266,21 @@ export default function Sidebar() {
               <Sparkles className="h-5 w-5 shrink-0" />
             </NavLink>
             <NavLink
-              to={ROUTES.home}
+              to={ROUTES.connect}
               onClick={expandSidebar}
               className={cn(
                 "flex items-center rounded-md text-sm font-medium transition-colors justify-center w-10 h-10 mx-auto",
-                onHomeInstallRoute
+                onConnectRoute
                   ? "bg-foreground/10 text-foreground"
                   : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
               )}
-              title="Install"
+              title="Connect"
             >
               <Download className="h-5 w-5 shrink-0" />
             </NavLink>
           </>
         ) : (
-          <div className="flex flex-col gap-0.5">
+          <>
             <NavLink
               to={ROUTES.onboarding}
               onClick={expandSidebar}
@@ -261,24 +294,20 @@ export default function Sidebar() {
               <Sparkles className="h-4 w-4 shrink-0" />
               <span className="animate-in fade-in truncate">Welcome</span>
             </NavLink>
-            <div className="mt-0.5 flex flex-col gap-0.5 border-l border-white/10 ml-4 pl-2">
-              <NavLink
-                to={ROUTES.home}
-                onClick={expandSidebar}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-2 rounded-md py-1.5 pl-2 pr-2 text-xs font-medium transition-colors min-w-0",
-                    isActive
-                      ? "bg-foreground/10 text-foreground"
-                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-                  )
-                }
-              >
-                <Download className="h-3.5 w-3.5 shrink-0 opacity-90" />
-                <span className="truncate">Install</span>
-              </NavLink>
-            </div>
-          </div>
+            <NavLink
+              to={ROUTES.connect}
+              onClick={expandSidebar}
+              className={cn(
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                onConnectRoute
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+            >
+              <Download className="h-4 w-4 shrink-0" />
+              <span className="animate-in fade-in truncate">Connect</span>
+            </NavLink>
+          </>
         )}
 
         <NavLink
@@ -433,10 +462,37 @@ export default function Sidebar() {
           </Badge>
         ) : null}
 
+        {/* Docs lives at the top of this group so first-time users have
+            an obvious "I don't know what this product is — where do I read
+            up?" exit. The subtle ring + the trailing ↗ both signal "this
+            opens in a new tab and is your friend." */}
+        <a
+          href="https://docs.mekodata.ai/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
+            "group flex items-center rounded-md text-sm font-medium text-foreground ring-1 ring-border bg-foreground/[0.03] hover:bg-foreground/10 hover:ring-foreground/30 transition-colors",
+            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+          )}
+          title={isCollapsed ? "Read the docs" : undefined}
+          aria-label="Read the docs (opens in a new tab)"
+        >
+          <BookOpen className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} aria-hidden />
+          {!isCollapsed && (
+            <>
+              <span className="animate-in fade-in truncate">Read the docs</span>
+              <ArrowUpRight
+                className="ml-auto h-3.5 w-3.5 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity"
+                aria-hidden
+              />
+            </>
+          )}
+        </a>
+
         <button
           type="button"
           className={cn(
-            "flex items-center rounded-md text-sm font-medium text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/30 bg-blue-500/5 hover:bg-blue-500/15 hover:text-blue-700 dark:text-blue-100 transition-colors",
+            "mt-2 flex items-center rounded-md text-sm font-medium text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/30 bg-blue-500/5 hover:bg-blue-500/15 hover:text-blue-700 dark:text-blue-100 transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
           )}
           onClick={() => setFeedbackOpen(true)}
@@ -474,21 +530,6 @@ export default function Sidebar() {
             )}
           />
           {!isCollapsed && <span className="animate-in fade-in truncate">Join us on Discord</span>}
-        </a>
-
-        <a
-          href="https://docs.mekodata.ai/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={cn(
-            "flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
-            isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-          )}
-          title={isCollapsed ? "Docs" : undefined}
-          aria-label="Open documentation"
-        >
-          <BookOpen className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} aria-hidden />
-          {!isCollapsed && <span className="animate-in fade-in truncate">Docs</span>}
         </a>
 
         <button
