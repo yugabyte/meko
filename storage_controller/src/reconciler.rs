@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use json_structural_diff::JsonDiff;
 use pageserver_api::controller_api::{AvailabilityZone, MigrationConfig, PlacementPolicy};
 use pageserver_api::models::{LocationConfig, TenantConfig, TenantWaitLsnRequest};
-use pageserver_api::shard::{ShardIdentity};
+use pageserver_api::models::{ShardIdentity};
 use pageserver_client::mgmt_api;
 use reqwest::StatusCode;
 use tokio_util::sync::CancellationToken;

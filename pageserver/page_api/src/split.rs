@@ -4,8 +4,8 @@ use bytes::Bytes;
 
 use crate::model::*;
 use pageserver_api::key::rel_block_to_key;
-use pageserver_api::shard::key_to_shard_number;
-use utils::shard::{ShardCount, ShardIndex, ShardStripeSize};
+use pageserver_api::models::key_to_shard_number;
+use utils::id::{ShardCount, ShardIndex, ShardStripeSize};
 
 /// Splits GetPageRequests that straddle shard boundaries and assembles the responses.
 /// TODO: add tests for this.

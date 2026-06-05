@@ -3,7 +3,7 @@ use std::ops::Range;
 use itertools::Itertools;
 
 use crate::key::Key;
-use crate::shard::ShardIdentity;
+use crate::models::ShardIdentity;
 
 ///
 /// Represents a set of Keys, in a compact form.
@@ -508,7 +508,7 @@ mod tests {
     use rand::{RngCore, SeedableRng};
 
     use super::*;
-    use crate::shard::{DEFAULT_STRIPE_SIZE, ShardCount, ShardNumber, ShardStripeSize};
+    use crate::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardNumber, ShardStripeSize};
 
     // Helper function to create a key range.
     //

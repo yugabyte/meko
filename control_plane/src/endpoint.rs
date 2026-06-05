@@ -79,7 +79,7 @@ use spki::der::Decode;
 use spki::{SubjectPublicKeyInfo, SubjectPublicKeyInfoRef};
 use tracing::debug;
 use utils::id::{NodeId, TenantId, TimelineId};
-use utils::shard::{ShardCount, ShardIndex, ShardNumber};
+use utils::id::{ShardCount, ShardIndex, ShardNumber};
 
 use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT as DEFAULT_PAGESERVER_GRPC_PORT;
 use postgres_connection::parse_host_port;

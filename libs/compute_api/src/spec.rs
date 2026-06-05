@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
-use utils::shard::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
+use utils::id::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
 
 use crate::responses::TlsConfig;
 

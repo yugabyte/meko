@@ -23,7 +23,7 @@ use pageserver_api::controller_api::{
     SafekeeperDescribeResponse, ShardSchedulingPolicy, SkSchedulingPolicy,
 };
 use pageserver_api::models::{ShardImportStatus, TenantConfig};
-use pageserver_api::shard::{
+use pageserver_api::models::{
     ShardConfigError, ShardCount, ShardIdentity, ShardNumber, ShardStripeSize,
 };
 use rustls::client::WebPkiServerVerifier;

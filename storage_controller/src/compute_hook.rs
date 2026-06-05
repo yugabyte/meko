@@ -15,7 +15,7 @@ use futures::StreamExt;
 use hyper::StatusCode;
 use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT;
 use pageserver_api::controller_api::AvailabilityZone;
-use pageserver_api::shard::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
+use pageserver_api::models::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
 use postgres_connection::parse_host_port;
 use safekeeper_api::membership::SafekeeperGeneration;
 use serde::{Deserialize, Serialize};
@@ -934,7 +934,7 @@ impl ComputeHook {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use pageserver_api::shard::{DEFAULT_STRIPE_SIZE, ShardCount, ShardNumber};
+    use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardNumber};
     use utils::id::TenantId;
 
     use super::*;

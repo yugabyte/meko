@@ -30,8 +30,6 @@ pub mod id;
 // utility functions to obtain reachable IP addresses in PS/SK nodes.
 pub mod ip_address;
 
-pub mod shard;
-
 mod hex;
 pub use hex::Hex;
 

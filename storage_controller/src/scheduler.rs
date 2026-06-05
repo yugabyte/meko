@@ -979,9 +979,9 @@ pub(crate) mod test_utils {
 mod tests {
     use pageserver_api::controller_api::NodeAvailability;
     use pageserver_api::models::utilization::test_utilization;
-    use pageserver_api::shard::ShardIdentity;
+    use pageserver_api::models::ShardIdentity;
     use utils::id::TenantId;
-    use utils::shard::{ShardCount, ShardNumber, ShardStripeSize};
+    use utils::id::{ShardCount, ShardNumber, ShardStripeSize};
 
     use super::*;
     use crate::tenant_shard::IntentState;

@@ -30,7 +30,7 @@ use std::time::{Duration, Instant, SystemTime};
 use bytes::{Buf, Bytes};
 use pageserver_api::key::{Key, rel_block_to_key};
 use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
-use pageserver_api::shard::ShardIdentity;
+use pageserver_api::models::ShardIdentity;
 use postgres_ffi::walrecord::*;
 use postgres_ffi::{
     PgMajorVersion, TransactionId, dispatch_pgversion, enum_pgversion, enum_pgversion_dispatch,

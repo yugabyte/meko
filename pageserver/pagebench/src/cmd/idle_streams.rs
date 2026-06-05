@@ -8,7 +8,7 @@ use tracing::info;
 use pageserver_page_api::{GetPageClass, GetPageRequest, GetPageStatusCode, ReadLsn, RelTag};
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
-use utils::shard::ShardIndex;
+use utils::id::ShardIndex;
 
 /// Starts a large number of idle gRPC GetPage streams.
 #[derive(clap::Parser)]

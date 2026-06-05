@@ -3472,7 +3472,7 @@ impl GlobalAndPerTenantIntCounter {
 pub(crate) mod tenant_throttling {
     use metrics::register_int_counter_vec;
     use once_cell::sync::Lazy;
-    use utils::shard::TenantId;
+    use utils::id::TenantId;
 
     use super::GlobalAndPerTenantIntCounter;
 

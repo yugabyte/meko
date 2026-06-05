@@ -8,11 +8,10 @@ use std::time::{Duration, Instant};
 /// API (`/control/v1` prefix).  Implemented by the server
 /// in [`storage_controller::http`]
 use serde::{Deserialize, Serialize};
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{NodeId, ShardStripeSize, TenantId, TimelineId};
 use utils::lsn::Lsn;
 
 use crate::models::{PageserverUtilization, ShardParameters, TenantConfig, TimelineInfo};
-use crate::shard::ShardStripeSize;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]

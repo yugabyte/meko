@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use futures::StreamExt;
 use futures::future::Either;
-use pageserver_api::shard::ShardIdentity;
+use pageserver_api::models::ShardIdentity;
 use postgres_backend::{CopyStreamHandlerEnd, PostgresBackend};
 use postgres_ffi::waldecoder::{WalDecodeError, WalStreamDecoder};
 use postgres_ffi::{PgMajorVersion, get_current_timestamp};
@@ -778,12 +778,12 @@ mod tests {
     use std::str::FromStr;
     use std::time::Duration;
 
-    use pageserver_api::shard::{DEFAULT_STRIPE_SIZE, ShardIdentity};
+    use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardIdentity};
     use postgres_ffi::{MAX_SEND_SIZE, PgMajorVersion};
     use tokio::sync::mpsc::error::TryRecvError;
     use utils::id::{NodeId, TenantTimelineId};
     use utils::lsn::Lsn;
-    use utils::shard::{ShardCount, ShardNumber};
+    use utils::id::{ShardCount, ShardNumber};
 
     use crate::send_interpreted_wal::{AttachShardNotification, Batch, InterpretedWalReader};
     use crate::test_utils::Env;

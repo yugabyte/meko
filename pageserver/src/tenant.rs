@@ -35,7 +35,7 @@ use pageserver_api::models::{
     TimelineArchivalState, TimelineState, TopTenantShardItem,
     WalRedoManagerStatus,
 };
-use pageserver_api::shard::{DEFAULT_STRIPE_SIZE, ShardIdentity, ShardStripeSize};
+use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardIdentity, ShardStripeSize};
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
 use remote_timeline_client::index::GcCompactionState;

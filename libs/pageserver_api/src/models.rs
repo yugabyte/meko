@@ -13,13 +13,162 @@ use postgres_versioninfo::PgMajorVersion;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::serde_as;
 pub use utilization::PageserverUtilization;
+use std::hash::{Hash, Hasher};
+
 use utils::id::{NodeId, TenantId, TimelineId};
+pub use utils::id::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
 use utils::lsn::Lsn;
 use utils::{completion, serde_system_time};
 
 use crate::config::Ratio;
 use crate::key::{CompactKey, Key};
-use crate::shard::{DEFAULT_STRIPE_SIZE, ShardCount, ShardIdentity, ShardStripeSize};
+
+// =====================================================================
+// Sharding compatibility types
+//
+// yb-mode: every tenant is unsharded (YugabyteDB tablet-shards the
+// underlying keyspace). Types are retained for wire-format
+// compatibility; methods are degenerate stubs that always reflect the
+// unsharded answer.
+// =====================================================================
+
+/// "Unsharded, shard 0" marker. Fields are kept `pub` so the call
+/// sites that still read `.number` / `.count` / `.stripe_size` keep
+/// compiling, but the values are always the unsharded constants.
+#[derive(Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Debug)]
+pub struct ShardIdentity {
+    pub number: ShardNumber,
+    pub count: ShardCount,
+    pub stripe_size: ShardStripeSize,
+}
+
+impl Hash for ShardIdentity {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.number.0.hash(state);
+        self.count.0.hash(state);
+    }
+}
+
+pub const DEFAULT_STRIPE_SIZE: ShardStripeSize = ShardStripeSize(16 * 1024 / 8);
+
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+pub enum ShardConfigError {
+    #[error("Invalid shard count")]
+    InvalidCount,
+    #[error("Invalid shard number")]
+    InvalidNumber,
+    #[error("Invalid stripe size")]
+    InvalidStripeSize,
+}
+
+impl ShardIdentity {
+    pub const fn unsharded() -> Self {
+        Self {
+            number: ShardNumber(0),
+            count: ShardCount(0),
+            stripe_size: DEFAULT_STRIPE_SIZE,
+        }
+    }
+
+    /// Preserve a non-default stripe size on round-trip; the value is
+    /// otherwise meaningless in yb-mode.
+    pub fn unsharded_with_stripe_size(stripe_size: ShardStripeSize) -> Self {
+        let mut id = Self::unsharded();
+        if stripe_size.0 > 0 {
+            id.stripe_size = stripe_size;
+        }
+        id
+    }
+
+    /// Constructs an identity from arbitrary fields — only used by
+    /// upstream code that wants to round-trip the `Broken` state. yb-mode
+    /// has no separate broken representation.
+    pub fn broken(number: ShardNumber, count: ShardCount) -> Self {
+        Self {
+            number,
+            count,
+            stripe_size: DEFAULT_STRIPE_SIZE,
+        }
+    }
+
+    pub fn is_unsharded(&self) -> bool {
+        true
+    }
+
+    /// yb-mode: `count` must be zero (unsharded). `number` / `stripe_size`
+    /// are ignored.
+    pub fn new(
+        _number: ShardNumber,
+        count: ShardCount,
+        _stripe_size: ShardStripeSize,
+    ) -> Result<Self, ShardConfigError> {
+        if count.0 != 0 {
+            return Err(ShardConfigError::InvalidCount);
+        }
+        Ok(Self::unsharded())
+    }
+
+    pub fn from_params(_number: ShardNumber, _params: ShardParameters) -> Self {
+        Self::unsharded()
+    }
+
+    pub fn assert_equal(&self, _other: ShardIdentity) {}
+
+    pub fn get_shard_number(&self, _key: &Key) -> ShardNumber {
+        ShardNumber(0)
+    }
+
+    /// Always true — every key belongs to the sole shard.
+    pub fn is_key_local(&self, _key: &Key) -> bool {
+        true
+    }
+
+    /// Whether the key would be served by every shard rather than one.
+    /// Kept for callers that want to classify SLRU / aux-file / shard0
+    /// keys regardless of sharding mode.
+    pub fn is_key_global(&self, key: &Key) -> bool {
+        if key.is_slru_block_key()
+            || key.is_slru_segment_size_key()
+            || key.is_aux_file_key()
+            || key.is_slru_dir_key()
+        {
+            false
+        } else if key.is_rel_block_key() {
+            false
+        } else {
+            true
+        }
+    }
+
+    /// No split aftermath to dispose of in yb-mode.
+    pub fn is_key_disposable(&self, _key: &Key) -> bool {
+        false
+    }
+
+    pub fn shard_index(&self) -> ShardIndex {
+        ShardIndex::unsharded()
+    }
+
+    pub fn shard_slug(&self) -> String {
+        String::new()
+    }
+
+    pub fn is_shard_zero(&self) -> bool {
+        true
+    }
+}
+
+pub fn key_to_shard_number(
+    _count: ShardCount,
+    _stripe_size: ShardStripeSize,
+    _key: &Key,
+) -> ShardNumber {
+    ShardNumber(0)
+}
+
+pub fn describe(_key: &Key, _stripe_size: ShardStripeSize) -> impl std::fmt::Debug {
+    "shard0"
+}
 
 /// The state of a tenant in this pageserver.
 ///

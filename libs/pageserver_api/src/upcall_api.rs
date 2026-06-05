@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 use utils::generation::Generation;
 use utils::id::{NodeId, TimelineId};
 
+use utils::id::{ShardStripeSize, TenantId};
+
 use crate::controller_api::NodeRegisterRequest;
 use crate::models::ShardImportStatus;
-use crate::shard::{ShardStripeSize, TenantId};
 
 /// Upcall message sent by the pageserver to the configured `control_plane_api` on
 /// startup.

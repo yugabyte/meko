@@ -42,7 +42,7 @@ use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::measured_stream::MeasuredReader;
 use utils::pid_file;
-use utils::shard::{ShardIndex, ShardNumber, ShardStripeSize};
+use utils::id::{ShardIndex, ShardNumber, ShardStripeSize};
 
 use crate::configurator::launch_configurator;
 use crate::disk_quota::set_disk_quota;

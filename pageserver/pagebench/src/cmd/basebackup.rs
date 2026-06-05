@@ -22,7 +22,7 @@ use tracing::{info, instrument};
 use url::Url;
 use utils::id::{TenantId, TenantTimelineId};
 use utils::lsn::Lsn;
-use utils::shard::ShardIndex;
+use utils::id::ShardIndex;
 
 use crate::util::tokio_thread_local_stats::AllThreadLocalStats;
 use crate::util::{request_stats, tokio_thread_local_stats};

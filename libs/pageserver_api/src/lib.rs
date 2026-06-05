@@ -7,7 +7,6 @@ pub mod keyspace;
 pub mod models;
 pub mod pagestream_api;
 pub mod reltag;
-pub mod shard;
 /// Public API types
 pub mod upcall_api;
 

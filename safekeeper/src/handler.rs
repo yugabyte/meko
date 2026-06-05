@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use jsonwebtoken::TokenData;
 use pageserver_api::models::ShardParameters;
-use pageserver_api::shard::{ShardIdentity, ShardStripeSize};
+use pageserver_api::models::{ShardIdentity, ShardStripeSize};
 use postgres_backend::{PostgresBackend, QueryError};
 use postgres_ffi::PG_TLI;
 use pq_proto::{BeMessage, FeStartupPacket, INT4_OID, RowDescriptor, TEXT_OID};
@@ -21,7 +21,7 @@ use utils::auth::{Claims, JwtAuth, Scope};
 use utils::id::{TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
 use utils::postgres_client::PostgresClientProtocol;
-use utils::shard::{ShardCount, ShardNumber};
+use utils::id::{ShardCount, ShardNumber};
 
 use crate::auth::check_permission;
 use crate::metrics::{PG_QUERIES_GAUGE, TrafficMetrics};

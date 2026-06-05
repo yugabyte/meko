@@ -18,7 +18,7 @@ use crate::pg_helpers::{
 };
 use crate::tls::{self, SERVER_CRT, SERVER_KEY};
 
-use utils::shard::{ShardIndex, ShardNumber};
+use utils::id::{ShardIndex, ShardNumber};
 
 /// Check that `line` is inside a text file and put it there if it is not.
 /// Create file if it doesn't exist.

@@ -41,7 +41,7 @@ use pageserver_api::models::{
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateResponseStorcon,
     TimelineInfo, TopTenantShardItem, TopTenantShardsRequest,
 };
-use pageserver_api::shard::{
+use pageserver_api::models::{
     DEFAULT_STRIPE_SIZE, ShardCount, ShardIdentity, ShardNumber, ShardStripeSize,
 };
 use pageserver_api::upcall_api::{
@@ -62,7 +62,7 @@ use utils::env;
 use utils::generation::Generation;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
-use utils::shard::ShardIndex;
+use utils::id::ShardIndex;
 use utils::sync::gate::{Gate, GateGuard};
 use utils::{failpoint_support, pausable_failpoint};
 

@@ -11,7 +11,7 @@ use bytes::{Bytes, BytesMut};
 use pageserver_api::key::{CompactKey, Key, rel_block_to_key};
 use pageserver_api::keyspace::KeySpace;
 use pageserver_api::reltag::RelTag;
-use pageserver_api::shard::ShardIdentity;
+use pageserver_api::models::ShardIdentity;
 use postgres_ffi::walrecord::{DecodedBkpBlock, DecodedWALRecord};
 use postgres_ffi::{BLCKSZ, PgMajorVersion, page_is_new, page_set_lsn, pg_constants};
 use serde::{Deserialize, Serialize};

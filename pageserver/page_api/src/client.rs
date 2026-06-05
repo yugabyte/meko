@@ -10,7 +10,7 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint};
 
 use utils::id::{TenantId, TimelineId};
-use utils::shard::ShardIndex;
+use utils::id::ShardIndex;
 
 use crate::model::*;
 use crate::proto;

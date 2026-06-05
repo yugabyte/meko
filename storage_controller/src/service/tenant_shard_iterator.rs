@@ -143,7 +143,7 @@ mod tests {
 
     use pageserver_api::controller_api::PlacementPolicy;
     use utils::id::TenantId;
-    use utils::shard::{ShardCount, ShardNumber};
+    use utils::id::{ShardCount, ShardNumber};
 
     use super::*;
     use crate::scheduler::test_utils::make_test_nodes;

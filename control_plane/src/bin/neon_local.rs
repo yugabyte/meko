@@ -45,7 +45,7 @@ use pageserver_api::controller_api::{
 use pageserver_api::models::{
     ShardParameters, TenantConfigRequest, TimelineCreateRequest, TimelineInfo,
 };
-use pageserver_api::shard::{DEFAULT_STRIPE_SIZE, ShardCount, ShardStripeSize};
+use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardStripeSize};
 use postgres_backend::AuthType;
 use safekeeper_api::membership::{SafekeeperGeneration, SafekeeperId};
 use safekeeper_api::{

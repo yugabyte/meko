@@ -29,7 +29,7 @@ use pageserver_api::models::{
     LsnLease, PageTraceEvent, RelSizeMigration, TimelineState,
 };
 use pageserver_api::reltag::{BlockNumber, RelTag};
-use pageserver_api::shard::{ShardIdentity, ShardIndex, ShardNumber};
+use pageserver_api::models::{ShardIdentity, ShardIndex, ShardNumber};
 use postgres_connection::PgConnectionConfig;
 use postgres_ffi::v14::xlog_utils;
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE, to_pg_timestamp};

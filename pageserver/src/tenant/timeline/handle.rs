@@ -219,10 +219,10 @@ use std::sync::Mutex;
 use std::sync::Weak;
 use std::time::Duration;
 
-use pageserver_api::shard::ShardIdentity;
+use pageserver_api::models::ShardIdentity;
 use tracing::{instrument, trace};
 use utils::id::TimelineId;
-use utils::shard::{ShardIndex, ShardNumber};
+use utils::id::{ShardIndex, ShardNumber};
 
 use crate::page_service::GetActiveTimelineError;
 use crate::tenant::GetTimelineError;

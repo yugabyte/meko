@@ -6,7 +6,7 @@ use futures::future::{self, Either};
 use itertools::Itertools;
 use pageserver_api::controller_api::{AvailabilityZone, PlacementPolicy, ShardSchedulingPolicy};
 use pageserver_api::models::{LocationConfig, TenantConfig};
-use pageserver_api::shard::{ShardIdentity};
+use pageserver_api::models::{ShardIdentity};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -14,7 +14,7 @@ use tracing::{Instrument, instrument};
 use utils::generation::Generation;
 use utils::id::{NodeId, TenantId};
 use utils::seqwait::{SeqWait, SeqWaitError};
-use utils::shard::ShardCount;
+use utils::id::ShardCount;
 use utils::sync::gate::GateGuard;
 
 use crate::compute_hook::ComputeHook;
@@ -2055,7 +2055,7 @@ pub(crate) mod tests {
     use std::rc::Rc;
 
     use pageserver_api::controller_api::NodeAvailability;
-    use pageserver_api::shard::{DEFAULT_STRIPE_SIZE, ShardCount, ShardNumber};
+    use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardNumber};
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use utils::id::TenantId;

@@ -12,7 +12,7 @@ use anyhow::Context;
 use camino::{Utf8DirEntry, Utf8Path, Utf8PathBuf};
 use futures::StreamExt;
 use pageserver_api::key::Key;
-use pageserver_api::shard::{ShardIdentity, ShardIndex, ShardNumber, ShardStripeSize};
+use pageserver_api::models::{ShardIdentity, ShardIndex, ShardNumber, ShardStripeSize};
 use pageserver_api::upcall_api::ReAttachResponseTenant;
 use rand::Rng;
 use rand::distr::Alphanumeric;
@@ -571,7 +571,7 @@ pub async fn init_tenant_mgr(
         config_write_result.fatal_err("write tenant shard config file");
 
         let tenant_dir_path = conf.tenant_path(&tenant_shard_id);
-        let shard_identity = pageserver_api::shard::ShardIdentity::unsharded();
+        let shard_identity = pageserver_api::models::ShardIdentity::unsharded();
         let generation = location_conf.generation;
         // Task 17.c: refresh `tenant_conf` from the YB-side
         // `pageserver.tenant_config` table. The local `config-v1`
@@ -898,7 +898,7 @@ impl TenantManager {
             .fatal_err("write tenant shard config");
 
         let new_slot = {
-            let shard_identity = pageserver_api::shard::ShardIdentity::unsharded();
+            let shard_identity = pageserver_api::models::ShardIdentity::unsharded();
 
             // Testing hack: if we are configured with no control plane, then drop the generation
             // from upserts.  This enables creating generation-less tenants even though neon_local
@@ -1098,7 +1098,7 @@ impl TenantManager {
             }
         }
 
-        let shard_identity = pageserver_api::shard::ShardIdentity::unsharded();
+        let shard_identity = pageserver_api::models::ShardIdentity::unsharded();
         // Task 17.c: tenant_conf source of truth is YB.
         let tenant_conf = self
             .resources

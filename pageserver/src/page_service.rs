@@ -56,7 +56,7 @@ use utils::auth::{Claims, Scope, SwappableJwtAuth};
 use utils::id::{TenantId, TenantTimelineId, TimelineId};
 use utils::logging::log_slow;
 use utils::lsn::Lsn;
-use utils::shard::ShardIndex;
+use utils::id::ShardIndex;
 use utils::simple_rcu::RcuReadGuard;
 use utils::sync::gate::{Gate, GateGuard};
 use utils::sync::spsc_fold;
@@ -520,7 +520,7 @@ impl timeline::handle::Timeline<TenantManagerTypes> for TenantManagerCacheItem {
         &self.timeline.handles
     }
 
-    fn get_shard_identity(&self) -> &pageserver_api::shard::ShardIdentity {
+    fn get_shard_identity(&self) -> &pageserver_api::models::ShardIdentity {
         Timeline::get_shard_identity(&self.timeline)
     }
 }
@@ -4448,7 +4448,7 @@ impl From<WaitedForLsn> for Lsn {
 
 #[cfg(test)]
 mod tests {
-    use utils::shard::ShardCount;
+    use utils::id::ShardCount;
 
     use super::*;
 

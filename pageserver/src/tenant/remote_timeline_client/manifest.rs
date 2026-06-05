@@ -2,7 +2,7 @@ use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use utils::id::TimelineId;
 use utils::lsn::Lsn;
-use utils::shard::ShardStripeSize;
+use utils::id::ShardStripeSize;
 
 /// Tenant shard manifest, stored in remote storage. Contains offloaded timelines and other tenant
 /// shard-wide information that must be persisted in remote storage.

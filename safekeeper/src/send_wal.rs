@@ -806,7 +806,7 @@ mod tests {
             WalSenderState::Interpreted(InterpretedWalSenderInternalState {
                 public_state: safekeeper_api::models::InterpretedWalSenderState {
                     ttid: mock_ttid(),
-                    shard: pageserver_api::shard::ShardIdentity::unsharded(),
+                    shard: pageserver_api::models::ShardIdentity::unsharded(),
                     addr: mock_addr(),
                     conn_id: 1,
                     appname: None,
