@@ -120,12 +120,24 @@ pub struct MaterializerHandle {
     pub in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
 }
 
-/// Running per-key delta tally — both count and payload bytes since
-/// the last anchor. See `PageWriter::delta_counts`.
+/// Running per-key delta tally — count, payload bytes, and the LSN
+/// of the most recent delta seen for this key. See
+/// `PageWriter::delta_counts`.
+///
+/// `last_lsn` lets the post-flush trigger dispatch keys that crossed
+/// the threshold in a PAST flush (so they aren't in the current
+/// flush's snapshot). If `last_lsn ≤ flush_horizon_lsn` the row is
+/// durable in YB and we can safely use `last_lsn` as the materialise
+/// target. Without this, cold-key residue accumulates in
+/// `delta_counts` forever: keys that hit the threshold then went
+/// quiet are never re-visited by the snapshot-matching dispatch,
+/// causing delta_counts to grow unbounded (the 8.4M-entries pathology
+/// we observed under sustained mixed read/write workloads).
 #[derive(Clone, Copy, Default)]
 struct DeltaTally {
     count: u32,
     payload_bytes: u32,
+    last_lsn: Lsn,
 }
 
 /// Top-level write buffer + flusher for one timeline.
@@ -505,6 +517,7 @@ impl PageWriter {
         // Rel rows: per-key DashMap shards; no global lock.
         for row in rel_rows {
             let key = row.key.clone();
+            let lsn = row.lsn;
             let resets_chain = row.is_image || row.will_init;
             let payload_len = row.payload.len() as u32;
             self.pages.push(row);
@@ -516,6 +529,9 @@ impl PageWriter {
                 let mut tally = self.delta_counts.entry(key).or_default();
                 tally.count = tally.count.saturating_add(1);
                 tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
+                if lsn > tally.last_lsn {
+                    tally.last_lsn = lsn;
+                }
             }
         }
         // Aux (slru + meta) buffers under one small mutex. Holds
@@ -600,6 +616,56 @@ impl PageWriter {
                 "perf",
             );
         }
+    }
+
+    /// Walk `delta_counts` for keys whose tally crossed threshold but
+    /// have no current-flush snapshot row, dispatching them at their
+    /// recorded `last_lsn`. Safe only when `last_lsn ≤
+    /// flush_horizon_lsn` (durable in YB by construction). Called
+    /// from both flush()'s normal trigger path and its
+    /// nothing-to-flush short-circuit, so cold residue still drains
+    /// when compute goes quiet. Removes dispatched keys from
+    /// `delta_counts` so subsequent flushes don't redispatch them.
+    fn collect_cold_residue_jobs(&self) -> Vec<MaterializeJob> {
+        let Some(m) = self.materializer.as_ref() else {
+            return Vec::new();
+        };
+        if m.count_limit == 0 && m.payload_bytes_limit == 0 {
+            return Vec::new();
+        }
+        let horizon = Lsn(self.flush_horizon_lsn.load(Ordering::Relaxed));
+        if horizon == Lsn(0) {
+            // No flush has ever completed — nothing is durable yet,
+            // so cold-residue dispatch would point at non-durable
+            // LSNs. Skip.
+            return Vec::new();
+        }
+        let mut to_dispatch = Vec::new();
+        let mut keys_to_clear: Vec<bytes::Bytes> = Vec::new();
+        for kv in self.delta_counts.iter() {
+            let (key, tally) = (kv.key(), kv.value());
+            let count_hit = m.count_limit > 0 && tally.count >= m.count_limit;
+            let bytes_hit =
+                m.payload_bytes_limit > 0 && tally.payload_bytes >= m.payload_bytes_limit;
+            if !(count_hit || bytes_hit) {
+                continue;
+            }
+            if tally.last_lsn == Lsn(0) || tally.last_lsn > horizon {
+                continue;
+            }
+            let inserted = m.in_flight.lock().unwrap().insert(key.clone());
+            if inserted {
+                keys_to_clear.push(key.clone());
+                to_dispatch.push(MaterializeJob {
+                    key: key.clone(),
+                    target_lsn: tally.last_lsn,
+                });
+            }
+        }
+        for k in keys_to_clear {
+            self.delta_counts.remove(&k);
+        }
+        to_dispatch
     }
 
     /// Range scan: return all page rows in `range` at LSN ≤
@@ -877,6 +943,16 @@ impl PageWriter {
         let slru_count = slru_rows.len();
         let meta_count = meta_rows.len();
         if rel_count == 0 && slru_count == 0 && meta_count == 0 {
+            // Nothing to flush. Cold-key residue (tallies whose
+            // threshold-crossing happened in past flushes but
+            // haven't dispatched — e.g. blocked by in_flight that
+            // has since cleared) can still drain here. Without this
+            // pass, delta_counts grows monotonically as workloads
+            // wind down — the residue would only get re-examined on
+            // a flush that has rows, which never comes once compute
+            // is idle.
+            let to_dispatch = self.collect_cold_residue_jobs();
+            self.dispatch_materialize_jobs(to_dispatch).await;
             return Ok(());
         }
 
@@ -921,9 +997,14 @@ impl PageWriter {
             // payload-byte tally crossed `image_chain_limit` /
             // `image_chain_payload_bytes_limit`; for each, find the
             // max LSN seen in this snapshot and enqueue one job.
-            // Keys without a matching snapshot row (counter bumped
-            // by an unflushed put after the snapshot) are deferred
-            // to the next flush.
+            // Keys present in the current snapshot dispatch at their
+            // per-snapshot max LSN; cold-key residue (threshold-crossed
+            // in a past flush, no current-snapshot row) dispatches at
+            // its tally's `last_lsn` — guaranteed durable when
+            // `last_lsn ≤ flush_horizon_lsn`, which we've just
+            // advanced. Without this fallback, cold residue
+            // accumulates in `delta_counts` forever and the periodic
+            // flush walk grows O(forever) instead of O(active keys).
             let mut to_materialize: Vec<MaterializeJob> = Vec::new();
             if let Some(m) = self.materializer.as_ref()
                 && (m.count_limit > 0 || m.payload_bytes_limit > 0)
@@ -935,6 +1016,7 @@ impl PageWriter {
                         *entry = row.lsn;
                     }
                 }
+                let horizon = Lsn(self.flush_horizon_lsn.load(Ordering::Relaxed));
                 let mut keys_to_clear: Vec<bytes::Bytes> = Vec::new();
                 for kv in self.delta_counts.iter() {
                     let (key, tally) = (kv.key(), kv.value());
@@ -944,13 +1026,22 @@ impl PageWriter {
                     if !(count_hit || bytes_hit) {
                         continue;
                     }
-                    let Some(&target_lsn) = max_lsn_per_key.get(key) else {
-                        // Counter bumped after the snapshot — leave it
-                        // at >= threshold so the next flush picks it
-                        // up. Skipping is the same write-trigger gap
-                        // the old put-time logic handled with an
-                        // `in_flight` recheck.
-                        continue;
+                    let target_lsn = match max_lsn_per_key.get(key) {
+                        Some(&lsn) => lsn,
+                        None => {
+                            // Cold residue. Dispatch at `last_lsn` iff
+                            // it's durable; otherwise the only delta
+                            // is still buffered (just-bumped pre-flush
+                            // by an unflushed put after the snapshot)
+                            // and we leave it for the next flush. The
+                            // `Lsn(0)` guard handles tallies created
+                            // before the `last_lsn` field existed in
+                            // case of in-place upgrades.
+                            if tally.last_lsn == Lsn(0) || tally.last_lsn > horizon {
+                                continue;
+                            }
+                            tally.last_lsn
+                        }
                     };
                     let inserted = m.in_flight.lock().unwrap().insert(key.clone());
                     if inserted {
@@ -2615,6 +2706,55 @@ mod tests {
             Lsn(50),
             "target_lsn must be max LSN-for-key in the snapshot, not the \
              threshold-crossing delta's LSN",
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Cold-key residue: a tally that crossed the threshold in a
+    /// past flush but isn't in the current snapshot (no new put) must
+    /// still dispatch — at `last_lsn` from the tally, since
+    /// `last_lsn ≤ flush_horizon_lsn` after the prior flush. Without
+    /// this, `delta_counts` grows unbounded as the workload winds
+    /// down (the 8.4M-entries pathology we observed at rest).
+    #[tokio::test]
+    async fn cold_key_residue_dispatches_at_last_lsn() {
+        let (store, schema) = make_store("mat_cold_residue").await;
+        const LIMIT: u32 = 3;
+        let (w, _t, _tl, mut rx, in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // Block dispatch by pre-loading in_flight with this key; the
+        // first flush will see the threshold but skip dispatch. The
+        // tally stays in delta_counts.
+        let key_bytes = key_to_bytes(k(1));
+        in_flight.lock().unwrap().insert(key_bytes.clone());
+
+        // Cross the threshold. After flush, last_lsn = 30 (max put
+        // LSN) and that LSN is durable.
+        for lsn in [10u64, 20, 30] {
+            w.put(&[(k(1), Lsn(lsn), delta_non_init())]).await.unwrap();
+        }
+        w.flush().await.unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "in_flight block should suppress the first dispatch",
+        );
+
+        // Job completes. Clear in_flight as the materialiser would.
+        in_flight.lock().unwrap().remove(&key_bytes);
+
+        // Second flush: no new puts → snapshot is empty for k(1).
+        // The cold-residue fallback dispatches at last_lsn=30.
+        w.flush().await.unwrap();
+        let job = rx
+            .try_recv()
+            .expect("cold-residue dispatch must fire on the second flush");
+        assert_eq!(job.key, key_bytes);
+        assert_eq!(
+            job.target_lsn,
+            Lsn(30),
+            "cold-residue dispatch should use tally.last_lsn",
         );
 
         drop_schema(&store, &schema).await;
