@@ -514,6 +514,11 @@ impl Endpoint {
         // individual tests do a lot of concurrent work on underpowered test machines
         conf.append("effective_io_concurrency", "2");
         conf.append("fsync", "off");
+        // yb-light durability lives in YB rows, not in fsync'd PG pages — torn
+        // pages can't survive recovery here, so disable full_page_writes to
+        // shave the per-checkpoint WAL spike. Override via --pg-setting if a
+        // workload genuinely needs it.
+        conf.append("full_page_writes", "off");
         conf.append("max_connections", "100");
         conf.append("wal_level", "logical");
         // wal_sender_timeout is the maximum time to wait for WAL replication.
