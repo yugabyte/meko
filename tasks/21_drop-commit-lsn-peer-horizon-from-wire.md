@@ -1,8 +1,9 @@
 ---
-status: pending
+status: done
 severity: low
 area: safekeeper
 opened: 2026-06-05
+closed: 2026-06-05
 ---
 
 # Phase 21 — Drop `commit_lsn` / `peer_horizon_lsn` from walproposer + broker wire formats
