@@ -87,6 +87,56 @@ the Postgres compute and YugabyteDB.
 
 ## Architecture overview
 
+```mermaid
+flowchart LR
+    subgraph clients["Postgres clients"]
+        app["app / psql"]
+    end
+
+    subgraph compute["Compute (patched PostgreSQL, stateless)"]
+        pg["postgres + neon smgr"]
+        wp["walproposer"]
+    end
+
+    subgraph sk["Safekeeper (stateless)"]
+        skp["WAL ingress"]
+    end
+
+    subgraph ps["Pageserver (yb-pageserver)"]
+        cps["compute_page_store pool<br/>(reads, chain reconstruct)"]
+        fps["fpu_page_store pool<br/>(walreceiver + materialiser)"]
+        mat["image materialiser"]
+    end
+
+    subgraph sc["Storage controller"]
+        sct["tenant placement<br/>generation fencing"]
+    end
+
+    subgraph yb["YugabyteDB cluster (RF=3, Raft replication)"]
+        direction LR
+        tblPages[("pageserver.pages<br/>pageserver.slru_pages<br/>pageserver.meta")]
+        tblConf[("pageserver.tenant_config<br/>pageserver.timeline_state")]
+        tblWal[("yb_storage.wals<br/>safekeeper WAL rows")]
+        tblBlob[("blobs<br/>basebackup tar, initdb")]
+        tblSc[("storage_controller schema")]
+    end
+
+    app -- "SQL: SELECT / INSERT / UPDATE" --> pg
+    pg -- "gRPC GetPage @ LSN" --> cps
+    wp -- "WAL stream<br/>(START_WAL_PUSH)" --> skp
+    skp -- "INSERT each WAL chunk" --> tblWal
+    ps -- "START_REPLICATION<br/>(walreceiver)" --> skp
+    cps -- "SELECT page rows" --> tblPages
+    fps -- "INSERT page rows<br/>(write path)" --> tblPages
+    fps -- "INSERT materialised images" --> tblPages
+    mat -- "compact long chains" --> fps
+    ps -- "tenant_config R/W" --> tblConf
+    sc -- "attach + generation" --> ps
+    sc -- "state R/W" --> tblSc
+    ps -- "basebackup tar" --> tblBlob
+    compute -- "basebackup fetch" --> ps
+```
+
 A ybLight install is:
 
 - **Compute nodes**: patched PostgreSQL, stateless, configured against a
@@ -94,11 +144,15 @@ A ybLight install is:
   routes every `smgr_read` to a gRPC `GetPage` and every WAL flush to
   the safekeepers.
 - **Pageserver (`yb-pageserver`)**: the row-store gateway. Two YSQL
-  connection pools per tenant:
-  - `compute_page_store` (pool_size=4): serves compute reads, runs
-    chain reconstruction over `pageserver.pages`.
-  - `internal_page_store` (single conn): walreceiver WAL ingestion +
-    image materialiser writes.
+  connection pools per pageserver:
+  - `compute_page_store` (pool_size = 4 × `scale_factor`): serves
+    compute reads, runs LSN-chain reconstruction over
+    `pageserver.pages`.
+  - `fpu_page_store` (pool_size = 4 × `scale_factor`): walreceiver
+    WAL ingestion path + image materialiser writes. Image
+    materialisation runs as a background task that compacts long
+    delta chains into walredo-applied images so subsequent reads
+    don't re-walk the chain.
 - **Safekeeper**: stateless WAL ingress. Receives the WAL stream from
   the compute, `INSERT`s each record into a YB row, returns ack the
   moment the row is durable. No local disk, no quorum, no leader
@@ -106,11 +160,13 @@ A ybLight install is:
   load balancer for connection-spread on heavy workloads — but every
   instance is independent and interchangeable. HA comes from YB.
 - **Storage controller**: tenant/timeline placement & generation
-  management. Backs its own state in YB too.
+  management. Backs its own state in YB too — its schema lives
+  alongside the pageserver tables in the same YB database.
 - **YugabyteDB cluster**: holds `pageserver.pages`, `pageserver.slru_pages`,
-  `pageserver.meta`, `pageserver.tenant_config`, the safekeeper WAL rows,
-  the storage_controller schema, and the blob table. This is the durable
-  storage tier.
+  `pageserver.meta`, `pageserver.tenant_config`,
+  `pageserver.timeline_state`, the safekeeper WAL rows
+  (`yb_storage.wals`), the storage_controller schema, and the blob
+  table. This is the durable storage tier.
 
 > **YB query contract**: every SQL statement issued through
 > `YsqlClient` must be idempotent. The client retries connection drops
@@ -151,7 +207,14 @@ cargo neon endpoint start main
 
 The pageserver expects to find a YB cluster reachable from the host;
 configure host/port/user/dbname/sslmode in `config.toml` under the
-`remote_storage` and `wal_yb_config` sections.
+`remote_storage` and `wal_yb_config` sections. `host` accepts a single
+hostname/IP or a comma-separated list of YB tservers
+(`"10.0.0.1,10.0.0.2,10.0.0.3"`) — the client tries them in order on
+connect, giving libpq-style failover across the cluster. Smart-driver
+load-balancing (`yb_servers()`-based fanout) is currently disabled
+pending an upstream `yb-tokio-postgres` fix; see the comment in
+`libs/ysql_client/src/lib.rs::build_pg_config` for the state of that
+workaround.
 
 Once running, connect with any Postgres client:
 
@@ -244,6 +307,25 @@ Integration tests (require a YB cluster reachable from the test runner):
 CARGO_BUILD_FLAGS="--features=testing" make
 DEFAULT_PG_VERSION=17 BUILD_TYPE=release ./scripts/pytest
 ```
+
+End-to-end shell tests under [`test/e2e/`](test/e2e/) exercise full
+boot, write, restart, and corruption-marker scans against a real
+`neon_local` cluster + YB. The most useful ones:
+
+- `test/e2e/run.sh [fast|slow|all]` — runs SQL workloads from
+  `fast/` and `slow/` and scans `pageserver.log` for corruption
+  markers between workloads.
+- `test/e2e/restart-correctness.sh` — verifies `prev_record_lsn` is
+  persisted across pageserver restarts (regression check for an
+  earlier corruption-class incident).
+- `test/e2e/restart-wal-replay.sh` — file-backed control-file
+  variant of the WAL-replay-on-restart catch-up regression check.
+- `test/e2e/restart-wal-replay-yb.sh` — same regression check
+  against an AWS-style safekeeper config (YB-WAL,
+  `--control-file-backend=remote-storage`, `--no-sync`,
+  `--wal-cache-size-mib=512`). Reproduces the
+  `next_chunk_seq`/upsert-collision bug fixed in
+  `commit 606864811` if it ever regresses.
 
 Many of the legacy Neon unit tests have been deleted along with the
 layer-file machinery they exercised — they tested code paths that no
