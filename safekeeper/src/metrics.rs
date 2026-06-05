@@ -180,29 +180,6 @@ pub static REMOVED_WAL_SEGMENTS: Lazy<IntCounter> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_removed_wal_segments_total counter")
 });
-pub static BACKED_UP_SEGMENTS: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "safekeeper_backed_up_segments_total",
-        "Number of WAL segments backed up to the S3"
-    )
-    .expect("Failed to register safekeeper_backed_up_segments_total counter")
-});
-pub static BACKUP_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "safekeeper_backup_errors_total",
-        "Number of errors during backup"
-    )
-    .expect("Failed to register safekeeper_backup_errors_total counter")
-});
-/* BEGIN_HADRON */
-pub static BACKUP_REELECT_LEADER_COUNT: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "safekeeper_backup_reelect_leader_total",
-        "Number of times the backup leader was reelected"
-    )
-    .expect("Failed to register safekeeper_backup_reelect_leader_total counter")
-});
-/* END_HADRON */
 pub static BROKER_PUSH_ALL_UPDATES_SECONDS: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "safekeeper_broker_push_update_seconds",
@@ -229,21 +206,6 @@ pub static RECEIVED_PS_FEEDBACKS: Lazy<IntCounter> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_received_ps_feedbacks_total counter")
 });
-pub static PARTIAL_BACKUP_UPLOADS: Lazy<IntCounterVec> = Lazy::new(|| {
-    register_int_counter_vec!(
-        "safekeeper_partial_backup_uploads_total",
-        "Number of partial backup uploads to the S3",
-        &["result"]
-    )
-    .expect("Failed to register safekeeper_partial_backup_uploads_total counter")
-});
-pub static PARTIAL_BACKUP_UPLOADED_BYTES: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "safekeeper_partial_backup_uploaded_bytes_total",
-        "Number of bytes uploaded to the S3 during partial backup"
-    )
-    .expect("Failed to register safekeeper_partial_backup_uploaded_bytes_total counter")
-});
 pub static MANAGER_ITERATIONS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_manager_iterations_total",
@@ -257,15 +219,6 @@ pub static MANAGER_ACTIVE_CHANGES: Lazy<IntCounter> = Lazy::new(|| {
         "Number of timeline active status changes in the timeline manager task"
     )
     .expect("Failed to register safekeeper_manager_active_changes_total counter")
-});
-pub static WAL_BACKUP_TASKS: Lazy<IntCounterPair> = Lazy::new(|| {
-    register_int_counter_pair!(
-        "safekeeper_wal_backup_tasks_started_total",
-        "Number of active WAL backup tasks",
-        "safekeeper_wal_backup_tasks_finished_total",
-        "Number of finished WAL backup tasks",
-    )
-    .expect("Failed to register safekeeper_wal_backup_tasks_finished_total counter")
 });
 pub static WAL_RECEIVERS: Lazy<IntGauge> = Lazy::new(|| {
     register_int_gauge!(
@@ -336,14 +289,6 @@ pub(crate) static EVICTION_EVENTS_COMPLETED: Lazy<IntCounterVec> = Lazy::new(|| 
         "safekeeper_eviction_events_completed_total",
         "Number of eviction state changes, incremented when they complete",
         &["kind"]
-    )
-    .expect("Failed to register metric")
-});
-
-pub static NUM_EVICTED_TIMELINES: Lazy<IntGauge> = Lazy::new(|| {
-    register_int_gauge!(
-        "safekeeper_evicted_timelines",
-        "Number of currently evicted timelines"
     )
     .expect("Failed to register metric")
 });

@@ -143,8 +143,6 @@ pub struct Config {
     pub workdir: PathBuf,
     pub listen_pg_addr: String,
     pub listen_http_addr: String,
-    pub max_offloader_lag_bytes: u64,
-    pub wal_backup_enabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -337,8 +335,6 @@ fn build_config(config: Arc<SafeKeeperConf>) -> Config {
         workdir: config.workdir.clone().into(),
         listen_pg_addr: config.listen_pg_addr.clone(),
         listen_http_addr: config.listen_http_addr.clone(),
-        max_offloader_lag_bytes: config.max_offloader_lag_bytes,
-        wal_backup_enabled: config.wal_backup_enabled,
     }
 }
 

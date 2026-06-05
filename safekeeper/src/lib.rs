@@ -69,28 +69,18 @@ pub mod defaults {
     };
 
     pub const DEFAULT_HEARTBEAT_TIMEOUT: &str = "5000ms";
-    pub const DEFAULT_MAX_OFFLOADER_LAG_BYTES: u64 = 128 * (1 << 20);
 
     /// Capacity (in MiB) of the in-memory cache of recently-written WAL
     /// chunks in YB-WAL mode. See [`crate::wal_cache`]. Set to 0 to
     /// disable the cache entirely (every WAL read hits YB).
     pub const DEFAULT_WAL_CACHE_SIZE_MIB: usize = 256;
-    /* BEGIN_HADRON */
-    // Default leader re-elect is 0(disabled). SK will re-elect leader if the current leader is lagging this many bytes.
-    pub const DEFAULT_MAX_REELECT_OFFLOADER_LAG_BYTES: u64 = 0;
-    // Default disk usage limit is 0 (disabled). It means each timeline by default can use up to this many WAL
-    // disk space on this SK until SK begins to reject WALs.
-    pub const DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES: u64 = 0;
-    /* END_HADRON */
-    pub const DEFAULT_PARTIAL_BACKUP_TIMEOUT: &str = "15m";
-    pub const DEFAULT_CONTROL_FILE_SAVE_INTERVAL: &str = "300s";
-    pub const DEFAULT_PARTIAL_BACKUP_CONCURRENCY: &str = "5";
-    pub const DEFAULT_EVICTION_CONCURRENCY: usize = 2;
 
-    // By default, our required residency before eviction is the same as the period that passes
-    // before uploading a partial segment, so that in normal operation the eviction can happen
-    // as soon as we have done the partial segment upload.
-    pub const DEFAULT_EVICTION_MIN_RESIDENT: &str = DEFAULT_PARTIAL_BACKUP_TIMEOUT;
+    /// Default disk usage limit is 0 (disabled) — yb-light has no
+    /// local-FS WAL anyway. Retained as a CLI knob because the
+    /// global-disk watcher uses it as the per-timeline cap when set.
+    pub const DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES: u64 = 0;
+
+    pub const DEFAULT_CONTROL_FILE_SAVE_INTERVAL: &str = "300s";
 
     pub const DEFAULT_SSL_KEY_FILE: &str = "server.key";
     pub const DEFAULT_SSL_CERT_FILE: &str = "server.crt";
@@ -131,29 +121,18 @@ pub struct SafeKeeperConf {
     /// mode. See [`crate::wal_cache`]. Ignored when
     /// [`Self::wal_yb_config`] is `None`. Set to 0 to disable the cache.
     pub wal_cache_size_mib: usize,
-    pub max_offloader_lag_bytes: u64,
-    /* BEGIN_HADRON */
-    pub max_reelect_offloader_lag_bytes: u64,
     pub max_timeline_disk_usage_bytes: u64,
     /// How often to check the working directory's filesystem for total disk usage.
     pub global_disk_check_interval: Duration,
     /// The portion of the filesystem capacity that can be used by all timelines.
     pub max_global_disk_usage_ratio: f64,
-    /* END_HADRON */
-    pub backup_parallel_jobs: usize,
-    pub wal_backup_enabled: bool,
     pub pg_auth: Option<Arc<JwtAuth>>,
     pub pg_tenant_only_auth: Option<Arc<JwtAuth>>,
     pub http_auth: Option<Arc<SwappableJwtAuth>>,
     /// JWT token to connect to other safekeepers with.
     pub sk_auth_token: Option<SecretString>,
     pub current_thread_runtime: bool,
-    pub partial_backup_timeout: Duration,
-    pub enable_offload: bool,
-    pub delete_offloaded_wal: bool,
     pub control_file_save_interval: Duration,
-    pub partial_backup_concurrency: usize,
-    pub eviction_min_resident: Duration,
     pub wal_reader_fanout: bool,
     pub max_delta_for_fanout: Option<u64>,
     pub ssl_key_file: Utf8PathBuf,
@@ -294,27 +273,16 @@ impl SafeKeeperConf {
             wal_yb_config: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
             my_id: NodeId(0),
-            wal_backup_enabled: true,
-            backup_parallel_jobs: 1,
             pg_auth: None,
             pg_tenant_only_auth: None,
             http_auth: None,
             sk_auth_token: None,
             heartbeat_timeout: Duration::new(5, 0),
-            max_offloader_lag_bytes: defaults::DEFAULT_MAX_OFFLOADER_LAG_BYTES,
-            /* BEGIN_HADRON */
-            max_reelect_offloader_lag_bytes: defaults::DEFAULT_MAX_REELECT_OFFLOADER_LAG_BYTES,
             max_timeline_disk_usage_bytes: defaults::DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES,
             global_disk_check_interval: Duration::from_secs(60),
             max_global_disk_usage_ratio: defaults::DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
-            /* END_HADRON */
             current_thread_runtime: false,
-            partial_backup_timeout: Duration::from_secs(0),
-            enable_offload: false,
-            delete_offloaded_wal: false,
             control_file_save_interval: Duration::from_secs(1),
-            partial_backup_concurrency: 1,
-            eviction_min_resident: Duration::ZERO,
             wal_reader_fanout: false,
             max_delta_for_fanout: None,
             ssl_key_file: Utf8PathBuf::from(defaults::DEFAULT_SSL_KEY_FILE),

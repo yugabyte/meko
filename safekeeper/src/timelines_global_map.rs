@@ -17,7 +17,6 @@ use tracing::*;
 use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
 
-use crate::defaults::DEFAULT_EVICTION_CONCURRENCY;
 use crate::http::routes::DeleteOrExcludeError;
 use crate::rate_limit::RateLimiter;
 use crate::state::TimelinePersistentState;
@@ -166,10 +165,11 @@ impl GlobalTimelines {
         // lock, so use explicit block
         let tenants_dir = {
             let mut state = self.state.lock().unwrap();
-            state.global_rate_limiter = RateLimiter::new(
-                state.conf.partial_backup_concurrency,
-                DEFAULT_EVICTION_CONCURRENCY,
-            );
+            // RateLimiter survives only as a Manager field; its
+            // partial-backup + eviction semaphores have no callers
+            // post Phase 9 Wave 1. Construct with cap = 1 so it stays
+            // benign if anything tries to acquire.
+            state.global_rate_limiter = RateLimiter::new(1, 1);
 
             // Iterate through all directories and load tenants for all directories
             // named as a valid tenant_id.

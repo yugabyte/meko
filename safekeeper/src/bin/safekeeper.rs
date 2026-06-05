@@ -15,12 +15,10 @@ use http_utils::tls_certs::ReloadingCertificateResolver;
 use metrics::set_build_info_metric;
 use remote_storage::RemoteStorageConfig;
 use safekeeper::defaults::{
-    DEFAULT_CONTROL_FILE_SAVE_INTERVAL, DEFAULT_EVICTION_MIN_RESIDENT,
-    DEFAULT_GLOBAL_DISK_CHECK_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_HTTP_LISTEN_ADDR,
-    DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO, DEFAULT_MAX_OFFLOADER_LAG_BYTES,
-    DEFAULT_MAX_REELECT_OFFLOADER_LAG_BYTES, DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES,
-    DEFAULT_PARTIAL_BACKUP_CONCURRENCY, DEFAULT_PARTIAL_BACKUP_TIMEOUT, DEFAULT_PG_LISTEN_ADDR,
-    DEFAULT_SSL_CERT_FILE, DEFAULT_SSL_CERT_RELOAD_PERIOD, DEFAULT_SSL_KEY_FILE,
+    DEFAULT_CONTROL_FILE_SAVE_INTERVAL, DEFAULT_GLOBAL_DISK_CHECK_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT,
+    DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
+    DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES, DEFAULT_PG_LISTEN_ADDR, DEFAULT_SSL_CERT_FILE,
+    DEFAULT_SSL_CERT_RELOAD_PERIOD, DEFAULT_SSL_KEY_FILE,
 };
 use safekeeper::wal_backup::WalBackup;
 use safekeeper::{
@@ -155,25 +153,12 @@ struct Args {
     /// scaled default.
     #[arg(long, default_value_t = safekeeper::DEFAULT_SCALE_FACTOR)]
     scale_factor: f64,
-    /// Safekeeper won't be elected for WAL offloading if it is lagging for more than this value in bytes
-    #[arg(long, default_value_t = DEFAULT_MAX_OFFLOADER_LAG_BYTES)]
-    max_offloader_lag: u64,
     /* BEGIN_HADRON */
-    /// Safekeeper will re-elect a new offloader if the current backup lagging for more than this value in bytes
-    #[arg(long, default_value_t = DEFAULT_MAX_REELECT_OFFLOADER_LAG_BYTES)]
-    max_reelect_offloader_lag_bytes: u64,
     /// Safekeeper will stop accepting new WALs if the timeline disk usage exceeds this value in bytes.
     /// Setting this value to 0 disables the limit.
     #[arg(long, default_value_t = DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES)]
     max_timeline_disk_usage_bytes: u64,
     /* END_HADRON */
-    /// Number of max parallel WAL segments to be offloaded to remote storage.
-    #[arg(long, default_value = "5")]
-    wal_backup_parallel_jobs: usize,
-    /// Disable WAL backup to s3. When disabled, safekeeper removes WAL ignoring
-    /// WAL backup horizon.
-    #[arg(long)]
-    disable_wal_backup: bool,
     /// If given, enables auth on incoming connections to WAL service endpoint
     /// (--listen-pg). Value specifies path to a .pem public key used for
     /// validations of JWT tokens. Empty string is allowed and means disabling
@@ -199,29 +184,9 @@ struct Args {
     /// useful for debugging.
     #[arg(long)]
     current_thread_runtime: bool,
-    /// Controls how long backup will wait until uploading the partial segment.
-    #[arg(long, value_parser = humantime::parse_duration, default_value = DEFAULT_PARTIAL_BACKUP_TIMEOUT, verbatim_doc_comment)]
-    partial_backup_timeout: Duration,
-    /// Enable automatic switching to offloaded state.
-    #[arg(long)]
-    enable_offload: bool,
-    /// Delete local WAL files after offloading. When disabled, they will be left on disk.
-    #[arg(long)]
-    delete_offloaded_wal: bool,
     /// Pending updates to control file will be automatically saved after this interval.
     #[arg(long, value_parser = humantime::parse_duration, default_value = DEFAULT_CONTROL_FILE_SAVE_INTERVAL)]
     control_file_save_interval: Duration,
-    /// Number of allowed concurrent uploads of partial segments to remote storage.
-    #[arg(long, default_value = DEFAULT_PARTIAL_BACKUP_CONCURRENCY)]
-    partial_backup_concurrency: usize,
-    /// How long a timeline must be resident before it is eligible for eviction.
-    /// Usually, timeline eviction has to wait for `partial_backup_timeout` before being eligible for eviction,
-    /// but if a timeline is un-evicted and then _not_ written to, it would immediately flap to evicting again,
-    /// if it weren't for `eviction_min_resident` preventing that.
-    ///
-    /// Also defines interval for eviction retries.
-    #[arg(long, value_parser = humantime::parse_duration, default_value = DEFAULT_EVICTION_MIN_RESIDENT)]
-    eviction_min_resident: Duration,
     /// Enable fanning out WAL to different shards from the same reader
     #[arg(long)]
     wal_reader_fanout: bool,
@@ -432,24 +397,15 @@ async fn main() -> anyhow::Result<()> {
                 args.scale_factor,
             )
         }),
-        max_offloader_lag_bytes: args.max_offloader_lag,
         /* BEGIN_HADRON */
-        max_reelect_offloader_lag_bytes: args.max_reelect_offloader_lag_bytes,
         max_timeline_disk_usage_bytes: args.max_timeline_disk_usage_bytes,
         /* END_HADRON */
-        wal_backup_enabled: !args.disable_wal_backup,
-        backup_parallel_jobs: args.wal_backup_parallel_jobs,
         pg_auth,
         pg_tenant_only_auth,
         http_auth,
         sk_auth_token,
         current_thread_runtime: args.current_thread_runtime,
-        partial_backup_timeout: args.partial_backup_timeout,
-        enable_offload: args.enable_offload,
-        delete_offloaded_wal: args.delete_offloaded_wal,
         control_file_save_interval: args.control_file_save_interval,
-        partial_backup_concurrency: args.partial_backup_concurrency,
-        eviction_min_resident: args.eviction_min_resident,
         wal_reader_fanout: args.wal_reader_fanout,
         max_delta_for_fanout: args.max_delta_for_fanout,
         ssl_key_file: args.ssl_key_file,

@@ -25,7 +25,7 @@ use utils::lsn::Lsn;
 use crate::SafeKeeperConf;
 use crate::control_file::{ControlFileStorage, Storage};
 use crate::metrics::{
-    MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS, NUM_EVICTED_TIMELINES,
+    MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS,
 };
 use crate::rate_limit::{RateLimiter, rand_duration};
 use crate::remove_wal::calc_horizon_lsn;
