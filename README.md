@@ -333,6 +333,48 @@ longer execute in ybLight. The remaining suite focuses on the
 row-store gateway, the YB-side write batching, the chain
 reconstruction, and the materialiser.
 
+## Operator tools
+
+Diagnostic helpers under [`tools/`](tools/) that wrap `psql` against
+the YB cluster and render the row-store tables in a human-readable
+form. They're staged into `${BUNDLE}/tools/` by
+`scripts/yb-light-ship.sh` so they ship to deploy hosts alongside the
+binaries.
+
+- [`tools/yb-dump-pages`](tools/yb-dump-pages) — dump
+  `pageserver.pages` rows for one (rel, fork) tuple. Renders the
+  LSN bigint as `H/L` hex, forknum as `main`/`fsm`/`vm`/`init`, and
+  the payload as `<bytes>; <16-byte hex sample>`. Required hash
+  columns: `--tenant --timeline --spc --db --rel --fork`. Range
+  filters: `--blknum` (or `--blknum-from/--blknum-to`),
+  `--lsn-from`/`--lsn-to` (PG `X/Y` hex). Add `--raw` for the wide
+  table form, `--no-payload` to drop the byte preview,
+  `--limit 0` for unbounded.
+- [`tools/yb-dump-wals`](tools/yb-dump-wals) — dump
+  `public.wals` rows (the safekeeper's WAL-in-YB chunks). Required
+  hash columns: `--tenant --timeline`. Range filters: `--segno`
+  (or `--segno-from/--segno-to`), `--chunk-offset` (or its
+  `-from/-to` variants), `--lsn-from`/`--lsn-to` (mapped to
+  segno+offset via `--wal-seg-size`, default 16 MiB). `--summary`
+  swaps the row dump for a per-segno health view
+  (`(min/max chunk_offset, total_bytes, gap_bytes)`) which is the
+  fastest way to spot a WAL hole during an incident.
+
+Sample invocations:
+
+```sh
+tools/yb-dump-wals  --tenant <hex> --timeline <hex> --summary
+tools/yb-dump-wals  --tenant <hex> --timeline <hex> \
+                    --lsn-from 0/1545000 --lsn-to 0/15A0000 --limit 5
+tools/yb-dump-pages --tenant <hex> --timeline <hex> \
+                    --spc 1663 --db 5 --rel 16384 --fork 0 \
+                    --blknum 0 --limit 3 --raw
+```
+
+Both default to a local `neon_local` cluster (`127.0.0.1:5433`,
+`yugabyte`/`yb_storage`) and accept `--host`/`--port`/`--user`/
+`--db-name`/`--password-env` overrides for remote clusters.
+
 ## Flamegraphs
 
 [`flamegraph-rs`](https://github.com/flamegraph-rs/flamegraph) works
