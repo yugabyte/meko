@@ -209,10 +209,6 @@ struct Args {
     /// useful for debugging.
     #[arg(long)]
     current_thread_runtime: bool,
-    /// Keep horizon for walsenders, i.e. don't remove WAL segments that are
-    /// still needed for existing replication connection.
-    #[arg(long)]
-    walsenders_keep_horizon: bool,
     /// Controls how long backup will wait until uploading the partial segment.
     #[arg(long, value_parser = humantime::parse_duration, default_value = DEFAULT_PARTIAL_BACKUP_TIMEOUT, verbatim_doc_comment)]
     partial_backup_timeout: Duration,
@@ -468,7 +464,6 @@ async fn main() -> anyhow::Result<()> {
         http_auth,
         sk_auth_token,
         current_thread_runtime: args.current_thread_runtime,
-        walsenders_keep_horizon: args.walsenders_keep_horizon,
         partial_backup_timeout: args.partial_backup_timeout,
         disable_periodic_broker_push: args.disable_periodic_broker_push,
         enable_offload: args.enable_offload,

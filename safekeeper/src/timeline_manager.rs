@@ -543,14 +543,11 @@ impl Manager {
             return;
         }
 
-        // If enabled, we use LSN of the most lagging walsender as a WAL removal horizon.
-        // This allows to get better read speed for pageservers that are lagging behind,
-        // at the cost of keeping more WAL on disk.
-        let replication_horizon_lsn = if self.conf.walsenders_keep_horizon {
-            self.walsenders.laggard_lsn()
-        } else {
-            None
-        };
+        // Clamp the removal horizon to the slowest active walsender. WAL
+        // lives in YB rows here (no local-disk WAL, no S3 fallback for
+        // the pageserver to refetch from), so deleting bytes that an
+        // active walsender still needs is a one-way data loss.
+        let replication_horizon_lsn = self.walsenders.laggard_lsn();
 
         let removal_horizon_lsn =
             calc_horizon_lsn(state, replication_horizon_lsn, self.conf.is_yb_wal_mode());

@@ -158,7 +158,6 @@ pub struct SafeKeeperConf {
     /// JWT token to connect to other safekeepers with.
     pub sk_auth_token: Option<SecretString>,
     pub current_thread_runtime: bool,
-    pub walsenders_keep_horizon: bool,
     pub partial_backup_timeout: Duration,
     pub disable_periodic_broker_push: bool,
     pub enable_offload: bool,
@@ -325,7 +324,6 @@ impl SafeKeeperConf {
             max_global_disk_usage_ratio: defaults::DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
             /* END_HADRON */
             current_thread_runtime: false,
-            walsenders_keep_horizon: false,
             partial_backup_timeout: Duration::from_secs(0),
             disable_periodic_broker_push: false,
             enable_offload: false,
