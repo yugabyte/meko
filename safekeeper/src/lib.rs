@@ -16,7 +16,6 @@ use utils::logging::SecretString;
 mod auth;
 pub mod control_file;
 pub mod control_file_upgrade;
-pub mod copy_timeline;
 pub mod debug_dump;
 pub mod hadron;
 pub mod handler;

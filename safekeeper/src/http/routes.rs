@@ -18,7 +18,7 @@ use pem::Pem;
 use postgres_ffi::WAL_SEGMENT_SIZE;
 use safekeeper_api::models::{
     AcceptorStateStatus, SafekeeperStatus, SkTimelineInfo, TenantDeleteResult,
-    TermSwitchApiEntry, TimelineCopyRequest, TimelineCreateRequest, TimelineDeleteResult,
+    TermSwitchApiEntry, TimelineCreateRequest, TimelineDeleteResult,
     TimelineStatus, TimelineTermBumpRequest,
 };
 use safekeeper_api::{ServerInfo, membership, models};
@@ -35,7 +35,7 @@ use crate::debug_dump::TimelineDigestRequest;
 use crate::hadron::{get_filesystem_capacity, get_filesystem_usage};
 use crate::safekeeper::TermLsn;
 use crate::timelines_global_map::DeleteOrExclude;
-use crate::{GlobalTimelines, SafeKeeperConf, copy_timeline, debug_dump, patch_control_file};
+use crate::{GlobalTimelines, SafeKeeperConf, debug_dump, patch_control_file};
 use serde_json::json;
 
 /// Healthcheck handler.
@@ -331,35 +331,6 @@ async fn timeline_membership_handler(
             req_gen, response.current_conf.generation
         )))
     }
-}
-
-async fn timeline_copy_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-
-    let request_data: TimelineCopyRequest = json_request(&mut request).await?;
-    let source_ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "source_timeline_id")?,
-    );
-
-    let global_timelines = get_global_timelines(&request);
-    let wal_backup = global_timelines.get_wal_backup();
-    let storage = wal_backup
-        .get_storage()
-        .ok_or(ApiError::BadRequest(anyhow::anyhow!(
-            "Remote Storage is not configured"
-        )))?;
-
-    copy_timeline::handle_request(copy_timeline::Request{
-        source_ttid,
-        until_lsn: request_data.until_lsn,
-        destination_ttid: TenantTimelineId::new(source_ttid.tenant_id, request_data.target_timeline_id),
-    }, global_timelines, storage)
-        .instrument(info_span!("copy_timeline", from=%source_ttid, to=%request_data.target_timeline_id, until_lsn=%request_data.until_lsn))
-        .await
-        .map_err(ApiError::InternalServerError)?;
-
-    json_response(StatusCode::OK, ())
 }
 
 async fn patch_control_file_handler(
@@ -665,10 +636,6 @@ pub fn make_router(
         .put(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/membership",
             |r| request_span(r, timeline_membership_handler),
-        )
-        .post(
-            "/v1/tenant/:tenant_id/timeline/:source_timeline_id/copy",
-            |r| request_span(r, timeline_copy_handler),
         )
         .patch(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/control_file",

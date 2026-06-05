@@ -29,7 +29,7 @@ use utils::lsn::Lsn;
 
 use crate::metrics::{WAL_STORAGE_OPERATION_SECONDS, WalStorageMetrics};
 use crate::state::TimelinePersistentState;
-use crate::wal_backup::{WalBackup, read_object, remote_timeline_path};
+use crate::wal_backup::{WalBackup, remote_timeline_path};
 
 pub trait Storage {
     // Last written LSN.
@@ -446,12 +446,11 @@ impl WalReader {
             )));
         }
 
-        // Try to open remote file, if remote reads are enabled
-        if let Some(storage) = self.wal_backup.get_storage() {
-            let remote_wal_file_path = self.remote_path.join(&wal_file_name);
-            return read_object(&storage, &remote_wal_file_path, xlogoff as u64).await;
-        }
-
+        // yb-light's single-SK mode keeps every WAL byte in YB
+        // (yb_storage.wals) — the YB branch above is the only valid
+        // path. The legacy S3 WAL-segment fallback was deleted along
+        // with the S3 upload offloader; reaching here means the
+        // requested LSN really is missing.
         bail!("WAL segment is not found")
     }
 }

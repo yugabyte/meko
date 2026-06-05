@@ -34,7 +34,7 @@ use crate::state::TimelineState;
 use crate::timeline::{ManagerTimeline, ReadGuardSharedState, StateSK, WalResidentTimeline};
 use crate::timeline_guard::{AccessService, GuardId, ResidenceGuard};
 use crate::timelines_set::{TimelineSetGuard, TimelinesSet};
-use crate::wal_backup::{self, WalBackup, WalBackupTaskHandle};
+use crate::wal_backup::WalBackup;
 
 pub(crate) struct StateSnapshot {
     // inmem values
@@ -201,7 +201,6 @@ pub(crate) struct Manager {
     pub(crate) last_removed_segno: XLogSegNo,
 
     // background tasks
-    pub(crate) backup_task: Option<WalBackupTaskHandle>,
     pub(crate) wal_removal_task: Option<JoinHandle<anyhow::Result<u64>>>,
 
     // misc
@@ -303,18 +302,6 @@ pub async fn main_task(
     // remove timeline from the broker active set sooner, before waiting for background tasks
     mgr.tli_broker_active.set(false);
 
-    // shutdown background tasks
-    if let Some(storage) = mgr.wal_backup.get_storage() {
-        if let Some(backup_task) = mgr.backup_task.take() {
-            // If we fell through here, then the timeline is shutting down. This is important
-            // because otherwise joining on the wal_backup handle might hang.
-            assert!(mgr.tli.cancel.is_cancelled());
-
-            backup_task.join().await;
-        }
-        wal_backup::update_task(&mut mgr, storage, false, &last_state).await;
-    }
-
     if let Some(wal_removal_task) = &mut mgr.wal_removal_task {
         let res = wal_removal_task.await;
         mgr.update_wal_removal_end(res);
@@ -340,7 +327,6 @@ impl Manager {
             num_computes_rx: tli.get_walreceivers().get_num_rx(),
             tli_broker_active: broker_active_set.guard(tli.clone()),
             last_removed_segno: 0,
-            backup_task: None,
             wal_removal_task: None,
             access_service: AccessService::new(manager_tx),
             tli,
@@ -381,21 +367,14 @@ impl Manager {
         )
     }
 
-    /// Spawns/kills backup task and returns true if backup is required.
-    async fn update_backup(&mut self, num_computes: usize, state: &StateSnapshot) -> bool {
-        let is_wal_backup_required =
-            wal_backup::is_wal_backup_required(self.wal_seg_size, num_computes, state);
-
-        if let Some(storage) = self.wal_backup.get_storage() {
-            wal_backup::update_task(self, storage, is_wal_backup_required, state).await;
-        }
-
-        // update the state in Arc<Timeline>
-        self.tli.wal_backup_active.store(
-            self.backup_task.is_some(),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        is_wal_backup_required
+    /// No-op stub: the S3 WAL upload task was deleted in Phase 9.
+    /// Returns `false` so `update_is_active` doesn't keep the
+    /// timeline active solely for backup reasons. Kept as a function
+    /// so the manager loop's call site doesn't need rewiring; the
+    /// `wal_backup_active` flag on `Timeline` stays at its initial
+    /// `false` because there is no backup task to track.
+    async fn update_backup(&mut self, _num_computes: usize, _state: &StateSnapshot) -> bool {
+        false
     }
 
     /// Update is_active flag and returns its value.
