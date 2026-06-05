@@ -34,7 +34,6 @@ use postgres_connection::PgConnectionConfig;
 use postgres_ffi::v14::xlog_utils;
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE, to_pg_timestamp};
 use rand::Rng;
-use storage_broker::BrokerClientChannel;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -1500,7 +1499,6 @@ impl Timeline {
     pub(crate) fn activate(
         self: &Arc<Self>,
         parent: Arc<crate::tenant::TenantShard>,
-        broker_client: BrokerClientChannel,
         background_jobs_can_start: Option<&completion::Barrier>,
         ctx: &RequestContext,
     ) {
@@ -1508,7 +1506,7 @@ impl Timeline {
             // Logical size is only maintained accurately on shard zero.
             self.spawn_initial_logical_size_computation_task(ctx);
         }
-        self.launch_wal_receiver(ctx, broker_client);
+        self.launch_wal_receiver(ctx);
         self.set_state(TimelineState::Active);
         // Per-timeline eviction task deleted in Phase 4d.2 — no layer
         // files to evict in the YB row-store world.
@@ -2168,11 +2166,7 @@ impl Timeline {
     ///
     /// This function is expected to be called at most once per Timeline's lifecycle
     /// when the timeline is activated.
-    fn launch_wal_receiver(
-        self: &Arc<Self>,
-        ctx: &RequestContext,
-        broker_client: BrokerClientChannel,
-    ) {
+    fn launch_wal_receiver(self: &Arc<Self>, ctx: &RequestContext) {
         info!(
             "launching WAL receiver for timeline {} of tenant {}",
             self.timeline_id, self.tenant_shard_id
@@ -2215,7 +2209,6 @@ impl Timeline {
                 ingest_batch_size: self.conf.ingest_batch_size,
                 validate_wal_contiguity: self.conf.validate_wal_contiguity,
             },
-            broker_client,
             ctx,
         ));
     }

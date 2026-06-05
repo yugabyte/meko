@@ -17,7 +17,6 @@ use safekeeper_api::membership::{
 use safekeeper_api::models::HotStandbyFeedback;
 use safekeeper_api::{Term, membership};
 use serde::{Deserialize, Serialize};
-use storage_broker::proto::SafekeeperTimelineInfo;
 use tracing::*;
 use utils::bin_ser::LeSer;
 use utils::id::{NodeId, TenantId, TimelineId};
@@ -1352,15 +1351,6 @@ where
         )))
     }
 
-    /// Peer-SK gossip is dead in yb-mode (single-SK); the broker pushes
-    /// nothing meaningful here. Kept as a no-op to preserve the public
-    /// shape used by `safekeeper/src/broker.rs`.
-    pub async fn record_safekeeper_info(
-        &mut self,
-        _sk_info: &SafekeeperTimelineInfo,
-    ) -> Result<()> {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

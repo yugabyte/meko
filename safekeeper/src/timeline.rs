@@ -16,7 +16,6 @@ use safekeeper_api::membership::Configuration;
 use safekeeper_api::models::{
     PeerInfo, TimelineMembershipSwitchResponse, TimelineTermBumpResponse,
 };
-use storage_broker::proto::{SafekeeperTimelineInfo, TenantTimelineId as ProtoTenantTimelineId};
 use tokio::fs::{self};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, watch};
 use tokio::time::Instant;
@@ -46,19 +45,14 @@ use crate::wal_storage::{Storage as wal_storage_iface, WalReader};
 use crate::yb_wal_storage::{self, YbWalStorage};
 use crate::{SafeKeeperConf, control_file, debug_dump, timeline_manager};
 
-fn peer_info_from_sk_info(sk_info: &SafekeeperTimelineInfo, ts: Instant) -> PeerInfo {
-    PeerInfo {
-        sk_id: NodeId(sk_info.safekeeper_id),
-        term: sk_info.term,
-        last_log_term: sk_info.last_log_term,
-        flush_lsn: Lsn(sk_info.flush_lsn),
-        commit_lsn: Lsn(sk_info.commit_lsn),
-        local_start_lsn: Lsn(sk_info.local_start_lsn),
-        pg_connstr: sk_info.safekeeper_connstr.clone(),
-        http_connstr: sk_info.http_connstr.clone(),
-        https_connstr: sk_info.https_connstr.clone(),
-        ts,
-    }
+/// Minimum subset of safekeeper timeline state needed by callers that
+/// previously consumed `storage_broker::proto::SafekeeperTimelineInfo`.
+#[derive(Debug, Clone)]
+pub struct LocalSkInfo {
+    pub term: safekeeper_api::Term,
+    pub last_log_term: safekeeper_api::Term,
+    pub flush_lsn: Lsn,
+    pub commit_lsn: Lsn,
 }
 
 // vector-based node id -> peer state map with very limited functionality we
@@ -217,36 +211,6 @@ impl StateSK {
         }
     }
 
-    /// Update timeline state with peer safekeeper data.
-    pub async fn record_safekeeper_info(&mut self, sk_info: &SafekeeperTimelineInfo) -> Result<()> {
-        // update commit_lsn if safekeeper is loaded
-        match self {
-            StateSK::Loaded(sk) => sk.record_safekeeper_info(sk_info).await?,
-            StateSK::Offloaded(_) => {}
-            StateSK::Empty => unreachable!(),
-        }
-
-        // update everything else, including remote_consistent_lsn and backup_lsn
-        let mut sync_control_file = false;
-        let state = self.state_mut();
-        let wal_seg_size = state.server.wal_seg_size as u64;
-
-        state.inmem.backup_lsn = max(Lsn(sk_info.backup_lsn), state.inmem.backup_lsn);
-        sync_control_file |= state.backup_lsn + wal_seg_size < state.inmem.backup_lsn;
-
-        state.inmem.remote_consistent_lsn = max(
-            Lsn(sk_info.remote_consistent_lsn),
-            state.inmem.remote_consistent_lsn,
-        );
-        sync_control_file |=
-            state.remote_consistent_lsn + wal_seg_size < state.inmem.remote_consistent_lsn;
-
-        if sync_control_file {
-            state.flush().await?;
-        }
-        Ok(())
-    }
-
     /// Previously known as epoch_start_lsn. Needed only for reference in some APIs.
     pub fn term_start_lsn(&self) -> Lsn {
         match self {
@@ -372,34 +336,16 @@ impl SharedState {
 
     fn get_safekeeper_info(
         &self,
-        ttid: &TenantTimelineId,
-        conf: &SafeKeeperConf,
-        standby_apply_lsn: Lsn,
-    ) -> SafekeeperTimelineInfo {
-        SafekeeperTimelineInfo {
-            safekeeper_id: conf.my_id.0,
-            tenant_timeline_id: Some(ProtoTenantTimelineId {
-                tenant_id: ttid.tenant_id.as_ref().to_owned(),
-                timeline_id: ttid.timeline_id.as_ref().to_owned(),
-            }),
+        _ttid: &TenantTimelineId,
+        _conf: &SafeKeeperConf,
+        _standby_apply_lsn: Lsn,
+    ) -> LocalSkInfo {
+        let flush_lsn = self.sk.flush_lsn();
+        LocalSkInfo {
             term: self.sk.state().acceptor_state.term,
             last_log_term: self.sk.last_log_term(),
-            flush_lsn: self.sk.flush_lsn().0,
-            // yb-mode: commit_lsn collapsed to flush_lsn (single-SK quorum).
-            commit_lsn: self.sk.flush_lsn().0,
-            remote_consistent_lsn: self.sk.state().inmem.remote_consistent_lsn.0,
-            // peer_horizon_lsn was removed (single-SK yb-mode); zero on the wire.
-            peer_horizon_lsn: 0,
-            safekeeper_connstr: conf
-                .advertise_pg_addr
-                .to_owned()
-                .unwrap_or(conf.listen_pg_addr.clone()),
-            http_connstr: conf.listen_http_addr.to_owned(),
-            https_connstr: conf.listen_https_addr.to_owned(),
-            backup_lsn: self.sk.state().inmem.backup_lsn.0,
-            local_start_lsn: self.sk.state().local_start_lsn.0,
-            availability_zone: conf.availability_zone.clone(),
-            standby_horizon: standby_apply_lsn.0,
+            flush_lsn,
+            commit_lsn: flush_lsn,
         }
     }
 
@@ -826,25 +772,13 @@ impl Timeline {
         Ok(())
     }
 
-    /// Get safekeeper info for broadcasting to broker and other peers.
-    pub async fn get_safekeeper_info(&self, conf: &SafeKeeperConf) -> SafekeeperTimelineInfo {
+    /// Snapshot of local SK timeline state. Previously broadcast to the
+    /// storage broker; retained for `wal_backup_partial` to capture
+    /// pre-upload watermarks.
+    pub async fn get_safekeeper_info(&self, conf: &SafeKeeperConf) -> LocalSkInfo {
         let standby_apply_lsn = self.walsenders.get_hotstandby().reply.apply_lsn;
         let shared_state = self.read_shared_state().await;
         shared_state.get_safekeeper_info(&self.ttid, conf, standby_apply_lsn)
-    }
-
-    /// Update timeline state with peer safekeeper data.
-    pub async fn record_safekeeper_info(
-        self: &Arc<Self>,
-        sk_info: SafekeeperTimelineInfo,
-    ) -> Result<()> {
-        {
-            let mut shared_state = self.write_shared_state().await;
-            shared_state.sk.record_safekeeper_info(&sk_info).await?;
-            let peer_info = peer_info_from_sk_info(&sk_info, Instant::now());
-            shared_state.peers_info.upsert(&peer_info);
-        }
-        Ok(())
     }
 
     pub async fn get_peers(&self, conf: &SafeKeeperConf) -> Vec<PeerInfo> {

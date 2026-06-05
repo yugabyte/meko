@@ -172,10 +172,11 @@ pub struct ConfigToml {
     pub auth_validation_public_key_path: Option<Utf8PathBuf>,
     pub remote_storage: Option<RemoteStorageConfig>,
     pub tenant_config: TenantConfigToml,
-    #[serde_as(as = "serde_with::DisplayFromStr")]
-    pub broker_endpoint: storage_broker::Uri,
-    #[serde(with = "humantime_serde")]
-    pub broker_keepalive_interval: Duration,
+    /// libpq connection string of the single safekeeper, e.g.
+    /// `host=127.0.0.1 port=5484`. The walreceiver opens its WAL
+    /// streaming connection against this address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safekeeper_pg_addr: Option<String>,
     #[serde_as(as = "serde_with::DisplayFromStr")]
     pub log_format: LogFormat,
     /// `None` → scaled default (`8 × scale_factor`, floored at 1).
@@ -649,8 +650,6 @@ impl MaxGetVectoredKeys {
 }
 
 pub mod defaults {
-    pub use storage_broker::DEFAULT_ENDPOINT as BROKER_DEFAULT_ENDPOINT;
-
     use crate::models::ImageCompressionAlgorithm;
 
     pub const DEFAULT_WAIT_LSN_TIMEOUT: &str = "300 s";
@@ -727,13 +726,7 @@ impl Default for ConfigToml {
             grpc_auth_type: (AuthType::Trust),
             auth_validation_public_key_path: (None),
             remote_storage: None,
-            broker_endpoint: (storage_broker::DEFAULT_ENDPOINT
-                .parse()
-                .expect("failed to parse default broker endpoint")),
-            broker_keepalive_interval: (humantime::parse_duration(
-                storage_broker::DEFAULT_KEEPALIVE_INTERVAL,
-            )
-            .expect("cannot parse default keepalive interval")),
+            safekeeper_pg_addr: None,
             log_format: (LogFormat::from_str(DEFAULT_LOG_FORMAT).unwrap()),
 
             concurrent_tenant_warmup: None,

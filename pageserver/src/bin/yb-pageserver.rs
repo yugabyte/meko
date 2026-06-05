@@ -22,9 +22,7 @@ use pageserver::controller_upcall_client::StorageControllerUpcallClient;
 use pageserver::deletion_queue::DeletionQueue;
 use pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
 use pageserver::page_service::GrpcPageServiceHandler;
-use pageserver::task_mgr::{
-    BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME, WALRECEIVER_RUNTIME,
-};
+use pageserver::task_mgr::{BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME};
 use pageserver::tenant::{TenantSharedResources, mgr};
 use pageserver::{
     CancellableTask, HttpEndpointListener, HttpsEndpointListener,
@@ -429,30 +427,6 @@ fn start_pageserver(
         grpc_listener = Some(tcp_listener::bind(grpc_addr).map_err(|e| anyhow!("{e}"))?);
     }
 
-    // Launch broker client
-    // The storage_broker::connect call needs to happen inside a tokio runtime thread.
-    let broker_client = WALRECEIVER_RUNTIME
-        .block_on(async {
-            let tls_config = storage_broker::ClientTlsConfig::new().ca_certificates(
-                conf.ssl_ca_certs
-                    .iter()
-                    .map(pem::encode)
-                    .map(storage_broker::Certificate::from_pem),
-            );
-            // Note: we do not attempt connecting here (but validate endpoints sanity).
-            storage_broker::connect(
-                conf.broker_endpoint.clone(),
-                conf.broker_keepalive_interval,
-                tls_config,
-            )
-        })
-        .with_context(|| {
-            format!(
-                "create broker client for uri={:?} keepalive_interval={:?}",
-                &conf.broker_endpoint, conf.broker_keepalive_interval,
-            )
-        })?;
-
     // Initialize authentication for incoming connections
     let http_auth;
     let pg_auth;
@@ -575,7 +549,6 @@ fn start_pageserver(
         conf,
         background_purges.clone(),
         TenantSharedResources {
-            broker_client: broker_client.clone(),
             remote_storage: remote_storage.clone(),
             deletion_queue_client,
             basebackup_cache: Arc::clone(&basebackup_cache),
@@ -688,7 +661,6 @@ fn start_pageserver(
                 tenant_manager.clone(),
                 http_auth.clone(),
                 remote_storage.clone(),
-                broker_client.clone(),
                 deletion_queue.new_client(),
             )
             .context("Failed to initialize router state")?,

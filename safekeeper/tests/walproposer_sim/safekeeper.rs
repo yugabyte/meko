@@ -13,7 +13,6 @@ use desim::executor::{self, PollSome};
 use desim::network::TCP;
 use desim::node_os::NodeOs;
 use desim::proto::{AnyMessage, NetEvent, NodeEvent};
-use http::Uri;
 use safekeeper::SafeKeeperConf;
 use safekeeper::safekeeper::{
     ProposerAcceptorMessage, SK_PROTO_VERSION_3, SafeKeeper, UNKNOWN_SERVER_VERSION,
@@ -159,8 +158,6 @@ pub fn run_server(os: NodeOs, disk: Arc<SafekeeperDisk>) -> Result<()> {
         listen_pg_addr: String::new(),
         listen_http_addr: String::new(),
         listen_https_addr: None,
-        broker_endpoint: "/".parse::<Uri>().unwrap(),
-        broker_keepalive_interval: Duration::from_secs(0),
         heartbeat_timeout: Duration::from_secs(0),
         remote_storage: None,
         wal_yb_config: None,
@@ -181,7 +178,6 @@ pub fn run_server(os: NodeOs, disk: Arc<SafekeeperDisk>) -> Result<()> {
         sk_auth_token: None,
         current_thread_runtime: false,
         partial_backup_timeout: Duration::from_secs(0),
-        disable_periodic_broker_push: false,
         enable_offload: false,
         delete_offloaded_wal: false,
         control_file_save_interval: Duration::from_secs(1),

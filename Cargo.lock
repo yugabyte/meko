@@ -841,7 +841,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "spki",
- "storage_broker",
  "thiserror 1.0.69",
  "tokio",
  "tokio-postgres",
@@ -3343,7 +3342,6 @@ dependencies = [
  "serde_path_to_error",
  "serde_with",
  "smallvec",
- "storage_broker",
  "strum",
  "strum_macros",
  "sysinfo",
@@ -3403,7 +3401,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "storage_broker",
  "strum",
  "strum_macros",
  "thiserror 1.0.69",
@@ -4790,7 +4787,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
- "storage_broker",
  "strum",
  "strum_macros",
  "thiserror 1.0.69",
@@ -5240,39 +5236,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "storage_broker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "bytes",
- "camino",
- "clap",
- "const_format",
- "futures",
- "futures-core",
- "futures-util",
- "http-body-util",
- "http-utils",
- "humantime",
- "hyper 1.4.1",
- "hyper-util",
- "metrics",
- "once_cell",
- "parking_lot",
- "prost 0.13.5",
- "protoc-bin-vendored",
- "rustls 0.23.29",
- "tokio",
- "tokio-rustls 0.26.2",
- "tonic",
- "tonic-build",
- "tracing",
- "utils",
- "workspace_hack",
-]
 
 [[package]]
 name = "storage_controller"

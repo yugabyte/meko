@@ -102,9 +102,16 @@ impl PageServerNode {
             self.env.pg_distrib_dir_raw().display()
         );
 
-        let broker_endpoint_param = format!("broker_endpoint='{}'", self.env.broker.client_url());
+        let safekeeper_pg_addr_param = self
+            .env
+            .safekeepers
+            .first()
+            .map(|sk| format!("safekeeper_pg_addr='127.0.0.1:{}'", sk.pg_port));
 
-        let mut overrides = vec![pg_distrib_dir_param, broker_endpoint_param];
+        let mut overrides = vec![pg_distrib_dir_param];
+        if let Some(p) = safekeeper_pg_addr_param {
+            overrides.push(p);
+        }
 
         overrides.push(format!(
             "control_plane_api='{}'",

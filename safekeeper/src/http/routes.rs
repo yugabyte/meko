@@ -22,7 +22,6 @@ use safekeeper_api::models::{
     TimelineStatus, TimelineTermBumpRequest,
 };
 use safekeeper_api::{ServerInfo, membership, models};
-use storage_broker::proto::{SafekeeperTimelineInfo, TenantTimelineId as ProtoTenantTimelineId};
 use tokio::sync::mpsc;
 use tokio::task;
 use tokio_stream::wrappers::ReceiverStream;
@@ -549,46 +548,6 @@ async fn timeline_term_bump_handler(
     json_response(StatusCode::OK, response)
 }
 
-/// Used only in tests to hand craft required data.
-async fn record_safekeeper_info(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
-    check_permission(&request, Some(ttid.tenant_id))?;
-    let sk_info: SkTimelineInfo = json_request(&mut request).await?;
-    let proto_sk_info = SafekeeperTimelineInfo {
-        safekeeper_id: 0,
-        tenant_timeline_id: Some(ProtoTenantTimelineId {
-            tenant_id: ttid.tenant_id.as_ref().to_owned(),
-            timeline_id: ttid.timeline_id.as_ref().to_owned(),
-        }),
-        term: sk_info.term.unwrap_or(0),
-        last_log_term: sk_info.last_log_term.unwrap_or(0),
-        flush_lsn: sk_info.flush_lsn.0,
-        commit_lsn: sk_info.commit_lsn.0,
-        remote_consistent_lsn: sk_info.remote_consistent_lsn.0,
-        // peer_horizon_lsn was removed from SK state; the broker proto still
-        // carries the field, send 0.
-        peer_horizon_lsn: 0,
-        safekeeper_connstr: sk_info.safekeeper_connstr.unwrap_or_else(|| "".to_owned()),
-        http_connstr: sk_info.http_connstr.unwrap_or_else(|| "".to_owned()),
-        https_connstr: sk_info.https_connstr,
-        backup_lsn: sk_info.backup_lsn.0,
-        local_start_lsn: sk_info.local_start_lsn.0,
-        availability_zone: None,
-        standby_horizon: sk_info.standby_horizon.0,
-    };
-
-    let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(ttid).map_err(ApiError::from)?;
-    tli.record_safekeeper_info(proto_sk_info)
-        .await
-        .map_err(ApiError::InternalServerError)?;
-
-    json_response(StatusCode::OK, ())
-}
-
 fn parse_kv_str<E: fmt::Display, T: FromStr<Err = E>>(k: &str, v: &str) -> Result<T, ApiError> {
     v.parse()
         .map_err(|e| ApiError::BadRequest(anyhow::anyhow!("cannot parse {k}: {e}")))
@@ -806,9 +765,6 @@ pub fn make_router(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/term_bump",
             |r| request_span(r, timeline_term_bump_handler),
         )
-        .post("/v1/record_safekeeper_info/:tenant_id/:timeline_id", |r| {
-            request_span(r, record_safekeeper_info)
-        })
         .get("/v1/debug_dump", |r| request_span(r, dump_debug_handler))
 }
 

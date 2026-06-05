@@ -24,7 +24,6 @@ use postgres_backend::AuthType;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{RemotePath, RemoteStorageConfig};
 use reqwest::Url;
-use storage_broker::Uri;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::{LogFormat, SecretString};
 
@@ -118,9 +117,9 @@ pub struct PageServerConf {
 
     pub default_tenant_conf: pageserver_api::config::TenantConfigToml,
 
-    /// Storage broker endpoints to connect to.
-    pub broker_endpoint: Uri,
-    pub broker_keepalive_interval: Duration,
+    /// libpq connection string of the single safekeeper that the
+    /// walreceiver streams WAL from, e.g. `host=127.0.0.1 port=5484`.
+    pub safekeeper_pg_addr: Option<String>,
 
     pub log_format: LogFormat,
 
@@ -368,8 +367,7 @@ impl PageServerConf {
             grpc_auth_type,
             auth_validation_public_key_path,
             remote_storage,
-            broker_endpoint,
-            broker_keepalive_interval,
+            safekeeper_pg_addr,
             log_format,
             synthetic_size_calculation_interval,
             disk_usage_based_eviction,
@@ -450,8 +448,7 @@ impl PageServerConf {
             grpc_auth_type,
             auth_validation_public_key_path,
             remote_storage_config: remote_storage,
-            broker_endpoint,
-            broker_keepalive_interval,
+            safekeeper_pg_addr,
             log_format,
             synthetic_size_calculation_interval,
             disk_usage_based_eviction,

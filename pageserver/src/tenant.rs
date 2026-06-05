@@ -43,7 +43,6 @@ use remote_timeline_client::manifest::{
     LATEST_TENANT_MANIFEST_VERSION, OffloadedTimelineManifest, TenantManifest,
 };
 use remote_timeline_client::{FAILED_REMOTE_OP_RETRIES, FAILED_UPLOAD_WARN_THRESHOLD};
-use storage_broker::BrokerClientChannel;
 use tokio::io::BufReader;
 use tokio::sync::{Semaphore, watch};
 use tokio_util::sync::CancellationToken;
@@ -128,7 +127,6 @@ pub const TIMELINES_SEGMENT_NAME: &str = "timelines";
 /// as the shared remote storage client and process initialization state.
 #[derive(Clone)]
 pub struct TenantSharedResources {
-    pub broker_client: storage_broker::BrokerClientChannel,
     pub remote_storage: GenericRemoteStorage,
     pub deletion_queue_client: DeletionQueueClient,
     pub basebackup_cache: Arc<BasebackupCache>,
@@ -1074,7 +1072,6 @@ impl TenantShard {
             WalRedoManager::new(PostgresRedoManager::new(conf, tenant_shard_id))?;
 
         let TenantSharedResources {
-            broker_client,
             remote_storage,
             deletion_queue_client,
             basebackup_cache,
@@ -1252,7 +1249,7 @@ impl TenantShard {
                 match attached {
                     Ok(()) => {
                         info!("attach finished, activating");
-                        tenant_clone.activate(broker_client, None, &ctx);
+                        tenant_clone.activate(None, &ctx);
                     }
                     Err(e) => make_broken_or_stopping(&tenant_clone, anyhow::anyhow!(e)),
                 }
@@ -1620,7 +1617,6 @@ impl TenantShard {
     async fn unoffload_timeline(
         self: &Arc<Self>,
         timeline_id: TimelineId,
-        broker_client: storage_broker::BrokerClientChannel,
         ctx: RequestContext,
     ) -> Result<Arc<Timeline>, TimelineArchivalError> {
         info!("unoffloading timeline");
@@ -1735,7 +1731,6 @@ impl TenantShard {
             let background_jobs_can_start = None;
             timeline.activate(
                 self.clone(),
-                broker_client.clone(),
                 background_jobs_can_start,
                 &ctx.with_scope_timeline(&timeline),
             );
@@ -1749,7 +1744,6 @@ impl TenantShard {
         self: &Arc<Self>,
         timeline_id: TimelineId,
         new_state: TimelineArchivalState,
-        broker_client: storage_broker::BrokerClientChannel,
         ctx: RequestContext,
     ) -> Result<(), TimelineArchivalError> {
         info!("setting timeline archival config");
@@ -1795,8 +1789,7 @@ impl TenantShard {
             timeline
         } else {
             // Turn offloaded timeline into a non-offloaded one
-            self.unoffload_timeline(timeline_id, broker_client, ctx)
-                .await?
+            self.unoffload_timeline(timeline_id, ctx).await?
         };
 
         // Third part: persist the new archival state. yb-mode keeps
@@ -2008,7 +2001,6 @@ impl TenantShard {
     pub(crate) async fn create_timeline(
         self: &Arc<TenantShard>,
         params: CreateTimelineParams,
-        broker_client: storage_broker::BrokerClientChannel,
         ctx: &RequestContext,
     ) -> Result<Arc<Timeline>, CreateTimelineError> {
         if !self.is_active() {
@@ -2123,12 +2115,7 @@ impl TenantShard {
         // doing stuff before the IndexPart is durable in S3, which is done by the previous section.
         let activated_timeline = match result {
             CreateTimelineResult::Created(timeline) => {
-                timeline.activate(
-                    self.clone(),
-                    broker_client,
-                    None,
-                    &ctx.with_scope_timeline(&timeline),
-                );
+                timeline.activate(self.clone(), None, &ctx.with_scope_timeline(&timeline));
                 timeline
             }
             CreateTimelineResult::Idempotent(timeline) => {
@@ -2256,7 +2243,6 @@ impl TenantShard {
     /// to delay background jobs. Background jobs can be started right away when None is given.
     fn activate(
         self: &Arc<Self>,
-        broker_client: BrokerClientChannel,
         background_jobs_can_start: Option<&completion::Barrier>,
         ctx: &RequestContext,
     ) {
@@ -2295,7 +2281,6 @@ impl TenantShard {
             for timeline in timelines_to_activate {
                 timeline.activate(
                     self.clone(),
-                    broker_client.clone(),
                     background_jobs_can_start,
                     &ctx.with_scope_timeline(timeline),
                 );

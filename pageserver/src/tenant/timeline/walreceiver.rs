@@ -1,24 +1,11 @@
-//! WAL receiver manages an open connection to safekeeper, to get the WAL it streams into.
-//! To do so, a current implementation needs to do the following:
+//! WAL receiver manages an open libpq streaming connection to the
+//! single safekeeper, reconnecting on errors with exponential backoff.
 //!
-//! * acknowledge the timelines that it needs to stream WAL into.
-//!   Pageserver is able to dynamically (un)load tenants on attach and detach,
-//!   hence WAL receiver needs to react on such events.
-//!
-//! * get a broker subscription, stream data from it to determine that a timeline needs WAL streaming.
-//!   For that, it watches specific keys in storage_broker and pulls the relevant data periodically.
-//!   The data is produced by safekeepers, that push it periodically and pull it to synchronize between each other.
-//!   Without this data, no WAL streaming is possible currently.
-//!
-//! Only one active WAL streaming connection is allowed at a time.
-//! The connection is supposed to be updated periodically, based on safekeeper timeline data.
-//!
-//! * handle the actual connection and WAL streaming
-//!
-//! Handling happens dynamically, by portions of WAL being processed and registered in the server.
-//! Along with the registration, certain metadata is written to show WAL streaming progress and rely on that when considering safekeepers for connection.
-//!
-//! The current module contains high-level primitives used in the submodules; general synchronization, timeline acknowledgement and shutdown logic.
+//! The submodules are:
+//! * `connection_manager` — owns the reconnect loop and exposes
+//!   [`ConnectionManagerStatus`] for the HTTP mgmt API.
+//! * `walreceiver_connection` — owns the actual libpq COPY-stream and
+//!   ingests WAL into the timeline.
 
 mod connection_manager;
 mod walreceiver_connection;
@@ -28,7 +15,6 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
-use storage_broker::BrokerClientChannel;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
@@ -66,12 +52,7 @@ pub struct WalReceiver {
 }
 
 impl WalReceiver {
-    pub fn start(
-        timeline: Arc<Timeline>,
-        conf: WalReceiverConf,
-        mut broker_client: BrokerClientChannel,
-        ctx: &RequestContext,
-    ) -> Self {
+    pub fn start(timeline: Arc<Timeline>, conf: WalReceiverConf, ctx: &RequestContext) -> Self {
         let tenant_shard_id = timeline.tenant_shard_id;
         let timeline_id = timeline.timeline_id;
         let walreceiver_ctx =
@@ -79,6 +60,8 @@ impl WalReceiver {
         let loop_status = Arc::new(std::sync::RwLock::new(None));
         let manager_status = Arc::clone(&loop_status);
         let cancel = timeline.cancel.child_token();
+
+        let safekeeper_pg_addr = timeline.conf.safekeeper_pg_addr.clone();
         let _task = WALRECEIVER_RUNTIME.spawn({
             let cancel = cancel.clone();
             async move {
@@ -88,20 +71,42 @@ impl WalReceiver {
                     debug!("WAL receiver manager could not enter the gate timeline gate, it's closed already");
                     return;
                 };
-                debug!("WAL receiver manager started, connecting to broker");
+
+                let Some(safekeeper_pg_addr) = safekeeper_pg_addr else {
+                    error!("safekeeper_pg_addr is not configured; walreceiver cannot start");
+                    return;
+                };
+
+                let wal_source_connconf = match ConnectionManagerState::build_wal_source_connconf(
+                    &timeline,
+                    &conf,
+                    &safekeeper_pg_addr,
+                ) {
+                    Ok(connconf) => connconf,
+                    Err(e) => {
+                        error!(
+                            "failed to build wal source connection config from \
+                             safekeeper_pg_addr={safekeeper_pg_addr:?}: {e:#}"
+                        );
+                        return;
+                    }
+                };
+
+                debug!(%safekeeper_pg_addr, "WAL receiver manager started");
                 let mut connection_manager_state = ConnectionManagerState::new(
                     timeline,
                     conf,
+                    wal_source_connconf,
                     cancel.clone(),
                 );
                 while !cancel.is_cancelled() {
                     let loop_step_result = connection_manager_loop_step(
-                        &mut broker_client,
                         &mut connection_manager_state,
                         &walreceiver_ctx,
                         &cancel,
                         &loop_status,
-                    ).await;
+                    )
+                    .await;
                     match loop_step_result {
                         Ok(()) => continue,
                         Err(_cancelled) => {

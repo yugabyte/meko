@@ -219,8 +219,8 @@ impl PartialBackup {
     async fn prepare_upload(&self) -> PartialRemoteSegment {
         // this operation takes a lock to get the actual state
         let sk_info = self.tli.get_safekeeper_info(&self.conf).await;
-        let flush_lsn = Lsn(sk_info.flush_lsn);
-        let commit_lsn = Lsn(sk_info.commit_lsn);
+        let flush_lsn = sk_info.flush_lsn;
+        let commit_lsn = sk_info.commit_lsn;
         let last_log_term = sk_info.last_log_term;
         let segno = self.segno(flush_lsn);
 
@@ -258,8 +258,8 @@ impl PartialBackup {
         if sk_info.last_log_term != prepared.term {
             anyhow::bail!("term changed during upload");
         }
-        assert!(prepared.commit_lsn <= Lsn(sk_info.commit_lsn));
-        assert!(prepared.flush_lsn <= Lsn(sk_info.flush_lsn));
+        assert!(prepared.commit_lsn <= sk_info.commit_lsn);
+        assert!(prepared.flush_lsn <= sk_info.flush_lsn);
 
         Ok(())
     }

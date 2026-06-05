@@ -25,11 +25,10 @@ use safekeeper::defaults::{
 use safekeeper::hadron;
 use safekeeper::wal_backup::WalBackup;
 use safekeeper::{
-    BACKGROUND_RUNTIME, BROKER_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf,
-    WAL_SERVICE_RUNTIME, broker, http, wal_service,
+    BACKGROUND_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf,
+    WAL_SERVICE_RUNTIME, http, wal_service,
 };
 use sd_notify::NotifyState;
-use storage_broker::{DEFAULT_ENDPOINT, Uri};
 use tokio::runtime::Handle;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinError;
@@ -125,14 +124,6 @@ struct Args {
     /// Dump control file at path specified by this argument and exit.
     #[arg(long)]
     dump_control_file: Option<Utf8PathBuf>,
-    /// Broker endpoint for storage nodes coordination in the form
-    /// http[s]://host:port. In case of https schema TLS is connection is
-    /// established; plaintext otherwise.
-    #[arg(long, default_value = DEFAULT_ENDPOINT, verbatim_doc_comment)]
-    broker_endpoint: Uri,
-    /// Broker keepalive interval.
-    #[arg(long, value_parser= humantime::parse_duration, default_value = storage_broker::DEFAULT_KEEPALIVE_INTERVAL)]
-    broker_keepalive_interval: Duration,
     /// Peer safekeeper is considered dead after not receiving heartbeats from
     /// it during this period passed as a human readable duration.
     #[arg(long, value_parser= humantime::parse_duration, default_value = DEFAULT_HEARTBEAT_TIMEOUT, verbatim_doc_comment)]
@@ -212,10 +203,6 @@ struct Args {
     /// Controls how long backup will wait until uploading the partial segment.
     #[arg(long, value_parser = humantime::parse_duration, default_value = DEFAULT_PARTIAL_BACKUP_TIMEOUT, verbatim_doc_comment)]
     partial_backup_timeout: Duration,
-    /// Disable task to push messages to broker every second. Supposed to
-    /// be used in tests.
-    #[arg(long)]
-    disable_periodic_broker_push: bool,
     /// Enable automatic switching to offloaded state.
     #[arg(long)]
     enable_offload: bool,
@@ -441,8 +428,6 @@ async fn main() -> anyhow::Result<()> {
         listen_https_addr: args.listen_https,
         advertise_pg_addr: args.advertise_pg,
         availability_zone: args.availability_zone,
-        broker_endpoint: args.broker_endpoint,
-        broker_keepalive_interval: args.broker_keepalive_interval,
         heartbeat_timeout: args.heartbeat_timeout,
         remote_storage: args.remote_storage,
         wal_yb_config: args.wal_yb_config,
@@ -465,7 +450,6 @@ async fn main() -> anyhow::Result<()> {
         sk_auth_token,
         current_thread_runtime: args.current_thread_runtime,
         partial_backup_timeout: args.partial_backup_timeout,
-        disable_periodic_broker_push: args.disable_periodic_broker_push,
         enable_offload: args.enable_offload,
         delete_offloaded_wal: args.delete_offloaded_wal,
         control_file_save_interval: args.control_file_save_interval,
@@ -728,16 +712,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
             .map(|res| ("HTTPS service main".to_owned(), res));
         tasks_handles.push(Box::pin(https_handle));
     }
-
-    let broker_task_handle = current_thread_rt
-        .as_ref()
-        .unwrap_or_else(|| BROKER_RUNTIME.handle())
-        .spawn(
-            broker::task_main(conf.clone(), global_timelines.clone())
-                .instrument(info_span!("broker")),
-        )
-        .map(|res| ("broker main".to_owned(), res));
-    tasks_handles.push(Box::pin(broker_task_handle));
 
     /* BEGIN_HADRON */
     if conf.force_metric_collection_on_scrape {

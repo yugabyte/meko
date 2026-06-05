@@ -91,19 +91,16 @@ pub struct State {
     auth: Option<Arc<SwappableJwtAuth>>,
     allowlist_routes: &'static [&'static str],
     remote_storage: GenericRemoteStorage,
-    broker_client: storage_broker::BrokerClientChannel,
     deletion_queue_client: DeletionQueueClient,
     latest_utilization: tokio::sync::Mutex<Option<(std::time::Instant, bytes::Bytes)>>,
 }
 
 impl State {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         conf: &'static PageServerConf,
         tenant_manager: Arc<TenantManager>,
         auth: Option<Arc<SwappableJwtAuth>>,
         remote_storage: GenericRemoteStorage,
-        broker_client: storage_broker::BrokerClientChannel,
         deletion_queue_client: DeletionQueueClient,
     ) -> anyhow::Result<Self> {
         let allowlist_routes = &[
@@ -120,7 +117,6 @@ impl State {
             auth,
             allowlist_routes,
             remote_storage,
-            broker_client,
             deletion_queue_client,
             latest_utilization: Default::default(),
         })
@@ -591,9 +587,7 @@ async fn timeline_create_handler(
         // => continue to provide that information, but, through a log message that doesn't require us to destructure
         tracing::info!(?params, "creating timeline");
 
-        match tenant
-            .create_timeline(params, state.broker_client.clone(), &ctx)
-            .await
+        match tenant.create_timeline(params, &ctx).await
         {
             Ok(new_timeline) => {
                 // Created. Construct a TimelineInfo for it.
@@ -817,12 +811,7 @@ async fn timeline_archival_config_handler(
         tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
         tenant
-            .apply_timeline_archival_config(
-                timeline_id,
-                request_data.state,
-                state.broker_client.clone(),
-                ctx,
-            )
+            .apply_timeline_archival_config(timeline_id, request_data.state, ctx)
             .await?;
         Ok::<_, ApiError>(())
     }
@@ -2281,8 +2270,6 @@ async fn put_tenant_timeline_import_basebackup(
             .tenant_manager
             .get_attached_tenant_shard(tenant_shard_id)?;
 
-        let broker_client = state.broker_client.clone();
-
         let mut body = StreamReader::new(
             request
                 .into_body()
@@ -2310,13 +2297,7 @@ async fn put_tenant_timeline_import_basebackup(
         info!("importing basebackup");
 
         timeline
-            .import_basebackup_from_tar(
-                tenant.clone(),
-                &mut body,
-                base_lsn,
-                broker_client,
-                &timeline_ctx,
-            )
+            .import_basebackup_from_tar(tenant.clone(), &mut body, base_lsn, &timeline_ctx)
             .await
             .map_err(ApiError::InternalServerError)?;
 

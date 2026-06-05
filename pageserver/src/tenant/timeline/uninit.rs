@@ -189,7 +189,6 @@ impl<'t> UninitializedTimeline<'t> {
         tenant: Arc<TenantShard>,
         copyin_read: &mut (impl tokio::io::AsyncRead + Send + Sync + Unpin),
         base_lsn: Lsn,
-        broker_client: storage_broker::BrokerClientChannel,
         ctx: &RequestContext,
     ) -> anyhow::Result<Arc<Timeline>> {
         self.write(|raw_timeline| async move {
@@ -210,7 +209,7 @@ impl<'t> UninitializedTimeline<'t> {
 
         // All the data has been imported. Insert the Timeline into the tenant's timelines map
         let tl = self.finish_creation().await?;
-        tl.activate(tenant, broker_client, None, ctx);
+        tl.activate(tenant, None, ctx);
         Ok(tl)
     }
 

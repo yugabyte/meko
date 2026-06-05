@@ -452,7 +452,7 @@ impl SafekeeperPostgresHandler {
             let info = tli.get_safekeeper_info(&self.conf).await;
             // Log the result and probably send it to the client, closing the stream.
             pgb.handle_copy_stream_end(end)
-            .instrument(info_span!("", term=%info.term, last_log_term=%info.last_log_term, flush_lsn=%Lsn(info.flush_lsn), commit_lsn=%Lsn(info.flush_lsn)))
+            .instrument(info_span!("", term=%info.term, last_log_term=%info.last_log_term, flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn))
             .await;
         }
         Ok(())

@@ -8,7 +8,6 @@ use camino::Utf8PathBuf;
 use once_cell::sync::Lazy;
 use pem::Pem;
 use remote_storage::RemoteStorageConfig;
-use storage_broker::Uri;
 use tokio::runtime::Runtime;
 use url::Url;
 use utils::auth::SwappableJwtAuth;
@@ -16,7 +15,6 @@ use utils::id::NodeId;
 use utils::logging::SecretString;
 
 mod auth;
-pub mod broker;
 pub mod control_file;
 pub mod control_file_upgrade;
 pub mod copy_timeline;
@@ -128,8 +126,6 @@ pub struct SafeKeeperConf {
     pub enable_pull_timeline_on_startup: bool,
     pub hcc_base_url: Option<Url>,
     /* END_HADRON */
-    pub broker_endpoint: Uri,
-    pub broker_keepalive_interval: Duration,
     pub heartbeat_timeout: Duration,
     pub remote_storage: Option<RemoteStorageConfig>,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
@@ -159,7 +155,6 @@ pub struct SafeKeeperConf {
     pub sk_auth_token: Option<SecretString>,
     pub current_thread_runtime: bool,
     pub partial_backup_timeout: Duration,
-    pub disable_periodic_broker_push: bool,
     pub enable_offload: bool,
     pub delete_offloaded_wal: bool,
     pub control_file_save_interval: Duration,
@@ -305,10 +300,6 @@ impl SafeKeeperConf {
             wal_yb_config: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
             my_id: NodeId(0),
-            broker_endpoint: storage_broker::DEFAULT_ENDPOINT
-                .parse()
-                .expect("failed to parse default broker endpoint"),
-            broker_keepalive_interval: Duration::from_secs(5),
             wal_backup_enabled: true,
             backup_parallel_jobs: 1,
             pg_auth: None,
@@ -325,7 +316,6 @@ impl SafeKeeperConf {
             /* END_HADRON */
             current_thread_runtime: false,
             partial_backup_timeout: Duration::from_secs(0),
-            disable_periodic_broker_push: false,
             enable_offload: false,
             delete_offloaded_wal: false,
             control_file_save_interval: Duration::from_secs(1),
@@ -364,15 +354,6 @@ pub static HTTP_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
         .enable_all()
         .build()
         .expect("Failed to create HTTP runtime")
-});
-
-pub static BROKER_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .thread_name("broker worker")
-        .worker_threads(2) // there are only 2 tasks, having more threads doesn't make sense
-        .enable_all()
-        .build()
-        .expect("Failed to create broker runtime")
 });
 
 pub static WAL_BACKUP_RUNTIME: Lazy<Runtime> = Lazy::new(|| {

@@ -48,9 +48,6 @@ generate_local_ssl_certs = false
 default_tenant_id = "11da26b359f5f72061ce4fc6461fab3f"
 control_plane_api = "http://127.0.0.1:1254/upcall/v1/"
 
-[broker]
-listen_addr = "127.0.0.1:50071"
-
 [storage_controller]
 max_offline = "10s"
 max_warming_up = "30s"
