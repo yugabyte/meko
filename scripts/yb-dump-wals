@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+#
+# Dump `public.wals` rows (the safekeeper WAL-in-YB chunks) in a
+# human-readable form.
+#
+# Hash columns (required):
+#   --tenant <hex>   --timeline <hex>
+#
+# Range / chunk filters (optional — any subset):
+#   --segno <int>            single segment
+#   --segno-from <int>       inclusive
+#   --segno-to   <int>       inclusive
+#   --lsn-from <X/Y>         (PG LSN format; mapped to segno/offset)
+#   --lsn-to   <X/Y>
+#   --chunk-seq      <int>   exact chunk_seq within segno
+#   --chunk-seq-from <int>
+#   --chunk-seq-to   <int>
+#   --chunk-offset      <int>   exact chunk_offset within segno
+#   --chunk-offset-from <int>
+#   --chunk-offset-to   <int>
+#   --wal-seg-size <bytes>   default 16777216 (16 MiB)
+#   --limit <int>            default 50, 0 means no limit
+#   --no-data                skip the data sample column
+#   --raw                    dump as `psql` table without prettifying
+#   --summary                per-segno (min/max/count/holes) instead of rows
+#
+# Connection (optional):
+#   --host <h> (def 127.0.0.1)   --port <p> (def 5433)
+#   --user <u> (def yugabyte)    --db-name <n> (def yb_storage)
+#   --password-env <ENV>         (PGPASSWORD takes precedence if set)
+#
+# Output is ordered (segno, chunk_seq ASC). The LSN of each chunk's
+# starting byte is rendered as `H/L` hex (= segno*wal_seg_size +
+# chunk_offset).  data is shown as size + leading-bytes hex sample
+# unless --no-data is given.  --summary swaps the row dump for a
+# per-segno health view that's most of what you want when
+# investigating restart-replay holes.
+
+set -euo pipefail
+
+usage() {
+    sed -n '/^# Dump/,/^# investigating/p' "$0" | sed 's/^# \{0,1\}//; /^!\/usr\/bin/d'
+    exit 2
+}
+
+HOST=127.0.0.1
+PORT=5433
+USER=yugabyte
+DBNAME=yb_storage
+PWD_ENV=PGPASSWORD
+
+TENANT=""; TIMELINE=""
+SEGNO=""; SEG_FROM=""; SEG_TO=""
+LSN_FROM=""; LSN_TO=""
+SEQ=""; SEQ_FROM=""; SEQ_TO=""
+OFF=""; OFF_FROM=""; OFF_TO=""
+WAL_SEG_SIZE=16777216
+LIMIT=50
+DATA=1
+RAW=0
+SUMMARY=0
+
+while (( $# > 0 )); do
+    case "$1" in
+        --tenant)             TENANT=$2;             shift 2 ;;
+        --timeline)           TIMELINE=$2;           shift 2 ;;
+        --segno)              SEGNO=$2;              shift 2 ;;
+        --segno-from)         SEG_FROM=$2;           shift 2 ;;
+        --segno-to)           SEG_TO=$2;             shift 2 ;;
+        --lsn-from)           LSN_FROM=$2;           shift 2 ;;
+        --lsn-to)             LSN_TO=$2;             shift 2 ;;
+        --chunk-seq)          SEQ=$2;                shift 2 ;;
+        --chunk-seq-from)     SEQ_FROM=$2;           shift 2 ;;
+        --chunk-seq-to)       SEQ_TO=$2;             shift 2 ;;
+        --chunk-offset)       OFF=$2;                shift 2 ;;
+        --chunk-offset-from)  OFF_FROM=$2;           shift 2 ;;
+        --chunk-offset-to)    OFF_TO=$2;             shift 2 ;;
+        --wal-seg-size)       WAL_SEG_SIZE=$2;       shift 2 ;;
+        --limit)              LIMIT=$2;              shift 2 ;;
+        --no-data)            DATA=0;                shift   ;;
+        --raw)                RAW=1;                 shift   ;;
+        --summary)            SUMMARY=1;             shift   ;;
+        --host)               HOST=$2;               shift 2 ;;
+        --port)               PORT=$2;               shift 2 ;;
+        --user)               USER=$2;               shift 2 ;;
+        --db-name)            DBNAME=$2;             shift 2 ;;
+        --password-env)       PWD_ENV=$2;            shift 2 ;;
+        -h|--help)            usage ;;
+        *)                    echo "unknown arg: $1" >&2; usage ;;
+    esac
+done
+
+missing=()
+[[ -z $TENANT   ]] && missing+=("--tenant")
+[[ -z $TIMELINE ]] && missing+=("--timeline")
+if (( ${#missing[@]} > 0 )); then
+    echo "missing required hash columns: ${missing[*]}" >&2
+    exit 2
+fi
+
+lsn_to_bigint() {
+    local lsn=$1
+    if [[ $lsn != */* ]]; then echo "$lsn"; return; fi
+    local hi=${lsn%%/*}
+    local lo=${lsn##*/}
+    python3 -c "print((int('$hi',16) << 32) | int('$lo',16))"
+}
+
+# Convert an LSN bound to (segno, offset). Returns "segno:offset".
+lsn_to_segoff() {
+    local b=$1
+    python3 -c "b=$b; print(f'{b // $WAL_SEG_SIZE}:{b % $WAL_SEG_SIZE}')"
+}
+
+LSN_FROM_SEG=""; LSN_FROM_OFF=""; LSN_TO_SEG=""; LSN_TO_OFF=""
+if [[ -n $LSN_FROM ]]; then
+    so=$(lsn_to_segoff "$(lsn_to_bigint "$LSN_FROM")")
+    LSN_FROM_SEG=${so%:*}
+    LSN_FROM_OFF=${so#*:}
+fi
+if [[ -n $LSN_TO ]]; then
+    so=$(lsn_to_segoff "$(lsn_to_bigint "$LSN_TO")")
+    LSN_TO_SEG=${so%:*}
+    LSN_TO_OFF=${so#*:}
+fi
+
+# Build WHERE.
+where="WHERE tenant_id = '${TENANT}'
+   AND timeline_id = '${TIMELINE}'"
+[[ -n $SEGNO       ]] && where+=" AND segno   = ${SEGNO}"
+[[ -n $SEG_FROM    ]] && where+=" AND segno  >= ${SEG_FROM}"
+[[ -n $SEG_TO      ]] && where+=" AND segno  <= ${SEG_TO}"
+[[ -n $SEQ         ]] && where+=" AND chunk_seq    = ${SEQ}"
+[[ -n $SEQ_FROM    ]] && where+=" AND chunk_seq   >= ${SEQ_FROM}"
+[[ -n $SEQ_TO      ]] && where+=" AND chunk_seq   <= ${SEQ_TO}"
+[[ -n $OFF         ]] && where+=" AND chunk_offset = ${OFF}"
+[[ -n $OFF_FROM    ]] && where+=" AND chunk_offset >= ${OFF_FROM}"
+[[ -n $OFF_TO      ]] && where+=" AND chunk_offset <= ${OFF_TO}"
+# LSN-based bounds use the (segno, offset) pair so we can't just AND
+# the two columns independently; this is a tighter filter that covers
+# the typical "show me chunks between LSN A and B" case.
+if [[ -n $LSN_FROM_SEG ]]; then
+    where+=" AND (segno > ${LSN_FROM_SEG}
+              OR (segno = ${LSN_FROM_SEG} AND chunk_offset + chunk_size > ${LSN_FROM_OFF}))"
+fi
+if [[ -n $LSN_TO_SEG ]]; then
+    where+=" AND (segno < ${LSN_TO_SEG}
+              OR (segno = ${LSN_TO_SEG} AND chunk_offset <= ${LSN_TO_OFF}))"
+fi
+
+lim_clause=""
+(( LIMIT > 0 )) && lim_clause="LIMIT ${LIMIT}"
+
+data_col=""
+if (( DATA == 1 )); then
+    data_col=", octet_length(data) AS bytes
+              , encode(substring(data, 1, 16), 'hex') AS data_head"
+fi
+
+if (( SUMMARY == 1 )); then
+    sql="SELECT
+            segno,
+            count(*) AS chunks,
+            min(chunk_seq) AS min_seq,
+            max(chunk_seq) AS max_seq,
+            min(chunk_offset) AS min_off,
+            max(chunk_offset + chunk_size) AS max_end,
+            to_hex(((${WAL_SEG_SIZE}::bigint * segno + min(chunk_offset)) >> 32)::int8)
+              || '/' ||
+              to_hex(((${WAL_SEG_SIZE}::bigint * segno + min(chunk_offset)) & x'ffffffff'::bigint)::int8)
+                AS min_lsn,
+            to_hex(((${WAL_SEG_SIZE}::bigint * segno + max(chunk_offset + chunk_size)) >> 32)::int8)
+              || '/' ||
+              to_hex(((${WAL_SEG_SIZE}::bigint * segno + max(chunk_offset + chunk_size)) & x'ffffffff'::bigint)::int8)
+                AS max_lsn,
+            sum(chunk_size) AS total_bytes,
+            (max(chunk_offset + chunk_size) - min(chunk_offset) - sum(chunk_size))
+                AS gap_bytes
+       FROM public.wals
+       ${where}
+       GROUP BY segno
+       ORDER BY segno"
+else
+    sql="SELECT
+            segno,
+            chunk_seq,
+            chunk_offset,
+            chunk_size,
+            to_hex(((${WAL_SEG_SIZE}::bigint * segno + chunk_offset) >> 32)::int8)
+              || '/' ||
+              to_hex(((${WAL_SEG_SIZE}::bigint * segno + chunk_offset) & x'ffffffff'::bigint)::int8)
+                AS start_lsn,
+            to_timestamp(last_modified_us / 1000000.0)::timestamp(3) AS modified_at
+            ${data_col}
+       FROM public.wals
+       ${where}
+       ORDER BY segno ASC, chunk_seq ASC
+       ${lim_clause}"
+fi
+
+psql_args=()
+(( RAW == 0 && SUMMARY == 0 )) && psql_args=(-x)
+
+export PGPASSWORD=${PGPASSWORD:-${!PWD_ENV:-}}
+
+psql -h "$HOST" -p "$PORT" -U "$USER" -d "$DBNAME" "${psql_args[@]}" -c "$sql"

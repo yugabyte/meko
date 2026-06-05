@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+#
+# Dump `pageserver.pages` rows in a human-readable form.
+#
+# Hash columns (required, in any order):
+#   --tenant <hex>   --timeline <hex>
+#   --spc <int>      --db <int>       --rel <int>     --fork <0..3>
+#
+# Range filters (optional — any subset):
+#   --blknum <int>          single block
+#   --blknum-from <int>     inclusive
+#   --blknum-to   <int>     inclusive
+#   --lsn-from    <X/Y>     inclusive (PG LSN format)
+#   --lsn-to      <X/Y>     inclusive
+#   --is-image  <true|false>
+#   --will-init <true|false>
+#   --limit       <int>     default 50, 0 means no limit
+#   --no-payload            skip the payload sample column
+#   --raw                   dump as `psql` table without prettifying
+#
+# Connection (optional):
+#   --host <h> (def 127.0.0.1)   --port <p> (def 5433)
+#   --user <u> (def yugabyte)    --db-name <n> (def yb_storage)
+#   --password-env <ENV>         (PGPASSWORD takes precedence if set)
+#
+# Output is sorted (tenant, timeline, spc, db, rel, fork, blknum ASC,
+# lsn DESC, is_image ASC) so the most recent record for a page shows
+# first. LSN is rendered as `H/L` in hex; forknum is rendered as a
+# name (main/fsm/vm/init); payload is shown as size + leading-bytes
+# hex sample, unless --no-payload is given.
+
+set -euo pipefail
+
+REPO=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+usage() {
+    sed -n '/^# Dump/,/^# name/p' "$0" | sed 's/^# \{0,1\}//; /^!\/usr\/bin/d'
+    exit 2
+}
+
+HOST=127.0.0.1
+PORT=5433
+USER=yugabyte
+DBNAME=yb_storage
+PWD_ENV=PGPASSWORD
+
+TENANT=""; TIMELINE=""
+SPC=""; DB=""; REL=""; FORK=""
+BLKNUM=""; BLK_FROM=""; BLK_TO=""
+LSN_FROM=""; LSN_TO=""
+IS_IMAGE=""; WILL_INIT=""
+LIMIT=50
+PAYLOAD=1
+RAW=0
+
+while (( $# > 0 )); do
+    case "$1" in
+        --tenant)        TENANT=$2;        shift 2 ;;
+        --timeline)      TIMELINE=$2;      shift 2 ;;
+        --spc)           SPC=$2;           shift 2 ;;
+        --db)            DB=$2;            shift 2 ;;
+        --rel)           REL=$2;           shift 2 ;;
+        --fork)          FORK=$2;          shift 2 ;;
+        --blknum)        BLKNUM=$2;        shift 2 ;;
+        --blknum-from)   BLK_FROM=$2;      shift 2 ;;
+        --blknum-to)     BLK_TO=$2;        shift 2 ;;
+        --lsn-from)      LSN_FROM=$2;      shift 2 ;;
+        --lsn-to)        LSN_TO=$2;        shift 2 ;;
+        --is-image)      IS_IMAGE=$2;      shift 2 ;;
+        --will-init)     WILL_INIT=$2;     shift 2 ;;
+        --limit)         LIMIT=$2;         shift 2 ;;
+        --no-payload)    PAYLOAD=0;        shift   ;;
+        --raw)           RAW=1;            shift   ;;
+        --host)          HOST=$2;          shift 2 ;;
+        --port)          PORT=$2;          shift 2 ;;
+        --user)          USER=$2;          shift 2 ;;
+        --db-name)       DBNAME=$2;        shift 2 ;;
+        --password-env)  PWD_ENV=$2;       shift 2 ;;
+        -h|--help)       usage ;;
+        *)               echo "unknown arg: $1" >&2; usage ;;
+    esac
+done
+
+# All six hash columns are required.
+missing=()
+[[ -z $TENANT   ]] && missing+=("--tenant")
+[[ -z $TIMELINE ]] && missing+=("--timeline")
+[[ -z $SPC      ]] && missing+=("--spc")
+[[ -z $DB       ]] && missing+=("--db")
+[[ -z $REL      ]] && missing+=("--rel")
+[[ -z $FORK     ]] && missing+=("--fork")
+if (( ${#missing[@]} > 0 )); then
+    echo "missing required hash columns: ${missing[*]}" >&2
+    exit 2
+fi
+
+lsn_to_bigint() {
+    # X/Y (hex) -> bigint
+    local lsn=$1
+    if [[ $lsn != */* ]]; then
+        echo "$lsn"  # already an integer
+        return
+    fi
+    local hi=${lsn%%/*}
+    local lo=${lsn##*/}
+    python3 -c "print((int('$hi',16) << 32) | int('$lo',16))"
+}
+
+LSN_FROM_INT=""; LSN_TO_INT=""
+[[ -n $LSN_FROM ]] && LSN_FROM_INT=$(lsn_to_bigint "$LSN_FROM")
+[[ -n $LSN_TO   ]] && LSN_TO_INT=$(lsn_to_bigint   "$LSN_TO")
+
+# Build WHERE clause.
+where="WHERE tenant_id = '${TENANT}'
+   AND timeline_id = '${TIMELINE}'
+   AND spcnode  = ${SPC}
+   AND dbnode   = ${DB}
+   AND relnode  = ${REL}
+   AND forknum  = ${FORK}"
+[[ -n $BLKNUM     ]] && where+=" AND blknum  = ${BLKNUM}"
+[[ -n $BLK_FROM   ]] && where+=" AND blknum >= ${BLK_FROM}"
+[[ -n $BLK_TO     ]] && where+=" AND blknum <= ${BLK_TO}"
+[[ -n $LSN_FROM_INT ]] && where+=" AND lsn    >= ${LSN_FROM_INT}"
+[[ -n $LSN_TO_INT   ]] && where+=" AND lsn    <= ${LSN_TO_INT}"
+[[ -n $IS_IMAGE   ]] && where+=" AND is_image  = ${IS_IMAGE}"
+[[ -n $WILL_INIT  ]] && where+=" AND will_init = ${WILL_INIT}"
+
+# SELECT list — render LSN as H/L hex, forknum as name, payload as
+# `<size> bytes; <hex prefix>` (or omit if --no-payload).
+payload_col=""
+if (( PAYLOAD == 1 )); then
+    payload_col=", octet_length(payload) AS bytes
+                , encode(substring(payload, 1, 16), 'hex') AS payload_head"
+fi
+
+lim_clause=""
+(( LIMIT > 0 )) && lim_clause="LIMIT ${LIMIT}"
+
+sql="SELECT
+        blknum,
+        to_hex((lsn >> 32)::int8) || '/' || to_hex((lsn & x'ffffffff'::bigint)::int8) AS lsn,
+        CASE forknum WHEN 0 THEN 'main'
+                     WHEN 1 THEN 'fsm'
+                     WHEN 2 THEN 'vm'
+                     WHEN 3 THEN 'init'
+                     ELSE forknum::text
+        END AS fork,
+        is_image,
+        will_init
+        ${payload_col}
+   FROM pageserver.pages
+   ${where}
+  ORDER BY blknum ASC, lsn DESC, is_image ASC
+   ${lim_clause}"
+
+if (( RAW == 1 )); then
+    psql_args=()
+else
+    psql_args=(-x)
+fi
+
+export PGPASSWORD=${PGPASSWORD:-${!PWD_ENV:-}}
+
+psql -h "$HOST" -p "$PORT" -U "$USER" -d "$DBNAME" "${psql_args[@]}" -c "$sql"
