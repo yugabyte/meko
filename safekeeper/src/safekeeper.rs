@@ -1274,29 +1274,20 @@ where
         Ok(None)
     }
 
-    /// Advance commit_lsn taking into account what we have locally.
-    ///
-    /// Note: it is assumed that 'WAL we have is from the right term' check has
-    /// already been done outside.
-    async fn update_commit_lsn(&mut self, mut candidate: Lsn) -> Result<()> {
-        // Both peers and walproposer communicate this value, we might already
-        // have a fresher (higher) version.
-        candidate = max(candidate, self.state.inmem.commit_lsn);
-        let commit_lsn = min(candidate, self.flush_lsn());
-        assert!(
-            commit_lsn >= self.state.inmem.commit_lsn,
-            "commit_lsn monotonicity violated: old={} new={}",
-            self.state.inmem.commit_lsn,
-            commit_lsn
-        );
+    /// Snap `commit_lsn` to the local flush watermark. yb-mode single-SK
+    /// quorum makes `commit_lsn == flush_lsn` by definition; we no longer
+    /// take the walproposer's lagged view into account.
+    async fn update_commit_lsn_to_flush(&mut self) -> Result<()> {
+        let flush_lsn = self.flush_lsn();
+        if flush_lsn <= self.state.inmem.commit_lsn {
+            return Ok(());
+        }
+        let prev_commit_lsn = self.state.commit_lsn;
+        self.state.inmem.commit_lsn = flush_lsn;
 
-        self.state.inmem.commit_lsn = commit_lsn;
-
-        // If new commit_lsn reached term switch, force sync of control
-        // file: walproposer in sync mode is very interested when this
-        // happens. Note: this is for sync-safekeepers mode only, as
-        // otherwise commit_lsn might jump over term_start_lsn.
-        if commit_lsn >= self.term_start_lsn && self.state.commit_lsn < self.term_start_lsn {
+        // If the new commit_lsn crosses the term switch, force a control-file
+        // sync — walproposer in sync-safekeepers mode polls for this.
+        if flush_lsn >= self.term_start_lsn && prev_commit_lsn < self.term_start_lsn {
             self.state.flush().await?;
         }
 
@@ -1375,13 +1366,12 @@ where
             self.wal_store.flush_wal().await?;
         }
 
-        // Update commit_lsn. It will be flushed to the control file regularly by the timeline
-        // manager, off of the WAL ingest hot path.
-        if msg.h.commit_lsn != Lsn(0) {
-            self.update_commit_lsn(msg.h.commit_lsn).await?;
-        }
-        // msg.h.truncate_lsn (walproposer's "you can trim WAL up to here for
-        // peer recovery") is ignored in yb-mode — single-SK means no peers.
+        // commit_lsn collapses to flush_lsn in single-SK yb-mode: quorum
+        // size 1 means every flush is by definition committed. Update from
+        // our own flush watermark instead of the walproposer's view (which
+        // lags by an RTT). msg.h.commit_lsn / msg.h.truncate_lsn are
+        // ignored — peer recovery doesn't apply.
+        self.update_commit_lsn_to_flush().await?;
 
         trace!(
             "processed AppendRequest of len {}, begin_lsn={}, end_lsn={:?}, commit_lsn={:?}, truncate_lsn={:?}, flushed={:?}",
@@ -1412,16 +1402,13 @@ where
         )))
     }
 
-    /// Update commit_lsn from peer safekeeper data.
-    pub async fn record_safekeeper_info(&mut self, sk_info: &SafekeeperTimelineInfo) -> Result<()> {
-        if Lsn(sk_info.commit_lsn) != Lsn::INVALID {
-            // Note: the check is too restrictive, generally we can update local
-            // commit_lsn if our history matches (is part of) history of advanced
-            // commit_lsn provider.
-            if sk_info.last_log_term == self.get_last_log_term() {
-                self.update_commit_lsn(Lsn(sk_info.commit_lsn)).await?;
-            }
-        }
+    /// Peer-SK gossip is dead in yb-mode (single-SK); the broker pushes
+    /// nothing meaningful here. Kept as a no-op to preserve the public
+    /// shape used by `safekeeper/src/broker.rs`.
+    pub async fn record_safekeeper_info(
+        &mut self,
+        _sk_info: &SafekeeperTimelineInfo,
+    ) -> Result<()> {
         Ok(())
     }
 }
