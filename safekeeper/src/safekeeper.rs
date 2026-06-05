@@ -270,7 +270,6 @@ pub struct VoteResponse {
     // Safekeeper flush_lsn (end of WAL) + history of term switches allow
     // proposer to choose the most advanced one.
     pub flush_lsn: Lsn,
-    truncate_lsn: Lsn,
     pub term_history: TermHistory,
 }
 
@@ -286,8 +285,7 @@ pub struct ProposerElected {
     pub term_history: TermHistory,
 }
 
-/// Request with WAL message sent from proposer to safekeeper. Along the way it
-/// communicates commit_lsn.
+/// Request with WAL message sent from proposer to safekeeper.
 #[derive(Debug)]
 pub struct AppendRequest {
     pub h: AppendRequestHeader,
@@ -302,10 +300,6 @@ pub struct AppendRequestHeader {
     pub begin_lsn: Lsn,
     /// end position of message in WAL
     pub end_lsn: Lsn,
-    /// LSN committed by quorum of safekeepers
-    pub commit_lsn: Lsn,
-    /// minimal LSN which may be needed by proposer to perform recovery of some safekeeper
-    pub truncate_lsn: Lsn,
 }
 
 /// V2 of the message; exists as a struct because we (de)serialized it as is.
@@ -342,9 +336,6 @@ pub struct AppendResponse {
     // observing term being set to one for which WAL truncation is known to have
     // happened.
     pub flush_lsn: Lsn,
-    // We report back our awareness about which WAL is committed, as this is
-    // a criterion for walproposer --sync mode exit
-    pub commit_lsn: Lsn,
     pub hs_feedback: HotStandbyFeedback,
     pub pageserver_feedback: Option<PageserverFeedback>,
 }
@@ -355,7 +346,6 @@ impl AppendResponse {
             generation,
             term,
             flush_lsn: Lsn(0),
-            commit_lsn: Lsn(0),
             hs_feedback: HotStandbyFeedback::empty(),
             pageserver_feedback: None,
         }
@@ -563,21 +553,11 @@ impl ProposerAcceptorMessage {
                         .get_u64_f()
                         .with_context(|| "reading end_lsn")?
                         .into();
-                    let commit_lsn: Lsn = msg_bytes
-                        .get_u64_f()
-                        .with_context(|| "reading commit_lsn")?
-                        .into();
-                    let truncate_lsn: Lsn = msg_bytes
-                        .get_u64_f()
-                        .with_context(|| "reading truncate_lsn")?
-                        .into();
                     let hdr = AppendRequestHeader {
                         generation,
                         term,
                         begin_lsn,
                         end_lsn,
-                        commit_lsn,
-                        truncate_lsn,
                     };
                     let rec_size = hdr
                         .end_lsn
@@ -657,13 +637,12 @@ impl ProposerAcceptorMessage {
                 'a' => {
                     // read header followed by wal data
                     let hdrv2 = AppendRequestHeaderV2::des_from(&mut stream)?;
+                    let _ = (hdrv2.commit_lsn, hdrv2.truncate_lsn);
                     let hdr = AppendRequestHeader {
                         generation: INVALID_GENERATION,
                         term: hdrv2.term,
                         begin_lsn: hdrv2.begin_lsn,
                         end_lsn: hdrv2.end_lsn,
-                        commit_lsn: hdrv2.commit_lsn,
-                        truncate_lsn: hdrv2.truncate_lsn,
                     };
                     let rec_size = hdr
                         .end_lsn
@@ -715,8 +694,6 @@ impl ProposerAcceptorMessage {
                         term: _,
                         begin_lsn: _,
                         end_lsn: _,
-                        commit_lsn: _,
-                        truncate_lsn: _,
                     },
                 wal_data,
             }) => wal_data.len(),
@@ -728,8 +705,6 @@ impl ProposerAcceptorMessage {
                         term: _,
                         begin_lsn: _,
                         end_lsn: _,
-                        commit_lsn: _,
-                        truncate_lsn: _,
                     },
                 wal_data,
             }) => wal_data.len(),
@@ -792,7 +767,6 @@ impl AcceptorProposerMessage {
                     buf.put_u64(msg.term);
                     buf.put_u8(msg.vote_given as u8);
                     buf.put_u64(msg.flush_lsn.into());
-                    buf.put_u64(msg.truncate_lsn.into());
                     buf.put_u32(msg.term_history.0.len() as u32);
                     for e in &msg.term_history.0 {
                         buf.put_u64(e.term);
@@ -804,7 +778,6 @@ impl AcceptorProposerMessage {
                     buf.put_u32(msg.generation.into_inner());
                     buf.put_u64(msg.term);
                     buf.put_u64(msg.flush_lsn.into());
-                    buf.put_u64(msg.commit_lsn.into());
                     buf.put_i64(msg.hs_feedback.ts);
                     buf.put_u64(msg.hs_feedback.xmin);
                     buf.put_u64(msg.hs_feedback.catalog_xmin);
@@ -832,7 +805,8 @@ impl AcceptorProposerMessage {
                     buf.put_u64_le(msg.term);
                     buf.put_u64_le(msg.vote_given as u64);
                     buf.put_u64_le(msg.flush_lsn.into());
-                    buf.put_u64_le(msg.truncate_lsn.into());
+                    // truncate_lsn (removed) — zero-fill for v2 wire compat
+                    buf.put_u64_le(0);
                     buf.put_u32_le(msg.term_history.0.len() as u32);
                     for e in &msg.term_history.0 {
                         buf.put_u64_le(e.term);
@@ -846,7 +820,8 @@ impl AcceptorProposerMessage {
                     buf.put_u64_le('a' as u64);
                     buf.put_u64_le(msg.term);
                     buf.put_u64_le(msg.flush_lsn.into());
-                    buf.put_u64_le(msg.commit_lsn.into());
+                    // commit_lsn (removed) — zero-fill for v2 wire compat
+                    buf.put_u64_le(0);
                     buf.put_i64_le(msg.hs_feedback.ts);
                     buf.put_u64_le(msg.hs_feedback.xmin);
                     buf.put_u64_le(msg.hs_feedback.catalog_xmin);
@@ -1088,11 +1063,6 @@ where
             term: self.state.acceptor_state.term,
             vote_given: false,
             flush_lsn: self.flush_lsn(),
-            // peer_horizon_lsn was removed in yb-mode (single SK = no peer
-            // recovery), but the walproposer C extension asserts on a zero
-            // truncate_lsn in VoteResponse — report flush_lsn so the field
-            // is non-zero and means "I have everything durable up to here".
-            truncate_lsn: self.flush_lsn(),
             term_history: self.get_term_history(),
         };
         if self.state.acceptor_state.term < msg.term {
@@ -1114,8 +1084,6 @@ where
             generation: self.state.mconf.generation,
             term: self.state.acceptor_state.term,
             flush_lsn: self.flush_lsn(),
-            // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
-            commit_lsn: self.flush_lsn(),
             // will be filled by the upper code to avoid bothering safekeeper
             hs_feedback: HotStandbyFeedback::empty(),
             pageserver_feedback: None,
@@ -1354,17 +1322,14 @@ where
 
         // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum). The
         // walproposer's `msg.h.commit_lsn` / `msg.h.truncate_lsn` are
-        // ignored — peer recovery doesn't apply. Sync the control file
-        // if this write crossed the term boundary.
+        // Sync the control file if this write crossed the term boundary.
         self.maybe_sync_on_term_crossing(flush_lsn).await?;
 
         trace!(
-            "processed AppendRequest of len {}, begin_lsn={}, end_lsn={:?}, commit_lsn={:?}, truncate_lsn={:?}, flushed={:?}",
+            "processed AppendRequest of len {}, begin_lsn={}, end_lsn={:?}, flushed={:?}",
             msg.wal_data.len(),
             msg.h.begin_lsn,
             msg.h.end_lsn,
-            msg.h.commit_lsn,
-            msg.h.truncate_lsn,
             require_flush,
         );
 
@@ -1542,8 +1507,6 @@ mod tests {
             term: 2,
             begin_lsn: Lsn(1),
             end_lsn: Lsn(2),
-            commit_lsn: Lsn(0),
-            truncate_lsn: Lsn(0),
         };
         let mut append_request = AppendRequest {
             h: ar_hdr.clone(),
@@ -1625,8 +1588,6 @@ mod tests {
             term: 1,
             begin_lsn: Lsn(1),
             end_lsn: Lsn(2),
-            commit_lsn: Lsn(0),
-            truncate_lsn: Lsn(0),
         };
         let append_request = AppendRequest {
             h: ar_hdr.clone(),

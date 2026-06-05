@@ -69,7 +69,6 @@ static void BroadcastAppendRequest(WalProposer *wp);
 static void HandleActiveState(Safekeeper *sk, uint32 events);
 static bool SendAppendRequests(Safekeeper *sk);
 static bool RecvAppendResponses(Safekeeper *sk);
-static XLogRecPtr CalculateMinFlushLsn(WalProposer *wp);
 static XLogRecPtr GetAcknowledgedByQuorumWALPosition(WalProposer *wp);
 static void PAMessageSerialize(WalProposer *wp, ProposerAcceptorMessage *msg, StringInfo buf, int proto_version);
 static void HandleSafekeeperResponse(WalProposer *wp, Safekeeper *sk);
@@ -1064,12 +1063,11 @@ RecvVoteResponse(Safekeeper *sk)
 		return;
 
 	wp_log(LOG,
-		   "got VoteResponse from sk {id = %lu, ep = %s:%s}, generation=%u, term=%lu, voteGiven=%u, last_log_term=" UINT64_FORMAT ", flushLsn=%X/%X, truncateLsn=%X/%X",
+		   "got VoteResponse from sk {id = %lu, ep = %s:%s}, generation=%u, term=%lu, voteGiven=%u, last_log_term=" UINT64_FORMAT ", flushLsn=%X/%X",
 		   sk->greetResponse.nodeId, sk->host, sk->port, sk->voteResponse.generation, sk->voteResponse.term,
 		   sk->voteResponse.voteGiven,
 		   GetHighestTerm(&sk->voteResponse.termHistory),
-		   LSN_FORMAT_ARGS(sk->voteResponse.flushLsn),
-		   LSN_FORMAT_ARGS(sk->voteResponse.truncateLsn));
+		   LSN_FORMAT_ARGS(sk->voteResponse.flushLsn));
 
 	/*
 	 * In case of acceptor rejecting our vote, bail out, but only if either it
@@ -1145,8 +1143,6 @@ VotesCollectedMset(WalProposer *wp, MemberSet *mset, Safekeeper **msk, StringInf
 				wp->propTermStartLsn = sk->voteResponse.flushLsn;
 				wp->donor = sk;
 			}
-			wp->truncateLsn = Max(sk->voteResponse.truncateLsn, wp->truncateLsn);
-
 			if (n_votes > 0)
 				appendStringInfoString(s, ", ");
 			appendStringInfo(s, "{id = %lu, ep = %s:%s}", sk->greetResponse.nodeId, sk->host, sk->port);
@@ -1174,7 +1170,6 @@ VotesCollected(WalProposer *wp)
 
 	wp->propTermStartLsn = InvalidXLogRecPtr;
 	wp->donorLastLogTerm = 0;
-	wp->truncateLsn = InvalidXLogRecPtr;
 
 	/* legacy: generations disabled */
 	if (!WalProposerGenerationsEnabled(wp) && wp->mconf.generation == INVALID_GENERATION)
@@ -1196,7 +1191,6 @@ VotesCollected(WalProposer *wp)
 					wp->propTermStartLsn = wp->safekeeper[i].voteResponse.flushLsn;
 					wp->donor = &wp->safekeeper[i];
 				}
-				wp->truncateLsn = Max(wp->safekeeper[i].voteResponse.truncateLsn, wp->truncateLsn);
 			}
 		}
 		collected = n_ready >= wp->quorum;
@@ -1257,9 +1251,10 @@ HandleElectedProposer(WalProposer *wp)
 		wp_log(FATAL, "failed to download WAL for logical replicaiton");
 	}
 
-	if (wp->truncateLsn == wp->propTermStartLsn && wp->config->syncSafekeepers)
+	if (wp->config->syncSafekeepers)
 	{
-		/* Sync is not needed: just exit */
+		/* yb-mode: sync-safekeepers is trivially satisfied after election
+		 * because there are no peers to sync to. */
 		wp->api.finish_sync_safekeepers(wp, wp->propTermStartLsn);
 		/* unreachable */
 	}
@@ -1353,7 +1348,7 @@ ProcessPropStartPos(WalProposer *wp)
 	{
 		if (!wp->config->syncSafekeepers)
 		{
-			wp->propTermStartLsn = wp->truncateLsn = wp->api.get_redo_start_lsn(wp);
+			wp->propTermStartLsn = wp->api.get_redo_start_lsn(wp);
 			wp_log(LOG, "bumped epochStartLsn to the first record %X/%X", LSN_FORMAT_ARGS(wp->propTermStartLsn));
 		}
 		else
@@ -1363,8 +1358,7 @@ ProcessPropStartPos(WalProposer *wp)
 		}
 	}
 	pg_atomic_write_u64(&wp->api.get_shmem_state(wp)->propEpochStartLsn, wp->propTermStartLsn);
-
-	Assert(wp->truncateLsn != InvalidXLogRecPtr || wp->config->syncSafekeepers);
+	/* yb-mode: truncateLsn removed; no analogous assertion needed. */
 
 	/*
 	 * We will be generating WAL since propTermStartLsn, so we should set
@@ -1383,11 +1377,10 @@ ProcessPropStartPos(WalProposer *wp)
 	wp->propTermHistory.entries[wp->propTermHistory.n_entries - 1].term = wp->propTerm;
 	wp->propTermHistory.entries[wp->propTermHistory.n_entries - 1].lsn = wp->propTermStartLsn;
 
-	wp_log(LOG, "walproposer elected in term " UINT64_FORMAT ", epochStartLsn %X/%X, donor %s:%s, truncate_lsn %X/%X",
+	wp_log(LOG, "walproposer elected in term " UINT64_FORMAT ", epochStartLsn %X/%X, donor %s:%s",
 		   wp->propTerm,
 		   LSN_FORMAT_ARGS(wp->propTermStartLsn),
-		   wp->donor->host, wp->donor->port,
-		   LSN_FORMAT_ARGS(wp->truncateLsn));
+		   wp->donor->host, wp->donor->port);
 
 	/*
 	 * Ensure the basebackup we are running (at RedoStartLsn) matches LSN
@@ -1593,8 +1586,7 @@ PrepareAppendRequest(WalProposer *wp, AppendRequestHeader *req, XLogRecPtr begin
 	req->term = wp->propTerm;
 	req->beginLsn = beginLsn;
 	req->endLsn = endLsn;
-	req->commitLsn = wp->commitLsn;
-	req->truncateLsn = wp->truncateLsn;
+	/* yb-mode: commit_lsn / truncate_lsn removed from the wire. */
 }
 
 /*
@@ -1685,12 +1677,11 @@ SendAppendRequests(Safekeeper *sk)
 			req = &sk->appendRequest;
 			PrepareAppendRequest(sk->wp, &sk->appendRequest, sk->streamingAt, endLsn);
 
-			wp_log(DEBUG5, "sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
+			wp_log(DEBUG5, "sending message len %ld beginLsn=%X/%X endLsn=%X/%X to %s:%s",
 				   req->endLsn - req->beginLsn,
 				   LSN_FORMAT_ARGS(req->beginLsn),
 				   LSN_FORMAT_ARGS(req->endLsn),
-				   LSN_FORMAT_ARGS(req->commitLsn),
-				   LSN_FORMAT_ARGS(wp->truncateLsn), sk->host, sk->port);
+				   sk->host, sk->port);
 
 			resetStringInfo(&sk->outbuf);
 
@@ -1800,10 +1791,9 @@ RecvAppendResponses(Safekeeper *sk)
 		if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->appendResponse))
 			break;
 
-		wp_log(DEBUG2, "received message term=" INT64_FORMAT " flushLsn=%X/%X commitLsn=%X/%X from %s:%s",
+		wp_log(DEBUG2, "received message term=" INT64_FORMAT " flushLsn=%X/%X from %s:%s",
 			   sk->appendResponse.term,
 			   LSN_FORMAT_ARGS(sk->appendResponse.flushLsn),
-			   LSN_FORMAT_ARGS(sk->appendResponse.commitLsn),
 			   sk->host, sk->port);
 
 		readAnything = true;
@@ -1919,23 +1909,6 @@ ParsePageserverFeedbackMessage(WalProposer *wp, StringInfo reply_message, Pagese
 	}
 }
 
-/*
- * Get minimum of flushed LSNs of all safekeepers, which is the LSN of the
- * last WAL record that can be safely discarded.
- */
-static XLogRecPtr
-CalculateMinFlushLsn(WalProposer *wp)
-{
-	XLogRecPtr	lsn = wp->n_safekeepers > 0
-		? wp->safekeeper[0].appendResponse.flushLsn
-		: InvalidXLogRecPtr;
-
-	for (int i = 1; i < wp->n_safekeepers; i++)
-	{
-		lsn = Min(lsn, wp->safekeeper[i].appendResponse.flushLsn);
-	}
-	return lsn;
-}
 
 /*
  * GetAcknowledgedByQuorumWALPosition for a single member set `mset`.
@@ -2094,7 +2067,6 @@ UpdateDonorShmem(WalProposer *wp)
 static void
 HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 {
-	XLogRecPtr	candidateTruncateLsn;
 	XLogRecPtr	newCommitLsn;
 
 	newCommitLsn = GetAcknowledgedByQuorumWALPosition(wp);
@@ -2113,22 +2085,7 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 	 */
 	wp->api.process_safekeeper_feedback(wp, fromsk);
 
-	/*
-	 * Try to advance truncateLsn -- the last record flushed to all
-	 * safekeepers.
-	 *
-	 * Advanced truncateLsn should be not higher than commitLsn. This prevents
-	 * surprising violation of truncateLsn <= commitLsn invariant which might
-	 * occur because commitLsn generally can't be advanced based on feedback
-	 * from safekeeper who is still in the previous epoch (similar to 'leader
-	 * can't commit entries from previous term' in Raft); 2)
-	 */
-	candidateTruncateLsn = CalculateMinFlushLsn(wp);
-	candidateTruncateLsn = Min(candidateTruncateLsn, wp->commitLsn);
-	if (candidateTruncateLsn > wp->truncateLsn)
-	{
-		wp->truncateLsn = candidateTruncateLsn;
-	}
+	/* yb-mode: truncateLsn removed — no peer recovery to gate. */
 
 	/*
 	 * Generally sync is done when majority reached propTermStartLsn so we
@@ -2147,7 +2104,8 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 		for (int i = 0; i < wp->n_safekeepers; i++)
 		{
 			Safekeeper *sk = &wp->safekeeper[i];
-			bool		synced = sk->appendResponse.commitLsn >= wp->propTermStartLsn;
+			/* yb-mode: commitLsn ≡ flushLsn (single-SK quorum). */
+			bool		synced = sk->appendResponse.flushLsn >= wp->propTermStartLsn;
 
 			/* alive safekeeper which is not synced yet; wait for it */
 			if (sk->state != SS_OFFLINE && !synced)
@@ -2271,8 +2229,7 @@ PAMessageSerialize(WalProposer *wp, ProposerAcceptorMessage *msg, StringInfo buf
 					pq_sendint64(buf, m->term);
 					pq_sendint64(buf, m->beginLsn);
 					pq_sendint64(buf, m->endLsn);
-					pq_sendint64(buf, m->commitLsn);
-					pq_sendint64(buf, m->truncateLsn);
+					/* yb-mode: commitLsn / truncateLsn removed from wire. */
 					break;
 				}
 			default:
@@ -2366,8 +2323,9 @@ PAMessageSerialize(WalProposer *wp, ProposerAcceptorMessage *msg, StringInfo buf
 					appendRequestHeaderV2.epochStartLsn = 0;	/* removed field */
 					appendRequestHeaderV2.beginLsn = m->beginLsn;
 					appendRequestHeaderV2.endLsn = m->endLsn;
-					appendRequestHeaderV2.commitLsn = m->commitLsn;
-					appendRequestHeaderV2.truncateLsn = m->truncateLsn;
+					/* yb-mode: commitLsn / truncateLsn no longer tracked; zero on v2 wire. */
+					appendRequestHeaderV2.commitLsn = 0;
+					appendRequestHeaderV2.truncateLsn = 0;
 					/* removed field */
 					memset(&appendRequestHeaderV2.proposerId, 0, sizeof(appendRequestHeaderV2.proposerId));
 
@@ -2504,7 +2462,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 					msg->term = pq_getmsgint64(&s);
 					msg->voteGiven = pq_getmsgbyte(&s);
 					msg->flushLsn = pq_getmsgint64(&s);
-					msg->truncateLsn = pq_getmsgint64(&s);
+					/* yb-mode: truncateLsn removed from wire. */
 					msg->termHistory.n_entries = pq_getmsgint32(&s);
 					msg->termHistory.entries = palloc(sizeof(TermSwitchEntry) * msg->termHistory.n_entries);
 					for (uint32 i = 0; i < msg->termHistory.n_entries; i++)
@@ -2522,7 +2480,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 					msg->generation = pq_getmsgint32(&s);
 					msg->term = pq_getmsgint64(&s);
 					msg->flushLsn = pq_getmsgint64(&s);
-					msg->commitLsn = pq_getmsgint64(&s);
+					/* yb-mode: commitLsn removed from wire. */
 					msg->hs.ts = pq_getmsgint64(&s);
 					msg->hs.xmin.value = pq_getmsgint64(&s);
 					msg->hs.catalog_xmin.value = pq_getmsgint64(&s);
@@ -2569,7 +2527,8 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 					msg->term = pq_getmsgint64_le(&s);
 					msg->voteGiven = pq_getmsgint64_le(&s);
 					msg->flushLsn = pq_getmsgint64_le(&s);
-					msg->truncateLsn = pq_getmsgint64_le(&s);
+					/* yb-mode: truncateLsn removed; consume + discard from v2 wire. */
+					(void) pq_getmsgint64_le(&s);
 					msg->termHistory.n_entries = pq_getmsgint32_le(&s);
 					msg->termHistory.entries = palloc(sizeof(TermSwitchEntry) * msg->termHistory.n_entries);
 					for (int i = 0; i < msg->termHistory.n_entries; i++)
@@ -2588,7 +2547,8 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 
 					msg->term = pq_getmsgint64_le(&s);
 					msg->flushLsn = pq_getmsgint64_le(&s);
-					msg->commitLsn = pq_getmsgint64_le(&s);
+					/* yb-mode: commitLsn removed; consume + discard from v2 wire. */
+					(void) pq_getmsgint64_le(&s);
 					msg->hs.ts = pq_getmsgint64_le(&s);
 					msg->hs.xmin.value = pq_getmsgint64_le(&s);
 					msg->hs.catalog_xmin.value = pq_getmsgint64_le(&s);

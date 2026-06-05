@@ -288,8 +288,6 @@ typedef struct VoteResponse
 	 * proposer to choose the most advanced one.
 	 */
 	XLogRecPtr	flushLsn;
-	XLogRecPtr	truncateLsn;	/* minimal LSN which may be needed for*
-								 * recovery of some safekeeper */
 	TermHistory termHistory;
 } VoteResponse;
 
@@ -318,13 +316,8 @@ typedef struct AppendRequestHeader
 	term_t		term;			/* term of the proposer */
 	XLogRecPtr	beginLsn;		/* start position of message in WAL */
 	XLogRecPtr	endLsn;			/* end position of message in WAL */
-	XLogRecPtr	commitLsn;		/* LSN committed by quorum of safekeepers */
-
-	/*
-	 * minimal LSN which may be needed for recovery of some safekeeper (end
-	 * lsn + 1 of last chunk streamed to everyone)
-	 */
-	XLogRecPtr	truncateLsn;
+	/* yb-mode: commit_lsn / truncate_lsn removed (single-SK quorum = no */
+	/* peer recovery; commit_lsn ≡ flush_lsn). */
 	/* in the AppendRequest message, WAL data follows */
 } AppendRequestHeader;
 
@@ -460,9 +453,8 @@ typedef struct AppendResponse
 	term_t		term;
 	/* TODO: add comment */
 	XLogRecPtr	flushLsn;
-	/* Safekeeper reports back his awareness about which WAL is committed, as */
-	/* this is a criterion for walproposer --sync mode exit */
-	XLogRecPtr	commitLsn;
+	/* yb-mode: commit_lsn removed (single-SK = no peer recovery; */
+	/* commit_lsn ≡ flush_lsn). */
 	HotStandbyFeedback hs;
 	/* Feedback received from pageserver includes standby_status_update fields */
 	/* and custom neon feedback. */
@@ -876,7 +868,8 @@ typedef struct WalProposer
 	/* WAL has been generated up to this point */
 	XLogRecPtr	availableLsn;
 
-	/* cached GetAcknowledgedByQuorumWALPosition result */
+	/* cached GetAcknowledgedByQuorumWALPosition result. yb-mode: ≡ flush_lsn */
+	/* of the (sole) SK; used to gate compute visibility. */
 	XLogRecPtr	commitLsn;
 
 	ProposerGreeting greetRequest;
@@ -885,11 +878,7 @@ typedef struct WalProposer
 	/* Vote request for safekeeper */
 	VoteRequest voteRequest;
 
-	/*
-	 * Minimal LSN which may be needed for recovery of some safekeeper,
-	 * record-aligned (first record which might not yet received by someone).
-	 */
-	XLogRecPtr	truncateLsn;
+	/* yb-mode: truncateLsn removed (no peer-recovery in single-SK mode). */
 
 	/*
 	 * Term of the proposer. We want our term to be highest and unique, so we

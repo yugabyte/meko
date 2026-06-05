@@ -134,8 +134,6 @@ impl Env {
                     term: 1,
                     begin_lsn: lsn,
                     end_lsn: lsn + record.len() as u64,
-                    commit_lsn: lsn,
-                    truncate_lsn: Lsn(0),
                 },
                 wal_data: record,
             };
