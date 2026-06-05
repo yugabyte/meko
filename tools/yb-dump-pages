@@ -12,7 +12,6 @@
 #   --blknum-to   <int>     inclusive
 #   --lsn-from    <X/Y>     inclusive (PG LSN format)
 #   --lsn-to      <X/Y>     inclusive
-#   --will-init <true|false>
 #   --limit       <int>     default 50, 0 means no limit
 #   --no-payload            skip the payload sample column
 #   --raw                   dump as `psql` table without prettifying
@@ -47,7 +46,6 @@ TENANT=""; TIMELINE=""
 SPC=""; DB=""; REL=""; FORK=""
 BLKNUM=""; BLK_FROM=""; BLK_TO=""
 LSN_FROM=""; LSN_TO=""
-WILL_INIT=""
 LIMIT=50
 PAYLOAD=1
 RAW=0
@@ -65,7 +63,6 @@ while (( $# > 0 )); do
         --blknum-to)     BLK_TO=$2;        shift 2 ;;
         --lsn-from)      LSN_FROM=$2;      shift 2 ;;
         --lsn-to)        LSN_TO=$2;        shift 2 ;;
-        --will-init)     WILL_INIT=$2;     shift 2 ;;
         --limit)         LIMIT=$2;         shift 2 ;;
         --no-payload)    PAYLOAD=0;        shift   ;;
         --raw)           RAW=1;            shift   ;;
@@ -120,8 +117,6 @@ where="WHERE tenant_id = '${TENANT}'
 [[ -n $BLK_TO     ]] && where+=" AND blknum <= ${BLK_TO}"
 [[ -n $LSN_FROM_INT ]] && where+=" AND lsn    >= ${LSN_FROM_INT}"
 [[ -n $LSN_TO_INT   ]] && where+=" AND lsn    <= ${LSN_TO_INT}"
-[[ -n $WILL_INIT  ]] && where+=" AND will_init = ${WILL_INIT}"
-
 # SELECT list — render LSN as H/L hex, forknum as name, payload as
 # `<size> bytes; <hex prefix>` (or omit if --no-payload).
 payload_col=""
