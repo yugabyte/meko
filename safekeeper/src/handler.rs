@@ -76,8 +76,10 @@ fn parse_cmd(cmd: &str) -> anyhow::Result<SafekeeperPostgresCommand> {
             .context(format!("failed to parse START_WAL_PUSH command {cmd}"))?;
         // capture () content
         let options = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-        // default values
-        let mut proto_version = 2;
+        // yb-light only speaks proto v3; v2 was dropped in Phase 9
+        // Wave 2. Default matches the walproposer hardcode so an
+        // older client missing the option is still parsed cleanly.
+        let mut proto_version = 3;
         let mut allow_timeline_creation = true;
         for kvstr in options.split(",") {
             if kvstr.is_empty() {
@@ -534,7 +536,7 @@ mod tests {
                 proto_version,
                 allow_timeline_creation,
             } => {
-                assert_eq!(proto_version, 2);
+                assert_eq!(proto_version, 3);
                 assert!(allow_timeline_creation);
             }
             _ => panic!("unexpected command"),

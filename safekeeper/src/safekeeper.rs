@@ -6,7 +6,6 @@ use std::io::Read;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
-use byteorder::{LittleEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use postgres_ffi::{MAX_SEND_SIZE, TimeLineID};
 use postgres_versioninfo::{PgMajorVersion, PgVersionId};
@@ -27,7 +26,12 @@ use crate::metrics::{MISC_OPERATION_SECONDS, PROPOSER_ACCEPTOR_MESSAGES_TOTAL};
 use crate::state::TimelineState;
 use crate::{control_file, wal_storage};
 
-pub const SK_PROTO_VERSION_2: u32 = 2;
+/// The compute ↔ safekeeper wire-protocol version supported by this
+/// safekeeper. yb-light dropped v2 support in Phase 9 Wave 2;
+/// walproposer hardcodes v3 too. The constant is retained (rather
+/// than fully eliminated) because the handler still parses the
+/// `START_WAL_PUSH (proto_version 'N', ...)` libpq command and
+/// validates it.
 pub const SK_PROTO_VERSION_3: u32 = 3;
 pub const UNKNOWN_SERVER_VERSION: PgVersionId = PgVersionId::UNKNOWN;
 
@@ -70,26 +74,6 @@ impl TermHistory {
                 .with_context(|| format!("TermHistory pos {i} misses lsn"))?
                 .into();
             res.push(TermLsn { term, lsn })
-        }
-        Ok(TermHistory(res))
-    }
-
-    // Parse TermHistory as n_entries followed by TermLsn pairs in LE order.
-    // TODO remove once v2 protocol is fully dropped.
-    pub fn from_bytes_le(bytes: &mut Bytes) -> Result<TermHistory> {
-        if bytes.remaining() < 4 {
-            bail!("TermHistory misses len");
-        }
-        let n_entries = bytes.get_u32_le();
-        let mut res = Vec::with_capacity(n_entries as usize);
-        for _ in 0..n_entries {
-            if bytes.remaining() < 16 {
-                bail!("TermHistory is incomplete");
-            }
-            res.push(TermLsn {
-                term: bytes.get_u64_le(),
-                lsn: bytes.get_u64_le().into(),
-            })
         }
         Ok(TermHistory(res))
     }
@@ -223,21 +207,6 @@ pub struct ProposerGreeting {
     pub wal_seg_size: u32,
 }
 
-/// V2 of the message; exists as a struct because we (de)serialized it as is.
-#[derive(Debug, Deserialize)]
-pub struct ProposerGreetingV2 {
-    /// proposer-acceptor protocol version
-    pub protocol_version: u32,
-    /// Postgres server version
-    pub pg_version: PgVersionId,
-    pub proposer_id: PgUuid,
-    pub system_id: SystemId,
-    pub timeline_id: TimelineId,
-    pub tenant_id: TenantId,
-    pub tli: TimeLineID,
-    pub wal_seg_size: u32,
-}
-
 /// Acceptor -> Proposer initial response: the highest term known to me
 /// (acceptor voted for).
 #[derive(Debug, Serialize)]
@@ -251,12 +220,6 @@ pub struct AcceptorGreeting {
 #[derive(Debug)]
 pub struct VoteRequest {
     pub generation: Generation,
-    pub term: Term,
-}
-
-/// V2 of the message; exists as a struct because we (de)serialized it as is.
-#[derive(Debug, Deserialize)]
-pub struct VoteRequestV2 {
     pub term: Term,
 }
 
@@ -299,26 +262,6 @@ pub struct AppendRequestHeader {
     pub begin_lsn: Lsn,
     /// end position of message in WAL
     pub end_lsn: Lsn,
-}
-
-/// V2 of the message; exists as a struct because we (de)serialized it as is.
-#[derive(Debug, Clone, Deserialize)]
-pub struct AppendRequestHeaderV2 {
-    // safekeeper's current term; if it is higher than proposer's, the compute is out of date.
-    pub term: Term,
-    // TODO: remove this field from the protocol, it in unused -- LSN of term
-    // switch can be taken from ProposerElected (as well as from term history).
-    pub term_start_lsn: Lsn,
-    /// start position of message in WAL
-    pub begin_lsn: Lsn,
-    /// end position of message in WAL
-    pub end_lsn: Lsn,
-    /// LSN committed by quorum of safekeepers
-    pub commit_lsn: Lsn,
-    /// minimal LSN which may be needed by proposer to perform recovery of some safekeeper
-    pub truncate_lsn: Lsn,
-    // only for logging/debugging
-    pub proposer_uuid: PgUuid,
 }
 
 /// Report safekeeper state to proposer
@@ -472,9 +415,13 @@ impl ProposerAcceptorMessage {
         }
     }
 
-    /// Parse proposer message.
+    /// Parse proposer message. yb-light only supports v3; v2 was
+    /// dropped in Phase 9 Wave 2.
     pub fn parse(mut msg_bytes: Bytes, proto_version: u32) -> Result<ProposerAcceptorMessage> {
-        if proto_version == SK_PROTO_VERSION_3 {
+        if proto_version != SK_PROTO_VERSION_3 {
+            bail!("unsupported protocol version {proto_version}; only v3 is supported");
+        }
+        {
             if msg_bytes.is_empty() {
                 bail!("ProposerAcceptorMessage is not complete: missing tag");
             }
@@ -583,90 +530,6 @@ impl ProposerAcceptorMessage {
                 }
                 _ => bail!("unknown proposer-acceptor message tag: {}", tag),
             }
-        } else if proto_version == SK_PROTO_VERSION_2 {
-            // xxx using Reader is inefficient but easy to work with bincode
-            let mut stream = msg_bytes.reader();
-            // u64 is here to avoid padding; it will be removed once we stop packing C structs into the wire as is
-            let tag = stream.read_u64::<LittleEndian>()? as u8 as char;
-            match tag {
-                'g' => {
-                    let msgv2 = ProposerGreetingV2::des_from(&mut stream)?;
-                    let g = ProposerGreeting {
-                        tenant_id: msgv2.tenant_id,
-                        timeline_id: msgv2.timeline_id,
-                        mconf: membership::Configuration {
-                            generation: INVALID_GENERATION,
-                            members: MemberSet::empty(),
-                            new_members: None,
-                        },
-                        pg_version: msgv2.pg_version,
-                        system_id: msgv2.system_id,
-                        wal_seg_size: msgv2.wal_seg_size,
-                    };
-                    Ok(ProposerAcceptorMessage::Greeting(g))
-                }
-                'v' => {
-                    let msg = VoteRequestV2::des_from(&mut stream)?;
-                    let v = VoteRequest {
-                        generation: INVALID_GENERATION,
-                        term: msg.term,
-                    };
-                    Ok(ProposerAcceptorMessage::VoteRequest(v))
-                }
-                'e' => {
-                    let mut msg_bytes = stream.into_inner();
-                    if msg_bytes.remaining() < 16 {
-                        bail!("ProposerElected message is not complete");
-                    }
-                    let term = msg_bytes.get_u64_le();
-                    let start_streaming_at = msg_bytes.get_u64_le().into();
-                    let term_history = TermHistory::from_bytes_le(&mut msg_bytes)?;
-                    if msg_bytes.remaining() < 8 {
-                        bail!("ProposerElected message is not complete");
-                    }
-                    let _timeline_start_lsn = msg_bytes.get_u64_le();
-                    let msg = ProposerElected {
-                        generation: INVALID_GENERATION,
-                        term,
-                        start_streaming_at,
-                        term_history,
-                    };
-                    Ok(ProposerAcceptorMessage::Elected(msg))
-                }
-                'a' => {
-                    // read header followed by wal data
-                    let hdrv2 = AppendRequestHeaderV2::des_from(&mut stream)?;
-                    let _ = (hdrv2.commit_lsn, hdrv2.truncate_lsn);
-                    let hdr = AppendRequestHeader {
-                        generation: INVALID_GENERATION,
-                        term: hdrv2.term,
-                        begin_lsn: hdrv2.begin_lsn,
-                        end_lsn: hdrv2.end_lsn,
-                    };
-                    let rec_size = hdr
-                        .end_lsn
-                        .checked_sub(hdr.begin_lsn)
-                        .context("begin_lsn > end_lsn in AppendRequest")?
-                        .0 as usize;
-                    if rec_size > MAX_SEND_SIZE {
-                        bail!(
-                            "AppendRequest is longer than MAX_SEND_SIZE ({})",
-                            MAX_SEND_SIZE
-                        );
-                    }
-
-                    let mut wal_data_vec: Vec<u8> = vec![0; rec_size];
-                    stream.read_exact(&mut wal_data_vec)?;
-                    let wal_data = Bytes::from(wal_data_vec);
-
-                    let msg = AppendRequest { h: hdr, wal_data };
-
-                    Ok(ProposerAcceptorMessage::AppendRequest(msg))
-                }
-                _ => bail!("unknown proposer-acceptor message tag: {}", tag),
-            }
-        } else {
-            bail!("unsupported protocol version {}", proto_version);
         }
     }
 
@@ -750,9 +613,13 @@ impl AcceptorProposerMessage {
         }
     }
 
-    /// Serialize acceptor -> proposer message.
+    /// Serialize acceptor -> proposer message. yb-light only supports
+    /// v3; v2 was dropped in Phase 9 Wave 2.
     pub fn serialize(&self, buf: &mut BytesMut, proto_version: u32) -> Result<()> {
-        if proto_version == SK_PROTO_VERSION_3 {
+        if proto_version != SK_PROTO_VERSION_3 {
+            bail!("unsupported protocol version {proto_version}; only v3 is supported");
+        }
+        {
             match self {
                 AcceptorProposerMessage::Greeting(msg) => {
                     buf.put_u8(b'g');
@@ -789,52 +656,6 @@ impl AcceptorProposerMessage {
                 }
             }
             Ok(())
-        // TODO remove 3 after converting all msgs
-        } else if proto_version == SK_PROTO_VERSION_2 {
-            match self {
-                AcceptorProposerMessage::Greeting(msg) => {
-                    buf.put_u64_le('g' as u64);
-                    // v2 didn't have mconf and fields were reordered
-                    buf.put_u64_le(msg.term);
-                    buf.put_u64_le(msg.node_id.0);
-                }
-                AcceptorProposerMessage::VoteResponse(msg) => {
-                    // v2 didn't have generation, had u64 vote_given and timeline_start_lsn
-                    buf.put_u64_le('v' as u64);
-                    buf.put_u64_le(msg.term);
-                    buf.put_u64_le(msg.vote_given as u64);
-                    buf.put_u64_le(msg.flush_lsn.into());
-                    // truncate_lsn (removed) — zero-fill for v2 wire compat
-                    buf.put_u64_le(0);
-                    buf.put_u32_le(msg.term_history.0.len() as u32);
-                    for e in &msg.term_history.0 {
-                        buf.put_u64_le(e.term);
-                        buf.put_u64_le(e.lsn.into());
-                    }
-                    // removed timeline_start_lsn
-                    buf.put_u64_le(0);
-                }
-                AcceptorProposerMessage::AppendResponse(msg) => {
-                    // v2 didn't have generation
-                    buf.put_u64_le('a' as u64);
-                    buf.put_u64_le(msg.term);
-                    buf.put_u64_le(msg.flush_lsn.into());
-                    // commit_lsn (removed) — zero-fill for v2 wire compat
-                    buf.put_u64_le(0);
-                    buf.put_i64_le(msg.hs_feedback.ts);
-                    buf.put_u64_le(msg.hs_feedback.xmin);
-                    buf.put_u64_le(msg.hs_feedback.catalog_xmin);
-
-                    // AsyncReadMessage in walproposer.c will not try to decode pageserver_feedback
-                    // if it is not present.
-                    if let Some(ref msg) = msg.pageserver_feedback {
-                        msg.serialize(buf);
-                    }
-                }
-            }
-            Ok(())
-        } else {
-            bail!("unsupported protocol version {}", proto_version);
         }
     }
 }

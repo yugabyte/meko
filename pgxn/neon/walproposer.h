@@ -207,20 +207,6 @@ typedef struct ProposerGreeting
 	uint32		wal_seg_size;
 } ProposerGreeting;
 
-/* protocol v2 variant, kept while wp supports it */
-typedef struct ProposerGreetingV2
-{
-	uint64		tag;			/* message tag */
-	uint32		protocolVersion;	/* proposer-safekeeper protocol version */
-	uint32		pgVersion;
-	pg_uuid_t	proposerId;
-	uint64		systemId;		/* Postgres system identifier */
-	uint8		timeline_id[16];	/* Neon timeline id */
-	uint8		tenant_id[16];
-	TimeLineID	timeline;
-	uint32		walSegSize;
-} ProposerGreetingV2;
-
 typedef struct AcceptorProposerMessage
 {
 	uint8		tag;
@@ -247,14 +233,6 @@ typedef struct VoteRequest
 	Generation	generation;		/* membership conf generation */
 	term_t		term;
 } VoteRequest;
-
-/* protocol v2 variant, kept while wp supports it */
-typedef struct VoteRequestV2
-{
-	uint64		tag;
-	term_t		term;
-	pg_uuid_t	proposerId;		/* for monitoring/debugging */
-} VoteRequestV2;
 
 /* Element of term switching chain. */
 typedef struct TermSwitchEntry
@@ -320,30 +298,6 @@ typedef struct AppendRequestHeader
 	/* peer recovery; commit_lsn ≡ flush_lsn). */
 	/* in the AppendRequest message, WAL data follows */
 } AppendRequestHeader;
-
-/* protocol v2 variant, kept while wp supports it */
-typedef struct AppendRequestHeaderV2
-{
-	uint64		tag;
-	term_t		term;			/* term of the proposer */
-
-	/*
-	 * LSN since which current proposer appends WAL (begin_lsn of its first
-	 * record); determines epoch switch point.
-	 */
-	XLogRecPtr	epochStartLsn;
-	XLogRecPtr	beginLsn;		/* start position of message in WAL */
-	XLogRecPtr	endLsn;			/* end position of message in WAL */
-	XLogRecPtr	commitLsn;		/* LSN committed by quorum of safekeepers */
-
-	/*
-	 * minimal LSN which may be needed for recovery of some safekeeper (end
-	 * lsn + 1 of last chunk streamed to everyone)
-	 */
-	XLogRecPtr	truncateLsn;
-	pg_uuid_t	proposerId;		/* for monitoring/debugging */
-	/* in the AppendRequest message, WAL data follows */
-} AppendRequestHeaderV2;
 
 /*
  * Hot standby feedback received from replica
@@ -873,7 +827,6 @@ typedef struct WalProposer
 	XLogRecPtr	commitLsn;
 
 	ProposerGreeting greetRequest;
-	ProposerGreetingV2 greetRequestV2;
 
 	/* Vote request for safekeeper */
 	VoteRequest voteRequest;
