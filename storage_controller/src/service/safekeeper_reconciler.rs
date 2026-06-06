@@ -6,7 +6,6 @@ use std::{
 };
 
 use clashmap::{ClashMap, Entry};
-use safekeeper_api::models::PullTimelineRequest;
 use safekeeper_client::mgmt_api;
 use tokio::sync::{
     Semaphore,
@@ -97,7 +96,7 @@ pub(crate) async fn load_schedule_requests(
         .list_pending_ops_with_timelines()
         .await?;
     let mut res = Vec::with_capacity(pending_ops_timelines.len());
-    for (op_persist, timeline_persist) in pending_ops_timelines {
+    for (op_persist, _timeline_persist) in pending_ops_timelines {
         let node_id = NodeId(op_persist.sk_id as u64);
         let Some(sk) = safekeepers.get(&node_id) else {
             // This shouldn't happen, at least the safekeeper should exist as decomissioned.
@@ -115,48 +114,8 @@ pub(crate) async fn load_schedule_requests(
         } else {
             None
         };
-        let host_list = match op_persist.op_kind {
-            SafekeeperTimelineOpKind::Delete => Vec::new(),
-            SafekeeperTimelineOpKind::Exclude => Vec::new(),
-            SafekeeperTimelineOpKind::Pull => {
-                if timeline_id.is_none() {
-                    // We only do this extra check (outside of timeline_persist check) to give better error msgs
-                    anyhow::bail!(
-                        "timeline_id is empty for `pull` schedule request for {tenant_id}"
-                    );
-                };
-                let Some(timeline_persist) = timeline_persist else {
-                    // This shouldn't happen, the timeline should still exist
-                    tracing::warn!(
-                        tenant_id = op_persist.tenant_id,
-                        timeline_id = op_persist.timeline_id,
-                        "couldn't find timeline for corresponding pull op"
-                    );
-                    continue;
-                };
-                timeline_persist
-                    .sk_set
-                    .iter()
-                    .filter_map(|sk_id| {
-                        let other_node_id = NodeId(*sk_id as u64);
-                        if node_id == other_node_id {
-                            // We obviously don't want to pull from ourselves
-                            return None;
-                        }
-                        let Some(sk) = safekeepers.get(&other_node_id) else {
-                            tracing::warn!(
-                                "couldn't find safekeeper with pending op id {other_node_id}, not pulling from it"
-                            );
-                            return None;
-                        };
-                        Some((other_node_id, sk.base_url()))
-                    })
-                    .collect::<Vec<_>>()
-            }
-        };
         let req = ScheduleRequest {
             safekeeper: sk,
-            host_list,
             tenant_id,
             timeline_id,
             generation: op_persist.generation as u32,
@@ -169,7 +128,6 @@ pub(crate) async fn load_schedule_requests(
 
 pub(crate) struct ScheduleRequest {
     pub(crate) safekeeper: Box<Safekeeper>,
-    pub(crate) host_list: Vec<(NodeId, String)>,
     pub(crate) tenant_id: TenantId,
     pub(crate) timeline_id: Option<TimelineId>,
     pub(crate) generation: u32,
@@ -346,68 +304,6 @@ impl SafekeeperReconcilerInner {
         let req_host = req.safekeeper.skp.host.clone();
         let success;
         match req.kind {
-            SafekeeperTimelineOpKind::Pull => {
-                let Some(timeline_id) = req.timeline_id else {
-                    tracing::warn!(
-                        "ignoring invalid schedule request: timeline_id is empty for `pull`"
-                    );
-                    return;
-                };
-                let our_id = req.safekeeper.get_id();
-                let http_hosts = req
-                    .host_list
-                    .iter()
-                    .filter(|(node_id, _hostname)| *node_id != our_id)
-                    .map(|(_, hostname)| hostname.clone())
-                    .collect::<Vec<_>>();
-                let pull_req = PullTimelineRequest {
-                    http_hosts,
-                    tenant_id: req.tenant_id,
-                    timeline_id,
-                    // TODO(diko): get mconf from "timelines" table and pass it here.
-                    // Now we use pull_timeline reconciliation only for the timeline creation,
-                    // so it's not critical right now.
-                    // It could be fixed together with other reconciliation issues:
-                    // https://github.com/neondatabase/neon/issues/12189
-                    mconf: None,
-                };
-                success = self
-                    .reconcile_inner(
-                        &req,
-                        async |client| client.pull_timeline(&pull_req).await,
-                        |resp| {
-                            if let Some(host) = resp.safekeeper_host {
-                                tracing::info!("pulled timeline from {host} onto {req_host}");
-                            } else {
-                                tracing::info!(
-                                    "timeline already present on safekeeper on {req_host}"
-                                );
-                            }
-                        },
-                        req_cancel,
-                    )
-                    .await;
-            }
-            SafekeeperTimelineOpKind::Exclude => {
-                // TODO actually exclude instead of delete here
-                let tenant_id = req.tenant_id;
-                let Some(timeline_id) = req.timeline_id else {
-                    tracing::warn!(
-                        "ignoring invalid schedule request: timeline_id is empty for `exclude`"
-                    );
-                    return;
-                };
-                success = self
-                    .reconcile_inner(
-                        &req,
-                        async |client| client.delete_timeline(tenant_id, timeline_id).await,
-                        |_resp| {
-                            tracing::info!("deleted timeline from {req_host}");
-                        },
-                        req_cancel,
-                    )
-                    .await;
-            }
             SafekeeperTimelineOpKind::Delete => {
                 let tenant_id = req.tenant_id;
                 if let Some(timeline_id) = req.timeline_id {
