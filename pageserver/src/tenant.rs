@@ -15,7 +15,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display};
-use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
@@ -58,7 +57,6 @@ use self::config::LocationConf;
 use self::metadata::TimelineMetadata;
 use self::mgr::{GetActiveTenantError, GetTenantError};
 use self::remote_timeline_client::upload::upload_tenant_manifest;
-use self::remote_timeline_client::download_index_file;
 use self::timeline::uninit::{TimelineCreateGuard, TimelineExclusionError, UninitializedTimeline};
 use self::timeline::{
     GcCutoffs, TimelineDeleteProgress, TimelineResources, WaitLsnError,
@@ -1508,33 +1506,6 @@ impl TenantShard {
         .await
     }
 
-    fn load_timeline_metadata(
-        self: &Arc<TenantShard>,
-        timeline_id: TimelineId,
-        remote_storage: GenericRemoteStorage,
-        cancel: CancellationToken,
-    ) -> impl Future<Output = TimelinePreload> + use<> {
-        let tenant_shard_id = self.tenant_shard_id;
-        let generation = self.generation;
-        async move {
-            debug_assert_current_span_has_tenant_and_timeline_id();
-            debug!("starting index part download");
-
-            let index_part = download_index_file(
-                &remote_storage,
-                &tenant_shard_id,
-                &timeline_id,
-                generation,
-                &cancel,
-            )
-            .await;
-
-            debug!("finished index part download");
-
-            TimelinePreload { index_part }
-        }
-    }
-
     fn check_to_be_archived_has_no_unarchived_children(
         timeline_id: TimelineId,
         timelines: &std::sync::MutexGuard<'_, HashMap<TimelineId, Arc<Timeline>>>,
@@ -1602,132 +1573,6 @@ impl TenantShard {
     /// Loads the specified (offloaded) timeline from S3 and attaches it as a loaded timeline
     ///
     /// Counterpart to [`offload_timeline`].
-    async fn unoffload_timeline(
-        self: &Arc<Self>,
-        timeline_id: TimelineId,
-        ctx: RequestContext,
-    ) -> Result<Arc<Timeline>, TimelineArchivalError> {
-        info!("unoffloading timeline");
-
-        // We activate the timeline below manually, so this must be called on an active tenant.
-        // We expect callers of this function to ensure this.
-        match self.current_state() {
-            TenantState::Activating { .. }
-            | TenantState::Attaching
-            | TenantState::Broken { .. } => {
-                panic!("Timeline expected to be active")
-            }
-            TenantState::Stopping { .. } => return Err(TimelineArchivalError::Cancelled),
-            TenantState::Active => {}
-        }
-        let cancel = self.cancel.clone();
-
-        // Protect against concurrent attempts to use this TimelineId
-        // We don't care much about idempotency, as it's ensured a layer above.
-        let allow_offloaded = true;
-        let _create_guard = self
-            .create_timeline_create_guard(
-                timeline_id,
-                CreateTimelineIdempotency::FailWithConflict,
-                allow_offloaded,
-            )
-            .map_err(|err| match err {
-                TimelineExclusionError::AlreadyCreating => TimelineArchivalError::AlreadyInProgress,
-                TimelineExclusionError::AlreadyExists { .. } => {
-                    TimelineArchivalError::Other(anyhow::anyhow!("Timeline already exists"))
-                }
-                TimelineExclusionError::Other(e) => TimelineArchivalError::Other(e),
-                TimelineExclusionError::ShuttingDown => TimelineArchivalError::Cancelled,
-            })?;
-
-        let timeline_preload = self
-            .load_timeline_metadata(timeline_id, self.remote_storage.clone(), cancel.clone())
-            .await;
-
-        let index_part = match timeline_preload.index_part {
-            Ok(index_part) => {
-                debug!("remote index part exists for timeline {timeline_id}");
-                index_part
-            }
-            Err(DownloadError::NotFound) => {
-                error!(%timeline_id, "index_part not found on remote");
-                return Err(TimelineArchivalError::NotFound);
-            }
-            Err(DownloadError::Cancelled) => return Err(TimelineArchivalError::Cancelled),
-            Err(e) => {
-                // Some (possibly ephemeral) error happened during index_part download.
-                warn!(%timeline_id, "Failed to load index_part from remote storage, failed creation? ({e})");
-                return Err(TimelineArchivalError::Other(
-                    anyhow::Error::new(e).context("downloading index_part from remote storage"),
-                ));
-            }
-        };
-        let index_part = match index_part {
-            MaybeDeletedIndexPart::IndexPart(index_part) => index_part,
-            MaybeDeletedIndexPart::Deleted(_index_part) => {
-                info!("timeline is deleted according to index_part.json");
-                return Err(TimelineArchivalError::NotFound);
-            }
-        };
-        let remote_metadata = index_part.metadata.clone();
-        let timeline_resources = self.build_timeline_resources(timeline_id);
-        self.load_remote_timeline(
-            timeline_id,
-            index_part,
-            remote_metadata,
-            timeline_resources,
-            LoadTimelineCause::Unoffload,
-            &ctx,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "failed to load remote timeline {} for tenant {}",
-                timeline_id, self.tenant_shard_id
-            )
-        })
-        .map_err(TimelineArchivalError::Other)?;
-
-        let timeline = {
-            let timelines = self.timelines.lock().unwrap();
-            let Some(timeline) = timelines.get(&timeline_id) else {
-                warn!("timeline not available directly after attach");
-                // This is not a panic because no locks are held between `load_remote_timeline`
-                // which puts the timeline into timelines, and our look into the timeline map.
-                return Err(TimelineArchivalError::Other(anyhow::anyhow!(
-                    "timeline not available directly after attach"
-                )));
-            };
-            let mut offloaded_timelines = self.timelines_offloaded.lock().unwrap();
-            match offloaded_timelines.remove(&timeline_id) {
-                Some(offloaded) => {
-                    offloaded.delete_from_ancestor_with_timelines(&timelines);
-                }
-                None => warn!("timeline already removed from offloaded timelines"),
-            }
-
-            self.initialize_gc_info(&timelines, &offloaded_timelines, Some(timeline_id));
-
-            Arc::clone(timeline)
-        };
-
-        // Upload new list of offloaded timelines to S3
-        self.maybe_upload_tenant_manifest().await?;
-
-        // Activate the timeline (if it makes sense)
-        if !(timeline.is_broken() || timeline.is_stopping()) {
-            let background_jobs_can_start = None;
-            timeline.activate(
-                self.clone(),
-                background_jobs_can_start,
-                &ctx.with_scope_timeline(&timeline),
-            );
-        }
-
-        info!("timeline unoffloading complete");
-        Ok(timeline)
-    }
-
     pub(crate) async fn apply_timeline_archival_config(
         self: &Arc<Self>,
         timeline_id: TimelineId,
@@ -1735,32 +1580,15 @@ impl TenantShard {
         ctx: RequestContext,
     ) -> Result<(), TimelineArchivalError> {
         info!("setting timeline archival config");
-        // First part: figure out what is needed to do, and do validation
-        let timeline_or_unarchive_offloaded = 'outer: {
+        let _ = ctx;
+        // yb-mode never produces offloaded timelines (the preload path
+        // populates `timelines_offloaded` from a manifest we no longer
+        // write), so the only valid case here is an in-memory timeline.
+        let timeline = {
             let timelines = self.timelines.lock().unwrap();
-
-            let Some(timeline) = timelines.get(&timeline_id) else {
-                let offloaded_timelines = self.timelines_offloaded.lock().unwrap();
-                let Some(offloaded) = offloaded_timelines.get(&timeline_id) else {
-                    return Err(TimelineArchivalError::NotFound);
-                };
-                if new_state == TimelineArchivalState::Archived {
-                    // It's offloaded already, so nothing to do
-                    return Ok(());
-                }
-                if let Some(ancestor_timeline_id) = offloaded.ancestor_timeline_id {
-                    Self::check_ancestor_of_to_be_unarchived_is_not_archived(
-                        ancestor_timeline_id,
-                        &timelines,
-                        &offloaded_timelines,
-                    )?;
-                }
-                break 'outer None;
-            };
-
-            // Do some validation. We release the timelines lock below, so there is potential
-            // for race conditions: these checks are more present to prevent misunderstandings of
-            // the API's capabilities, instead of serving as the sole way to defend their invariants.
+            let timeline = timelines
+                .get(&timeline_id)
+                .ok_or(TimelineArchivalError::NotFound)?;
             match new_state {
                 TimelineArchivalState::Unarchived => {
                     Self::check_to_be_unarchived_timeline_has_no_archived_parent(timeline)?
@@ -1769,15 +1597,7 @@ impl TenantShard {
                     Self::check_to_be_archived_has_no_unarchived_children(timeline_id, &timelines)?
                 }
             }
-            Some(Arc::clone(timeline))
-        };
-
-        // Second part: unoffload timeline (if needed)
-        let timeline = if let Some(timeline) = timeline_or_unarchive_offloaded {
-            timeline
-        } else {
-            // Turn offloaded timeline into a non-offloaded one
-            self.unoffload_timeline(timeline_id, ctx).await?
+            Arc::clone(timeline)
         };
 
         // Third part: persist the new archival state. yb-mode keeps

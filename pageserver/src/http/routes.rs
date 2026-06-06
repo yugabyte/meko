@@ -32,21 +32,19 @@ use pageserver_api::models::{
     ListAuxFilesRequest, LocationConfig, LocationConfigListResponse, LsnLease,
     LsnLeaseRequest, OffloadedTimelineInfo, PageTraceEvent, StatusResponse,
     TenantConfigPatchRequest, TenantConfigRequest, TenantDetails, TenantInfo,
-    TenantLocationConfigRequest, TenantLocationConfigResponse, TenantScanRemoteStorageResponse,
-    TenantScanRemoteStorageShard, TenantShardLocation, TenantSorting, TenantState, TenantWaitLsnRequest,
+    TenantLocationConfigRequest, TenantLocationConfigResponse, TenantShardLocation, TenantSorting, TenantState, TenantWaitLsnRequest,
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateRequestMode, TimelineGcRequest, TimelineInfo,
     TimelinePatchIndexPartRequest, TimelineVisibilityState, TimelinesInfoAndOffloaded,
     TopTenantShardItem, TopTenantShardsRequest, TopTenantShardsResponse,
 };
 use postgres_ffi::PgMajorVersion;
-use remote_storage::{DownloadError, GenericRemoteStorage};
+use remote_storage::GenericRemoteStorage;
 use scopeguard::defer;
 use tokio::time::Instant;
 use tokio_util::io::StreamReader;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::auth::SwappableJwtAuth;
-use utils::generation::Generation;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 
@@ -60,9 +58,6 @@ use crate::tenant::config::LocationConf;
 use crate::tenant::mgr::{
     GetActiveTenantError, GetTenantError, TenantManager, TenantMapError, TenantMapInsertError,
     TenantSlot, TenantSlotError, TenantSlotUpsertError, TenantStateError, UpsertLocationError,
-};
-use crate::tenant::remote_timeline_client::{
-    download_index_part, download_tenant_manifest, list_remote_tenant_shards, list_remote_timelines,
 };
 use crate::tenant::timeline::{
     MarkInvisibleRequest, Timeline, WaitLsnTimeout,
@@ -1813,91 +1808,6 @@ async fn always_panic_handler(
     });
     json_response(StatusCode::NO_CONTENT, ())
 }
-
-async fn tenant_scan_remote_handler(
-    request: Request<Body>,
-    cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let state = get_state(&request);
-    let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
-
-    let mut response = TenantScanRemoteStorageResponse::default();
-
-    let (shards, _other_keys) =
-        list_remote_tenant_shards(&state.remote_storage, tenant_id, cancel.clone())
-            .await
-            .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!(e)))?;
-
-    for tenant_shard_id in shards {
-        let (timeline_ids, _other_keys) =
-            list_remote_timelines(&state.remote_storage, tenant_shard_id, cancel.clone())
-                .await
-                .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!(e)))?;
-
-        let mut generation = Generation::none();
-        for timeline_id in timeline_ids {
-            match download_index_part(
-                &state.remote_storage,
-                &tenant_shard_id,
-                &timeline_id,
-                Generation::MAX,
-                &cancel,
-            )
-            .instrument(info_span!("download_index_part",
-                         tenant_id=%tenant_shard_id,
-                         shard_id=%tenant_shard_id.shard_slug(),
-                         %timeline_id))
-            .await
-            {
-                Ok((index_part, index_generation, _index_mtime)) => {
-                    tracing::info!(
-                        "Found timeline {tenant_shard_id}/{timeline_id} metadata (gen {index_generation:?}, {} consistent LSN)",
-                        index_part.metadata.disk_consistent_lsn()
-                    );
-                    generation = std::cmp::max(generation, index_generation);
-                }
-                Err(DownloadError::NotFound) => {
-                    // This is normal for tenants that were created with multiple shards: they have an unsharded path
-                    // containing the timeline's initdb tarball but no index.  Otherwise it is a bit strange.
-                    tracing::info!(
-                        "Timeline path {tenant_shard_id}/{timeline_id} exists in remote storage but has no index, skipping"
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    return Err(ApiError::InternalServerError(anyhow::anyhow!(e)));
-                }
-            };
-        }
-
-        let result =
-            download_tenant_manifest(&state.remote_storage, &tenant_shard_id, generation, &cancel)
-                .instrument(info_span!("download_tenant_manifest",
-                            tenant_id=%tenant_shard_id,
-                            shard_id=%tenant_shard_id.shard_slug()))
-                .await;
-        let stripe_size = match result {
-            Ok((manifest, _, _)) => manifest.stripe_size,
-            Err(DownloadError::NotFound) => None,
-            Err(err) => return Err(ApiError::InternalServerError(anyhow!(err))),
-        };
-
-        response.shards.push(TenantScanRemoteStorageShard {
-            tenant_shard_id,
-            generation: generation.into(),
-            stripe_size,
-        });
-    }
-
-    if response.shards.is_empty() {
-        return Err(ApiError::NotFound(
-            anyhow::anyhow!("No shards found for tenant ID {tenant_id}").into(),
-        ));
-    }
-
-    json_response(StatusCode::OK, response)
-}
-
 async fn wait_lsn_handler(
     mut request: Request<Body>,
     cancel: CancellationToken,
@@ -2669,9 +2579,6 @@ pub fn make_router(
             "/v1/tenant/:tenant_shard_id/timeline/:timeline_id/page_trace",
             |r| api_handler(r, timeline_page_trace_handler),
         )
-        .get("/v1/tenant/:tenant_id/scan_remote_storage", |r| {
-            api_handler(r, tenant_scan_remote_handler)
-        })
         .post("/v1/tenant/:tenant_shard_id/wait_lsn", |r| {
             api_handler(r, wait_lsn_handler)
         })

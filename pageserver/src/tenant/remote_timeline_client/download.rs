@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use anyhow::Context;
 use camino::Utf8PathBuf;
 use remote_storage::{
-    DownloadError, DownloadKind, DownloadOpts, GenericRemoteStorage, ListingMode, RemotePath,
+    DownloadError, DownloadOpts, GenericRemoteStorage, ListingMode, RemotePath,
 };
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncSeekExt;
@@ -21,13 +21,9 @@ use tracing::warn;
 use utils::id::{TenantId, TimelineId};
 use utils::backoff;
 
-use super::index::IndexPart;
-use super::manifest::TenantManifest;
 use super::{
-    FAILED_DOWNLOAD_WARN_THRESHOLD, FAILED_REMOTE_OP_RETRIES, INITDB_PATH, parse_remote_index_path,
-    parse_remote_tenant_manifest_path, remote_index_path, remote_initdb_archive_path,
-    remote_initdb_preserved_archive_path, remote_tenant_manifest_path,
-    remote_tenant_manifest_prefix, remote_tenant_path,
+    FAILED_DOWNLOAD_WARN_THRESHOLD, FAILED_REMOTE_OP_RETRIES, INITDB_PATH, remote_initdb_archive_path,
+    remote_initdb_preserved_archive_path,
 };
 use crate::TEMP_FILE_SUFFIX;
 use crate::config::PageServerConf;
@@ -35,7 +31,6 @@ use crate::span::{
     debug_assert_current_span_has_tenant_and_timeline_id, debug_assert_current_span_has_tenant_id,
 };
 use crate::tenant::Generation;
-use crate::tenant::remote_timeline_client::remote_timelines_path;
 
 async fn list_identifiers<T>(
     storage: &GenericRemoteStorage,
@@ -77,48 +72,6 @@ where
     Ok((parsed_ids, other_prefixes))
 }
 
-/// List shards of given tenant in remote storage
-pub(crate) async fn list_remote_tenant_shards(
-    storage: &GenericRemoteStorage,
-    tenant_id: TenantId,
-    cancel: CancellationToken,
-) -> anyhow::Result<(HashSet<TenantId>, HashSet<String>)> {
-    let remote_path = remote_tenant_path(&TenantId::unsharded(tenant_id));
-    list_identifiers::<TenantId>(storage, remote_path, cancel).await
-}
-
-/// List timelines of given tenant shard in remote storage
-pub async fn list_remote_timelines(
-    storage: &GenericRemoteStorage,
-    tenant_shard_id: TenantId,
-    cancel: CancellationToken,
-) -> anyhow::Result<(HashSet<TimelineId>, HashSet<String>)> {
-    fail::fail_point!("storage-sync-list-remote-timelines", |_| {
-        anyhow::bail!("storage-sync-list-remote-timelines");
-    });
-
-    // YbStore short-circuit: the storage_controller's `timelines` table
-    // is colocated in `yb_storage` with the blobs table, so we can ask
-    // it directly instead of LIST'ing `tenants/<T>/timelines/` and
-    // parsing the response. The S3 listing exists because S3 has no
-    // other way to enumerate; YB does.
-    if let GenericRemoteStorage::YbStore(yb) = storage {
-        let tenant_id_str = tenant_shard_id.to_string();
-        let ids = tokio::select! {
-            r = yb.list_timelines_for_tenant_via_controller(&tenant_id_str) => r?,
-            _ = cancel.cancelled() => anyhow::bail!("cancelled"),
-        };
-        let parsed = ids
-            .into_iter()
-            .filter_map(|s| TimelineId::from_str(&s).ok())
-            .collect();
-        return Ok((parsed, HashSet::new()));
-    }
-
-    let remote_path = remote_timelines_path(&tenant_shard_id).add_trailing_slash();
-    list_identifiers::<TimelineId>(storage, remote_path, cancel).await
-}
-
 async fn do_download_remote_path_retry_forever(
     storage: &GenericRemoteStorage,
     remote_path: &RemotePath,
@@ -144,56 +97,6 @@ async fn do_download_remote_path_retry_forever(
         cancel,
     )
     .await
-}
-
-async fn do_download_tenant_manifest(
-    storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantId,
-    _timeline_id: Option<&TimelineId>,
-    generation: Generation,
-    cancel: &CancellationToken,
-) -> Result<(TenantManifest, Generation, SystemTime), DownloadError> {
-    let remote_path = remote_tenant_manifest_path(tenant_shard_id, generation);
-
-    let download_opts = DownloadOpts {
-        kind: DownloadKind::Small,
-        ..Default::default()
-    };
-
-    let (manifest_bytes, manifest_bytes_mtime) =
-        do_download_remote_path_retry_forever(storage, &remote_path, download_opts, cancel).await?;
-
-    let tenant_manifest = TenantManifest::from_json_bytes(&manifest_bytes)
-        .with_context(|| format!("deserialize tenant manifest file at {remote_path:?}"))
-        .map_err(DownloadError::Other)?;
-
-    Ok((tenant_manifest, generation, manifest_bytes_mtime))
-}
-
-async fn do_download_index_part(
-    storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantId,
-    timeline_id: Option<&TimelineId>,
-    index_generation: Generation,
-    cancel: &CancellationToken,
-) -> Result<(IndexPart, Generation, SystemTime), DownloadError> {
-    let timeline_id =
-        timeline_id.expect("A timeline ID is always provided when downloading an index");
-    let remote_path = remote_index_path(tenant_shard_id, timeline_id, index_generation);
-
-    let download_opts = DownloadOpts {
-        kind: DownloadKind::Small,
-        ..Default::default()
-    };
-
-    let (index_part_bytes, index_part_mtime) =
-        do_download_remote_path_retry_forever(storage, &remote_path, download_opts, cancel).await?;
-
-    let index_part: IndexPart = serde_json::from_slice(&index_part_bytes)
-        .with_context(|| format!("deserialize index part file at {remote_path:?}"))
-        .map_err(DownloadError::Other)?;
-
-    Ok((index_part, index_generation, index_part_mtime))
 }
 
 /// Metadata objects are "generationed", meaning that they include a generation suffix.  This
@@ -331,57 +234,6 @@ where
             .await
         }
     }
-}
-
-/// index_part.json objects are suffixed with a generation number, so we cannot
-/// directly GET the latest index part without doing some probing.
-///
-/// In this function we probe for the most recent index in a generation <= our current generation.
-/// See "Finding the remote indices for timelines" in docs/rfcs/025-generation-numbers.md
-pub(crate) async fn download_index_part(
-    storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantId,
-    timeline_id: &TimelineId,
-    my_generation: Generation,
-    cancel: &CancellationToken,
-) -> Result<(IndexPart, Generation, SystemTime), DownloadError> {
-    debug_assert_current_span_has_tenant_and_timeline_id();
-
-    let index_prefix = remote_index_path(tenant_shard_id, timeline_id, Generation::none());
-    download_generation_object(
-        storage,
-        tenant_shard_id,
-        Some(timeline_id),
-        my_generation,
-        "index_part",
-        index_prefix,
-        do_download_index_part,
-        parse_remote_index_path,
-        cancel,
-    )
-    .await
-}
-
-pub(crate) async fn download_tenant_manifest(
-    storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantId,
-    my_generation: Generation,
-    cancel: &CancellationToken,
-) -> Result<(TenantManifest, Generation, SystemTime), DownloadError> {
-    let manifest_prefix = remote_tenant_manifest_prefix(tenant_shard_id);
-
-    download_generation_object(
-        storage,
-        tenant_shard_id,
-        None,
-        my_generation,
-        "tenant-manifest",
-        manifest_prefix,
-        do_download_tenant_manifest,
-        parse_remote_tenant_manifest_path,
-        cancel,
-    )
-    .await
 }
 
 pub(crate) async fn download_initdb_tar_zst(
