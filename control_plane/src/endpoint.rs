@@ -1289,12 +1289,12 @@ impl Endpoint {
 /// fully managed by storage controller, therefore not sharded.
 pub fn local_pageserver_conf_to_conn_info(
     conf: &crate::local_env::PageServerConf,
-    disable_tls: bool,
+    use_tls: bool,
 ) -> Result<PageserverConnectionInfo> {
     let libpq_url = {
         let (host, port) = parse_host_port(&conf.listen_pg_addr)?;
         let port = port.unwrap_or(5432);
-        let sslmode = if disable_tls { "?sslmode=disable" } else { "" };
+        let sslmode = if use_tls { "" } else { "?sslmode=disable" };
         Some(format!("postgres://no_user@{host}:{port}{sslmode}"))
     };
     let grpc_url = if let Some(grpc_addr) = &conf.listen_grpc_addr {
@@ -1327,7 +1327,7 @@ pub fn local_pageserver_conf_to_conn_info(
 
 pub fn tenant_locate_response_to_conn_info(
     response: &pageserver_api::controller_api::TenantLocateResponse,
-    disable_tls: bool,
+    use_tls: bool,
 ) -> Result<PageserverConnectionInfo> {
     let mut shards = HashMap::new();
     for shard in response.shards.iter() {
@@ -1335,7 +1335,7 @@ pub fn tenant_locate_response_to_conn_info(
         let libpq_url = {
             let host = &shard.listen_pg_addr;
             let port = shard.listen_pg_port;
-            let sslmode = if disable_tls { "?sslmode=disable" } else { "" };
+            let sslmode = if use_tls { "" } else { "?sslmode=disable" };
             Some(format!("postgres://no_user@{host}:{port}{sslmode}"))
         };
         let grpc_url = if let Some(grpc_addr) = &shard.listen_grpc_addr {
