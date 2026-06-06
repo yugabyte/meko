@@ -459,7 +459,7 @@ impl PageStore {
                        AND a.forknum=$6 AND a.blknum=$7 \
                        AND a.is_image=TRUE AND a.lsn <= $8 \
                      ORDER BY a.lsn DESC LIMIT 1), 0) \
-             ORDER BY p.lsn DESC",
+             ORDER BY p.lsn DESC, p.is_image DESC",
             schema = self.schema
         );
         let rows = self
@@ -473,8 +473,11 @@ impl PageStore {
             .await
             .context("read_chain")?;
         let mut chain = Vec::with_capacity(rows.len());
+        let mut order_check: Vec<(Lsn, bool, bool)> = Vec::with_capacity(rows.len());
         for r in rows {
             let row = row_to_page(r)?;
+            order_check.push((row.lsn, row.is_image, row.will_init));
+            assert_chain_order_for_key(&order_check, "read_chain");
             let anchor = row.will_init;
             chain.push(row);
             if anchor {
@@ -597,9 +600,9 @@ impl PageStore {
                                AND a.forknum=$6 AND a.blknum = b.blknum \
                                AND a.is_image=TRUE AND a.lsn <= $9 \
                              ORDER BY a.lsn DESC LIMIT 1), 0) \
-                     ORDER BY p.lsn DESC \
+                     ORDER BY p.lsn DESC, p.is_image DESC \
                  ) p \
-                 ORDER BY p.blknum, p.lsn DESC",
+                 ORDER BY p.blknum, p.lsn DESC, p.is_image DESC",
                 schema = self.schema
             );
             self.ysql_client
@@ -659,9 +662,9 @@ impl PageStore {
                                AND a.blknum = b.blknum \
                                AND a.is_image=TRUE AND a.lsn <= $13 \
                              ORDER BY a.lsn DESC LIMIT 1), 0) \
-                     ORDER BY p.lsn DESC \
+                     ORDER BY p.lsn DESC, p.is_image DESC \
                  ) p \
-                 ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC",
+                 ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC, p.is_image DESC",
                 schema = self.schema
             );
             self.ysql_client
@@ -683,9 +686,18 @@ impl PageStore {
         // For blocks without an image, it finds the latest will_init
         // delta and trims older rows.
         let mut by_key: HashMap<Bytes, Vec<PageRow>> = HashMap::new();
+        let mut order_check: HashMap<Bytes, Vec<(Lsn, bool, bool)>> = HashMap::new();
         for r in rows {
             let row = row_to_page(r)?;
             let key = row.key.clone();
+            order_check
+                .entry(key.clone())
+                .or_default()
+                .push((row.lsn, row.is_image, row.will_init));
+            assert_chain_order_for_key(
+                order_check.get(&key).unwrap(),
+                "scan_range",
+            );
             let chain = by_key.entry(key).or_default();
             if chain.last().is_some_and(|last| last.will_init) {
                 continue;
@@ -816,7 +828,7 @@ impl PageStore {
                        AND a.segno=$4 AND a.blknum=$5 \
                        AND a.is_image=TRUE AND a.lsn <= $6 \
                      ORDER BY a.lsn DESC LIMIT 1), 0) \
-             ORDER BY p.lsn DESC",
+             ORDER BY p.lsn DESC, p.is_image DESC",
             schema = self.schema
         );
         let rows = self
@@ -828,8 +840,11 @@ impl PageStore {
             .await
             .context("read_slru_chain")?;
         let mut chain = Vec::with_capacity(rows.len());
+        let mut order_check: Vec<(Lsn, bool, bool)> = Vec::with_capacity(rows.len());
         for r in rows {
             let row = row_to_slru_page(r)?;
+            order_check.push((row.lsn, row.is_image, row.will_init));
+            assert_chain_order_for_key(&order_check, "read_slru_chain");
             let anchor = row.will_init;
             chain.push(row);
             if anchor {
@@ -910,8 +925,17 @@ impl PageStore {
             .context("scan_slru_range")?;
 
         let mut by_block: HashMap<u32, Vec<SlruPageRow>> = HashMap::new();
+        let mut order_check: HashMap<u32, Vec<(Lsn, bool, bool)>> = HashMap::new();
         for r in rows {
             let row = row_to_slru_page(r)?;
+            order_check
+                .entry(row.blknum)
+                .or_default()
+                .push((row.lsn, row.is_image, row.will_init));
+            assert_chain_order_for_key(
+                order_check.get(&row.blknum).unwrap(),
+                "scan_slru_range",
+            );
             let entry = by_block.entry(row.blknum).or_default();
             if entry.last().is_some_and(|last| last.will_init) {
                 continue;
@@ -1609,6 +1633,44 @@ impl PageStore {
     #[doc(hidden)]
     pub async fn test_only_execute(&self, sql: &str) -> Result<u64> {
         self.ysql_client.execute(sql, &[]).await
+    }
+}
+
+/// Invariants that every chain returned by `read_chain` / `scan_range` /
+/// `read_slru_chain` / `scan_slru_range` must satisfy *for a single key*
+/// when iterated in the SQL's `lsn DESC, is_image DESC` order — i.e.
+/// in the order rows are pushed into the chain `Vec`.
+///
+/// 1. `lsn` is non-increasing as we step through the slice.
+/// 2. At a tied LSN, an image (`is_image == true`) MUST come before a
+///    delta (`is_image == false`). This guarantees the
+///    "break at first will_init=true" trim sees the image first and
+///    drops the same-LSN delta (which is the WAL record already baked
+///    into the image — applying it would double-apply).
+///
+/// Violations indicate either a missing `ORDER BY ... is_image DESC`
+/// tiebreaker (caller bug) or stale prepared-statement state. Panic
+/// rather than silently feed walredo a chain that would yield wrong
+/// page contents.
+fn assert_chain_order_for_key(
+    chain: &[(Lsn, bool, bool /* will_init */)],
+    where_: &str,
+) {
+    let mut prev: Option<(Lsn, bool)> = None;
+    for (i, &(lsn, is_image, _will_init)) in chain.iter().enumerate() {
+        if let Some((plsn, pis_image)) = prev {
+            if lsn > plsn {
+                panic!(
+                    "{where_}: chain row {i} lsn {lsn} > prev lsn {plsn} (must be DESC)",
+                );
+            }
+            if lsn == plsn && !pis_image && is_image {
+                panic!(
+                    "{where_}: chain has image at lsn {lsn} after a delta at the same lsn (need ORDER BY ..., is_image DESC tiebreaker)",
+                );
+            }
+        }
+        prev = Some((lsn, is_image));
     }
 }
 
