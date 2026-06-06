@@ -180,6 +180,30 @@ static PgSeccompRule allowed_syscalls[] =
 	PG_SCMP_ALLOW(select),
 	PG_SCMP_ALLOW(write),
 
+	/*
+	 * Signal plumbing — needed by postgres's ereport()/PANIC paths
+	 * (BlockSig/UnBlockSig/PG_SETMASK macros), libc's pthread_sigmask,
+	 * and the kernel trampoline for any installed sighandler's return.
+	 *
+	 * Without these, a fault inside walredo (malformed WAL record, OOM,
+	 * checksum mismatch, ...) gets translated by the kernel into SIGSYS
+	 * before postgres can write its WARNING/PANIC line to the pipe — the
+	 * pageserver then sees only "child died with signal 31" and the
+	 * diagnostic context (record type, LSN, page offset) is lost.
+	 *
+	 * These syscalls only manipulate per-process signal state; they
+	 * can't escape the sandbox or reveal kernel info, so allowing
+	 * them costs nothing security-wise.
+	 *
+	 * See 2026-06-06 incident: a chain-order bug produced an under-
+	 * populated image; walredo's INSERT_LEAF off:237 PANIC was masked
+	 * as bare SIGSYS until the WARNING happened to slip out before the
+	 * sigprocmask call.
+	 */
+	PG_SCMP_ALLOW(rt_sigprocmask),
+	PG_SCMP_ALLOW(rt_sigaction),
+	PG_SCMP_ALLOW(rt_sigreturn),
+
 	/* Memory allocation */
 	PG_SCMP_ALLOW(brk),
 #ifndef MALLOC_NO_MMAP
