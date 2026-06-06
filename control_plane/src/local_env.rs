@@ -91,7 +91,7 @@ pub struct LocalEnv {
 
     /// Flag to generate SSL certificates for components that need it.
     /// Also generates root CA certificate that is used to sign all other certificates.
-    pub generate_local_ssl_certs: bool,
+    pub use_local_tls: bool,
 }
 
 /// On-disk state stored in `.neon/config`.
@@ -118,7 +118,7 @@ pub struct OnDiskConfig {
     // Note: skip serializing because in compat tests old storage controller fails
     // to load new config file. May be removed after this field is in release branch.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub generate_local_ssl_certs: bool,
+    pub use_local_tls: bool,
 }
 
 fn fail_if_pageservers_field_specified<'de, D>(_: D) -> Result<Vec<PageServerConf>, D::Error>
@@ -146,7 +146,7 @@ pub struct NeonLocalInitConf {
     pub endpoint_storage: EndpointStorageConf,
     pub control_plane_api: Option<Url>,
     pub control_plane_hooks_api: Option<Url>,
-    pub generate_local_ssl_certs: bool,
+    pub use_local_tls: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
@@ -503,7 +503,7 @@ impl LocalEnv {
     }
 
     pub fn ssl_ca_cert_path(&self) -> Option<PathBuf> {
-        if self.generate_local_ssl_certs {
+        if self.use_local_tls {
             Some(self.base_data_dir.join("rootCA.crt"))
         } else {
             None
@@ -511,7 +511,7 @@ impl LocalEnv {
     }
 
     pub fn ssl_ca_key_path(&self) -> Option<PathBuf> {
-        if self.generate_local_ssl_certs {
+        if self.use_local_tls {
             Some(self.base_data_dir.join("rootCA.key"))
         } else {
             None
@@ -664,7 +664,7 @@ impl LocalEnv {
                 control_plane_hooks_api,
                 control_plane_compute_hook_api: _,
                 branch_name_mappings,
-                generate_local_ssl_certs,
+                use_local_tls,
                 endpoint_storage,
             } = on_disk_config;
             LocalEnv {
@@ -680,7 +680,7 @@ impl LocalEnv {
                 control_plane_api: control_plane_api.unwrap(),
                 control_plane_hooks_api,
                 branch_name_mappings,
-                generate_local_ssl_certs,
+                use_local_tls,
                 endpoint_storage,
             }
         };
@@ -795,7 +795,7 @@ impl LocalEnv {
                 control_plane_hooks_api: self.control_plane_hooks_api.clone(),
                 control_plane_compute_hook_api: None,
                 branch_name_mappings: self.branch_name_mappings.clone(),
-                generate_local_ssl_certs: self.generate_local_ssl_certs,
+                use_local_tls: self.use_local_tls,
                 endpoint_storage: self.endpoint_storage.clone(),
             },
         )
@@ -900,7 +900,7 @@ impl LocalEnv {
             pageservers,
             safekeepers,
             control_plane_api,
-            generate_local_ssl_certs,
+            use_local_tls,
             control_plane_hooks_api,
             endpoint_storage,
         } = conf;
@@ -952,11 +952,11 @@ impl LocalEnv {
             control_plane_api: control_plane_api.unwrap(),
             control_plane_hooks_api,
             branch_name_mappings: Default::default(),
-            generate_local_ssl_certs,
+            use_local_tls,
             endpoint_storage,
         };
 
-        if generate_local_ssl_certs {
+        if use_local_tls {
             env.generate_ssl_ca_cert()?;
         }
 

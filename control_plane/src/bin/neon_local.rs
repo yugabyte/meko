@@ -1017,7 +1017,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
             default_tenant_id: TenantId::from_array(std::array::from_fn(|_| 0)),
             storage_controller: None,
             control_plane_hooks_api: None,
-            generate_local_ssl_certs: false,
+            use_local_tls: false,
         }
     };
 
@@ -1486,7 +1486,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
 
             let mut pageserver_conninfo = if let Some(ps_id) = pageserver_id {
                 let conf = env.get_pageserver_conf(ps_id).unwrap();
-                local_pageserver_conf_to_conn_info(conf)?
+                local_pageserver_conf_to_conn_info(conf, !env.use_local_tls)?
             } else {
                 // Look up the currently attached location of the tenant, and its striping metadata,
                 // to pass these on to postgres.
@@ -1510,7 +1510,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
                     .await?;
                 }
 
-                tenant_locate_response_to_conn_info(&locate_result)?
+                tenant_locate_response_to_conn_info(&locate_result, !env.use_local_tls)?
             };
             pageserver_conninfo.prefer_protocol = prefer_protocol;
 
@@ -1568,14 +1568,14 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
             let mut pageserver_conninfo = match args.pageserver_id {
                 Some(pageserver_id) => {
                     let conf = env.get_pageserver_conf(pageserver_id)?;
-                    local_pageserver_conf_to_conn_info(conf)?
+                    local_pageserver_conf_to_conn_info(conf, !env.use_local_tls)?
                 }
                 None => {
                     let storage_controller = StorageController::from_env(env);
                     let locate_result =
                         storage_controller.tenant_locate(endpoint.tenant_id).await?;
 
-                    tenant_locate_response_to_conn_info(&locate_result)?
+                    tenant_locate_response_to_conn_info(&locate_result, !env.use_local_tls)?
                 }
             };
             pageserver_conninfo.prefer_protocol = prefer_protocol;
@@ -1598,14 +1598,14 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
             };
             let mut pageserver_conninfo = if let Some(ps_id) = args.endpoint_pageserver_id {
                 let conf = env.get_pageserver_conf(ps_id)?;
-                local_pageserver_conf_to_conn_info(conf)?
+                local_pageserver_conf_to_conn_info(conf, !env.use_local_tls)?
             } else {
                 // Look up the currently attached location of the tenant, and its striping metadata,
                 // to pass these on to postgres.
                 let storage_controller = StorageController::from_env(env);
                 let locate_result = storage_controller.tenant_locate(endpoint.tenant_id).await?;
 
-                tenant_locate_response_to_conn_info(&locate_result)?
+                tenant_locate_response_to_conn_info(&locate_result, !env.use_local_tls)?
             };
             pageserver_conninfo.prefer_protocol = prefer_protocol;
 

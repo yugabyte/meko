@@ -489,7 +489,7 @@ impl StorageController {
             }
         }
 
-        if self.env.generate_local_ssl_certs {
+        if self.env.use_local_tls {
             self.env.generate_ssl_cert(
                 &instance_dir.join("server.crt"),
                 &instance_dir.join("server.key"),

@@ -1111,14 +1111,14 @@ class NeonEnv:
         self.initial_tenant = config.initial_tenant
         self.initial_timeline = config.initial_timeline
 
-        self.generate_local_ssl_certs = (
+        self.use_local_tls = (
             config.use_https_pageserver_api
             or config.use_https_safekeeper_api
             or config.use_https_storage_controller_api
             or config.use_https_storage_broker_api
         )
         self.ssl_ca_file = (
-            self.repo_dir.joinpath("rootCA.crt") if self.generate_local_ssl_certs else None
+            self.repo_dir.joinpath("rootCA.crt") if self.use_local_tls else None
         )
 
         neon_local_env_vars = {}
@@ -1197,7 +1197,7 @@ class NeonEnv:
             "endpoint_storage": {
                 "listen_addr": f"127.0.0.1:{self.port_distributor.get_port()}",
             },
-            "generate_local_ssl_certs": self.generate_local_ssl_certs,
+            "use_local_tls": self.use_local_tls,
         }
 
         if config.use_https_storage_broker_api:

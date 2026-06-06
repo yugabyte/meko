@@ -44,7 +44,7 @@ trap cleanup EXIT
 step "Generate AWS-style neon_local init config (YB-WAL + remote-storage CF)"
 INIT_TOML=/tmp/neon-init-yb.toml
 cat > "$INIT_TOML" <<'TOML'
-generate_local_ssl_certs = false
+use_local_tls = false
 default_tenant_id = "11da26b359f5f72061ce4fc6461fab3f"
 control_plane_api = "http://127.0.0.1:1254/upcall/v1/"
 
