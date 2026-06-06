@@ -10,7 +10,6 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use http_utils::error::ApiError;
-use remote_storage::RemotePath;
 use safekeeper_api::Term;
 use safekeeper_api::membership::Configuration;
 use safekeeper_api::models::{

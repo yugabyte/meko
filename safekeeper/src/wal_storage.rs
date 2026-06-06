@@ -20,7 +20,6 @@ use postgres_ffi::waldecoder::WalStreamDecoder;
 use postgres_ffi::{PG_TLI, XLogFileName, XLogSegNo};
 use postgres_versioninfo::{PgMajorVersion, PgVersionId};
 use pq_proto::SystemId;
-use remote_storage::RemotePath;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 use tracing::*;

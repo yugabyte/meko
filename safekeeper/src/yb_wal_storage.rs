@@ -102,11 +102,10 @@ use crate::state::TimelinePersistentState;
 use crate::wal_cache::WalCache;
 use crate::wal_storage::{PhysicalStorage, Storage};
 
-// Re-export the auto-reconnecting Postgres ysql_fpu_client wrapper from the
-// shared `remote_storage` crate (used by both the pageserver's
-// `YbStore` and our YB-WAL mirror here). See `remote_storage::YsqlClient`
+// Re-export the auto-reconnecting Postgres ysql_fpu_client wrapper
+// shared with the pageserver's `YbStore`. See `ysql_client::YsqlClient`
 // for the reconnect / retry-once semantics.
-pub use remote_storage::YsqlClient;
+pub use ysql_client::YsqlClient;
 
 /// Handles to the YB connection that mirrors live WAL into
 /// `yb_storage.wals`. Constructed at safekeeper boot via
