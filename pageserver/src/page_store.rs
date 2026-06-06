@@ -1674,6 +1674,119 @@ fn assert_chain_order_for_key(
     }
 }
 
+#[cfg(test)]
+mod chain_order_tests {
+    //! Unit tests for [`assert_chain_order_for_key`]. The guard runs
+    //! after every chain trim in `read_chain` / `scan_range` /
+    //! `read_slru_chain` / `scan_slru_range`, so a regression in
+    //! either the SQL `ORDER BY` clause or in the row-to-PageRow
+    //! decode would be caught here without needing a live YB.
+    use super::*;
+
+    fn row(lsn: u64, is_image: bool, will_init: bool) -> (Lsn, bool, bool) {
+        (Lsn(lsn), is_image, will_init)
+    }
+
+    /// The canonical happy-path chain. Walking the trim DESC: a delta
+    /// at the higher LSN, then the image (with will_init) at the
+    /// lower LSN — break. Strict-decreasing LSNs, no tied LSNs.
+    #[test]
+    fn pure_descending_lsn_is_accepted() {
+        assert_chain_order_for_key(
+            &[row(300, false, false), row(200, false, false), row(100, true, true)],
+            "test_pure_desc",
+        );
+    }
+
+    /// The post-fix tied-LSN order. At LSN 100 the image is FIRST,
+    /// then a same-LSN delta would appear (but the trim breaks
+    /// on the image before reaching it). This represents what the
+    /// SQL with `ORDER BY p.lsn DESC, p.is_image DESC` produces.
+    #[test]
+    fn image_first_at_tied_lsn_is_accepted() {
+        assert_chain_order_for_key(
+            &[row(200, false, false), row(100, true, true), row(100, false, false)],
+            "test_image_first_tie",
+        );
+    }
+
+    /// Two deltas at the same LSN, then an image at a lower LSN.
+    /// Same-LSN deltas are legal (different sub-records or same
+    /// record decoded twice for different keys can land at the same
+    /// LSN); only image-AFTER-delta-at-tied-LSN is forbidden.
+    #[test]
+    fn delta_delta_at_same_lsn_is_accepted() {
+        assert_chain_order_for_key(
+            &[row(200, false, false), row(200, false, false), row(100, true, true)],
+            "test_delta_delta_tie",
+        );
+    }
+
+    /// Two images at the same LSN — pathological but legal under
+    /// the rule. The first one anchors the trim; the second would
+    /// be dropped by the will_init break in the caller. The guard
+    /// only forbids image-AFTER-delta at the same LSN.
+    #[test]
+    fn image_image_at_same_lsn_is_accepted() {
+        assert_chain_order_for_key(
+            &[row(100, true, true), row(100, true, true)],
+            "test_image_image_tie",
+        );
+    }
+
+    /// Single-row chain is trivially ordered.
+    #[test]
+    fn single_row_is_accepted() {
+        assert_chain_order_for_key(&[row(100, true, true)], "test_single");
+    }
+
+    /// Empty chain is trivially ordered.
+    #[test]
+    fn empty_chain_is_accepted() {
+        assert_chain_order_for_key(&[], "test_empty");
+    }
+
+    /// LSN increasing across two rows must panic — the trim relies
+    /// on DESC order, and walredo would then receive WAL records in
+    /// the wrong replay order.
+    #[test]
+    #[should_panic(expected = "must be DESC")]
+    fn lsn_ascending_panics() {
+        assert_chain_order_for_key(
+            &[row(100, false, false), row(200, false, false)],
+            "test_lsn_asc",
+        );
+    }
+
+    /// Image AFTER a delta at the same LSN is the pre-fix bug. The
+    /// trim would push the delta, then break at the image, so the
+    /// chain handed to walredo would contain a same-LSN delta whose
+    /// effect is already baked into the image — double-apply.
+    #[test]
+    #[should_panic(expected = "after a delta at the same lsn")]
+    fn image_after_delta_at_tied_lsn_panics() {
+        assert_chain_order_for_key(
+            &[row(200, false, false), row(100, false, false), row(100, true, true)],
+            "test_image_after_delta_tie",
+        );
+    }
+
+    /// LSN strict-decreasing is fine; only an increase panics. The
+    /// equal-LSN case is allowed (handled by the `lsn > plsn` check,
+    /// not `>=`).
+    #[test]
+    fn equal_lsn_does_not_trigger_desc_panic() {
+        // Two deltas at the same LSN — first row sets the prev, second
+        // hits `lsn == plsn`, which does NOT trigger the DESC panic
+        // (only `lsn > plsn` does). The image-after-delta check also
+        // doesn't fire because both rows are deltas.
+        assert_chain_order_for_key(
+            &[row(100, false, false), row(100, false, false)],
+            "test_equal_lsn_deltas",
+        );
+    }
+}
+
 fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {
     let sp: i64 = r.try_get(0)?;
     let db: i64 = r.try_get(1)?;
@@ -1986,6 +2099,75 @@ mod tests {
             .await
             .unwrap();
         assert!(got.is_empty());
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Regression for the 2026-06-06 incident: PS materializes images
+    /// at the same LSN as the WAL record they represent — the image
+    /// row is the post-record state, the same-LSN delta row is the
+    /// raw WAL record (its effect already baked into the image).
+    ///
+    /// Before the fix, the SQL was `ORDER BY p.lsn DESC` with no
+    /// tiebreaker; DocDB was free to return the delta before the
+    /// image at the tied LSN. The Rust trim breaks at the first
+    /// `will_init = true` row, so the chain would include
+    /// `[higher_delta, tied_delta, tied_image]` — walredo would then
+    /// double-apply the tied WAL record (once via the image, once
+    /// via the delta) and produce a corrupt page.
+    ///
+    /// After the fix (`ORDER BY p.lsn DESC, p.is_image DESC`) the
+    /// image at the tied LSN ALWAYS comes first; the trim breaks
+    /// on it and the same-LSN delta is dropped. Walredo sees
+    /// `[higher_delta, tied_image]`, applies the higher delta once
+    /// to the post-tied-record image, and produces the right page.
+    ///
+    /// Note: we intentionally insert the rows in the worst-case
+    /// "delta first" insertion order so we don't accidentally test
+    /// the trivial case where the storage layer happens to return
+    /// images first regardless of ORDER BY.
+    #[tokio::test]
+    async fn read_chain_image_before_delta_at_tied_lsn() {
+        let (store, schema) = make_store("tied_lsn_image_first").await;
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let k = page_key(1663, 5, 16384, 0, 99);
+
+        // Same-LSN image+delta at 100, plus a later delta at 200.
+        // Insert image LAST so any incidental storage order would
+        // bury it after the same-LSN delta.
+        store
+            .put_pages(
+                tenant,
+                timeline,
+                &[
+                    page_row(k.clone(), 100, false, false, b"wal-rec-at-100"),
+                    page_row(k.clone(), 200, false, false, b"wal-rec-at-200"),
+                    page_row(k.clone(), 100, true, true, b"post-wal-100-image"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let got = store
+            .read_chain(tenant, timeline, &k, Lsn(300))
+            .await
+            .unwrap();
+
+        // Expected: [delta@200, image@100]. Length 2 — NOT 3
+        // (length 3 would mean the same-LSN delta slipped past the
+        // image anchor, which is the pre-fix bug).
+        assert_eq!(
+            got.len(),
+            2,
+            "chain should be [delta@200, image@100], got: {:?}",
+            got.iter().map(|r| (r.lsn.0, r.is_image)).collect::<Vec<_>>()
+        );
+        assert_eq!(got[0].lsn, Lsn(200));
+        assert!(!got[0].is_image);
+        assert_eq!(got[1].lsn, Lsn(100));
+        assert!(got[1].is_image, "trim must break on the image, not the same-LSN delta");
+        assert!(got[1].will_init);
+
         drop_schema(&store, &schema).await;
     }
 
