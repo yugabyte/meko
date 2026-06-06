@@ -2329,10 +2329,7 @@ pub(crate) struct TimelinePersistence {
     pub(crate) start_lsn: LsnWrapper,
     pub(crate) generation: i32,
     pub(crate) sk_set: Vec<i64>,
-    pub(crate) new_sk_set: Option<Vec<i64>>,
-    pub(crate) cplane_notified_generation: i32,
     pub(crate) deleted_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub(crate) sk_set_notified_generation: i32,
 }
 
 /// This is separate from [TimelinePersistence] only because postgres allows NULLs
@@ -2348,10 +2345,7 @@ pub(crate) struct TimelineFromDb {
     pub(crate) start_lsn: LsnWrapper,
     pub(crate) generation: i32,
     pub(crate) sk_set: Vec<Option<i64>>,
-    pub(crate) new_sk_set: Option<Vec<Option<i64>>>,
-    pub(crate) cplane_notified_generation: i32,
     pub(crate) deleted_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub(crate) sk_set_notified_generation: i32,
 }
 
 impl TimelineFromDb {
@@ -2359,19 +2353,13 @@ impl TimelineFromDb {
         // We should never encounter null entries in the sets, but we need to filter them out.
         // There is no way to forbid this in the schema that diesel recognizes (to our knowledge).
         let sk_set = self.sk_set.into_iter().flatten().collect::<Vec<_>>();
-        let new_sk_set = self
-            .new_sk_set
-            .map(|s| s.into_iter().flatten().collect::<Vec<_>>());
         TimelinePersistence {
             tenant_id: self.tenant_id,
             timeline_id: self.timeline_id,
             start_lsn: self.start_lsn,
             generation: self.generation,
             sk_set,
-            new_sk_set,
-            cplane_notified_generation: self.cplane_notified_generation,
             deleted_at: self.deleted_at,
-            sk_set_notified_generation: self.sk_set_notified_generation,
         }
     }
 }
@@ -2385,7 +2373,6 @@ pub(crate) struct TimelineUpdate {
     pub(crate) timeline_id: String,
     pub(crate) start_lsn: LsnWrapper,
     pub(crate) sk_set: Vec<i64>,
-    pub(crate) new_sk_set: Option<Vec<i64>>,
 }
 
 #[derive(Insertable, AsChangeset, Queryable, Selectable, Clone)]

@@ -300,10 +300,7 @@ impl Service {
             start_lsn: start_lsn.into(),
             generation: 1,
             sk_set: sks_persistence.clone(),
-            new_sk_set: None,
-            cplane_notified_generation: 0,
             deleted_at: None,
-            sk_set_notified_generation: 0,
         };
         let inserted = self
             .persistence
@@ -404,10 +401,7 @@ impl Service {
             start_lsn: req.start_lsn.into(),
             generation: 1,
             sk_set: req.sk_set.iter().map(|sk_id| sk_id.0 as i64).collect(),
-            new_sk_set: None,
-            cplane_notified_generation: 1,
             deleted_at: None,
-            sk_set_notified_generation: 1,
         };
         let inserted = self
             .persistence
@@ -424,7 +418,6 @@ impl Service {
             timeline_id: persistence.timeline_id,
             start_lsn: persistence.start_lsn,
             sk_set: persistence.sk_set,
-            new_sk_set: persistence.new_sk_set,
         };
         self.persistence.update_timeline_unsafe(update).await?;
         tracing::info!("timeline updated");
@@ -433,7 +426,7 @@ impl Service {
     }
 
     /// Locate safekeepers for a timeline.
-    /// Return the generation, sk_set and new_sk_set if present.
+    /// Return the generation and sk_set.
     /// If the timeline is not storcon-managed, return NotFound.
     pub(crate) async fn tenant_timeline_locate(
         &self,
@@ -458,9 +451,7 @@ impl Service {
                 .iter()
                 .map(|id| NodeId(*id as u64))
                 .collect(),
-            new_sk_set: timeline
-                .new_sk_set
-                .map(|sk_set| sk_set.iter().map(|id| NodeId(*id as u64)).collect()),
+            new_sk_set: None,
         })
     }
 
@@ -483,12 +474,7 @@ impl Service {
         self.persistence
             .timeline_set_deleted_at(tenant_id, timeline_id)
             .await?;
-        let all_sks = tl
-            .new_sk_set
-            .iter()
-            .flatten()
-            .chain(tl.sk_set.iter())
-            .collect::<HashSet<_>>();
+        let all_sks = tl.sk_set.iter().collect::<HashSet<_>>();
 
         // The timeline has no safekeepers: we need to delete it from the db manually,
         // as no safekeeper reconciler will get to it
@@ -579,11 +565,7 @@ impl Service {
 
         // List all pending ops for all timelines, cancel them
         for (_timeline_id, timeline) in timeline_list.iter() {
-            let sk_iter = timeline
-                .sk_set
-                .iter()
-                .chain(timeline.new_sk_set.iter().flatten())
-                .map(|id| NodeId(*id as u64));
+            let sk_iter = timeline.sk_set.iter().map(|id| NodeId(*id as u64));
             sk_list.extend(sk_iter);
         }
 

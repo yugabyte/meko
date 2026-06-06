@@ -109,10 +109,7 @@ diesel::table! {
         start_lsn -> PgLsn,
         generation -> Int4,
         sk_set -> Array<Nullable<Int8>>,
-        new_sk_set -> Nullable<Array<Nullable<Int8>>>,
-        cplane_notified_generation -> Int4,
         deleted_at -> Nullable<Timestamptz>,
-        sk_set_notified_generation -> Int4,
     }
 }
 

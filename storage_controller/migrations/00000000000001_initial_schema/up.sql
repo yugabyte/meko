@@ -86,10 +86,7 @@ CREATE TABLE storage_controller.timelines (
     start_lsn                   pg_lsn NOT NULL,
     generation                  INTEGER NOT NULL,
     sk_set                      BIGINT[] NOT NULL,
-    new_sk_set                  BIGINT[],
-    cplane_notified_generation  INTEGER NOT NULL,
     deleted_at                  TIMESTAMPTZ,
-    sk_set_notified_generation  INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (tenant_id, timeline_id)
 );
 

@@ -17,12 +17,11 @@ use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT;
 use pageserver_api::controller_api::AvailabilityZone;
 use pageserver_api::models::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
 use postgres_connection::parse_host_port;
-use safekeeper_api::membership::SafekeeperGeneration;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
 use utils::backoff::{self};
-use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
+use utils::id::{NodeId, TenantId};
 
 use crate::service::Config;
 
@@ -56,12 +55,10 @@ struct ComputeRemoteState<R> {
 }
 
 type ComputeRemoteTenantState = ComputeRemoteState<NotifyAttachRequest>;
-type ComputeRemoteTimelineState = ComputeRemoteState<NotifySafekeepersRequest>;
 
 /// The trait which define the handler-specific types and methods.
-/// We have two implementations of this trait so far:
-/// - [`ComputeHookTenant`] for tenant attach notifications ("/notify-attach")
-/// - [`ComputeHookTimeline`] for safekeeper change notifications ("/notify-safekeepers")
+/// Currently the only implementer is [`ComputeHookTenant`] for tenant
+/// attach notifications ("/notify-attach").
 trait ApiMethod {
     /// Type of the key which identifies the resource.
     /// It's either TenantId for tenant attach notifications,
@@ -118,106 +115,6 @@ impl ComputeHookTenant {
     }
 }
 
-/// The state of a timeline we need to notify the compute about.
-struct ComputeHookTimeline {
-    generation: SafekeeperGeneration,
-    safekeepers: Vec<SafekeeperInfo>,
-
-    send_lock: Arc<tokio::sync::Mutex<Option<ComputeRemoteTimelineState>>>,
-}
-
-impl ComputeHookTimeline {
-    /// Construct a new ComputeHookTimeline with the given safekeepers and generation.
-    fn new(generation: SafekeeperGeneration, safekeepers: Vec<SafekeeperInfo>) -> Self {
-        Self {
-            generation,
-            safekeepers,
-            send_lock: Arc::default(),
-        }
-    }
-
-    /// Update the state with a new SafekeepersUpdate.
-    /// Noop if the update generation is not greater than the current generation.
-    fn update(&mut self, sk_update: SafekeepersUpdate) {
-        if sk_update.generation > self.generation {
-            self.generation = sk_update.generation;
-            self.safekeepers = sk_update.safekeepers;
-        }
-    }
-}
-
-impl ApiMethod for ComputeHookTimeline {
-    type Key = TenantTimelineId;
-    type Request = NotifySafekeepersRequest;
-
-    const API_PATH: &'static str = "notify-safekeepers";
-
-    fn maybe_send(
-        &self,
-        ttid: TenantTimelineId,
-        lock: Option<tokio::sync::OwnedMutexGuard<Option<ComputeRemoteTimelineState>>>,
-    ) -> MaybeSendNotifySafekeepersResult {
-        let locked = match lock {
-            Some(already_locked) => already_locked,
-            None => {
-                // Lock order: this _must_ be only a try_lock, because we are called inside of the [`ComputeHook::timelines`] lock.
-                let Ok(locked) = self.send_lock.clone().try_lock_owned() else {
-                    return MaybeSendResult::AwaitLock((ttid, self.send_lock.clone()));
-                };
-                locked
-            }
-        };
-
-        if locked
-            .as_ref()
-            .is_some_and(|s| s.request.generation >= self.generation)
-        {
-            return MaybeSendResult::Noop;
-        }
-
-        MaybeSendResult::Transmit((
-            NotifySafekeepersRequest {
-                tenant_id: ttid.tenant_id,
-                timeline_id: ttid.timeline_id,
-                generation: self.generation,
-                safekeepers: self.safekeepers.clone(),
-            },
-            locked,
-        ))
-    }
-
-    async fn notify_local(
-        _env: &LocalEnv,
-        cplane: &ComputeControlPlane,
-        req: &NotifySafekeepersRequest,
-    ) -> Result<(), NotifyError> {
-        let NotifySafekeepersRequest {
-            tenant_id,
-            timeline_id,
-            generation,
-            safekeepers,
-        } = req;
-
-        for (endpoint_name, endpoint) in &cplane.endpoints {
-            if endpoint.tenant_id == *tenant_id
-                && endpoint.timeline_id == *timeline_id
-                && endpoint.status() == EndpointStatus::Running
-            {
-                tracing::info!("Reconfiguring safekeepers for endpoint {endpoint_name}");
-
-                let safekeepers = safekeepers.iter().map(|sk| sk.id).collect::<Vec<_>>();
-
-                endpoint
-                    .reconfigure_safekeepers(safekeepers, *generation)
-                    .await
-                    .map_err(NotifyError::NeonLocal)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 struct NotifyAttachRequestShard {
     shard_number: ShardNumber,
@@ -231,23 +128,6 @@ struct NotifyAttachRequest {
     preferred_az: Option<String>,
     stripe_size: Option<ShardStripeSize>,
     shards: Vec<NotifyAttachRequestShard>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
-pub(crate) struct SafekeeperInfo {
-    pub id: NodeId,
-    /// Hostname of the safekeeper.
-    /// It exists for better debuggability. Might be missing.
-    /// Should not be used for anything else.
-    pub hostname: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
-struct NotifySafekeepersRequest {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
-    generation: SafekeeperGeneration,
-    safekeepers: Vec<SafekeeperInfo>,
 }
 
 /// Error type for attempts to call into the control plane compute notification hook
@@ -295,7 +175,6 @@ enum MaybeSendResult<R, K> {
 }
 
 type MaybeSendNotifyAttachResult = MaybeSendResult<NotifyAttachRequest, TenantId>;
-type MaybeSendNotifySafekeepersResult = MaybeSendResult<NotifySafekeepersRequest, TenantTimelineId>;
 
 impl ApiMethod for ComputeHookTenant {
     type Key = TenantId;
@@ -443,7 +322,6 @@ impl ApiMethod for ComputeHookTenant {
 pub(super) struct ComputeHook {
     config: Config,
     tenants: std::sync::Mutex<HashMap<TenantId, ComputeHookTenant>>,
-    timelines: std::sync::Mutex<HashMap<TenantTimelineId, ComputeHookTimeline>>,
     authorization_header: Option<String>,
 
     // Concurrency limiter, so that we do not overload the cloud control plane when updating
@@ -469,13 +347,6 @@ pub(crate) struct ShardUpdate<'a> {
     pub(crate) preferred_az: Option<Cow<'a, AvailabilityZone>>,
 }
 
-pub(crate) struct SafekeepersUpdate {
-    pub(crate) tenant_id: TenantId,
-    pub(crate) timeline_id: TimelineId,
-    pub(crate) generation: SafekeeperGeneration,
-    pub(crate) safekeepers: Vec<SafekeeperInfo>,
-}
-
 impl ComputeHook {
     pub(super) fn new(config: Config) -> anyhow::Result<Self> {
         let authorization_header = config
@@ -493,7 +364,6 @@ impl ComputeHook {
 
         Ok(Self {
             tenants: Default::default(),
-            timelines: Default::default(),
             config,
             authorization_header,
             neon_local_lock: Default::default(),
@@ -666,33 +536,6 @@ impl ComputeHook {
             }
         };
         tenant.maybe_send(tenant_shard_id, None)
-    }
-
-    fn notify_safekeepers_prepare(
-        &self,
-        safekeepers_update: SafekeepersUpdate,
-    ) -> MaybeSendNotifySafekeepersResult {
-        let mut timelines_locked = self.timelines.lock().unwrap();
-
-        let ttid = TenantTimelineId {
-            tenant_id: safekeepers_update.tenant_id,
-            timeline_id: safekeepers_update.timeline_id,
-        };
-
-        use std::collections::hash_map::Entry;
-        let timeline = match timelines_locked.entry(ttid) {
-            Entry::Vacant(e) => e.insert(ComputeHookTimeline::new(
-                safekeepers_update.generation,
-                safekeepers_update.safekeepers,
-            )),
-            Entry::Occupied(e) => {
-                let timeline = e.into_mut();
-                timeline.update(safekeepers_update);
-                timeline
-            }
-        };
-
-        timeline.maybe_send(ttid, None)
     }
 
     async fn notify_execute<M: ApiMethod>(
@@ -891,16 +734,6 @@ impl ComputeHook {
     ) -> Result<(), NotifyError> {
         let maybe_send_result = self.notify_attach_prepare(shard_update);
         self.notify_execute(&self.tenants, maybe_send_result, cancel)
-            .await
-    }
-
-    pub(super) async fn notify_safekeepers(
-        &self,
-        safekeepers_update: SafekeepersUpdate,
-        cancel: &CancellationToken,
-    ) -> Result<(), NotifyError> {
-        let maybe_send_result = self.notify_safekeepers_prepare(safekeepers_update);
-        self.notify_execute(&self.timelines, maybe_send_result, cancel)
             .await
     }
 
