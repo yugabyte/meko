@@ -30,7 +30,7 @@ use metrics::launch_timestamp::LaunchTimestamp;
 use pageserver_api::models::{
     IngestAuxFilesRequest,
     ListAuxFilesRequest, LocationConfig, LocationConfigListResponse, LsnLease,
-    LsnLeaseRequest, OffloadedTimelineInfo, PageTraceEvent, StatusResponse,
+    LsnLeaseRequest, PageTraceEvent, StatusResponse,
     TenantConfigPatchRequest, TenantConfigRequest, TenantDetails, TenantInfo,
     TenantLocationConfigRequest, TenantLocationConfigResponse, TenantShardLocation, TenantSorting, TenantState, TenantWaitLsnRequest,
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateRequestMode, TimelineGcRequest, TimelineInfo,
@@ -64,7 +64,7 @@ use crate::tenant::timeline::{
     WaitLsnWaiter,
 };
 use crate::tenant::{
-    GetTimelineError, OffloadedTimeline, PageReconstructError,
+    GetTimelineError, PageReconstructError,
 };
 use crate::{DEFAULT_PG_VERSION, tenant};
 
@@ -467,24 +467,6 @@ async fn build_timeline_info_common(
     Ok(info)
 }
 
-fn build_timeline_offloaded_info(offloaded: &Arc<OffloadedTimeline>) -> OffloadedTimelineInfo {
-    let &OffloadedTimeline {
-        tenant_shard_id,
-        timeline_id,
-        ancestor_retain_lsn,
-        ancestor_timeline_id,
-        archived_at,
-        ..
-    } = offloaded.as_ref();
-    OffloadedTimelineInfo {
-        tenant_id: tenant_shard_id,
-        timeline_id,
-        ancestor_retain_lsn,
-        ancestor_timeline_id,
-        archived_at: archived_at.and_utc(),
-    }
-}
-
 // healthcheck handler
 async fn status_handler(
     request: Request<Body>,
@@ -707,7 +689,7 @@ async fn timeline_and_offloaded_list_handler(
 
         tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
-        let (timelines, offloadeds) = tenant.list_timelines_and_offloaded();
+        let timelines = tenant.list_timelines();
 
         let mut timeline_infos = Vec::with_capacity(timelines.len());
         for timeline in timelines {
@@ -725,13 +707,11 @@ async fn timeline_and_offloaded_list_handler(
 
             timeline_infos.push(timeline_info);
         }
-        let offloaded_infos = offloadeds
-            .into_iter()
-            .map(|offloaded| build_timeline_offloaded_info(&offloaded))
-            .collect::<Vec<_>>();
+        // yb-mode has no offloaded timelines; the upstream payload shape is
+        // preserved so the storage controller / cplane don't need updating.
         let res = TimelinesInfoAndOffloaded {
             timelines: timeline_infos,
-            offloaded: offloaded_infos,
+            offloaded: Vec::new(),
         };
         Ok::<TimelinesInfoAndOffloaded, ApiError>(res)
     }

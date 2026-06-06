@@ -15,9 +15,7 @@ use super::Timeline;
 use crate::context::RequestContext;
 use crate::import_datadir;
 use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
-use crate::tenant::{
-    CreateTimelineError, CreateTimelineIdempotency, TenantShard, TimelineOrOffloaded,
-};
+use crate::tenant::{CreateTimelineError, CreateTimelineIdempotency, TenantShard};
 
 /// A timeline with some of its files on disk, being initialized.
 /// This struct ensures the atomicity of the timeline init: it's either properly created and inserted into pageserver's memory, or
@@ -277,7 +275,7 @@ pub(crate) struct TimelineCreateGuard {
 pub(crate) enum TimelineExclusionError {
     #[error("Already exists")]
     AlreadyExists {
-        existing: TimelineOrOffloaded,
+        existing: Arc<Timeline>,
         arg: CreateTimelineIdempotency,
     },
     #[error("Already creating")]
@@ -296,17 +294,14 @@ impl TimelineCreateGuard {
         timeline_id: TimelineId,
         timeline_path: Utf8PathBuf,
         idempotency: CreateTimelineIdempotency,
-        allow_offloaded: bool,
+        _allow_offloaded: bool,
     ) -> Result<Self, TimelineExclusionError> {
         let _tenant_gate_guard = owning_tenant
             .gate
             .enter()
             .map_err(|_| TimelineExclusionError::ShuttingDown)?;
 
-        // Lock order: this is the only place we take both locks.  During drop() we only
-        // lock creating_timelines
         let timelines = owning_tenant.timelines.lock().unwrap();
-        let timelines_offloaded = owning_tenant.timelines_offloaded.lock().unwrap();
         let mut creating_timelines: std::sync::MutexGuard<
             '_,
             std::collections::HashSet<TimelineId>,
@@ -314,24 +309,15 @@ impl TimelineCreateGuard {
 
         if let Some(existing) = timelines.get(&timeline_id) {
             return Err(TimelineExclusionError::AlreadyExists {
-                existing: TimelineOrOffloaded::Timeline(existing.clone()),
+                existing: existing.clone(),
                 arg: idempotency,
             });
-        }
-        if !allow_offloaded {
-            if let Some(existing) = timelines_offloaded.get(&timeline_id) {
-                return Err(TimelineExclusionError::AlreadyExists {
-                    existing: TimelineOrOffloaded::Offloaded(existing.clone()),
-                    arg: idempotency,
-                });
-            }
         }
         if creating_timelines.contains(&timeline_id) {
             return Err(TimelineExclusionError::AlreadyCreating);
         }
         creating_timelines.insert(timeline_id);
         drop(creating_timelines);
-        drop(timelines_offloaded);
         drop(timelines);
         Ok(Self {
             _tenant_gate_guard,

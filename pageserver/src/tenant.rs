@@ -15,15 +15,13 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
-use std::{fmt, fs};
+use std::fs;
 
 use anyhow::{Context, bail};
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
-use chrono::NaiveDateTime;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use itertools::Itertools as _;
@@ -53,7 +51,7 @@ use self::metadata::TimelineMetadata;
 use self::mgr::{GetActiveTenantError, GetTenantError};
 use self::timeline::uninit::{TimelineCreateGuard, TimelineExclusionError, UninitializedTimeline};
 use self::timeline::{
-    GcCutoffs, TimelineDeleteProgress, TimelineResources, WaitLsnError,
+    GcCutoffs, TimelineResources, WaitLsnError,
 };
 use crate::basebackup_cache::BasebackupCache;
 use crate::config::PageServerConf;
@@ -63,7 +61,7 @@ use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{
     BROKEN_TENANTS_SET, CONCURRENT_INITDBS,
     INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME, TENANT,
-    TENANT_STATE_METRIC, TIMELINE_STATE_METRIC,
+    TENANT_STATE_METRIC,
     remove_tenant_metrics,
 };
 use crate::task_mgr::TaskKind;
@@ -262,12 +260,8 @@ pub struct TenantShard {
 
     /// During timeline creation, we first insert the TimelineId to the
     /// creating map, then `timelines`, then remove it from the creating map.
-    /// **Lock order**: if acquiring all (or a subset), acquire them in order `timelines`, `timelines_offloaded`, `timelines_creating`
+    /// **Lock order**: if acquiring both, acquire `timelines` before `timelines_creating`.
     timelines_creating: std::sync::Mutex<HashSet<TimelineId>>,
-
-    /// Possibly offloaded and archived timelines
-    /// **Lock order**: if acquiring all (or a subset), acquire them in order `timelines`, `timelines_offloaded`, `timelines_creating`
-    timelines_offloaded: Mutex<HashMap<TimelineId, Arc<OffloadedTimeline>>>,
 
     // This mutex prevents creation of new timelines during GC.
     // Adding yet another mutex (in addition to `timelines`) is needed because holding
@@ -414,180 +408,6 @@ impl WalRedoManager {
     pub(crate) fn status(&self) -> Option<WalRedoManagerStatus> {
         let WalRedoManager::Prod(_, m) = self;
         Some(m.status())
-    }
-}
-
-/// A very lightweight memory representation of an offloaded timeline.
-///
-/// We need to store the list of offloaded timelines so that we can perform operations on them,
-/// like unoffloading them, or (at a later date), decide to perform flattening.
-/// This type has a much smaller memory impact than [`Timeline`], and thus we can store many
-/// more offloaded timelines than we can manage ones that aren't.
-pub struct OffloadedTimeline {
-    pub tenant_shard_id: TenantId,
-    pub timeline_id: TimelineId,
-    pub ancestor_timeline_id: Option<TimelineId>,
-    /// Whether to retain the branch lsn at the ancestor or not
-    pub ancestor_retain_lsn: Option<Lsn>,
-
-    /// When the timeline was archived.
-    ///
-    /// Present for future flattening deliberations.
-    pub archived_at: NaiveDateTime,
-
-    /// Prevent two tasks from deleting the timeline at the same time. If held, the
-    /// timeline is being deleted. If 'true', the timeline has already been deleted.
-    pub delete_progress: TimelineDeleteProgress,
-
-    /// Part of the `OffloadedTimeline` object's lifecycle: this needs to be set before we drop it
-    pub deleted_from_ancestor: AtomicBool,
-
-    _metrics_guard: OffloadedTimelineMetricsGuard,
-}
-
-/// Increases the offloaded timeline count metric when created, and decreases when dropped.
-struct OffloadedTimelineMetricsGuard;
-
-impl OffloadedTimelineMetricsGuard {
-    fn new() -> Self {
-        TIMELINE_STATE_METRIC
-            .with_label_values(&["offloaded"])
-            .inc();
-        Self
-    }
-}
-
-impl Drop for OffloadedTimelineMetricsGuard {
-    fn drop(&mut self) {
-        TIMELINE_STATE_METRIC
-            .with_label_values(&["offloaded"])
-            .dec();
-    }
-}
-
-impl OffloadedTimeline {
-    /// Delete this timeline's retain_lsn from its ancestor, if present in the given tenant
-    fn delete_from_ancestor_with_timelines(
-        &self,
-        timelines: &std::sync::MutexGuard<'_, HashMap<TimelineId, Arc<Timeline>>>,
-    ) {
-        if let (Some(_retain_lsn), Some(ancestor_timeline_id)) =
-            (self.ancestor_retain_lsn, self.ancestor_timeline_id)
-        {
-            if let Some((_, ancestor_timeline)) = timelines
-                .iter()
-                .find(|(tid, _tl)| **tid == ancestor_timeline_id)
-            {
-                let removal_happened = ancestor_timeline
-                    .gc_info
-                    .write()
-                    .unwrap()
-                    .remove_child_offloaded(self.timeline_id);
-                if !removal_happened {
-                    tracing::error!(tenant_id = %self.tenant_shard_id, shard_id = %self.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id,
-                        "Couldn't remove retain_lsn entry from offloaded timeline's parent: already removed");
-                }
-            }
-        }
-        self.deleted_from_ancestor.store(true, Ordering::Release);
-    }
-    /// Call [`Self::delete_from_ancestor_with_timelines`] instead if possible.
-    ///
-    /// As the entire tenant is being dropped, don't bother deregistering the `retain_lsn` from the ancestor.
-    fn defuse_for_tenant_drop(&self) {
-        self.deleted_from_ancestor.store(true, Ordering::Release);
-    }
-}
-
-impl fmt::Debug for OffloadedTimeline {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "OffloadedTimeline<{}>", self.timeline_id)
-    }
-}
-
-impl Drop for OffloadedTimeline {
-    fn drop(&mut self) {
-        if !self.deleted_from_ancestor.load(Ordering::Acquire) {
-            tracing::warn!(
-                "offloaded timeline {} was dropped without having cleaned it up at the ancestor",
-                self.timeline_id
-            );
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub enum MaybeOffloaded {
-    Yes,
-    No,
-}
-
-#[derive(Clone, Debug)]
-pub enum TimelineOrOffloaded {
-    Timeline(Arc<Timeline>),
-    Offloaded(Arc<OffloadedTimeline>),
-}
-
-impl TimelineOrOffloaded {
-    pub fn arc_ref(&self) -> TimelineOrOffloadedArcRef<'_> {
-        match self {
-            TimelineOrOffloaded::Timeline(timeline) => {
-                TimelineOrOffloadedArcRef::Timeline(timeline)
-            }
-            TimelineOrOffloaded::Offloaded(offloaded) => {
-                TimelineOrOffloadedArcRef::Offloaded(offloaded)
-            }
-        }
-    }
-    pub fn tenant_shard_id(&self) -> TenantId {
-        self.arc_ref().tenant_shard_id()
-    }
-    pub fn timeline_id(&self) -> TimelineId {
-        self.arc_ref().timeline_id()
-    }
-    pub fn delete_progress(&self) -> &Arc<tokio::sync::Mutex<DeleteTimelineFlow>> {
-        match self {
-            TimelineOrOffloaded::Timeline(timeline) => &timeline.delete_progress,
-            TimelineOrOffloaded::Offloaded(offloaded) => &offloaded.delete_progress,
-        }
-    }
-    /// Returns true if this variant is a live `Timeline` (vs an
-    /// offloaded shell). Used by the delete path to decide whether
-    /// the timeline has in-memory state to shut down.
-    fn is_live_timeline(&self) -> bool {
-        matches!(self, TimelineOrOffloaded::Timeline(_))
-    }
-}
-
-pub enum TimelineOrOffloadedArcRef<'a> {
-    Timeline(&'a Arc<Timeline>),
-    Offloaded(&'a Arc<OffloadedTimeline>),
-}
-
-impl TimelineOrOffloadedArcRef<'_> {
-    pub fn tenant_shard_id(&self) -> TenantId {
-        match self {
-            TimelineOrOffloadedArcRef::Timeline(timeline) => timeline.tenant_shard_id,
-            TimelineOrOffloadedArcRef::Offloaded(offloaded) => offloaded.tenant_shard_id,
-        }
-    }
-    pub fn timeline_id(&self) -> TimelineId {
-        match self {
-            TimelineOrOffloadedArcRef::Timeline(timeline) => timeline.timeline_id,
-            TimelineOrOffloadedArcRef::Offloaded(offloaded) => offloaded.timeline_id,
-        }
-    }
-}
-
-impl<'a> From<&'a Arc<Timeline>> for TimelineOrOffloadedArcRef<'a> {
-    fn from(timeline: &'a Arc<Timeline>) -> Self {
-        Self::Timeline(timeline)
-    }
-}
-
-impl<'a> From<&'a Arc<OffloadedTimeline>> for TimelineOrOffloadedArcRef<'a> {
-    fn from(timeline: &'a Arc<OffloadedTimeline>) -> Self {
-        Self::Offloaded(timeline)
     }
 }
 
@@ -1236,10 +1056,6 @@ impl TenantShard {
             );
         };
 
-        // yb-mode never produces offloaded timelines — the tenant manifest
-        // (the source of the offload list in upstream) is gone.
-        let offloaded_timelines_list: Vec<(TimelineId, Arc<OffloadedTimeline>)> = Vec::new();
-
         let mut timeline_ancestors = HashMap::new();
         for (timeline_id, preload) in preload.timelines {
             let Some(preload) = preload else { continue };
@@ -1284,13 +1100,8 @@ impl TenantShard {
         // Now compute the layer visibility for all (not offloaded) timelines.
         let compute_visiblity_for = {
             let timelines_accessor = self.timelines.lock().unwrap();
-            let mut timelines_offloaded_accessor = self.timelines_offloaded.lock().unwrap();
-
-            timelines_offloaded_accessor.extend(offloaded_timelines_list.into_iter());
-
             // Before activation, populate each Timeline's GcInfo with information about its children
-            self.initialize_gc_info(&timelines_accessor, &timelines_offloaded_accessor, None);
-
+            self.initialize_gc_info(&timelines_accessor, None);
             timelines_accessor.values().cloned().collect::<Vec<_>>()
         };
 
@@ -1395,23 +1206,18 @@ impl TenantShard {
     fn check_ancestor_of_to_be_unarchived_is_not_archived(
         ancestor_timeline_id: TimelineId,
         timelines: &std::sync::MutexGuard<'_, HashMap<TimelineId, Arc<Timeline>>>,
-        offloaded_timelines: &std::sync::MutexGuard<
-            '_,
-            HashMap<TimelineId, Arc<OffloadedTimeline>>,
-        >,
     ) -> Result<(), TimelineArchivalError> {
-        let has_archived_parent =
-            if let Some(ancestor_timeline) = timelines.get(&ancestor_timeline_id) {
-                ancestor_timeline.is_archived() == Some(true)
-            } else if offloaded_timelines.contains_key(&ancestor_timeline_id) {
-                true
-            } else {
-                error!("ancestor timeline {ancestor_timeline_id} not found");
-                if cfg!(debug_assertions) {
-                    panic!("ancestor timeline {ancestor_timeline_id} not found");
-                }
-                return Err(TimelineArchivalError::NotFound);
-            };
+        let has_archived_parent = if let Some(ancestor_timeline) =
+            timelines.get(&ancestor_timeline_id)
+        {
+            ancestor_timeline.is_archived() == Some(true)
+        } else {
+            error!("ancestor timeline {ancestor_timeline_id} not found");
+            if cfg!(debug_assertions) {
+                panic!("ancestor timeline {ancestor_timeline_id} not found");
+            }
+            return Err(TimelineArchivalError::NotFound);
+        };
         if has_archived_parent {
             return Err(TimelineArchivalError::HasArchivedParent(
                 ancestor_timeline_id,
@@ -1476,21 +1282,6 @@ impl TenantShard {
         Ok(())
     }
 
-    pub fn get_offloaded_timeline(
-        &self,
-        timeline_id: TimelineId,
-    ) -> Result<Arc<OffloadedTimeline>, GetTimelineError> {
-        self.timelines_offloaded
-            .lock()
-            .unwrap()
-            .get(&timeline_id)
-            .map(Arc::clone)
-            .ok_or(GetTimelineError::NotFound {
-                tenant_id: self.tenant_shard_id,
-                timeline_id,
-            })
-    }
-
     pub(crate) fn tenant_shard_id(&self) -> TenantId {
         self.tenant_shard_id
     }
@@ -1532,29 +1323,6 @@ impl TenantShard {
             .collect()
     }
 
-
-    /// Lists timelines the tenant manages, including offloaded ones.
-    ///
-    /// It's up to callers to omit certain timelines that are not considered ready for use.
-    pub fn list_timelines_and_offloaded(
-        &self,
-    ) -> (Vec<Arc<Timeline>>, Vec<Arc<OffloadedTimeline>>) {
-        let timelines = self
-            .timelines
-            .lock()
-            .unwrap()
-            .values()
-            .map(Arc::clone)
-            .collect();
-        let offloaded = self
-            .timelines_offloaded
-            .lock()
-            .unwrap()
-            .values()
-            .map(Arc::clone)
-            .collect();
-        (timelines, offloaded)
-    }
 
     pub fn list_timeline_ids(&self) -> Vec<TimelineId> {
         self.timelines.lock().unwrap().keys().cloned().collect()
@@ -1938,7 +1706,6 @@ impl TenantShard {
 
         if activating {
             let timelines_accessor = self.timelines.lock().unwrap();
-            let timelines_offloaded_accessor = self.timelines_offloaded.lock().unwrap();
             let timelines_to_activate = timelines_accessor
                 .values()
                 .filter(|timeline| !(timeline.is_broken() || timeline.is_stopping()));
@@ -2055,12 +1822,6 @@ impl TenantShard {
                 let timeline_id = timeline.timeline_id;
                 let span = tracing::info_span!("timeline_shutdown", %timeline_id, ?shutdown_mode);
                 js.spawn(async move { timeline.shutdown(shutdown_mode).instrument(span).await });
-            });
-        }
-        {
-            let timelines_offloaded = self.timelines_offloaded.lock().unwrap();
-            timelines_offloaded.values().for_each(|timeline| {
-                timeline.defuse_for_tenant_drop();
             });
         }
         // test_long_timeline_create_then_tenant_delete is leaning on this message
@@ -2659,7 +2420,6 @@ impl TenantShard {
             constructed_at: Instant::now(),
             timelines: Mutex::new(HashMap::new()),
             timelines_creating: Mutex::new(HashSet::new()),
-            timelines_offloaded: Mutex::new(HashMap::new()),
             gc_cs: tokio::sync::Mutex::new(()),
             walredo_mgr,
             remote_storage,
@@ -2850,7 +2610,6 @@ impl TenantShard {
     fn initialize_gc_info(
         &self,
         timelines: &std::sync::MutexGuard<HashMap<TimelineId, Arc<Timeline>>>,
-        timelines_offloaded: &std::sync::MutexGuard<HashMap<TimelineId, Arc<OffloadedTimeline>>>,
         restrict_to_timeline: Option<TimelineId>,
     ) {
         if restrict_to_timeline.is_none() {
@@ -2861,30 +2620,13 @@ impl TenantShard {
 
         // Scan all timelines. For each timeline, remember the timeline ID and
         // the branch point where it was created.
-        let mut all_branchpoints: BTreeMap<TimelineId, Vec<(Lsn, TimelineId, MaybeOffloaded)>> =
-            BTreeMap::new();
+        let mut all_branchpoints: BTreeMap<TimelineId, Vec<(Lsn, TimelineId)>> = BTreeMap::new();
         timelines.iter().for_each(|(timeline_id, timeline_entry)| {
             if let Some(ancestor_timeline_id) = &timeline_entry.get_ancestor_timeline_id() {
                 let ancestor_children = all_branchpoints.entry(*ancestor_timeline_id).or_default();
-                ancestor_children.push((
-                    timeline_entry.get_ancestor_lsn(),
-                    *timeline_id,
-                    MaybeOffloaded::No,
-                ));
+                ancestor_children.push((timeline_entry.get_ancestor_lsn(), *timeline_id));
             }
         });
-        timelines_offloaded
-            .iter()
-            .for_each(|(timeline_id, timeline_entry)| {
-                let Some(ancestor_timeline_id) = &timeline_entry.ancestor_timeline_id else {
-                    return;
-                };
-                let Some(retain_lsn) = timeline_entry.ancestor_retain_lsn else {
-                    return;
-                };
-                let ancestor_children = all_branchpoints.entry(*ancestor_timeline_id).or_default();
-                ancestor_children.push((retain_lsn, *timeline_id, MaybeOffloaded::Yes));
-            });
 
         // The number of bytes we always keep, irrespective of PITR: this is a constant across timelines
         let horizon = self.get_gc_horizon();
@@ -2896,7 +2638,7 @@ impl TenantShard {
             itertools::Either::Right(timelines.values())
         };
         for timeline in timelines_to_write {
-            let mut branchpoints: Vec<(Lsn, TimelineId, MaybeOffloaded)> = all_branchpoints
+            let mut branchpoints: Vec<(Lsn, TimelineId)> = all_branchpoints
                 .remove(&timeline.timeline_id)
                 .unwrap_or_default();
 
@@ -3213,17 +2955,7 @@ impl TenantShard {
                 Err(CreateTimelineError::AlreadyCreating)
             }
             Err(TimelineExclusionError::Other(e)) => Err(CreateTimelineError::Other(e)),
-            Err(TimelineExclusionError::AlreadyExists {
-                existing: TimelineOrOffloaded::Offloaded(_existing),
-                ..
-            }) => {
-                info!("timeline already exists but is offloaded");
-                Err(CreateTimelineError::Conflict)
-            }
-            Err(TimelineExclusionError::AlreadyExists {
-                existing: TimelineOrOffloaded::Timeline(existing),
-                arg,
-            }) => {
+            Err(TimelineExclusionError::AlreadyExists { existing, arg }) => {
                 {
                     let existing = &existing.create_idempotency;
                     let _span = info_span!("idempotency_check", ?existing, ?arg).entered();

@@ -53,7 +53,7 @@ use self::delete::DeleteTimelineFlow;
 use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
 use super::{
-    AttachedTenantConf, GcError, MaybeOffloaded,
+    AttachedTenantConf, GcError,
     debug_assert_current_span_has_tenant_and_timeline_id,
 };
 use crate::aux_file::AuxFileSizeEstimator;
@@ -304,7 +304,7 @@ pub(crate) struct GcInfo {
     /// Currently, this includes all points where child branches have
     /// been forked off from. In the future, could also include
     /// explicit user-defined snapshot points.
-    pub(crate) retain_lsns: Vec<(Lsn, TimelineId, MaybeOffloaded)>,
+    pub(crate) retain_lsns: Vec<(Lsn, TimelineId)>,
 
     /// The cutoff coordinates, which are combined by selecting the minimum.
     pub(crate) cutoffs: GcCutoffs,
@@ -321,21 +321,12 @@ impl GcInfo {
         self.cutoffs.select_min()
     }
 
-    pub(super) fn insert_child(
-        &mut self,
-        child_id: TimelineId,
-        child_lsn: Lsn,
-        is_offloaded: MaybeOffloaded,
-    ) {
-        self.retain_lsns.push((child_lsn, child_id, is_offloaded));
+    pub(super) fn insert_child(&mut self, child_id: TimelineId, child_lsn: Lsn) {
+        self.retain_lsns.push((child_lsn, child_id));
         self.retain_lsns.sort_by_key(|i| i.0);
     }
 
-    pub(super) fn remove_child_maybe_offloaded(
-        &mut self,
-        child_id: TimelineId,
-        maybe_offloaded: MaybeOffloaded,
-    ) -> bool {
+    pub(super) fn remove_child_not_offloaded(&mut self, child_id: TimelineId) -> bool {
         // Remove at most one element. Needed for correctness if there is two live `Timeline` objects referencing
         // the same timeline. Shouldn't but maybe can occur when Arc's live longer than intended.
         let mut removed = false;
@@ -343,20 +334,13 @@ impl GcInfo {
             if removed {
                 return true;
             }
-            let remove = i.1 == child_id && i.2 == maybe_offloaded;
+            let remove = i.1 == child_id;
             removed |= remove;
             !remove
         });
         removed
     }
 
-    pub(super) fn remove_child_not_offloaded(&mut self, child_id: TimelineId) -> bool {
-        self.remove_child_maybe_offloaded(child_id, MaybeOffloaded::No)
-    }
-
-    pub(super) fn remove_child_offloaded(&mut self, child_id: TimelineId) -> bool {
-        self.remove_child_maybe_offloaded(child_id, MaybeOffloaded::Yes)
-    }
     pub(crate) fn lsn_covered_by_lease(&self, lsn: Lsn) -> bool {
         self.leases.contains_key(&lsn)
     }
@@ -1934,9 +1918,7 @@ impl Timeline {
 
         if let Some(ancestor) = &ancestor {
             let mut ancestor_gc_info = ancestor.gc_info.write().unwrap();
-            // If we construct an explicit timeline object, it's obviously not offloaded
-            let is_offloaded = MaybeOffloaded::No;
-            ancestor_gc_info.insert_child(timeline_id, metadata.ancestor_lsn(), is_offloaded);
+            ancestor_gc_info.insert_child(timeline_id, metadata.ancestor_lsn());
         }
 
         let relsize_snapshot_cache_capacity = {
