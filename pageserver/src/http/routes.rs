@@ -30,7 +30,7 @@ use metrics::launch_timestamp::LaunchTimestamp;
 use pageserver_api::models::{
     IngestAuxFilesRequest,
     ListAuxFilesRequest, LocationConfig, LocationConfigListResponse, LsnLease,
-    LsnLeaseRequest, OffloadedTimelineInfo, PageTraceEvent, ShardParameters, StatusResponse,
+    LsnLeaseRequest, OffloadedTimelineInfo, PageTraceEvent, StatusResponse,
     TenantConfigPatchRequest, TenantConfigRequest, TenantDetails, TenantInfo,
     TenantLocationConfigRequest, TenantLocationConfigResponse, TenantScanRemoteStorageResponse,
     TenantScanRemoteStorageShard, TenantShardLocation, TenantSorting, TenantState, TenantWaitLsnRequest,

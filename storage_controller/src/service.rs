@@ -4,13 +4,11 @@ mod safekeeper_service;
 mod tenant_shard_iterator;
 
 use std::borrow::Cow;
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::num::NonZeroU32;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -36,8 +34,7 @@ use pageserver_api::models::{
     self, DetachBehavior, LocationConfig, LocationConfigListResponse, LsnLease,
     PageserverUtilization, SecondaryProgress, ShardImportStatus, ShardParameters, TenantConfig,
     TenantConfigPatchRequest, TenantConfigRequest, TenantLocationConfigRequest,
-    TenantLocationConfigResponse, TenantShardLocation,
-    TenantSorting, TenantTimeTravelRequest,
+    TenantLocationConfigResponse, TenantShardLocation, TenantTimeTravelRequest,
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateResponseStorcon,
     TimelineInfo, TopTenantShardItem, TopTenantShardsRequest,
 };
@@ -56,14 +53,13 @@ use tenant_shard_iterator::{TenantShardExclusiveIterator, create_shared_shard_it
 use tokio::sync::TryAcquireError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
+use tracing::{Instrument, instrument, warn};
 use utils::completion::Barrier;
-use utils::env;
 use utils::generation::Generation;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::id::ShardIndex;
-use utils::sync::gate::{Gate, GateGuard};
+use utils::sync::gate::Gate;
 use utils::{failpoint_support, pausable_failpoint};
 
 use crate::background_node_operations::{
@@ -88,14 +84,13 @@ use crate::persistence::{
 };
 use crate::reconciler::{
     ReconcileError, ReconcileUnits, ReconcilerConfig, ReconcilerConfigBuilder, ReconcilerPriority,
-    attached_location_conf,
 };
 use crate::safekeeper::Safekeeper;
 use crate::scheduler::{
     AttachedShardTag, MaySchedule, ScheduleContext, ScheduleError, ScheduleMode, Scheduler,
 };
 use crate::tenant_shard::{
-    IntentState, MigrateAttachment, ObservedState, ObservedStateDelta, ObservedStateLocation,
+    IntentState, MigrateAttachment, ObservedStateDelta, ObservedStateLocation,
     ReconcileNeeded, ReconcileResult, ReconcileWaitError, ReconcilerStatus, ReconcilerWaiter,
     ScheduleOptimization, ScheduleOptimizationAction, TenantShard,
 };
@@ -1571,7 +1566,7 @@ impl Service {
             .set(safekeepers.values().filter(|s| s.has_https_port()).count() as i64);
 
         tracing::info!("Loading shards from database...");
-        let mut tenant_shard_persistence = persistence.load_active_tenant_shards().await?;
+        let tenant_shard_persistence = persistence.load_active_tenant_shards().await?;
         tracing::info!(
             "Loaded {} shards from database.",
             tenant_shard_persistence.len()

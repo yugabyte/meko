@@ -18,7 +18,6 @@ use metrics::set_build_info_metric;
 use nix::sys::socket::{setsockopt, sockopt};
 use pageserver::basebackup_cache::BasebackupCache;
 use pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
-use pageserver::controller_upcall_client::StorageControllerUpcallClient;
 use pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
 use pageserver::page_service::GrpcPageServiceHandler;
 use pageserver::task_mgr::{BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME};

@@ -47,7 +47,7 @@ use utils::seqwait::SeqWait;
 use utils::simple_rcu::{Rcu, RcuReadGuard};
 use utils::sync::gate::{Gate, GateGuard};
 use utils::{completion, critical_timeline, pausable_failpoint};
-use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
+use wal_decoder::serialized_batch::SerializedValueBatch;
 
 use self::delete::DeleteTimelineFlow;
 use self::logical_size::LogicalSize;

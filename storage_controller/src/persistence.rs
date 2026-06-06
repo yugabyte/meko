@@ -24,7 +24,7 @@ use pageserver_api::controller_api::{
 };
 use pageserver_api::models::{ShardImportStatus, TenantConfig};
 use pageserver_api::models::{
-    ShardConfigError, ShardCount, ShardIdentity, ShardNumber, ShardStripeSize,
+    ShardConfigError, ShardCount, ShardIdentity, ShardNumber,
 };
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
@@ -35,7 +35,6 @@ use utils::generation::Generation;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 
-use self::split_state::SplitState;
 use crate::metrics::{
     DatabaseQueryErrorLabelGroup, DatabaseQueryLatencyLabelGroup, METRICS_REGISTRY,
 };

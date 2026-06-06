@@ -18,7 +18,6 @@ use safekeeper_api::models::PeerInfo;
 use serde::{Deserialize, Serialize};
 use tokio::task::{JoinError, JoinHandle};
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, info_span, instrument, warn};
 use utils::lsn::Lsn;
 

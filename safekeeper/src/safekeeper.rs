@@ -2,12 +2,11 @@
 
 use std::cmp::{max, min};
 use std::fmt;
-use std::io::Read;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use postgres_ffi::{MAX_SEND_SIZE, TimeLineID};
+use postgres_ffi::MAX_SEND_SIZE;
 use postgres_versioninfo::{PgMajorVersion, PgVersionId};
 use pq_proto::SystemId;
 use safekeeper_api::membership::{
@@ -17,10 +16,11 @@ use safekeeper_api::models::HotStandbyFeedback;
 use safekeeper_api::{Term, membership};
 use serde::{Deserialize, Serialize};
 use tracing::*;
-use utils::bin_ser::LeSer;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
+#[cfg(test)]
+use utils::bin_ser::BeSer;
 
 use crate::metrics::{MISC_OPERATION_SECONDS, PROPOSER_ACCEPTOR_MESSAGES_TOTAL};
 use crate::state::TimelineState;

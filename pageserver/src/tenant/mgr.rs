@@ -12,7 +12,7 @@ use anyhow::Context;
 use camino::{Utf8DirEntry, Utf8Path, Utf8PathBuf};
 use futures::StreamExt;
 use pageserver_api::key::Key;
-use pageserver_api::models::{ShardIdentity, ShardIndex, ShardNumber, ShardStripeSize};
+use pageserver_api::models::{ShardIdentity, ShardIndex};
 use pageserver_api::upcall_api::ReAttachResponseTenant;
 use rand::Rng;
 use rand::distr::Alphanumeric;

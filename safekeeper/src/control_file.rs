@@ -170,7 +170,7 @@ impl YbControlFileStorage {
         ttid: &TenantTimelineId,
         state: TimelinePersistentState,
     ) -> Result<YbControlFileStorage> {
-        let mut store = YbControlFileStorage {
+        let store = YbControlFileStorage {
             client,
             ttid: *ttid,
             state: state.clone(),
