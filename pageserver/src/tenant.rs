@@ -58,7 +58,7 @@ use self::config::LocationConf;
 use self::metadata::TimelineMetadata;
 use self::mgr::{GetActiveTenantError, GetTenantError};
 use self::remote_timeline_client::upload::upload_tenant_manifest;
-use self::remote_timeline_client::RemoteTimelineClient;
+use self::remote_timeline_client::download_index_file;
 use self::timeline::uninit::{TimelineCreateGuard, TimelineExclusionError, UninitializedTimeline};
 use self::timeline::{
     GcCutoffs, TimelineDeleteProgress, TimelineResources, WaitLsnError,
@@ -1508,31 +1508,26 @@ impl TenantShard {
         .await
     }
 
-    fn build_timeline_client(
-        &self,
-        timeline_id: TimelineId,
-        remote_storage: GenericRemoteStorage,
-    ) -> RemoteTimelineClient {
-        RemoteTimelineClient::new(
-            remote_storage,
-            self.tenant_shard_id,
-            timeline_id,
-            self.generation,
-        )
-    }
-
     fn load_timeline_metadata(
         self: &Arc<TenantShard>,
         timeline_id: TimelineId,
         remote_storage: GenericRemoteStorage,
         cancel: CancellationToken,
     ) -> impl Future<Output = TimelinePreload> + use<> {
-        let client = self.build_timeline_client(timeline_id, remote_storage);
+        let tenant_shard_id = self.tenant_shard_id;
+        let generation = self.generation;
         async move {
             debug_assert_current_span_has_tenant_and_timeline_id();
             debug!("starting index part download");
 
-            let index_part = client.download_index_file(&cancel).await;
+            let index_part = download_index_file(
+                &remote_storage,
+                &tenant_shard_id,
+                &timeline_id,
+                generation,
+                &cancel,
+            )
+            .await;
 
             debug!("finished index part download");
 

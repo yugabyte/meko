@@ -225,119 +225,86 @@ pub enum MaybeDeletedIndexPart {
     Deleted(IndexPart),
 }
 
-/// A client for accessing a timeline's data in remote storage.
+/// Download the latest `index_part.json` for the given timeline. The
+/// caller checks the result for a "deleted" marker (the only surviving
+/// signal an index_part still carries in yb-mode); every other field is
+/// consumed during `load_remote_timeline`.
 ///
-/// This takes care of managing the number of connections, and balancing them
-/// across tenants. This also handles retries of failed uploads.
-///
-/// In yb-mode this struct is a thin holder for the metadata needed
-/// to call [`Self::download_index_file`] at tenant startup. The
-/// upstream upload queue + layer-file delete machinery is gone:
-/// timeline state lives in `pageserver.timeline_state` (managed by
-/// `PageStore`), and there are no layer files to upload, delete, or
-/// reconcile. The struct is consumed and dropped right after the
-/// download — see `Tenant::load_timeline_metadata`.
-pub(crate) struct RemoteTimelineClient {
-    tenant_shard_id: TenantId,
-    timeline_id: TimelineId,
+/// In yb-mode this is the only remote-storage call left for timeline
+/// metadata — the upstream upload queue + layer-file delete machinery
+/// is gone; timeline state lives in `pageserver.timeline_state`.
+pub async fn download_index_file(
+    storage: &GenericRemoteStorage,
+    tenant_shard_id: &TenantId,
+    timeline_id: &TimelineId,
     generation: Generation,
-    storage_impl: GenericRemoteStorage,
-    pub(crate) metrics: Arc<RemoteTimelineClientMetrics>,
-}
+    cancel: &CancellationToken,
+) -> Result<MaybeDeletedIndexPart, DownloadError> {
+    let metrics = Arc::new(RemoteTimelineClientMetrics::new(tenant_shard_id, timeline_id));
+    let _unfinished_gauge_guard =
+        metrics.call_begin(&RemoteOpFileKind::Index, &RemoteOpKind::Download);
 
-impl RemoteTimelineClient {
-    pub(crate) fn new(
-        remote_storage: GenericRemoteStorage,
-        tenant_shard_id: TenantId,
-        timeline_id: TimelineId,
-        generation: Generation,
-    ) -> RemoteTimelineClient {
-        RemoteTimelineClient {
-            tenant_shard_id,
-            timeline_id,
-            generation,
-            storage_impl: remote_storage,
-            metrics: Arc::new(RemoteTimelineClientMetrics::new(
-                &tenant_shard_id,
-                &timeline_id,
-            )),
+    let (index_part, index_generation, index_last_modified) = download::download_index_part(
+        storage,
+        tenant_shard_id,
+        timeline_id,
+        generation,
+        cancel,
+    )
+    .measure_remote_op(
+        Option::<TaskKind>::None,
+        RemoteOpFileKind::Index,
+        RemoteOpKind::Download,
+        Arc::clone(&metrics),
+    )
+    .await?;
+
+    // Defense in depth: monotonicity of generation numbers is an important correctness guarantee, so when we see a very
+    // old index, we do extra checks in case this is the result of backward time-travel of the generation number (e.g.
+    // in case of a bug in the service that issues generation numbers). Indices are allowed to be old, but we expect that
+    // when we load an old index we are loading the _latest_ index: if we are asked to load an old index and there is
+    // also a newer index available, that is surprising.
+    const INDEX_AGE_CHECKS_THRESHOLD: Duration = Duration::from_secs(14 * 24 * 3600);
+    let index_age = index_last_modified.elapsed().unwrap_or_else(|e| {
+        if e.duration() > Duration::from_secs(5) {
+            tracing::warn!("Index has modification time in the future: {e}");
+        }
+        Duration::ZERO
+    });
+    if index_age > INDEX_AGE_CHECKS_THRESHOLD {
+        tracing::info!(
+            ?index_generation,
+            age = index_age.as_secs_f64(),
+            "Loaded an old index, checking for other indices..."
+        );
+
+        let (_latest_index_part, latest_index_generation, latest_index_mtime) =
+            download::download_index_part(
+                storage,
+                tenant_shard_id,
+                timeline_id,
+                Generation::MAX,
+                cancel,
+            )
+            .await?;
+
+        if latest_index_generation > index_generation {
+            tracing::error!(
+                ?index_generation,
+                ?latest_index_generation,
+                ?latest_index_mtime,
+                "Found a newer index while loading an old one"
+            );
+            return Err(DownloadError::Fatal(
+                "Index age exceeds threshold and a newer index exists".into(),
+            ));
         }
     }
 
-    /// Download the latest `index_part.json` for this timeline. The
-    /// caller checks the result for a "deleted" marker (the only
-    /// surviving signal an index_part still carries in yb-mode);
-    /// every other field is consumed during `load_remote_timeline`.
-    pub async fn download_index_file(
-        &self,
-        cancel: &CancellationToken,
-    ) -> Result<MaybeDeletedIndexPart, DownloadError> {
-        let _unfinished_gauge_guard = self
-            .metrics
-            .call_begin(&RemoteOpFileKind::Index, &RemoteOpKind::Download);
-
-        let (index_part, index_generation, index_last_modified) = download::download_index_part(
-            &self.storage_impl,
-            &self.tenant_shard_id,
-            &self.timeline_id,
-            self.generation,
-            cancel,
-        )
-        .measure_remote_op(
-            Option::<TaskKind>::None,
-            RemoteOpFileKind::Index,
-            RemoteOpKind::Download,
-            Arc::clone(&self.metrics),
-        )
-        .await?;
-
-        // Defense in depth: monotonicity of generation numbers is an important correctness guarantee, so when we see a very
-        // old index, we do extra checks in case this is the result of backward time-travel of the generation number (e.g.
-        // in case of a bug in the service that issues generation numbers). Indices are allowed to be old, but we expect that
-        // when we load an old index we are loading the _latest_ index: if we are asked to load an old index and there is
-        // also a newer index available, that is surprising.
-        const INDEX_AGE_CHECKS_THRESHOLD: Duration = Duration::from_secs(14 * 24 * 3600);
-        let index_age = index_last_modified.elapsed().unwrap_or_else(|e| {
-            if e.duration() > Duration::from_secs(5) {
-                tracing::warn!("Index has modification time in the future: {e}");
-            }
-            Duration::ZERO
-        });
-        if index_age > INDEX_AGE_CHECKS_THRESHOLD {
-            tracing::info!(
-                ?index_generation,
-                age = index_age.as_secs_f64(),
-                "Loaded an old index, checking for other indices..."
-            );
-
-            let (_latest_index_part, latest_index_generation, latest_index_mtime) =
-                download::download_index_part(
-                    &self.storage_impl,
-                    &self.tenant_shard_id,
-                    &self.timeline_id,
-                    Generation::MAX,
-                    cancel,
-                )
-                .await?;
-
-            if latest_index_generation > index_generation {
-                tracing::error!(
-                    ?index_generation,
-                    ?latest_index_generation,
-                    ?latest_index_mtime,
-                    "Found a newer index while loading an old one"
-                );
-                return Err(DownloadError::Fatal(
-                    "Index age exceeds threshold and a newer index exists".into(),
-                ));
-            }
-        }
-
-        if index_part.deleted_at.is_some() {
-            Ok(MaybeDeletedIndexPart::Deleted(index_part))
-        } else {
-            Ok(MaybeDeletedIndexPart::IndexPart(index_part))
-        }
+    if index_part.deleted_at.is_some() {
+        Ok(MaybeDeletedIndexPart::Deleted(index_part))
+    } else {
+        Ok(MaybeDeletedIndexPart::IndexPart(index_part))
     }
 }
 
