@@ -309,15 +309,7 @@ pub static HTTP_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
         .expect("Failed to create HTTP runtime")
 });
 
-pub static WAL_BACKUP_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .thread_name("WAL backup worker")
-        .enable_all()
-        .build()
-        .expect("Failed to create WAL backup runtime")
-});
-
-/// Hadron: Dedicated runtime for infrequent background tasks.
+/// Dedicated runtime for infrequent background tasks.
 pub static BACKGROUND_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .thread_name("Hadron background worker")
