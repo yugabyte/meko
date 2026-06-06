@@ -3,7 +3,12 @@ use std::sync::Arc;
 
 use utils::id::TimelineId;
 
-use super::remote_timeline_client::index::GcBlockingReason;
+#[derive(Debug, enumset::EnumSetType, serde::Serialize, serde::Deserialize)]
+#[enumset(serialize_repr = "list")]
+pub(crate) enum GcBlockingReason {
+    Manual,
+    DetachAncestor,
+}
 
 type Storage = HashMap<TimelineId, enumset::EnumSet<GcBlockingReason>>;
 

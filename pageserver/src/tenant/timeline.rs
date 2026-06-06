@@ -52,7 +52,6 @@ use wal_decoder::serialized_batch::SerializedValueBatch;
 use self::delete::DeleteTimelineFlow;
 use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
-use super::remote_timeline_client::index::GcCompactionState;
 use super::{
     AttachedTenantConf, GcError, MaybeOffloaded,
     debug_assert_current_span_has_tenant_and_timeline_id,
@@ -1918,7 +1917,6 @@ impl Timeline {
         state: TimelineState,
         attach_wal_lag_cooldown: Arc<OnceLock<WalLagCooldown>>,
         create_idempotency: crate::tenant::CreateTimelineIdempotency,
-        _gc_compaction_state: Option<GcCompactionState>,
         rel_size_v2_status: Option<RelSizeMigration>,
         rel_size_migrated_at: Option<Lsn>,
         cancel: CancellationToken,
@@ -3083,14 +3081,14 @@ impl Timeline {
     ///
     /// Returns true if no such block existed before, false otherwise.
     pub(crate) async fn block_gc(&self, tenant: &super::TenantShard) -> anyhow::Result<bool> {
-        use crate::tenant::remote_timeline_client::index::GcBlockingReason;
+        use crate::tenant::gc_block::GcBlockingReason;
         assert_eq!(self.tenant_shard_id, tenant.tenant_shard_id);
         tenant.gc_block.insert(self, GcBlockingReason::Manual).await
     }
 
     /// Persistently unblocks gc for `Manual` reason.
     pub(crate) async fn unblock_gc(&self, tenant: &super::TenantShard) -> anyhow::Result<()> {
-        use crate::tenant::remote_timeline_client::index::GcBlockingReason;
+        use crate::tenant::gc_block::GcBlockingReason;
         assert_eq!(self.tenant_shard_id, tenant.tenant_shard_id);
         tenant.gc_block.remove(self, GcBlockingReason::Manual).await
     }

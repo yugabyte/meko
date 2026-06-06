@@ -175,7 +175,6 @@
 //! [`Timeline::load_layer_map`]: super::Timeline::load_layer_map
 
 pub(crate) mod download;
-pub mod index;
 pub(crate) mod upload;
 
 use camino::Utf8Path;
@@ -184,8 +183,6 @@ use remote_storage::RemotePath;
 pub(crate) use upload::upload_initdb_dir;
 use utils::id::{TenantId, TimelineId};
 
-use self::index::IndexPart;
-use super::Generation;
 use crate::metrics::MeasureRemoteOp;
 use crate::tenant::TIMELINES_SEGMENT_NAME;
 
@@ -207,11 +204,6 @@ pub(crate) const INITDB_PRESERVED_PATH: &str = "initdb-preserved.tar.zst";
 
 /// Default buffer size when interfacing with [`tokio::fs::File`].
 pub(crate) const BUFFER_SIZE: usize = 32 * 1024;
-
-pub enum MaybeDeletedIndexPart {
-    IndexPart(IndexPart),
-    Deleted(IndexPart),
-}
 
 /// Prefix of all objects belonging to a tenant in remote storage. Used by
 /// the tenant-delete path to wipe `tenants/<tenant_id>/*` in one shot.

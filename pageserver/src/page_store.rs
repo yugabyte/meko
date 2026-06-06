@@ -51,7 +51,7 @@ use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::models::RelSizeMigration;
 use pageserver_api::reltag::SlruKind;
 
-use crate::tenant::remote_timeline_client::index::Lineage;
+use crate::tenant::metadata::Lineage;
 use remote_storage::{YbStoreConfig, YsqlClient};
 // We talk to YugabyteDB through the YB smart-driver fork of
 // tokio-postgres; alias it so the type names below (`tokio_postgres::Row`,

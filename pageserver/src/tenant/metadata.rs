@@ -318,6 +318,28 @@ impl TimelineMetadata {
 
 }
 
+/// Limited history of earlier ancestors.
+///
+/// A timeline can have more than 1 earlier ancestor, in the rare case that it was repeatedly
+/// reparented by having an later timeline be detached from it's ancestor.
+///
+/// Persisted as a JSONB column on `pageserver.timeline_state`. In yb-mode
+/// reparenting and detach-ancestor are unsupported, so this is always
+/// `Default::default()`; the column is kept for forward-compat.
+#[derive(Debug, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct Lineage {
+    #[serde(skip_serializing_if = "is_false", default)]
+    reparenting_history_truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    reparenting_history: Vec<utils::id::TimelineId>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    original_ancestor: Option<(utils::id::TimelineId, utils::lsn::Lsn, chrono::NaiveDateTime)>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
+}
+
 pub(crate) mod modern_serde {
     use serde::{Deserialize, Serialize};
 

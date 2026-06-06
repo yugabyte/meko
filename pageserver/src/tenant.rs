@@ -37,7 +37,6 @@ use pageserver_api::models::{
 use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardIdentity, ShardStripeSize};
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
-use remote_timeline_client::index::GcCompactionState;
 use tokio::io::BufReader;
 use tokio::sync::{Semaphore, watch};
 use tokio_util::sync::CancellationToken;
@@ -69,10 +68,7 @@ use crate::metrics::{
 };
 use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
-pub use crate::tenant::remote_timeline_client::index::IndexPart;
-use crate::tenant::remote_timeline_client::{
-    INITDB_PATH, MaybeDeletedIndexPart, remote_initdb_archive_path,
-};
+use crate::tenant::remote_timeline_client::{INITDB_PATH, remote_initdb_archive_path};
 
 use crate::tenant::timeline::delete::DeleteTimelineFlow;
 use crate::tenant::timeline::uninit::cleanup_timeline_directory;
@@ -184,7 +180,7 @@ impl AttachedTenantConf {
     }
 }
 struct TimelinePreload {
-    index_part: Result<MaybeDeletedIndexPart, DownloadError>,
+    metadata: Result<TimelineMetadata, DownloadError>,
 }
 
 pub(crate) struct TenantPreload {
@@ -192,12 +188,13 @@ pub(crate) struct TenantPreload {
     timelines: HashMap<TimelineId, Option<TimelinePreload>>,
 }
 
-/// Build a yb-mode `IndexPart` from the `pageserver.timeline_state` row.
-/// Layer files don't exist, so the index is empty; the metadata fields
-/// that used to live in `index_part.json` ride on the row directly.
-fn synth_index_part_from_row(
+/// Build a `TimelineMetadata` from a `pageserver.timeline_state` row.
+/// In yb-mode the row *is* the timeline metadata; everything that
+/// used to ride on `index_part.json` either lives in the row or is
+/// dead weight.
+fn synth_timeline_metadata_from_row(
     row: &crate::page_store::TimelineRow,
-) -> anyhow::Result<MaybeDeletedIndexPart> {
+) -> anyhow::Result<TimelineMetadata> {
     let pg_major = match row.pg_version {
         14 => PgMajorVersion::PG14,
         15 => PgMajorVersion::PG15,
@@ -205,7 +202,7 @@ fn synth_index_part_from_row(
         17 => PgMajorVersion::PG17,
         v => anyhow::bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
     };
-    let metadata = crate::tenant::metadata::TimelineMetadata::new(
+    Ok(TimelineMetadata::new(
         row.disk_consistent_lsn,
         // Persisted on flush; see PageWriter::take_prev_at_or_below.
         // NULL falls through as None and the walreceiver re-derives
@@ -219,8 +216,7 @@ fn synth_index_part_from_row(
         // yb-mode) and consumption metrics.
         row.initdb_lsn.unwrap_or(row.disk_consistent_lsn),
         pg_major,
-    );
-    Ok(MaybeDeletedIndexPart::IndexPart(IndexPart::empty(metadata)))
+    ))
 }
 
 /// When we spawn a tenant, there is a special mode for tenant creation that
@@ -875,12 +871,10 @@ impl TenantShard {
     ///
     /// If the operation fails, the timeline is left in the tenant's hash map in Broken state. On success,
     /// it is marked as Active.
-    #[allow(clippy::too_many_arguments)]
     async fn timeline_init_and_sync(
         self: &Arc<Self>,
         timeline_id: TimelineId,
         resources: TimelineResources,
-        index_part: IndexPart,
         metadata: TimelineMetadata,
         ancestor: Option<Arc<Timeline>>,
         cause: LoadTimelineCause,
@@ -905,9 +899,8 @@ impl TenantShard {
             ancestor.clone(),
             resources,
             idempotency.clone(),
-            index_part.gc_compaction.clone(),
-            index_part.rel_size_migration.clone(),
-            index_part.rel_size_migrated_at,
+            None, // rel_size_v2_status — always None in yb-mode
+            None, // rel_size_migrated_at — always None in yb-mode
             ctx,
         )?;
         let disk_consistent_lsn = timeline.get_disk_consistent_lsn();
@@ -925,7 +918,6 @@ impl TenantShard {
         // yb-mode: no upload queue to init. The PageWriter takes the
         // `remote_state.rc_lsn` slot directly so flush success bumps
         // the safekeeper-truncation bound.
-        let _ = &index_part;
         if let Some(pw) = timeline.page_writer.as_ref() {
             pw.set_remote_consistent_lsn_slot(timeline.remote_state.rc_lsn.clone());
         }
@@ -1214,11 +1206,11 @@ impl TenantShard {
         info!("preload: {} timelines from pageserver.timeline_state", rows.len());
         let mut timelines = HashMap::with_capacity(rows.len());
         for row in rows {
-            let index_part = synth_index_part_from_row(&row)?;
+            let metadata = synth_timeline_metadata_from_row(&row)?;
             timelines.insert(
                 row.timeline_id,
                 Some(TimelinePreload {
-                    index_part: Ok(index_part),
+                    metadata: Ok(metadata),
                 }),
             );
         }
@@ -1249,47 +1241,29 @@ impl TenantShard {
         // (the source of the offload list in upstream) is gone.
         let offloaded_timelines_list: Vec<(TimelineId, Arc<OffloadedTimeline>)> = Vec::new();
 
-        let mut remote_index = HashMap::new();
         let mut timeline_ancestors = HashMap::new();
         for (timeline_id, preload) in preload.timelines {
             let Some(preload) = preload else { continue };
-            // `preload.index_part` is synthesised from
+            // `preload.metadata` is synthesised from
             // `pageserver.timeline_state` in `Tenant::preload`, so it's
-            // always `Ok(IndexPart(...))` — no remote blob download
-            // path remains in yb-mode.
-            let MaybeDeletedIndexPart::IndexPart(index_part) = preload
-                .index_part
-                .expect("yb-mode preload always builds an Ok IndexPart")
-            else {
-                unreachable!("synth_index_part_from_row never produces Deleted");
-            };
-            timeline_ancestors.insert(timeline_id, index_part.metadata.clone());
-            remote_index.insert(timeline_id, index_part);
+            // always `Ok(_)` — no remote blob download path remains in yb-mode.
+            let metadata = preload
+                .metadata
+                .expect("yb-mode preload always builds an Ok TimelineMetadata");
+            timeline_ancestors.insert(timeline_id, metadata);
         }
 
-        let mut gc_blocks = HashMap::new();
+        // gc_blocking lived on index_part.json; yb-mode has no source for
+        // it yet, so initialise empty.
+        let gc_blocks: HashMap<TimelineId, enumset::EnumSet<gc_block::GcBlockingReason>> =
+            HashMap::new();
 
         let sorted_timelines = tree_sort_timelines(timeline_ancestors, |m| m.ancestor_timeline())?;
         for (timeline_id, remote_metadata) in sorted_timelines {
-            let index_part = remote_index
-                .remove(&timeline_id)
-                .expect("just put it in above");
-
-            if let Some(blocking) = index_part.gc_blocking.as_ref() {
-                // could just filter these away, but it helps while testing
-                anyhow::ensure!(
-                    !blocking.reasons.is_empty(),
-                    "index_part for {timeline_id} is malformed: it should not have gc blocking with zero reasons"
-                );
-                let prev = gc_blocks.insert(timeline_id, blocking.reasons);
-                assert!(prev.is_none());
-            }
-
             // TODO again handle early failure
             let effect = self
                 .load_remote_timeline(
                     timeline_id,
-                    index_part,
                     remote_metadata,
                     self.build_timeline_resources(timeline_id),
                     LoadTimelineCause::Attach,
@@ -1360,11 +1334,9 @@ impl TenantShard {
     }
 
     #[instrument(skip_all, fields(timeline_id=%timeline_id))]
-    #[allow(clippy::too_many_arguments)]
     async fn load_remote_timeline(
         self: &Arc<Self>,
         timeline_id: TimelineId,
-        index_part: IndexPart,
         remote_metadata: TimelineMetadata,
         resources: TimelineResources,
         cause: LoadTimelineCause,
@@ -1390,7 +1362,6 @@ impl TenantShard {
         self.timeline_init_and_sync(
             timeline_id,
             resources,
-            index_part,
             remote_metadata,
             ancestor,
             cause,
@@ -2564,7 +2535,6 @@ impl TenantShard {
         ancestor: Option<Arc<Timeline>>,
         resources: TimelineResources,
         create_idempotency: CreateTimelineIdempotency,
-        gc_compaction_state: Option<GcCompactionState>,
         rel_size_v2_status: Option<RelSizeMigration>,
         rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
@@ -2593,7 +2563,6 @@ impl TenantShard {
             state,
             self.attach_wal_lag_cooldown.clone(),
             create_idempotency,
-            gc_compaction_state,
             rel_size_v2_status,
             rel_size_migrated_at,
             self.cancel.child_token(),
@@ -3537,7 +3506,6 @@ impl TenantShard {
                 ancestor,
                 resources,
                 create_guard.idempotency.clone(),
-                None,
                 rel_size_v2_status,
                 rel_size_migrated_at,
                 ctx,
