@@ -29,7 +29,7 @@ use utils::lsn::Lsn;
 
 use crate::metrics::{WAL_STORAGE_OPERATION_SECONDS, WalStorageMetrics};
 use crate::state::TimelinePersistentState;
-use crate::wal_backup::WalBackup;
+use crate::yb_wal_storage::YbWalConn;
 
 pub trait Storage {
     // Last written LSN.
@@ -265,7 +265,7 @@ pub struct WalReader {
     wal_segment: Option<Pin<Box<dyn AsyncRead + Send + Sync>>>,
 
     // S3 will be used to read WAL if LSN is not available locally
-    wal_backup: Arc<WalBackup>,
+    wal_backup: Option<Arc<YbWalConn>>,
 
     // We don't have WAL locally if LSN is less than local_start_lsn
     local_start_lsn: Lsn,
@@ -284,7 +284,7 @@ impl WalReader {
         timeline_dir: Utf8PathBuf,
         state: &TimelinePersistentState,
         start_pos: Lsn,
-        wal_backup: Arc<WalBackup>,
+        wal_backup: Option<Arc<YbWalConn>>,
     ) -> Result<Self> {
         if state.server.wal_seg_size == 0 || state.local_start_lsn == Lsn(0) {
             bail!("state uninitialized, no data to read");
@@ -428,7 +428,7 @@ impl WalReader {
         // falling through to YB only on miss. This replaces the old
         // snapshot-at-open `VecAsyncRead` which silently lost data added
         // to `wals` after the segment was opened — see `wal_cache.rs`.
-        if let Some(yb_wal) = self.wal_backup.yb_wal() {
+        if let Some(yb_wal) = self.wal_backup.clone() {
             tracing::info!(
                 "WalReader: serving segment {segno} (offset {xlogoff}) from YB table `{}` (cache {})",
                 yb_wal.table,

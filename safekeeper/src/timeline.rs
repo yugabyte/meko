@@ -37,7 +37,7 @@ use crate::state::{EvictionState, TimelineMemState, TimelinePersistentState, Tim
 use crate::timeline_guard::ResidenceGuard;
 use crate::timeline_manager::{AtomicStatus, ManagerCtl};
 use crate::timelines_set::TimelinesSet;
-use crate::wal_backup::WalBackup;
+use crate::yb_wal_storage::YbWalConn;
 use crate::wal_backup_partial::PartialRemoteSegment;
 use crate::wal_storage::{Storage as wal_storage_iface, WalReader};
 use crate::yb_wal_storage::{self, YbWalStorage};
@@ -287,10 +287,10 @@ impl SharedState {
     pub async fn restore(
         conf: &SafeKeeperConf,
         ttid: &TenantTimelineId,
-        wal_backup: &WalBackup,
+        yb_wal: Option<&Arc<YbWalConn>>,
     ) -> Result<Self> {
-        let yb_wal = wal_backup
-            .yb_wal()
+        let yb_wal = yb_wal
+            .cloned()
             .context("control-file restore requires --wal-yb-config")?;
         let control_store =
             control_file::ControlFileStorage::restore_new(yb_wal.client.clone(), ttid).await?;
@@ -308,10 +308,7 @@ impl SharedState {
 
         let sk = match control_store.eviction_state {
             EvictionState::Present => {
-                let yb_wal = wal_backup
-                    .yb_wal()
-                    .context("WAL storage requires YB live-WAL config (--wal-yb-config)")?;
-                let wal_store = YbWalStorage::new(ttid, &control_store, yb_wal).await?;
+                let wal_store = YbWalStorage::new(ttid, &control_store, yb_wal.clone()).await?;
                 StateSK::Loaded(SafeKeeper::new(
                     TimelineState::new(control_store),
                     wal_store,
@@ -429,7 +426,7 @@ pub struct Timeline {
     manager_ctl: ManagerCtl,
     conf: Arc<SafeKeeperConf>,
 
-    pub(crate) wal_backup: Arc<WalBackup>,
+    pub(crate) wal_backup: Option<Arc<YbWalConn>>,
 
     remote_deletion: std::sync::Mutex<Option<RemoteDeletionReceiver>>,
 
@@ -454,7 +451,7 @@ impl Timeline {
         timeline_dir: &Utf8Path,
         shared_state: SharedState,
         conf: Arc<SafeKeeperConf>,
-        wal_backup: Arc<WalBackup>,
+        wal_backup: Option<Arc<YbWalConn>>,
     ) -> Arc<Self> {
         // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
         let (commit_lsn_watch_tx, commit_lsn_watch_rx) =
@@ -496,13 +493,13 @@ impl Timeline {
     pub async fn load_timeline(
         conf: Arc<SafeKeeperConf>,
         ttid: TenantTimelineId,
-        wal_backup: Arc<WalBackup>,
+        wal_backup: Option<Arc<YbWalConn>>,
     ) -> Result<Arc<Timeline>> {
         use tracing::Instrument;
         let span = info_span!("load_timeline", timeline = %ttid.timeline_id);
         async move {
             let shared_state =
-                SharedState::restore(conf.as_ref(), &ttid, &wal_backup).await?;
+                SharedState::restore(conf.as_ref(), &ttid, wal_backup.as_ref()).await?;
             let timeline_dir = get_timeline_dir(conf.as_ref(), &ttid);
 
             Ok(Timeline::new(
@@ -523,7 +520,7 @@ impl Timeline {
         _shared_state: &mut WriteGuardSharedState<'_>,
         conf: &SafeKeeperConf,
         broker_active_set: Arc<TimelinesSet>,
-        wal_backup: Arc<WalBackup>,
+        wal_backup: Option<Arc<YbWalConn>>,
     ) {
         let (tx, rx) = self.manager_ctl.bootstrap_manager();
 
@@ -661,7 +658,7 @@ impl Timeline {
         guard: &mut std::sync::MutexGuard<Option<RemoteDeletionReceiver>>,
     ) -> RemoteDeletionReceiver {
         tracing::info!("starting remote deletion");
-        let yb_wal = self.wal_backup.yb_wal();
+        let yb_wal = self.wal_backup.clone();
         let (result_tx, result_rx) = tokio::sync::watch::channel(None);
         let ttid = self.ttid;
         tokio::task::spawn(

@@ -33,7 +33,7 @@ use crate::state::TimelineState;
 use crate::timeline::{ManagerTimeline, ReadGuardSharedState, StateSK, WalResidentTimeline};
 use crate::timeline_guard::{AccessService, GuardId, ResidenceGuard};
 use crate::timelines_set::{TimelineSetGuard, TimelinesSet};
-use crate::wal_backup::WalBackup;
+use crate::yb_wal_storage::YbWalConn;
 
 pub(crate) struct StateSnapshot {
     // inmem values
@@ -191,7 +191,7 @@ pub(crate) struct Manager {
     pub(crate) conf: SafeKeeperConf,
     pub(crate) wal_seg_size: usize,
     pub(crate) walsenders: Arc<WalSenders>,
-    pub(crate) wal_backup: Arc<WalBackup>,
+    pub(crate) wal_backup: Option<Arc<YbWalConn>>,
 
     // current state
     pub(crate) state_version_rx: tokio::sync::watch::Receiver<usize>,
@@ -216,7 +216,7 @@ pub async fn main_task(
     broker_active_set: Arc<TimelinesSet>,
     manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
     mut manager_rx: tokio::sync::mpsc::UnboundedReceiver<ManagerCtlMessage>,
-    wal_backup: Arc<WalBackup>,
+    wal_backup: Option<Arc<YbWalConn>>,
 ) {
     tli.set_status(Status::Started);
 
@@ -312,7 +312,7 @@ impl Manager {
         conf: SafeKeeperConf,
         broker_active_set: Arc<TimelinesSet>,
         manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
-        wal_backup: Arc<WalBackup>,
+        wal_backup: Option<Arc<YbWalConn>>,
     ) -> Manager {
         Manager {
             wal_seg_size: tli.get_wal_seg_size().await,

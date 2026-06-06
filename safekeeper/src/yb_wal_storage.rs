@@ -109,11 +109,11 @@ use crate::wal_storage::{PhysicalStorage, Storage};
 pub use remote_storage::YsqlClient;
 
 /// Handles to the YB connection that mirrors live WAL into
-/// `yb_storage.wals`. Constructed at safekeeper boot (see
-/// [`crate::wal_backup::WalBackup::new`]) and shared across timelines
-/// via `Arc<YbWalConn>`. Both the writer ([`YbWalStorage::new`]) and
-/// the reader ([`YbSegmentReader::new`]) consume these fields
-/// directly — replaces the prior three-tuple-from-getter pattern.
+/// `yb_storage.wals`. Constructed at safekeeper boot via
+/// [`YbWalConn::from_conf`] and shared across timelines via
+/// `Arc<YbWalConn>`. Used by the WAL writer ([`YbWalStorage::new`]),
+/// the WAL reader ([`YbSegmentReader::new`]), and (since task 19)
+/// the control-file storage ([`crate::control_file::YbControlFileStorage`]).
 pub struct YbWalConn {
     /// Auto-reconnecting wrapper around `tokio_postgres::Client`. A
     /// TCP-level disconnect (e.g. the YB tserver restarting) triggers
@@ -130,6 +130,50 @@ pub struct YbWalConn {
     /// `--wal-cache-size-mib 0` to disable the cache entirely (every
     /// WAL read then hits YB).
     pub cache: Option<Arc<std::sync::Mutex<WalCache>>>,
+}
+
+impl YbWalConn {
+    /// Build from the SK config. Returns `None` when
+    /// `--wal-yb-config` isn't set (which yb-light shouldn't be
+    /// running without — every persistence path needs this).
+    pub async fn from_conf(
+        conf: &crate::SafeKeeperConf,
+    ) -> anyhow::Result<Option<Arc<YbWalConn>>> {
+        use anyhow::Context;
+        let Some(yb) = conf.wal_yb_config.as_ref() else {
+            return Ok(None);
+        };
+        // Same factory the pageserver's YbStore uses — honors
+        // sslmode + sslrootcert + password_env consistently.
+        // `set_fast_path_upsert = true`: this client serves
+        // WAL chunk INSERTs, WAL GC, and the control-file UPSERT
+        // — all idempotent / last-writer-wins, so YB's
+        // read-before-write check adds nothing.
+        let client = ysql_client::YsqlClient::from_yb_config(
+            &yb.conn_config(),
+            "safekeeper:yb_wal_mirror",
+            true,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "connect WAL mirror YB at {}:{} (sslmode={:?})",
+                yb.host, yb.port, yb.sslmode
+            )
+        })?;
+        let cache = if conf.wal_cache_size_mib > 0 {
+            Some(Arc::new(std::sync::Mutex::new(WalCache::new(
+                conf.wal_cache_size_mib * 1024 * 1024,
+            ))))
+        } else {
+            None
+        };
+        Ok(Some(Arc::new(YbWalConn {
+            client: Arc::new(client),
+            table: yb.table_name.clone(),
+            cache,
+        })))
+    }
 }
 
 /// Flush the buffer when it accumulates this many chunks. Picked to amortize
@@ -213,8 +257,8 @@ pub struct YbWalStorage {
     /// [`YbSegmentReader`] (the reader side). Populated by
     /// [`Self::upsert_writes`] immediately, in addition to the
     /// producer/consumer path that INSERTs into YB. Read access goes
-    /// through [`WalBackup::get_wal_yb`] so the WAL sender doesn't
-    /// need a separate plumbing path.
+    /// shared with the WAL sender through the same `Arc<YbWalConn>`
+    /// so the reader doesn't need a separate plumbing path.
     ///
     /// `None` when the operator has set `--wal-cache-size-mib 0`.
     cache: Option<Arc<std::sync::Mutex<WalCache>>>,

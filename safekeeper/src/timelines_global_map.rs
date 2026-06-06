@@ -21,7 +21,7 @@ use crate::http::routes::DeleteOrExcludeError;
 use crate::state::TimelinePersistentState;
 use crate::timeline::{Timeline, TimelineError, delete_dir, get_tenant_dir, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
-use crate::wal_backup::WalBackup;
+use crate::yb_wal_storage::YbWalConn;
 use crate::{SafeKeeperConf, control_file};
 
 // Timeline entry in the global map: either a ready timeline, or mark that it is
@@ -50,14 +50,14 @@ struct GlobalTimelinesState {
 
     conf: Arc<SafeKeeperConf>,
     broker_active_set: Arc<TimelinesSet>,
-    wal_backup: Arc<WalBackup>,
+    wal_backup: Option<Arc<YbWalConn>>,
 }
 
 impl GlobalTimelinesState {
     /// Get dependencies for a timeline constructor.
     fn get_dependencies(
         &self,
-    ) -> (Arc<SafeKeeperConf>, Arc<TimelinesSet>, Arc<WalBackup>) {
+    ) -> (Arc<SafeKeeperConf>, Arc<TimelinesSet>, Option<Arc<YbWalConn>>) {
         (
             self.conf.clone(),
             self.broker_active_set.clone(),
@@ -137,7 +137,7 @@ pub struct GlobalTimelines {
 
 impl GlobalTimelines {
     /// Create a new instance of the global timelines map.
-    pub fn new(conf: Arc<SafeKeeperConf>, wal_backup: Arc<WalBackup>) -> Self {
+    pub fn new(conf: Arc<SafeKeeperConf>, wal_backup: Option<Arc<YbWalConn>>) -> Self {
         Self {
             state: Mutex::new(GlobalTimelinesState {
                 timelines: HashMap::new(),
@@ -261,7 +261,7 @@ impl GlobalTimelines {
         self.state.lock().unwrap().broker_active_set.clone()
     }
 
-    pub fn get_wal_backup(&self) -> Arc<WalBackup> {
+    pub fn get_wal_backup(&self) -> Option<Arc<YbWalConn>> {
         self.state.lock().unwrap().wal_backup.clone()
     }
 
@@ -299,7 +299,7 @@ impl GlobalTimelines {
         // immediately initialize first WAL segment as well.
         let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn)?;
         let yb_wal = wal_backup
-            .yb_wal()
+            .clone()
             .context("control-file create requires --wal-yb-config")?;
         control_file::ControlFileStorage::create_new(yb_wal.client.clone(), &ttid, state).await?;
         let timeline = self
@@ -406,7 +406,7 @@ impl GlobalTimelines {
         ttid: TenantTimelineId,
         _tmp_path: &Utf8PathBuf,
         conf: Arc<SafeKeeperConf>,
-        wal_backup: Arc<WalBackup>,
+        wal_backup: Option<Arc<YbWalConn>>,
     ) -> Result<Arc<Timeline>> {
         Timeline::load_timeline(conf, ttid, wal_backup).await
     }
@@ -673,10 +673,10 @@ pub async fn validate_temp_timeline(
     ttid: TenantTimelineId,
     _path: &Utf8PathBuf,
     generation: Option<SafekeeperGeneration>,
-    wal_backup: &WalBackup,
+    yb_wal: Option<&Arc<YbWalConn>>,
 ) -> Result<(Lsn, Lsn)> {
-    let yb_wal = wal_backup
-        .yb_wal()
+    let yb_wal = yb_wal
+        .cloned()
         .context("control-file validate requires --wal-yb-config")?;
     let control_store =
         control_file::ControlFileStorage::restore_new(yb_wal.client.clone(), &ttid).await?;

@@ -19,7 +19,7 @@ use safekeeper::defaults::{
     DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES, DEFAULT_PG_LISTEN_ADDR, DEFAULT_SSL_CERT_FILE,
     DEFAULT_SSL_CERT_RELOAD_PERIOD, DEFAULT_SSL_KEY_FILE,
 };
-use safekeeper::wal_backup::WalBackup;
+use safekeeper::yb_wal_storage::YbWalConn;
 use safekeeper::{
     BACKGROUND_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf,
     WAL_SERVICE_RUNTIME, http, wal_service,
@@ -455,7 +455,7 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
         None => None,
     };
 
-    let wal_backup = Arc::new(WalBackup::new(&conf).await?);
+    let wal_backup = YbWalConn::from_conf(&conf).await?;
 
     let global_timelines = Arc::new(GlobalTimelines::new(conf.clone(), wal_backup.clone()));
 

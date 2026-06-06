@@ -30,7 +30,6 @@ pub mod timeline;
 pub mod timeline_guard;
 pub mod timeline_manager;
 pub mod timelines_set;
-pub mod wal_backup;
 pub mod wal_backup_partial;
 pub mod wal_cache;
 pub mod wal_reader_stream;
