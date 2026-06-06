@@ -108,6 +108,30 @@ use crate::wal_storage::{PhysicalStorage, Storage};
 // for the reconnect / retry-once semantics.
 pub use remote_storage::YsqlClient;
 
+/// Handles to the YB connection that mirrors live WAL into
+/// `yb_storage.wals`. Constructed at safekeeper boot (see
+/// [`crate::wal_backup::WalBackup::new`]) and shared across timelines
+/// via `Arc<YbWalConn>`. Both the writer ([`YbWalStorage::new`]) and
+/// the reader ([`YbSegmentReader::new`]) consume these fields
+/// directly — replaces the prior three-tuple-from-getter pattern.
+pub struct YbWalConn {
+    /// Auto-reconnecting wrapper around `tokio_postgres::Client`. A
+    /// TCP-level disconnect (e.g. the YB tserver restarting) triggers
+    /// a transparent reconnect on the next operation — without this
+    /// wrapper the process held a corpse `Arc<Client>` until restart.
+    pub client: Arc<YsqlClient>,
+    /// Name of the YB table that backs the WAL mirror
+    /// (`public.wals` by default, configurable via `--wal-yb-config
+    /// table_name='...'`).
+    pub table: String,
+    /// In-memory cache of recent WAL chunks, shared between the
+    /// writer ([`YbWalStorage::upsert_writes`]) and the reader
+    /// ([`YbSegmentReader`]). `None` when the operator has set
+    /// `--wal-cache-size-mib 0` to disable the cache entirely (every
+    /// WAL read then hits YB).
+    pub cache: Option<Arc<std::sync::Mutex<WalCache>>>,
+}
+
 /// Flush the buffer when it accumulates this many chunks. Picked to amortize
 /// the per-statement DocDB cost (single-row ≈ 0.6 ms; 50-row batch ≈ 2.5 ms
 /// → ~12× fewer per-row ms).
@@ -220,10 +244,11 @@ impl YbWalStorage {
     pub async fn new(
         ttid: &TenantTimelineId,
         state: &TimelinePersistentState,
-        ysql_fpu_client: Arc<YsqlClient>,
-        table_name: String,
-        cache: Option<Arc<std::sync::Mutex<WalCache>>>,
+        yb_wal: Arc<YbWalConn>,
     ) -> Result<Self> {
+        let ysql_fpu_client = yb_wal.client.clone();
+        let table_name = yb_wal.table.clone();
+        let cache = yb_wal.cache.clone();
         let wal_seg_size = state.server.wal_seg_size as usize;
         let tenant_id_str = ttid.tenant_id.to_string();
         let timeline_id_str = ttid.timeline_id.to_string();
@@ -886,9 +911,7 @@ impl YbSegmentReader {
     /// `Send + Sync` and can be passed up the WAL sender stack like the
     /// `tokio::fs::File` it replaces.
     pub fn new(
-        ysql_fpu_client: Arc<YsqlClient>,
-        table: String,
-        cache: Option<Arc<std::sync::Mutex<WalCache>>>,
+        yb_wal: Arc<YbWalConn>,
         ttid: &TenantTimelineId,
         segno: XLogSegNo,
         wal_seg_size: usize,
@@ -898,9 +921,9 @@ impl YbSegmentReader {
             segno,
             wal_seg_size: wal_seg_size as u64,
             pos: start_xlogoff as u64,
-            cache,
-            ysql_fpu_client,
-            table,
+            cache: yb_wal.cache.clone(),
+            ysql_fpu_client: yb_wal.client.clone(),
+            table: yb_wal.table.clone(),
             tenant_id: ttid.tenant_id.to_string(),
             timeline_id: ttid.timeline_id.to_string(),
             current: None,
@@ -1144,7 +1167,12 @@ mod tests {
         state.local_start_lsn = start_lsn;
 
         let tmp = camino_tempfile::tempdir().expect("tempdir");
-        let storage = YbWalStorage::new(&ttid, &state, ysql_fpu_client, table.to_string(), None)
+        let yb_wal = Arc::new(YbWalConn {
+            client: ysql_fpu_client,
+            table: table.to_string(),
+            cache: None,
+        });
+        let storage = YbWalStorage::new(&ttid, &state, yb_wal)
             .await
             .expect("YbWalStorage::new");
         (storage, tmp)

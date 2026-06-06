@@ -430,15 +430,14 @@ impl WalReader {
         // falling through to YB only on miss. This replaces the old
         // snapshot-at-open `VecAsyncRead` which silently lost data added
         // to `wals` after the segment was opened — see `wal_cache.rs`.
-        if let Some((client, table, cache)) = self.wal_backup.get_wal_yb() {
+        if let Some(yb_wal) = self.wal_backup.yb_wal() {
             tracing::info!(
-                "WalReader: serving segment {segno} (offset {xlogoff}) from YB table `{table}` (cache {})",
-                if cache.is_some() { "enabled" } else { "disabled" }
+                "WalReader: serving segment {segno} (offset {xlogoff}) from YB table `{}` (cache {})",
+                yb_wal.table,
+                if yb_wal.cache.is_some() { "enabled" } else { "disabled" }
             );
             return Ok(Box::pin(crate::yb_wal_storage::YbSegmentReader::new(
-                client,
-                table,
-                cache,
+                yb_wal,
                 &self.ttid,
                 segno,
                 self.wal_seg_size,

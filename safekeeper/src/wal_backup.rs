@@ -42,25 +42,19 @@ use utils::id::TenantTimelineId;
 use utils::pausable_failpoint;
 
 use crate::SafeKeeperConf;
+use crate::yb_wal_storage::YbWalConn;
 
 /// Handle to the safekeeper's remote-storage backend (control file
 /// blobs) plus the live-WAL YB mirror connection. One instance is
 /// constructed at boot and shared across timelines.
 pub struct WalBackup {
+    /// `GenericRemoteStorage` used by the per-timeline control-file
+    /// blob path (see `control_file::ControlFileStorage`). Will go
+    /// away once the SK control file moves into YB columns (task 19).
     storage: Option<Arc<GenericRemoteStorage>>,
-    /// Dedicated YB connection for the live WAL mirror. Populated
-    /// when `--wal-yb-config` is set. Wraps `tokio_postgres::Client`
-    /// so a TCP-level disconnect (e.g. the YB tserver restarting)
-    /// triggers a transparent reconnect on the next operation —
-    /// without this wrapper the process held a corpse `Arc<Client>`
-    /// until restart.
-    ysql_fpu_client: Option<Arc<crate::yb_wal_storage::YsqlClient>>,
-    wal_yb_table: Option<String>,
-    /// In-memory cache of recent WAL chunks, shared between
-    /// [`crate::yb_wal_storage::YbWalStorage`] (the writer) and
-    /// [`crate::yb_wal_storage::YbSegmentReader`] (the reader).
-    /// `None` when the operator has set `wal_cache_size_mib = 0`.
-    wal_cache: Option<Arc<std::sync::Mutex<crate::wal_cache::WalCache>>>,
+    /// Live-WAL YB mirror connection. `None` when `--wal-yb-config`
+    /// isn't set (which yb-light shouldn't be running without).
+    yb_wal: Option<Arc<YbWalConn>>,
 }
 
 impl WalBackup {
@@ -75,7 +69,7 @@ impl WalBackup {
     ///   mirror. Required in yb-light's normal mode (the SK writes
     ///   each WAL chunk into `yb_storage.wals` as it arrives).
     pub async fn new(conf: &SafeKeeperConf) -> Result<Self> {
-        let (ysql_fpu_client, wal_yb_table, wal_cache) = match &conf.wal_yb_config {
+        let yb_wal = match &conf.wal_yb_config {
             Some(yb) => {
                 // Same factory the pageserver's YbStore uses — honors
                 // sslmode + sslrootcert + password_env consistently.
@@ -83,7 +77,7 @@ impl WalBackup {
                 // WAL chunk INSERTs (`yb_wal_storage::insert_wal`)
                 // and WAL GC (`truncate_wal`), both of which benefit
                 // from skipping YB's read-before-write check.
-                let ysql_fpu_client = ysql_client::YsqlClient::from_yb_config(
+                let client = ysql_client::YsqlClient::from_yb_config(
                     &yb.conn_config(),
                     "safekeeper:yb_wal_mirror",
                     true,
@@ -102,13 +96,13 @@ impl WalBackup {
                 } else {
                     None
                 };
-                (
-                    Some(Arc::new(ysql_fpu_client)),
-                    Some(yb.table_name.clone()),
+                Some(Arc::new(YbWalConn {
+                    client: Arc::new(client),
+                    table: yb.table_name.clone(),
                     cache,
-                )
+                }))
             }
-            None => (None, None, None),
+            None => None,
         };
 
         let storage = match conf.remote_storage.as_ref() {
@@ -116,32 +110,17 @@ impl WalBackup {
             None => None,
         };
 
-        Ok(Self {
-            storage,
-            ysql_fpu_client,
-            wal_yb_table,
-            wal_cache,
-        })
+        Ok(Self { storage, yb_wal })
     }
 
     pub fn get_storage(&self) -> Option<Arc<GenericRemoteStorage>> {
         self.storage.clone()
     }
 
-    /// Returns `(client, table_name, cache)` for the live-WAL YB
-    /// mirror, if configured. The `cache` is `None` when the
-    /// operator has set `wal_cache_size_mib = 0`.
-    pub fn get_wal_yb(
-        &self,
-    ) -> Option<(
-        Arc<crate::yb_wal_storage::YsqlClient>,
-        String,
-        Option<Arc<std::sync::Mutex<crate::wal_cache::WalCache>>>,
-    )> {
-        match (&self.ysql_fpu_client, &self.wal_yb_table) {
-            (Some(c), Some(t)) => Some((c.clone(), t.clone(), self.wal_cache.clone())),
-            _ => None,
-        }
+    /// Live-WAL YB mirror, if configured. `None` when
+    /// `--wal-yb-config` isn't set.
+    pub fn yb_wal(&self) -> Option<Arc<YbWalConn>> {
+        self.yb_wal.clone()
     }
 }
 

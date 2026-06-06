@@ -309,11 +309,10 @@ impl SharedState {
 
         let sk = match control_store.eviction_state {
             EvictionState::Present => {
-                let (client, table, cache) = wal_backup
-                    .get_wal_yb()
+                let yb_wal = wal_backup
+                    .yb_wal()
                     .context("WAL storage requires YB live-WAL config (--wal-yb-config)")?;
-                let wal_store =
-                    YbWalStorage::new(ttid, &control_store, client, table, cache).await?;
+                let wal_store = YbWalStorage::new(ttid, &control_store, yb_wal).await?;
                 StateSK::Loaded(SafeKeeper::new(
                     TimelineState::new(control_store),
                     wal_store,
