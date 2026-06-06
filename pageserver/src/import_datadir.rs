@@ -578,26 +578,14 @@ async fn import_file(
             }
         }
     } else if file_path.starts_with("pg_xact") {
-        let slru = SlruKind::Clog;
-
-        if modification.tline.tenant_shard_id.is_shard_zero() {
-            import_slru(modification, slru, file_path, reader, len, ctx).await?;
-            debug!("imported clog slru");
-        }
+        import_slru(modification, SlruKind::Clog, file_path, reader, len, ctx).await?;
+        debug!("imported clog slru");
     } else if file_path.starts_with("pg_multixact/offsets") {
-        let slru = SlruKind::MultiXactOffsets;
-
-        if modification.tline.tenant_shard_id.is_shard_zero() {
-            import_slru(modification, slru, file_path, reader, len, ctx).await?;
-            debug!("imported multixact offsets slru");
-        }
+        import_slru(modification, SlruKind::MultiXactOffsets, file_path, reader, len, ctx).await?;
+        debug!("imported multixact offsets slru");
     } else if file_path.starts_with("pg_multixact/members") {
-        let slru = SlruKind::MultiXactMembers;
-
-        if modification.tline.tenant_shard_id.is_shard_zero() {
-            import_slru(modification, slru, file_path, reader, len, ctx).await?;
-            debug!("imported multixact members slru");
-        }
+        import_slru(modification, SlruKind::MultiXactMembers, file_path, reader, len, ctx).await?;
+        debug!("imported multixact members slru");
     } else if file_path.starts_with("pg_twophase") {
         let bytes = read_all_bytes(reader).await?;
 

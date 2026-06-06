@@ -3130,10 +3130,8 @@ impl TenantShard {
                 .context("run initdb")?;
 
             // Upload the created data dir to S3
-            if self.tenant_shard_id().is_shard_zero() {
-                self.upload_initdb(&timelines_path, &pgdata_path, &timeline_id)
-                    .await?;
-            }
+            self.upload_initdb(&timelines_path, &pgdata_path, &timeline_id)
+                .await?;
         }
         let pgdata_lsn = import_datadir::get_lsn_from_controlfile(&pgdata_path)?.align();
 

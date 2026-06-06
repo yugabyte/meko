@@ -922,12 +922,6 @@ async fn get_lsn_by_timestamp_handler(
     check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
 
-    if !tenant_shard_id.is_shard_zero() {
-        // Requires SLRU contents, which are only stored on shard zero
-        return Err(ApiError::BadRequest(anyhow!(
-            "Lsn calculations by timestamp are only available on shard zero"
-        )));
-    }
 
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     let timestamp_raw = must_get_query_param(&request, "timestamp")?;
@@ -996,13 +990,6 @@ async fn get_timestamp_of_lsn_handler(
     let tenant_shard_id: TenantId = parse_request_param(&request, "tenant_shard_id")?;
     check_permission(&request, Some(tenant_shard_id))?;
     let state = get_state(&request);
-
-    if !tenant_shard_id.is_shard_zero() {
-        // Requires SLRU contents, which are only stored on shard zero
-        return Err(ApiError::BadRequest(anyhow!(
-            "Timestamp calculations by lsn are only available on shard zero"
-        )));
-    }
 
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
 

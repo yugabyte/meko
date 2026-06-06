@@ -1485,10 +1485,7 @@ impl Timeline {
         background_jobs_can_start: Option<&completion::Barrier>,
         ctx: &RequestContext,
     ) {
-        if self.tenant_shard_id.is_shard_zero() {
-            // Logical size is only maintained accurately on shard zero.
-            self.spawn_initial_logical_size_computation_task(ctx);
-        }
+        self.spawn_initial_logical_size_computation_task(ctx);
         self.launch_wal_receiver(ctx);
         self.set_state(TimelineState::Active);
         // Per-timeline eviction task deleted in Phase 4d.2 — no layer
@@ -1776,11 +1773,6 @@ impl Timeline {
     /// by the basebackup cache on a best-effort basis.
     pub(crate) fn prepare_basebackup(&self, lsn: Lsn) {
         if !self.is_basebackup_cache_enabled() {
-            return;
-        }
-        if !self.tenant_shard_id.is_shard_zero() {
-            // In theory we should never get here, but just in case check it.
-            // Preparing basebackup doesn't make sense for shards other than shard zero.
             return;
         }
         if !self.is_active() {
@@ -2207,12 +2199,6 @@ impl Timeline {
         priority: GetLogicalSizePriority,
         ctx: &RequestContext,
     ) -> logical_size::CurrentLogicalSize {
-        if !self.tenant_shard_id.is_shard_zero() {
-            // Logical size is only accurately maintained on shard zero: when called elsewhere, for example
-            // when HTTP API is serving a GET for timeline zero, return zero
-            return logical_size::CurrentLogicalSize::Approximate(logical_size::Approximate::zero());
-        }
-
         let current_size = self.current_logical_size.current_size();
         debug!("Current size: {current_size:?}");
 
@@ -2464,8 +2450,6 @@ impl Timeline {
         crate::span::debug_assert_current_span_has_tenant_and_timeline_id();
         // We should never be calculating logical sizes on shard !=0, because these shards do not have
         // accurate relation sizes, and they do not emit consumption metrics.
-        debug_assert!(self.tenant_shard_id.is_shard_zero());
-
         let guard = self
             .gate
             .enter()

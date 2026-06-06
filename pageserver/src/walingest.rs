@@ -968,24 +968,22 @@ impl WalIngest {
         // will block waiting for the last valid LSN to advance up to
         // it. So we use the previous record's LSN in the get calls
         // instead.
-        if modification.tline.get_shard_identity().is_shard_zero() {
-            for segno in modification
-                .tline
-                .list_slru_segments(SlruKind::Clog, Version::Modified(modification), ctx)
-                .await?
-            {
-                let segpage = segno * pg_constants::SLRU_PAGES_PER_SEGMENT;
+        for segno in modification
+            .tline
+            .list_slru_segments(SlruKind::Clog, Version::Modified(modification), ctx)
+            .await?
+        {
+            let segpage = segno * pg_constants::SLRU_PAGES_PER_SEGMENT;
 
-                let may_delete = dispatch_pgversion!(modification.tline.pg_version, {
-                    pgv::nonrelfile_utils::slru_may_delete_clogsegment(segpage, pageno)
-                });
+            let may_delete = dispatch_pgversion!(modification.tline.pg_version, {
+                pgv::nonrelfile_utils::slru_may_delete_clogsegment(segpage, pageno)
+            });
 
-                if may_delete {
-                    modification
-                        .drop_slru_segment(SlruKind::Clog, segno, ctx)
-                        .await?;
-                    trace!("Drop CLOG segment {:>04X}", segno);
-                }
+            if may_delete {
+                modification
+                    .drop_slru_segment(SlruKind::Clog, segno, ctx)
+                    .await?;
+                trace!("Drop CLOG segment {:>04X}", segno);
             }
         }
 
@@ -1140,18 +1138,16 @@ impl WalIngest {
 
         // Delete all the segments except the last one. The last segment can still
         // contain, possibly partially, valid data.
-        if modification.tline.get_shard_identity().is_shard_zero() {
-            while segment != endsegment {
-                modification
-                    .drop_slru_segment(SlruKind::MultiXactMembers, segment as u32, ctx)
-                    .await?;
+        while segment != endsegment {
+            modification
+                .drop_slru_segment(SlruKind::MultiXactMembers, segment as u32, ctx)
+                .await?;
 
-                /* move to next segment, handling wraparound correctly */
-                if segment == maxsegment {
-                    segment = 0;
-                } else {
-                    segment += 1;
-                }
+            /* move to next segment, handling wraparound correctly */
+            if segment == maxsegment {
+                segment = 0;
+            } else {
+                segment += 1;
             }
         }
 
@@ -1522,10 +1518,6 @@ impl WalIngest {
         img: Bytes,
         ctx: &RequestContext,
     ) -> Result<(), WalIngestError> {
-        if !self.shard.is_shard_zero() {
-            return Ok(());
-        }
-
         self.handle_slru_extend(modification, kind, segno, blknum, ctx)
             .await?;
         modification.put_slru_page_image(kind, segno, blknum, img)?;

@@ -311,9 +311,6 @@ impl BackgroundTask {
         let entries_old = self.c.entries.lock().unwrap().clone();
         let mut entries_new = HashMap::new();
         for (tenant_shard_id, tenant_slot) in self.tenant_manager.list() {
-            if !tenant_shard_id.is_shard_zero() {
-                continue;
-            }
             let TenantSlot::Attached(tenant) = tenant_slot else {
                 continue;
             };
