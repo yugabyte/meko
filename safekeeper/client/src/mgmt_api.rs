@@ -8,8 +8,7 @@ use std::error::Error as _;
 use http_utils::error::HttpErrorBody;
 use reqwest::{IntoUrl, Method, Response, StatusCode};
 use safekeeper_api::models::{
-    self, PullTimelineRequest, PullTimelineResponse, SafekeeperStatus, SafekeeperUtilization,
-    TimelineCreateRequest,
+    self, SafekeeperStatus, SafekeeperUtilization, TimelineCreateRequest,
 };
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::SecretString;
@@ -86,30 +85,6 @@ impl Client {
         Ok(resp)
     }
 
-    /// Pull a timeline from peer safekeepers. Removed from yb-light's
-    /// SK (single-SK mode) — the SK will 404 this. Kept here only
-    /// because the storage_controller's multi-SK reconciler still
-    /// composes this request type.
-    pub async fn pull_timeline(&self, req: &PullTimelineRequest) -> Result<PullTimelineResponse> {
-        let uri = format!("{}/v1/pull_timeline", self.mgmt_api_endpoint);
-        let resp = self.post(&uri, req).await?;
-        resp.json().await.map_err(Error::ReceiveBody)
-    }
-
-    pub async fn exclude_timeline(
-        &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-        req: &models::TimelineMembershipSwitchRequest,
-    ) -> Result<models::TimelineDeleteResult> {
-        let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}/exclude",
-            self.mgmt_api_endpoint, tenant_id, timeline_id
-        );
-        let resp = self.put(&uri, req).await?;
-        resp.json().await.map_err(Error::ReceiveBody)
-    }
-
     pub async fn delete_timeline(
         &self,
         tenant_id: TenantId,
@@ -125,39 +100,11 @@ impl Client {
         resp.json().await.map_err(Error::ReceiveBody)
     }
 
-    pub async fn switch_timeline_membership(
-        &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-        req: &models::TimelineMembershipSwitchRequest,
-    ) -> Result<models::TimelineMembershipSwitchResponse> {
-        let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}/membership",
-            self.mgmt_api_endpoint, tenant_id, timeline_id
-        );
-        let resp = self.put(&uri, req).await?;
-        resp.json().await.map_err(Error::ReceiveBody)
-    }
-
     pub async fn delete_tenant(&self, tenant_id: TenantId) -> Result<models::TenantDeleteResult> {
         let uri = format!("{}/v1/tenant/{}", self.mgmt_api_endpoint, tenant_id);
         let resp = self
             .request_maybe_body(Method::DELETE, &uri, None::<()>)
             .await?;
-        resp.json().await.map_err(Error::ReceiveBody)
-    }
-
-    pub async fn bump_timeline_term(
-        &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-        req: &models::TimelineTermBumpRequest,
-    ) -> Result<models::TimelineTermBumpResponse> {
-        let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}/term_bump",
-            self.mgmt_api_endpoint, tenant_id, timeline_id
-        );
-        let resp = self.post(&uri, req).await?;
         resp.json().await.map_err(Error::ReceiveBody)
     }
 
@@ -204,14 +151,6 @@ impl Client {
         body: B,
     ) -> Result<reqwest::Response> {
         self.request(Method::POST, uri, body).await
-    }
-
-    async fn put<B: serde::Serialize, U: IntoUrl>(
-        &self,
-        uri: U,
-        body: B,
-    ) -> Result<reqwest::Response> {
-        self.request(Method::PUT, uri, body).await
     }
 
     async fn get<U: IntoUrl>(&self, uri: U) -> Result<reqwest::Response> {

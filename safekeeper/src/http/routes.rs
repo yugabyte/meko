@@ -14,19 +14,16 @@ use http_utils::json::{json_request, json_response};
 use http_utils::request::{ensure_no_body, parse_query_param, parse_request_param};
 use http_utils::{RequestExt, RouterBuilder};
 use hyper::{Body, Request, Response, StatusCode};
-use pem::Pem;
 use postgres_ffi::WAL_SEGMENT_SIZE;
 use safekeeper_api::models::{
-    AcceptorStateStatus, SafekeeperStatus, SkTimelineInfo, TenantDeleteResult,
-    TermSwitchApiEntry, TimelineCreateRequest, TimelineDeleteResult,
-    TimelineStatus, TimelineTermBumpRequest,
+    AcceptorStateStatus, SafekeeperStatus, TenantDeleteResult, TermSwitchApiEntry,
+    TimelineCreateRequest, TimelineDeleteResult, TimelineStatus,
 };
-use safekeeper_api::{ServerInfo, membership, models};
+use safekeeper_api::ServerInfo;
 use tokio::sync::mpsc;
-use tokio::task;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, info_span};
+use tracing::info_span;
 use utils::auth::SwappableJwtAuth;
 use utils::id::{TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
@@ -231,105 +228,8 @@ async fn timeline_delete_handler(mut request: Request<Body>) -> Result<Response<
     let resp = global_timelines
         .delete_or_exclude(&ttid, action)
         .await
-        .map_err(ApiError::from)?;
-    json_response(StatusCode::OK, resp)
-}
-
-/// Error type for delete_or_exclude: either generation conflict or something
-/// internal.
-#[derive(thiserror::Error, Debug)]
-pub enum DeleteOrExcludeError {
-    #[error("refused to switch into excluding mconf {requested}, current: {current}")]
-    Conflict {
-        requested: membership::Configuration,
-        current: membership::Configuration,
-    },
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-
-/// Convert DeleteOrExcludeError to ApiError.
-impl From<DeleteOrExcludeError> for ApiError {
-    fn from(de: DeleteOrExcludeError) -> ApiError {
-        match de {
-            DeleteOrExcludeError::Conflict {
-                requested: _,
-                current: _,
-            } => ApiError::Conflict(de.to_string()),
-            DeleteOrExcludeError::Other(e) => ApiError::InternalServerError(e),
-        }
-    }
-}
-
-/// Remove timeline locally after this node has been excluded from the
-/// membership configuration. The body is the same as in the membership endpoint
-/// -- conf where node is excluded -- and in principle single ep could be used
-/// for both actions, but since this is a data deletion op let's keep them
-/// separate.
-async fn timeline_exclude_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
-    check_permission(&request, Some(ttid.tenant_id))?;
-
-    let global_timelines = get_global_timelines(&request);
-    let data: models::TimelineMembershipSwitchRequest = json_request(&mut request).await?;
-    let my_id = get_conf(&request).my_id;
-    // If request doesn't exclude us, membership switch endpoint should be used
-    // instead.
-    if data.mconf.contains(my_id) {
-        return Err(ApiError::Forbidden(format!(
-            "refused to exclude timeline with {}, node {} is member of it",
-            data.mconf, my_id
-        )));
-    }
-    let action = DeleteOrExclude::Exclude(data.mconf);
-
-    let resp = global_timelines
-        .delete_or_exclude(&ttid, action)
-        .await
-        .map_err(ApiError::from)?;
-    json_response(StatusCode::OK, resp)
-}
-
-/// Consider switching timeline membership configuration to the provided one.
-async fn timeline_membership_handler(
-    mut request: Request<Body>,
-) -> Result<Response<Body>, ApiError> {
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
-    check_permission(&request, Some(ttid.tenant_id))?;
-
-    let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(ttid).map_err(ApiError::from)?;
-
-    let data: models::TimelineMembershipSwitchRequest = json_request(&mut request).await?;
-    let my_id = get_conf(&request).my_id;
-    // If request excludes us, exclude endpoint should be used instead.
-    if !data.mconf.contains(my_id) {
-        return Err(ApiError::Forbidden(format!(
-            "refused to switch into {}, node {} is not a member of it",
-            data.mconf, my_id
-        )));
-    }
-    let req_gen = data.mconf.generation;
-    let response = tli
-        .membership_switch(data.mconf)
-        .await
         .map_err(ApiError::InternalServerError)?;
-
-    // Return 409 if request was ignored.
-    if req_gen == response.current_conf.generation {
-        json_response(StatusCode::OK, response)
-    } else {
-        Err(ApiError::Conflict(format!(
-            "request to switch into {} ignored, current generation {}",
-            req_gen, response.current_conf.generation
-        )))
-    }
+    json_response(StatusCode::OK, resp)
 }
 
 async fn patch_control_file_handler(
@@ -423,29 +323,6 @@ async fn timeline_backup_partial_reset(request: Request<Body>) -> Result<Respons
         .backup_partial_reset()
         .await
         .map_err(ApiError::InternalServerError)?;
-    json_response(StatusCode::OK, response)
-}
-
-/// Make term at least as high as one in request. If one in request is None,
-/// increment current one.
-async fn timeline_term_bump_handler(
-    mut request: Request<Body>,
-) -> Result<Response<Body>, ApiError> {
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
-    check_permission(&request, Some(ttid.tenant_id))?;
-
-    let request_data: TimelineTermBumpRequest = json_request(&mut request).await?;
-
-    let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(ttid).map_err(ApiError::from)?;
-    let response = tli
-        .term_bump(request_data.term)
-        .await
-        .map_err(ApiError::InternalServerError)?;
-
     json_response(StatusCode::OK, response)
 }
 
@@ -627,13 +504,6 @@ pub fn make_router(
         .delete("/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {
             request_span(r, timeline_delete_handler)
         })
-        .put("/v1/tenant/:tenant_id/timeline/:timeline_id/exclude", |r| {
-            request_span(r, timeline_exclude_handler)
-        })
-        .put(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/membership",
-            |r| request_span(r, timeline_membership_handler),
-        )
         .patch(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/control_file",
             |r| request_span(r, patch_control_file_handler),
@@ -648,10 +518,6 @@ pub fn make_router(
         .post(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/backup_partial_reset",
             |r| request_span(r, timeline_backup_partial_reset),
-        )
-        .post(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/term_bump",
-            |r| request_span(r, timeline_term_bump_handler),
         )
         .get("/v1/debug_dump", |r| request_span(r, dump_debug_handler))
 }

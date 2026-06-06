@@ -12,12 +12,11 @@ use camino::Utf8PathBuf;
 use camino_tempfile::Utf8TempDir;
 use safekeeper_api::membership::{Configuration, SafekeeperGeneration};
 use safekeeper_api::models::{SafekeeperUtilization, TimelineDeleteResult};
-use safekeeper_api::{ServerInfo, membership};
+use safekeeper_api::ServerInfo;
 use tracing::*;
 use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
 
-use crate::http::routes::DeleteOrExcludeError;
 use crate::state::TimelinePersistentState;
 use crate::timeline::{Timeline, TimelineError, delete_dir, get_tenant_dir, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
@@ -480,17 +479,11 @@ impl GlobalTimelines {
         &self,
         ttid: &TenantTimelineId,
         action: DeleteOrExclude,
-    ) -> Result<TimelineDeleteResult, DeleteOrExcludeError> {
-        let generation = match &action {
-            DeleteOrExclude::Delete | DeleteOrExclude::DeleteLocal => None,
-            DeleteOrExclude::Exclude(mconf) => Some(mconf.generation),
-        };
-
+    ) -> Result<TimelineDeleteResult> {
         let tli_res = {
             let state = self.state.lock().unwrap();
 
-            // Do NOT check tenant tombstones here: those were set earlier
-            if state.has_timeline_tombstone(ttid, generation) {
+            if state.has_timeline_tombstone(ttid, None) {
                 // Presence of a tombstone guarantees that a previous deletion has completed and there is no work to do.
                 info!("Timeline {ttid} was already deleted");
                 return Ok(TimelineDeleteResult { dir_existed: false });
@@ -503,46 +496,20 @@ impl GlobalTimelines {
             Ok(timeline) => {
                 info!("deleting timeline {}, action={:?}", ttid, action);
 
-                // If node is getting excluded, check the generation first.
-                // Then, while holding the lock cancel the timeline; it will be
-                // unusable after this point, and if node is added back first
-                // deletion must be completed and node seeded anew.
-                //
-                // We would like to avoid holding the lock while waiting for the
-                // gate to finish as this is deadlock prone, so for actual
-                // deletion will take it second time.
-                //
-                // Canceling the timeline will block membership switch requests,
-                // ensuring that the timeline generation will not increase
-                // after this point, and we will not remove a timeline with a generation
-                // higher than the requested one.
-                if let DeleteOrExclude::Exclude(ref mconf) = action {
-                    let shared_state = timeline.read_shared_state().await;
-                    if shared_state.sk.state().mconf.generation > mconf.generation {
-                        return Err(DeleteOrExcludeError::Conflict {
-                            requested: mconf.clone(),
-                            current: shared_state.sk.state().mconf.clone(),
-                        });
-                    }
-                    timeline.cancel();
-                } else {
-                    timeline.cancel();
-                }
-
+                timeline.cancel();
                 timeline.close().await;
 
                 info!("timeline {ttid} shut down for deletion");
 
-                // Take a lock and finish the deletion holding this mutex.
                 let mut shared_state = timeline.write_shared_state().await;
 
-                let only_local = !matches!(action, DeleteOrExclude::Delete);
+                let only_local = matches!(action, DeleteOrExclude::DeleteLocal);
                 let dir_existed = timeline.delete(&mut shared_state, only_local).await?;
 
                 Ok(TimelineDeleteResult { dir_existed })
             }
             Err(_) => {
-                // Timeline is not memory, but it may still exist on disk in broken state.
+                // Timeline not in memory, but it may still exist on disk in broken state.
                 let dir_path = get_timeline_dir(self.state.lock().unwrap().conf.as_ref(), ttid);
                 let dir_existed = delete_dir(&dir_path).await?;
 
@@ -550,10 +517,8 @@ impl GlobalTimelines {
             }
         };
 
-        // Finalize deletion, by dropping Timeline objects and storing smaller tombstones.  The tombstones
-        // are used to prevent still-running computes from re-creating the same timeline when they send data,
-        // and to speed up repeated deletion calls by avoiding re-listing objects.
-        self.state.lock().unwrap().delete(*ttid, generation);
+        // Finalize deletion, by dropping Timeline objects and storing smaller tombstones.
+        self.state.lock().unwrap().delete(*ttid, None);
 
         result
     }
@@ -632,11 +597,8 @@ impl GlobalTimelines {
 pub enum DeleteOrExclude {
     /// Delete timeline globally.
     Delete,
-    /// Legacy mode until we fully migrate to generations: like exclude deletes
-    /// timeline only locally, but ignores generation number.
+    /// Delete timeline only locally (don't touch remote storage / YB).
     DeleteLocal,
-    /// This node is getting excluded, delete timeline locally.
-    Exclude(membership::Configuration),
 }
 
 /// Create temp directory for a new timeline. It needs to be located on the same

@@ -201,22 +201,6 @@ pub struct TimelineStatus {
     pub walreceivers: Vec<WalReceiverState>,
 }
 
-/// Request to switch membership configuration.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TimelineMembershipSwitchRequest {
-    pub mconf: Configuration,
-}
-
-/// In response both previous and current configuration are sent.
-#[derive(Serialize, Deserialize)]
-pub struct TimelineMembershipSwitchResponse {
-    pub previous_conf: Configuration,
-    pub current_conf: Configuration,
-    pub last_log_term: Term,
-    pub flush_lsn: Lsn,
-}
-
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct TimelineDeleteResult {
     pub dir_existed: bool,
@@ -262,48 +246,8 @@ pub struct SkTimelineInfo {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TimelineCopyRequest {
-    pub target_timeline_id: TimelineId,
-    pub until_lsn: Lsn,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TimelineTermBumpRequest {
-    /// bump to
-    pub term: Option<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TimelineTermBumpResponse {
-    // before the request
-    pub previous_term: u64,
-    pub current_term: u64,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SafekeeperUtilization {
     pub timeline_count: u64,
-}
-
-/// pull_timeline request body.
-///
-/// The safekeeper-side handler has been removed in yb-light's single-SK
-/// mode (durability is YB Raft, not SK quorum). The type is kept here
-/// because the storage_controller still references it in legacy
-/// multi-SK reconciler paths — calls to a yb-light SK's
-/// `/v1/pull_timeline` will simply 404. Those paths can be deleted
-/// when the storage_controller is also slimmed to single-SK.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct PullTimelineRequest {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
-    pub http_hosts: Vec<String>,
-    pub mconf: Option<Configuration>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PullTimelineResponse {
-    pub safekeeper_host: Option<String>,
 }
 
 /// Response to a timeline locate request.

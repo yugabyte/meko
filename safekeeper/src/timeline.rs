@@ -11,10 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use http_utils::error::ApiError;
 use safekeeper_api::Term;
-use safekeeper_api::membership::Configuration;
-use safekeeper_api::models::{
-    PeerInfo, TimelineMembershipSwitchResponse, TimelineTermBumpResponse,
-};
+use safekeeper_api::models::PeerInfo;
 use tokio::fs::{self};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, watch};
 use tokio::time::Instant;
@@ -170,26 +167,6 @@ impl StateSK {
         self.state()
             .acceptor_state
             .get_last_log_term(self.flush_lsn())
-    }
-
-    pub async fn term_bump(&mut self, to: Option<Term>) -> Result<TimelineTermBumpResponse> {
-        self.state_mut().term_bump(to).await
-    }
-
-    pub async fn membership_switch(
-        &mut self,
-        to: Configuration,
-    ) -> Result<TimelineMembershipSwitchResponse> {
-        let result = self.state_mut().membership_switch(to).await?;
-        let flush_lsn = self.flush_lsn();
-        let last_log_term = self.state().acceptor_state.get_last_log_term(flush_lsn);
-
-        Ok(TimelineMembershipSwitchResponse {
-            previous_conf: result.previous_conf,
-            current_conf: result.current_conf,
-            last_log_term,
-            flush_lsn,
-        })
     }
 
     /// Close open WAL files to release FDs.
@@ -809,26 +786,6 @@ impl Timeline {
             .finish_change(&persistent_state)
             .await?;
         Ok(res)
-    }
-
-    pub async fn term_bump(self: &Arc<Self>, to: Option<Term>) -> Result<TimelineTermBumpResponse> {
-        let mut state = self.write_shared_state().await;
-        state.sk.term_bump(to).await
-    }
-
-    pub async fn membership_switch(
-        self: &Arc<Self>,
-        to: Configuration,
-    ) -> Result<TimelineMembershipSwitchResponse> {
-        let mut state = self.write_shared_state().await;
-        // Ensure we don't race with exclude/delete requests by checking the cancellation
-        // token under the write_shared_state lock.
-        // Exclude/delete cancel the timeline under the shared state lock,
-        // so the timeline cannot be deleted in the middle of the membership switch.
-        if self.is_cancelled() {
-            bail!(TimelineError::Cancelled(self.ttid));
-        }
-        state.sk.membership_switch(to).await
     }
 
     /// Guts of [`Self::wal_residence_guard`] and [`Self::try_wal_residence_guard`]

@@ -1,7 +1,6 @@
 //! Defines per timeline data stored persistently (SafeKeeperPersistentState)
 //! and its wrapper with in memory layer (SafekeeperState).
 
-use std::cmp::max;
 use std::ops::Deref;
 use std::time::SystemTime;
 
@@ -9,8 +8,7 @@ use anyhow::{Result, bail};
 use postgres_ffi::WAL_SEGMENT_SIZE;
 use postgres_versioninfo::{PgMajorVersion, PgVersionId};
 use safekeeper_api::membership::Configuration;
-use safekeeper_api::models::TimelineTermBumpResponse;
-use safekeeper_api::{INITIAL_TERM, ServerInfo, Term};
+use safekeeper_api::{INITIAL_TERM, ServerInfo};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use utils::id::{TenantId, TenantTimelineId, TimelineId};
@@ -53,10 +51,6 @@ pub struct TimelinePersistentState {
     pub creation_ts: SystemTime,
 }
 
-pub struct MembershipSwitchResult {
-    pub previous_conf: Configuration,
-    pub current_conf: Configuration,
-}
 
 impl TimelinePersistentState {
     /// yb-mode: `commit_lsn` collapsed into `flush_lsn`, so creation only
@@ -186,47 +180,24 @@ where
         self.finish_change(&s).await
     }
 
-    /// Make term at least as `to`. If `to` is None, increment current one. This
-    /// is not in safekeeper.rs because we want to be able to do it even if
-    /// timeline is offloaded.
-    pub async fn term_bump(&mut self, to: Option<Term>) -> Result<TimelineTermBumpResponse> {
-        let before = self.acceptor_state.term;
-        let mut state = self.start_change();
-        let new = match to {
-            Some(to) => max(state.acceptor_state.term, to),
-            None => state.acceptor_state.term + 1,
-        };
-        if new > state.acceptor_state.term {
-            state.acceptor_state.term = new;
-            self.finish_change(&state).await?;
-        }
-        let after = self.acceptor_state.term;
-        Ok(TimelineTermBumpResponse {
-            previous_term: before,
-            current_term: after,
-        })
-    }
-
     /// Switch into membership configuration `to` if it is higher than the
-    /// current one.
-    pub async fn membership_switch(&mut self, to: Configuration) -> Result<MembershipSwitchResult> {
-        let before = self.mconf.clone();
-        // Is switch allowed?
+    /// current one. Called from `handle_elected` in the walproposer protocol;
+    /// in single-SK yb-light `to.generation` is always equal to the current
+    /// generation so this is effectively a no-op.
+    pub async fn membership_switch(&mut self, to: Configuration) -> Result<()> {
         if to.generation <= self.mconf.generation {
             info!(
                 "ignoring request to switch membership conf to {}, current conf {}",
                 to, self.mconf
             );
-        } else {
-            let mut state = self.start_change();
-            state.mconf = to.clone();
-            self.finish_change(&state).await?;
-            info!("switched membership conf to {} from {}", to, before);
+            return Ok(());
         }
-        Ok(MembershipSwitchResult {
-            previous_conf: before,
-            current_conf: self.mconf.clone(),
-        })
+        let before = self.mconf.clone();
+        let mut state = self.start_change();
+        state.mconf = to.clone();
+        self.finish_change(&state).await?;
+        info!("switched membership conf to {} from {}", to, before);
+        Ok(())
     }
 }
 
