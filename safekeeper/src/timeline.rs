@@ -37,8 +37,7 @@ use crate::state::{EvictionState, TimelineMemState, TimelinePersistentState, Tim
 use crate::timeline_guard::ResidenceGuard;
 use crate::timeline_manager::{AtomicStatus, ManagerCtl};
 use crate::timelines_set::TimelinesSet;
-use crate::wal_backup;
-use crate::wal_backup::{WalBackup, remote_timeline_path};
+use crate::wal_backup::WalBackup;
 use crate::wal_backup_partial::PartialRemoteSegment;
 use crate::wal_storage::{Storage as wal_storage_iface, WalReader};
 use crate::yb_wal_storage::{self, YbWalStorage};
@@ -290,11 +289,11 @@ impl SharedState {
         ttid: &TenantTimelineId,
         wal_backup: &WalBackup,
     ) -> Result<Self> {
-        let remote_storage = wal_backup
-            .get_storage()
-            .context("control-file restore requires remote storage")?;
+        let yb_wal = wal_backup
+            .yb_wal()
+            .context("control-file restore requires --wal-yb-config")?;
         let control_store =
-            control_file::ControlFileStorage::restore_new(remote_storage, ttid).await?;
+            control_file::ControlFileStorage::restore_new(yb_wal.client.clone(), ttid).await?;
         if control_store.server.wal_seg_size == 0 {
             bail!(TimelineError::UninitializedWalSegSize(*ttid));
         }
@@ -404,7 +403,6 @@ type RemoteDeletionReceiver = tokio::sync::watch::Receiver<Option<anyhow::Result
 /// It also holds SharedState and provides mutually exclusive access to it.
 pub struct Timeline {
     pub ttid: TenantTimelineId,
-    pub remote_path: RemotePath,
 
     /// Used to broadcast commit_lsn updates to all background jobs.
     commit_lsn_watch_tx: watch::Sender<Lsn>,
@@ -454,7 +452,6 @@ impl Timeline {
     pub fn new(
         ttid: TenantTimelineId,
         timeline_dir: &Utf8Path,
-        remote_path: &RemotePath,
         shared_state: SharedState,
         conf: Arc<SafeKeeperConf>,
         wal_backup: Arc<WalBackup>,
@@ -472,7 +469,6 @@ impl Timeline {
 
         Arc::new(Self {
             ttid,
-            remote_path: remote_path.to_owned(),
             timeline_dir: timeline_dir.to_owned(),
             commit_lsn_watch_tx,
             commit_lsn_watch_rx,
@@ -508,12 +504,10 @@ impl Timeline {
             let shared_state =
                 SharedState::restore(conf.as_ref(), &ttid, &wal_backup).await?;
             let timeline_dir = get_timeline_dir(conf.as_ref(), &ttid);
-            let remote_path = remote_timeline_path(&ttid)?;
 
             Ok(Timeline::new(
                 ttid,
                 &timeline_dir,
-                &remote_path,
                 shared_state,
                 conf,
                 wal_backup,
@@ -667,16 +661,16 @@ impl Timeline {
         guard: &mut std::sync::MutexGuard<Option<RemoteDeletionReceiver>>,
     ) -> RemoteDeletionReceiver {
         tracing::info!("starting remote deletion");
-        let storage = self.wal_backup.get_storage().clone();
+        let yb_wal = self.wal_backup.yb_wal();
         let (result_tx, result_rx) = tokio::sync::watch::channel(None);
         let ttid = self.ttid;
         tokio::task::spawn(
             async move {
-                let r = if let Some(storage) = storage {
-                    wal_backup::delete_timeline(&storage, &ttid).await
+                let r = if let Some(yb_wal) = yb_wal {
+                    control_file::YbControlFileStorage::delete(&yb_wal.client, &ttid).await
                 } else {
                     tracing::info!(
-                        "skipping remote deletion because no remote storage is configured; this effectively leaks the objects in remote storage"
+                        "skipping remote deletion because --wal-yb-config is not set; this effectively leaks the control-file row"
                     );
                     Ok(())
                 };

@@ -30,6 +30,12 @@ impl PgVersionId {
             _ => panic!("Invalid full PostgreSQL version ID {version}"),
         }
     }
+
+    /// Numeric form used by callers that need to round-trip the value
+    /// through an integer column / wire field.
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
 }
 
 impl Display for PgVersionId {

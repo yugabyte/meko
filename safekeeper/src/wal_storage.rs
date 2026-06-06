@@ -29,7 +29,7 @@ use utils::lsn::Lsn;
 
 use crate::metrics::{WAL_STORAGE_OPERATION_SECONDS, WalStorageMetrics};
 use crate::state::TimelinePersistentState;
-use crate::wal_backup::{WalBackup, remote_timeline_path};
+use crate::wal_backup::WalBackup;
 
 pub trait Storage {
     // Last written LSN.
@@ -259,7 +259,6 @@ impl Storage for PhysicalStorage {
 
 pub struct WalReader {
     ttid: TenantTimelineId,
-    remote_path: RemotePath,
     timeline_dir: Utf8PathBuf,
     wal_seg_size: usize,
     pos: Lsn,
@@ -310,7 +309,6 @@ impl WalReader {
 
         Ok(Self {
             ttid: *ttid,
-            remote_path: remote_timeline_path(ttid)?,
             timeline_dir,
             wal_seg_size: state.server.wal_seg_size as usize,
             pos: start_pos,

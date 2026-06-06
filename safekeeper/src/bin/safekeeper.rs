@@ -13,7 +13,6 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use http_utils::tls_certs::ReloadingCertificateResolver;
 use metrics::set_build_info_metric;
-use remote_storage::RemoteStorageConfig;
 use safekeeper::defaults::{
     DEFAULT_CONTROL_FILE_SAVE_INTERVAL, DEFAULT_GLOBAL_DISK_CHECK_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT,
     DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
@@ -125,14 +124,6 @@ struct Args {
     /// it during this period passed as a human readable duration.
     #[arg(long, value_parser= humantime::parse_duration, default_value = DEFAULT_HEARTBEAT_TIMEOUT, verbatim_doc_comment)]
     heartbeat_timeout: Duration,
-    /// Remote storage configuration for WAL backup (offloading to s3) as TOML
-    /// inline table, e.g.
-    ///   {max_concurrent_syncs = 17, max_sync_errors = 13, bucket_name = "<BUCKETNAME>", bucket_region = "<REGION>", concurrency_limit = 119}
-    /// Safekeeper offloads WAL to
-    ///   [prefix_in_bucket/]<tenant_id>/<timeline_id>/<segment_file>, mirroring
-    /// structure on the file system.
-    #[arg(long, value_parser = parse_remote_storage, verbatim_doc_comment)]
-    remote_storage: Option<RemoteStorageConfig>,
     /// Optional YugabyteDB connection for mirroring live WAL writes. TOML
     /// inline-table format, same fields as a `YbStore` `remote_storage`
     /// entry (host, port, user, dbname, table_name, prefix?). When set,
@@ -385,7 +376,6 @@ async fn main() -> anyhow::Result<()> {
         advertise_pg_addr: args.advertise_pg,
         availability_zone: args.availability_zone,
         heartbeat_timeout: args.heartbeat_timeout,
-        remote_storage: args.remote_storage,
         wal_yb_config: args.wal_yb_config,
         wal_cache_size_mib: args.wal_cache_size_mib.unwrap_or_else(|| {
             safekeeper::scale_count(
@@ -685,16 +675,11 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
     std::process::exit(0);
 }
 
-/// Determine safekeeper id.
-fn parse_remote_storage(storage_conf: &str) -> anyhow::Result<RemoteStorageConfig> {
-    RemoteStorageConfig::from_toml(&storage_conf.parse()?)
-}
-
 fn parse_yb_store_config(s: &str) -> anyhow::Result<remote_storage::YbStoreConfig> {
     // Reuse the same TOML-parsing path the pageserver uses for its remote
     // storage config: deserialize as a single RemoteStorageConfig and pull
     // out the YbStore variant (the only one).
-    let cfg = RemoteStorageConfig::from_toml(&s.parse()?)?;
+    let cfg = remote_storage::RemoteStorageConfig::from_toml(&s.parse()?)?;
     let remote_storage::RemoteStorageKind::YbStore(yb) = cfg.storage;
     Ok(yb)
 }

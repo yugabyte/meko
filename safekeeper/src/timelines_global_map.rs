@@ -298,10 +298,10 @@ impl GlobalTimelines {
         // TODO: currently we create only cfile. It would be reasonable to
         // immediately initialize first WAL segment as well.
         let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn)?;
-        let remote_storage = wal_backup
-            .get_storage()
-            .context("control-file create requires remote storage")?;
-        control_file::ControlFileStorage::create_new(remote_storage, &ttid, state).await?;
+        let yb_wal = wal_backup
+            .yb_wal()
+            .context("control-file create requires --wal-yb-config")?;
+        control_file::ControlFileStorage::create_new(yb_wal.client.clone(), &ttid, state).await?;
         let timeline = self
             .load_temp_timeline(ttid, &tmp_dir_path, generation)
             .await?;
@@ -675,11 +675,11 @@ pub async fn validate_temp_timeline(
     generation: Option<SafekeeperGeneration>,
     wal_backup: &WalBackup,
 ) -> Result<(Lsn, Lsn)> {
-    let remote_storage = wal_backup
-        .get_storage()
-        .context("control-file validate requires remote storage")?;
+    let yb_wal = wal_backup
+        .yb_wal()
+        .context("control-file validate requires --wal-yb-config")?;
     let control_store =
-        control_file::ControlFileStorage::restore_new(remote_storage, &ttid).await?;
+        control_file::ControlFileStorage::restore_new(yb_wal.client.clone(), &ttid).await?;
     if control_store.server.wal_seg_size == 0 {
         bail!("wal_seg_size is not set");
     }

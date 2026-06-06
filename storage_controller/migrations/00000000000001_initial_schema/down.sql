@@ -1,6 +1,10 @@
 -- Inverse of up.sql — drop in reverse-dependency order so FK
 -- references unwind cleanly.
 
+-- safekeeper.* and its schema.
+DROP TABLE IF EXISTS safekeeper.timeline_state;
+DROP SCHEMA IF EXISTS safekeeper;
+
 -- pageserver.* and its schema.
 DROP TABLE IF EXISTS pageserver.timeline_state;
 DROP TABLE IF EXISTS pageserver.tenant_config;

@@ -16,7 +16,7 @@ use crate::send_wal::EndWatch;
 use crate::state::TimelinePersistentState;
 use crate::timeline::{SharedState, StateSK, Timeline, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
-use crate::wal_backup::{WalBackup, remote_timeline_path};
+use crate::wal_backup::WalBackup;
 use crate::{SafeKeeperConf, control_file, receive_wal, yb_wal_storage};
 
 /// A Safekeeper testing or benchmarking environment. Uses a tempdir for storage, removed on drop.
@@ -72,7 +72,6 @@ impl Env {
     ) -> anyhow::Result<Arc<Timeline>> {
         let conf = Arc::new(self.make_conf(node_id));
         let timeline_dir = get_timeline_dir(&conf, &ttid);
-        let remote_path = remote_timeline_path(&ttid)?;
 
         let safekeeper = self.make_safekeeper(node_id, ttid, start_lsn).await?;
         let shared_state = SharedState::new(StateSK::Loaded(safekeeper));
@@ -82,7 +81,6 @@ impl Env {
         let timeline = Timeline::new(
             ttid,
             &timeline_dir,
-            &remote_path,
             shared_state,
             conf.clone(),
             wal_backup.clone(),

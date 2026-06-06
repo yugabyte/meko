@@ -175,10 +175,6 @@ impl SafekeeperNode {
             drop(backup_threads);
         }
 
-        if let Some(ref remote_storage) = self.conf.remote_storage {
-            args.extend(["--remote-storage".to_owned(), remote_storage.clone()]);
-        }
-
         if let Some(ref wal_yb) = self.conf.wal_yb_config {
             args.extend(["--wal-yb-config".to_owned(), wal_yb.clone()]);
         }

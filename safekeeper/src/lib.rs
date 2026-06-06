@@ -7,7 +7,6 @@ use std::time::Duration;
 use camino::Utf8PathBuf;
 use once_cell::sync::Lazy;
 use pem::Pem;
-use remote_storage::RemoteStorageConfig;
 use tokio::runtime::Runtime;
 use utils::auth::SwappableJwtAuth;
 use utils::id::NodeId;
@@ -15,7 +14,6 @@ use utils::logging::SecretString;
 
 mod auth;
 pub mod control_file;
-pub mod control_file_upgrade;
 pub mod debug_dump;
 pub mod hadron;
 pub mod handler;
@@ -107,7 +105,6 @@ pub struct SafeKeeperConf {
     pub advertise_pg_addr: Option<String>,
     pub availability_zone: Option<String>,
     pub heartbeat_timeout: Duration,
-    pub remote_storage: Option<RemoteStorageConfig>,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
     /// every `write_wal` is INSERT'd into the YB table named here in
     /// addition to being written to the local-FS shadow. When `None`,
@@ -265,7 +262,6 @@ impl SafeKeeperConf {
             listen_https_addr: None,
             advertise_pg_addr: None,
             availability_zone: None,
-            remote_storage: None,
             wal_yb_config: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
             my_id: NodeId(0),

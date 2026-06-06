@@ -316,8 +316,8 @@ pub struct NeonLocalInitPageserverConf {
     /// `remote_storage = <value>`. Value must be a TOML inline table for
     /// `YbStore` (e.g. `{ host = "172.151.17.132", port = 5433, ... }`).
     /// Required — pageserver init bails if neither this nor `other.remote_storage`
-    /// is set. Mirrors [`SafekeeperConf::remote_storage`]; bypasses the
-    /// `#[serde(flatten)] other` round-trip that mangles inline tables.
+    /// is set. Bypasses the `#[serde(flatten)] other` round-trip that
+    /// would otherwise mangle inline tables.
     #[serde(default)]
     pub remote_storage: Option<String>,
     #[serde(flatten)]
@@ -361,7 +361,6 @@ pub struct SafekeeperConf {
     pub pg_tenant_only_port: Option<u16>,
     pub http_port: u16,
     pub https_port: Option<u16>,
-    pub remote_storage: Option<String>,
     pub backup_threads: Option<u32>,
     pub auth_enabled: bool,
     pub listen_addr: Option<String>,
@@ -385,7 +384,6 @@ impl Default for SafekeeperConf {
             pg_tenant_only_port: None,
             http_port: 0,
             https_port: None,
-            remote_storage: None,
             backup_threads: None,
             auth_enabled: false,
             listen_addr: None,

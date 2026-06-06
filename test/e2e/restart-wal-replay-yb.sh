@@ -69,7 +69,6 @@ remote_storage = "{ host = '127.0.0.1', port = 5433, user = 'yugabyte' }"
 id = 1
 pg_port = 5484
 http_port = 7696
-remote_storage = "{ host = '127.0.0.1', port = 5433, user = 'yugabyte' }"
 wal_yb_config = "{ host = '127.0.0.1', port = 5433, user = 'yugabyte', table_name = 'wals' }"
 wal_cache_size_mib = 512
 
