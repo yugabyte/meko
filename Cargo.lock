@@ -2392,6 +2392,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "initdb_storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "camino",
+ "remote_storage",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "utils",
+]
+
+[[package]]
 name = "inotify"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3305,6 +3318,7 @@ dependencies = [
  "humantime-serde",
  "hyper 0.14.30",
  "indoc",
+ "initdb_storage",
  "itertools 0.10.5",
  "jsonwebtoken",
  "md5",

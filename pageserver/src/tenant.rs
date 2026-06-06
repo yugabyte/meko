@@ -68,7 +68,7 @@ use crate::metrics::{
 };
 use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
-use crate::tenant::remote_timeline_client::{INITDB_PATH, remote_initdb_archive_path};
+use initdb_storage::{INITDB_PATH, remote_initdb_archive_path};
 
 use crate::tenant::timeline::delete::DeleteTimelineFlow;
 use crate::tenant::timeline::uninit::cleanup_timeline_directory;
@@ -85,7 +85,6 @@ use utils::lsn::{Lsn, RecordLsn};
 
 
 pub mod metadata;
-pub mod remote_timeline_client;
 pub mod storage_layer;
 
 pub mod config;
@@ -3284,7 +3283,7 @@ impl TenantShard {
 
         backoff::retry(
             || async {
-                self::remote_timeline_client::upload_initdb_dir(
+                initdb_storage::upload_initdb_dir(
                     &self.remote_storage,
                     &self.tenant_shard_id,
                     timeline_id,
@@ -3370,16 +3369,16 @@ impl TenantShard {
                     .await
                     .context("copy initdb tar")?;
             }
-            let (initdb_tar_zst_path, initdb_tar_zst) =
-                self::remote_timeline_client::download_initdb_tar_zst(
-                    self.conf,
-                    &self.remote_storage,
-                    &self.tenant_shard_id,
-                    &existing_initdb_timeline_id,
-                    &self.cancel,
-                )
-                .await
-                .context("download initdb tar")?;
+            let timeline_path = self.conf.timelines_path(&self.tenant_shard_id);
+            let (initdb_tar_zst_path, initdb_tar_zst) = initdb_storage::download_initdb_tar_zst(
+                &timeline_path,
+                &self.remote_storage,
+                &self.tenant_shard_id,
+                &existing_initdb_timeline_id,
+                &self.cancel,
+            )
+            .await
+            .context("download initdb tar")?;
 
             scopeguard::defer! {
                 if let Err(e) = fs::remove_file(&initdb_tar_zst_path) {
@@ -3388,7 +3387,7 @@ impl TenantShard {
             }
 
             let buf_read =
-                BufReader::with_capacity(remote_timeline_client::BUFFER_SIZE, initdb_tar_zst);
+                BufReader::with_capacity(initdb_storage::BUFFER_SIZE, initdb_tar_zst);
             extract_zst_tarball(&pgdata_path, buf_read)
                 .await
                 .context("extract initdb tar")?;

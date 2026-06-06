@@ -27,7 +27,7 @@ use utils::generation::Generation;
 use utils::id::{TenantId, TimelineId};
 use utils::{backoff, completion};
 
-use super::remote_timeline_client::remote_tenant_path;
+use initdb_storage::remote_tenant_path;
 use super::{GlobalShutDown, TenantSharedResources};
 use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};

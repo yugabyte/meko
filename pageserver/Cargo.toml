@@ -73,6 +73,7 @@ rand.workspace = true
 range-set-blaze = { version = "0.1.16", features = ["alloc"] }
 regex.workspace = true
 remote_storage.workspace = true
+initdb_storage.workspace = true
 ysql_client.workspace = true
 reqwest.workspace = true
 rpds.workspace = true

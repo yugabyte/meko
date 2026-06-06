@@ -36,6 +36,7 @@ members = [
     "libs/vm_monitor",
     "libs/wal_decoder",
     "libs/postgres_initdb",
+    "libs/initdb_storage",
     "libs/proxy/json",
     "libs/proxy/postgres-protocol2",
     "libs/proxy/postgres-types2",
@@ -269,6 +270,7 @@ postgres_ffi = { version = "0.1", path = "./libs/postgres_ffi/" }
 postgres_ffi_types = { version = "0.1", path = "./libs/postgres_ffi_types/" }
 postgres_versioninfo = { version = "0.1", path = "./libs/postgres_versioninfo/" }
 postgres_initdb = { path = "./libs/postgres_initdb" }
+initdb_storage = { path = "./libs/initdb_storage" }
 pq_proto = { version = "0.1", path = "./libs/pq_proto/" }
 remote_storage = { version = "0.1", path = "./libs/remote_storage/" }
 safekeeper_api = { version = "0.1", path = "./libs/safekeeper_api" }
