@@ -1,6 +1,4 @@
-use safekeeper_api::models::{
-    self, PullTimelineRequest, PullTimelineResponse, SafekeeperUtilization, TimelineCreateRequest,
-};
+use safekeeper_api::models::{self, SafekeeperUtilization, TimelineCreateRequest};
 use safekeeper_client::mgmt_api::{Client, Result};
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::SecretString;
@@ -54,10 +52,6 @@ impl SafekeeperClient {
             inner: Client::new(raw_client, mgmt_api_endpoint, jwt),
             node_id_label: node_id.0.to_string(),
         }
-    }
-
-    pub(crate) fn node_id_label(&self) -> &str {
-        &self.node_id_label
     }
 
     pub(crate) async fn create_timeline(
@@ -128,18 +122,6 @@ impl SafekeeperClient {
             crate::metrics::Method::Delete,
             &self.node_id_label,
             self.inner.delete_tenant(tenant_id).await
-        )
-    }
-
-    pub(crate) async fn pull_timeline(
-        &self,
-        req: &PullTimelineRequest,
-    ) -> Result<PullTimelineResponse> {
-        measured_request!(
-            "pull_timeline",
-            crate::metrics::Method::Post,
-            &self.node_id_label,
-            self.inner.pull_timeline(req).await
         )
     }
 

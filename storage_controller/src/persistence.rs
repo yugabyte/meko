@@ -29,7 +29,6 @@ use pageserver_api::models::{
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
-use safekeeper_api::membership::SafekeeperGeneration;
 use scoped_futures::ScopedBoxFuture;
 use serde::{Deserialize, Serialize};
 use utils::generation::Generation;
@@ -102,8 +101,6 @@ pub(crate) enum DatabaseError {
     Logical(String),
     #[error("Migration error: {0}")]
     Migration(String),
-    #[error("CAS error: {0}")]
-    Cas(String),
 }
 
 #[derive(measured::FixedCardinalityLabel, Copy, Clone)]
