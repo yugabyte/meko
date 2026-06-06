@@ -176,14 +176,10 @@
 
 pub(crate) mod download;
 pub mod index;
-pub mod manifest;
 pub(crate) mod upload;
-
-use std::sync::OnceLock;
 
 use camino::Utf8Path;
 pub(crate) use download::download_initdb_tar_zst;
-use regex::Regex;
 use remote_storage::RemotePath;
 pub(crate) use upload::upload_initdb_dir;
 use utils::id::{TenantId, TimelineId};
@@ -217,25 +213,10 @@ pub enum MaybeDeletedIndexPart {
     Deleted(IndexPart),
 }
 
+/// Prefix of all objects belonging to a tenant in remote storage. Used by
+/// the tenant-delete path to wipe `tenants/<tenant_id>/*` in one shot.
 pub fn remote_tenant_path(tenant_shard_id: &TenantId) -> RemotePath {
     let path = format!("tenants/{tenant_shard_id}");
-    RemotePath::from_string(&path).expect("Failed to construct path")
-}
-
-pub fn remote_tenant_manifest_path(
-    tenant_shard_id: &TenantId,
-    generation: Generation,
-) -> RemotePath {
-    let path = format!(
-        "tenants/{tenant_shard_id}/tenant-manifest{}.json",
-        generation.get_suffix()
-    );
-    RemotePath::from_string(&path).expect("Failed to construct path")
-}
-
-/// Prefix to all generations' manifest objects in a tenant shard
-pub fn remote_tenant_manifest_prefix(tenant_shard_id: &TenantId) -> RemotePath {
-    let path = format!("tenants/{tenant_shard_id}/tenant-manifest",);
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 
@@ -268,44 +249,5 @@ pub fn remote_initdb_preserved_archive_path(
         "tenants/{tenant_id}/{TIMELINES_SEGMENT_NAME}/{timeline_id}/{INITDB_PRESERVED_PATH}"
     ))
     .expect("Failed to construct path")
-}
-
-pub fn remote_index_path(
-    tenant_shard_id: &TenantId,
-    timeline_id: &TimelineId,
-    generation: Generation,
-) -> RemotePath {
-    RemotePath::from_string(&format!(
-        "tenants/{tenant_shard_id}/{TIMELINES_SEGMENT_NAME}/{timeline_id}/{0}{1}",
-        IndexPart::FILE_NAME,
-        generation.get_suffix()
-    ))
-    .expect("Failed to construct path")
-}
-
-/// Given the key of an index, parse out the generation part of the name
-pub fn parse_remote_index_path(path: RemotePath) -> Option<Generation> {
-    let file_name = match path.get_path().file_name() {
-        Some(f) => f,
-        None => {
-            // Unexpected: we should be seeing index_part.json paths only
-            tracing::warn!("Malformed index key {}", path);
-            return None;
-        }
-    };
-
-    match file_name.split_once('-') {
-        Some((_, gen_suffix)) => Generation::parse_suffix(gen_suffix),
-        None => None,
-    }
-}
-
-/// Given the key of a tenant manifest, parse out the generation number
-pub fn parse_remote_tenant_manifest_path(path: RemotePath) -> Option<Generation> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r".*tenant-manifest-([0-9a-f]{8}).json").unwrap());
-    re.captures(path.get_path().as_str())
-        .and_then(|c| c.get(1))
-        .and_then(|m| Generation::parse_suffix(m.as_str()))
 }
 

@@ -10,7 +10,7 @@ use utils::{crashsafe, fs_ext, pausable_failpoint};
 use crate::config::PageServerConf;
 use crate::task_mgr::{self, TaskKind};
 use crate::tenant::{
-    DeleteTimelineError, TenantManifestError, TenantShard, Timeline,
+    DeleteTimelineError, TenantShard, Timeline,
     TimelineOrOffloaded,
 };
 use crate::virtual_file::MaybeFatalIo;
@@ -297,19 +297,6 @@ impl DeleteTimelineFlow {
         pausable_failpoint!("in_progress_delete");
 
         remove_maybe_offloaded_timeline_from_tenant(tenant, timeline, &guard).await?;
-
-        // This is susceptible to race conditions, i.e. we won't continue deletions if there is a crash
-        // between the deletion of the index-part.json and reaching of this code.
-        // So indeed, the tenant manifest might refer to an offloaded timeline which has already been deleted.
-        // However, we handle this case in tenant loading code so the next time we attach, the issue is
-        // resolved.
-        tenant
-            .maybe_upload_tenant_manifest()
-            .await
-            .map_err(|err| match err {
-                TenantManifestError::Cancelled => DeleteTimelineError::Cancelled,
-                err => DeleteTimelineError::Other(err.into()),
-            })?;
 
         *guard = Self::Finished;
 

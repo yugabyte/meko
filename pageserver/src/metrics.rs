@@ -874,15 +874,6 @@ pub(crate) static BROKEN_TENANTS_SET: Lazy<UIntGaugeVec> = Lazy::new(|| {
     .expect("Failed to register pageserver_tenant_states_count metric")
 });
 
-pub(crate) static TENANT_OFFLOADED_TIMELINES: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_tenant_offloaded_timelines",
-        "Number of offloaded timelines of a tenant",
-        &["tenant_id", "shard_id"]
-    )
-    .expect("Failed to register pageserver_tenant_offloaded_timelines metric")
-});
-
 static EVICTIONS_WITH_LOW_RESIDENCE_DURATION: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "pageserver_evictions_with_low_residence_duration",
@@ -2944,11 +2935,6 @@ impl TimelineMetrics {
 }
 
 pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantId) {
-    let tid = tenant_shard_id.to_string();
-    let shard_id = tenant_shard_id.shard_slug().to_string();
-
-    let _ = TENANT_OFFLOADED_TIMELINES.remove_label_values(&[&tid, &shard_id]);
-
     tenant_throttling::remove_tenant_metrics(tenant_shard_id);
 
     // we leave the BROKEN_TENANTS_SET entry if any
