@@ -1,9 +1,22 @@
 ---
-status: pending
+status: done
 severity: medium
 area: safekeeper
 opened: 2026-06-05
+closed: 2026-06-05
 ---
+
+## DONE in commit `840e56aae`
+
+Schema landed at the planned shape; `YbControlFileStorage`
+rewritten to read/write the row via `YsqlClient`; the blob path
+(magic + bincode + crc32c + `safekeeper-control/...` RemotePath)
+is gone, along with the entire `control_file_upgrade.rs` module
+(778 LOC of legacy V1..V9 upgrade paths that only ran against
+the deleted blob). e2e green. Follow-on cleanup in the same
+commit: dropped `--remote-storage` SK CLI arg + matching field
+on `SafeKeeperConf`, dropped `wal_backup::delete_timeline` and
+friends.
 
 # Phase 19 — Move SK control file from remote-storage blob to YB columns
 
