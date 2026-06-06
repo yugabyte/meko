@@ -3,9 +3,8 @@
 //! yb-light persists the per-timeline `TimelinePersistentState` as a
 //! row in the YB table `safekeeper.timeline_state`. Hot-update LSN
 //! scalars get their own BIGINT columns; slow-update structures
-//! (`mconf`, `term_history`, `partial_backup`, `eviction_state`) go
-//! in JSONB so their internal Rust-side shape can evolve without an
-//! SQL migration.
+//! (`mconf`, `term_history`) go in JSONB so their internal Rust-side
+//! shape can evolve without an SQL migration.
 //!
 //! Prior history: upstream Neon used a local-FS blob, then yb-light's
 //! Phase 2 reduction stored the same bincode blob in
@@ -18,21 +17,20 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use postgres_versioninfo::{PgMajorVersion, PgVersionId};
+use postgres_versioninfo::PgVersionId;
 use safekeeper_api::Term;
 use safekeeper_api::membership::Configuration;
 use serde::{Deserialize, Serialize};
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
-use ysql_client::YsqlClient;
 use yb_tokio_postgres::types::ToSql;
+use ysql_client::YsqlClient;
 
 use crate::metrics::PERSIST_CONTROL_FILE_SECONDS;
 use crate::safekeeper::{AcceptorState, PgUuid, TermHistory};
-use crate::state::{EvictionState, TimelinePersistentState};
-use crate::wal_backup_partial;
+use crate::state::TimelinePersistentState;
 
 /// Storage should keep actual state inside of it. It should implement
 /// `Deref` so callers can read fields off the state directly, and
@@ -97,9 +95,9 @@ fn term_history_from_json(v: serde_json::Value) -> Result<TermHistory> {
     ))
 }
 
-const COLUMNS: &str = "timeline_start_lsn, local_start_lsn, backup_lsn, remote_consistent_lsn, \
+const COLUMNS: &str = "timeline_start_lsn, local_start_lsn, remote_consistent_lsn, \
                        pg_version, system_id, wal_seg_size, term, term_history, proposer_uuid, \
-                       mconf, partial_backup, eviction_state, creation_ts";
+                       mconf, creation_ts";
 
 impl YbControlFileStorage {
     /// Load the row for `ttid`. Errors if no row exists — callers
@@ -124,28 +122,21 @@ impl YbControlFileStorage {
 
         let timeline_start_lsn = Lsn(row.try_get::<_, i64>(0)? as u64);
         let local_start_lsn = Lsn(row.try_get::<_, i64>(1)? as u64);
-        let backup_lsn = Lsn(row.try_get::<_, i64>(2)? as u64);
-        let remote_consistent_lsn = Lsn(row.try_get::<_, i64>(3)? as u64);
+        let remote_consistent_lsn = Lsn(row.try_get::<_, i64>(2)? as u64);
         let pg_version: PgVersionId =
-            PgVersionId::from_full_pg_version(row.try_get::<_, i32>(4)? as u32);
-        let system_id = row.try_get::<_, i64>(5)? as u64;
-        let wal_seg_size = row.try_get::<_, i32>(6)? as u32;
-        let term: Term = row.try_get::<_, i64>(7)? as Term;
-        let term_history = term_history_from_json(row.try_get::<_, serde_json::Value>(8)?)?;
-        let proposer_uuid_bytes: Vec<u8> = row.try_get(9)?;
+            PgVersionId::from_full_pg_version(row.try_get::<_, i32>(3)? as u32);
+        let system_id = row.try_get::<_, i64>(4)? as u64;
+        let wal_seg_size = row.try_get::<_, i32>(5)? as u32;
+        let term: Term = row.try_get::<_, i64>(6)? as Term;
+        let term_history = term_history_from_json(row.try_get::<_, serde_json::Value>(7)?)?;
+        let proposer_uuid_bytes: Vec<u8> = row.try_get(8)?;
         let proposer_uuid: PgUuid = proposer_uuid_bytes
             .as_slice()
             .try_into()
             .context("proposer_uuid is not 16 bytes")?;
-        let mconf: Configuration = serde_json::from_value(row.try_get::<_, serde_json::Value>(10)?)
+        let mconf: Configuration = serde_json::from_value(row.try_get::<_, serde_json::Value>(9)?)
             .context("decode mconf JSONB")?;
-        let partial_backup: wal_backup_partial::State =
-            serde_json::from_value(row.try_get::<_, serde_json::Value>(11)?)
-                .context("decode partial_backup JSONB")?;
-        let eviction_state: EvictionState =
-            serde_json::from_value(row.try_get::<_, serde_json::Value>(12)?)
-                .context("decode eviction_state JSONB")?;
-        let creation_ts_dt: DateTime<Utc> = row.try_get(13)?;
+        let creation_ts_dt: DateTime<Utc> = row.try_get(10)?;
         let creation_ts: std::time::SystemTime = creation_ts_dt.into();
 
         let state = TimelinePersistentState {
@@ -161,10 +152,7 @@ impl YbControlFileStorage {
             proposer_uuid,
             timeline_start_lsn,
             local_start_lsn,
-            backup_lsn,
             remote_consistent_lsn,
-            partial_backup,
-            eviction_state,
             creation_ts,
         };
 
@@ -182,7 +170,6 @@ impl YbControlFileStorage {
         ttid: &TenantTimelineId,
         state: TimelinePersistentState,
     ) -> Result<YbControlFileStorage> {
-        assert!(matches!(state.eviction_state, EvictionState::Present));
         let mut store = YbControlFileStorage {
             client,
             ttid: *ttid,
@@ -212,20 +199,15 @@ impl YbControlFileStorage {
         let proposer_uuid: &[u8] = &s.proposer_uuid[..];
         let creation_ts: DateTime<Utc> = s.creation_ts.into();
         let mconf_json = serde_json::to_value(&s.mconf).context("encode mconf JSONB")?;
-        let partial_backup_json =
-            serde_json::to_value(&s.partial_backup).context("encode partial_backup JSONB")?;
-        let eviction_state_json =
-            serde_json::to_value(&s.eviction_state).context("encode eviction_state JSONB")?;
         let term_history_json = term_history_to_json(&s.acceptor_state.term_history);
 
         let tenant_id = self.ttid.tenant_id.to_string();
         let timeline_id = self.ttid.timeline_id.to_string();
-        let params: [&(dyn ToSql + Sync); 16] = [
+        let params: [&(dyn ToSql + Sync); 13] = [
             &tenant_id,
             &timeline_id,
             &(s.timeline_start_lsn.0 as i64),
             &(s.local_start_lsn.0 as i64),
-            &(s.backup_lsn.0 as i64),
             &(s.remote_consistent_lsn.0 as i64),
             &pg_version_i32,
             &(s.server.system_id as i64),
@@ -234,36 +216,30 @@ impl YbControlFileStorage {
             &term_history_json,
             &proposer_uuid,
             &mconf_json,
-            &partial_backup_json,
-            &eviction_state_json,
             &creation_ts,
         ];
 
         let sql = if insert {
             "INSERT INTO safekeeper.timeline_state (\
                  tenant_id, timeline_id, timeline_start_lsn, local_start_lsn, \
-                 backup_lsn, remote_consistent_lsn, pg_version, system_id, \
+                 remote_consistent_lsn, pg_version, system_id, \
                  wal_seg_size, term, term_history, proposer_uuid, mconf, \
-                 partial_backup, eviction_state, creation_ts) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
-                     $14, $15, $16)"
+                 creation_ts) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
                 .to_string()
         } else {
             "UPDATE safekeeper.timeline_state SET \
                  timeline_start_lsn    = $3, \
                  local_start_lsn       = $4, \
-                 backup_lsn            = $5, \
-                 remote_consistent_lsn = $6, \
-                 pg_version            = $7, \
-                 system_id             = $8, \
-                 wal_seg_size          = $9, \
-                 term                  = $10, \
-                 term_history          = $11, \
-                 proposer_uuid         = $12, \
-                 mconf                 = $13, \
-                 partial_backup        = $14, \
-                 eviction_state        = $15, \
-                 creation_ts           = $16 \
+                 remote_consistent_lsn = $5, \
+                 pg_version            = $6, \
+                 system_id             = $7, \
+                 wal_seg_size          = $8, \
+                 term                  = $9, \
+                 term_history          = $10, \
+                 proposer_uuid         = $11, \
+                 mconf                 = $12, \
+                 creation_ts           = $13 \
              WHERE tenant_id           = $1 \
                AND timeline_id         = $2"
                 .to_string()
@@ -305,4 +281,3 @@ impl Storage for YbControlFileStorage {
 /// kept as a type alias so call sites read uniformly with the rest of
 /// the code that holds a `Storage`-trait value generically.
 pub type ControlFileStorage = YbControlFileStorage;
-

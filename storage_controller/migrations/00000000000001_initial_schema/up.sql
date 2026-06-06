@@ -282,23 +282,14 @@ CREATE TABLE pageserver.timeline_state (
 --
 -- Column choice: hot-update LSN scalars get their own BIGINT
 -- columns so a control-file save is a column-scoped UPDATE rather
--- than a 400-byte blob rewrite. Slow-update structures
--- (`mconf`, `term_history`, `partial_backup`) go in JSONB so their
--- internal Rust-side shape can evolve without an SQL migration.
---
--- Dead-but-persisted columns (kept so the in-memory
--- `TimelinePersistentState` struct doesn't have to change yet —
--- task 9's "leftovers" section in tasks/9_*.md):
---   - backup_lsn        — old S3 WAL-offloader watermark
---   - partial_backup    — old S3 partial-segment uploader state
---   - eviction_state    — old local-FS eviction state
--- All three sit at their `default()` values in yb-mode.
+-- than a 400-byte blob rewrite. Slow-update structures (`mconf`,
+-- `term_history`) go in JSONB so their internal Rust-side shape can
+-- evolve without an SQL migration.
 CREATE TABLE safekeeper.timeline_state (
     tenant_id              TEXT        NOT NULL,
     timeline_id            TEXT        NOT NULL,
     timeline_start_lsn     BIGINT      NOT NULL,
     local_start_lsn        BIGINT      NOT NULL,
-    backup_lsn             BIGINT      NOT NULL,
     remote_consistent_lsn  BIGINT      NOT NULL,
     pg_version             INT         NOT NULL,
     system_id              BIGINT      NOT NULL,
@@ -307,8 +298,6 @@ CREATE TABLE safekeeper.timeline_state (
     term_history           JSONB       NOT NULL,
     proposer_uuid          BYTEA       NOT NULL,
     mconf                  JSONB       NOT NULL,
-    partial_backup         JSONB       NOT NULL,
-    eviction_state         JSONB       NOT NULL,
     creation_ts            TIMESTAMPTZ NOT NULL,
     PRIMARY KEY ((tenant_id, timeline_id) HASH)
 );

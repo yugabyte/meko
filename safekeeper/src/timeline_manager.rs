@@ -37,12 +37,10 @@ use crate::yb_wal_storage::YbWalConn;
 
 pub(crate) struct StateSnapshot {
     // inmem values
-    pub(crate) backup_lsn: Lsn,
     pub(crate) remote_consistent_lsn: Lsn,
 
     // persistent control file values
     pub(crate) cfile_remote_consistent_lsn: Lsn,
-    pub(crate) cfile_backup_lsn: Lsn,
 
     // latest state
     pub(crate) flush_lsn: Lsn,
@@ -60,10 +58,8 @@ impl StateSnapshot {
     fn new(read_guard: ReadGuardSharedState, heartbeat_timeout: Duration) -> Self {
         let state = read_guard.sk.state();
         Self {
-            backup_lsn: state.inmem.backup_lsn,
             remote_consistent_lsn: state.inmem.remote_consistent_lsn,
             cfile_remote_consistent_lsn: state.remote_consistent_lsn,
-            cfile_backup_lsn: state.backup_lsn,
             flush_lsn: read_guard.sk.flush_lsn(),
             last_log_term: read_guard.sk.last_log_term(),
             cfile_last_persist_at: state.pers.last_persist_at(),
@@ -74,8 +70,7 @@ impl StateSnapshot {
     }
 
     fn has_unflushed_inmem_state(state: &TimelineState<ControlFileStorage>) -> bool {
-        state.inmem.backup_lsn > state.backup_lsn
-            || state.inmem.remote_consistent_lsn > state.remote_consistent_lsn
+        state.inmem.remote_consistent_lsn > state.remote_consistent_lsn
     }
 }
 
@@ -439,8 +434,7 @@ impl Manager {
         // active walsender still needs is a one-way data loss.
         let replication_horizon_lsn = self.walsenders.laggard_lsn();
 
-        let removal_horizon_lsn =
-            calc_horizon_lsn(state, replication_horizon_lsn, self.conf.is_yb_wal_mode());
+        let removal_horizon_lsn = calc_horizon_lsn(state, replication_horizon_lsn);
         let removal_horizon_segno = removal_horizon_lsn
             .segment_number(self.wal_seg_size)
             .saturating_sub(1);
@@ -455,11 +449,6 @@ impl Manager {
             let remover = match self.tli.read_shared_state().await.sk {
                 StateSK::Loaded(ref sk) => {
                     crate::wal_storage::Storage::remove_up_to(&sk.wal_store, removal_horizon_segno)
-                }
-                StateSK::Offloaded(_) => {
-                    // we can't remove WAL if it's not loaded
-                    warn!("unexpectedly trying to run WAL removal on offloaded timeline");
-                    return;
                 }
                 StateSK::Empty => unreachable!(),
             };

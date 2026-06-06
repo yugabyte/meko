@@ -473,7 +473,6 @@ pub struct TimelineCollector {
     global_timelines: Arc<GlobalTimelines>,
     descs: Vec<Desc>,
     commit_lsn: GenericGaugeVec<AtomicU64>,
-    backup_lsn: GenericGaugeVec<AtomicU64>,
     flush_lsn: GenericGaugeVec<AtomicU64>,
     epoch_start_lsn: GenericGaugeVec<AtomicU64>,
     remote_consistent_lsn: GenericGaugeVec<AtomicU64>,
@@ -507,16 +506,6 @@ impl TimelineCollector {
         )
         .unwrap();
         descs.extend(commit_lsn.desc().into_iter().cloned());
-
-        let backup_lsn = GenericGaugeVec::new(
-            Opts::new(
-                "safekeeper_backup_lsn",
-                "Current backup_lsn, up to which WAL is backed up, grouped by timeline",
-            ),
-            &["tenant_id", "timeline_id"],
-        )
-        .unwrap();
-        descs.extend(backup_lsn.desc().into_iter().cloned());
 
         let flush_lsn = GenericGaugeVec::new(
             Opts::new(
@@ -688,7 +677,6 @@ impl TimelineCollector {
             global_timelines,
             descs,
             commit_lsn,
-            backup_lsn,
             flush_lsn,
             epoch_start_lsn,
             remote_consistent_lsn,
@@ -721,7 +709,6 @@ impl Collector for TimelineCollector {
 
         // reset all metrics to clean up inactive timelines
         self.commit_lsn.reset();
-        self.backup_lsn.reset();
         self.flush_lsn.reset();
         self.epoch_start_lsn.reset();
         self.remote_consistent_lsn.reset();
@@ -766,9 +753,6 @@ impl Collector for TimelineCollector {
                 .with_label_values(labels)
                 // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
                 .set(tli.flush_lsn.into());
-            self.backup_lsn
-                .with_label_values(labels)
-                .set(tli.mem_state.backup_lsn.into());
             self.flush_lsn
                 .with_label_values(labels)
                 .set(tli.flush_lsn.into());
@@ -834,7 +818,6 @@ impl Collector for TimelineCollector {
         // collect MetricFamilys.
         let mut mfs = Vec::new();
         mfs.extend(self.commit_lsn.collect());
-        mfs.extend(self.backup_lsn.collect());
         mfs.extend(self.flush_lsn.collect());
         mfs.extend(self.epoch_start_lsn.collect());
         mfs.extend(self.remote_consistent_lsn.collect());

@@ -1034,9 +1034,8 @@ where
             }
             // yb-mode: commit_lsn collapsed to flush_lsn; nothing to seed.
 
-            // Initializing backup_lsn is useful to avoid making backup think it should upload 0 segment.
-            state.backup_lsn = max(state.backup_lsn, state.timeline_start_lsn);
-            // similar for remote_consistent_lsn
+            // Seed remote_consistent_lsn at the timeline start so that
+            // post-restart catch-up doesn't read a pre-timeline LSN.
             state.remote_consistent_lsn =
                 max(state.remote_consistent_lsn, state.timeline_start_lsn);
 
@@ -1188,7 +1187,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::state::{EvictionState, TimelinePersistentState};
+    use crate::state::TimelinePersistentState;
 
     // fake storage for tests
     struct InMemoryState {
@@ -1534,10 +1533,7 @@ mod tests {
             },
             timeline_start_lsn: Lsn(0x12345600),
             local_start_lsn: Lsn(0x12),
-            backup_lsn: Lsn(1234567300),
             remote_consistent_lsn: Lsn(1234560000),
-            partial_backup: crate::wal_backup_partial::State::default(),
-            eviction_state: EvictionState::Present,
             creation_ts: UNIX_EPOCH,
         };
 

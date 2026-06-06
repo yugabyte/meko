@@ -19,10 +19,10 @@ use utils::lsn::Lsn;
 use crate::control_file;
 use crate::safekeeper::{AcceptorState, PgUuid, TermHistory, TermLsn, UNKNOWN_SERVER_VERSION};
 use crate::timeline::TimelineError;
-use crate::wal_backup_partial::{self};
 
 /// Persistent information stored on safekeeper node about timeline.
-/// On disk data is prefixed by magic and format version and followed by checksum.
+/// Serialised to `safekeeper.timeline_state` columns (see
+/// `crate::control_file::YbControlFileStorage`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelinePersistentState {
     #[serde(with = "hex")]
@@ -46,32 +46,11 @@ pub struct TimelinePersistentState {
     /// All WAL segments next to one containing local_start_lsn are
     /// filled with data from the beginning.
     pub local_start_lsn: Lsn,
-    /// LSN that points to the end of the last backed up segment. Useful to
-    /// persist to avoid finding out offloading progress on boot.
-    pub backup_lsn: Lsn,
-    /// LSN of the oldest known checkpoint made by pageserver and successfully
-    /// pushed to s3. We don't remove WAL beyond it. Persisted only for
-    /// informational purposes, we receive it from pageserver (or broker).
+    /// LSN of the oldest known checkpoint made by pageserver. We don't
+    /// remove WAL beyond it. The pageserver advertises this via
+    /// `PageserverFeedback.remote_consistent_lsn`.
     pub remote_consistent_lsn: Lsn,
-    /// Holds names of partial segments uploaded to remote storage. Used to
-    /// clean up old objects without leaving garbage in remote storage.
-    pub partial_backup: wal_backup_partial::State,
-    /// Eviction state of the timeline. If it's Offloaded, we should download
-    /// WAL files from remote storage to serve the timeline.
-    pub eviction_state: EvictionState,
     pub creation_ts: SystemTime,
-}
-
-/// State of the local WAL files. Used to track current timeline state,
-/// that can be either WAL files are present on disk or last partial segment
-/// is offloaded to remote storage.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub enum EvictionState {
-    /// WAL files are present on disk.
-    Present,
-    /// Last partial segment is offloaded to remote storage.
-    /// Contains flush_lsn of the last offloaded segment.
-    Offloaded(Lsn),
 }
 
 pub struct MembershipSwitchResult {
@@ -122,10 +101,7 @@ impl TimelinePersistentState {
             proposer_uuid: [0; 16],
             timeline_start_lsn: start_lsn,
             local_start_lsn: start_lsn,
-            backup_lsn: start_lsn,
             remote_consistent_lsn: Lsn(0),
-            partial_backup: wal_backup_partial::State::default(),
-            eviction_state: EvictionState::Present,
             creation_ts: SystemTime::now(),
         })
     }
@@ -149,7 +125,6 @@ impl TimelinePersistentState {
 // In memory safekeeper state. Fields mirror ones in `SafeKeeperPersistentState`; values
 // are not flushed yet.
 pub struct TimelineMemState {
-    pub backup_lsn: Lsn,
     pub remote_consistent_lsn: Lsn,
     #[serde(with = "hex")]
     pub proposer_uuid: PgUuid,
@@ -174,7 +149,6 @@ where
     pub fn new(state: CTRL) -> Self {
         TimelineState {
             inmem: TimelineMemState {
-                backup_lsn: state.backup_lsn,
                 remote_consistent_lsn: state.remote_consistent_lsn,
                 proposer_uuid: state.proposer_uuid,
             },
@@ -187,7 +161,6 @@ where
     /// 2) atomically persist it with finish_change.
     pub fn start_change(&self) -> TimelinePersistentState {
         let mut s = self.pers.clone();
-        s.backup_lsn = self.inmem.backup_lsn;
         s.remote_consistent_lsn = self.inmem.remote_consistent_lsn;
         s.proposer_uuid = self.inmem.proposer_uuid;
         s
@@ -202,7 +175,6 @@ where
         }
 
         // keep in memory values up to date
-        self.inmem.backup_lsn = s.backup_lsn;
         self.inmem.remote_consistent_lsn = s.remote_consistent_lsn;
         self.inmem.proposer_uuid = s.proposer_uuid;
         Ok(())

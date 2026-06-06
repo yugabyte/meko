@@ -205,7 +205,6 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
         local_start_lsn: state.local_start_lsn,
         // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
         commit_lsn: flush_lsn,
-        backup_lsn: inmem.backup_lsn,
         remote_consistent_lsn: inmem.remote_consistent_lsn,
         peers: tli.get_peers(conf).await,
         walsenders: tli.get_walsenders().get_all_public(),

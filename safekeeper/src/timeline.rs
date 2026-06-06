@@ -32,12 +32,11 @@ use crate::hadron::GLOBAL_DISK_LIMIT_EXCEEDED;
 use crate::receive_wal::WalReceivers;
 use crate::safekeeper::{AcceptorProposerMessage, ProposerAcceptorMessage, SafeKeeper, TermLsn};
 use crate::send_wal::{WalSenders, WalSendersTimelineMetricValues};
-use crate::state::{EvictionState, TimelineMemState, TimelinePersistentState, TimelineState};
+use crate::state::{TimelineMemState, TimelinePersistentState, TimelineState};
 use crate::timeline_guard::ResidenceGuard;
 use crate::timeline_manager::{AtomicStatus, ManagerCtl};
 use crate::timelines_set::TimelinesSet;
 use crate::yb_wal_storage::YbWalConn;
-use crate::wal_backup_partial::PartialRemoteSegment;
 use crate::wal_storage::{Storage as wal_storage_iface, WalReader};
 use crate::yb_wal_storage::{self, YbWalStorage};
 use crate::{SafeKeeperConf, control_file, debug_dump, timeline_manager};
@@ -138,10 +137,8 @@ impl Drop for WriteGuardSharedState<'_> {
 /// Usually it holds SafeKeeper, but it also supports offloaded timeline state. In this
 /// case, SafeKeeper is not available (because WAL is not present on disk) and all
 /// operations can be done only with control file.
-#[allow(clippy::large_enum_variant, reason = "TODO")]
 pub enum StateSK {
     Loaded(SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>),
-    Offloaded(Box<TimelineState<control_file::ControlFileStorage>>),
     // Not used, required for moving between states.
     Empty,
 }
@@ -150,10 +147,6 @@ impl StateSK {
     pub fn flush_lsn(&self) -> Lsn {
         match self {
             StateSK::Loaded(sk) => sk.wal_store.flush_lsn(),
-            StateSK::Offloaded(state) => match state.eviction_state {
-                EvictionState::Offloaded(flush_lsn) => flush_lsn,
-                _ => panic!("StateSK::Offloaded mismatches with eviction_state from control_file"),
-            },
             StateSK::Empty => unreachable!(),
         }
     }
@@ -162,7 +155,6 @@ impl StateSK {
     pub fn state(&self) -> &TimelineState<control_file::ControlFileStorage> {
         match self {
             StateSK::Loaded(sk) => &sk.state,
-            StateSK::Offloaded(s) => s,
             StateSK::Empty => unreachable!(),
         }
     }
@@ -170,7 +162,6 @@ impl StateSK {
     pub fn state_mut(&mut self) -> &mut TimelineState<control_file::ControlFileStorage> {
         match self {
             StateSK::Loaded(sk) => &mut sk.state,
-            StateSK::Offloaded(s) => s,
             StateSK::Empty => unreachable!(),
         }
     }
@@ -212,7 +203,6 @@ impl StateSK {
     pub fn term_start_lsn(&self) -> Lsn {
         match self {
             StateSK::Loaded(sk) => sk.term_start_lsn,
-            StateSK::Offloaded(_) => Lsn(0),
             StateSK::Empty => unreachable!(),
         }
     }
@@ -221,7 +211,6 @@ impl StateSK {
     pub fn wal_storage_metrics(&self) -> WalStorageMetrics {
         match self {
             StateSK::Loaded(sk) => sk.wal_store.get_metrics(),
-            StateSK::Offloaded(_) => WalStorageMetrics::default(),
             StateSK::Empty => unreachable!(),
         }
     }
@@ -230,32 +219,16 @@ impl StateSK {
     pub fn wal_storage_internal_state(&self) -> (Lsn, Lsn, Lsn, bool) {
         match self {
             StateSK::Loaded(sk) => sk.wal_store.internal_state(),
-            StateSK::Offloaded(_) => {
-                let flush_lsn = self.flush_lsn();
-                (flush_lsn, flush_lsn, flush_lsn, false)
-            }
             StateSK::Empty => unreachable!(),
         }
     }
 
-    /// Access to SafeKeeper object. Panics if offloaded, should be good to use from WalResidentTimeline.
+    /// Access to SafeKeeper object.
     pub fn safekeeper(
         &mut self,
     ) -> &mut SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore> {
         match self {
             StateSK::Loaded(sk) => sk,
-            StateSK::Offloaded(_) => {
-                panic!("safekeeper is offloaded, cannot be used")
-            }
-            StateSK::Empty => unreachable!(),
-        }
-    }
-
-    /// Moves control file's state structure out of the enum. Used to switch states.
-    fn take_state(self) -> TimelineState<control_file::ControlFileStorage> {
-        match self {
-            StateSK::Loaded(sk) => sk.state,
-            StateSK::Offloaded(state) => *state,
             StateSK::Empty => unreachable!(),
         }
     }
@@ -305,20 +278,13 @@ impl SharedState {
             crate::require_single_safekeeper(&control_store.mconf)?;
         }
 
-        let sk = match control_store.eviction_state {
-            EvictionState::Present => {
-                let wal_store = YbWalStorage::new(ttid, &control_store, yb_wal.clone()).await?;
-                StateSK::Loaded(SafeKeeper::new(
-                    TimelineState::new(control_store),
-                    wal_store,
-                    conf.my_id,
-                    conf.is_yb_wal_mode(),
-                )?)
-            }
-            EvictionState::Offloaded(_) => {
-                StateSK::Offloaded(Box::new(TimelineState::new(control_store)))
-            }
-        };
+        let wal_store = YbWalStorage::new(ttid, &control_store, yb_wal.clone()).await?;
+        let sk = StateSK::Loaded(SafeKeeper::new(
+            TimelineState::new(control_store),
+            wal_store,
+            conf.my_id,
+            conf.is_yb_wal_mode(),
+        )?);
 
         Ok(Self::new(sk))
     }
@@ -743,24 +709,6 @@ impl Timeline {
             state.sk.state().inmem.clone(),
             TimelinePersistentState::clone(state.sk.state()),
         )
-    }
-
-    /// Returns latest backup_lsn.
-    pub async fn get_wal_backup_lsn(&self) -> Lsn {
-        self.read_shared_state().await.sk.state().inmem.backup_lsn
-    }
-
-    /// Sets backup_lsn to the given value.
-    pub async fn set_wal_backup_lsn(self: &Arc<Self>, backup_lsn: Lsn) -> Result<()> {
-        if self.is_cancelled() {
-            bail!(TimelineError::Cancelled(self.ttid));
-        }
-
-        let mut state = self.write_shared_state().await;
-        state.sk.state_mut().inmem.backup_lsn = max(state.sk.state().inmem.backup_lsn, backup_lsn);
-        // we should check whether to shut down offloader, but this will be done
-        // soon by peer communication anyway.
-        Ok(())
     }
 
     /// Snapshot of local SK timeline state. Previously broadcast to the
