@@ -191,7 +191,7 @@ pub(crate) struct Manager {
     pub(crate) conf: SafeKeeperConf,
     pub(crate) wal_seg_size: usize,
     pub(crate) walsenders: Arc<WalSenders>,
-    pub(crate) wal_backup: Option<Arc<YbWalConn>>,
+    pub(crate) yb_wal: Option<Arc<YbWalConn>>,
 
     // current state
     pub(crate) state_version_rx: tokio::sync::watch::Receiver<usize>,
@@ -216,7 +216,7 @@ pub async fn main_task(
     broker_active_set: Arc<TimelinesSet>,
     manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
     mut manager_rx: tokio::sync::mpsc::UnboundedReceiver<ManagerCtlMessage>,
-    wal_backup: Option<Arc<YbWalConn>>,
+    yb_wal: Option<Arc<YbWalConn>>,
 ) {
     tli.set_status(Status::Started);
 
@@ -234,7 +234,7 @@ pub async fn main_task(
         conf,
         broker_active_set,
         manager_tx,
-        wal_backup,
+        yb_wal,
     )
     .await;
 
@@ -312,12 +312,12 @@ impl Manager {
         conf: SafeKeeperConf,
         broker_active_set: Arc<TimelinesSet>,
         manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
-        wal_backup: Option<Arc<YbWalConn>>,
+        yb_wal: Option<Arc<YbWalConn>>,
     ) -> Manager {
         Manager {
             wal_seg_size: tli.get_wal_seg_size().await,
             walsenders: tli.get_walsenders().clone(),
-            wal_backup,
+            yb_wal,
             state_version_rx: tli.get_state_version_rx(),
             num_computes_rx: tli.get_walreceivers().get_num_rx(),
             tli_broker_active: broker_active_set.guard(tli.clone()),

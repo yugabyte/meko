@@ -76,20 +76,20 @@ impl Env {
         let safekeeper = self.make_safekeeper(node_id, ttid, start_lsn).await?;
         let shared_state = SharedState::new(StateSK::Loaded(safekeeper));
 
-        let wal_backup = YbWalConn::from_conf(&conf).await?;
+        let yb_wal = YbWalConn::from_conf(&conf).await?;
 
         let timeline = Timeline::new(
             ttid,
             &timeline_dir,
             shared_state,
             conf.clone(),
-            wal_backup.clone(),
+            yb_wal.clone(),
         );
         timeline.bootstrap(
             &mut timeline.write_shared_state().await,
             &conf,
             Arc::new(TimelinesSet::default()), // ignored for now
-            wal_backup,
+            yb_wal,
         );
         Ok(timeline)
     }

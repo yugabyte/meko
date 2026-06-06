@@ -104,7 +104,7 @@ impl Drop for WriteGuardSharedState<'_> {
         let term_flush_lsn =
             TermLsn::from((self.guard.sk.last_log_term(), self.guard.sk.flush_lsn()));
         // yb-mode: commit_lsn = flush_lsn (single-SK quorum, every flush is
-        // committed). The watcher subscribers (walsenders, wal_backup) see
+        // committed). The watcher subscribers (walsenders, yb_wal) see
         // updates every time flush_lsn advances.
         let commit_lsn = self.guard.sk.flush_lsn();
 
@@ -425,7 +425,7 @@ pub struct Timeline {
     manager_ctl: ManagerCtl,
     conf: Arc<SafeKeeperConf>,
 
-    pub(crate) wal_backup: Option<Arc<YbWalConn>>,
+    pub(crate) yb_wal: Option<Arc<YbWalConn>>,
 
     remote_deletion: std::sync::Mutex<Option<RemoteDeletionReceiver>>,
 
@@ -450,7 +450,7 @@ impl Timeline {
         timeline_dir: &Utf8Path,
         shared_state: SharedState,
         conf: Arc<SafeKeeperConf>,
-        wal_backup: Option<Arc<YbWalConn>>,
+        yb_wal: Option<Arc<YbWalConn>>,
     ) -> Arc<Self> {
         // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
         let (commit_lsn_watch_tx, commit_lsn_watch_rx) =
@@ -484,7 +484,7 @@ impl Timeline {
             wal_backup_active: AtomicBool::new(false),
             last_removed_segno: AtomicU64::new(0),
             mgr_status: AtomicStatus::new(),
-            wal_backup,
+            yb_wal,
         })
     }
 
@@ -492,13 +492,13 @@ impl Timeline {
     pub async fn load_timeline(
         conf: Arc<SafeKeeperConf>,
         ttid: TenantTimelineId,
-        wal_backup: Option<Arc<YbWalConn>>,
+        yb_wal: Option<Arc<YbWalConn>>,
     ) -> Result<Arc<Timeline>> {
         use tracing::Instrument;
         let span = info_span!("load_timeline", timeline = %ttid.timeline_id);
         async move {
             let shared_state =
-                SharedState::restore(conf.as_ref(), &ttid, wal_backup.as_ref()).await?;
+                SharedState::restore(conf.as_ref(), &ttid, yb_wal.as_ref()).await?;
             let timeline_dir = get_timeline_dir(conf.as_ref(), &ttid);
 
             Ok(Timeline::new(
@@ -506,7 +506,7 @@ impl Timeline {
                 &timeline_dir,
                 shared_state,
                 conf,
-                wal_backup,
+                yb_wal,
             ))
         }
         .instrument(span)
@@ -519,7 +519,7 @@ impl Timeline {
         _shared_state: &mut WriteGuardSharedState<'_>,
         conf: &SafeKeeperConf,
         broker_active_set: Arc<TimelinesSet>,
-        wal_backup: Option<Arc<YbWalConn>>,
+        yb_wal: Option<Arc<YbWalConn>>,
     ) {
         let (tx, rx) = self.manager_ctl.bootstrap_manager();
 
@@ -541,7 +541,7 @@ impl Timeline {
                     broker_active_set,
                     tx,
                     rx,
-                    wal_backup,
+                    yb_wal,
                 )
                 .await
             }
@@ -657,7 +657,7 @@ impl Timeline {
         guard: &mut std::sync::MutexGuard<Option<RemoteDeletionReceiver>>,
     ) -> RemoteDeletionReceiver {
         tracing::info!("starting remote deletion");
-        let yb_wal = self.wal_backup.clone();
+        let yb_wal = self.yb_wal.clone();
         let (result_tx, result_rx) = tokio::sync::watch::channel(None);
         let ttid = self.ttid;
         tokio::task::spawn(
@@ -1095,7 +1095,7 @@ impl WalResidentTimeline {
             self.timeline_dir.clone(),
             &persisted_state,
             start_lsn,
-            self.wal_backup.clone(),
+            self.yb_wal.clone(),
         )
     }
 

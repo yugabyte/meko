@@ -50,7 +50,7 @@ struct GlobalTimelinesState {
 
     conf: Arc<SafeKeeperConf>,
     broker_active_set: Arc<TimelinesSet>,
-    wal_backup: Option<Arc<YbWalConn>>,
+    yb_wal: Option<Arc<YbWalConn>>,
 }
 
 impl GlobalTimelinesState {
@@ -61,7 +61,7 @@ impl GlobalTimelinesState {
         (
             self.conf.clone(),
             self.broker_active_set.clone(),
-            self.wal_backup.clone(),
+            self.yb_wal.clone(),
         )
     }
 
@@ -137,7 +137,7 @@ pub struct GlobalTimelines {
 
 impl GlobalTimelines {
     /// Create a new instance of the global timelines map.
-    pub fn new(conf: Arc<SafeKeeperConf>, wal_backup: Option<Arc<YbWalConn>>) -> Self {
+    pub fn new(conf: Arc<SafeKeeperConf>, yb_wal: Option<Arc<YbWalConn>>) -> Self {
         Self {
             state: Mutex::new(GlobalTimelinesState {
                 timelines: HashMap::new(),
@@ -145,7 +145,7 @@ impl GlobalTimelines {
                 tenant_tombstones: HashMap::new(),
                 conf,
                 broker_active_set: Arc::new(TimelinesSet::default()),
-                wal_backup,
+                yb_wal,
             }),
         }
     }
@@ -196,7 +196,7 @@ impl GlobalTimelines {
     /// just lock and unlock it for each timeline -- this function is called
     /// during init when nothing else is running, so this is fine.
     async fn load_tenant_timelines(&self, tenant_id: TenantId) -> Result<()> {
-        let (conf, broker_active_set, wal_backup) = {
+        let (conf, broker_active_set, yb_wal) = {
             let state = self.state.lock().unwrap();
             state.get_dependencies()
         };
@@ -211,7 +211,7 @@ impl GlobalTimelines {
                         TimelineId::from_str(timeline_dir_entry.file_name().to_str().unwrap_or(""))
                     {
                         let ttid = TenantTimelineId::new(tenant_id, timeline_id);
-                        match Timeline::load_timeline(conf.clone(), ttid, wal_backup.clone()).await {
+                        match Timeline::load_timeline(conf.clone(), ttid, yb_wal.clone()).await {
                             Ok(tli) => {
                                 let mut shared_state = tli.write_shared_state().await;
                                 self.state
@@ -223,7 +223,7 @@ impl GlobalTimelines {
                                     &mut shared_state,
                                     &conf,
                                     broker_active_set.clone(),
-                                    wal_backup.clone(),
+                                    yb_wal.clone(),
                                 );
                             }
                             // If we can't load a timeline, it's most likely because of a corrupted
@@ -261,10 +261,6 @@ impl GlobalTimelines {
         self.state.lock().unwrap().broker_active_set.clone()
     }
 
-    pub fn get_wal_backup(&self) -> Option<Arc<YbWalConn>> {
-        self.state.lock().unwrap().wal_backup.clone()
-    }
-
     /// Create a new timeline with the given id. If the timeline already exists, returns
     /// an existing timeline.
     pub(crate) async fn create(
@@ -276,7 +272,7 @@ impl GlobalTimelines {
     ) -> Result<Arc<Timeline>> {
         let generation = Some(mconf.generation);
 
-        let (conf, _, wal_backup) = {
+        let (conf, _, yb_wal) = {
             let state = self.state.lock().unwrap();
             if let Ok(timeline) = state.get(&ttid) {
                 // Timeline already exists, return it.
@@ -298,7 +294,7 @@ impl GlobalTimelines {
         // TODO: currently we create only cfile. It would be reasonable to
         // immediately initialize first WAL segment as well.
         let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn)?;
-        let yb_wal = wal_backup
+        let yb_wal = yb_wal
             .clone()
             .context("control-file create requires --wal-yb-config")?;
         control_file::ControlFileStorage::create_new(yb_wal.client.clone(), &ttid, state).await?;
@@ -326,7 +322,7 @@ impl GlobalTimelines {
         generation: Option<SafekeeperGeneration>,
     ) -> Result<Arc<Timeline>> {
         // Check for existence and mark that we're creating it.
-        let (conf, broker_active_set, wal_backup) = {
+        let (conf, broker_active_set, yb_wal) = {
             let mut state = self.state.lock().unwrap();
             match state.timelines.get(&ttid) {
                 Some(GlobalMapTimeline::CreationInProgress) => {
@@ -360,7 +356,7 @@ impl GlobalTimelines {
             ttid,
             tmp_path,
             conf.clone(),
-            wal_backup.clone(),
+            yb_wal.clone(),
         )
         .await
         {
@@ -380,7 +376,7 @@ impl GlobalTimelines {
                     &mut timeline_shared_state,
                     &conf,
                     broker_active_set,
-                    wal_backup,
+                    yb_wal,
                 );
                 drop(timeline_shared_state);
                 Ok(timeline)
@@ -406,9 +402,9 @@ impl GlobalTimelines {
         ttid: TenantTimelineId,
         _tmp_path: &Utf8PathBuf,
         conf: Arc<SafeKeeperConf>,
-        wal_backup: Option<Arc<YbWalConn>>,
+        yb_wal: Option<Arc<YbWalConn>>,
     ) -> Result<Arc<Timeline>> {
-        Timeline::load_timeline(conf, ttid, wal_backup).await
+        Timeline::load_timeline(conf, ttid, yb_wal).await
     }
 
     /// Get a timeline from the global map. If it's not present, it doesn't exist on disk,

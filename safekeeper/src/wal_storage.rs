@@ -264,7 +264,7 @@ pub struct WalReader {
     wal_segment: Option<Pin<Box<dyn AsyncRead + Send + Sync>>>,
 
     // S3 will be used to read WAL if LSN is not available locally
-    wal_backup: Option<Arc<YbWalConn>>,
+    yb_wal: Option<Arc<YbWalConn>>,
 
     // We don't have WAL locally if LSN is less than local_start_lsn
     local_start_lsn: Lsn,
@@ -283,7 +283,7 @@ impl WalReader {
         timeline_dir: Utf8PathBuf,
         state: &TimelinePersistentState,
         start_pos: Lsn,
-        wal_backup: Option<Arc<YbWalConn>>,
+        yb_wal: Option<Arc<YbWalConn>>,
     ) -> Result<Self> {
         if state.server.wal_seg_size == 0 || state.local_start_lsn == Lsn(0) {
             bail!("state uninitialized, no data to read");
@@ -312,7 +312,7 @@ impl WalReader {
             wal_seg_size: state.server.wal_seg_size as usize,
             pos: start_pos,
             wal_segment: None,
-            wal_backup,
+            yb_wal,
             local_start_lsn: state.local_start_lsn,
             timeline_start_lsn: state.timeline_start_lsn,
             pg_version: PgMajorVersion::try_from(state.server.pg_version).unwrap(),
@@ -427,7 +427,7 @@ impl WalReader {
         // falling through to YB only on miss. This replaces the old
         // snapshot-at-open `VecAsyncRead` which silently lost data added
         // to `wals` after the segment was opened — see `wal_cache.rs`.
-        if let Some(yb_wal) = self.wal_backup.clone() {
+        if let Some(yb_wal) = self.yb_wal.clone() {
             tracing::info!(
                 "WalReader: serving segment {segno} (offset {xlogoff}) from YB table `{}` (cache {})",
                 yb_wal.table,
