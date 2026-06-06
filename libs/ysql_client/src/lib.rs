@@ -56,7 +56,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use metrics::{YB_CLIENT_ERRORS, YB_RETRIES_EXHAUSTED};
+use metrics::{YB_CLIENT_ERRORS, YB_QUERY_SECONDS, YB_RETRIES_EXHAUSTED};
 use yb_tokio_postgres::Statement;
 use yb_tokio_postgres::types::ToSql;
 
@@ -333,7 +333,12 @@ impl YsqlClient {
         if let Some(stmt) = guard.prepared.get(sql) {
             return Ok((client, stmt.clone()));
         }
-        let stmt = guard.client.prepare(sql).await?;
+        let started = std::time::Instant::now();
+        let res = guard.client.prepare(sql).await;
+        YB_QUERY_SECONDS
+            .with_label_values(&["prepare"])
+            .observe(started.elapsed().as_secs_f64());
+        let stmt = res?;
         guard.prepared.insert(sql.to_string(), stmt.clone());
         Ok((client, stmt))
     }
@@ -455,7 +460,12 @@ impl YsqlClient {
                     }
                 }
             };
-            match f(client.clone(), stmt).await {
+            let started = std::time::Instant::now();
+            let result = f(client.clone(), stmt).await;
+            YB_QUERY_SECONDS
+                .with_label_values(&[op_label])
+                .observe(started.elapsed().as_secs_f64());
+            match result {
                 Ok(v) => return Ok(v),
                 Err(e) => {
                     let class = classify_error(&e, client.is_closed());
