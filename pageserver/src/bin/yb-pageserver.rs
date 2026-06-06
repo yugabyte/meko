@@ -19,7 +19,6 @@ use nix::sys::socket::{setsockopt, sockopt};
 use pageserver::basebackup_cache::BasebackupCache;
 use pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
 use pageserver::controller_upcall_client::StorageControllerUpcallClient;
-use pageserver::deletion_queue::DeletionQueue;
 use pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
 use pageserver::page_service::GrpcPageServiceHandler;
 use pageserver::task_mgr::{BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME};
@@ -502,14 +501,6 @@ fn start_pageserver(
     let compute_page_store = BACKGROUND_RUNTIME.block_on(create_compute_page_store(conf))?;
     let fpu_page_store = BACKGROUND_RUNTIME.block_on(create_fpu_page_store(conf))?;
 
-    // Set up deletion queue
-    let (deletion_queue, deletion_workers) = DeletionQueue::new(
-        remote_storage.clone(),
-        StorageControllerUpcallClient::new(conf, &shutdown_pageserver),
-        conf,
-    );
-    deletion_workers.spawn_with(BACKGROUND_RUNTIME.handle());
-
     // Up to this point no significant I/O has been done: this should have been fast.  Record
     // duration prior to starting I/O intensive phase of startup.
     startup_checkpoint(started_startup_at, "initial", "Starting loading tenants");
@@ -542,7 +533,6 @@ fn start_pageserver(
         conf.basebackup_cache_dir(),
         conf.basebackup_cache_config.clone(),
     );
-    let deletion_queue_client = deletion_queue.new_client();
     let background_purges = mgr::BackgroundPurges::default();
 
     let tenant_manager = mgr::init(
@@ -550,7 +540,6 @@ fn start_pageserver(
         background_purges.clone(),
         TenantSharedResources {
             remote_storage: remote_storage.clone(),
-            deletion_queue_client,
             basebackup_cache: Arc::clone(&basebackup_cache),
             compute_page_store: compute_page_store.clone(),
             fpu_page_store: fpu_page_store.clone(),
@@ -661,7 +650,6 @@ fn start_pageserver(
                 tenant_manager.clone(),
                 http_auth.clone(),
                 remote_storage.clone(),
-                deletion_queue.new_client(),
             )
             .context("Failed to initialize router state")?,
         );
@@ -809,7 +797,6 @@ fn start_pageserver(
             metrics_collection_task,
             &tenant_manager,
             background_purges,
-            deletion_queue.clone(),
             0,
         )
         .await;

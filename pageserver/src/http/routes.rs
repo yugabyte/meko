@@ -53,7 +53,6 @@ use utils::lsn::Lsn;
 use crate::config::PageServerConf;
 use crate::context;
 use crate::context::{DownloadBehavior, RequestContext, RequestContextBuilder};
-use crate::deletion_queue::DeletionQueueClient;
 use crate::metrics::LOCAL_DATA_LOSS_SUSPECTED;
 use crate::pgdatadir_mapping::LsnForTimestamp;
 use crate::task_mgr::TaskKind;
@@ -91,7 +90,6 @@ pub struct State {
     auth: Option<Arc<SwappableJwtAuth>>,
     allowlist_routes: &'static [&'static str],
     remote_storage: GenericRemoteStorage,
-    deletion_queue_client: DeletionQueueClient,
     latest_utilization: tokio::sync::Mutex<Option<(std::time::Instant, bytes::Bytes)>>,
 }
 
@@ -101,7 +99,6 @@ impl State {
         tenant_manager: Arc<TenantManager>,
         auth: Option<Arc<SwappableJwtAuth>>,
         remote_storage: GenericRemoteStorage,
-        deletion_queue_client: DeletionQueueClient,
     ) -> anyhow::Result<Self> {
         let allowlist_routes = &[
             "/v1/status",
@@ -117,7 +114,6 @@ impl State {
             auth,
             allowlist_routes,
             remote_storage,
-            deletion_queue_client,
             latest_utilization: Default::default(),
         })
     }
@@ -1487,7 +1483,7 @@ async fn put_tenant_location_config_handler(
     if request_data.config.generation.is_none() {
         if let Err(e) = state
             .tenant_manager
-            .detach_tenant(conf, tenant_shard_id, &state.deletion_queue_client)
+            .detach_tenant(conf, tenant_shard_id)
             .instrument(info_span!("tenant_detach",
                 tenant_id = %tenant_shard_id,
                 shard_id = %tenant_shard_id.shard_slug()
@@ -1761,33 +1757,6 @@ async fn timeline_detach_ancestor_handler(
     )))
 }
 
-async fn deletion_queue_flush(
-    r: Request<Body>,
-    cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let state = get_state(&r);
-
-    let execute = parse_query_param(&r, "execute")?.unwrap_or(false);
-
-    let flush = async {
-        if execute {
-            state.deletion_queue_client.flush_execute().await
-        } else {
-            state.deletion_queue_client.flush().await
-        }
-    }
-    // DeletionQueueError's only case is shutting down.
-    .map_err(|_| ApiError::ShuttingDown);
-
-    tokio::select! {
-        res = flush => {
-            res.map(|()| json_response(StatusCode::OK, ()))?
-        }
-        _ = cancel.cancelled() => {
-            Err(ApiError::ShuttingDown)
-        }
-    }
-}
 
 async fn timeline_collect_keyspace(
     request: Request<Body>,
@@ -2702,9 +2671,6 @@ pub fn make_router(
         )
         .get("/v1/tenant/:tenant_id/scan_remote_storage", |r| {
             api_handler(r, tenant_scan_remote_handler)
-        })
-        .put("/v1/deletion_queue/flush", |r| {
-            api_handler(r, deletion_queue_flush)
         })
         .post("/v1/tenant/:tenant_shard_id/wait_lsn", |r| {
             api_handler(r, wait_lsn_handler)

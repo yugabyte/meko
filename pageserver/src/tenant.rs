@@ -68,7 +68,6 @@ use crate::config::PageServerConf;
 use crate::context;
 use crate::context::RequestContextBuilder;
 use crate::context::{DownloadBehavior, RequestContext};
-use crate::deletion_queue::{DeletionQueueClient, DeletionQueueError};
 use crate::metrics::{
     BROKEN_TENANTS_SET, CONCURRENT_INITDBS,
     INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME, TENANT, TENANT_OFFLOADED_TIMELINES,
@@ -128,7 +127,6 @@ pub const TIMELINES_SEGMENT_NAME: &str = "timelines";
 #[derive(Clone)]
 pub struct TenantSharedResources {
     pub remote_storage: GenericRemoteStorage,
-    pub deletion_queue_client: DeletionQueueClient,
     pub basebackup_cache: Arc<BasebackupCache>,
     /// Row-per-page YugabyteDB store dedicated to compute-facing
     /// reads (GetPage hot path: `PageWriter::scan_range` and
@@ -306,9 +304,6 @@ pub struct TenantShard {
 
     /// Provides access to timeline data sitting in the remote storage.
     pub(crate) remote_storage: GenericRemoteStorage,
-
-    /// Access to global deletion queue for when this tenant wants to schedule a deletion.
-    deletion_queue_client: DeletionQueueClient,
 
     /// A channel to send async requests to prepare a basebackup for the basebackup cache.
     basebackup_cache: Arc<BasebackupCache>,
@@ -1073,7 +1068,6 @@ impl TenantShard {
 
         let TenantSharedResources {
             remote_storage,
-            deletion_queue_client,
             basebackup_cache,
             compute_page_store,
             fpu_page_store,
@@ -1089,7 +1083,6 @@ impl TenantShard {
             Some(wal_redo_manager),
             tenant_shard_id,
             remote_storage.clone(),
-            deletion_queue_client,
             basebackup_cache,
             compute_page_store,
             fpu_page_store,
@@ -2944,7 +2937,6 @@ impl TenantShard {
         walredo_mgr: Option<Arc<WalRedoManager>>,
         tenant_shard_id: TenantId,
         remote_storage: GenericRemoteStorage,
-        deletion_queue_client: DeletionQueueClient,
         basebackup_cache: Arc<BasebackupCache>,
         compute_page_store: Arc<crate::page_store::PageStore>,
         fpu_page_store: Arc<crate::page_store::PageStore>,
@@ -3021,7 +3013,6 @@ impl TenantShard {
             gc_cs: tokio::sync::Mutex::new(()),
             walredo_mgr,
             remote_storage,
-            deletion_queue_client,
             state,
             activate_now_sem: tokio::sync::Semaphore::new(0),
             attach_wal_lag_cooldown: Arc::new(std::sync::OnceLock::new()),
@@ -3990,15 +3981,6 @@ impl TenantShard {
                     tracing::error!("unexpected join error: {e:?}");
                 }
             }
-        }
-
-        // The flushes we did above were just writes, but the TenantShard might have had
-        // pending deletions as well from recent compaction/gc: we want to flush those
-        // as well.  This requires flushing the global delete queue.  This is cheap
-        // because it's typically a no-op.
-        match self.deletion_queue_client.flush_execute().await {
-            Ok(_) => {}
-            Err(DeletionQueueError::ShuttingDown) => {}
         }
 
         Ok(())

@@ -7,7 +7,6 @@ pub mod basebackup_cache;
 pub mod config;
 pub mod context;
 pub mod controller_upcall_client;
-pub mod deletion_queue;
 
 pub mod http;
 pub mod import_datadir;
@@ -36,7 +35,6 @@ pub mod walingest;
 pub mod walredo;
 
 use camino::Utf8Path;
-use deletion_queue::DeletionQueue;
 use postgres_ffi::PgMajorVersion;
 use tenant::mgr::{BackgroundPurges, TenantManager};
 use tracing::{info, info_span};
@@ -89,7 +87,6 @@ pub async fn shutdown_pageserver(
     metrics_collection_task: MetricsCollectionTask,
     tenant_manager: &TenantManager,
     background_purges: BackgroundPurges,
-    mut deletion_queue: DeletionQueue,
     exit_code: i32,
 ) {
     use std::time::Duration;
@@ -204,9 +201,6 @@ pub async fn shutdown_pageserver(
         Duration::from_secs(1),
     )
     .await;
-
-    // Best effort to persist any outstanding deletions, to avoid leaking objects
-    deletion_queue.shutdown(Duration::from_secs(5)).await;
 
     // HADRON
     timed(

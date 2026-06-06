@@ -34,7 +34,6 @@ use crate::context::{DownloadBehavior, RequestContext};
 use crate::controller_upcall_client::{
     RetryForeverError, StorageControllerUpcallApi, StorageControllerUpcallClient,
 };
-use crate::deletion_queue::DeletionQueueClient;
 use crate::http::routes::ACTIVE_TENANT_TIMEOUT;
 use crate::metrics::{LOCAL_DATA_LOSS_SUSPECTED, TENANT, TENANT_MANAGER as METRICS};
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind};
@@ -307,19 +306,6 @@ async fn init_load_generations(
             }
         }
     };
-
-    // The deletion queue needs to know about the startup attachment state to decide which (if any) stored
-    // deletion list entries may still be valid.  We provide that by pushing a recovery operation into
-    // the queue. Sequential processing of te queue ensures that recovery is done before any new tenant deletions
-    // are processed, even though we don't block on recovery completing here.
-    let attached_tenants = generations
-        .iter()
-        .map(|(id, start_mode)| {
-            let TenantStartupMode::Attached(generation) = start_mode;
-            (*id, *generation)
-        })
-        .collect();
-    resources.deletion_queue_client.recover(attached_tenants)?;
 
     Ok(Some(generations))
 }
@@ -846,9 +832,6 @@ impl TenantManager {
                 // if we see an attached tenant we know it will be discarded and should be
                 // shut down.
                 let (_guard, progress) = utils::completion::channel();
-                // Before we leave our state as the presumed holder of the latest generation,
-                // flush any outstanding deletions to reduce the risk of leaking objects.
-                self.resources.deletion_queue_client.flush_advisory();
 
                 info!("Shutting down attached tenant");
                 match tenant.shutdown(progress, ShutdownMode::Hard).await {
@@ -1384,10 +1367,9 @@ impl TenantManager {
         &self,
         conf: &'static PageServerConf,
         tenant_shard_id: TenantId,
-        deletion_queue_client: &DeletionQueueClient,
     ) -> Result<(), TenantStateError> {
         if let Some(tmp_path) = self
-            .detach_tenant0(conf, tenant_shard_id, deletion_queue_client)
+            .detach_tenant0(conf, tenant_shard_id)
             .await?
         {
             self.background_purges.spawn(tmp_path);
@@ -1402,7 +1384,6 @@ impl TenantManager {
         &self,
         conf: &'static PageServerConf,
         tenant_shard_id: TenantId,
-        deletion_queue_client: &DeletionQueueClient,
     ) -> Result<Option<Utf8PathBuf>, TenantStateError> {
         let tenant_dir_rename_operation = |tenant_id_to_clean: TenantId| async move {
             let local_tenant_directory = conf.tenant_path(&tenant_id_to_clean);
@@ -1438,10 +1419,6 @@ impl TenantManager {
                 .await
                 .map_err(TenantStateError::Other);
         }
-
-        // Flush pending deletions, so that they have a good chance of passing validation
-        // before this tenant is potentially re-attached elsewhere.
-        deletion_queue_client.flush_advisory();
 
         removal_result
     }
