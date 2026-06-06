@@ -437,8 +437,14 @@ pub struct Timeline {
     pub(crate) cancel: CancellationToken,
 
     // timeline_manager controlled state
+    /// True iff the timeline is doing useful work: has live computes,
+    /// is mid-flush, or the pageserver's `remote_consistent_lsn` is
+    /// behind `flush_lsn`. Drives `safekeeper_active_timelines` +
+    /// the `safekeeper_timeline_active` gauge. Naming inherited from
+    /// upstream Neon's "is this timeline in the broker active set"
+    /// flag — yb-light has no broker, but the activity-tracking
+    /// semantics are still meaningful.
     pub(crate) broker_active: AtomicBool,
-    pub(crate) wal_backup_active: AtomicBool,
     pub(crate) last_removed_segno: AtomicU64,
     pub(crate) mgr_status: AtomicStatus,
 }
@@ -481,7 +487,6 @@ impl Timeline {
             manager_ctl: ManagerCtl::new(),
             conf,
             broker_active: AtomicBool::new(false),
-            wal_backup_active: AtomicBool::new(false),
             last_removed_segno: AtomicU64::new(0),
             mgr_status: AtomicStatus::new(),
             yb_wal,
@@ -804,7 +809,6 @@ impl Timeline {
             ps_feedback_count: ps_feedback_counter,
             ps_corruption_detected,
             last_ps_feedback,
-            wal_backup_active: self.wal_backup_active.load(Ordering::Relaxed),
             timeline_is_active: self.broker_active.load(Ordering::Relaxed),
             num_computes: self.walreceivers.get_num() as u32,
             last_removed_segno: self.last_removed_segno.load(Ordering::Relaxed),
@@ -828,7 +832,6 @@ impl Timeline {
             is_cancelled: self.is_cancelled(),
             peers_info_len: state.peers_info.0.len(),
             walsenders: self.walsenders.get_all_public(),
-            wal_backup_active: self.wal_backup_active.load(Ordering::Relaxed),
             active: self.broker_active.load(Ordering::Relaxed),
             num_computes: self.walreceivers.get_num() as u32,
             last_removed_segno: self.last_removed_segno.load(Ordering::Relaxed),

@@ -160,7 +160,6 @@ pub struct Memory {
     pub is_cancelled: bool,
     pub peers_info_len: usize,
     pub walsenders: Vec<WalSenderState>,
-    pub wal_backup_active: bool,
     pub active: bool,
     pub num_computes: u32,
     pub last_removed_segno: XLogSegNo,

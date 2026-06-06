@@ -454,7 +454,6 @@ pub struct FullTimelineInfo {
     pub ps_feedback_count: u64,
     pub ps_corruption_detected: bool,
     pub last_ps_feedback: PageserverFeedback,
-    pub wal_backup_active: bool,
     pub timeline_is_active: bool,
     pub num_computes: u32,
     pub last_removed_segno: XLogSegNo,
@@ -483,7 +482,6 @@ pub struct TimelineCollector {
     ps_feedback_count: GenericGaugeVec<AtomicU64>,
     ps_corruption_detected: IntGaugeVec,
     timeline_active: GenericGaugeVec<AtomicU64>,
-    wal_backup_active: GenericGaugeVec<AtomicU64>,
     connected_computes: IntGaugeVec,
     disk_usage: GenericGaugeVec<AtomicU64>,
     acceptor_term: GenericGaugeVec<AtomicU64>,
@@ -598,16 +596,6 @@ impl TimelineCollector {
         .unwrap();
         descs.extend(timeline_active.desc().into_iter().cloned());
 
-        let wal_backup_active = GenericGaugeVec::new(
-            Opts::new(
-                "safekeeper_wal_backup_active",
-                "Reports 1 for timelines with active WAL backup, 0 otherwise",
-            ),
-            &["tenant_id", "timeline_id"],
-        )
-        .unwrap();
-        descs.extend(wal_backup_active.desc().into_iter().cloned());
-
         let connected_computes = IntGaugeVec::new(
             Opts::new(
                 "safekeeper_connected_computes",
@@ -709,7 +697,6 @@ impl TimelineCollector {
             ps_feedback_count,
             ps_corruption_detected,
             timeline_active,
-            wal_backup_active,
             connected_computes,
             disk_usage,
             acceptor_term,
@@ -742,7 +729,6 @@ impl Collector for TimelineCollector {
         self.feedback_last_time_seconds.reset();
         self.ps_feedback_count.reset();
         self.timeline_active.reset();
-        self.wal_backup_active.reset();
         self.connected_computes.reset();
         self.disk_usage.reset();
         self.acceptor_term.reset();
@@ -795,9 +781,6 @@ impl Collector for TimelineCollector {
             self.timeline_active
                 .with_label_values(labels)
                 .set(tli.timeline_is_active as u64);
-            self.wal_backup_active
-                .with_label_values(labels)
-                .set(tli.wal_backup_active as u64);
             self.connected_computes
                 .with_label_values(labels)
                 .set(tli.num_computes as i64);
@@ -860,7 +843,6 @@ impl Collector for TimelineCollector {
         mfs.extend(self.ps_feedback_count.collect());
         mfs.extend(self.ps_corruption_detected.collect());
         mfs.extend(self.timeline_active.collect());
-        mfs.extend(self.wal_backup_active.collect());
         mfs.extend(self.connected_computes.collect());
         mfs.extend(self.disk_usage.collect());
         mfs.extend(self.acceptor_term.collect());
