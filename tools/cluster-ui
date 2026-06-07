@@ -1,0 +1,530 @@
+#!/usr/bin/env python3
+#
+# Standalone diagnostic UI for a local `neon_local` yb-light cluster.
+#
+# Serves a single web page that shows, at a glance:
+#   - service health (storage controller, pageservers, safekeepers,
+#     endpoint storage)
+#   - pageserver nodes the storage controller knows about
+#   - tenants + their timelines (with the load-bearing LSNs:
+#     last_record_lsn, disk_consistent_lsn, remote_consistent_lsn, ...)
+#   - safekeepers + their timelines (commit/flush LSNs)
+#   - compute endpoints (from .neon/endpoints/*/endpoint.json) and
+#     whether their compute_ctl is responding
+#
+# It runs its own tiny aggregating web server, so the browser only ever
+# talks to this one origin — no CORS headers are needed on the storage
+# services themselves. The server reaches out to each service's HTTP API
+# and merges the results into /api/data (JSON), which the page polls.
+#
+# Usage:
+#   tools/cluster-ui                 # serve on 127.0.0.1:9000, repo .neon
+#   tools/cluster-ui --port 9001
+#   tools/cluster-ui --repo-dir /path/to/.neon
+#   tools/cluster-ui --once          # print the aggregated JSON and exit
+#
+# Stdlib only; works on Python 3.8+. No build step, no dependencies.
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.request
+import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+HTTP_TIMEOUT = 2.0  # seconds; the cluster is local, keep the UI snappy
+
+
+def http_get_json(url):
+    """GET a URL and parse JSON. Returns (data, error_string)."""
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            body = resp.read()
+        if not body:
+            return (None, None)
+        return (json.loads(body.decode("utf-8")), None)
+    except urllib.error.HTTPError as e:
+        return (None, f"HTTP {e.code}")
+    except urllib.error.URLError as e:
+        return (None, f"{e.reason}")
+    except Exception as e:  # noqa: BLE001 - surface anything in the UI
+        return (None, str(e))
+
+
+# --------------------------------------------------------------------------
+# Discovery: learn service addresses from the .neon repo dir.
+# --------------------------------------------------------------------------
+
+def discover(repo_dir):
+    """Inspect the .neon repo dir and return a topology dict."""
+    cfg_path = os.path.join(repo_dir, "config")
+    cfg_text = ""
+    try:
+        with open(cfg_path, "r") as f:
+            cfg_text = f.read()
+    except OSError:
+        pass
+
+    # Storage controller URL is the host:port of control_plane_api.
+    sc_url = "http://127.0.0.1:1234"
+    m = re.search(r'control_plane_api\s*=\s*"([^"]+)"', cfg_text)
+    if m:
+        u = urlparse(m.group(1))
+        if u.scheme and u.netloc:
+            sc_url = f"{u.scheme}://{u.netloc}"
+
+    # Pageservers: read each pageserver_*/pageserver.toml directly so we can
+    # query tenants/timelines even if the storage controller is down.
+    pageservers = []
+    for name in sorted(os.listdir(repo_dir)) if os.path.isdir(repo_dir) else []:
+        if not name.startswith("pageserver_"):
+            continue
+        toml = os.path.join(repo_dir, name, "pageserver.toml")
+        try:
+            with open(toml, "r") as f:
+                t = f.read()
+        except OSError:
+            continue
+        hm = re.search(r'listen_http_addr\s*=\s*"([^"]+)"', t)
+        # The node id isn't in pageserver.toml; it's the dir suffix
+        # (pageserver_<id>), with `id = N` in the toml as a fallback.
+        im = re.search(r'^\s*id\s*=\s*(\d+)', t, re.MULTILINE)
+        dm = re.search(r'pageserver_(\d+)$', name)
+        node_id = int(dm.group(1)) if dm else (int(im.group(1)) if im else None)
+        if hm:
+            pageservers.append({"id": node_id, "http": f"http://{hm.group(1)}"})
+
+    # Safekeepers: parse the [[safekeepers]] blocks from .neon/config.
+    safekeepers = []
+    for block in cfg_text.split("[[safekeepers]]")[1:]:
+        # Stop at the next top-level table header.
+        block = block.split("\n[", 1)[0]
+        idm = re.search(r'\bid\s*=\s*(\d+)', block)
+        hm = re.search(r'\bhttp_port\s*=\s*(\d+)', block)
+        if hm:
+            safekeepers.append({"id": int(idm.group(1)) if idm else None,
+                                "http": f"http://127.0.0.1:{hm.group(1)}"})
+    if not safekeepers:
+        safekeepers.append({"id": 1, "http": "http://127.0.0.1:7676"})
+
+    # Endpoint storage listen_addr.
+    es_url = "http://127.0.0.1:9993"
+    em = re.search(r'\[endpoint_storage\][^\[]*?listen_addr\s*=\s*"([^"]+)"',
+                   cfg_text, re.DOTALL)
+    if em:
+        es_url = f"http://{em.group(1)}"
+
+    # Compute endpoints from disk.
+    endpoints = []
+    ep_dir = os.path.join(repo_dir, "endpoints")
+    if os.path.isdir(ep_dir):
+        for name in sorted(os.listdir(ep_dir)):
+            j = os.path.join(ep_dir, name, "endpoint.json")
+            try:
+                with open(j, "r") as f:
+                    endpoints.append(json.load(f))
+            except OSError:
+                continue
+            except json.JSONDecodeError:
+                continue
+
+    return {
+        "repo_dir": os.path.abspath(repo_dir),
+        "storage_controller": sc_url,
+        "pageservers": pageservers or [{"id": 1, "http": "http://127.0.0.1:9898"}],
+        "safekeepers": safekeepers,
+        "endpoint_storage": es_url,
+        "endpoints": endpoints,
+    }
+
+
+# --------------------------------------------------------------------------
+# Aggregation: hit the live APIs and merge.
+# --------------------------------------------------------------------------
+
+def collect(repo_dir):
+    topo = discover(repo_dir)
+    services = []
+
+    # Storage controller.
+    sc = topo["storage_controller"]
+    sc_status, sc_err = http_get_json(f"{sc}/status")
+    services.append({"name": "storage-controller", "kind": "storage_controller",
+                     "url": sc, "up": sc_err is None, "detail": sc_err})
+
+    nodes, nodes_err = http_get_json(f"{sc}/control/v1/node")
+    sc_sks, _ = http_get_json(f"{sc}/control/v1/safekeeper")
+
+    # Pageservers + their tenants/timelines.
+    tenants = []
+    for ps in topo["pageservers"]:
+        st, err = http_get_json(f"{ps['http']}/v1/status")
+        services.append({"name": f"pageserver-{ps['id']}", "kind": "pageserver",
+                         "url": ps["http"], "up": err is None, "detail": err,
+                         "info": st})
+        if err is not None:
+            continue
+        tlist, terr = http_get_json(f"{ps['http']}/v1/tenant")
+        for t in (tlist or []):
+            tid = t.get("id") or t.get("tenant_id")
+            timelines = []
+            if tid:
+                tl, _ = http_get_json(f"{ps['http']}/v1/tenant/{tid}/timeline")
+                timelines = tl or []
+            tenants.append({"pageserver": ps["id"], "tenant": t,
+                            "timelines": timelines})
+
+    # Safekeepers + their timelines.
+    safekeepers = []
+    for sk in topo["safekeepers"]:
+        st, err = http_get_json(f"{sk['http']}/v1/status")
+        services.append({"name": f"safekeeper-{sk['id']}", "kind": "safekeeper",
+                         "url": sk["http"], "up": err is None, "detail": err,
+                         "info": st})
+        tl = []
+        if err is None:
+            tl, _ = http_get_json(f"{sk['http']}/v1/tenant/timeline")
+        safekeepers.append({"id": sk["id"], "url": sk["http"], "up": err is None,
+                            "timelines": tl or []})
+
+    # Endpoint storage.
+    es = topo["endpoint_storage"]
+    _, es_err = http_get_json(f"{es}/status")
+    services.append({"name": "endpoint-storage", "kind": "endpoint_storage",
+                     "url": es, "up": es_err is None, "detail": es_err})
+
+    # Compute endpoints: ping each one's external http port /status.
+    endpoints = []
+    for ep in topo["endpoints"]:
+        port = ep.get("external_http_port")
+        running = False
+        cdetail = None
+        if port:
+            info, cerr = http_get_json(f"http://127.0.0.1:{port}/status")
+            running = cerr is None
+            cdetail = cerr if cerr else (info.get("status") if isinstance(info, dict) else None)
+        endpoints.append({**ep, "running": running, "compute_detail": cdetail})
+
+    return {
+        "topology": topo,
+        "services": services,
+        "nodes": nodes or [],
+        "nodes_error": nodes_err,
+        "sc_safekeepers": sc_sks or [],
+        "tenants": tenants,
+        "safekeepers": safekeepers,
+        "endpoints": endpoints,
+    }
+
+
+# --------------------------------------------------------------------------
+# Web server.
+# --------------------------------------------------------------------------
+
+INDEX_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yb-light cluster</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --fg:#e6e9ef; --muted:#9aa3b2; --accent:#6ea8fe; --green:#3fb950;
+    --red:#f85149; --amber:#d29922; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:14px 20px;
+           border-bottom:1px solid var(--line); background:var(--panel);
+           position:sticky; top:0; z-index:5; }
+  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.3px; }
+  header .repo { color:var(--muted); font:12px var(--mono); }
+  header .spacer { flex:1; }
+  header .updated { color:var(--muted); font-size:12px; }
+  button { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+           border-radius:6px; padding:6px 12px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--accent); }
+  main { padding:20px; max-width:1200px; margin:0 auto; }
+  section { margin-bottom:26px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.6px;
+       color:var(--muted); margin:0 0 10px; border-bottom:1px solid var(--line);
+       padding-bottom:6px; }
+  .cards { display:flex; flex-wrap:wrap; gap:10px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+          padding:12px 14px; min-width:190px; }
+  .card .svc { display:flex; align-items:center; gap:8px; font-weight:600; }
+  .card .url { color:var(--muted); font:12px var(--mono); margin-top:4px;
+               word-break:break-all; }
+  .card .err { color:var(--red); font:12px var(--mono); margin-top:4px; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .dot.up { background:var(--green); box-shadow:0 0 6px var(--green); }
+  .dot.down { background:var(--red); }
+  table { width:100%; border-collapse:collapse; background:var(--panel);
+          border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line);
+          font-size:13px; vertical-align:top; }
+  th { color:var(--muted); font-weight:600; background:var(--panel2);
+       text-transform:uppercase; font-size:11px; letter-spacing:.4px; }
+  tr:last-child td { border-bottom:none; }
+  td.mono, .mono { font-family:var(--mono); font-size:12px; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
+          border:1px solid var(--line); color:var(--muted); }
+  .pill.ok { color:var(--green); border-color:var(--green); }
+  .pill.bad { color:var(--red); border-color:var(--red); }
+  .pill.warn { color:var(--amber); border-color:var(--amber); }
+  .tenant { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+            margin-bottom:12px; }
+  .tenant > .head { padding:10px 14px; display:flex; gap:12px; align-items:center;
+                    border-bottom:1px solid var(--line); }
+  .tenant .tid { font-family:var(--mono); font-size:12px; }
+  .empty { color:var(--muted); font-style:italic; padding:8px 2px; }
+  details { margin-top:6px; }
+  summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  pre { background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+        padding:10px; overflow:auto; font:12px var(--mono); margin:6px 0 0; }
+  .banner { background:#3a1d1d; border:1px solid var(--red); color:#ffd7d5;
+            padding:10px 14px; border-radius:8px; margin-bottom:18px; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>yb-light cluster</h1>
+  <span class="repo" id="repo"></span>
+  <span class="spacer"></span>
+  <span class="updated" id="updated"></span>
+  <label style="font-size:12px;color:var(--muted)">
+    <input type="checkbox" id="auto" checked> auto-refresh
+  </label>
+  <button onclick="load()">Refresh</button>
+</header>
+<main>
+  <div class="banner" id="banner"></div>
+  <section><h2>Services</h2><div class="cards" id="services"></div></section>
+  <section><h2>Pageserver nodes (storage controller)</h2><div id="nodes"></div></section>
+  <section><h2>Tenants &amp; timelines</h2><div id="tenants"></div></section>
+  <section><h2>Safekeepers</h2><div id="safekeepers"></div></section>
+  <section><h2>Compute endpoints</h2><div id="endpoints"></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const mono = (s) => `<span class="mono">${esc(s)}</span>`;
+
+// Pull the first present key from an object.
+function pick(o, keys) {
+  for (const k of keys) if (o && o[k] !== undefined && o[k] !== null) return o[k];
+  return undefined;
+}
+
+function rawDetails(label, obj) {
+  return `<details><summary>${esc(label)}</summary><pre>${esc(JSON.stringify(obj, null, 2))}</pre></details>`;
+}
+
+function renderServices(svcs) {
+  $("services").innerHTML = svcs.map(s => `
+    <div class="card">
+      <div class="svc"><span class="dot ${s.up?'up':'down'}"></span>${esc(s.name)}</div>
+      <div class="url">${esc(s.url)}</div>
+      ${s.up ? '' : `<div class="err">${esc(s.detail||'unreachable')}</div>`}
+    </div>`).join("");
+}
+
+function table(headers, rows) {
+  if (!rows.length) return `<div class="empty">none</div>`;
+  return `<table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+function renderNodes(nodes, err) {
+  if (err) { $("nodes").innerHTML = `<div class="empty">storage controller unreachable: ${esc(err)}</div>`; return; }
+  const rows = nodes.map(n => [
+    mono(pick(n,['id','node_id'])),
+    esc(pick(n,['listen_http_addr'])||'') + ':' + esc(pick(n,['listen_http_port'])||''),
+    mono(esc(pick(n,['listen_pg_addr'])||'') + ':' + esc(pick(n,['listen_pg_port'])||'')),
+    `<span class="pill ${/active|available/i.test(pick(n,['availability'])||'')?'ok':'warn'}">${esc(pick(n,['availability'])||'?')}</span>`,
+    esc(pick(n,['scheduling'])||'-'),
+  ]);
+  $("nodes").innerHTML = table(["id","http","libpq","availability","scheduling"], rows);
+}
+
+function lsnCols(tl) {
+  // Common LSN fields on a pageserver timeline detail.
+  return {
+    last_record_lsn: pick(tl,['last_record_lsn']),
+    disk_consistent_lsn: pick(tl,['disk_consistent_lsn']),
+    remote_consistent_lsn: pick(tl,['remote_consistent_lsn']),
+    ancestor_lsn: pick(tl,['ancestor_lsn']),
+  };
+}
+
+function renderTenants(tenants) {
+  if (!tenants.length) { $("tenants").innerHTML = `<div class="empty">no tenants attached</div>`; return; }
+  $("tenants").innerHTML = tenants.map(entry => {
+    const t = entry.tenant;
+    const tid = pick(t,['id','tenant_id']);
+    const state = pick(t,['state']);
+    const stateStr = (typeof state === 'object') ? pick(state,['slug','Attached','state']) || JSON.stringify(state) : state;
+    const rows = entry.timelines.map(tl => {
+      const l = lsnCols(tl);
+      return [
+        mono(pick(tl,['timeline_id'])),
+        mono(l.last_record_lsn||'-'),
+        mono(l.disk_consistent_lsn||'-'),
+        mono(l.remote_consistent_lsn||'-'),
+        mono(l.ancestor_lsn && l.ancestor_lsn!=="0/0" ? l.ancestor_lsn : '-'),
+        rawDetails("raw", tl),
+      ];
+    });
+    return `<div class="tenant">
+      <div class="head">
+        <span class="tid">${esc(tid)}</span>
+        <span class="pill ${/active/i.test(stateStr||'')?'ok':'warn'}">${esc(stateStr||'?')}</span>
+        <span class="pill">ps ${esc(entry.pageserver)}</span>
+        <span class="pill">${entry.timelines.length} timeline(s)</span>
+      </div>
+      <div style="padding:10px 14px">
+        ${table(["timeline","last_record","disk_consistent","remote_consistent","ancestor",""], rows)}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderSafekeepers(sks) {
+  $("safekeepers").innerHTML = sks.map(sk => {
+    const rows = sk.timelines.map(tl => [
+      mono(pick(tl,['tenant_id'])),
+      mono(pick(tl,['timeline_id'])),
+      mono(pick(tl,['flush_lsn'])||'-'),
+      mono(pick(tl,['commit_lsn'])||'-'),
+      mono(pick(tl,['remote_consistent_lsn'])||'-'),
+    ]);
+    return `<div class="tenant">
+      <div class="head">
+        <span class="dot ${sk.up?'up':'down'}"></span>
+        <span>safekeeper ${esc(sk.id)}</span>
+        <span class="repo mono">${esc(sk.url)}</span>
+        <span class="pill">${sk.timelines.length} timeline(s)</span>
+      </div>
+      <div style="padding:10px 14px">
+        ${table(["tenant","timeline","flush_lsn","commit_lsn","remote_consistent",], rows)}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderEndpoints(eps) {
+  if (!eps.length) { $("endpoints").innerHTML = `<div class="empty">no endpoints created (cargo neon endpoint create &lt;name&gt;)</div>`; return; }
+  const rows = eps.map(ep => [
+    esc(ep.endpoint_id),
+    `<span class="pill ${ep.running?'ok':'bad'}">${ep.running?'running':'stopped'}</span>`,
+    esc(ep.mode||'-'),
+    mono(ep.tenant_id),
+    mono(ep.timeline_id),
+    mono('127.0.0.1:'+ep.pg_port),
+    mono(ep.external_http_port),
+  ]);
+  $("endpoints").innerHTML = table(
+    ["endpoint","compute","mode","tenant","timeline","libpq","http"], rows);
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/data", {cache:"no-store"});
+    const d = await r.json();
+    $("banner").style.display = "none";
+    $("repo").textContent = d.topology.repo_dir;
+    renderServices(d.services);
+    renderNodes(d.nodes, d.nodes_error);
+    renderTenants(d.tenants);
+    renderSafekeepers(d.safekeepers);
+    renderEndpoints(d.endpoints);
+    $("updated").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    $("banner").style.display = "block";
+    $("banner").textContent = "Failed to load /api/data: " + e;
+  }
+}
+
+let timer = null;
+function tick() {
+  if ($("auto").checked) load();
+  timer = setTimeout(tick, 4000);
+}
+load(); tick();
+</script>
+</body>
+</html>
+"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    repo_dir = ".neon"
+
+    def _send(self, code, body, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/" or self.path.startswith("/index"):
+            self._send(200, INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path.startswith("/api/data"):
+            try:
+                data = collect(self.repo_dir)
+                body = json.dumps(data).encode("utf-8")
+                self._send(200, body, "application/json")
+            except Exception as e:  # noqa: BLE001
+                body = json.dumps({"error": str(e)}).encode("utf-8")
+                self._send(500, body, "application/json")
+        else:
+            self._send(404, b"not found", "text/plain")
+
+    def log_message(self, fmt, *args):  # quieter logs
+        pass
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Standalone yb-light cluster UI")
+    ap.add_argument("--repo-dir", default=os.environ.get("NEON_REPO_DIR", ".neon"),
+                    help="path to the .neon repo dir (default: .neon)")
+    ap.add_argument("--host", default="127.0.0.1")
+    # 9099 by default: 9000 is YugabyteDB's tserver web UI, 7000 the master UI.
+    ap.add_argument("--port", type=int, default=9099)
+    ap.add_argument("--once", action="store_true",
+                    help="print aggregated JSON once and exit")
+    args = ap.parse_args()
+
+    if not os.path.isdir(args.repo_dir):
+        print(f"repo dir {args.repo_dir!r} not found; pass --repo-dir", file=sys.stderr)
+        sys.exit(1)
+
+    if args.once:
+        json.dump(collect(args.repo_dir), sys.stdout, indent=2)
+        print()
+        return
+
+    Handler.repo_dir = args.repo_dir
+    try:
+        httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as e:
+        print(f"could not bind {args.host}:{args.port} ({e}); "
+              f"pick another with --port", file=sys.stderr)
+        sys.exit(1)
+    httpd.daemon_threads = True
+    print(f"yb-light cluster UI → http://{args.host}:{args.port}  (repo {os.path.abspath(args.repo_dir)})")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
