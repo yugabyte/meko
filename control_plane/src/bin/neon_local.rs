@@ -25,7 +25,7 @@ use control_plane::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointSto
 use control_plane::local_env;
 use control_plane::local_env::{
     EndpointStorageConf, InitForceMode, LocalEnv, NeonLocalInitConf, NeonLocalInitPageserverConf,
-    SafekeeperConf,
+    NeonStorageControllerConf, SafekeeperConf,
 };
 use control_plane::pageserver::PageServerNode;
 use control_plane::safekeeper::SafekeeperNode;
@@ -68,6 +68,27 @@ const DEFAULT_PG_VERSION: PgMajorVersion = PgMajorVersion::PG17;
 const DEFAULT_PG_VERSION_NUM: &str = "17";
 
 const DEFAULT_PAGESERVER_CONTROL_PLANE_API: &str = "http://127.0.0.1:1234/upcall/v1/";
+
+const DEFAULT_YB_HOST: &str = "127.0.0.1";
+const DEFAULT_YB_PORT: u16 = 5433;
+const DEFAULT_YB_USER: &str = "yugabyte";
+const DEFAULT_YB_DBNAME: &str = "yb_storage";
+
+/// Build a `YbStoreConfig` TOML inline table targeting `table_name` in the
+/// dev cluster's YB. Consumed verbatim as the pageserver `remote_storage`
+/// override and the safekeeper `--wal-yb-config` argument.
+fn default_yb_store_inline_table(table_name: &str) -> String {
+    format!(
+        "{{ host = '{DEFAULT_YB_HOST}', port = {DEFAULT_YB_PORT}, \
+         user = '{DEFAULT_YB_USER}', dbname = '{DEFAULT_YB_DBNAME}', \
+         table_name = '{table_name}' }}"
+    )
+}
+
+/// `storage_controller.database_url` for the dev cluster's YB.
+fn default_storage_controller_database_url() -> String {
+    format!("postgresql://{DEFAULT_YB_USER}@{DEFAULT_YB_HOST}:{DEFAULT_YB_PORT}/{DEFAULT_YB_DBNAME}")
+}
 
 /// Neon CLI.
 #[derive(clap::Parser)]
@@ -983,6 +1004,8 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 id: DEFAULT_SAFEKEEPER_ID,
                 pg_port: DEFAULT_SAFEKEEPER_PG_PORT,
                 http_port: DEFAULT_SAFEKEEPER_HTTP_PORT,
+                // Mirror live WAL into yb_storage.public.wals.
+                wal_yb_config: Some(default_yb_store_inline_table("wals")),
                 ..Default::default()
             }],
             pageservers: (0..args.num_pageservers.unwrap_or(1))
@@ -1000,7 +1023,8 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                         pg_auth_type: AuthType::Trust,
                         http_auth_type: AuthType::Trust,
                         grpc_auth_type: AuthType::Trust,
-                        remote_storage: None,
+                        // Relfile/layer objects live in yb_storage.public.blobs.
+                        remote_storage: Some(default_yb_store_inline_table("blobs")),
                         other: Default::default(),
                         // Typical developer machines use disks with slow fsync, and we don't care
                         // about data integrity: disable disk syncs.
@@ -1015,7 +1039,11 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
             pg_distrib_dir: None,
             neon_distrib_dir: None,
             default_tenant_id: TenantId::from_array(std::array::from_fn(|_| 0)),
-            storage_controller: None,
+            storage_controller: Some(NeonStorageControllerConf {
+                // Provision the storage_controller + yb_storage DBs in YB.
+                database_url: Some(default_storage_controller_database_url()),
+                ..Default::default()
+            }),
             control_plane_hooks_api: None,
             use_local_tls: false,
         }

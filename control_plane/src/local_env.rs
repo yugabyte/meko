@@ -144,6 +144,7 @@ pub struct NeonLocalInitConf {
     pub endpoint_storage: EndpointStorageConf,
     pub control_plane_api: Option<Url>,
     pub control_plane_hooks_api: Option<Url>,
+    #[serde(default)]
     pub use_local_tls: bool,
 }
 
