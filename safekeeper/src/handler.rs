@@ -18,10 +18,10 @@ use safekeeper_api::models::ConnectionId;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{Instrument, debug, info, info_span};
 use utils::auth::{Claims, JwtAuth, Scope};
+use utils::id::{ShardCount, ShardNumber};
 use utils::id::{TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
 use utils::postgres_client::PostgresClientProtocol;
-use utils::id::{ShardCount, ShardNumber};
 
 use crate::auth::check_permission;
 use crate::metrics::{PG_QUERIES_GAUGE, TrafficMetrics};
@@ -216,10 +216,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                 // path enforce the requirement when it actually
                 // needs the shard identity to filter records.
                 // START_WAL_PUSH never reads `self.shard`.
-                if shard_count.is_some()
-                    || shard_number.is_some()
-                    || shard_stripe_size.is_some()
-                {
+                if shard_count.is_some() || shard_number.is_some() || shard_stripe_size.is_some() {
                     match (shard_count, shard_number, shard_stripe_size) {
                         (Some(count), Some(number), Some(stripe_size)) => {
                             let params = ShardParameters {
@@ -389,10 +386,11 @@ impl SafekeeperPostgresHandler {
         // yb-light only supports the Interpreted protocol; default if
         // the client didn't specify one (older clients that used to
         // default to Vanilla now get Interpreted instead).
-        self.protocol.unwrap_or(PostgresClientProtocol::Interpreted {
-            format: utils::postgres_client::InterpretedFormat::Protobuf,
-            compression: None,
-        })
+        self.protocol
+            .unwrap_or(PostgresClientProtocol::Interpreted {
+                format: utils::postgres_client::InterpretedFormat::Protobuf,
+                compression: None,
+            })
     }
 
     // when accessing management api supply None as an argument

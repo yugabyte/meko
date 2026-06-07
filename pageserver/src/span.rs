@@ -10,8 +10,7 @@ mod extractors {
 #[track_caller]
 pub(crate) fn debug_assert_current_span_has_tenant_id() {
     if cfg!(debug_assertions) {
-        if let Err(missing) = check_fields_present!([&extractors::TENANT_ID])
-        {
+        if let Err(missing) = check_fields_present!([&extractors::TENANT_ID]) {
             panic!("missing extractors: {missing:?}")
         }
     }
@@ -20,10 +19,9 @@ pub(crate) fn debug_assert_current_span_has_tenant_id() {
 #[track_caller]
 pub(crate) fn debug_assert_current_span_has_tenant_and_timeline_id() {
     if cfg!(debug_assertions) {
-        if let Err(missing) = check_fields_present!([
-            &extractors::TENANT_ID,
-            &extractors::TIMELINE_ID,
-        ]) {
+        if let Err(missing) =
+            check_fields_present!([&extractors::TENANT_ID, &extractors::TIMELINE_ID,])
+        {
             panic!("missing extractors: {missing:?}")
         }
     }

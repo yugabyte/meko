@@ -315,7 +315,6 @@ impl TimelineMetadata {
     pub fn pg_version(&self) -> PgMajorVersion {
         self.body.pg_version
     }
-
 }
 
 /// Limited history of earlier ancestors.
@@ -333,7 +332,11 @@ pub struct Lineage {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     reparenting_history: Vec<utils::id::TimelineId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    original_ancestor: Option<(utils::id::TimelineId, utils::lsn::Lsn, chrono::NaiveDateTime)>,
+    original_ancestor: Option<(
+        utils::id::TimelineId,
+        utils::lsn::Lsn,
+        chrono::NaiveDateTime,
+    )>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -430,4 +433,3 @@ pub(crate) mod modern_serde {
         assert_eq!(wrapper_from_bytes.0, wrapper_from_json.0);
     }
 }
-

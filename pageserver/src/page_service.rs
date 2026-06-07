@@ -53,10 +53,10 @@ use tonic::service::Interceptor as _;
 use tonic::transport::server::TcpConnectInfo;
 use tracing::*;
 use utils::auth::{Claims, Scope, SwappableJwtAuth};
+use utils::id::ShardIndex;
 use utils::id::{TenantId, TenantTimelineId, TimelineId};
 use utils::logging::log_slow;
 use utils::lsn::Lsn;
-use utils::id::ShardIndex;
 use utils::simple_rcu::RcuReadGuard;
 use utils::sync::gate::{Gate, GateGuard};
 use utils::sync::spsc_fold;
@@ -1427,10 +1427,7 @@ impl PageServerHandler {
         let (mut handler_results, span) = {
             // TODO: we unfortunately have to pin the future on the heap, since GetPage futures are huge and
             // won't fit on the stack.
-            let mut boxpinned = Box::pin(Self::pagestream_dispatch_batched_message(
-                batch,
-                ctx,
-            ));
+            let mut boxpinned = Box::pin(Self::pagestream_dispatch_batched_message(batch, ctx));
             log_slow(
                 log_slow_name,
                 LOG_SLOW_GETPAGE_THRESHOLD,
@@ -1944,13 +1941,7 @@ impl PageServerHandler {
             };
 
             let result = self
-                .pagestream_handle_batched_message(
-                    pgb_writer,
-                    msg,
-                    &cancel,
-                    protocol_version,
-                    ctx,
-                )
+                .pagestream_handle_batched_message(pgb_writer, msg, &cancel, protocol_version, ctx)
                 .await;
             match result {
                 Ok(()) => {}
@@ -2129,8 +2120,7 @@ impl PageServerHandler {
                             // compute disconnects + reconnects now.
                             if graceful_cancel_executor.is_cancelled() {
                                 if let Err(e) =
-                                    Self::send_going_away(pgb_writer, protocol_version)
-                                        .await
+                                    Self::send_going_away(pgb_writer, protocol_version).await
                                 {
                                     debug!("failed to write GoingAway frame: {e}");
                                 }
@@ -3700,13 +3690,8 @@ impl GrpcPageServiceHandler {
             let timeline = handles
                 .get(tenant_id, timeline_id, ShardSelector::Known(shard_index))
                 .await?;
-            let future = Self::get_page(
-                ctx,
-                timeline,
-                shard_req,
-                received_at,
-            )
-            .map(move |result| result.map(|resp| (shard_index, resp)));
+            let future = Self::get_page(ctx, timeline, shard_req, received_at)
+                .map(move |result| result.map(|resp| (shard_index, resp)));
             shard_requests.push(future);
         }
 

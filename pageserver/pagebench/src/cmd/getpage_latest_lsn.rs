@@ -23,9 +23,9 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
+use utils::id::ShardIndex;
 use utils::id::{TenantId, TenantTimelineId};
 use utils::lsn::Lsn;
-use utils::id::ShardIndex;
 
 use crate::util::tokio_thread_local_stats::AllThreadLocalStats;
 use crate::util::{request_stats, tokio_thread_local_stats};

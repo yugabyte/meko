@@ -33,8 +33,8 @@ use crate::state::{TimelineMemState, TimelinePersistentState, TimelineState};
 use crate::timeline_guard::ResidenceGuard;
 use crate::timeline_manager::{AtomicStatus, ManagerCtl};
 use crate::timelines_set::TimelinesSet;
-use crate::yb_wal_storage::YbWalConn;
 use crate::wal_storage::{Storage as wal_storage_iface, WalReader};
+use crate::yb_wal_storage::YbWalConn;
 use crate::yb_wal_storage::{self, YbWalStorage};
 use crate::{SafeKeeperConf, control_file, debug_dump, timeline_manager};
 
@@ -445,8 +445,7 @@ impl Timeline {
         use tracing::Instrument;
         let span = info_span!("load_timeline", timeline = %ttid.timeline_id);
         async move {
-            let shared_state =
-                SharedState::restore(conf.as_ref(), &ttid, yb_wal.as_ref()).await?;
+            let shared_state = SharedState::restore(conf.as_ref(), &ttid, yb_wal.as_ref()).await?;
             let timeline_dir = get_timeline_dir(conf.as_ref(), &ttid);
 
             Ok(Timeline::new(

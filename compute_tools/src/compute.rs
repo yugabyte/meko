@@ -38,11 +38,11 @@ use url::Url;
 use utils::backoff::{
     DEFAULT_BASE_BACKOFF_SECONDS, DEFAULT_MAX_BACKOFF_SECONDS, exponential_backoff_duration,
 };
+use utils::id::{ShardIndex, ShardNumber, ShardStripeSize};
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::measured_stream::MeasuredReader;
 use utils::pid_file;
-use utils::id::{ShardIndex, ShardNumber, ShardStripeSize};
 
 use crate::configurator::launch_configurator;
 use crate::disk_quota::set_disk_quota;

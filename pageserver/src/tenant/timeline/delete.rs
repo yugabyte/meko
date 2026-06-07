@@ -93,9 +93,9 @@ async fn remove_maybe_offloaded_timeline_from_tenant(
         panic!("Timeline grew children while we removed layer files");
     }
 
-    timelines.remove(&timeline.timeline_id).expect(
-        "timeline that we were deleting was concurrently removed from 'timelines' map",
-    );
+    timelines
+        .remove(&timeline.timeline_id)
+        .expect("timeline that we were deleting was concurrently removed from 'timelines' map");
     let _ = tenant; // scheduled_compaction_tasks removed in phase 4d.2
 
     drop(timelines);
@@ -252,7 +252,6 @@ impl DeleteTimelineFlow {
 
         Ok(())
     }
-
 }
 
 pub(super) fn make_timeline_delete_guard(

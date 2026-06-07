@@ -269,11 +269,17 @@ pub struct ConfigToml {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct YbPageWriterConfigToml {
-    #[serde(with = "humantime_serde::option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "humantime_serde::option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub flush_interval: Option<Duration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flush_size_bytes: Option<usize>,
-    #[serde(with = "humantime_serde::option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        with = "humantime_serde::option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub flush_poll_interval: Option<Duration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_chain_limit: Option<u32>,
@@ -394,19 +400,17 @@ impl YbPageWriterConfigToml {
         let base = YbPageWriterConfig::unscaled_defaults();
         YbPageWriterConfig {
             flush_interval: self.flush_interval.unwrap_or(base.flush_interval),
-            flush_size_bytes: self.flush_size_bytes.unwrap_or_else(|| {
-                scale_count(base.flush_size_bytes, scale_factor)
-            }),
-            flush_poll_interval: self
-                .flush_poll_interval
-                .unwrap_or(base.flush_poll_interval),
+            flush_size_bytes: self
+                .flush_size_bytes
+                .unwrap_or_else(|| scale_count(base.flush_size_bytes, scale_factor)),
+            flush_poll_interval: self.flush_poll_interval.unwrap_or(base.flush_poll_interval),
             image_chain_limit: self.image_chain_limit.unwrap_or(base.image_chain_limit),
             image_chain_payload_bytes_limit: self
                 .image_chain_payload_bytes_limit
                 .unwrap_or(base.image_chain_payload_bytes_limit),
-            materialize_queue_capacity: self.materialize_queue_capacity.unwrap_or_else(|| {
-                scale_count(base.materialize_queue_capacity, scale_factor)
-            }),
+            materialize_queue_capacity: self
+                .materialize_queue_capacity
+                .unwrap_or_else(|| scale_count(base.materialize_queue_capacity, scale_factor)),
             read_cache_bytes: self
                 .read_cache_bytes
                 .unwrap_or_else(|| scale_count(base.read_cache_bytes, scale_factor)),

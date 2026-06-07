@@ -8,10 +8,10 @@ use futures::Future;
 use metrics::core::{AtomicU64, Collector, Desc, GenericCounter, GenericGaugeVec, Opts};
 use metrics::proto::MetricFamily;
 use metrics::{
-    DISK_FSYNC_SECONDS_BUCKETS, Gauge, GaugeVec, Histogram, HistogramVec, IntCounter, IntCounterPairVec, IntCounterVec, IntGauge, IntGaugeVec, pow2_buckets,
-    register_histogram, register_histogram_vec, register_int_counter,
-    register_int_counter_pair_vec, register_int_counter_vec, register_int_gauge,
-    register_int_gauge_vec,
+    DISK_FSYNC_SECONDS_BUCKETS, Gauge, GaugeVec, Histogram, HistogramVec, IntCounter,
+    IntCounterPairVec, IntCounterVec, IntGauge, IntGaugeVec, pow2_buckets, register_histogram,
+    register_histogram_vec, register_int_counter, register_int_counter_pair_vec,
+    register_int_counter_vec, register_int_gauge, register_int_gauge_vec,
 };
 use once_cell::sync::Lazy;
 use postgres_ffi::XLogSegNo;

@@ -62,8 +62,8 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 
 use pageserver_page_api as page_api;
-use utils::id::{TenantId, TimelineId};
 use utils::id::ShardIndex;
+use utils::id::{TenantId, TimelineId};
 
 /// Reap clients/streams that have been idle for this long. Channels are reaped immediately when
 /// empty, and indirectly rely on the client/stream idle timeouts.

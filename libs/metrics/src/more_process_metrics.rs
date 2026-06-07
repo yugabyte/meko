@@ -88,11 +88,7 @@ impl Collector {
 
         fn gauge(name: &str, help: &str, descs: &mut Vec<prometheus::core::Desc>) -> UIntGauge {
             let g = UIntGauge::new(name, help).unwrap();
-            descs.extend(
-                prometheus::core::Collector::desc(&g)
-                    .into_iter()
-                    .cloned(),
-            );
+            descs.extend(prometheus::core::Collector::desc(&g).into_iter().cloned());
             g
         }
 

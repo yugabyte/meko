@@ -51,7 +51,6 @@ pub struct TimelinePersistentState {
     pub creation_ts: SystemTime,
 }
 
-
 impl TimelinePersistentState {
     /// yb-mode: `commit_lsn` collapsed into `flush_lsn`, so creation only
     /// needs `start_lsn`. Term history is seeded when `start_lsn` is known.

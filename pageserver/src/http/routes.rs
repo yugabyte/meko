@@ -20,22 +20,21 @@ use http_utils::error::{ApiError, HttpErrorBody};
 use http_utils::failpoints::failpoints_handler;
 use http_utils::json::{json_request, json_request_maybe, json_response};
 use http_utils::request::{
-    must_get_query_param, must_parse_query_param, parse_query_param,
-    parse_request_param,
+    must_get_query_param, must_parse_query_param, parse_query_param, parse_request_param,
 };
 use http_utils::{RequestExt, RouterBuilder};
 use humantime::format_rfc3339;
 use hyper::{Body, Request, Response, StatusCode, Uri, header};
 use metrics::launch_timestamp::LaunchTimestamp;
 use pageserver_api::models::{
-    IngestAuxFilesRequest,
-    ListAuxFilesRequest, LocationConfig, LocationConfigListResponse, LsnLease,
-    LsnLeaseRequest, PageTraceEvent, StatusResponse,
-    TenantConfigPatchRequest, TenantConfigRequest, TenantDetails, TenantInfo,
-    TenantLocationConfigRequest, TenantLocationConfigResponse, TenantShardLocation, TenantSorting, TenantState, TenantWaitLsnRequest,
-    TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateRequestMode, TimelineGcRequest, TimelineInfo,
-    TimelinePatchIndexPartRequest, TimelineVisibilityState, TimelinesInfoAndOffloaded,
-    TopTenantShardItem, TopTenantShardsRequest, TopTenantShardsResponse,
+    IngestAuxFilesRequest, ListAuxFilesRequest, LocationConfig, LocationConfigListResponse,
+    LsnLease, LsnLeaseRequest, PageTraceEvent, StatusResponse, TenantConfigPatchRequest,
+    TenantConfigRequest, TenantDetails, TenantInfo, TenantLocationConfigRequest,
+    TenantLocationConfigResponse, TenantShardLocation, TenantSorting, TenantState,
+    TenantWaitLsnRequest, TimelineArchivalConfigRequest, TimelineCreateRequest,
+    TimelineCreateRequestMode, TimelineGcRequest, TimelineInfo, TimelinePatchIndexPartRequest,
+    TimelineVisibilityState, TimelinesInfoAndOffloaded, TopTenantShardItem, TopTenantShardsRequest,
+    TopTenantShardsResponse,
 };
 use postgres_ffi::PgMajorVersion;
 use remote_storage::GenericRemoteStorage;
@@ -59,13 +58,8 @@ use crate::tenant::mgr::{
     GetActiveTenantError, GetTenantError, TenantManager, TenantMapError, TenantMapInsertError,
     TenantSlot, TenantSlotError, TenantSlotUpsertError, TenantStateError, UpsertLocationError,
 };
-use crate::tenant::timeline::{
-    MarkInvisibleRequest, Timeline, WaitLsnTimeout,
-    WaitLsnWaiter,
-};
-use crate::tenant::{
-    GetTimelineError, PageReconstructError,
-};
+use crate::tenant::timeline::{MarkInvisibleRequest, Timeline, WaitLsnTimeout, WaitLsnWaiter};
+use crate::tenant::{GetTimelineError, PageReconstructError};
 use crate::{DEFAULT_PG_VERSION, tenant};
 
 // For APIs that require an Active tenant, how long should we block waiting for that state?
@@ -550,9 +544,7 @@ async fn timeline_create_handler(
     let state = get_state(&request);
 
     async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
         tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
@@ -560,8 +552,7 @@ async fn timeline_create_handler(
         // => continue to provide that information, but, through a log message that doesn't require us to destructure
         tracing::info!(?params, "creating timeline");
 
-        match tenant.create_timeline(params, &ctx).await
-        {
+        match tenant.create_timeline(params, &ctx).await {
             Ok(new_timeline) => {
                 // Created. Construct a TimelineInfo for it.
                 let timeline_info = build_timeline_info_common(
@@ -630,9 +621,7 @@ async fn timeline_list_handler(
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
 
     let response_data = async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
         tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
@@ -681,9 +670,7 @@ async fn timeline_and_offloaded_list_handler(
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
 
     let response_data = async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
         tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
@@ -735,9 +722,7 @@ async fn timeline_preserve_initdb_handler(
     // location where timeline recreation cand find it.
 
     async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
         let timeline = tenant.get_timeline(timeline_id, false)?;
 
@@ -771,9 +756,7 @@ async fn timeline_archival_config_handler(
     let state = get_state(&request);
 
     async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
         tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
@@ -815,8 +798,7 @@ async fn timeline_patch_index_part_handler(
 
     async {
         let timeline =
-            active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id)
-                .await?;
+            active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
 
         if request_data.rel_size_migration.is_none() && request_data.rel_size_migrated_at.is_some()
         {
@@ -877,9 +859,7 @@ async fn timeline_detail_handler(
     let state = get_state(&request);
 
     let timeline_info = async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
         tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
@@ -915,7 +895,6 @@ async fn get_lsn_by_timestamp_handler(
     check_permission(&request, Some(tenant_id))?;
     let state = get_state(&request);
 
-
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     let timestamp_raw = must_get_query_param(&request, "timestamp")?;
     let timestamp = humantime::parse_rfc3339(&timestamp_raw)
@@ -926,8 +905,7 @@ async fn get_lsn_by_timestamp_handler(
     let with_lease = parse_query_param(&request, "with_lease")?.unwrap_or(false);
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id)
-            .await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
     let result = timeline
@@ -992,8 +970,7 @@ async fn get_timestamp_of_lsn_handler(
         .map_err(ApiError::BadRequest)?;
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id)
-            .await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
     let result = timeline.get_timestamp_for_lsn(lsn, &ctx).await?;
@@ -1038,7 +1015,9 @@ async fn timeline_delete_handler(
             }
         })?;
     tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
-    tenant.delete_timeline(timeline_id).instrument(info_span!("timeline_delete", tenant_id=%tenant_id, %timeline_id))
+    tenant
+        .delete_timeline(timeline_id)
+        .instrument(info_span!("timeline_delete", tenant_id=%tenant_id, %timeline_id))
         .await?;
 
     json_response(StatusCode::ACCEPTED, ())
@@ -1107,9 +1086,7 @@ async fn tenant_status(
     let activate = parse_query_param(&request, "activate")?.unwrap_or(activate);
 
     let tenant_info = async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
         if activate {
             // This is advisory: we prefer to let the tenant activate on-demand when this function is
@@ -1172,7 +1149,6 @@ async fn tenant_delete_handler(
     json_response(StatusCode::OK, ())
 }
 
-
 async fn timeline_gc_blocking_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
@@ -1209,8 +1185,7 @@ async fn timeline_page_trace_handler(
     let event_limit = size_limit / event_size;
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id)
-            .await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
 
     // Install a page trace, unless one is already in progress. We just use a buffered channel,
     // which may 2x the memory usage in the worst case, but it's still bounded.
@@ -1264,9 +1239,7 @@ async fn block_or_unblock_gc(
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     let state = get_state(&request);
 
-    let tenant = state
-        .tenant_manager
-        .get_attached_tenant_shard(tenant_id)?;
+    let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
     tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
@@ -1298,7 +1271,6 @@ async fn block_or_unblock_gc(
     json_response(StatusCode::OK, ())
 }
 
-
 pub fn html_response(status: StatusCode, data: String) -> Result<Response<Body>, ApiError> {
     let response = Response::builder()
         .status(status)
@@ -1316,9 +1288,7 @@ async fn get_tenant_config_handler(
     check_permission(&request, Some(tenant_id))?;
     let state = get_state(&request);
 
-    let tenant = state
-        .tenant_manager
-        .get_attached_tenant_shard(tenant_id)?;
+    let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
     let response = HashMap::from([
         (
@@ -1352,9 +1322,7 @@ async fn update_tenant_config_handler(
 
     let tenant_id = TenantId::unsharded(tenant_id);
 
-    let tenant = state
-        .tenant_manager
-        .get_attached_tenant_shard(tenant_id)?;
+    let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
     tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
     // This is a legacy API that only operates on attached tenants: the preferred
@@ -1385,9 +1353,7 @@ async fn patch_tenant_config_handler(
 
     let tenant_id = TenantId::unsharded(tenant_id);
 
-    let tenant = state
-        .tenant_manager
-        .get_attached_tenant_shard(tenant_id)?;
+    let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
     tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
     let updated = tenant
@@ -1563,8 +1529,7 @@ async fn lsn_lease_handler(
     let state = get_state(&request);
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id)
-            .await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
 
     let result = async {
         timeline
@@ -1623,9 +1588,7 @@ async fn timeline_mark_invisible_handler(
     };
 
     async {
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
         let timeline = tenant.get_timeline(timeline_id, true)?;
         // yb-mode: visibility state lives in `remote_state.invisible`
         // only. No index_part.json upload needed.
@@ -1663,19 +1626,19 @@ async fn timeline_checkpoint_handler(
         parse_query_param::<_, bool>(&request, "wait_until_uploaded")?.unwrap_or(false);
 
     async {
-        let timeline = active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
-        let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download).with_scope_timeline(&timeline);
+        let timeline =
+            active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
+        let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
+            .with_scope_timeline(&timeline);
         if wait_until_flushed {
             timeline.freeze_and_flush().await
         } else {
             timeline.freeze().await.and(Ok(()))
-        }.map_err(|e| {
-                match e {
-                    tenant::timeline::FlushLayerError::Cancelled => ApiError::ShuttingDown,
-                    other => ApiError::InternalServerError(other.into()),
-
-                }
-            })?;
+        }
+        .map_err(|e| match e {
+            tenant::timeline::FlushLayerError::Cancelled => ApiError::ShuttingDown,
+            other => ApiError::InternalServerError(other.into()),
+        })?;
         // Compaction removed in phase 4d.2 (compaction.rs deletion).
         let _ = (ctx, &cancel);
 
@@ -1686,7 +1649,9 @@ async fn timeline_checkpoint_handler(
             // doesn't change for callers.
             tracing::info!(
                 "Uploads completed up to {}",
-                timeline.get_remote_consistent_lsn_projected().unwrap_or(Lsn(0))
+                timeline
+                    .get_remote_consistent_lsn_projected()
+                    .unwrap_or(Lsn(0))
             );
         }
 
@@ -1708,7 +1673,6 @@ async fn timeline_detach_ancestor_handler(
     )))
 }
 
-
 async fn timeline_collect_keyspace(
     request: Request<Body>,
     _cancel: CancellationToken,
@@ -1721,8 +1685,10 @@ async fn timeline_collect_keyspace(
     let at_lsn: Option<Lsn> = parse_query_param(&request, "at_lsn")?;
 
     async {
-        let timeline = active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
-        let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download).with_scope_timeline(&timeline);
+        let timeline =
+            active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
+        let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
+            .with_scope_timeline(&timeline);
         let at_lsn = at_lsn.unwrap_or_else(|| timeline.get_last_record_lsn());
         let (dense_ks, sparse_ks) = timeline
             .collect_keyspace(at_lsn, &ctx)
@@ -1731,7 +1697,11 @@ async fn timeline_collect_keyspace(
 
         // This API is currently used by pagebench. Pagebench will iterate all keys within the keyspace.
         // Therefore, we split dense/sparse keys in this API.
-        let res = pageserver_api::models::partitioning::Partitioning { keys: dense_ks, sparse_keys: sparse_ks, at_lsn };
+        let res = pageserver_api::models::partitioning::Partitioning {
+            keys: dense_ks,
+            sparse_keys: sparse_ks,
+            at_lsn,
+        };
 
         json_response(StatusCode::OK, res)
     }
@@ -1772,9 +1742,7 @@ async fn wait_lsn_handler(
     let wait_lsn_request: TenantWaitLsnRequest = json_request(&mut request).await?;
 
     let state = get_state(&request);
-    let tenant = state
-        .tenant_manager
-        .get_attached_tenant_shard(tenant_id)?;
+    let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
     let mut wait_futures = Vec::default();
     for timeline in tenant.list_timelines() {
@@ -1950,8 +1918,7 @@ async fn list_aux_files(
     let state = get_state(&request);
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id)
-            .await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
 
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
@@ -1971,8 +1938,7 @@ async fn ingest_aux_files(
     let state = get_state(&request);
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id)
-            .await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
 
     let mut modification = timeline.begin_modification(
         Lsn(timeline.get_last_record_lsn().0 + 8), /* advance LSN by 8 */
@@ -2101,9 +2067,7 @@ async fn put_tenant_timeline_import_basebackup(
         base_lsn=%base_lsn, end_lsn=%end_lsn, pg_version=%pg_version);
     async move {
         let state = get_state(&request);
-        let tenant = state
-            .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
         let mut body = StreamReader::new(
             request
@@ -2430,7 +2394,9 @@ pub fn make_router(
 
     Ok(router
         .data(state)
-        .get("/metrics", move |r| request_span(r, prometheus_metrics_handler_wrapper))
+        .get("/metrics", move |r| {
+            request_span(r, prometheus_metrics_handler_wrapper)
+        })
         .get("/profile/cpu", |r| request_span(r, profile_cpu_handler))
         .get("/profile/heap", |r| request_span(r, profile_heap_handler))
         .get("/v1/status", |r| api_handler(r, status_handler))
@@ -2441,9 +2407,7 @@ pub fn make_router(
             api_handler(r, reload_auth_validation_keys_handler)
         })
         .get("/v1/tenant", |r| api_handler(r, tenant_list_handler))
-        .get("/v1/tenant/:tenant_id", |r| {
-            api_handler(r, tenant_status)
-        })
+        .get("/v1/tenant/:tenant_id", |r| api_handler(r, tenant_status))
         .delete("/v1/tenant/:tenant_id", |r| {
             api_handler(r, tenant_delete_handler)
         })
@@ -2504,13 +2468,12 @@ pub fn make_router(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/lsn_lease",
             |r| api_handler(r, lsn_lease_handler),
         )
-        .put(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/do_gc",
-            |r| api_handler(r, timeline_gc_handler),
-        )
+        .put("/v1/tenant/:tenant_id/timeline/:timeline_id/do_gc", |r| {
+            api_handler(r, timeline_gc_handler)
+        })
         .put(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/mark_invisible",
-            |r| api_handler( r, timeline_mark_invisible_handler),
+            |r| api_handler(r, timeline_mark_invisible_handler),
         )
         .put(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/checkpoint",
@@ -2550,7 +2513,9 @@ pub fn make_router(
             |r| api_handler(r, timeline_collect_keyspace),
         )
         .get("/v1/utilization", |r| api_handler(r, get_utilization))
-        .get("/v1/list_tenant_visible_size", |r| api_handler(r, list_tenant_visible_size_handler))
+        .get("/v1/list_tenant_visible_size", |r| {
+            api_handler(r, list_tenant_visible_size_handler)
+        })
         .post(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/ingest_aux_files",
             |r| testing_api_handler("ingest_aux_files", r, ingest_aux_files),

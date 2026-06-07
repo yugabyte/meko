@@ -4,8 +4,8 @@ use pageserver_api::models::detach_ancestor::AncestorDetached;
 use pageserver_api::models::{
     DetachBehavior, LocationConfig, LocationConfigListResponse, LsnLease, PageserverUtilization,
     SecondaryProgress, TenantScanRemoteStorageResponse, TenantWaitLsnRequest,
-    TimelineArchivalConfigRequest,
-    TimelineCreateRequest, TimelineInfo, TopTenantShardsRequest, TopTenantShardsResponse,
+    TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineInfo, TopTenantShardsRequest,
+    TopTenantShardsResponse,
 };
 use pageserver_client::BlockUnblock;
 use pageserver_client::mgmt_api::{Client, Result};
@@ -427,5 +427,4 @@ impl PageserverClient {
                 .await
         )
     }
-
 }

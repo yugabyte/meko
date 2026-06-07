@@ -67,11 +67,14 @@ async fn main() -> anyhow::Result<()> {
     let payload_b: Vec<u8> = b"hello from yb_smoke".to_vec();
     let payload_c: Vec<u8> = vec![0xAB; 1024];
 
-    for (k, v) in [(&key_a, &payload_a), (&key_b, &payload_b), (&key_c, &payload_c)] {
+    for (k, v) in [
+        (&key_a, &payload_a),
+        (&key_b, &payload_b),
+        (&key_c, &payload_c),
+    ] {
         let size = v.len();
         let bytes = Bytes::copy_from_slice(v);
-        let stream =
-            futures::stream::once(async move { Ok::<_, std::io::Error>(bytes) });
+        let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(bytes) });
         storage
             .upload(stream, size, k, None, &cancel)
             .await
@@ -81,10 +84,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Head + download payload_a, verify round-trip.
     let head = storage.head_object(&key_a, &cancel).await?;
-    println!("head {key_a}: size={} last_modified={:?}", head.size, head.last_modified);
+    println!(
+        "head {key_a}: size={} last_modified={:?}",
+        head.size, head.last_modified
+    );
     anyhow::ensure!(head.size as usize == payload_a.len(), "head size mismatch");
 
-    let mut dl = storage.download(&key_a, &DownloadOpts::default(), &cancel).await?;
+    let mut dl = storage
+        .download(&key_a, &DownloadOpts::default(), &cancel)
+        .await?;
     let mut got: Vec<u8> = Vec::new();
     use futures::StreamExt;
     while let Some(chunk) = dl.download_stream.next().await {
@@ -99,8 +107,16 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     println!(
         "list root WithDelimiter: prefixes={:?} keys={:?}",
-        root_listing.prefixes.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
-        root_listing.keys.iter().map(|o| o.key.to_string()).collect::<Vec<_>>()
+        root_listing
+            .prefixes
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>(),
+        root_listing
+            .keys
+            .iter()
+            .map(|o| o.key.to_string())
+            .collect::<Vec<_>>()
     );
 
     // List under a/ — expect the two keys.
@@ -108,10 +124,7 @@ async fn main() -> anyhow::Result<()> {
     let a_listing = storage
         .list(Some(&prefix_a), ListingMode::NoDelimiter, None, &cancel)
         .await?;
-    println!(
-        "list a/ NoDelimiter: {} keys",
-        a_listing.keys.len()
-    );
+    println!("list a/ NoDelimiter: {} keys", a_listing.keys.len());
     anyhow::ensure!(a_listing.keys.len() == 2, "expected 2 keys under a/");
 
     // Copy + verify.
@@ -147,7 +160,11 @@ async fn main() -> anyhow::Result<()> {
     let after = storage
         .list(None, ListingMode::NoDelimiter, None, &cancel)
         .await?;
-    anyhow::ensure!(after.keys.is_empty(), "expected empty after delete, got {} keys", after.keys.len());
+    anyhow::ensure!(
+        after.keys.is_empty(),
+        "expected empty after delete, got {} keys",
+        after.keys.len()
+    );
     println!("delete + delete_objects OK");
 
     println!("ALL OK");

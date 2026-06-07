@@ -42,9 +42,7 @@ pub trait StorageControllerUpcallApi {
         &self,
         conf: &PageServerConf,
         empty_local_disk: bool,
-    ) -> impl Future<
-        Output = Result<HashMap<TenantId, ReAttachResponseTenant>, RetryForeverError>,
-    > + Send;
+    ) -> impl Future<Output = Result<HashMap<TenantId, ReAttachResponseTenant>, RetryForeverError>> + Send;
     fn validate(
         &self,
         tenants: Vec<(TenantId, Generation)>,

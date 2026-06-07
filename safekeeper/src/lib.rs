@@ -241,11 +241,9 @@ mod yb_mode_tests {
 
     #[test]
     fn joint_with_two_new_members_is_rejected() {
-        let err = require_single_safekeeper(&conf(
-            vec![member(1)],
-            Some(vec![member(2), member(3)]),
-        ))
-        .unwrap_err();
+        let err =
+            require_single_safekeeper(&conf(vec![member(1)], Some(vec![member(2), member(3)])))
+                .unwrap_err();
         assert!(format!("{err}").contains("2 new members"));
     }
 }

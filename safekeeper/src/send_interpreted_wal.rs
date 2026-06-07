@@ -775,8 +775,8 @@ mod tests {
     use postgres_ffi::{MAX_SEND_SIZE, PgMajorVersion};
     use tokio::sync::mpsc::error::TryRecvError;
     use utils::id::{NodeId, TenantTimelineId};
-    use utils::lsn::Lsn;
     use utils::id::{ShardCount, ShardNumber};
+    use utils::lsn::Lsn;
 
     use crate::send_interpreted_wal::{AttachShardNotification, Batch, InterpretedWalReader};
     use crate::test_utils::Env;

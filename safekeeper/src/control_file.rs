@@ -182,8 +182,7 @@ impl YbControlFileStorage {
 
     /// Delete the row for `ttid`. Used by the timeline-delete flow.
     pub async fn delete(client: &YsqlClient, ttid: &TenantTimelineId) -> Result<()> {
-        let sql =
-            "DELETE FROM safekeeper.timeline_state WHERE tenant_id = $1 AND timeline_id = $2";
+        let sql = "DELETE FROM safekeeper.timeline_state WHERE tenant_id = $1 AND timeline_id = $2";
         client
             .execute(
                 sql,

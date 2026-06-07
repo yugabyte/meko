@@ -291,8 +291,7 @@ impl UnifiedPages {
     /// supersedes. Newer deltas and unflushed entries are untouched.
     pub fn trim_key_up_to(&self, key: &Bytes, max_lsn: Lsn) {
         let mut total_freed = 0usize;
-        let key_empty = 
-        {
+        let key_empty = {
             let Some(mut entry) = self.by_key.get_mut(key) else {
                 return;
             };
@@ -395,8 +394,7 @@ impl UnifiedPages {
                 "lookup_chain_durable_if_complete saw an unflushed row at \
                  lsn={} while walking ≤ target_lsn={} — caller passed a \
                  target_lsn above the flush horizon",
-                e.row.lsn,
-                target_lsn,
+                e.row.lsn, target_lsn,
             );
             out.push(e.row.clone());
             if e.row.will_init {
@@ -601,7 +599,10 @@ mod tests {
         u.push_durable(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
         u.evict_to_capacity();
         // k1 was inserted first → at the front → evicted first.
-        assert!(u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100)).is_empty());
+        assert!(
+            u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -624,8 +625,14 @@ mod tests {
         u.push_durable(mk(b"k1", 1, true, b"AAAAAAAAAAAAAAAA"));
         u.push(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
         u.evict_to_capacity();
-        assert!(u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100)).is_empty());
-        assert!(!u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100)).is_empty());
+        assert!(
+            u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100))
+                .is_empty()
+        );
+        assert!(
+            !u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -770,8 +777,14 @@ mod tests {
         u.push_durable(mk(b"k1", 3, false, b"CCCCCCCCCCCCCCCC"));
         u.evict_to_capacity();
         // k2 was at the front after the k1 promotion → evicted.
-        assert!(u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100)).is_empty());
-        assert!(!u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100)).is_empty());
+        assert!(
+            u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100))
+                .is_empty()
+        );
+        assert!(
+            !u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100))
+                .is_empty()
+        );
     }
 
     /// Range-scan: confirm the half-open `[start, end)` filter and that
@@ -806,7 +819,8 @@ mod tests {
         let before = u.total_bytes();
         u.evict_to_capacity();
         assert_eq!(
-            u.total_bytes(), before,
+            u.total_bytes(),
+            before,
             "all pinned ⇒ no eviction; total_bytes unchanged",
         );
         assert_eq!(u.by_key_entries(), 5, "all keys still resident");
@@ -826,7 +840,8 @@ mod tests {
         // The unflushed counter must have dropped to zero — the old
         // (key,10) entry is no longer unflushed.
         assert_eq!(
-            u.unflushed_bytes(), 0,
+            u.unflushed_bytes(),
+            0,
             "overwrite by push_durable promotes the entry; \
              unflushed_bytes should drain even though unflushed_fifo \
              still holds the stale ref",
@@ -858,7 +873,7 @@ mod tests {
         u.mark_first_n_flushed(1);
         u.push(mk(b"k", 20, false, b"d20"));
         u.mark_first_n_flushed(1);
-        u.push(mk(b"k", 30, false, b"d30"));         // UNFLUSHED
+        u.push(mk(b"k", 30, false, b"d30")); // UNFLUSHED
         u.push_durable(mk(b"k", 40, false, b"d40")); // already durable
         // target_lsn=100 covers an unflushed row (d30); the assertion
         // fires.

@@ -52,9 +52,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
-use crate::metrics::{
-    WAL_CACHE_BYTES, WAL_CACHE_EVICTIONS, WAL_CACHE_HITS, WAL_CACHE_MISSES,
-};
+use crate::metrics::{WAL_CACHE_BYTES, WAL_CACHE_EVICTIONS, WAL_CACHE_HITS, WAL_CACHE_MISSES};
 
 /// One cached chunk, mirroring a row in `yb_storage.wals` but without
 /// the (tenant_id, timeline_id) prefix (those are captured at the
@@ -130,7 +128,11 @@ impl WalCache {
         &mut self,
         segno: u64,
         byte_offset: u64,
-    ) -> Option<(u64 /* chunk_offset */, u64 /* end_offset */, Arc<Vec<u8>>)> {
+    ) -> Option<(
+        u64, /* chunk_offset */
+        u64, /* end_offset */
+        Arc<Vec<u8>>,
+    )> {
         let seg_map = self.by_segno.get(&segno);
         let result = seg_map.and_then(|m| {
             // Highest chunk_offset <= byte_offset.

@@ -628,8 +628,7 @@ pub fn shutdown_token() -> CancellationToken {
 /// arms in `bin/yb-pageserver.rs`. Populated once at startup by
 /// `init_global_shutdown_token` before any task that might call
 /// `request_global_shutdown` is spawned.
-static GLOBAL_SHUTDOWN_TOKEN: std::sync::OnceLock<CancellationToken> =
-    std::sync::OnceLock::new();
+static GLOBAL_SHUTDOWN_TOKEN: std::sync::OnceLock<CancellationToken> = std::sync::OnceLock::new();
 
 /// Register the global shutdown token. Must be called exactly once at
 /// startup before any caller can `request_global_shutdown`.

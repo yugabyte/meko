@@ -13,8 +13,8 @@ use remote_storage::RemotePath;
 use serde::{Deserialize, Serialize};
 use url::Url;
 use utils::id::{NodeId, TenantId, TimelineId};
-use utils::lsn::Lsn;
 use utils::id::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
+use utils::lsn::Lsn;
 
 use crate::responses::TlsConfig;
 

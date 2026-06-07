@@ -20,4 +20,3 @@ impl UsizeIsU64 for usize {
         self as u64
     }
 }
-

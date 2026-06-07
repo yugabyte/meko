@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use camino::Utf8PathBuf;
 use camino_tempfile::Utf8TempDir;
+use safekeeper_api::ServerInfo;
 use safekeeper_api::membership::{Configuration, SafekeeperGeneration};
 use safekeeper_api::models::{SafekeeperUtilization, TimelineDeleteResult};
-use safekeeper_api::ServerInfo;
 use tracing::*;
 use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
@@ -56,7 +56,11 @@ impl GlobalTimelinesState {
     /// Get dependencies for a timeline constructor.
     fn get_dependencies(
         &self,
-    ) -> (Arc<SafeKeeperConf>, Arc<TimelinesSet>, Option<Arc<YbWalConn>>) {
+    ) -> (
+        Arc<SafeKeeperConf>,
+        Arc<TimelinesSet>,
+        Option<Arc<YbWalConn>>,
+    ) {
         (
             self.conf.clone(),
             self.broker_active_set.clone(),
@@ -351,13 +355,8 @@ impl GlobalTimelines {
         };
 
         // Do the actual move and reflect the result in the map.
-        match GlobalTimelines::install_temp_timeline(
-            ttid,
-            tmp_path,
-            conf.clone(),
-            yb_wal.clone(),
-        )
-        .await
+        match GlobalTimelines::install_temp_timeline(ttid, tmp_path, conf.clone(), yb_wal.clone())
+            .await
         {
             Ok(timeline) => {
                 let mut timeline_shared_state = timeline.write_shared_state().await;
@@ -371,12 +370,7 @@ impl GlobalTimelines {
                     .timelines
                     .insert(ttid, GlobalMapTimeline::Timeline(timeline.clone()));
                 drop(state);
-                timeline.bootstrap(
-                    &mut timeline_shared_state,
-                    &conf,
-                    broker_active_set,
-                    yb_wal,
-                );
+                timeline.bootstrap(&mut timeline_shared_state, &conf, broker_active_set, yb_wal);
                 drop(timeline_shared_state);
                 Ok(timeline)
             }

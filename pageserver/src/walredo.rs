@@ -268,10 +268,7 @@ impl PostgresRedoManager {
     ///
     /// Create a new PostgresRedoManager.
     ///
-    pub fn new(
-        conf: &'static PageServerConf,
-        tenant_shard_id: TenantId,
-    ) -> PostgresRedoManager {
+    pub fn new(conf: &'static PageServerConf, tenant_shard_id: TenantId) -> PostgresRedoManager {
         // The actual processes are launched lazily, on first request to each slot.
         let pool_size = conf.walredo_pool_size.get();
         let redo_pool = (0..pool_size)
@@ -587,4 +584,3 @@ impl PostgresRedoManager {
         Ok(())
     }
 }
-

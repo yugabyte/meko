@@ -52,10 +52,7 @@ pub fn remote_timelines_path(tenant_shard_id: &TenantId) -> RemotePath {
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 
-pub fn remote_timeline_path(
-    tenant_shard_id: &TenantId,
-    timeline_id: &TimelineId,
-) -> RemotePath {
+pub fn remote_timeline_path(tenant_shard_id: &TenantId, timeline_id: &TimelineId) -> RemotePath {
     remote_timelines_path(tenant_shard_id).join(Utf8Path::new(&timeline_id.to_string()))
 }
 

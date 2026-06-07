@@ -15,9 +15,9 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display};
+use std::fs;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
-use std::fs;
 
 use anyhow::{Context, bail};
 use arc_swap::ArcSwap;
@@ -28,11 +28,10 @@ use itertools::Itertools as _;
 use once_cell::sync::Lazy;
 pub use pageserver_api::models::TenantState;
 use pageserver_api::models::{self, RelSizeMigration};
-use pageserver_api::models::{
-    TimelineArchivalState, TimelineState, TopTenantShardItem,
-    WalRedoManagerStatus,
-};
 use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardIdentity, ShardStripeSize};
+use pageserver_api::models::{
+    TimelineArchivalState, TimelineState, TopTenantShardItem, WalRedoManagerStatus,
+};
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
 use tokio::io::BufReader;
@@ -50,19 +49,15 @@ use self::config::LocationConf;
 use self::metadata::TimelineMetadata;
 use self::mgr::{GetActiveTenantError, GetTenantError};
 use self::timeline::uninit::{TimelineCreateGuard, TimelineExclusionError, UninitializedTimeline};
-use self::timeline::{
-    GcCutoffs, TimelineResources, WaitLsnError,
-};
+use self::timeline::{GcCutoffs, TimelineResources, WaitLsnError};
 use crate::basebackup_cache::BasebackupCache;
 use crate::config::PageServerConf;
 use crate::context;
 use crate::context::RequestContextBuilder;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{
-    BROKEN_TENANTS_SET, CONCURRENT_INITDBS,
-    INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME, TENANT,
-    TENANT_STATE_METRIC,
-    remove_tenant_metrics,
+    BROKEN_TENANTS_SET, CONCURRENT_INITDBS, INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME,
+    TENANT, TENANT_STATE_METRIC, remove_tenant_metrics,
 };
 use crate::task_mgr::TaskKind;
 use crate::tenant::gc_result::GcResult;
@@ -81,7 +76,6 @@ use utils::generation::Generation;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::{Lsn, RecordLsn};
 
-
 pub mod metadata;
 pub mod storage_layer;
 
@@ -90,7 +84,6 @@ pub mod mgr;
 pub mod tasks;
 
 pub(crate) mod timeline;
-
 
 mod gc_block;
 mod gc_result;
@@ -1022,7 +1015,10 @@ impl TenantShard {
             r = self.compute_page_store.list_timelines(tenant_id) => r?,
             _ = cancel.cancelled() => anyhow::bail!("cancelled"),
         };
-        info!("preload: {} timelines from pageserver.timeline_state", rows.len());
+        info!(
+            "preload: {} timelines from pageserver.timeline_state",
+            rows.len()
+        );
         let mut timelines = HashMap::with_capacity(rows.len());
         for row in rows {
             let metadata = synth_timeline_metadata_from_row(&row)?;
@@ -1207,17 +1203,16 @@ impl TenantShard {
         ancestor_timeline_id: TimelineId,
         timelines: &std::sync::MutexGuard<'_, HashMap<TimelineId, Arc<Timeline>>>,
     ) -> Result<(), TimelineArchivalError> {
-        let has_archived_parent = if let Some(ancestor_timeline) =
-            timelines.get(&ancestor_timeline_id)
-        {
-            ancestor_timeline.is_archived() == Some(true)
-        } else {
-            error!("ancestor timeline {ancestor_timeline_id} not found");
-            if cfg!(debug_assertions) {
-                panic!("ancestor timeline {ancestor_timeline_id} not found");
-            }
-            return Err(TimelineArchivalError::NotFound);
-        };
+        let has_archived_parent =
+            if let Some(ancestor_timeline) = timelines.get(&ancestor_timeline_id) {
+                ancestor_timeline.is_archived() == Some(true)
+            } else {
+                error!("ancestor timeline {ancestor_timeline_id} not found");
+                if cfg!(debug_assertions) {
+                    panic!("ancestor timeline {ancestor_timeline_id} not found");
+                }
+                return Err(TimelineArchivalError::NotFound);
+            };
         if has_archived_parent {
             return Err(TimelineArchivalError::HasArchivedParent(
                 ancestor_timeline_id,
@@ -1322,7 +1317,6 @@ impl TenantShard {
             .map(Arc::clone)
             .collect()
     }
-
 
     pub fn list_timeline_ids(&self) -> Vec<TimelineId> {
         self.timelines.lock().unwrap().keys().cloned().collect()
@@ -1608,7 +1602,11 @@ impl TenantShard {
             return Err(GcError::NotActive);
         }
 
-        if self.tenant_conf.load().is_gc_blocked_by_lsn_lease_deadline() {
+        if self
+            .tenant_conf
+            .load()
+            .is_gc_blocked_by_lsn_lease_deadline()
+        {
             info!("Skipping GC because lsn lease deadline is not reached");
             return Ok(GcResult::default());
         }
@@ -1841,9 +1839,7 @@ impl TenantShard {
                     crate::metrics::CORRECTNESS_ERRORS
                         .with_label_values(&["tenant_task_panic"])
                         .inc();
-                    tracing::error!(
-                        "TENANT TASK ENDED WITH UNEXPECTED JoinError: {je:?}"
-                    );
+                    tracing::error!("TENANT TASK ENDED WITH UNEXPECTED JoinError: {je:?}");
                 }
             }
         }
@@ -2080,7 +2076,6 @@ impl TenantShard {
         self.generation
     }
 
-
     pub(crate) fn get_sizes(&self) -> TopTenantShardItem {
         let mut result = TopTenantShardItem {
             id: self.id,
@@ -2208,7 +2203,6 @@ impl TenantShard {
             .lsn_lease_length
             .unwrap_or(conf.default_tenant_conf.lsn_lease_length)
     }
-
 
     pub fn update_tenant_config<
         F: Fn(
@@ -3086,12 +3080,9 @@ impl TenantShard {
         }
         if let Some(existing_initdb_timeline_id) = load_existing_initdb {
             if existing_initdb_timeline_id != timeline_id {
-                let source_path = &remote_initdb_archive_path(
-                    &self.id,
-                    &existing_initdb_timeline_id,
-                );
-                let dest_path =
-                    &remote_initdb_archive_path(&self.id, &timeline_id);
+                let source_path =
+                    &remote_initdb_archive_path(&self.id, &existing_initdb_timeline_id);
+                let dest_path = &remote_initdb_archive_path(&self.id, &timeline_id);
 
                 // if this fails, it will get retried by retried control plane requests
                 self.remote_storage
@@ -3116,8 +3107,7 @@ impl TenantShard {
                 }
             }
 
-            let buf_read =
-                BufReader::with_capacity(initdb_storage::BUFFER_SIZE, initdb_tar_zst);
+            let buf_read = BufReader::with_capacity(initdb_storage::BUFFER_SIZE, initdb_tar_zst);
             extract_zst_tarball(&pgdata_path, buf_read)
                 .await
                 .context("extract initdb tar")?;

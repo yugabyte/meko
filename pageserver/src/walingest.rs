@@ -29,8 +29,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use bytes::{Buf, Bytes};
 use pageserver_api::key::{Key, rel_block_to_key};
-use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
 use pageserver_api::models::ShardIdentity;
+use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
 use postgres_ffi::walrecord::*;
 use postgres_ffi::{
     PgMajorVersion, TransactionId, dispatch_pgversion, enum_pgversion, enum_pgversion_dispatch,
@@ -587,12 +587,7 @@ impl WalIngest {
 
                 let content = modification
                     .tline
-                    .get_rel_page_at_lsn(
-                        src_rel,
-                        blknum,
-                        Version::Modified(modification),
-                        ctx,
-                    )
+                    .get_rel_page_at_lsn(src_rel, blknum, Version::Modified(modification), ctx)
                     .await?;
                 modification.put_rel_page_image(dst_rel, blknum, content)?;
                 num_blocks_copied += 1;

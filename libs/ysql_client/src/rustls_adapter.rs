@@ -63,10 +63,10 @@ where
     type Future = Pin<Box<dyn Future<Output = io::Result<YbRustlsStream<S>>> + Send>>;
 
     fn connect(self, stream: S) -> Self::Future {
-        let fut = <tokio_postgres_rustls::RustlsConnect as tokio_postgres::tls::TlsConnect<S>>::connect(
-            self.0,
-            stream,
-        );
+        let fut =
+            <tokio_postgres_rustls::RustlsConnect as tokio_postgres::tls::TlsConnect<S>>::connect(
+                self.0, stream,
+            );
         Box::pin(async move { fut.await.map(YbRustlsStream) })
     }
 }

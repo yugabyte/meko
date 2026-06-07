@@ -62,9 +62,7 @@ impl TenantShardDrain {
                 .is_some_and(|conf| conf.generation.is_some());
 
             return match (attached_on_drained, tenant_shard.intent.get_attached()) {
-                (true, Some(intent_node_id)) => {
-                    TenantShardDrainAction::Reconcile(*intent_node_id)
-                }
+                (true, Some(intent_node_id)) => TenantShardDrainAction::Reconcile(*intent_node_id),
                 _ => TenantShardDrainAction::Skip,
             };
         }

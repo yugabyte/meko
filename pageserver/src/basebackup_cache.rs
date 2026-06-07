@@ -634,13 +634,10 @@ impl BackgroundTask {
         // It's not necessary to fsync the inode after renaming, because the worst case is that
         // the rename operation will be rolled back on the disk failure, the entry will disappear
         // from the main directory, and the entry access will cause a cache miss.
-        let entry_path = self
-            .c
-            .entry_path(tenant_shard_id, timeline_id, req_lsn);
+        let entry_path = self.c.entry_path(tenant_shard_id, timeline_id, req_lsn);
         tokio::fs::rename(&entry_tmp_path, &entry_path).await?;
 
-        self.upsert_entry(tenant_shard_id, timeline_id, entry)
-            .await;
+        self.upsert_entry(tenant_shard_id, timeline_id, entry).await;
 
         self.prepare_ok_count.inc();
         Ok(())

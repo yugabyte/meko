@@ -6,9 +6,9 @@ use tonic::transport::Endpoint;
 use tracing::info;
 
 use pageserver_page_api::{GetPageClass, GetPageRequest, GetPageStatusCode, ReadLsn, RelTag};
+use utils::id::ShardIndex;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
-use utils::id::ShardIndex;
 
 /// Starts a large number of idle gRPC GetPage streams.
 #[derive(clap::Parser)]

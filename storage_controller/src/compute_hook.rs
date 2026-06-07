@@ -680,10 +680,11 @@ impl ComputeHook {
                     let cancel = cancel.clone();
 
                     async move {
-                        this
-                            .notify_execute(&this.tenants, maybe_send_result, &cancel)
-                            .await.map_err(|e| (tenant_id, e))
-                    }.instrument(info_span!(
+                        this.notify_execute(&this.tenants, maybe_send_result, &cancel)
+                            .await
+                            .map_err(|e| (tenant_id, e))
+                    }
+                    .instrument(info_span!(
                         "notify_attach_background", tenant_id=%tenant_id
                     ))
                 })
@@ -742,11 +743,7 @@ impl ComputeHook {
     /// The goal is to avoid sending compute notifications with stale information (i.e.
     /// including detach pageservers).
     #[tracing::instrument(skip_all, fields(tenant_id=%tenant_id))]
-    pub(super) fn handle_detach(
-        &self,
-        tenant_id: TenantId,
-        stripe_size: ShardStripeSize,
-    ) {
+    pub(super) fn handle_detach(&self, tenant_id: TenantId, stripe_size: ShardStripeSize) {
         use std::collections::hash_map::Entry;
 
         let mut tenants_locked = self.tenants.lock().unwrap();
@@ -777,12 +774,8 @@ pub(crate) mod tests {
     fn tenant_updates() -> anyhow::Result<()> {
         let tenant_id = TenantId::generate();
         let stripe_size = DEFAULT_STRIPE_SIZE;
-        let mut tenant_state = ComputeHookTenant::new(
-            tenant_id,
-            ShardStripeSize(12345),
-            None,
-            NodeId(1),
-        );
+        let mut tenant_state =
+            ComputeHookTenant::new(tenant_id, ShardStripeSize(12345), None, NodeId(1));
 
         // An unsharded tenant is always ready to emit a notification, but won't
         // send the same one twice

@@ -22,14 +22,10 @@ use handle::ShardTimelineId;
 
 use once_cell::sync::Lazy;
 use pageserver_api::config::tenant_conf_defaults::DEFAULT_PITR_INTERVAL;
-use pageserver_api::key::{
-    Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX,
-};
-use pageserver_api::models::{
-    LsnLease, PageTraceEvent, RelSizeMigration, TimelineState,
-};
-use pageserver_api::reltag::{BlockNumber, RelTag};
+use pageserver_api::key::{Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX};
+use pageserver_api::models::{LsnLease, PageTraceEvent, RelSizeMigration, TimelineState};
 use pageserver_api::models::{ShardIdentity, ShardIndex, ShardNumber};
+use pageserver_api::reltag::{BlockNumber, RelTag};
 use postgres_connection::PgConnectionConfig;
 use postgres_ffi::v14::xlog_utils;
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE, to_pg_timestamp};
@@ -52,20 +48,13 @@ use wal_decoder::serialized_batch::SerializedValueBatch;
 use self::delete::DeleteTimelineFlow;
 use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
-use super::{
-    AttachedTenantConf, GcError,
-    debug_assert_current_span_has_tenant_and_timeline_id,
-};
+use super::{AttachedTenantConf, GcError, debug_assert_current_span_has_tenant_and_timeline_id};
 use crate::aux_file::AuxFileSizeEstimator;
 use crate::basebackup_cache::BasebackupCache;
 use crate::config::PageServerConf;
-use crate::context::{
-    DownloadBehavior, RequestContext,
-};
+use crate::context::{DownloadBehavior, RequestContext};
 use crate::keyspace::KeySpace;
-use crate::metrics::{
-    DELTAS_PER_READ_GLOBAL, ScanLatencyOngoingRecording, TimelineMetrics,
-};
+use crate::metrics::{DELTAS_PER_READ_GLOBAL, ScanLatencyOngoingRecording, TimelineMetrics};
 use crate::page_service::TenantManagerTypes;
 use crate::pgdatadir_mapping::{
     CalculateLogicalSizeError, DirectoryKind, LsnForTimestamp, MetricsUpdate,
@@ -79,7 +68,6 @@ use crate::tenant::timeline::logical_size::CurrentLogicalSize;
 use crate::walingest::WalLagCooldown;
 use crate::walredo::RedoAttemptType;
 use crate::{task_mgr, walredo};
-
 
 /// The outward-facing resources required to build a Timeline
 pub struct TimelineResources {
@@ -143,8 +131,7 @@ pub struct Timeline {
     /// and `shutdown()`-ed during `Timeline::shutdown`. `None` when
     /// materialisation is disabled or the timeline is running in
     /// upstream-only mode.
-    image_materializer_task:
-        std::sync::Mutex<Option<crate::image_materializer::MaterializerTask>>,
+    image_materializer_task: std::sync::Mutex<Option<crate::image_materializer::MaterializerTask>>,
 
     // What page versions do we hold in the repository? If we get a
     // request > last_record_lsn, we need to wait until we receive all
@@ -1008,8 +995,7 @@ impl Timeline {
             // Filter chain rows to those at lsn ≤ target_lsn (in case
             // the caller-asked LSN differs across keys); the chain is
             // already LSN-descending so we just truncate.
-            let mut chain: Vec<_> =
-                chain.into_iter().filter(|r| r.lsn <= target_lsn).collect();
+            let mut chain: Vec<_> = chain.into_iter().filter(|r| r.lsn <= target_lsn).collect();
             // Truncate at the first will_init=true row — older rows are
             // shadowed by that anchor.
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
@@ -1136,11 +1122,7 @@ impl Timeline {
         };
         match pw
             .fpu_page_store()
-            .cas_bump_generation_on_attach(
-                self.tenant_id,
-                self.timeline_id,
-                self.generation,
-            )
+            .cas_bump_generation_on_attach(self.tenant_id, self.timeline_id, self.generation)
             .await?
         {
             crate::page_store::CasBumpOutcome::Bumped
@@ -1211,17 +1193,15 @@ impl Timeline {
             match ctx.task_kind() {
                 TaskKind::WalReceiverManager
                 | TaskKind::WalReceiverConnectionHandler
-                | TaskKind::WalReceiverConnectionPoller => {
-                    match who_is_waiting {
-                        WaitLsnWaiter::Tenant
-                        | WaitLsnWaiter::PageService
-                        | WaitLsnWaiter::HttpEndpoint
-                        | WaitLsnWaiter::BaseBackupCache => unreachable!(
-                            "tenant or page_service context are not expected to have task kind {:?}",
-                            ctx.task_kind()
-                        ),
-                    }
-                }
+                | TaskKind::WalReceiverConnectionPoller => match who_is_waiting {
+                    WaitLsnWaiter::Tenant
+                    | WaitLsnWaiter::PageService
+                    | WaitLsnWaiter::HttpEndpoint
+                    | WaitLsnWaiter::BaseBackupCache => unreachable!(
+                        "tenant or page_service context are not expected to have task kind {:?}",
+                        ctx.task_kind()
+                    ),
+                },
                 _ => {}
             }
         }
@@ -1844,9 +1824,6 @@ impl Timeline {
         }
     }
 
-
-
-
     /// Returns `true` if the rel_size_v2 config is enabled. NOTE: the write path and read path
     /// should look at `get_rel_size_v2_status()` to get the actual status of the timeline. It is
     /// possible that the index part persists the state while the config doesn't get persisted.
@@ -1905,8 +1882,7 @@ impl Timeline {
         // before reaching the residency target; yb-mode has no layer
         // files, so this never fires. The threshold is still a
         // required constructor arg — use the upstream default (24 h).
-        let evictions_low_residence_duration_metric_threshold =
-            Duration::from_secs(24 * 3600);
+        let evictions_low_residence_duration_metric_threshold = Duration::from_secs(24 * 3600);
 
         if let Some(ancestor) = &ancestor {
             let mut ancestor_gc_info = ancestor.gc_info.write().unwrap();
@@ -1952,12 +1928,9 @@ impl Timeline {
                 || pw_cfg.image_chain_payload_bytes_limit > 0)
                 && walredo_mgr.is_some();
             let mat_channel = if mat_enabled {
-                let (tx, rx) = tokio::sync::mpsc::channel(
-                    pw_cfg.materialize_queue_capacity.max(1),
-                );
-                let in_flight = std::sync::Arc::new(std::sync::Mutex::new(
-                    std::collections::HashSet::new(),
-                ));
+                let (tx, rx) = tokio::sync::mpsc::channel(pw_cfg.materialize_queue_capacity.max(1));
+                let in_flight =
+                    std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
                 writer.set_materializer(crate::page_writer::MaterializerHandle {
                     count_limit: pw_cfg.image_chain_limit,
                     payload_bytes_limit: pw_cfg.image_chain_payload_bytes_limit,
@@ -2065,7 +2038,6 @@ impl Timeline {
                 last_received_wal: Mutex::new(None),
                 rel_size_latest_cache: RwLock::new(HashMap::new()),
                 rel_size_snapshot_cache: Mutex::new(LruCache::new(relsize_snapshot_cache_capacity)),
-
 
                 state,
 
@@ -2439,7 +2411,6 @@ impl Timeline {
             .expect("only this task sets it");
     }
 
-
     #[instrument(skip_all)]
     async fn logical_size_calculation_task(
         self: &Arc<Self>,
@@ -2574,7 +2545,6 @@ impl Timeline {
             metric.set(sum_of_entries);
         }
     }
-
 
     /// Returns true if the given lsn is or was an ancestor branchpoint.
     /// In upstream Neon a detached timeline carries
@@ -2785,7 +2755,6 @@ impl Timeline {
             _ = self.cancel.cancelled() => {}
         )
     }
-
 }
 
 impl Drop for Timeline {
@@ -3058,7 +3027,6 @@ impl Timeline {
         assert_eq!(self.tenant_id, tenant.id);
         tenant.gc_block.remove(self, GcBlockingReason::Manual).await
     }
-
 }
 
 /// yb-mode placeholder. The original Neon TimelineWriter tracked the
@@ -3088,7 +3056,6 @@ impl Deref for TimelineWriter<'_> {
 }
 
 impl TimelineWriter<'_> {
-
     /// Put a batch of keys at the specified Lsns.
     pub(crate) async fn put_batch(
         &mut self,
@@ -3169,7 +3136,6 @@ fn is_send() {
     fn _assert_send<T: Send>() {}
     _assert_send::<TimelineWriter<'_>>();
 }
-
 
 /// Encode an SLRU block row's identity as the 18-byte BYTEA key the
 /// `PageRow.key` field expects. Used by the SLRU branch of

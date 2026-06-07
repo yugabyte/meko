@@ -140,7 +140,12 @@ impl PhysicalStorage {
 
     /// Get all known state of the storage.
     pub fn internal_state(&self) -> (Lsn, Lsn, Lsn, bool) {
-        (self.write_lsn, self.write_record_lsn, self.flush_record_lsn, false)
+        (
+            self.write_lsn,
+            self.write_record_lsn,
+            self.flush_record_lsn,
+            false,
+        )
     }
 }
 
@@ -161,7 +166,10 @@ impl Storage for PhysicalStorage {
         // YB-backed `YbWalStorage` initializes the segment-header bytes in
         // YB; nothing to do at the bookkeeping layer beyond the trace.
         let segno = init_lsn.segment_number(self.wal_seg_size);
-        info!("initialize_first_segment: segno {} at lsn {} (YB-backed)", segno, init_lsn);
+        info!(
+            "initialize_first_segment: segno {} at lsn {} (YB-backed)",
+            segno, init_lsn
+        );
         Ok(())
     }
 
@@ -190,7 +198,11 @@ impl Storage for PhysicalStorage {
         self.metrics.observe_write_bytes(buf.len());
 
         if self.decoder.available() != startpos {
-            info!("restart decoder from {} to {}", self.decoder.available(), startpos);
+            info!(
+                "restart decoder from {} to {}",
+                self.decoder.available(),
+                startpos
+            );
             let pg_version = self.decoder.pg_version;
             self.decoder = WalStreamDecoder::new(startpos, pg_version);
         }
@@ -431,7 +443,11 @@ impl WalReader {
             tracing::info!(
                 "WalReader: serving segment {segno} (offset {xlogoff}) from YB table `{}` (cache {})",
                 yb_wal.table,
-                if yb_wal.cache.is_some() { "enabled" } else { "disabled" }
+                if yb_wal.cache.is_some() {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
             );
             return Ok(Box::pin(crate::yb_wal_storage::YbSegmentReader::new(
                 yb_wal,

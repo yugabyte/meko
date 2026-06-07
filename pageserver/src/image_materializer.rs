@@ -183,109 +183,110 @@ impl ImageMaterializer {
             shard_id = "0000",
             timeline_id = %timeline_id,
         );
-        let handle = tokio::spawn(async move {
-            // Helper: refresh the queue-depth gauge from the receiver's
-            // current state. Called after every recv/try_recv and after
-            // each batch completes so the gauge reflects live drain
-            // rather than the last write-side dispatch snapshot.
-            let sample_queue_depth = |rx: &tokio::sync::mpsc::Receiver<MaterializeJob>| {
-                crate::metrics::MATERIALIZER_QUEUE_DEPTH
-                    .set(rx.len() as u64);
-            };
-            // In-flight INSERT futures, oldest at the front. Bounded
-            // to `max_inflight_inserts` — when full, await the front
-            // before spawning a new one. Lets batch N+1's redo run
-            // concurrently with batch N's INSERT round-trip while
-            // keeping YB-side write fan-out bounded.
-            let max_inflight_inserts = me.max_inflight_inserts;
-            let mut inflight_inserts: std::collections::VecDeque<
-                tokio::task::JoinHandle<()>,
-            > = std::collections::VecDeque::with_capacity(max_inflight_inserts);
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = cancel_for_task.cancelled() => break,
-                    first = rx.recv() => {
-                        let Some(first) = first else { break }; // PageWriter dropped
-                        sample_queue_depth(&rx);
-                        // Drain up to BATCH_DRAIN_LIMIT-1 more jobs
-                        // non-blockingly so we can fold them into one
-                        // walredo loop + one COPY round-trip.
-                        let mut batch = Vec::with_capacity(BATCH_DRAIN_LIMIT);
-                        batch.push(first);
-                        while batch.len() < BATCH_DRAIN_LIMIT {
-                            match rx.try_recv() {
-                                Ok(j) => batch.push(j),
-                                Err(_) => break,
-                            }
-                        }
-                        sample_queue_depth(&rx);
-                        // Phase 1 (synchronous on this task): drive the
-                        // batch's chain reads + walredo. Errors only
-                        // come from setup; per-job redo errors are
-                        // logged + skipped inside.
-                        let outcome = match me.redo_phase(&batch).await {
-                            Ok(o) => o,
-                            Err(e) => {
-                                crate::metrics::CORRECTNESS_ERRORS
-                                    .with_label_values(&["materializer_setup"])
-                                    .inc();
-                                tracing::error!(
-                                    tenant_id = %me.tenant_id,
-                                    timeline_id = %me.timeline_id,
-                                    batch_size = batch.len(),
-                                    "MATERIALIZER REDO-PHASE SETUP ERROR — \
-                                     entire batch un-materialised: {e:#}"
-                                );
-                                // Release in_flight for these keys so
-                                // the write trigger can re-dispatch
-                                // them on the next delta.
-                                let mut guard = me.in_flight.lock().unwrap();
-                                for job in &batch {
-                                    guard.remove(&job.key);
+        let handle = tokio::spawn(
+            async move {
+                // Helper: refresh the queue-depth gauge from the receiver's
+                // current state. Called after every recv/try_recv and after
+                // each batch completes so the gauge reflects live drain
+                // rather than the last write-side dispatch snapshot.
+                let sample_queue_depth = |rx: &tokio::sync::mpsc::Receiver<MaterializeJob>| {
+                    crate::metrics::MATERIALIZER_QUEUE_DEPTH.set(rx.len() as u64);
+                };
+                // In-flight INSERT futures, oldest at the front. Bounded
+                // to `max_inflight_inserts` — when full, await the front
+                // before spawning a new one. Lets batch N+1's redo run
+                // concurrently with batch N's INSERT round-trip while
+                // keeping YB-side write fan-out bounded.
+                let max_inflight_inserts = me.max_inflight_inserts;
+                let mut inflight_inserts: std::collections::VecDeque<tokio::task::JoinHandle<()>> =
+                    std::collections::VecDeque::with_capacity(max_inflight_inserts);
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = cancel_for_task.cancelled() => break,
+                        first = rx.recv() => {
+                            let Some(first) = first else { break }; // PageWriter dropped
+                            sample_queue_depth(&rx);
+                            // Drain up to BATCH_DRAIN_LIMIT-1 more jobs
+                            // non-blockingly so we can fold them into one
+                            // walredo loop + one COPY round-trip.
+                            let mut batch = Vec::with_capacity(BATCH_DRAIN_LIMIT);
+                            batch.push(first);
+                            while batch.len() < BATCH_DRAIN_LIMIT {
+                                match rx.try_recv() {
+                                    Ok(j) => batch.push(j),
+                                    Err(_) => break,
                                 }
-                                continue;
                             }
-                        };
-                        // Phase 2 (pipelined): hand off the INSERT +
-                        // cache install + in_flight release to a
-                        // spawned future. The next iteration's redo
-                        // starts immediately. If we're already at
-                        // `max_inflight_inserts`, await the oldest first.
-                        while inflight_inserts.len() >= max_inflight_inserts {
-                            if let Some(h) = inflight_inserts.pop_front() {
-                                let _ = h.await;
+                            sample_queue_depth(&rx);
+                            // Phase 1 (synchronous on this task): drive the
+                            // batch's chain reads + walredo. Errors only
+                            // come from setup; per-job redo errors are
+                            // logged + skipped inside.
+                            let outcome = match me.redo_phase(&batch).await {
+                                Ok(o) => o,
+                                Err(e) => {
+                                    crate::metrics::CORRECTNESS_ERRORS
+                                        .with_label_values(&["materializer_setup"])
+                                        .inc();
+                                    tracing::error!(
+                                        tenant_id = %me.tenant_id,
+                                        timeline_id = %me.timeline_id,
+                                        batch_size = batch.len(),
+                                        "MATERIALIZER REDO-PHASE SETUP ERROR — \
+                                         entire batch un-materialised: {e:#}"
+                                    );
+                                    // Release in_flight for these keys so
+                                    // the write trigger can re-dispatch
+                                    // them on the next delta.
+                                    let mut guard = me.in_flight.lock().unwrap();
+                                    for job in &batch {
+                                        guard.remove(&job.key);
+                                    }
+                                    continue;
+                                }
+                            };
+                            // Phase 2 (pipelined): hand off the INSERT +
+                            // cache install + in_flight release to a
+                            // spawned future. The next iteration's redo
+                            // starts immediately. If we're already at
+                            // `max_inflight_inserts`, await the oldest first.
+                            while inflight_inserts.len() >= max_inflight_inserts {
+                                if let Some(h) = inflight_inserts.pop_front() {
+                                    let _ = h.await;
+                                }
                             }
+                            let me_for_commit = Arc::clone(&me);
+                            let h = tokio::spawn(
+                                async move {
+                                    me_for_commit.commit_phase(batch, outcome).await;
+                                }
+                                .in_current_span(),
+                            );
+                            inflight_inserts.push_back(h);
+                            sample_queue_depth(&rx);
                         }
-                        let me_for_commit = Arc::clone(&me);
-                        let h = tokio::spawn(
-                            async move {
-                                me_for_commit.commit_phase(batch, outcome).await;
-                            }
-                            .in_current_span(),
-                        );
-                        inflight_inserts.push_back(h);
-                        sample_queue_depth(&rx);
                     }
                 }
+                // Best-effort: drain any still-running INSERTs so the
+                // last `max_inflight_inserts - 1` batches' images make it
+                // to YB before the task exits. Without this, a clean
+                // shutdown could leave a redone-but-not-INSERTed batch
+                // in RAM that disappears when the task drops.
+                while let Some(h) = inflight_inserts.pop_front() {
+                    let _ = h.await;
+                }
+                // Best-effort reset on exit so a dead task doesn't leave
+                // the gauge frozen at a stale value.
+                crate::metrics::MATERIALIZER_QUEUE_DEPTH.set(0);
+                info!(
+                    tenant_id = %me.tenant_id,
+                    timeline_id = %me.timeline_id,
+                    "image materialiser exited",
+                );
             }
-            // Best-effort: drain any still-running INSERTs so the
-            // last `max_inflight_inserts - 1` batches' images make it
-            // to YB before the task exits. Without this, a clean
-            // shutdown could leave a redone-but-not-INSERTed batch
-            // in RAM that disappears when the task drops.
-            while let Some(h) = inflight_inserts.pop_front() {
-                let _ = h.await;
-            }
-            // Best-effort reset on exit so a dead task doesn't leave
-            // the gauge frozen at a stale value.
-            crate::metrics::MATERIALIZER_QUEUE_DEPTH.set(0);
-            info!(
-                tenant_id = %me.tenant_id,
-                timeline_id = %me.timeline_id,
-                "image materialiser exited",
-            );
-        }.instrument(span));
+            .instrument(span),
+        );
         MaterializerTask { handle, cancel }
     }
 
@@ -325,13 +326,8 @@ impl ImageMaterializer {
         // Boxed futures so prime + refill calls produce the same
         // FuturesUnordered item type. Each future borrows `self` and the
         // `MaterializeJob` slice from `jobs` — both outlive the await.
-        type RedoFut<'a> = BoxFuture<
-            'a,
-            (
-                &'a MaterializeJob,
-                Result<Option<(PageRow, usize, usize)>>,
-            ),
-        >;
+        type RedoFut<'a> =
+            BoxFuture<'a, (&'a MaterializeJob, Result<Option<(PageRow, usize, usize)>>)>;
         fn spawn_redo<'a>(me: &'a ImageMaterializer, job: &'a MaterializeJob) -> RedoFut<'a> {
             async move {
                 let res = me.redo_one(job).await;
@@ -515,10 +511,7 @@ impl ImageMaterializer {
     /// - `Some((image_row, chain_len, n_records))` to enqueue for COPY,
     /// - `None` to drop the job (nothing durable yet, or already image-anchored),
     /// - `Err` to log and skip.
-    async fn redo_one(
-        &self,
-        job: &MaterializeJob,
-    ) -> Result<Option<(PageRow, usize, usize)>> {
+    async fn redo_one(&self, job: &MaterializeJob) -> Result<Option<(PageRow, usize, usize)>> {
         // target_lsn is durable by construction (post-flush trigger
         // uses max snapshot LSN per key; read-side trigger uses the
         // caller's bound). Fetch via `read_chain_durable` — the cache
@@ -567,9 +560,7 @@ impl ImageMaterializer {
         let chain_len = chain.len();
         let n_records = chain_len.saturating_sub(if base_img.is_some() { 1 } else { 0 });
         let image_bytes = if records.is_empty() {
-            base_img
-                .expect("checked records empty + base_img some")
-                .1
+            base_img.expect("checked records empty + base_img some").1
         } else {
             let chain_dump: Vec<String> = chain
                 .iter()
@@ -633,7 +624,10 @@ fn parse_chain(chain: &[PageRow]) -> Result<(Option<(Lsn, Bytes)>, Vec<(Lsn, Neo
     let anchor = &chain[anchor_idx];
 
     let (base_img, records_slice) = if anchor.is_image {
-        (Some((anchor.lsn, anchor.payload.clone())), &chain[..anchor_idx])
+        (
+            Some((anchor.lsn, anchor.payload.clone())),
+            &chain[..anchor_idx],
+        )
     } else {
         (None, &chain[..])
     };

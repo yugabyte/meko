@@ -16,11 +16,11 @@ use safekeeper_api::models::HotStandbyFeedback;
 use safekeeper_api::{Term, membership};
 use serde::{Deserialize, Serialize};
 use tracing::*;
+#[cfg(test)]
+use utils::bin_ser::BeSer;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
-#[cfg(test)]
-use utils::bin_ser::BeSer;
 
 use crate::metrics::{MISC_OPERATION_SECONDS, PROPOSER_ACCEPTOR_MESSAGES_TOTAL};
 use crate::state::TimelineState;
@@ -1170,7 +1170,6 @@ where
             self.append_response(),
         )))
     }
-
 }
 
 #[cfg(test)]
@@ -1267,7 +1266,8 @@ mod tests {
             persisted_state: test_sk_state(),
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
-        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
+        let mut sk =
+            SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
 
         // Vote with generation mismatch should be rejected.
         let gen_mismatch_vote_request = ProposerAcceptorMessage::VoteRequest(VoteRequest {
@@ -1310,7 +1310,8 @@ mod tests {
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
 
-        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
+        let mut sk =
+            SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
 
         let mut ar_hdr = AppendRequestHeader {
             generation: Generation::new(0),
@@ -1378,7 +1379,8 @@ mod tests {
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
 
-        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
+        let mut sk =
+            SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
 
         let pem = ProposerElected {
             generation: Generation::new(0),

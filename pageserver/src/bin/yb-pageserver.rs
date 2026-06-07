@@ -23,8 +23,8 @@ use pageserver::page_service::GrpcPageServiceHandler;
 use pageserver::task_mgr::{BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME};
 use pageserver::tenant::{TenantSharedResources, mgr};
 use pageserver::{
-    CancellableTask, HttpEndpointListener, HttpsEndpointListener,
-    MetricsCollectionTask, http, page_service, task_mgr, virtual_file,
+    CancellableTask, HttpEndpointListener, HttpsEndpointListener, MetricsCollectionTask, http,
+    page_service, task_mgr, virtual_file,
 };
 use postgres_backend::AuthType;
 use remote_storage::GenericRemoteStorage;
@@ -851,13 +851,9 @@ async fn create_compute_page_store(
     // docstring for the parallelism rationale.
     let pool_size = pageserver_api::config::scale_count(4, conf.scale_factor);
     // Read-only path — no `yb_enable_upsert_mode` GUC needed.
-    let store = create_page_store_with_app_name(
-        conf,
-        "yb-pageserver:compute_reads",
-        pool_size,
-        false,
-    )
-    .await?;
+    let store =
+        create_page_store_with_app_name(conf, "yb-pageserver:compute_reads", pool_size, false)
+            .await?;
     // No schema bootstrap here — storage_controller's diesel
     // migrations are the single source of truth for `pageserver.*`
     // tables. Tests still call `store.ensure_schema()` directly.
@@ -890,13 +886,7 @@ async fn create_fpu_page_store(
     // `put_meta` + the materialiser's image INSERTs all run here and
     // depend on `yb_enable_upsert_mode = true` to skip
     // read-before-write on partial-chunk retries.
-    let store = create_page_store_with_app_name(
-        conf,
-        "yb-pageserver:fpu",
-        pool_size,
-        true,
-    )
-    .await?;
+    let store = create_page_store_with_app_name(conf, "yb-pageserver:fpu", pool_size, true).await?;
     info!(pool_size, "Internal PageStore connected");
     Ok(store)
 }

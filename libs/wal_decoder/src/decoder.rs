@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use bytes::{Buf, Bytes};
 use pageserver_api::key::rel_block_to_key;
-use pageserver_api::reltag::{RelTag, SlruKind};
 use pageserver_api::models::ShardIdentity;
+use pageserver_api::reltag::{RelTag, SlruKind};
 use postgres_ffi::walrecord::*;
 use postgres_ffi::{PgMajorVersion, pg_constants};
 use postgres_ffi_types::forknum::VISIBILITYMAP_FORKNUM;

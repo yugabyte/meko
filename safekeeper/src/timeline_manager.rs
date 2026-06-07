@@ -23,9 +23,7 @@ use utils::lsn::Lsn;
 
 use crate::SafeKeeperConf;
 use crate::control_file::{ControlFileStorage, Storage};
-use crate::metrics::{
-    MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS,
-};
+use crate::metrics::{MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS};
 use crate::remove_wal::calc_horizon_lsn;
 use crate::send_wal::WalSenders;
 use crate::state::TimelineState;
@@ -223,14 +221,7 @@ pub async fn main_task(
         }
     };
 
-    let mut mgr = Manager::new(
-        tli,
-        conf,
-        broker_active_set,
-        manager_tx,
-        yb_wal,
-    )
-    .await;
+    let mut mgr = Manager::new(tli, conf, broker_active_set, manager_tx, yb_wal).await;
 
     let last_state = 'outer: loop {
         MANAGER_ITERATIONS_TOTAL.inc();
@@ -492,7 +483,9 @@ impl Manager {
             Some(ManagerCtlMessage::GuardRequest(tx)) => {
                 let guard = match self.tli.gate.enter() {
                     Ok(gate_guard) => Ok(self.access_service.create_guard(gate_guard)),
-                    Err(_) => Err(anyhow::anyhow!("timeline is shutting down, can't get a guard")),
+                    Err(_) => Err(anyhow::anyhow!(
+                        "timeline is shutting down, can't get a guard"
+                    )),
                 };
 
                 if tx.send(guard).is_err() {

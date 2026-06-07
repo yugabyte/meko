@@ -93,9 +93,9 @@ use futures::future::{BoxFuture, FutureExt};
 use postgres_ffi::XLogSegNo;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, watch};
-use yb_tokio_postgres::types::ToSql;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
+use yb_tokio_postgres::types::ToSql;
 
 use crate::metrics::WalStorageMetrics;
 use crate::state::TimelinePersistentState;
@@ -135,9 +135,7 @@ impl YbWalConn {
     /// Build from the SK config. Returns `None` when
     /// `--wal-yb-config` isn't set (which yb-light shouldn't be
     /// running without — every persistence path needs this).
-    pub async fn from_conf(
-        conf: &crate::SafeKeeperConf,
-    ) -> anyhow::Result<Option<Arc<YbWalConn>>> {
+    pub async fn from_conf(conf: &crate::SafeKeeperConf) -> anyhow::Result<Option<Arc<YbWalConn>>> {
         use anyhow::Context;
         let Some(yb) = conf.wal_yb_config.as_ref() else {
             return Ok(None);
@@ -327,8 +325,7 @@ impl YbWalStorage {
         // `submitted_max_lsn == write_lsn` returns at once (nothing to
         // wait for).
         let (tx, rx) = mpsc::channel::<PendingChunk>(CHUNK_CHANNEL_CAPACITY);
-        let (watermark_tx, watermark_rx) =
-            watch::channel(DurableState::Healthy(write_lsn));
+        let (watermark_tx, watermark_rx) = watch::channel(DurableState::Healthy(write_lsn));
         let flush_notify = Arc::new(tokio::sync::Notify::new());
         let durable_lsn = Arc::new(AtomicU64::new(write_lsn.0));
         let consumer_handle = tokio::spawn(consumer_main(
@@ -536,7 +533,6 @@ impl YbWalStorage {
             DurableState::Failed(msg) => Err(anyhow::anyhow!(msg)),
         }
     }
-
 }
 
 impl Storage for YbWalStorage {
@@ -675,8 +671,7 @@ impl Storage for YbWalStorage {
             );
             let lower_i: i64 = lower as i64;
             let upper_i: i64 = segno_up_to as i64;
-            let params: [&(dyn ToSql + Sync); 4] =
-                [&tenant_id, &timeline_id, &lower_i, &upper_i];
+            let params: [&(dyn ToSql + Sync); 4] = [&tenant_id, &timeline_id, &lower_i, &upper_i];
             ysql_fpu_client
                 .execute(&sql, &params)
                 .await
@@ -778,12 +773,17 @@ async fn consumer_main(
             }
         }
 
-        let highest_lsn = batch
-            .last()
-            .map(|c| c.end_lsn)
-            .expect("batch is non-empty");
+        let highest_lsn = batch.last().map(|c| c.end_lsn).expect("batch is non-empty");
 
-        match flush_batch(&ysql_fpu_client, &table_name, &tenant_id, &timeline_id, &batch).await {
+        match flush_batch(
+            &ysql_fpu_client,
+            &table_name,
+            &tenant_id,
+            &timeline_id,
+            &batch,
+        )
+        .await
+        {
             Ok(()) => {
                 // Populate the read-side cache from the batch BEFORE
                 // publishing the durability advance. The cache is the
@@ -796,11 +796,7 @@ async fn consumer_main(
                 if let Some(c) = &cache {
                     let mut guard = c.lock().unwrap();
                     for pc in &batch {
-                        guard.insert(
-                            pc.segno,
-                            pc.chunk_offset as u64,
-                            pc.data.clone(),
-                        );
+                        guard.insert(pc.segno, pc.chunk_offset as u64, pc.data.clone());
                     }
                 }
                 // Publish durability advance. The atomic is the
@@ -983,8 +979,15 @@ impl YbSegmentReader {
         let pos = self.pos;
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let res =
-                fetch_chunk_from_yb(&ysql_fpu_client, &table, &tenant_id, &timeline_id, segno, pos).await;
+            let res = fetch_chunk_from_yb(
+                &ysql_fpu_client,
+                &table,
+                &tenant_id,
+                &timeline_id,
+                segno,
+                pos,
+            )
+            .await;
             let _ = tx.send(res);
         });
         self.fetch = Some(rx);
@@ -1059,7 +1062,10 @@ impl AsyncRead for YbSegmentReader {
                     me.fetch = None;
                     return Poll::Ready(Err(std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        format!("YB WAL fetch failed for segno {} offset {}: {e}", me.segno, me.pos),
+                        format!(
+                            "YB WAL fetch failed for segno {} offset {}: {e}",
+                            me.segno, me.pos
+                        ),
                     )));
                 }
                 Poll::Ready(Err(_recv_err)) => {
@@ -1186,7 +1192,9 @@ mod tests {
 
     async fn drop_wals_table(ysql_fpu_client: &YsqlClient, table: &str) {
         let q = quote_ident(table);
-        let _ = ysql_fpu_client.execute(&format!("DROP TABLE IF EXISTS {q}"), &[]).await;
+        let _ = ysql_fpu_client
+            .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
+            .await;
     }
 
     /// Build a fresh `YbWalStorage` with its own per-test scratch table
@@ -1314,7 +1322,10 @@ mod tests {
 
     fn rand_suffix() -> String {
         let pid = std::process::id();
-        let nanos = std::time::UNIX_EPOCH.elapsed().map(|d| d.as_nanos()).unwrap_or(0);
+        let nanos = std::time::UNIX_EPOCH
+            .elapsed()
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         format!("{pid}_{nanos}")
     }
 }

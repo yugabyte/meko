@@ -222,8 +222,7 @@ impl YsqlClient {
             }
             Some(_mode) => {
                 let tls = build_yb_rustls_connector(cfg.sslrootcert.as_deref())?;
-                Self::connect_rustls_pooled(pg_config, tls, pool_size, set_fast_path_upsert)
-                    .await
+                Self::connect_rustls_pooled(pg_config, tls, pool_size, set_fast_path_upsert).await
             }
         }
     }
@@ -247,9 +246,7 @@ impl YsqlClient {
 
     /// Round-robin pick a pool slot index.
     fn pick_slot(&self) -> usize {
-        self.next
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            % self.pool.len()
+        self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % self.pool.len()
     }
 
     /// Pick a pool slot and return the live client at that slot,
@@ -343,11 +340,7 @@ impl YsqlClient {
         Ok((client, stmt))
     }
 
-    pub async fn execute(
-        &self,
-        sql: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<u64> {
+    pub async fn execute(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64> {
         self.run_with_retries("execute", sql, |client, stmt| async move {
             client.execute(&stmt, params).await
         })
@@ -413,12 +406,7 @@ impl YsqlClient {
     /// `query_opt`) go through here, so every caller gets the same
     /// retry semantics + prepared-statement caching without
     /// reimplementing them.
-    async fn run_with_retries<F, Fut, T>(
-        &self,
-        op_label: &str,
-        sql: &str,
-        f: F,
-    ) -> Result<T>
+    async fn run_with_retries<F, Fut, T>(&self, op_label: &str, sql: &str, f: F) -> Result<T>
     where
         F: Fn(Arc<tokio_postgres::Client>, Statement) -> Fut,
         Fut: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
@@ -696,14 +684,13 @@ pub fn build_yb_rustls_connector(
     use rustls::crypto::ring;
 
     let roots = if let Some(path) = sslrootcert {
-        let pem = std::fs::read(path)
-            .with_context(|| format!("reading sslrootcert file `{path}`"))?;
+        let pem =
+            std::fs::read(path).with_context(|| format!("reading sslrootcert file `{path}`"))?;
         let mut store = rustls::RootCertStore::empty();
         let mut reader = std::io::Cursor::new(pem);
         let mut added = 0usize;
         for item in rustls_pemfile::certs(&mut reader) {
-            let cert =
-                item.with_context(|| format!("parsing PEM cert in `{path}`"))?;
+            let cert = item.with_context(|| format!("parsing PEM cert in `{path}`"))?;
             store
                 .add(cert)
                 .with_context(|| format!("adding cert from `{path}` to root store"))?;
@@ -803,10 +790,7 @@ pub fn build_yb_rustls_connector(
 /// the connection here than carry a silently misconfigured client
 /// (the previous `let _ = … .await` is exactly the kind of hidden
 /// GUC drift that bites under load).
-fn build_pg_config(
-    cfg: &YbConnConfig,
-    application_name: &str,
-) -> Result<tokio_postgres::Config> {
+fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_postgres::Config> {
     let mut pg_config = tokio_postgres::Config::new();
     // YbConnConfig.host accepts a comma-separated list of YB tservers
     // (e.g. "10.0.0.1,10.0.0.2,10.0.0.3"). Add each as its own host on
@@ -847,9 +831,8 @@ fn build_pg_config(
     //
     // pg_config.load_balance("only-primary");
     if let Some(env_name) = &cfg.password_env {
-        let password = std::env::var(env_name).with_context(|| {
-            format!("YsqlClient: password env var `{env_name}` is not set")
-        })?;
+        let password = std::env::var(env_name)
+            .with_context(|| format!("YsqlClient: password env var `{env_name}` is not set"))?;
         pg_config.password(password);
     }
     Ok(pg_config)
@@ -942,9 +925,7 @@ mod retry_class_tests {
 
     #[test]
     fn drop_patterns_match() {
-        assert!(looks_like_dropped_connection(
-            "db error: connection closed"
-        ));
+        assert!(looks_like_dropped_connection("db error: connection closed"));
         assert!(looks_like_dropped_connection(
             "io error: connection reset by peer"
         ));

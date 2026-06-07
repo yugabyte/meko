@@ -285,7 +285,12 @@ async fn tenant_housekeeping_loop(tenant: Arc<TenantShard>, cancel: Cancellation
         info_span!(parent: None, "pagestream_throttle", tenant_id=%tenant.id).in_scope(|| {
             let now = Instant::now();
             let prev = std::mem::replace(&mut last_throttle_flag_reset_at, now);
-            let Stats { count_accounted_start, count_accounted_finish, count_throttled, sum_throttled_usecs} = tenant.pagestream_throttle.reset_stats();
+            let Stats {
+                count_accounted_start,
+                count_accounted_finish,
+                count_throttled,
+                sum_throttled_usecs,
+            } = tenant.pagestream_throttle.reset_stats();
             if count_throttled == 0 {
                 return;
             }

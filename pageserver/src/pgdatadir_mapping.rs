@@ -16,16 +16,16 @@ use anyhow::Context;
 use bytes::{Buf, Bytes, BytesMut};
 use enum_map::Enum;
 use pageserver_api::key::{
-    CHECKPOINT_KEY, CONTROLFILE_KEY, CompactKey, DBDIR_KEY, Key, RelDirExists,
-    TWOPHASEDIR_KEY, dbdir_key_range, rel_block_to_key, rel_dir_to_key, rel_key_range,
-    rel_size_to_key, rel_tag_sparse_key, rel_tag_sparse_key_range, relmap_file_key,
-    repl_origin_key, repl_origin_key_range, slru_block_to_key, slru_dir_to_key,
-    slru_segment_key_range, slru_segment_size_to_key, twophase_file_key, twophase_key_range,
+    CHECKPOINT_KEY, CONTROLFILE_KEY, CompactKey, DBDIR_KEY, Key, RelDirExists, TWOPHASEDIR_KEY,
+    dbdir_key_range, rel_block_to_key, rel_dir_to_key, rel_key_range, rel_size_to_key,
+    rel_tag_sparse_key, rel_tag_sparse_key_range, relmap_file_key, repl_origin_key,
+    repl_origin_key_range, slru_block_to_key, slru_dir_to_key, slru_segment_key_range,
+    slru_segment_size_to_key, twophase_file_key, twophase_key_range,
 };
 use pageserver_api::keyspace::{KeySpaceRandomAccum, SparseKeySpace};
 use pageserver_api::models::RelSizeMigration;
-use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
 use pageserver_api::models::ShardIdentity;
+use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
 use postgres_ffi::{BLCKSZ, PgMajorVersion, TransactionId};
 use postgres_ffi_types::forknum::{FSM_FORKNUM, VISIBILITYMAP_FORKNUM};
 use postgres_ffi_types::{Oid, RepOriginId, TimestampTz};
@@ -1917,7 +1917,6 @@ impl DatadirModification<'_> {
         blknum: BlockNumber,
         img: Bytes,
     ) -> Result<(), WalIngestError> {
-
         let key = slru_block_to_key(kind, segno, blknum);
         if !key.is_valid_key_on_write_path() {
             Err(WalIngestErrorKind::InvalidKey(key, self.lsn))?;
@@ -2505,7 +2504,6 @@ impl DatadirModification<'_> {
         nblocks: BlockNumber,
         ctx: &RequestContext,
     ) -> Result<(), WalIngestError> {
-
         // Add it to the directory entry
         let dir_key = slru_dir_to_key(kind);
         let buf = self.get(dir_key, ctx).await?;
@@ -2540,7 +2538,6 @@ impl DatadirModification<'_> {
         segno: u32,
         nblocks: BlockNumber,
     ) -> Result<(), WalIngestError> {
-
         // Put size
         let size_key = slru_segment_size_to_key(kind, segno);
         let buf = nblocks.to_le_bytes();

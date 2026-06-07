@@ -17,8 +17,8 @@ use crate::retry::Retry;
 use compute_api::spec::PageserverProtocol;
 use pageserver_page_api as page_api;
 use pageserver_page_api::GetPageSplitter;
-use utils::id::{TenantId, TimelineId};
 use utils::id::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
+use utils::id::{TenantId, TimelineId};
 
 /// Max number of concurrent clients per channel (i.e. TCP connection). New channels will be spun up
 /// when full.

@@ -594,10 +594,7 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn timeline_list(
-        &self,
-        tenant_shard_id: &TenantId,
-    ) -> Result<Vec<TimelineInfo>> {
+    pub async fn timeline_list(&self, tenant_shard_id: &TenantId) -> Result<Vec<TimelineInfo>> {
         let uri = format!(
             "{}/v1/tenant/{}/timeline",
             self.mgmt_api_endpoint, tenant_shard_id
@@ -818,5 +815,4 @@ impl Client {
             .await
             .map_err(Error::ReceiveBody)
     }
-
 }

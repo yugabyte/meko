@@ -199,4 +199,3 @@ pub async fn check_storage_permissions(
 fn bytes_to_stream(bytes: Bytes) -> impl futures::Stream<Item = std::io::Result<Bytes>> {
     futures::stream::once(futures::future::ready(Ok(bytes)))
 }
-

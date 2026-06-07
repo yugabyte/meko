@@ -581,10 +581,26 @@ async fn import_file(
         import_slru(modification, SlruKind::Clog, file_path, reader, len, ctx).await?;
         debug!("imported clog slru");
     } else if file_path.starts_with("pg_multixact/offsets") {
-        import_slru(modification, SlruKind::MultiXactOffsets, file_path, reader, len, ctx).await?;
+        import_slru(
+            modification,
+            SlruKind::MultiXactOffsets,
+            file_path,
+            reader,
+            len,
+            ctx,
+        )
+        .await?;
         debug!("imported multixact offsets slru");
     } else if file_path.starts_with("pg_multixact/members") {
-        import_slru(modification, SlruKind::MultiXactMembers, file_path, reader, len, ctx).await?;
+        import_slru(
+            modification,
+            SlruKind::MultiXactMembers,
+            file_path,
+            reader,
+            len,
+            ctx,
+        )
+        .await?;
         debug!("imported multixact members slru");
     } else if file_path.starts_with("pg_twophase") {
         let bytes = read_all_bytes(reader).await?;

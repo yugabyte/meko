@@ -451,10 +451,7 @@ where
             .store(Some(Arc::new((dbdir_cnt, rel_cnt))));
 
         let start_time = Instant::now();
-        let aux_files = self
-            .timeline
-            .list_aux_files(self.lsn, self.ctx)
-            .await?;
+        let aux_files = self.timeline.list_aux_files(self.lsn, self.ctx).await?;
         let aux_scan_time = start_time.elapsed();
         let aux_estimated_size = aux_files
             .values()
@@ -517,10 +514,7 @@ where
         {
             self.add_twophase_file(xid).await?;
         }
-        let repl_origins = self
-            .timeline
-            .get_replorigins(self.lsn, self.ctx)
-            .await?;
+        let repl_origins = self.timeline.get_replorigins(self.lsn, self.ctx).await?;
         let n_origins = repl_origins.len();
         if n_origins != 0 {
             //

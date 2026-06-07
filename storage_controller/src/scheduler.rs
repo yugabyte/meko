@@ -978,8 +978,8 @@ pub(crate) mod test_utils {
 #[cfg(test)]
 mod tests {
     use pageserver_api::controller_api::NodeAvailability;
-    use pageserver_api::models::utilization::test_utilization;
     use pageserver_api::models::ShardIdentity;
+    use pageserver_api::models::utilization::test_utilization;
     use utils::id::TenantId;
     use utils::id::{ShardCount, ShardNumber, ShardStripeSize};
 
@@ -1331,12 +1331,8 @@ mod tests {
 
             let tenant_shard_id = TenantId::generate();
 
-            let shard_identity = ShardIdentity::new(
-                ShardNumber(0),
-                ShardCount(0),
-                ShardStripeSize(1),
-            )
-            .unwrap();
+            let shard_identity =
+                ShardIdentity::new(ShardNumber(0), ShardCount(0), ShardStripeSize(1)).unwrap();
             let mut shard = TenantShard::new(
                 tenant_shard_id,
                 shard_identity,
@@ -1406,12 +1402,8 @@ mod tests {
             preferred_az: Option<AvailabilityZone>,
             context: &mut ScheduleContext,
         ) {
-            let shard_identity = ShardIdentity::new(
-                ShardNumber(0),
-                ShardCount(0),
-                ShardStripeSize(1),
-            )
-            .unwrap();
+            let shard_identity =
+                ShardIdentity::new(ShardNumber(0), ShardCount(0), ShardStripeSize(1)).unwrap();
             let mut shard = TenantShard::new(
                 tenant_shard_id,
                 shard_identity,
@@ -1533,12 +1525,8 @@ mod tests {
         let mut scheduler = Scheduler::new(nodes.values());
 
         let tenant_shard_id = TenantId::generate();
-        let shard_identity = ShardIdentity::new(
-            ShardNumber(0),
-            ShardCount(0),
-            ShardStripeSize(1),
-        )
-        .unwrap();
+        let shard_identity =
+            ShardIdentity::new(ShardNumber(0), ShardCount(0), ShardStripeSize(1)).unwrap();
         // 1 attached and 1 secondary.
         let mut shard = TenantShard::new(
             tenant_shard_id,

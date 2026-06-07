@@ -15,11 +15,11 @@ use http_utils::request::{ensure_no_body, parse_query_param, parse_request_param
 use http_utils::{RequestExt, RouterBuilder};
 use hyper::{Body, Request, Response, StatusCode};
 use postgres_ffi::WAL_SEGMENT_SIZE;
+use safekeeper_api::ServerInfo;
 use safekeeper_api::models::{
     AcceptorStateStatus, SafekeeperStatus, TenantDeleteResult, TermSwitchApiEntry,
     TimelineCreateRequest, TimelineDeleteResult, TimelineStatus,
 };
-use safekeeper_api::ServerInfo;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;

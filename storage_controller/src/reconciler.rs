@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use json_structural_diff::JsonDiff;
 use pageserver_api::controller_api::{AvailabilityZone, MigrationConfig, PlacementPolicy};
+use pageserver_api::models::ShardIdentity;
 use pageserver_api::models::{LocationConfig, TenantConfig, TenantWaitLsnRequest};
-use pageserver_api::models::{ShardIdentity};
 use pageserver_client::mgmt_api;
 use reqwest::StatusCode;
 use tokio_util::sync::CancellationToken;
@@ -23,7 +23,6 @@ use crate::pageserver_client::PageserverClient;
 use crate::persistence::Persistence;
 use crate::tenant_shard::{IntentState, ObservedState, ObservedStateDelta, ObservedStateLocation};
 use crate::{compute_hook, service};
-
 
 /// Object with the lifetime of the background reconcile task that is created
 /// for tenants which have a difference between their intent and observed states.
@@ -878,10 +877,7 @@ impl Reconciler {
         // Detach any extraneous pageservers that are no longer referenced
         // by our intent.
         for node in &self.detach {
-            changes.push((
-                node.clone(),
-                LocationConfig { generation: None },
-            ));
+            changes.push((node.clone(), LocationConfig { generation: None }));
         }
 
         let mut first_err = None;

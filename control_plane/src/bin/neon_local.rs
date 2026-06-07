@@ -24,8 +24,8 @@ use control_plane::endpoint::{
 use control_plane::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage};
 use control_plane::local_env;
 use control_plane::local_env::{
-    EndpointStorageConf, InitForceMode, LocalEnv, NeonLocalInitConf,
-    NeonLocalInitPageserverConf, SafekeeperConf,
+    EndpointStorageConf, InitForceMode, LocalEnv, NeonLocalInitConf, NeonLocalInitPageserverConf,
+    SafekeeperConf,
 };
 use control_plane::pageserver::PageServerNode;
 use control_plane::safekeeper::SafekeeperNode;
@@ -41,10 +41,10 @@ use pageserver_api::config::{
 use pageserver_api::controller_api::{
     NodeAvailabilityWrapper, PlacementPolicy, TenantCreateRequest,
 };
+use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardStripeSize};
 use pageserver_api::models::{
     ShardParameters, TenantConfigRequest, TimelineCreateRequest, TimelineInfo,
 };
-use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardStripeSize};
 use postgres_backend::AuthType;
 use safekeeper_api::membership::{SafekeeperGeneration, SafekeeperId};
 use safekeeper_api::{
@@ -1919,7 +1919,9 @@ async fn handle_start_all_impl(
         .prepare_database_if_external()
         .await
     {
-        return Err(vec![e.context("prepare external storage controller database")]);
+        return Err(vec![
+            e.context("prepare external storage controller database"),
+        ]);
     }
 
     // Phase 2 — storage_controller. The controller runs diesel

@@ -196,13 +196,17 @@ impl ConnectionManagerStatus {
                 } else if connection.is_connected {
                     resulting_string.push_str(&format!(
                         " (update {}): connecting to node {}",
-                        connection.latest_connection_update.format("%Y-%m-%d %H:%M:%S"),
+                        connection
+                            .latest_connection_update
+                            .format("%Y-%m-%d %H:%M:%S"),
                         connection.node,
                     ));
                 } else {
                     resulting_string.push_str(&format!(
                         " (update {}): initializing node {} connection",
-                        connection.latest_connection_update.format("%Y-%m-%d %H:%M:%S"),
+                        connection
+                            .latest_connection_update
+                            .format("%Y-%m-%d %H:%M:%S"),
                         connection.node,
                     ));
                 }
@@ -246,10 +250,9 @@ impl Backoff {
     /// Record a connection attempt that began at `started_at`, scheduling
     /// the next earliest retry and growing the backoff.
     fn record_attempt(&mut self, started_at: NaiveDateTime) {
-        self.next_attempt_at = started_at
-            .checked_add_signed(chrono::Duration::milliseconds(
-                (self.duration_seconds * 1000.0) as i64,
-            ));
+        self.next_attempt_at = started_at.checked_add_signed(chrono::Duration::milliseconds(
+            (self.duration_seconds * 1000.0) as i64,
+        ));
         let next = self.duration_seconds * RECONNECT_BACKOFF_MULTIPLIER;
         self.duration_seconds = next
             .min(RECONNECT_MAX_BACKOFF_SECONDS)
@@ -345,52 +348,55 @@ impl ConnectionManagerState {
         let sk_id = SAFEKEEPER_NODE_ID;
         let span = info_span!("connection", node_id = %sk_id);
 
-        let connection_handle = TaskHandle::spawn(&self.cancel, move |events_sender, cancellation| {
-            async move {
-                debug_assert_current_span_has_tenant_and_timeline_id();
+        let connection_handle =
+            TaskHandle::spawn(&self.cancel, move |events_sender, cancellation| {
+                async move {
+                    debug_assert_current_span_has_tenant_and_timeline_id();
 
-                let res = super::walreceiver_connection::handle_walreceiver_connection(
-                    timeline,
-                    protocol,
-                    wal_source_connconf,
-                    events_sender,
-                    cancellation.clone(),
-                    connect_timeout,
-                    ctx,
-                    sk_id,
-                    ingest_batch_size,
-                    validate_wal_contiguity,
-                )
-                .await;
+                    let res = super::walreceiver_connection::handle_walreceiver_connection(
+                        timeline,
+                        protocol,
+                        wal_source_connconf,
+                        events_sender,
+                        cancellation.clone(),
+                        connect_timeout,
+                        ctx,
+                        sk_id,
+                        ingest_batch_size,
+                        validate_wal_contiguity,
+                    )
+                    .await;
 
-                match res {
-                    Ok(()) => Ok(()),
-                    Err(e) => match e {
-                        WalReceiverError::SuccessfulCompletion(msg) => {
-                            info!("walreceiver connection handling ended with success: {msg}");
-                            Ok(())
-                        }
-                        WalReceiverError::ExpectedSafekeeperError(e) => {
-                            info!("walreceiver connection handling ended: {e}");
-                            Ok(())
-                        }
-                        WalReceiverError::ClosedGate => {
-                            info!("walreceiver connection handling ended because of closed gate");
-                            Ok(())
-                        }
-                        WalReceiverError::Cancelled => Ok(()),
-                        WalReceiverError::Other(e) => {
-                            if cancellation.is_cancelled() {
+                    match res {
+                        Ok(()) => Ok(()),
+                        Err(e) => match e {
+                            WalReceiverError::SuccessfulCompletion(msg) => {
+                                info!("walreceiver connection handling ended with success: {msg}");
                                 Ok(())
-                            } else {
-                                Err(e).context("walreceiver connection handling failure")
                             }
-                        }
-                    },
+                            WalReceiverError::ExpectedSafekeeperError(e) => {
+                                info!("walreceiver connection handling ended: {e}");
+                                Ok(())
+                            }
+                            WalReceiverError::ClosedGate => {
+                                info!(
+                                    "walreceiver connection handling ended because of closed gate"
+                                );
+                                Ok(())
+                            }
+                            WalReceiverError::Cancelled => Ok(()),
+                            WalReceiverError::Other(e) => {
+                                if cancellation.is_cancelled() {
+                                    Ok(())
+                                } else {
+                                    Err(e).context("walreceiver connection handling failure")
+                                }
+                            }
+                        },
+                    }
                 }
-            }
-            .instrument(span)
-        });
+                .instrument(span)
+            });
 
         self.wal_connection = Some(WalConnection {
             status: WalConnectionStatus {

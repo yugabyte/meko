@@ -214,13 +214,14 @@ impl WalReaderStreamState {
         // Read WAL
         let read_start = self.wal_reader.start;
         let send_size = {
-            let _term_guard = if let Some(t) = self.term {
-                Some(self.tli.acquire_term(t).await.with_context(|| {
-                    format!("acquire_term({t}) failed at start={read_start}")
-                })?)
-            } else {
-                None
-            };
+            let _term_guard =
+                if let Some(t) = self.term {
+                    Some(self.tli.acquire_term(t).await.with_context(|| {
+                        format!("acquire_term({t}) failed at start={read_start}")
+                    })?)
+                } else {
+                    None
+                };
             self.wal_reader
                 .reader
                 .as_mut()

@@ -14,15 +14,15 @@ use futures::{FutureExt, StreamExt};
 use http_utils::tls_certs::ReloadingCertificateResolver;
 use metrics::set_build_info_metric;
 use safekeeper::defaults::{
-    DEFAULT_CONTROL_FILE_SAVE_INTERVAL, DEFAULT_GLOBAL_DISK_CHECK_INTERVAL, DEFAULT_HEARTBEAT_TIMEOUT,
-    DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
+    DEFAULT_CONTROL_FILE_SAVE_INTERVAL, DEFAULT_GLOBAL_DISK_CHECK_INTERVAL,
+    DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
     DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES, DEFAULT_PG_LISTEN_ADDR, DEFAULT_SSL_CERT_FILE,
     DEFAULT_SSL_CERT_RELOAD_PERIOD, DEFAULT_SSL_KEY_FILE,
 };
 use safekeeper::yb_wal_storage::YbWalConn;
 use safekeeper::{
-    BACKGROUND_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf,
-    WAL_SERVICE_RUNTIME, http, wal_service,
+    BACKGROUND_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf, WAL_SERVICE_RUNTIME, http,
+    wal_service,
 };
 use sd_notify::NotifyState;
 use tokio::runtime::Handle;

@@ -27,7 +27,6 @@ use utils::generation::Generation;
 use utils::id::{TenantId, TimelineId};
 use utils::{backoff, completion};
 
-use initdb_storage::remote_tenant_path;
 use super::{GlobalShutDown, TenantSharedResources};
 use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};
@@ -45,6 +44,7 @@ use crate::tenant::{
 };
 use crate::virtual_file::MaybeFatalIo;
 use crate::{InitializationOrder, TEMP_FILE_SUFFIX};
+use initdb_storage::remote_tenant_path;
 
 /// For a tenant that appears in TenantsMap, it may either be
 /// - `Attached`: has a full Tenant object, is elegible to service
@@ -723,9 +723,7 @@ impl TenantManager {
         {
             Ok(Some(yb_conf)) => yb_conf,
             Ok(None) => {
-                tracing::info!(
-                    "no pageserver.tenant_config row yet, using default tenant_conf"
-                );
+                tracing::info!("no pageserver.tenant_config row yet, using default tenant_conf");
                 pageserver_api::models::TenantConfig::default()
             }
             Err(e) => {
@@ -1211,7 +1209,6 @@ impl TenantManager {
         })
     }
 
-
     ///
     /// Shut down all tenants. This runs as part of pageserver shutdown.
     ///
@@ -1263,7 +1260,11 @@ impl TenantManager {
                                     async move {
                                         let res = {
                                             let (_guard, shutdown_progress) = completion::channel();
-                                            t.shutdown(shutdown_progress, ShutdownMode::FreezeAndFlush).await
+                                            t.shutdown(
+                                                shutdown_progress,
+                                                ShutdownMode::FreezeAndFlush,
+                                            )
+                                            .await
                                         };
 
                                         if let Err(other_progress) = res {
@@ -1367,10 +1368,7 @@ impl TenantManager {
         conf: &'static PageServerConf,
         tenant_shard_id: TenantId,
     ) -> Result<(), TenantStateError> {
-        if let Some(tmp_path) = self
-            .detach_tenant0(conf, tenant_shard_id)
-            .await?
-        {
+        if let Some(tmp_path) = self.detach_tenant0(conf, tenant_shard_id).await? {
             self.background_purges.spawn(tmp_path);
         }
 
@@ -1439,7 +1437,6 @@ impl TenantManager {
             })
             .collect())
     }
-
 
     /// A page service client sends a TenantId, and to look up the correct Tenant we must
     /// resolve this to a fully qualified TenantId.

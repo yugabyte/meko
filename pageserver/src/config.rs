@@ -27,8 +27,8 @@ use reqwest::Url;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::{LogFormat, SecretString};
 
-use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
 use crate::TENANT_LOCATION_CONFIG_NAME;
+use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
 
 /// Global state of pageserver.
 ///
@@ -294,10 +294,7 @@ impl PageServerConf {
 
     /// Points to a place in pageserver's local directory,
     /// where certain tenant's LocationConf be stored.
-    pub(crate) fn tenant_location_config_path(
-        &self,
-        tenant_shard_id: &TenantId,
-    ) -> Utf8PathBuf {
+    pub(crate) fn tenant_location_config_path(&self, tenant_shard_id: &TenantId) -> Utf8PathBuf {
         self.tenant_path(tenant_shard_id)
             .join(TENANT_LOCATION_CONFIG_NAME)
     }
@@ -420,11 +417,9 @@ impl PageServerConf {
             );
             NonZeroUsize::new(scaled).expect("scale_count clamps to >= 1")
         });
-        let walredo_pool_size = NonZeroUsize::new(pageserver_api::config::scale_count(
-            2,
-            scale_factor,
-        ))
-        .expect("scale_count clamps to >= 1");
+        let walredo_pool_size =
+            NonZeroUsize::new(pageserver_api::config::scale_count(2, scale_factor))
+                .expect("scale_count clamps to >= 1");
 
         let mut conf = PageServerConf {
             // ------------------------------------------------------------

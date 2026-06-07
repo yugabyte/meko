@@ -15,7 +15,6 @@ use crate::local_env::{LocalEnv, NeonStorageControllerConf};
 // (which returns a `yb_postgres_openssl::MakeTlsConnector`) lines up
 // with the Config / Client / Error types this file uses below. The
 // rest of control_plane keeps using the Neon fork's `tokio_postgres`.
-use yb_tokio_postgres as tokio_postgres;
 use camino::{Utf8Path, Utf8PathBuf};
 use hyper0::Uri;
 use nix::unistd::Pid;
@@ -40,6 +39,7 @@ use url::Url;
 use utils::auth::{Claims, Scope, encode_from_key_file};
 use utils::id::{NodeId, TenantId};
 use whoami::username;
+use yb_tokio_postgres as tokio_postgres;
 
 pub struct StorageController {
     env: LocalEnv,
@@ -392,7 +392,8 @@ impl StorageController {
     async fn create_database(base: &tokio_postgres::Config, name: &str) -> anyhow::Result<()> {
         let mut admin = base.clone();
         admin.dbname("yugabyte");
-        let (client, conn_task) = Self::connect_external(&admin, "YB admin database 'yugabyte'").await?;
+        let (client, conn_task) =
+            Self::connect_external(&admin, "YB admin database 'yugabyte'").await?;
 
         let create_sql = format!("CREATE DATABASE \"{}\"", name.replace('"', "\"\""));
         match client.batch_execute(&create_sql).await {
@@ -400,14 +401,15 @@ impl StorageController {
                 println!("Created database '{name}'");
             }
             Err(e) => {
-                let is_dup = e
-                    .as_db_error()
-                    .is_some_and(|d| d.code() == &tokio_postgres::error::SqlState::DUPLICATE_DATABASE);
+                let is_dup = e.as_db_error().is_some_and(|d| {
+                    d.code() == &tokio_postgres::error::SqlState::DUPLICATE_DATABASE
+                });
                 if is_dup {
                     println!("Database '{name}' already exists");
                 } else {
-                    return Err(anyhow::Error::from(e)
-                        .context(format!("creating database '{name}'")));
+                    return Err(
+                        anyhow::Error::from(e).context(format!("creating database '{name}'"))
+                    );
                 }
             }
         }
@@ -514,8 +516,7 @@ impl StorageController {
                 // path below (used only for the startup script) still works
                 // when external_database_url is None at some sites. The port
                 // here is otherwise unused on the external path.
-                let parsed =
-                    Url::parse(url).context("parsing storage_controller.database_url")?;
+                let parsed = Url::parse(url).context("parsing storage_controller.database_url")?;
                 let port = parsed.port().unwrap_or(5432);
                 (base_port, port)
             }

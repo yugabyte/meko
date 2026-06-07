@@ -9,8 +9,8 @@ use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint};
 
-use utils::id::{TenantId, TimelineId};
 use utils::id::ShardIndex;
+use utils::id::{TenantId, TimelineId};
 
 use crate::model::*;
 use crate::proto;

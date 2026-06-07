@@ -20,9 +20,7 @@ use serde::{Deserialize, Serialize};
 use utils::auth::encode_from_key_file;
 use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 
-use crate::endpoint_storage::{
-    ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage,
-};
+use crate::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage};
 use crate::pageserver::PageServerNode;
 use crate::safekeeper::SafekeeperNode;
 

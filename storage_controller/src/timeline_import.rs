@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use pageserver_api::models::{ShardImportProgress, ShardImportStatus};
 use tokio_util::sync::CancellationToken;
-use utils::sync::gate::Gate;
 use utils::id::{ShardIndex, TenantId, TimelineId};
+use utils::sync::gate::Gate;
 
 use crate::{persistence::TimelineImportPersistence, service::Config};
 

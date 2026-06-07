@@ -12,8 +12,8 @@ use std::time::{Duration, SystemTime};
 use postgres_versioninfo::PgMajorVersion;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::serde_as;
-pub use utilization::PageserverUtilization;
 use std::hash::{Hash, Hasher};
+pub use utilization::PageserverUtilization;
 
 use utils::id::{NodeId, TenantId, TimelineId};
 pub use utils::id::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};

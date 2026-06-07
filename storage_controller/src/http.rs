@@ -26,8 +26,8 @@ use pageserver_api::controller_api::{
 };
 use pageserver_api::models::{
     DetachBehavior, LsnLeaseRequest, TenantConfigPatchRequest, TenantConfigRequest,
-    TenantLocationConfigRequest, TenantTimeTravelRequest,
-    TimelineArchivalConfigRequest, TimelineCreateRequest,
+    TenantLocationConfigRequest, TenantTimeTravelRequest, TimelineArchivalConfigRequest,
+    TimelineCreateRequest,
 };
 use pageserver_api::upcall_api::{
     PutTimelineImportStatusRequest, ReAttachRequest, TimelineImportStatusRequest, ValidateRequest,
@@ -712,9 +712,7 @@ async fn handle_tenant_timeline_passthrough(
 
     let tenant_shard_id = if tenant_or_shard_id.is_unsharded() {
         // If the request contains only tenant ID, find the node that holds shard zero
-        let (_, shard_id) = service
-            .tenant_shard0_node(tenant_or_shard_id)
-            .await?;
+        let (_, shard_id) = service.tenant_shard0_node(tenant_or_shard_id).await?;
         shard_id
     } else {
         tenant_or_shard_id

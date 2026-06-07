@@ -25,10 +25,10 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use bytes::Bytes;
 use dashmap::DashMap;
-use parking_lot::Mutex as PlMutex;
-use tracing::info;
 use pageserver_api::key::{KEY_SIZE, Key};
+use parking_lot::Mutex as PlMutex;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use utils::bin_ser::BeSer;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
@@ -467,8 +467,7 @@ impl PageWriter {
                 tokio::pin!(notified);
                 notified.as_mut().enable();
 
-                let pending =
-                    self.pages.unflushed_bytes() + self.aux.lock().bytes_in_aux_buffers;
+                let pending = self.pages.unflushed_bytes() + self.aux.lock().bytes_in_aux_buffers;
                 if pending < self.policy.backpressure_bytes {
                     break;
                 }
@@ -704,8 +703,9 @@ impl PageWriter {
         let start_bytes = key_to_bytes(range.start);
         let end_bytes = key_to_bytes(range.end);
         let t_lock_start = Instant::now();
-        let cached: std::collections::HashMap<bytes::Bytes, Vec<PageRow>> =
-            self.pages.lookup_range(&start_bytes, &end_bytes, target_lsn);
+        let cached: std::collections::HashMap<bytes::Bytes, Vec<PageRow>> = self
+            .pages
+            .lookup_range(&start_bytes, &end_bytes, target_lsn);
         let t_cache = t_lock_start.elapsed();
         let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
         let cached_rows: usize = cached.values().map(|v| v.len()).sum();
@@ -723,11 +723,7 @@ impl PageWriter {
         for (key, chain) in out.iter_mut() {
             // Descending LSN; on ties prefer the image (see `read_chain`
             // for the rationale).
-            chain.sort_by(|a, b| {
-                b.lsn
-                    .cmp(&a.lsn)
-                    .then_with(|| b.is_image.cmp(&a.is_image))
-            });
+            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
             chain.dedup_by(|a, b| a.lsn == b.lsn);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
@@ -780,10 +776,9 @@ impl PageWriter {
         // job won't ask the materialiser to read YB above the
         // partial-flush window. If horizon is 0 (no flush yet) skip
         // the dispatch — nothing to materialize against.
-        let horizon = Lsn(
-            self.flush_horizon_lsn
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
+        let horizon = Lsn(self
+            .flush_horizon_lsn
+            .load(std::sync::atomic::Ordering::Relaxed));
         if horizon.0 == 0 {
             return;
         }
@@ -822,11 +817,7 @@ impl PageWriter {
         // the same LSN as an existing delta), the image must sort
         // first so dedup keeps it and discards the now-superseded
         // delta. Otherwise the chain can lose its anchor.
-        merged.sort_by(|a, b| {
-            b.lsn
-                .cmp(&a.lsn)
-                .then_with(|| b.is_image.cmp(&a.is_image))
-        });
+        merged.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
         merged.dedup_by(|a, b| a.lsn == b.lsn);
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
@@ -839,11 +830,7 @@ impl PageWriter {
     /// sources (post-flush cache + PageStore). Pre-flush rows are
     /// EXCLUDED. The image materialiser uses this so its image is
     /// built only from data that survives a process crash.
-    pub async fn read_chain_durable(
-        &self,
-        key: Key,
-        target_lsn: Lsn,
-    ) -> Result<Vec<PageRow>> {
+    pub async fn read_chain_durable(&self, key: Key, target_lsn: Lsn) -> Result<Vec<PageRow>> {
         // `target_lsn` is the caller's contract: it must be ≤
         // `flush_horizon_lsn` so a YB read above the horizon can't
         // surface a mid-flush partial-chunk view. The post-flush
@@ -876,11 +863,7 @@ impl PageWriter {
         // the same LSN as an existing delta), the image must sort
         // first so dedup keeps it and discards the now-superseded
         // delta. Otherwise the chain can lose its anchor.
-        merged.sort_by(|a, b| {
-            b.lsn
-                .cmp(&a.lsn)
-                .then_with(|| b.is_image.cmp(&a.is_image))
-        });
+        merged.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
         merged.dedup_by(|a, b| a.lsn == b.lsn);
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
@@ -1229,7 +1212,11 @@ impl PageWriter {
     pub async fn stats(&self) -> WriterStats {
         let (slru_len, meta_len, aux_bytes) = {
             let aux = self.aux.lock();
-            (aux.slru_buffer.len(), aux.meta_buffer.len(), aux.bytes_in_aux_buffers)
+            (
+                aux.slru_buffer.len(),
+                aux.meta_buffer.len(),
+                aux.bytes_in_aux_buffers,
+            )
         };
         let bytes_in_buffer = self.pages.unflushed_bytes() + aux_bytes;
         // Side-effect: refresh the global gauges so a periodic
@@ -1363,15 +1350,21 @@ impl PageWriter {
             aux.slru_buffer
                 .iter()
                 .filter(|r| {
-                    r.kind == kind && r.segno == segno && r.blknum == blknum
-                        && r.lsn <= target_lsn
+                    r.kind == kind && r.segno == segno && r.blknum == blknum && r.lsn <= target_lsn
                 })
                 .cloned()
                 .collect()
         };
         let persisted = self
             .compute_page_store
-            .read_slru_chain(self.tenant_id, self.timeline_id, kind, segno, blknum, target_lsn)
+            .read_slru_chain(
+                self.tenant_id,
+                self.timeline_id,
+                kind,
+                segno,
+                blknum,
+                target_lsn,
+            )
             .await?;
         buffered.extend(persisted);
         buffered.sort_by(|a, b| b.lsn.cmp(&a.lsn));
@@ -1392,15 +1385,24 @@ impl PageWriter {
     ) -> Result<std::collections::HashMap<u32, Vec<SlruPageRow>>> {
         let persisted = self
             .compute_page_store
-            .scan_slru_range(self.tenant_id, self.timeline_id, kind, segno, blknum_range.clone(), target_lsn)
+            .scan_slru_range(
+                self.tenant_id,
+                self.timeline_id,
+                kind,
+                segno,
+                blknum_range.clone(),
+                target_lsn,
+            )
             .await?;
         let buffered: Vec<SlruPageRow> = {
             let aux = self.aux.lock();
             aux.slru_buffer
                 .iter()
                 .filter(|r| {
-                    r.kind == kind && r.segno == segno
-                        && r.blknum >= blknum_range.start && r.blknum < blknum_range.end
+                    r.kind == kind
+                        && r.segno == segno
+                        && r.blknum >= blknum_range.start
+                        && r.blknum < blknum_range.end
                         && r.lsn <= target_lsn
                 })
                 .cloned()
@@ -1576,7 +1578,11 @@ fn build_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<PageRow> {
                         utils::abort::fatal_abort(format_args!(
                             "WRITE-PATH ROUNDTRIP MISMATCH key={} lsn={} \
                              payload_len={}: orig={:?} decoded={:?}",
-                            key, lsn, bytes.len(), rec, decoded,
+                            key,
+                            lsn,
+                            bytes.len(),
+                            rec,
+                            decoded,
                         ));
                     }
                     Err(e) => {
@@ -1589,7 +1595,10 @@ fn build_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<PageRow> {
                         utils::abort::fatal_abort(format_args!(
                             "WRITE-PATH ROUNDTRIP DECODE FAILED key={} lsn={} \
                              payload_len={}: {:#}",
-                            key, lsn, bytes.len(), e,
+                            key,
+                            lsn,
+                            bytes.len(),
+                            e,
                         ));
                     }
                 }
@@ -1799,16 +1808,21 @@ mod tests {
         })
     }
 
-    fn writer(
-        store: Arc<PageStore>,
-        policy: FlushPolicy,
-    ) -> (PageWriter, TenantId, TimelineId) {
+    fn writer(store: Arc<PageStore>, policy: FlushPolicy) -> (PageWriter, TenantId, TimelineId) {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
         (
             // Tests don't exercise the connection split — pass the
             // same PageStore arc as both compute + internal.
-            PageWriter::new(t, tl, utils::generation::Generation::new(1), store.clone(), store, policy, 64 * 1024 * 1024),
+            PageWriter::new(
+                t,
+                tl,
+                utils::generation::Generation::new(1),
+                store.clone(),
+                store,
+                policy,
+                64 * 1024 * 1024,
+            ),
             t,
             tl,
         )
@@ -1855,7 +1869,15 @@ mod tests {
     ) {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
-        let mut w = PageWriter::new(t, tl, utils::generation::Generation::new(1), store.clone(), store, policy, 64 * 1024 * 1024);
+        let mut w = PageWriter::new(
+            t,
+            tl,
+            utils::generation::Generation::new(1),
+            store.clone(),
+            store,
+            policy,
+            64 * 1024 * 1024,
+        );
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let in_flight = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
         w.set_materializer(MaterializerHandle {
@@ -1967,7 +1989,9 @@ mod tests {
             (k(1), Lsn(10), init),
             (k(1), Lsn(20), delta()),
             (k(1), Lsn(30), delta()),
-        ]).await.unwrap();
+        ])
+        .await
+        .unwrap();
         let stats = w.stats().await;
         assert_eq!(stats.rows_written, 3);
         w.flush().await.unwrap();
@@ -2027,11 +2051,8 @@ mod tests {
             field5: 0,
             field6: 0,
         };
-        let slru_key = pageserver_api::key::slru_block_to_key(
-            pageserver_api::reltag::SlruKind::Clog,
-            7,
-            42,
-        );
+        let slru_key =
+            pageserver_api::key::slru_block_to_key(pageserver_api::reltag::SlruKind::Clog, 7, 42);
 
         w.put(&[
             (k(1), Lsn(10), image()),
@@ -2062,8 +2083,7 @@ mod tests {
     async fn flush_emits_a_single_insert_round_trip() {
         let (store, schema) = make_store("flush_one_rt").await;
         let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        let entries: Vec<(Key, Lsn, Value)> =
-            (0..50).map(|i| (k(i), Lsn(10), image())).collect();
+        let entries: Vec<(Key, Lsn, Value)> = (0..50).map(|i| (k(i), Lsn(10), image())).collect();
         w.put(&entries).await.unwrap();
         assert_eq!(w.stats().await.buffered_rows, 50);
         w.flush().await.unwrap();
@@ -2118,7 +2138,13 @@ mod tests {
         let (store, schema) = make_store("blend").await;
         let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
         let first_batch: Vec<(Key, Lsn, Value)> = (0..5)
-            .map(|i| (k(1), Lsn(10 + 10 * i), if i == 0 { image() } else { delta() }))
+            .map(|i| {
+                (
+                    k(1),
+                    Lsn(10 + 10 * i),
+                    if i == 0 { image() } else { delta() },
+                )
+            })
             .collect();
         w.put(&first_batch).await.unwrap();
         w.flush().await.unwrap();
@@ -2175,7 +2201,15 @@ mod tests {
             max_bytes: 1 << 30,
             backpressure_bytes: 0,
         };
-        let w = Arc::new(PageWriter::new(t, tl, utils::generation::Generation::new(1), store.clone(), store.clone(), policy, 64 * 1024 * 1024));
+        let w = Arc::new(PageWriter::new(
+            t,
+            tl,
+            utils::generation::Generation::new(1),
+            store.clone(),
+            store.clone(),
+            policy,
+            64 * 1024 * 1024,
+        ));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -2200,7 +2234,15 @@ mod tests {
             max_bytes: 1 << 30,
             backpressure_bytes: 0,
         };
-        let w = Arc::new(PageWriter::new(t, tl, utils::generation::Generation::new(1), store.clone(), store.clone(), policy, 64 * 1024 * 1024));
+        let w = Arc::new(PageWriter::new(
+            t,
+            tl,
+            utils::generation::Generation::new(1),
+            store.clone(),
+            store.clone(),
+            policy,
+            64 * 1024 * 1024,
+        ));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         tokio::time::sleep(Duration::from_millis(80)).await;
@@ -2326,7 +2368,9 @@ mod tests {
             .await
             .unwrap();
         w.flush().await.unwrap();
-        let job = rx.try_recv().expect("dispatched after flush hits threshold");
+        let job = rx
+            .try_recv()
+            .expect("dispatched after flush hits threshold");
         assert_eq!(job.target_lsn, Lsn(10 + LIMIT as u64));
         assert_eq!(job.key.as_ref(), key_to_bytes(k(1)).as_ref());
         // Simulate the materialiser finishing this batch.
@@ -2372,7 +2416,10 @@ mod tests {
                 .unwrap();
         }
         w.flush().await.unwrap();
-        assert!(rx.try_recv().is_err(), "image should have reset the counter");
+        assert!(
+            rx.try_recv().is_err(),
+            "image should have reset the counter"
+        );
         // 10th post-image delta + flush: now dispatch.
         w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
         w.flush().await.unwrap();
@@ -2420,7 +2467,9 @@ mod tests {
         // 3rd delta + flush puts cumulative bytes at exactly the limit.
         w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
         w.flush().await.unwrap();
-        let job = rx.try_recv().expect("dispatched on hitting payload-bytes threshold");
+        let job = rx
+            .try_recv()
+            .expect("dispatched on hitting payload-bytes threshold");
         assert_eq!(job.target_lsn, Lsn(30));
 
         in_flight.lock().unwrap().remove(&job.key);
@@ -2436,7 +2485,9 @@ mod tests {
         );
         w.put(&[(k(1), Lsn(60), delta_non_init())]).await.unwrap();
         w.flush().await.unwrap();
-        let _ = rx.try_recv().expect("dispatch on second payload-bytes threshold");
+        let _ = rx
+            .try_recv()
+            .expect("dispatch on second payload-bytes threshold");
 
         drop_schema(&store, &schema).await;
     }
@@ -2557,7 +2608,10 @@ mod tests {
                 .unwrap();
         }
         w.flush().await.unwrap();
-        assert!(rx.try_recv().is_err(), "will_init should have reset the counter");
+        assert!(
+            rx.try_recv().is_err(),
+            "will_init should have reset the counter"
+        );
         w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
         w.flush().await.unwrap();
         let _ = rx.try_recv().expect("dispatch after will_init + LIMIT");
@@ -2647,7 +2701,8 @@ mod tests {
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         assert_eq!(
-            w.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed),
+            w.flush_horizon_lsn
+                .load(std::sync::atomic::Ordering::Relaxed),
             0,
             "horizon starts at zero before any flush",
         );
@@ -2659,7 +2714,8 @@ mod tests {
         w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
         w.flush().await.unwrap();
         assert_eq!(
-            w.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed),
+            w.flush_horizon_lsn
+                .load(std::sync::atomic::Ordering::Relaxed),
             30,
             "horizon advances to max(snapshot.lsn) after mark_first_n_flushed",
         );
@@ -2669,7 +2725,8 @@ mod tests {
         w.put(&[(k(1), Lsn(40), delta_non_init())]).await.unwrap();
         w.flush().await.unwrap();
         assert_eq!(
-            w.flush_horizon_lsn.load(std::sync::atomic::Ordering::Relaxed),
+            w.flush_horizon_lsn
+                .load(std::sync::atomic::Ordering::Relaxed),
             40,
         );
 
@@ -2694,9 +2751,7 @@ mod tests {
         // up to lsn 50.
         for (i, lsn) in [10u64, 20, 30, 40, 50].iter().enumerate() {
             let _ = i;
-            w.put(&[(k(1), Lsn(*lsn), delta_non_init())])
-                .await
-                .unwrap();
+            w.put(&[(k(1), Lsn(*lsn), delta_non_init())]).await.unwrap();
         }
         w.flush().await.unwrap();
 
@@ -2773,10 +2828,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        assert!(
-            rx.try_recv().is_err(),
-            "limit=0 must not dispatch"
-        );
+        assert!(rx.try_recv().is_err(), "limit=0 must not dispatch");
 
         drop_schema(&store, &schema).await;
     }
@@ -2785,11 +2837,7 @@ mod tests {
     /// matching the generation used by the `writer` helper. Required
     /// for any test that wants `PageWriter::flush` to land its
     /// generation-gated `advance_disk_consistent_lsn` UPDATE.
-    async fn seed_timeline_row(
-        store: &PageStore,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) {
+    async fn seed_timeline_row(store: &PageStore, tenant: TenantId, timeline: TimelineId) {
         store
             .insert_timeline_at_creation(&crate::page_store::TimelineRow {
                 tenant_id: tenant,
@@ -2878,11 +2926,17 @@ mod tests {
         w.note_record_lsn(Lsn(0x300), Lsn(0x200));
 
         // Lookup at the exact `last` returns its prev.
-        assert_eq!(w.take_prev_at_or_below(Lsn(0x200)), Some((Lsn(0x200), Lsn(0x100))));
+        assert_eq!(
+            w.take_prev_at_or_below(Lsn(0x200)),
+            Some((Lsn(0x200), Lsn(0x100)))
+        );
         // Older entries (≤ 0x200) are pruned; 0x100 is gone.
         assert_eq!(w.take_prev_at_or_below(Lsn(0x100)), None);
         // 0x300 survives.
-        assert_eq!(w.take_prev_at_or_below(Lsn(0x300)), Some((Lsn(0x300), Lsn(0x200))));
+        assert_eq!(
+            w.take_prev_at_or_below(Lsn(0x300)),
+            Some((Lsn(0x300), Lsn(0x200)))
+        );
         // Map now empty.
         assert_eq!(w.take_prev_at_or_below(Lsn(0x400)), None);
 
@@ -2903,9 +2957,15 @@ mod tests {
 
         // Query at 0x250 — no entry at exactly that lsn; pick the
         // highest noted ≤ 0x250, which is 0x100.
-        assert_eq!(w.take_prev_at_or_below(Lsn(0x250)), Some((Lsn(0x100), Lsn(0x080))));
+        assert_eq!(
+            w.take_prev_at_or_below(Lsn(0x250)),
+            Some((Lsn(0x100), Lsn(0x080)))
+        );
         // 0x300 still there.
-        assert_eq!(w.take_prev_at_or_below(Lsn(0x300)), Some((Lsn(0x300), Lsn(0x100))));
+        assert_eq!(
+            w.take_prev_at_or_below(Lsn(0x300)),
+            Some((Lsn(0x300), Lsn(0x100)))
+        );
 
         drop_schema(&store, &schema).await;
     }
@@ -2974,13 +3034,7 @@ mod tests {
 
         // First advance with a real prev.
         store
-            .advance_disk_consistent_lsn(
-                t,
-                tl,
-                Generation::new(1),
-                Lsn(0x200),
-                Some(Lsn(0x180)),
-            )
+            .advance_disk_consistent_lsn(t, tl, Generation::new(1), Lsn(0x200), Some(Lsn(0x180)))
             .await
             .unwrap();
         let row = store.get_timeline(t, tl).await.unwrap().unwrap();
@@ -3083,8 +3137,7 @@ mod tests {
         #[test]
         fn dispatches_when_chain_exceeds_count_limit() {
             let (in_flight, tx, mut rx) = setup();
-            let dispatched =
-                try_dispatch_read_side(&kb(), Lsn(100), 21, 20, &in_flight, &tx);
+            let dispatched = try_dispatch_read_side(&kb(), Lsn(100), 21, 20, &in_flight, &tx);
             assert!(dispatched);
             let job = rx.try_recv().unwrap();
             assert_eq!(job.key, kb());
@@ -3097,7 +3150,12 @@ mod tests {
             let (in_flight, tx, mut rx) = setup();
             for chain_len in 0..=20 {
                 assert!(!try_dispatch_read_side(
-                    &kb(), Lsn(100), chain_len, 20, &in_flight, &tx
+                    &kb(),
+                    Lsn(100),
+                    chain_len,
+                    20,
+                    &in_flight,
+                    &tx
                 ));
             }
             assert!(rx.try_recv().is_err());
@@ -3108,7 +3166,12 @@ mod tests {
         fn skips_when_count_limit_zero_disabled() {
             let (in_flight, tx, mut rx) = setup();
             assert!(!try_dispatch_read_side(
-                &kb(), Lsn(100), 9999, 0, &in_flight, &tx
+                &kb(),
+                Lsn(100),
+                9999,
+                0,
+                &in_flight,
+                &tx
             ));
             assert!(rx.try_recv().is_err());
             assert!(in_flight.lock().unwrap().is_empty());
@@ -3119,7 +3182,12 @@ mod tests {
             let (in_flight, tx, mut rx) = setup();
             in_flight.lock().unwrap().insert(kb());
             assert!(!try_dispatch_read_side(
-                &kb(), Lsn(100), 50, 20, &in_flight, &tx
+                &kb(),
+                Lsn(100),
+                50,
+                20,
+                &in_flight,
+                &tx
             ));
             assert!(rx.try_recv().is_err());
             // Pre-existing in_flight entry must remain.
@@ -3138,7 +3206,12 @@ mod tests {
             let in_flight = Mutex::new(HashSet::new());
             // Dispatch should fail and NOT leave the key in in_flight.
             assert!(!try_dispatch_read_side(
-                &kb(), Lsn(100), 50, 20, &in_flight, &tx
+                &kb(),
+                Lsn(100),
+                50,
+                20,
+                &in_flight,
+                &tx
             ));
             assert!(
                 !in_flight.lock().unwrap().contains(&kb()),

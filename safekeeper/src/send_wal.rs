@@ -802,18 +802,17 @@ mod tests {
 
     // add to wss specified feedback setting other fields to dummy values
     fn push_feedback(wss: &mut WalSendersShared, feedback: ReplicationFeedback) {
-        let walsender_state =
-            WalSenderState::Interpreted(InterpretedWalSenderInternalState {
-                public_state: safekeeper_api::models::InterpretedWalSenderState {
-                    ttid: mock_ttid(),
-                    shard: pageserver_api::models::ShardIdentity::unsharded(),
-                    addr: mock_addr(),
-                    conn_id: 1,
-                    appname: None,
-                    feedback,
-                },
-                interpreted_wal_reader: None,
-            });
+        let walsender_state = WalSenderState::Interpreted(InterpretedWalSenderInternalState {
+            public_state: safekeeper_api::models::InterpretedWalSenderState {
+                ttid: mock_ttid(),
+                shard: pageserver_api::models::ShardIdentity::unsharded(),
+                addr: mock_addr(),
+                conn_id: 1,
+                appname: None,
+                feedback,
+            },
+            interpreted_wal_reader: None,
+        });
         wss.slots.push(Some(walsender_state))
     }
 

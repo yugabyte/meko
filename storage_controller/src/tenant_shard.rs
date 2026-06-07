@@ -5,16 +5,16 @@ use std::time::Duration;
 use futures::future::{self, Either};
 use itertools::Itertools;
 use pageserver_api::controller_api::{AvailabilityZone, PlacementPolicy, ShardSchedulingPolicy};
+use pageserver_api::models::ShardIdentity;
 use pageserver_api::models::{LocationConfig, TenantConfig};
-use pageserver_api::models::{ShardIdentity};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, instrument};
 use utils::generation::Generation;
+use utils::id::ShardCount;
 use utils::id::{NodeId, TenantId};
 use utils::seqwait::{SeqWait, SeqWaitError};
-use utils::id::ShardCount;
 use utils::sync::gate::GateGuard;
 
 use crate::compute_hook::ComputeHook;
@@ -2062,7 +2062,12 @@ pub(crate) mod tests {
     use crate::scheduler::test_utils::make_test_nodes;
 
     fn make_test_tenant_shard(policy: PlacementPolicy) -> TenantShard {
-        TenantShard::new(TenantId::generate(), ShardIdentity::unsharded(), policy, None)
+        TenantShard::new(
+            TenantId::generate(),
+            ShardIdentity::unsharded(),
+            policy,
+            None,
+        )
     }
 
     pub(crate) fn make_test_tenant(
@@ -2942,8 +2947,7 @@ pub(crate) mod tests {
                 // yb-mode: always single-shard.
                 *shards_per_az.entry(az.clone()).or_default() += 1;
 
-                let tenant_shards =
-                    make_test_tenant(PlacementPolicy::Attached(1), Some(az));
+                let tenant_shards = make_test_tenant(PlacementPolicy::Attached(1), Some(az));
                 let context = Rc::new(RefCell::new(ScheduleContext::default()));
 
                 contexts.push(context.clone());

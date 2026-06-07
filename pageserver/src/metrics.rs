@@ -983,11 +983,7 @@ impl EvictionsWithLowResidenceDurationBuilder {
         }
     }
 
-    fn build(
-        &self,
-        tenant_id: &str,
-        timeline_id: &str,
-    ) -> EvictionsWithLowResidenceDuration {
+    fn build(&self, tenant_id: &str, timeline_id: &str) -> EvictionsWithLowResidenceDuration {
         let counter = EVICTIONS_WITH_LOW_RESIDENCE_DURATION
             .get_metric_with_label_values(&[
                 tenant_id,
@@ -1018,11 +1014,9 @@ impl EvictionsWithLowResidenceDuration {
         if new_threshold == self.threshold {
             return;
         }
-        let mut with_new = EvictionsWithLowResidenceDurationBuilder::new(
-            self.data_source,
-            new_threshold,
-        )
-        .build(tenant_id, timeline_id);
+        let mut with_new =
+            EvictionsWithLowResidenceDurationBuilder::new(self.data_source, new_threshold)
+                .build(tenant_id, timeline_id);
         std::mem::swap(self, &mut with_new);
         with_new.remove(tenant_id, timeline_id);
     }
@@ -1934,12 +1928,7 @@ static REMOTE_TIMELINE_CLIENT_CALLS: Lazy<IntCounterPairVec> = Lazy::new(|| {
         "Number of started calls to remote timeline client.",
         "pageserver_remote_timeline_client_calls_finished",
         "Number of finshed calls to remote timeline client.",
-        &[
-            "tenant_id",
-            "timeline_id",
-            "file_kind",
-            "op_kind"
-        ],
+        &["tenant_id", "timeline_id", "file_kind", "op_kind"],
     )
     .unwrap()
 });
@@ -2608,11 +2597,7 @@ pub(crate) struct StorageTimeMetrics {
 }
 
 impl StorageTimeMetrics {
-    pub fn new(
-        operation: StorageTimeOperation,
-        tenant_id: &str,
-        timeline_id: &str,
-    ) -> Self {
+    pub fn new(operation: StorageTimeOperation, tenant_id: &str, timeline_id: &str) -> Self {
         let operation: &'static str = operation.into();
 
         let timeline_sum = STORAGE_TIME_SUM_PER_TIMELINE
@@ -2679,11 +2664,8 @@ impl TimelineMetrics {
     ) -> Self {
         let tenant_id = tenant_id_raw.to_string();
         let timeline_id = timeline_id_raw.to_string();
-        let logical_size_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::LogicalSize,
-            &tenant_id,
-            &timeline_id,
-        );
+        let logical_size_histo =
+            StorageTimeMetrics::new(StorageTimeOperation::LogicalSize, &tenant_id, &timeline_id);
         let find_gc_cutoffs_histo = StorageTimeMetrics::new(
             StorageTimeOperation::FindGcCutoffs,
             &tenant_id,
@@ -2732,8 +2714,8 @@ impl TimelineMetrics {
         };
         let directory_entries_count_gauge: Lazy<UIntGauge, Box<dyn Send + Fn() -> UIntGauge>> =
             Lazy::new(Box::new(directory_entries_count_gauge_closure));
-        let evictions_with_low_residence_duration = evictions_with_low_residence_duration_builder
-            .build(&tenant_id, &timeline_id);
+        let evictions_with_low_residence_duration =
+            evictions_with_low_residence_duration_builder.build(&tenant_id, &timeline_id);
 
         let valid_lsn_lease_count_gauge = VALID_LSN_LEASE_COUNT
             .get_metric_with_label_values(&[&tenant_id, &timeline_id])
@@ -2835,16 +2817,10 @@ impl TimelineMetrics {
         // outlive an individual smgr connection, but not the timeline.
 
         for op in StorageTimeOperation::VARIANTS {
-            let _ = STORAGE_TIME_SUM_PER_TIMELINE.remove_label_values(&[
-                op,
-                tenant_id,
-                timeline_id,
-            ]);
-            let _ = STORAGE_TIME_COUNT_PER_TIMELINE.remove_label_values(&[
-                op,
-                tenant_id,
-                timeline_id,
-            ]);
+            let _ =
+                STORAGE_TIME_SUM_PER_TIMELINE.remove_label_values(&[op, tenant_id, timeline_id]);
+            let _ =
+                STORAGE_TIME_COUNT_PER_TIMELINE.remove_label_values(&[op, tenant_id, timeline_id]);
             /* BEGIN_HADRON */
             let _ = STORAGE_ACTIVE_COUNT_PER_TIMELINE.remove_label_values(&[
                 op,
@@ -2858,15 +2834,13 @@ impl TimelineMetrics {
             let _ = STORAGE_IO_SIZE.remove_label_values(&[op, tenant_id, timeline_id]);
         }
 
-        let _ =
-            WAIT_LSN_IN_PROGRESS_MICROS.remove_label_values(&[tenant_id, timeline_id]);
+        let _ = WAIT_LSN_IN_PROGRESS_MICROS.remove_label_values(&[tenant_id, timeline_id]);
 
         {
             let mut res = [Ok(()), Ok(())];
             WAIT_LSN_START_FINISH_COUNTERPAIR
                 .remove_label_values(&mut res, &[tenant_id, timeline_id]);
         }
-
 
         let _ = SMGR_QUERY_STARTED_PER_TENANT_TIMELINE.remove_label_values(&[
             SmgrQueryType::GetPageAtLsn.into(),
@@ -2878,22 +2852,13 @@ impl TimelineMetrics {
             tenant_id,
             timeline_id,
         ]);
-        let _ = PAGE_SERVICE_BATCH_SIZE_PER_TENANT_TIMELINE.remove_label_values(&[
-            tenant_id,
-            timeline_id,
-        ]);
-        let _ = PAGESERVER_TIMELINE_WAL_RECORDS_RECEIVED.remove_label_values(&[
-            tenant_id,
-            timeline_id,
-        ]);
-        let _ = PAGE_SERVICE_SMGR_FLUSH_INPROGRESS_MICROS.remove_label_values(&[
-            tenant_id,
-            timeline_id,
-        ]);
-        let _ = PAGE_SERVICE_SMGR_BATCH_WAIT_TIME.remove_label_values(&[
-            tenant_id,
-            timeline_id,
-        ]);
+        let _ = PAGE_SERVICE_BATCH_SIZE_PER_TENANT_TIMELINE
+            .remove_label_values(&[tenant_id, timeline_id]);
+        let _ =
+            PAGESERVER_TIMELINE_WAL_RECORDS_RECEIVED.remove_label_values(&[tenant_id, timeline_id]);
+        let _ = PAGE_SERVICE_SMGR_FLUSH_INPROGRESS_MICROS
+            .remove_label_values(&[tenant_id, timeline_id]);
+        let _ = PAGE_SERVICE_SMGR_BATCH_WAIT_TIME.remove_label_values(&[tenant_id, timeline_id]);
 
         for reason in GetPageBatchBreakReason::iter() {
             let _ = PAGE_SERVICE_BATCH_BREAK_REASON_PER_TENANT_TIMELINE.remove_label_values(&[
@@ -2989,17 +2954,11 @@ impl RemoteTimelineClientMetrics {
         let key = (file_kind.as_str(), op_kind.as_str());
         let metric = guard.entry(key).or_insert_with(move || {
             REMOTE_TIMELINE_CLIENT_CALLS
-                .get_metric_with_label_values(&[
-                    &self.tenant_id,
-                    &self.timeline_id,
-                    key.0,
-                    key.1,
-                ])
+                .get_metric_with_label_values(&[&self.tenant_id, &self.timeline_id, key.0, key.1])
                 .unwrap()
         });
         metric.clone()
     }
-
 }
 
 /// See [`RemoteTimelineClientMetrics::call_begin`].
@@ -3055,10 +3014,7 @@ impl Drop for RemoteTimelineClientMetrics {
         }
         {
             let _ = projected_remote_consistent_lsn_gauge;
-            let _ = PROJECTED_REMOTE_CONSISTENT_LSN.remove_label_values(&[
-                tenant_id,
-                timeline_id,
-            ]);
+            let _ = PROJECTED_REMOTE_CONSISTENT_LSN.remove_label_values(&[tenant_id, timeline_id]);
         }
     }
 }
@@ -3505,10 +3461,7 @@ pub(crate) mod tenant_throttling {
 
     impl<const KIND: usize> Metrics<KIND> {
         pub(crate) fn new(tenant_shard_id: &TenantId) -> Self {
-            let per_tenant_label_values = &[
-                KINDS[KIND],
-                &tenant_shard_id.to_string(),
-            ];
+            let per_tenant_label_values = &[KINDS[KIND], &tenant_shard_id.to_string()];
             Metrics {
                 count_accounted_start: {
                     GlobalAndPerTenantIntCounter {
@@ -3557,10 +3510,7 @@ pub(crate) mod tenant_throttling {
             &WAIT_COUNT_PER_TENANT,
         ] {
             for kind in KINDS {
-                let _ = m.remove_label_values(&[
-                    kind,
-                    &tenant_shard_id.to_string(),
-                ]);
+                let _ = m.remove_label_values(&[kind, &tenant_shard_id.to_string()]);
             }
         }
     }

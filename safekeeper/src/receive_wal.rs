@@ -347,12 +347,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> NetworkReader<'_, IO> {
                 };
                 let tli = if allow_timeline_creation {
                     self.global_timelines
-                        .create(
-                            self.ttid,
-                            Configuration::empty(),
-                            server_info,
-                            Lsn::INVALID,
-                        )
+                        .create(self.ttid, Configuration::empty(), server_info, Lsn::INVALID)
                         .await
                         .context("create timeline")?
                 } else {

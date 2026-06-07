@@ -22,10 +22,8 @@ use pageserver_api::controller_api::{
     AvailabilityZone, MetadataHealthRecord, NodeLifecycle, NodeSchedulingPolicy, PlacementPolicy,
     SafekeeperDescribeResponse, ShardSchedulingPolicy, SkSchedulingPolicy,
 };
+use pageserver_api::models::{ShardConfigError, ShardCount, ShardIdentity, ShardNumber};
 use pageserver_api::models::{ShardImportStatus, TenantConfig};
-use pageserver_api::models::{
-    ShardConfigError, ShardCount, ShardIdentity, ShardNumber,
-};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
@@ -811,12 +809,7 @@ impl Persistence {
 
             // Compose a comma separated list of tuples for matching on (tenant_id, shard_number, shard_count)
             let in_clause = chunk_ids
-                .map(|tsid| {
-                    format!(
-                        "('{}', {}, {})",
-                        tsid, ShardNumber(0).0, ShardCount(0).0
-                    )
-                })
+                .map(|tsid| format!("('{}', {}, {})", tsid, ShardNumber(0).0, ShardCount(0).0))
                 .join(",");
 
             // We are done when our iterator gives us nothing to filter on
@@ -941,8 +934,8 @@ impl Persistence {
         config: &TenantConfig,
     ) -> DatabaseResult<()> {
         let tenant_id_str = tenant_id.to_string();
-        let config_json = serde_json::to_string(config)
-            .expect("TenantConfig is always JSON-serialisable");
+        let config_json =
+            serde_json::to_string(config).expect("TenantConfig is always JSON-serialisable");
         self.with_measured_conn(DatabaseOperation::SaveTenantConfigYb, move |conn| {
             let tenant_id_str = tenant_id_str.clone();
             let config_json = config_json.clone();
@@ -1949,9 +1942,7 @@ fn add_search_path_to_url(url: &str) -> String {
     // URL-encoded: `-c search_path=storage_controller,public`.
     // `%3D` = `=`, `%2C` = `,`. The leading `-c` is part of the libpq
     // options grammar; the equals there is literal.
-    let opt = format!(
-        "options=-c%20search_path%3D{SC_SCHEMA}%2Cpublic"
-    );
+    let opt = format!("options=-c%20search_path%3D{SC_SCHEMA}%2Cpublic");
     if url.contains('?') {
         format!("{url}&{opt}")
     } else {

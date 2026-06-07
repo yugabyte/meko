@@ -47,9 +47,9 @@ use futures::TryStreamExt;
 use futures::stream::Stream;
 // YB smart-driver fork; aliased so the type names below stay
 // untouched. See pageserver/src/page_store.rs for the rationale.
+use tokio_util::sync::CancellationToken;
 use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
-use tokio_util::sync::CancellationToken;
 
 use crate::config::YbStoreConfig;
 use crate::error::{Cancelled, TimeoutOrCancel};
@@ -109,13 +109,13 @@ impl YbStore {
             "pageserver:yb_store",
             true,
         )
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to connect to YugabyteDB at {}:{} as user `{}` (sslmode={:?})",
-                    config.host, config.port, config.user, config.sslmode
-                )
-            })?;
+        .await
+        .with_context(|| {
+            format!(
+                "failed to connect to YugabyteDB at {}:{} as user `{}` (sslmode={:?})",
+                config.host, config.port, config.user, config.sslmode
+            )
+        })?;
 
         let prefix = config.prefix.as_ref().map(|p| {
             if p.is_empty() || p.ends_with(REMOTE_STORAGE_PREFIX_SEPARATOR) {
@@ -160,7 +160,10 @@ impl YbStore {
                    WHERE tenant_id = $1 AND deleted_at IS NULL";
         let client = self.ysql_fpu_client.current().await?;
         let rows = client.query(sql, &[&tenant_id]).await?;
-        Ok(rows.into_iter().map(|r| r.get::<_, String>("timeline_id")).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| r.get::<_, String>("timeline_id"))
+            .collect())
     }
 
     fn full_key(&self, p: &RemotePath) -> String {
@@ -333,13 +336,12 @@ impl YbStore {
     fn parse_key(&self, full_key: &str) -> (&'static str, String, String, String) {
         let cfg_prefix = self.prefix.as_deref().unwrap_or("");
         let rest = full_key.strip_prefix(cfg_prefix).unwrap_or(full_key);
-        let namespace: &'static str = if cfg_prefix.contains("safekeeper")
-            || full_key.starts_with("safekeeper")
-        {
-            "safekeeper"
-        } else {
-            "pageserver"
-        };
+        let namespace: &'static str =
+            if cfg_prefix.contains("safekeeper") || full_key.starts_with("safekeeper") {
+                "safekeeper"
+            } else {
+                "pageserver"
+            };
         let (tenant_id, timeline_id) = Self::extract_neon_ids(rest);
 
         let key_body: String = rest
@@ -510,10 +512,8 @@ impl RemoteStorage for YbStore {
         // contains tenant/timeline ids (the common case — pageserver
         // lists by `tenants/<X>/timelines/<Y>/…`), we filter on those
         // columns directly so the query hits a single hash tablet.
-        let (namespace, tenant_id, timeline_id, raw_key_body_prefix) =
-            self.parse_key(&full_prefix);
-        let (mut key_body_prefix, requested_gen) =
-            Self::split_key_generation(&raw_key_body_prefix);
+        let (namespace, tenant_id, timeline_id, raw_key_body_prefix) = self.parse_key(&full_prefix);
+        let (mut key_body_prefix, requested_gen) = Self::split_key_generation(&raw_key_body_prefix);
 
         // Pageserver's `remote_tenant_manifest_prefix` returns
         // `…/tenant-manifest` (no extension) because S3/Azure LIST is
@@ -549,8 +549,7 @@ impl RemoteStorage for YbStore {
 
         let mut where_clauses: Vec<String> =
             vec!["namespace = $1::text::blob_namespace".to_string()];
-        let mut bind_params: Vec<Box<dyn ToSql + Sync + Send>> =
-            vec![Box::new(namespace)];
+        let mut bind_params: Vec<Box<dyn ToSql + Sync + Send>> = vec![Box::new(namespace)];
         if !tenant_id.is_empty() {
             where_clauses.push(format!("tenant_id = ${}", bind_params.len() + 1));
             bind_params.push(Box::new(tenant_id.clone()));
@@ -601,11 +600,13 @@ impl RemoteStorage for YbStore {
         }
 
         let rows = {
-            let client = self.ysql_fpu_client.current().await.map_err(DownloadError::Other)?;
+            let client = self
+                .ysql_fpu_client
+                .current()
+                .await
+                .map_err(DownloadError::Other)?;
             let fut = client.query_raw(&sql, bind_params);
-            let row_stream = self
-                .with_timeout_download(fut, cancel)
-                .await?;
+            let row_stream = self.with_timeout_download(fut, cancel).await?;
             use futures::StreamExt;
             let mut row_stream = std::pin::pin!(row_stream);
             let mut acc = Vec::new();
@@ -629,9 +630,9 @@ impl RemoteStorage for YbStore {
                     // Re-attach the generation marker so callers see the
                     // full original path (`index_part.json-00000005`,
                     // `tenant-manifest-00000005.json`, etc.).
-                    let key_with_gen =
-                        Self::rejoin_key_generation(&row_key_body, row_generation);
-                    let full_key = self.reconstruct_key(namespace, &row_tenant, &row_timeline, &key_with_gen);
+                    let key_with_gen = Self::rejoin_key_generation(&row_key_body, row_generation);
+                    let full_key =
+                        self.reconstruct_key(namespace, &row_tenant, &row_timeline, &key_with_gen);
                     let remote_path = self
                         .db_key_to_remote_path(&full_key)
                         .map_err(DownloadError::Other)?;
@@ -671,9 +672,9 @@ impl RemoteStorage for YbStore {
                     let size_bytes: i64 = row.get("size_bytes");
                     let last_modified_us: i64 = row.get("last_modified_us");
 
-                    let key_with_gen =
-                        Self::rejoin_key_generation(&row_key_body, row_generation);
-                    let full_key = self.reconstruct_key(namespace, &row_tenant, &row_timeline, &key_with_gen);
+                    let key_with_gen = Self::rejoin_key_generation(&row_key_body, row_generation);
+                    let full_key =
+                        self.reconstruct_key(namespace, &row_tenant, &row_timeline, &key_with_gen);
                     let relative = match full_key.strip_prefix(listing_prefix.as_str()) {
                         Some(r) => r.to_string(),
                         None => continue,
@@ -739,8 +740,13 @@ impl RemoteStorage for YbStore {
                AND generation IS NOT DISTINCT FROM $5 AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 5] =
-            [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
+        let params: [&(dyn ToSql + Sync); 5] = [
+            &tenant_id,
+            &timeline_id,
+            &namespace,
+            &key_body,
+            &requested_gen,
+        ];
         let row_opt = self
             .with_timeout_download(self.ysql_fpu_client.query_opt(&sql, &params), cancel)
             .await?;
@@ -764,10 +770,7 @@ impl RemoteStorage for YbStore {
     ) -> anyhow::Result<()> {
         let _permit = self.permit(RequestKind::Put, cancel).await?;
 
-        let chunks: Vec<Bytes> = from
-            .try_collect()
-            .await
-            .context("read upload stream")?;
+        let chunks: Vec<Bytes> = from.try_collect().await.context("read upload stream")?;
         let mut buffer = Vec::with_capacity(data_size_bytes);
         for chunk in chunks {
             buffer.extend_from_slice(&chunk);
@@ -788,9 +791,9 @@ impl RemoteStorage for YbStore {
         let size: i64 = i64::try_from(buffer.len()).context("data size exceeds i64::MAX")?;
         let db_key = self.full_key(to);
         let metadata_json: Option<String> = match metadata {
-            Some(StorageMetadata(m)) => Some(
-                serde_json::to_string(&m).context("serialize storage metadata")?,
-            ),
+            Some(StorageMetadata(m)) => {
+                Some(serde_json::to_string(&m).context("serialize storage metadata")?)
+            }
             None => None,
         };
 
@@ -906,10 +909,18 @@ impl RemoteStorage for YbStore {
                AND generation IS NOT DISTINCT FROM $5 AND chunk_idx = 0",
             quote_ident(&self.table_name)
         );
-        let head_params: [&(dyn ToSql + Sync); 5] =
-            [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
+        let head_params: [&(dyn ToSql + Sync); 5] = [
+            &tenant_id,
+            &timeline_id,
+            &namespace,
+            &key_body,
+            &requested_gen,
+        ];
         let head_opt = self
-            .with_timeout_download(self.ysql_fpu_client.query_opt(&head_sql, &head_params), cancel)
+            .with_timeout_download(
+                self.ysql_fpu_client.query_opt(&head_sql, &head_params),
+                cancel,
+            )
             .await?;
         let head = head_opt.ok_or(DownloadError::NotFound)?;
         let total_size: i64 = head.get("size_bytes");
@@ -1001,16 +1012,12 @@ impl RemoteStorage for YbStore {
             Box::new(start_chunk),
             Box::new(end_chunk),
         ];
-        let row_stream = match tokio::time::timeout(
-            timeout,
-            client.query_raw(&stream_sql, params),
-        )
-        .await
-        {
-            Ok(Ok(rs)) => rs,
-            Ok(Err(e)) => return Err(DownloadError::Other(e.into())),
-            Err(_) => return Err(DownloadError::Timeout),
-        };
+        let row_stream =
+            match tokio::time::timeout(timeout, client.query_raw(&stream_sql, params)).await {
+                Ok(Ok(rs)) => rs,
+                Ok(Err(e)) => return Err(DownloadError::Other(e.into())),
+                Err(_) => return Err(DownloadError::Timeout),
+            };
 
         // `row_stream` is a `tokio_postgres::RowStream` that pulls bytes off
         // the wire as we poll it — we never have more than one chunk's
@@ -1059,8 +1066,13 @@ impl RemoteStorage for YbStore {
                AND generation IS NOT DISTINCT FROM $5",
             quote_ident(&self.table_name)
         );
-        let params: [&(dyn ToSql + Sync); 5] =
-            [&tenant_id, &timeline_id, &namespace, &key_body, &requested_gen];
+        let params: [&(dyn ToSql + Sync); 5] = [
+            &tenant_id,
+            &timeline_id,
+            &namespace,
+            &key_body,
+            &requested_gen,
+        ];
         self.with_timeout(self.ysql_fpu_client.execute(&sql, &params), cancel)
             .await
             .with_context(|| format!("YbStore delete of `{db_key}`"))?;
@@ -1245,9 +1257,9 @@ mod tests {
 
     #[test]
     fn extract_neon_ids_legacy_tenant_with_timeline() {
-        let (t, tl) = YbStore::extract_neon_ids(
-            &format!("tenants/{T_LEGACY}/timelines/{TL}/index_part.json-00000005"),
-        );
+        let (t, tl) = YbStore::extract_neon_ids(&format!(
+            "tenants/{T_LEGACY}/timelines/{TL}/index_part.json-00000005"
+        ));
         assert_eq!(t, T_LEGACY, "tenant_id for legacy unsharded tenant");
         assert_eq!(tl, TL, "timeline_id alongside legacy tenant");
     }
@@ -1268,9 +1280,9 @@ mod tests {
     /// instead of a single-tablet hash lookup.
     #[test]
     fn extract_neon_ids_sharded_tenant_with_timeline() {
-        let (t, tl) = YbStore::extract_neon_ids(
-            &format!("tenants/{T_SHARDED}/timelines/{TL}/index_part.json-00000005"),
-        );
+        let (t, tl) = YbStore::extract_neon_ids(&format!(
+            "tenants/{T_SHARDED}/timelines/{TL}/index_part.json-00000005"
+        ));
         assert_eq!(t, T_SHARDED, "tenant_id for sharded tenant (37-char form)");
         assert_eq!(tl, TL, "timeline_id alongside sharded tenant");
     }
@@ -1294,9 +1306,8 @@ mod tests {
     fn extract_neon_ids_safekeeper_wal_path() {
         // WAL-backup layout: `<tenant>/<timeline>/<segno>` — no
         // `tenants/timelines` markers, just the ids in path order.
-        let (t, tl) = YbStore::extract_neon_ids(
-            &format!("{T_LEGACY}/{TL}/000000010000000000000005"),
-        );
+        let (t, tl) =
+            YbStore::extract_neon_ids(&format!("{T_LEGACY}/{TL}/000000010000000000000005"));
         assert_eq!(t, T_LEGACY);
         assert_eq!(tl, TL);
     }
@@ -1322,8 +1333,7 @@ mod tests {
     #[test]
     fn split_layer_v1_suffix() {
         // Layer files end in `-v1-<gen>` — trailing-suffix shape.
-        let layer =
-            "000000000000000000000000-FFFFFFFFFFFFFFFFFFFFFFFF__0000000001620E40-0000000001621E40-v1-00000005";
+        let layer = "000000000000000000000000-FFFFFFFFFFFFFFFFFFFFFFFF__0000000001620E40-0000000001621E40-v1-00000005";
         let (body, g) = YbStore::split_key_generation(layer);
         assert_eq!(g, Some(5));
         assert!(body.ends_with("-v1"));
@@ -1378,4 +1388,3 @@ mod tests {
         );
     }
 }
-

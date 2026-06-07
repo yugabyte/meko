@@ -59,10 +59,10 @@ use remote_storage::{YbStoreConfig, YsqlClient};
 // per-callsite churn. The Neon fork of tokio-postgres survives
 // elsewhere in the workspace for the walproposer/walreceiver
 // replication path.
-use yb_tokio_postgres as tokio_postgres;
-use yb_tokio_postgres::types::ToSql;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
+use yb_tokio_postgres as tokio_postgres;
+use yb_tokio_postgres::types::ToSql;
 
 /// One row in `pageserver.pages`. `key` is the 18-byte BYTEA encoding
 /// of a `pageserver_api::key::Key` for a relation page; it must satisfy
@@ -259,7 +259,9 @@ fn key_columns(key_bytes: &[u8]) -> Result<(i64, i64, i64, i16, i64)> {
         bail!(
             "PageStore: key {key} is not a relation block (field1=0x{:02x}, field4={}, field6=0x{:x}); \
              non-page keys belong in the layer-file path, not pageserver.pages",
-            key.field1, key.field4, key.field6
+            key.field1,
+            key.field4,
+            key.field6
         );
     }
     Ok((
@@ -341,8 +343,7 @@ impl PageStore {
         // on the shared connection so YB can absorb them concurrently.
         const COLS: usize = 11;
         const ROWS_PER_INSERT: usize = 500;
-        let parallelism =
-            pageserver_api::config::scale_count(4, self.scale_factor);
+        let parallelism = pageserver_api::config::scale_count(4, self.scale_factor);
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
@@ -366,11 +367,20 @@ impl PageStore {
                 let base = i * COLS + 1;
                 sql.push_str(&format!(
                     "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                    base, base + 1, base + 2, base + 3, base + 4,
-                    base + 5, base + 6, base + 7, base + 8, base + 9, base + 10,
+                    base,
+                    base + 1,
+                    base + 2,
+                    base + 3,
+                    base + 4,
+                    base + 5,
+                    base + 6,
+                    base + 7,
+                    base + 8,
+                    base + 9,
+                    base + 10,
                 ));
-                let (sp, db, rel, fork, blk) = key_columns(&row.key)
-                    .with_context(|| format!("put_pages row {i}: bad key"))?;
+                let (sp, db, rel, fork, blk) =
+                    key_columns(&row.key).with_context(|| format!("put_pages row {i}: bad key"))?;
                 params.push(Box::new(tenant_s.clone()));
                 params.push(Box::new(timeline_s.clone()));
                 params.push(Box::new(sp));
@@ -386,8 +396,10 @@ impl PageStore {
             let chunk_rows = chunk.len();
             let ysql_client = Arc::clone(&self.ysql_client);
             futs.push(Box::pin(async move {
-                let params_ref: Vec<&(dyn ToSql + Sync)> =
-                    params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+                let params_ref: Vec<&(dyn ToSql + Sync)> = params
+                    .iter()
+                    .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+                    .collect();
                 ysql_client
                     .execute(&sql, &params_ref)
                     .await
@@ -466,9 +478,7 @@ impl PageStore {
             .ysql_client
             .query(
                 &sql,
-                &[
-                    &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk, &target,
-                ],
+                &[&tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk, &target],
             )
             .await
             .context("read_chain")?;
@@ -523,7 +533,8 @@ impl PageStore {
             bail!(
                 "PageStore::scan_range: range [{}, {}) extends outside the relation-page \
                  namespace (field1 must be 0); caller must filter non-page keys first",
-                range.start, range.end,
+                range.start,
+                range.end,
             );
         }
 
@@ -609,7 +620,15 @@ impl PageStore {
                 .query(
                     &sql,
                     &[
-                        &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk_lo, &blk_hi, &target,
+                        &tenant_s,
+                        &timeline_s,
+                        &sp,
+                        &db,
+                        &rel,
+                        &fork,
+                        &blk_lo,
+                        &blk_hi,
+                        &target,
                     ],
                 )
                 .await
@@ -671,8 +690,19 @@ impl PageStore {
                 .query(
                     &sql,
                     &[
-                        &tenant_s, &timeline_s, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo,
-                        &sp_hi, &db_hi, &rel_hi, &fork_hi, &blk_hi, &target,
+                        &tenant_s,
+                        &timeline_s,
+                        &sp_lo,
+                        &db_lo,
+                        &rel_lo,
+                        &fork_lo,
+                        &blk_lo,
+                        &sp_hi,
+                        &db_hi,
+                        &rel_hi,
+                        &fork_hi,
+                        &blk_hi,
+                        &target,
                     ],
                 )
                 .await
@@ -690,14 +720,12 @@ impl PageStore {
         for r in rows {
             let row = row_to_page(r)?;
             let key = row.key.clone();
-            order_check
-                .entry(key.clone())
-                .or_default()
-                .push((row.lsn, row.is_image, row.will_init));
-            assert_chain_order_for_key(
-                order_check.get(&key).unwrap(),
-                "scan_range",
-            );
+            order_check.entry(key.clone()).or_default().push((
+                row.lsn,
+                row.is_image,
+                row.will_init,
+            ));
+            assert_chain_order_for_key(order_check.get(&key).unwrap(), "scan_range");
             let chain = by_key.entry(key).or_default();
             if chain.last().is_some_and(|last| last.will_init) {
                 continue;
@@ -707,11 +735,7 @@ impl PageStore {
         Ok(by_key)
     }
 
-    pub async fn delete_all_pages(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<()> {
+    pub async fn delete_all_pages(&self, tenant: TenantId, timeline: TimelineId) -> Result<()> {
         let sql = format!(
             "DELETE FROM \"{}\".pages WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
@@ -733,8 +757,7 @@ impl PageStore {
     ) -> Result<()> {
         const COLS: usize = 9;
         const ROWS_PER_INSERT: usize = 500;
-        let parallelism =
-            pageserver_api::config::scale_count(2, self.scale_factor);
+        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
@@ -758,8 +781,15 @@ impl PageStore {
                 let base = i * COLS + 1;
                 sql.push_str(&format!(
                     "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                    base, base + 1, base + 2, base + 3, base + 4,
-                    base + 5, base + 6, base + 7, base + 8,
+                    base,
+                    base + 1,
+                    base + 2,
+                    base + 3,
+                    base + 4,
+                    base + 5,
+                    base + 6,
+                    base + 7,
+                    base + 8,
                 ));
                 params.push(Box::new(tenant_s.clone()));
                 params.push(Box::new(timeline_s.clone()));
@@ -871,7 +901,14 @@ impl PageStore {
         // the multi-block JOIN.
         if blknum_range.end == blknum_range.start.saturating_add(1) {
             let chain = self
-                .read_slru_chain(tenant, timeline, kind, segno, blknum_range.start, target_lsn)
+                .read_slru_chain(
+                    tenant,
+                    timeline,
+                    kind,
+                    segno,
+                    blknum_range.start,
+                    target_lsn,
+                )
                 .await?;
             let mut out = HashMap::with_capacity(1);
             if !chain.is_empty() {
@@ -919,7 +956,15 @@ impl PageStore {
             .ysql_client
             .query(
                 &sql,
-                &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_lo, &blk_hi, &target],
+                &[
+                    &tenant_s,
+                    &timeline_s,
+                    &kind_i,
+                    &segno_i,
+                    &blk_lo,
+                    &blk_hi,
+                    &target,
+                ],
             )
             .await
             .context("scan_slru_range")?;
@@ -932,10 +977,7 @@ impl PageStore {
                 .entry(row.blknum)
                 .or_default()
                 .push((row.lsn, row.is_image, row.will_init));
-            assert_chain_order_for_key(
-                order_check.get(&row.blknum).unwrap(),
-                "scan_slru_range",
-            );
+            assert_chain_order_for_key(order_check.get(&row.blknum).unwrap(), "scan_slru_range");
             let entry = by_block.entry(row.blknum).or_default();
             if entry.last().is_some_and(|last| last.will_init) {
                 continue;
@@ -955,8 +997,7 @@ impl PageStore {
     ) -> Result<()> {
         const COLS: usize = 5;
         const ROWS_PER_INSERT: usize = 2000;
-        let parallelism =
-            pageserver_api::config::scale_count(3, self.scale_factor);
+        let parallelism = pageserver_api::config::scale_count(3, self.scale_factor);
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
 
@@ -978,10 +1019,17 @@ impl PageStore {
                 let base = i * COLS + 1;
                 sql.push_str(&format!(
                     "(${}, ${}, ${}, ${}, ${})",
-                    base, base + 1, base + 2, base + 3, base + 4,
+                    base,
+                    base + 1,
+                    base + 2,
+                    base + 3,
+                    base + 4,
                 ));
                 if row.key.len() != KEY_SIZE {
-                    bail!("put_meta row {i}: key bytes wrong length ({})", row.key.len());
+                    bail!(
+                        "put_meta row {i}: key bytes wrong length ({})",
+                        row.key.len()
+                    );
                 }
                 params.push(Box::new(tenant_s.clone()));
                 params.push(Box::new(timeline_s.clone()));
@@ -992,8 +1040,10 @@ impl PageStore {
             let chunk_rows = chunk.len();
             let ysql_client = Arc::clone(&self.ysql_client);
             futs.push(Box::pin(async move {
-                let params_ref: Vec<&(dyn ToSql + Sync)> =
-                    params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+                let params_ref: Vec<&(dyn ToSql + Sync)> = params
+                    .iter()
+                    .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+                    .collect();
                 ysql_client
                     .execute(&sql, &params_ref)
                     .await
@@ -1098,13 +1148,7 @@ impl PageStore {
             .ysql_client
             .query(
                 &sql,
-                &[
-                    &tenant_s,
-                    &timeline_s,
-                    &start_bytes,
-                    &end_bytes,
-                    &target,
-                ],
+                &[&tenant_s, &timeline_s, &start_bytes, &end_bytes, &target],
             )
             .await
             .context("scan_meta_range")?;
@@ -1116,11 +1160,7 @@ impl PageStore {
         Ok(out)
     }
 
-    pub async fn delete_all_meta(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<()> {
+    pub async fn delete_all_meta(&self, tenant: TenantId, timeline: TimelineId) -> Result<()> {
         let sql = format!(
             "DELETE FROM \"{}\".meta WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
@@ -1364,8 +1404,7 @@ impl PageStore {
         let sql = format!(
             "SELECT {} FROM \"{}\".timeline_state \
              WHERE tenant_id = $1 AND timeline_id = $2",
-            TIMELINE_ROW_COLUMNS,
-            self.schema
+            TIMELINE_ROW_COLUMNS, self.schema
         );
         let row = self
             .ysql_client
@@ -1379,8 +1418,7 @@ impl PageStore {
         let sql = format!(
             "SELECT {} FROM \"{}\".timeline_state \
              WHERE tenant_id = $1",
-            TIMELINE_ROW_COLUMNS,
-            self.schema
+            TIMELINE_ROW_COLUMNS, self.schema
         );
         let rows = self
             .ysql_client
@@ -1390,11 +1428,7 @@ impl PageStore {
         rows.into_iter().map(row_to_timeline).collect()
     }
 
-    pub async fn delete_timeline(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<()> {
+    pub async fn delete_timeline(&self, tenant: TenantId, timeline: TimelineId) -> Result<()> {
         let sql = format!(
             "DELETE FROM \"{}\".timeline_state WHERE tenant_id = $1 AND timeline_id = $2",
             self.schema
@@ -1565,10 +1599,7 @@ impl PageStore {
             );
             let row = self
                 .ysql_client
-                .query_opt(
-                    &probe_sql,
-                    &[&tenant.to_string(), &timeline.to_string()],
-                )
+                .query_opt(&probe_sql, &[&tenant.to_string(), &timeline.to_string()])
                 .await
                 .context("advance_disk_consistent_lsn probe")?;
             match row {
@@ -1588,11 +1619,7 @@ impl PageStore {
         }
     }
 
-    pub async fn bump_generation(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<i32> {
+    pub async fn bump_generation(&self, tenant: TenantId, timeline: TimelineId) -> Result<i32> {
         let sql = format!(
             "UPDATE \"{}\".timeline_state \
              SET current_generation = current_generation + 1 \
@@ -1652,17 +1679,12 @@ impl PageStore {
 /// tiebreaker (caller bug) or stale prepared-statement state. Panic
 /// rather than silently feed walredo a chain that would yield wrong
 /// page contents.
-fn assert_chain_order_for_key(
-    chain: &[(Lsn, bool, bool /* will_init */)],
-    where_: &str,
-) {
+fn assert_chain_order_for_key(chain: &[(Lsn, bool, bool /* will_init */)], where_: &str) {
     let mut prev: Option<(Lsn, bool)> = None;
     for (i, &(lsn, is_image, _will_init)) in chain.iter().enumerate() {
         if let Some((plsn, pis_image)) = prev {
             if lsn > plsn {
-                panic!(
-                    "{where_}: chain row {i} lsn {lsn} > prev lsn {plsn} (must be DESC)",
-                );
+                panic!("{where_}: chain row {i} lsn {lsn} > prev lsn {plsn} (must be DESC)",);
             }
             if lsn == plsn && !pis_image && is_image {
                 panic!(
@@ -1693,7 +1715,11 @@ mod chain_order_tests {
     #[test]
     fn pure_descending_lsn_is_accepted() {
         assert_chain_order_for_key(
-            &[row(300, false, false), row(200, false, false), row(100, true, true)],
+            &[
+                row(300, false, false),
+                row(200, false, false),
+                row(100, true, true),
+            ],
             "test_pure_desc",
         );
     }
@@ -1705,7 +1731,11 @@ mod chain_order_tests {
     #[test]
     fn image_first_at_tied_lsn_is_accepted() {
         assert_chain_order_for_key(
-            &[row(200, false, false), row(100, true, true), row(100, false, false)],
+            &[
+                row(200, false, false),
+                row(100, true, true),
+                row(100, false, false),
+            ],
             "test_image_first_tie",
         );
     }
@@ -1717,7 +1747,11 @@ mod chain_order_tests {
     #[test]
     fn delta_delta_at_same_lsn_is_accepted() {
         assert_chain_order_for_key(
-            &[row(200, false, false), row(200, false, false), row(100, true, true)],
+            &[
+                row(200, false, false),
+                row(200, false, false),
+                row(100, true, true),
+            ],
             "test_delta_delta_tie",
         );
     }
@@ -1766,7 +1800,11 @@ mod chain_order_tests {
     #[should_panic(expected = "after a delta at the same lsn")]
     fn image_after_delta_at_tied_lsn_panics() {
         assert_chain_order_for_key(
-            &[row(200, false, false), row(100, false, false), row(100, true, true)],
+            &[
+                row(200, false, false),
+                row(100, false, false),
+                row(100, true, true),
+            ],
             "test_image_after_delta_tie",
         );
     }
@@ -1859,8 +1897,7 @@ fn serialize_row_aux(row: &TimelineRow) -> Result<(Option<String>, serde_json::V
         .map(serde_json::to_string)
         .transpose()
         .context("serialising rel_size_migration")?;
-    let lineage_json =
-        serde_json::to_value(&row.lineage).context("serialising lineage")?;
+    let lineage_json = serde_json::to_value(&row.lineage).context("serialising lineage")?;
     Ok((rel_size_migration_text, lineage_json))
 }
 
@@ -2073,7 +2110,13 @@ mod tests {
 
         let mut rows = vec![page_row(k.clone(), 10, true, true, b"img")];
         for i in 1..=12 {
-            rows.push(page_row(k.clone(), 10 + 10 * i, false, false, &[b'd', i as u8]));
+            rows.push(page_row(
+                k.clone(),
+                10 + 10 * i,
+                false,
+                false,
+                &[b'd', i as u8],
+            ));
         }
         store.put_pages(tenant, timeline, &rows).await.unwrap();
 
@@ -2160,12 +2203,17 @@ mod tests {
             got.len(),
             2,
             "chain should be [delta@200, image@100], got: {:?}",
-            got.iter().map(|r| (r.lsn.0, r.is_image)).collect::<Vec<_>>()
+            got.iter()
+                .map(|r| (r.lsn.0, r.is_image))
+                .collect::<Vec<_>>()
         );
         assert_eq!(got[0].lsn, Lsn(200));
         assert!(!got[0].is_image);
         assert_eq!(got[1].lsn, Lsn(100));
-        assert!(got[1].is_image, "trim must break on the image, not the same-LSN delta");
+        assert!(
+            got[1].is_image,
+            "trim must break on the image, not the same-LSN delta"
+        );
         assert!(got[1].will_init);
 
         drop_schema(&store, &schema).await;
@@ -2191,7 +2239,10 @@ mod tests {
             page_row(k.clone(), 40, false, false, b"d40"),
         ];
         store.put_pages(tenant, timeline, &rows).await.unwrap();
-        let got = store.read_chain(tenant, timeline, &k, Lsn(100)).await.unwrap();
+        let got = store
+            .read_chain(tenant, timeline, &k, Lsn(100))
+            .await
+            .unwrap();
         assert_eq!(got.len(), 4);
         let lsns: Vec<u64> = got.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns, vec![40, 30, 20, 10]);
@@ -2262,7 +2313,13 @@ mod tests {
         let mut rows = Vec::new();
         for blk in 0u32..5 {
             let k = page_key(1663, 5, 16384, 0, blk);
-            rows.push(page_row(k.clone(), 10, true, true, format!("img{blk}").as_bytes()));
+            rows.push(page_row(
+                k.clone(),
+                10,
+                true,
+                true,
+                format!("img{blk}").as_bytes(),
+            ));
             rows.push(page_row(k, 20, false, false, format!("d{blk}").as_bytes()));
         }
         // Plus pages on a different rel (should NOT be returned).
@@ -2433,7 +2490,13 @@ mod tests {
         for rel in [16384u32, 16385u32] {
             for blk in 0u32..3 {
                 let k = page_key(1663, 5, rel, 0, blk);
-                rows.push(page_row(k, 10, true, true, format!("{rel}-{blk}").as_bytes()));
+                rows.push(page_row(
+                    k,
+                    10,
+                    true,
+                    true,
+                    format!("{rel}-{blk}").as_bytes(),
+                ));
             }
         }
         store.put_pages(tenant, timeline, &rows).await.unwrap();
@@ -2494,15 +2557,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            store.read_chain(t1, tl1, &k, Lsn(100)).await.unwrap()[0].payload.as_ref(),
+            store.read_chain(t1, tl1, &k, Lsn(100)).await.unwrap()[0]
+                .payload
+                .as_ref(),
             b"t1tl1"
         );
         assert_eq!(
-            store.read_chain(t2, tl1, &k, Lsn(100)).await.unwrap()[0].payload.as_ref(),
+            store.read_chain(t2, tl1, &k, Lsn(100)).await.unwrap()[0]
+                .payload
+                .as_ref(),
             b"t2tl1"
         );
         assert_eq!(
-            store.read_chain(t1, tl2, &k, Lsn(100)).await.unwrap()[0].payload.as_ref(),
+            store.read_chain(t1, tl2, &k, Lsn(100)).await.unwrap()[0]
+                .payload
+                .as_ref(),
             b"t1tl2"
         );
         drop_schema(&store, &schema).await;
@@ -2516,7 +2585,11 @@ mod tests {
         let k = page_key(1663, 5, 16384, 0, 0xff);
         let high = 0x7fff_ffff_ffff_fff0u64;
         store
-            .put_pages(tenant, timeline, &[page_row(k.clone(), high, true, true, b"x")])
+            .put_pages(
+                tenant,
+                timeline,
+                &[page_row(k.clone(), high, true, true, b"x")],
+            )
             .await
             .unwrap();
         let got = store
@@ -2676,24 +2749,28 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(res, AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 });
+        assert_eq!(
+            res,
+            AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 }
+        );
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
-        assert_eq!(got.disk_consistent_lsn, Lsn(0x2000), "stale-gen UPDATE must not advance");
+        assert_eq!(
+            got.disk_consistent_lsn,
+            Lsn(0x2000),
+            "stale-gen UPDATE must not advance"
+        );
 
         // Generation ahead of persisted (we bumped in-memory but the
         // row hasn't been UPSERT'd yet) → also stale: persisted row is
         // the source of truth.
         let res = store
-            .advance_disk_consistent_lsn(
-                tenant,
-                timeline,
-                Generation::new(6),
-                Lsn(0x4000),
-                None,
-            )
+            .advance_disk_consistent_lsn(tenant, timeline, Generation::new(6), Lsn(0x4000), None)
             .await
             .unwrap();
-        assert_eq!(res, AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 });
+        assert_eq!(
+            res,
+            AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 }
+        );
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
         assert_eq!(got.disk_consistent_lsn, Lsn(0x2000));
 
