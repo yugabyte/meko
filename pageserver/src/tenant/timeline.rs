@@ -1120,6 +1120,14 @@ impl Timeline {
             .await
             .context("insert_timeline_at_creation")?;
         pw.seed_consistent_lsn_watermark(dc_lsn);
+        // Seed the in-memory `remote_state.consistent_lsn` slot too: for a
+        // fresh bootstrap, `Timeline::new` ran with disk_consistent_lsn=0 in
+        // metadata (the real value is only known after import_datadir), so
+        // the slot is still 0 here even though the durable row we just wrote
+        // has dc_lsn. Without this, the walreceiver reads
+        // `get_consistent_lsn() == 0` and bails with "No previous WAL
+        // position".
+        self.remote_state.consistent_lsn.fetch_max(dc_lsn);
         Ok(())
     }
 
