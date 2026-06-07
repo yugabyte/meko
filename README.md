@@ -232,6 +232,30 @@ cargo neon endpoint create migration_check --branch-name migration_check
 cargo neon endpoint start migration_check
 ```
 
+
+## Service endpoints
+
+Default HTTP endpoints for a `neon_local` dev cluster (all bind
+`127.0.0.1`).
+
+| Service | HTTP API | Other ports |
+|---|---|---|
+| Storage controller | `http://127.0.0.1:1234` | — |
+| Pageserver | `http://127.0.0.1:9898` | gRPC `51051`, libpq `64000` |
+| Safekeeper | `http://127.0.0.1:7676` | libpq `5454` |
+| Endpoint storage | `http://127.0.0.1:9993` | — |
+
+Notes:
+
+- Pageserver ports increment per node (node *i* → HTTP `9898+i`, libpq
+  `64000+i`, gRPC `51051+i`).
+- The storage controller shares its port with the control-plane upcall
+  API (`/upcall/v1/`); its REST API lives at `/control/v1` and `/v1` on
+  the same port.
+- `compute_ctl` exposes a per-endpoint HTTP control port assigned at
+  `endpoint create` time (see `cargo neon endpoint` output).
+
+
 ## Building from source
 
 ### Linux deps
