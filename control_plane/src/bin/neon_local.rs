@@ -762,7 +762,13 @@ struct RepoLock {
 
 impl RepoLock {
     fn new() -> Result<Self> {
-        let repo_dir = File::open(local_env::base_path())?;
+        let path = local_env::base_path();
+        let repo_dir = File::open(&path).with_context(|| {
+            format!(
+                "no neon_local repo at {} \u{2014} run `neon_local init` first",
+                path.display()
+            )
+        })?;
         match Flock::lock(repo_dir, FlockArg::LockExclusive) {
             Ok(f) => Ok(Self { _file: f }),
             Err((_, e)) => Err(e).context("flock error"),
@@ -787,7 +793,7 @@ fn main() -> Result<()> {
         // This tool uses a collection of simple files to store its state, and consequently
         // it is not generally safe to run multiple commands concurrently.  Rather than expect
         // all callers to know this, use a lock file to protect against concurrent execution.
-        let _repo_lock = RepoLock::new().unwrap();
+        let _repo_lock = RepoLock::new()?;
 
         // all other commands need an existing config
         let env = LocalEnv::load_config(&local_env::base_path()).context("Error loading config")?;
