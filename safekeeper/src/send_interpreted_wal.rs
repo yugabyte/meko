@@ -479,13 +479,6 @@ impl InterpretedWalReader {
                         .with_context(|| "Failed to interpret WAL")?;
 
                         for (shard, record) in interpreted {
-                            // Shard zero needs to track the start LSN of the latest record
-                            // in adition to the LSN of the next record to ingest. The former
-                            // is included in basebackup persisted by the compute in WAL.
-                            if !shard.is_shard_zero() && record.is_empty() {
-                                continue;
-                            }
-
                             let mut states_iter = self.shard_senders
                                 .get(&shard)
                                 .expect("keys collected above")

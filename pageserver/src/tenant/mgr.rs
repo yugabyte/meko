@@ -281,7 +281,6 @@ fn emergency_generations(
 async fn init_load_generations(
     conf: &'static PageServerConf,
     tenant_confs: &HashMap<TenantId, Result<LocationConf, LoadConfigError>>,
-    resources: &TenantSharedResources,
     cancel: &CancellationToken,
 ) -> anyhow::Result<Option<HashMap<TenantId, TenantStartupMode>>> {
     let generations = if conf.control_plane_emergency_mode {
@@ -450,7 +449,7 @@ pub async fn init_tenant_mgr(
     let tenant_configs = init_load_tenant_configs(conf).await;
 
     // Determine which tenants are to be secondary or attached, and in which generation
-    let tenant_modes = init_load_generations(conf, &tenant_configs, resources, cancel).await?;
+    let tenant_modes = init_load_generations(conf, &tenant_configs, cancel).await?;
 
     // Hadron local SSD check: Raise an alert if our local filesystem does not contain any tenants but the re-attach request returned tenants.
     // This can happen if the PS suffered a Kubernetes node failure resulting in loss of all local data, but recovered quickly on another node
@@ -486,7 +485,7 @@ pub async fn init_tenant_mgr(
             Ok(l) => l,
             Err(e) => {
                 // This should only happen in the case of a serialization bug or critical local I/O error: we cannot load this tenant
-                error!(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(), "Failed to load tenant config, failed to {e:#}");
+                error!(tenant_id=%tenant_shard_id, "Failed to load tenant config, failed to {e:#}");
                 continue;
             }
         };
@@ -496,14 +495,14 @@ pub async fn init_tenant_mgr(
             // this tenant is really attached.
             match tenant_modes.get(&tenant_shard_id) {
                 None => {
-                    info!(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(), "Detaching tenant, control plane omitted it in re-attach response");
+                    info!(tenant_id=%tenant_shard_id, "Detaching tenant, control plane omitted it in re-attach response");
 
                     match safe_rename_tenant_dir(&tenant_dir_path).await {
                         Ok(tmp_path) => {
                             background_purges.spawn(tmp_path);
                         }
                         Err(e) => {
-                            error!(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(),
+                            error!(tenant_id=%tenant_shard_id,
                             "Failed to move detached tenant directory '{tenant_dir_path}': {e:?}");
                         }
                     };
@@ -513,7 +512,7 @@ pub async fn init_tenant_mgr(
                 }
                 Some(TenantStartupMode::Attached(generation)) => {
                     if &location_conf.generation > generation {
-                        tracing::error!(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(),
+                        tracing::error!(tenant_id=%tenant_shard_id,
                             "Control plane gave decreasing generation ({generation:?}) in re-attach response for tenant that was attached in generation {:?}; skipping",
                             location_conf.generation
                         );
@@ -525,7 +524,7 @@ pub async fn init_tenant_mgr(
         } else {
             // Legacy mode: no generation information, any tenant present
             // on local disk may activate
-            info!(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(), "Starting tenant in legacy mode, no generation",);
+            info!(tenant_id=%tenant_shard_id, "Starting tenant in legacy mode, no generation",);
         };
 
         // Presence of a generation number implies attachment: attach the tenant
@@ -699,7 +698,7 @@ impl TenantManager {
         false
     }
 
-    #[instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%tenant_shard_id))]
     pub(crate) async fn upsert_location(
         &self,
         tenant_shard_id: TenantId,
@@ -964,7 +963,7 @@ impl TenantManager {
         METRICS.tenant_slot_writes.inc();
 
         let mut locked = self.tenants.write().unwrap();
-        let span = tracing::info_span!("acquire_slot", tenant_id=%tenant_shard_id, shard_id = %tenant_shard_id.shard_slug());
+        let span = tracing::info_span!("acquire_slot", tenant_id=%tenant_shard_id);
         let _guard = span.enter();
 
         let m = match &mut *locked {
@@ -1033,7 +1032,7 @@ impl TenantManager {
     ///
     /// This does not have any special "force" shutdown of a tenant: it relies on the tenant's tasks
     /// to respect the cancellation tokens used in normal shutdown().
-    #[instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(), %drop_cache))]
+    #[instrument(skip_all, fields(tenant_id=%tenant_shard_id, %drop_cache))]
     pub(crate) async fn reset_tenant(
         &self,
         tenant_shard_id: TenantId,
@@ -1276,7 +1275,7 @@ impl TenantManager {
                                         // going to log too many lines
                                         debug!("tenant successfully stopped");
                                     }
-                                    .instrument(info_span!("shutdown", tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug())),
+                                    .instrument(info_span!("shutdown", tenant_id=%tenant_shard_id)),
                                 );
 
                                 total_attached += 1;
@@ -1531,7 +1530,7 @@ impl TenantManager {
         Ok((wanted_bytes, shard_count as u32))
     }
 
-    #[instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(), %timeline_id))]
+    #[instrument(skip_all, fields(tenant_id=%tenant_shard_id, %timeline_id))]
     pub(crate) async fn immediate_gc(
         &self,
         tenant_shard_id: TenantId,
@@ -2074,4 +2073,3 @@ use http_utils::error::ApiError;
 use pageserver_api::models::TimelineGcRequest;
 
 use crate::tenant::gc_result::GcResult;
-

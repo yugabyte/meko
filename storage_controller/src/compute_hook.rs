@@ -341,7 +341,7 @@ pub(super) struct ComputeHook {
 /// other code notifying us of a shard's status, rather than being the final notification
 /// that we send upwards to the control plane for the whole tenant.
 pub(crate) struct ShardUpdate<'a> {
-    pub(crate) tenant_shard_id: TenantId,
+    pub(crate) tenant_id: TenantId,
     pub(crate) node_id: NodeId,
     pub(crate) stripe_size: ShardStripeSize,
     pub(crate) preferred_az: Option<Cow<'a, AvailabilityZone>>,
@@ -512,18 +512,18 @@ impl ComputeHook {
         let mut tenants_locked = self.tenants.lock().unwrap();
 
         use std::collections::hash_map::Entry;
-        let tenant_shard_id = shard_update.tenant_shard_id;
+        let tenant_id = shard_update.tenant_id;
 
-        let tenant = match tenants_locked.entry(tenant_shard_id) {
+        let tenant = match tenants_locked.entry(tenant_id) {
             Entry::Vacant(e) => {
                 let ShardUpdate {
-                    tenant_shard_id,
+                    tenant_id: tenant_id,
                     node_id,
                     stripe_size,
                     preferred_az,
                 } = shard_update;
                 e.insert(ComputeHookTenant::new(
-                    tenant_shard_id,
+                    tenant_id,
                     stripe_size,
                     preferred_az.map(|az| az.into_owned()),
                     node_id,
@@ -535,7 +535,7 @@ impl ComputeHook {
                 tenant
             }
         };
-        tenant.maybe_send(tenant_shard_id, None)
+        tenant.maybe_send(tenant_id, None)
     }
 
     async fn notify_execute<M: ApiMethod>(
@@ -661,9 +661,9 @@ impl ComputeHook {
     ) {
         let mut maybe_sends = Vec::new();
         for shard_update in notifications {
-            let tenant_shard_id = shard_update.tenant_shard_id;
+            let tenant_id = shard_update.tenant_id;
             let maybe_send_result = self.notify_attach_prepare(shard_update);
-            maybe_sends.push((tenant_shard_id, maybe_send_result))
+            maybe_sends.push((tenant_id, maybe_send_result))
         }
 
         let this = self.clone();
@@ -675,16 +675,16 @@ impl ComputeHook {
             // ComputeHook semaphore already limits concurrency, but this way we avoid constructing+polling lots of futures which
             // would mostly just be waiting on that semaphore.
             let mut stream = futures::stream::iter(maybe_sends)
-                .map(|(tenant_shard_id, maybe_send_result)| {
+                .map(|(tenant_id, maybe_send_result)| {
                     let this = this.clone();
                     let cancel = cancel.clone();
 
                     async move {
                         this
                             .notify_execute(&this.tenants, maybe_send_result, &cancel)
-                            .await.map_err(|e| (tenant_shard_id, e))
+                            .await.map_err(|e| (tenant_id, e))
                     }.instrument(info_span!(
-                        "notify_attach_background", tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()
+                        "notify_attach_background", tenant_id=%tenant_id
                     ))
                 })
                 .buffered(API_CONCURRENCY);
@@ -726,7 +726,7 @@ impl ComputeHook {
     /// periods, but we don't retry forever.  The **caller** is responsible for handling failures and
     /// ensuring that they eventually call again to ensure that the compute is eventually notified of
     /// the proper pageserver nodes for a tenant.
-    #[tracing::instrument(skip_all, fields(tenant_id=%shard_update.tenant_shard_id, shard_id=%shard_update.tenant_shard_id.shard_slug(), node_id))]
+    #[tracing::instrument(skip_all, fields(tenant_id=%shard_update.tenant_id, node_id))]
     pub(super) async fn notify_attach<'a>(
         &self,
         shard_update: ShardUpdate<'a>,
@@ -741,16 +741,16 @@ impl ComputeHook {
     ///
     /// The goal is to avoid sending compute notifications with stale information (i.e.
     /// including detach pageservers).
-    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()))]
+    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_id))]
     pub(super) fn handle_detach(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         stripe_size: ShardStripeSize,
     ) {
         use std::collections::hash_map::Entry;
 
         let mut tenants_locked = self.tenants.lock().unwrap();
-        match tenants_locked.entry(tenant_shard_id) {
+        match tenants_locked.entry(tenant_id) {
             Entry::Vacant(_) => {
                 // This is a valid but niche case, where the tenant was previously attached
                 // as a Secondary location and then detached, so has no previously notified
@@ -808,7 +808,7 @@ pub(crate) mod tests {
         // resets the tenant state and puts it in an non-notifying state (need to
         // see all shards)
         tenant_state.update(ShardUpdate {
-            tenant_shard_id: tenant_id,
+            tenant_id,
             stripe_size,
             preferred_az: None,
             node_id: NodeId(1),
@@ -820,7 +820,7 @@ pub(crate) mod tests {
 
         // Writing the second shard makes it ready to notify
         tenant_state.update(ShardUpdate {
-            tenant_shard_id: tenant_id,
+            tenant_id,
             stripe_size,
             preferred_az: None,
             node_id: NodeId(1),

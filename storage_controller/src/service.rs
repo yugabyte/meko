@@ -766,7 +766,7 @@ impl Service {
                     // yet match our intent, we will eventually reconcile, and that will emit a compute notification.
                     if let Some(attached_at) = tenant_shard.stably_attached() {
                         compute_notifications.push(compute_hook::ShardUpdate {
-                            tenant_shard_id: *tenant_shard_id,
+                            tenant_id: *tenant_shard_id,
                             node_id: attached_at,
                             stripe_size: tenant_shard.shard.stripe_size,
                             preferred_az: tenant_shard
@@ -1336,7 +1336,6 @@ impl Service {
     #[instrument(skip_all, fields(
         seq=%result.sequence,
         tenant_id=%result.tenant_shard_id,
-        shard_id=%result.tenant_shard_id.shard_slug(),
     ))]
     fn process_result(&self, result: ReconcileResult) {
         let mut locked = self.inner.write().unwrap();
@@ -3564,14 +3563,14 @@ impl Service {
             if let Some(placement) = &placement {
                 shard.policy = placement.clone();
 
-                tracing::info!(tenant_id=%shard_id, shard_id=%shard_id.shard_slug(),
+                tracing::info!(tenant_id=%shard_id,
                                "Updated placement policy to {placement:?}");
             }
 
             if let Some(scheduling) = &scheduling {
                 shard.set_scheduling_policy(*scheduling);
 
-                tracing::info!(tenant_id=%shard_id, shard_id=%shard_id.shard_slug(),
+                tracing::info!(tenant_id=%shard_id,
                                "Updated scheduling policy to {scheduling:?}");
             }
 
@@ -3861,7 +3860,6 @@ impl Service {
 
     #[instrument(skip_all, fields(
         tenant_id=%req.tenant_shard_id,
-        shard_id=%req.tenant_shard_id.shard_slug(),
         timeline_id=%req.timeline_id,
     ))]
     pub(crate) async fn handle_timeline_shard_import_progress(
@@ -3915,7 +3913,6 @@ impl Service {
 
     #[instrument(skip_all, fields(
         tenant_id=%req.tenant_shard_id,
-        shard_id=%req.tenant_shard_id.shard_slug(),
         timeline_id=%req.timeline_id,
     ))]
     pub(crate) async fn handle_timeline_shard_import_progress_upcall(
@@ -3961,7 +3958,6 @@ impl Service {
         tracing::info!(
             tenant_id=%req.tenant_shard_id,
             timeline_id=%req.timeline_id,
-            shard_id=%req.tenant_shard_id.shard_slug(),
             "Updated timeline import status to: {timeline_import:?}");
 
         if timeline_import.is_complete() {
@@ -5154,7 +5150,7 @@ impl Service {
 
             let Some(intent_node_id) = shard.intent.get_attached() else {
                 tracing::warn!(
-                    tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(),
+                    tenant_id=%tenant_shard_id,
                     "Shard not scheduled (policy {:?}), cannot generate pass-through URL",
                     shard.policy
                 );
@@ -6308,7 +6304,7 @@ impl Service {
                     ShardSchedulingPolicy::Pause | ShardSchedulingPolicy::Stop => {
                         // If we have been asked to avoid rescheduling this shard, then do not migrate it during a deletion
                         tracing::warn!(
-                            tenant_id=%tid, shard_id=%tid.shard_slug(),
+                            tenant_id=%tid,
                             "Skip migration during deletion because shard scheduling policy {:?} disallows it",
                             tenant_shard.get_scheduling_policy(),
                         );
@@ -7438,7 +7434,7 @@ impl Service {
         let units = match self.get_reconciler_units(reconciler_config.priority) {
             Ok(u) => u,
             Err(_) => {
-                tracing::info!(tenant_id=%shard.tenant_shard_id, shard_id=%shard.tenant_shard_id.shard_slug(),
+                tracing::info!(tenant_id=%shard.tenant_shard_id,
                     "Concurrency limited: enqueued for reconcile later");
                 if !shard.delayed_reconcile {
                     match self.delayed_reconcile_tx.try_send(shard.tenant_shard_id) {
@@ -7545,7 +7541,6 @@ impl Service {
                     // We don't want to consider them when deciding to run optimizations.
                     tracing::warn!(
                         tenant_id=%shard.tenant_shard_id,
-                        shard_id=%shard.tenant_shard_id.shard_slug(),
                         "Shard reconciliation is stuck: {} consecutive launches",
                         shard.consecutive_reconciles_count
                     );
@@ -8215,7 +8210,7 @@ impl Service {
 
                 let tid_drain = TenantShardDrain {
                     drained_node: node_id,
-                    tenant_shard_id: tid,
+                    tenant_id: tid,
                 };
 
                 let drain_action = {
@@ -8238,21 +8233,21 @@ impl Service {
                     }
                     Ok(Some(lag)) => {
                         tracing::info!(
-                            tenant_id=%tid, shard_id=%tid.shard_slug(),
+                            tenant_id=%tid,
                             "Secondary on node {dest_node_id} is lagging by {lag}. Skipping reconcile."
                         );
                         continue;
                     }
                     Ok(None) => {
                         tracing::info!(
-                            tenant_id=%tid, shard_id=%tid.shard_slug(),
+                            tenant_id=%tid,
                             "Could not determine lag for secondary on node {dest_node_id}. Skipping reconcile."
                         );
                         continue;
                     }
                     Err(err) => {
                         tracing::warn!(
-                            tenant_id=%tid, shard_id=%tid.shard_slug(),
+                            tenant_id=%tid,
                             "Failed to get secondary lag from node {dest_node_id}. Skipping reconcile: {err}"
                         );
                         continue;
@@ -8548,13 +8543,13 @@ impl Service {
                             match tenant_shard.reschedule_to_secondary(Some(node_id), scheduler) {
                                 Err(e) => {
                                     tracing::warn!(
-                                        tenant_id=%tid, shard_id=%tid.shard_slug(),
+                                        tenant_id=%tid,
                                         "Scheduling error when filling pageserver {} : {e}", node_id
                                     );
                                 }
                                 Ok(()) => {
                                     tracing::info!(
-                                        tenant_id=%tid, shard_id=%tid.shard_slug(),
+                                        tenant_id=%tid,
                                         "Rescheduled shard while filling node {}: {:?} -> {}",
                                         node_id,
                                         previously_attached_to,
@@ -8788,4 +8783,3 @@ impl Service {
         })
     }
 }
-

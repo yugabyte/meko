@@ -244,9 +244,9 @@ pub struct TenantShard {
     // This is necessary to allow global config updates.
     tenant_conf: Arc<ArcSwap<AttachedTenantConf>>,
 
-    tenant_shard_id: TenantId,
+    id: TenantId,
 
-    // The detailed sharding information, beyond the number/count in tenant_shard_id
+    // The detailed sharding information, beyond the number/count in id
     shard_identity: ShardIdentity,
 
     /// The remote storage generation, used to protect S3 objects from split-brain.
@@ -316,7 +316,7 @@ pub struct TenantShard {
 }
 impl std::fmt::Debug for TenantShard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.tenant_shard_id, self.current_state())
+        write!(f, "{} ({})", self.id, self.current_state())
     }
 }
 
@@ -699,7 +699,7 @@ impl TenantShard {
         cause: LoadTimelineCause,
         ctx: &RequestContext,
     ) -> anyhow::Result<TimelineInitAndSyncResult> {
-        let tenant_id = self.tenant_shard_id;
+        let tenant_id = self.id;
 
         let idempotency = if metadata.ancestor_timeline().is_none() {
             CreateTimelineIdempotency::Bootstrap {
@@ -1000,7 +1000,7 @@ impl TenantShard {
 
                 Ok(())
             }
-            .instrument(tracing::info_span!(parent: None, "attach", tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(), gen=?generation)),
+            .instrument(tracing::info_span!(parent: None, "attach", tenant_id=%tenant_shard_id, gen=?generation)),
         );
         Ok(tenant)
     }
@@ -1017,7 +1017,7 @@ impl TenantShard {
         // `pageserver.timeline_state`; one SQL fetch builds the full
         // preload. Offloaded timelines aren't supported in yb-mode, so
         // the tenant-manifest blob is also skipped.
-        let tenant_id = self.tenant_shard_id;
+        let tenant_id = self.id;
         let rows = tokio::select! {
             r = self.compute_page_store.list_timelines(tenant_id) => r?,
             _ = cancel.cancelled() => anyhow::bail!("cancelled"),
@@ -1088,7 +1088,7 @@ impl TenantShard {
                 .with_context(|| {
                     format!(
                         "failed to load remote timeline {} for tenant {}",
-                        timeline_id, self.tenant_shard_id
+                        timeline_id, self.id
                     )
                 })?;
 
@@ -1283,7 +1283,7 @@ impl TenantShard {
     }
 
     pub(crate) fn tenant_shard_id(&self) -> TenantId {
-        self.tenant_shard_id
+        self.id
     }
 
     /// Get Timeline handle for given Neon timeline ID.
@@ -1297,13 +1297,13 @@ impl TenantShard {
         let timeline = timelines_accessor
             .get(&timeline_id)
             .ok_or(GetTimelineError::NotFound {
-                tenant_id: self.tenant_shard_id,
+                tenant_id: self.id,
                 timeline_id,
             })?;
 
         if active_only && !timeline.is_active() {
             Err(GetTimelineError::NotActive {
-                tenant_id: self.tenant_shard_id,
+                tenant_id: self.id,
                 timeline_id,
                 state: timeline.current_state(),
             })
@@ -1698,7 +1698,7 @@ impl TenantShard {
                     *current_state = TenantState::Activating(ActivatingFrom::Attaching);
                 }
             }
-            debug!(tenant_id = %self.tenant_shard_id, shard_id = %self.tenant_shard_id.shard_slug(), "Activating tenant");
+            debug!(tenant_id = %self.id, "Activating tenant");
             activating = true;
             // Continue outside the closure. We need to grab timelines.lock()
             // and we plan to turn it into a tokio::sync::Mutex in a future patch.
@@ -1739,8 +1739,7 @@ impl TenantShard {
                 // times to activate. see https://github.com/neondatabase/neon/issues/4025
                 info!(
                     since_creation_millis = elapsed.as_millis(),
-                    tenant_id = %self.tenant_shard_id,
-                    shard_id = %self.tenant_shard_id.shard_slug(),
+                    tenant_id = %self.id,
                     activated_timelines,
                     total_timelines,
                     post_state = <&'static str>::from(&*current_state),
@@ -1859,7 +1858,7 @@ impl TenantShard {
         //
         // this will additionally shutdown and await all timeline tasks.
         tracing::debug!("Waiting for tasks...");
-        task_mgr::shutdown_tasks(None, Some(self.tenant_shard_id), None).await;
+        task_mgr::shutdown_tasks(None, Some(self.id), None).await;
 
         if let Some(walredo_mgr) = self.walredo_mgr.as_ref() {
             walredo_mgr.shutdown().await;
@@ -1868,7 +1867,7 @@ impl TenantShard {
         // Wait for any in-flight operations to complete
         self.gate.close().await;
 
-        remove_tenant_metrics(&self.tenant_shard_id);
+        remove_tenant_metrics(&self.id);
 
         Ok(())
     }
@@ -2031,7 +2030,7 @@ impl TenantShard {
                             r.map_err(
                             |_e: tokio::sync::watch::error::RecvError|
                                 // Tenant existed but was dropped: report it as non-existent
-                                GetActiveTenantError::NotFound(GetTenantError::ShardNotFound(self.tenant_shard_id))
+                                GetActiveTenantError::NotFound(GetTenantError::ShardNotFound(self.id))
                         )?
                         }
                         Err(TimeoutCancellableError::Cancelled) => {
@@ -2084,7 +2083,7 @@ impl TenantShard {
 
     pub(crate) fn get_sizes(&self) -> TopTenantShardItem {
         let mut result = TopTenantShardItem {
-            id: self.tenant_shard_id,
+            id: self.id,
             resident_size: 0,
             physical_size: 0,
             max_logical_size: 0,
@@ -2314,7 +2313,7 @@ impl TenantShard {
             new_metadata,
             ancestor,
             new_timeline_id,
-            self.tenant_shard_id,
+            self.id,
             self.generation,
             self.shard_identity,
             self.walredo_mgr.clone(),
@@ -2347,7 +2346,7 @@ impl TenantShard {
         attached_conf: AttachedTenantConf,
         shard_identity: ShardIdentity,
         walredo_mgr: Option<Arc<WalRedoManager>>,
-        tenant_shard_id: TenantId,
+        id: TenantId,
         remote_storage: GenericRemoteStorage,
         basebackup_cache: Arc<BasebackupCache>,
         compute_page_store: Arc<crate::page_store::PageStore>,
@@ -2365,9 +2364,8 @@ impl TenantShard {
             // set of broken tenants should not have zero counts so that it remains accessible for
             // alerting.
 
-            let tid = tenant_shard_id.to_string();
-            let shard_id = tenant_shard_id.shard_slug().to_string();
-            let set_key = &[tid.as_str(), shard_id.as_str()][..];
+            let tid = id.to_string();
+            let set_key = &[tid.as_str()][..];
 
             fn inspect_state(state: &TenantState) -> ([&'static str; 1], bool) {
                 ([state.into()], matches!(state, TenantState::Broken { .. }))
@@ -2411,7 +2409,7 @@ impl TenantShard {
         });
 
         TenantShard {
-            tenant_shard_id,
+            id,
             shard_identity,
             generation: attached_conf.generation,
             conf,
@@ -2432,7 +2430,7 @@ impl TenantShard {
                 TenantShard::get_pagestream_throttle_config(conf, &attached_conf.tenant_conf),
             )),
             pagestream_throttle_metrics: Arc::new(
-                crate::metrics::tenant_throttling::Pagestream::new(&tenant_shard_id),
+                crate::metrics::tenant_throttling::Pagestream::new(&id),
             ),
             tenant_conf: Arc::new(ArcSwap::from_pointee(attached_conf)),
             gc_block: Default::default(),
@@ -2481,7 +2479,7 @@ impl TenantShard {
     ///
     /// NB: make sure to call `ShardIdentity::assert_equal` before persisting a new config, to avoid
     /// changes to shard parameters that may result in data corruption.
-    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()))]
+    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id))]
     pub(super) async fn persist_tenant_config(
         conf: &'static PageServerConf,
         tenant_shard_id: &TenantId,
@@ -2492,7 +2490,7 @@ impl TenantShard {
         Self::persist_tenant_config_at(tenant_shard_id, &config_path, location_conf).await
     }
 
-    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug()))]
+    #[tracing::instrument(skip_all, fields(tenant_id=%tenant_shard_id))]
     pub(super) async fn persist_tenant_config_at(
         tenant_shard_id: &TenantId,
         config_path: &Utf8Path,
@@ -3017,7 +3015,7 @@ impl TenantShard {
             || async {
                 initdb_storage::upload_initdb_dir(
                     &self.remote_storage,
-                    &self.tenant_shard_id,
+                    &self.id,
                     timeline_id,
                     pgdata_zstd.try_clone().await?,
                     tar_zst_size,
@@ -3061,7 +3059,7 @@ impl TenantShard {
         // create a `tenant/{tenant_id}/timelines/basebackup-{timeline_id}.{TEMP_FILE_SUFFIX}/`
         // temporary directory for basebackup files for the given timeline.
 
-        let timelines_path = self.conf.timelines_path(&self.tenant_shard_id);
+        let timelines_path = self.conf.timelines_path(&self.id);
         let pgdata_path = path_with_suffix_extension(
             timelines_path.join(format!("basebackup-{timeline_id}")),
             TEMP_FILE_SUFFIX,
@@ -3089,11 +3087,11 @@ impl TenantShard {
         if let Some(existing_initdb_timeline_id) = load_existing_initdb {
             if existing_initdb_timeline_id != timeline_id {
                 let source_path = &remote_initdb_archive_path(
-                    &self.tenant_shard_id,
+                    &self.id,
                     &existing_initdb_timeline_id,
                 );
                 let dest_path =
-                    &remote_initdb_archive_path(&self.tenant_shard_id, &timeline_id);
+                    &remote_initdb_archive_path(&self.id, &timeline_id);
 
                 // if this fails, it will get retried by retried control plane requests
                 self.remote_storage
@@ -3101,11 +3099,11 @@ impl TenantShard {
                     .await
                     .context("copy initdb tar")?;
             }
-            let timeline_path = self.conf.timelines_path(&self.tenant_shard_id);
+            let timeline_path = self.conf.timelines_path(&self.id);
             let (initdb_tar_zst_path, initdb_tar_zst) = initdb_storage::download_initdb_tar_zst(
                 &timeline_path,
                 &self.remote_storage,
-                &self.tenant_shard_id,
+                &self.id,
                 &existing_initdb_timeline_id,
                 &self.cancel,
             )
@@ -3161,7 +3159,7 @@ impl TenantShard {
             )
             .await?;
 
-        let tenant_shard_id = raw_timeline.owning_tenant.tenant_shard_id;
+        let tenant_shard_id = raw_timeline.owning_tenant.id;
         raw_timeline
             .write(|unfinished_timeline| async move {
                 import_datadir::import_timeline_from_postgres_datadir(
@@ -3223,7 +3221,7 @@ impl TenantShard {
         rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
     ) -> anyhow::Result<(UninitializedTimeline<'a>, RequestContext)> {
-        let tenant_shard_id = self.tenant_shard_id;
+        let tenant_shard_id = self.id;
 
         let resources = self.build_timeline_resources(new_timeline_id);
         let _ = (new_metadata, &rel_size_v2_status, rel_size_migrated_at);
@@ -3289,7 +3287,7 @@ impl TenantShard {
         idempotency: CreateTimelineIdempotency,
         allow_offloaded: bool,
     ) -> Result<TimelineCreateGuard, TimelineExclusionError> {
-        let tenant_shard_id = self.tenant_shard_id;
+        let tenant_shard_id = self.id;
 
         let timeline_path = self.conf.timeline_path(&tenant_shard_id, &timeline_id);
 
@@ -3445,5 +3443,3 @@ async fn run_initdb(
 
     res
 }
-
-

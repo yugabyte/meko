@@ -938,7 +938,7 @@ impl Reconciler {
                 .compute_hook
                 .notify_attach(
                     compute_hook::ShardUpdate {
-                        tenant_shard_id: self.tenant_shard_id,
+                        tenant_id: self.tenant_shard_id,
                         node_id: node.get_id(),
                         stripe_size: self.shard.stripe_size,
                         preferred_az: self.preferred_az.as_ref().map(Cow::Borrowed),

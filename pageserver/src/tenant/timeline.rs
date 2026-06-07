@@ -100,7 +100,7 @@ pub struct Timeline {
 
     myself: Weak<Self>,
 
-    pub(crate) tenant_shard_id: TenantId,
+    pub(crate) tenant_id: TenantId,
     pub timeline_id: TimelineId,
 
     /// The generation of the tenant that instantiated us: this is used for safety when writing remote objects.
@@ -1085,7 +1085,7 @@ impl Timeline {
             None
         };
         let row = crate::page_store::TimelineRow {
-            tenant_id: self.tenant_shard_id,
+            tenant_id: self.tenant_id,
             timeline_id: self.timeline_id,
             disk_consistent_lsn: dc_lsn,
             applied_gc_cutoff_lsn: gc_cutoff,
@@ -1137,7 +1137,7 @@ impl Timeline {
         match pw
             .fpu_page_store()
             .cas_bump_generation_on_attach(
-                self.tenant_shard_id,
+                self.tenant_id,
                 self.timeline_id,
                 self.generation,
             )
@@ -1153,7 +1153,7 @@ impl Timeline {
                 // shutdown via stale_gen detection on the live PS.
                 anyhow::bail!(
                     "attach refused: timeline {tenant}/{timeline} has live generation {live} > our generation {ours:?}",
-                    tenant = self.tenant_shard_id,
+                    tenant = self.tenant_id,
                     timeline = self.timeline_id,
                     live = live_generation,
                     ours = self.generation,
@@ -1432,14 +1432,14 @@ impl Timeline {
     /// yb-mode: equivalent to `freeze_and_flush` (drain `PageWriter`
     /// row buffer into YB). The `u64` return is a legacy flush-token
     /// from the Neon flush_loop machinery — always 0 in yb-mode.
-    #[instrument(skip(self), fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id))]
+    #[instrument(skip(self), fields(tenant_id=%self.tenant_id, timeline_id=%self.timeline_id))]
     pub(crate) async fn freeze(&self) -> Result<u64, FlushLayerError> {
         self.freeze_and_flush0().await?;
         Ok(0)
     }
 
     /// Freeze and flush the open in-memory layer, waiting for it to be written to disk.
-    #[instrument(skip(self), fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id))]
+    #[instrument(skip(self), fields(tenant_id=%self.tenant_id, timeline_id=%self.timeline_id))]
     /// yb-pageserver durability checkpoint: drain the `PageWriter`
     /// row-INSERT buffer into YugabyteDB.
     ///
@@ -1624,7 +1624,7 @@ impl Timeline {
 
         // TODO: work toward making this a no-op. See this function's doc comment for more context.
         tracing::debug!("Waiting for tasks...");
-        task_mgr::shutdown_tasks(None, Some(self.tenant_shard_id), Some(self.timeline_id)).await;
+        task_mgr::shutdown_tasks(None, Some(self.tenant_id), Some(self.timeline_id)).await;
 
         {
             // yb-mode: no in-memory layers to drop. The write_lock is
@@ -1739,7 +1739,7 @@ impl Timeline {
     /// Try to get a basebackup from the on-disk cache.
     pub(crate) async fn get_cached_basebackup(&self, lsn: Lsn) -> Option<tokio::fs::File> {
         self.basebackup_cache
-            .get(self.tenant_shard_id, self.timeline_id, lsn)
+            .get(self.tenant_id, self.timeline_id, lsn)
             .await
     }
 
@@ -1784,7 +1784,7 @@ impl Timeline {
         }
 
         self.basebackup_cache
-            .send_prepare(self.tenant_shard_id, self.timeline_id, lsn);
+            .send_prepare(self.tenant_id, self.timeline_id, lsn);
     }
 }
 
@@ -1884,7 +1884,7 @@ impl Timeline {
         metadata: &TimelineMetadata,
         ancestor: Option<Arc<Timeline>>,
         timeline_id: TimelineId,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         generation: Generation,
         shard_identity: ShardIdentity,
         walredo_mgr: Option<Arc<super::WalRedoManager>>,
@@ -1929,7 +1929,7 @@ impl Timeline {
             let internal_ps = &resources.fpu_page_store;
             let pw_cfg = &conf.yb_page_writer;
             let mut writer = crate::page_writer::PageWriter::new(
-                tenant_shard_id,
+                tenant_id,
                 timeline_id,
                 generation,
                 compute_ps.clone(),
@@ -1977,7 +1977,7 @@ impl Timeline {
                     let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
                         .expect("invalid pg_version in timeline init");
                     Some(crate::image_materializer::ImageMaterializer::spawn(
-                        tenant_shard_id,
+                        tenant_id,
                         timeline_id,
                         writer.clone(),
                         internal_ps.clone(),
@@ -1996,7 +1996,7 @@ impl Timeline {
 
         Arc::new_cyclic(|myself| {
             let metrics = Arc::new(TimelineMetrics::new(
-                &tenant_shard_id,
+                &tenant_id,
                 &timeline_id,
                 crate::metrics::EvictionsWithLowResidenceDurationBuilder::new(
                     "mtime",
@@ -2010,7 +2010,7 @@ impl Timeline {
                 tenant_conf,
                 myself: myself.clone(),
                 timeline_id,
-                tenant_shard_id,
+                tenant_id: tenant_id,
                 generation,
                 shard_identity,
                 pg_version,
@@ -2037,7 +2037,7 @@ impl Timeline {
                 metrics,
 
                 query_metrics: crate::metrics::SmgrQueryTimePerTimeline::new(
-                    &tenant_shard_id,
+                    &tenant_id,
                     &timeline_id,
                     resources.pagestream_throttle_metrics,
                 ),
@@ -2141,7 +2141,7 @@ impl Timeline {
     fn launch_wal_receiver(self: &Arc<Self>, ctx: &RequestContext) {
         info!(
             "launching WAL receiver for timeline {} of tenant {}",
-            self.timeline_id, self.tenant_shard_id
+            self.timeline_id, self.tenant_id
         );
 
         let tenant_conf = self.tenant_conf.load();
@@ -2290,7 +2290,7 @@ impl Timeline {
         task_mgr::spawn(
             task_mgr::BACKGROUND_RUNTIME.handle(),
             task_mgr::TaskKind::InitialLogicalSizeCalculation,
-            self.tenant_shard_id,
+            self.tenant_id,
             Some(self.timeline_id),
             "initial size calculation",
             // NB: don't log errors here, task_mgr will do that.
@@ -2304,7 +2304,7 @@ impl Timeline {
                     .await;
                 Ok(())
             }
-            .instrument(info_span!(parent: None, "initial_size_calculation", tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(), timeline_id=%self.timeline_id)),
+            .instrument(info_span!(parent: None, "initial_size_calculation", tenant_id=%self.tenant_id, timeline_id=%self.timeline_id)),
         );
     }
 
@@ -2795,14 +2795,14 @@ impl Drop for Timeline {
             // an unwrap(), to avoid panicking in a destructor and thereby aborting the process.
             if let Ok(mut gc_info) = ancestor.gc_info.write() {
                 if !gc_info.remove_child_not_offloaded(self.timeline_id) {
-                    tracing::error!(tenant_id = %self.tenant_shard_id, shard_id = %self.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id,
+                    tracing::error!(tenant_id = %self.tenant_id, timeline_id = %self.timeline_id,
                         "Couldn't remove retain_lsn entry from timeline's parent on drop: already removed");
                 }
             }
         }
         info!(
             "Timeline {} for tenant {} is being dropped",
-            self.timeline_id, self.tenant_shard_id
+            self.timeline_id, self.tenant_id
         );
     }
 }
@@ -3012,7 +3012,7 @@ impl Timeline {
                     Err(walredo::Error::Other(err)) => {
                         if fire_critical_error {
                             critical_timeline!(
-                                self.tenant_shard_id,
+                                self.tenant_id,
                                 self.timeline_id,
                                 Some(&self.corruption_detected),
                                 "walredo failure during page reconstruction: {err:?}"
@@ -3048,14 +3048,14 @@ impl Timeline {
     /// Returns true if no such block existed before, false otherwise.
     pub(crate) async fn block_gc(&self, tenant: &super::TenantShard) -> anyhow::Result<bool> {
         use crate::tenant::gc_block::GcBlockingReason;
-        assert_eq!(self.tenant_shard_id, tenant.tenant_shard_id);
+        assert_eq!(self.tenant_id, tenant.id);
         tenant.gc_block.insert(self, GcBlockingReason::Manual).await
     }
 
     /// Persistently unblocks gc for `Manual` reason.
     pub(crate) async fn unblock_gc(&self, tenant: &super::TenantShard) -> anyhow::Result<()> {
         use crate::tenant::gc_block::GcBlockingReason;
-        assert_eq!(self.tenant_shard_id, tenant.tenant_shard_id);
+        assert_eq!(self.tenant_id, tenant.id);
         tenant.gc_block.remove(self, GcBlockingReason::Manual).await
     }
 
@@ -3232,4 +3232,3 @@ fn chain_to_value_reconstruct_state(
     }
     Ok(state)
 }
-

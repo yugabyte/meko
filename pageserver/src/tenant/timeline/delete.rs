@@ -186,7 +186,7 @@ impl DeleteTimelineFlow {
         tenant: Arc<TenantShard>,
         timeline: Arc<Timeline>,
     ) {
-        let tenant_shard_id = timeline.tenant_shard_id;
+        let tenant_shard_id = timeline.tenant_id;
         let timeline_id = timeline.timeline_id;
 
         // Take a tenant gate guard, because timeline deletion needs access to the tenant to update its manifest.
@@ -216,7 +216,7 @@ impl DeleteTimelineFlow {
                 };
                 Ok(())
             }
-            .instrument(tracing::info_span!(parent: None, "delete_timeline", tenant_id=%tenant_shard_id, shard_id=%tenant_shard_id.shard_slug(),timeline_id=%timeline_id)),
+            .instrument(tracing::info_span!(parent: None, "delete_timeline", tenant_id=%tenant_shard_id,timeline_id=%timeline_id)),
         );
     }
 
@@ -230,7 +230,7 @@ impl DeleteTimelineFlow {
             Err(anyhow::anyhow!("failpoint: timeline-delete-before-rm"))?
         });
 
-        delete_local_timeline_directory(conf, tenant.tenant_shard_id, timeline).await;
+        delete_local_timeline_directory(conf, tenant.id, timeline).await;
 
         fail::fail_point!("timeline-delete-after-rm", |_| {
             Err(anyhow::anyhow!("failpoint: timeline-delete-after-rm"))?
@@ -240,7 +240,7 @@ impl DeleteTimelineFlow {
         // `pages`, `slru_pages`, `meta`, `timeline_state`.
         tenant
             .fpu_page_store
-            .delete_all_for_timeline(tenant.tenant_shard_id, timeline.timeline_id)
+            .delete_all_for_timeline(tenant.id, timeline.timeline_id)
             .await
             .map_err(DeleteTimelineError::Other)?;
 

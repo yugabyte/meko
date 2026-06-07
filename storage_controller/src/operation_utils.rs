@@ -35,7 +35,7 @@ pub(crate) fn validate_node_state(
 /// Struct that houses a few utility methods for draining pageserver nodes
 pub(crate) struct TenantShardDrain {
     pub(crate) drained_node: NodeId,
-    pub(crate) tenant_shard_id: TenantId,
+    pub(crate) tenant_id: TenantId,
 }
 
 impl TenantShardDrain {
@@ -46,7 +46,7 @@ impl TenantShardDrain {
         tenants: &BTreeMap<TenantId, TenantShard>,
         scheduler: &Scheduler,
     ) -> TenantShardDrainAction {
-        let Some(tenant_shard) = tenants.get(&self.tenant_shard_id) else {
+        let Some(tenant_shard) = tenants.get(&self.tenant_id) else {
             return TenantShardDrainAction::Skip;
         };
 
@@ -87,7 +87,7 @@ impl TenantShardDrain {
             Some(node) => TenantShardDrainAction::RescheduleToSecondary(node),
             None => {
                 tracing::warn!(
-                    tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(),
+                    tenant_id=%self.tenant_id,
                     "No eligible secondary while draining {}", self.drained_node
                 );
 
@@ -106,7 +106,7 @@ impl TenantShardDrain {
         scheduler: &mut Scheduler,
         nodes: &Arc<HashMap<NodeId, Node>>,
     ) -> Result<Option<&'a mut TenantShard>, OperationError> {
-        let tenant_shard = match tenants.get_mut(&self.tenant_shard_id) {
+        let tenant_shard = match tenants.get_mut(&self.tenant_id) {
             Some(some) => some,
             None => {
                 // Tenant shard was removed in the meantime.
@@ -123,7 +123,7 @@ impl TenantShardDrain {
 
         if !tenant_shard.intent.get_secondary().contains(&destination) {
             tracing::info!(
-                tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(),
+                tenant_id=%self.tenant_id,
                 "Secondary moved away from {destination} during drain"
             );
 
@@ -133,7 +133,7 @@ impl TenantShardDrain {
         match tenant_shard.reschedule_to_secondary(Some(destination), scheduler) {
             Err(e) => {
                 tracing::warn!(
-                    tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(),
+                    tenant_id=%self.tenant_id,
                     "Scheduling error when draining pageserver {} : {}", self.drained_node, e
                 );
 
@@ -142,7 +142,7 @@ impl TenantShardDrain {
             Ok(()) => {
                 let scheduled_to = tenant_shard.intent.get_attached();
                 tracing::info!(
-                    tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(),
+                    tenant_id=%self.tenant_id,
                     "Rescheduled shard while draining node {}: {} -> {:?}",
                     self.drained_node,
                     self.drained_node,

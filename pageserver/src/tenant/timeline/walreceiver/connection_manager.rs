@@ -292,7 +292,7 @@ impl ConnectionManagerState {
         safekeeper_pg_addr: &str,
     ) -> anyhow::Result<PgConnectionConfig> {
         let ttid = TenantTimelineId {
-            tenant_id: timeline.tenant_shard_id,
+            tenant_id: timeline.tenant_id,
             timeline_id: timeline.timeline_id,
         };
         let connection_conf_args = ConnectionConfigArgs {
@@ -437,4 +437,3 @@ impl ConnectionManagerState {
         }
     }
 }
-

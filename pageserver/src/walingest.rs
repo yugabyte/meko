@@ -421,7 +421,7 @@ impl WalIngest {
         // https://github.com/neondatabase/neon/pull/10634.
         let Some(vm_size) = get_relsize(modification, vm_rel, ctx).await? else {
             critical_timeline!(
-                modification.tline.tenant_shard_id,
+                modification.tline.tenant_id,
                 modification.tline.timeline_id,
                 // Hadron: No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                 None::<&AtomicBool>,
@@ -432,7 +432,7 @@ impl WalIngest {
         if let Some(blknum) = new_vm_blk {
             if blknum >= vm_size {
                 critical_timeline!(
-                    modification.tline.tenant_shard_id,
+                    modification.tline.tenant_id,
                     modification.tline.timeline_id,
                     // Hadron: No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                     None::<&AtomicBool>,
@@ -444,7 +444,7 @@ impl WalIngest {
         if let Some(blknum) = old_vm_blk {
             if blknum >= vm_size {
                 critical_timeline!(
-                    modification.tline.tenant_shard_id,
+                    modification.tline.tenant_id,
                     modification.tline.timeline_id,
                     // Hadron: No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                     None::<&AtomicBool>,

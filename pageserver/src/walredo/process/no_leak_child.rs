@@ -84,7 +84,7 @@ impl Drop for NoLeakChild {
             Some(child) => child,
             None => return,
         };
-        let tenant_shard_id = self.tenant_id;
+        let tenant_id = self.tenant_id;
         // Offload the kill+wait of the child process into the background.
         // If someone stops the runtime, we'll leak the child process.
         // We can ignore that case because we only stop the runtime on pageserver exit.
@@ -94,8 +94,7 @@ impl Drop for NoLeakChild {
                 // This thread here is going to outlive of our dropper.
                 let span = tracing::info_span!(
                     "walredo",
-                    tenant_id = %tenant_shard_id,
-                    shard_id = %tenant_shard_id.shard_slug()
+                    tenant_id = %tenant_id
                 );
                 let _entered = span.enter();
                 Self::kill_and_wait_impl(child, WalRedoKillCause::NoLeakChildDrop);

@@ -291,7 +291,7 @@ impl UnifiedPages {
     /// supersedes. Newer deltas and unflushed entries are untouched.
     pub fn trim_key_up_to(&self, key: &Bytes, max_lsn: Lsn) {
         let mut total_freed = 0usize;
-        let mut key_empty = false;
+        let key_empty = 
         {
             let Some(mut entry) = self.by_key.get_mut(key) else {
                 return;
@@ -310,8 +310,8 @@ impl UnifiedPages {
                     total_freed += size;
                 }
             }
-            key_empty = ks.chain.is_empty();
-        }
+            ks.chain.is_empty()
+        };
         if total_freed > 0 {
             self.total_bytes.fetch_sub(total_freed, Ordering::Relaxed);
         }

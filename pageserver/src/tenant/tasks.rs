@@ -120,14 +120,14 @@ pub(crate) async fn acquire_concurrency_permit(
 /// `pageserver.pages`. A background image materialiser (Phase 3e) will
 /// replace this loop once we need it.
 pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barrier>) {
-    let tenant_shard_id = tenant.tenant_shard_id;
+    let tenant_id = tenant.id;
 
     task_mgr::spawn(
         BACKGROUND_RUNTIME.handle(),
         TaskKind::GarbageCollector,
-        tenant_shard_id,
+        tenant_id,
         None,
-        &format!("garbage collector for tenant {tenant_shard_id}"),
+        &format!("garbage collector for tenant {tenant_id}"),
         {
             let tenant = Arc::clone(tenant);
             let can_start = can_start.cloned();
@@ -140,7 +140,7 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
                 TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
                 defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
                 gc_loop(tenant, cancel)
-                    .instrument(info_span!("gc_loop", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug()))
+                    .instrument(info_span!("gc_loop", tenant_id = %tenant_id))
                     .await;
                 Ok(())
             }
@@ -150,9 +150,9 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
     task_mgr::spawn(
         BACKGROUND_RUNTIME.handle(),
         TaskKind::TenantHousekeeping,
-        tenant_shard_id,
+        tenant_id,
         None,
-        &format!("housekeeping for tenant {tenant_shard_id}"),
+        &format!("housekeeping for tenant {tenant_id}"),
         {
             let tenant = Arc::clone(tenant);
             let can_start = can_start.cloned();
@@ -165,7 +165,7 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
                 TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
                 defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
                 tenant_housekeeping_loop(tenant, cancel)
-                    .instrument(info_span!("tenant_housekeeping_loop", tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug()))
+                    .instrument(info_span!("tenant_housekeeping_loop", tenant_id = %tenant_id))
                     .await;
                 Ok(())
             }
@@ -282,7 +282,7 @@ async fn tenant_housekeeping_loop(tenant: Arc<TenantShard>, cancel: Cancellation
         iteration.run(tenant.housekeeping()).await;
 
         // Log any getpage throttling.
-        info_span!(parent: None, "pagestream_throttle", tenant_id=%tenant.tenant_shard_id, shard_id=%tenant.tenant_shard_id.shard_slug()).in_scope(|| {
+        info_span!(parent: None, "pagestream_throttle", tenant_id=%tenant.id).in_scope(|| {
             let now = Instant::now();
             let prev = std::mem::replace(&mut last_throttle_flag_reset_at, now);
             let Stats { count_accounted_start, count_accounted_finish, count_throttled, sum_throttled_usecs} = tenant.pagestream_throttle.reset_stats();

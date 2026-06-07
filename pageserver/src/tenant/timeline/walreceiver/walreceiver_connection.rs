@@ -356,7 +356,7 @@ pub(super) async fn handle_walreceiver_connection(
                                     "Gap in streamed WAL: [{expected_wal_start}, {raw_wal_start_lsn}"
                                 );
                                 critical_timeline!(
-                                    timeline.tenant_shard_id,
+                                    timeline.tenant_id,
                                     timeline.timeline_id,
                                     Some(&timeline.corruption_detected),
                                     "{msg}"
@@ -374,7 +374,7 @@ pub(super) async fn handle_walreceiver_connection(
                                             first_rec.next_record_lsn, expected_wal_start
                                         );
                                         critical_timeline!(
-                                            timeline.tenant_shard_id,
+                                            timeline.tenant_id,
                                             timeline.timeline_id,
                                             Some(&timeline.corruption_detected),
                                             "{msg}"
@@ -448,7 +448,7 @@ pub(super) async fn handle_walreceiver_connection(
                             // anyhow::Error, so just ignore it if we're cancelled.
                             if !cancellation.is_cancelled() && !timeline.is_stopping() {
                                 critical_timeline!(
-                                    timeline.tenant_shard_id,
+                                    timeline.tenant_id,
                                     timeline.timeline_id,
                                     Some(&timeline.corruption_detected),
                                     "{err:?}"

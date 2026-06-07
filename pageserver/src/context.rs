@@ -138,7 +138,7 @@ pub(crate) enum Scope {
 }
 
 static GLOBAL_IO_SIZE_METRICS: Lazy<crate::metrics::StorageIoSizeMetrics> =
-    Lazy::new(|| crate::metrics::StorageIoSizeMetrics::new("*", "*", "*"));
+    Lazy::new(|| crate::metrics::StorageIoSizeMetrics::new("*", "*"));
 
 impl Scope {
     pub(crate) fn new_global() -> Self {

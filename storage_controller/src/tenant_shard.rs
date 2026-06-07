@@ -687,7 +687,6 @@ impl TenantShard {
 
     #[instrument(skip_all, fields(
         tenant_id=%self.tenant_shard_id,
-        shard_id=%self.tenant_shard_id.shard_slug(),
         sequence=%self.sequence
     ))]
     pub(crate) fn schedule(
@@ -718,7 +717,7 @@ impl TenantShard {
             ShardSchedulingPolicy::Active | ShardSchedulingPolicy::Essential => {}
             ShardSchedulingPolicy::Pause | ShardSchedulingPolicy::Stop => {
                 // Warn to make it obvious why other things aren't happening/working, if we skip scheduling
-                tracing::warn!(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug(),
+                tracing::warn!(tenant_id=%self.tenant_shard_id,
                     "Scheduling is disabled by policy {:?}", self.scheduling_policy);
                 return Ok(());
             }
@@ -1003,7 +1002,7 @@ impl TenantShard {
     ///
     /// `schedule_context` should have been populated with all shards in the tenant, including
     /// the one we're trying to optimize (this function will subtract its own contribution before making scoring decisions)
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id))]
     pub(crate) fn optimize_attachment(
         &self,
         scheduler: &mut Scheduler,
@@ -1171,7 +1170,7 @@ impl TenantShard {
         }
     }
 
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id))]
     pub(crate) fn optimize_secondary(
         &self,
         scheduler: &mut Scheduler,
@@ -1472,7 +1471,7 @@ impl TenantShard {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id))]
     pub(crate) fn get_reconcile_needed(
         &mut self,
         pageservers: &Arc<HashMap<NodeId, Node>>,
@@ -1639,7 +1638,7 @@ impl TenantShard {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id, shard_id=%self.tenant_shard_id.shard_slug()))]
+    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id))]
     pub(crate) fn spawn_reconciler(
         &mut self,
         reason: ReconcileReason,
@@ -1707,8 +1706,7 @@ impl TenantShard {
         tracing::info!(seq=%reconcile_seq, "Spawning Reconciler ({reason:?})");
         let must_notify = self.pending_compute_notification;
         let reconciler_span = tracing::info_span!(parent: None, "reconciler", seq=%reconcile_seq,
-                                                        tenant_id=%reconciler.tenant_shard_id,
-                                                        shard_id=%reconciler.tenant_shard_id.shard_slug());
+                                                        tenant_id=%reconciler.tenant_shard_id);
         metrics::METRICS_REGISTRY
             .metrics_group
             .storage_controller_reconcile_spawn

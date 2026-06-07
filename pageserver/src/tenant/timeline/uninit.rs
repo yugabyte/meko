@@ -97,7 +97,7 @@ impl<'t> UninitializedTimeline<'t> {
     /// The caller is responsible for activating the timeline (function `.activate()`).
     pub(crate) async fn finish_creation(mut self) -> anyhow::Result<Arc<Timeline>> {
         let timeline_id = self.timeline_id;
-        let tenant_shard_id = self.owning_tenant.tenant_shard_id;
+        let tenant_shard_id = self.owning_tenant.id;
 
         if self.raw_timeline.is_none() {
             self.abort().await;
@@ -218,7 +218,7 @@ impl<'t> UninitializedTimeline<'t> {
             .with_context(|| {
                 format!(
                     "No raw timeline {}/{} found",
-                    self.owning_tenant.tenant_shard_id, self.timeline_id
+                    self.owning_tenant.id, self.timeline_id
                 )
             })?
             .0)
@@ -228,7 +228,7 @@ impl<'t> UninitializedTimeline<'t> {
 impl Drop for UninitializedTimeline<'_> {
     fn drop(&mut self) {
         if let Some((timeline, create_guard)) = self.raw_timeline.take() {
-            let _entered = info_span!("drop_uninitialized_timeline", tenant_id = %self.owning_tenant.tenant_shard_id, shard_id = %self.owning_tenant.tenant_shard_id.shard_slug(), timeline_id = %self.timeline_id).entered();
+            let _entered = info_span!("drop_uninitialized_timeline", tenant_id = %self.owning_tenant.id, timeline_id = %self.timeline_id).entered();
             if self.needs_shutdown && !timeline.gate.close_complete() {
                 // This should not happen: caller should call [`Self::abort`] on failures
                 tracing::warn!(

@@ -151,7 +151,7 @@ impl WalRedoProcess {
                         error!(error=?e, "failed to read from walredo stderr");
                     }
                 }
-            }.instrument(tracing::info_span!(parent: None, "wal-redo-postgres-stderr", pid = child.id(), tenant_id = %tenant_shard_id, shard_id = %tenant_shard_id.shard_slug(), %pg_version))
+            }.instrument(tracing::info_span!(parent: None, "wal-redo-postgres-stderr", pid = child.id(), tenant_id = %tenant_shard_id, %pg_version))
         );
 
         Ok(Self {
