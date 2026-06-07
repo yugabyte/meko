@@ -238,7 +238,7 @@ pub struct Timeline {
     /// Timeline deletion will acquire both compaction and gc locks in whatever order.
     compaction_lock: tokio::sync::Mutex<()>,
 
-    /// Begin Hadron: If true, the pageserver has likely detected data corruption in the timeline.
+    /// If true, the pageserver has likely detected data corruption in the timeline.
     /// We need to feed this information back to the Safekeeper and postgres for them to take the
     /// appropriate action.
     corruption_detected: AtomicBool,
@@ -3029,14 +3029,12 @@ impl Timeline {
         }
     }
 
-    /* BEGIN_HADRON */
     /// yb-mode: there are no image layers; treat applied_lsn as
     /// image-consistent so basebackup/compute reads don't stall behind
     /// the slower durable watermark.
     pub(crate) async fn compute_image_consistent_lsn(&self) -> anyhow::Result<Lsn> {
         Ok(self.get_applied_lsn())
     }
-    /* END_HADRON */
 }
 
 impl Timeline {

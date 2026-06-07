@@ -87,7 +87,7 @@ use crate::{CancellableTask, PERF_TRACE_TARGET, timed_after_cancellation};
 /// is not yet in state [`TenantState::Active`].
 ///
 /// NB: this is a different value than [`crate::http::routes::ACTIVE_TENANT_TIMEOUT`].
-/// HADRON: reduced timeout and we will retry in Cache::get().
+/// reduced timeout and we will retry in Cache::get().
 const ACTIVE_TENANT_TIMEOUT: Duration = Duration::from_millis(5000);
 
 /// Threshold at which to log slow GetPage requests.
@@ -1481,11 +1481,9 @@ impl PageServerHandler {
             let (response_msg, ctx) = match handler_result {
                 Err(e) => match &e.err {
                     PageStreamError::Shutdown => {
-                        // BEGIN HADRON
                         PAGESTREAM_HANDLER_RESULTS_TOTAL
                             .with_label_values(&[metrics::PAGESTREAM_HANDLER_OUTCOME_OTHER_ERROR])
                             .inc();
-                        // END HADRON
 
                         // If we fail to fulfil a request during shutdown, which may be _because_ of
                         // shutdown, then do not send the error to the client.  Instead just drop the
@@ -1495,28 +1493,23 @@ impl PageServerHandler {
                     }
                     PageStreamError::Reconnect(_reason) => {
                         span.in_scope(|| {
-                            // BEGIN HADRON
                             // We can get here because the compute node is pointing at the wrong PS. We
                             // already have a metric to keep track of this so suppressing this log to
                             // reduce log spam. The information in this log message is not going to be that
                             // helpful given the volume of logs that can be generated.
                             // info!("handler requested reconnect: {reason}")
-                            // END HADRON
                         });
-                        // BEGIN HADRON
                         PAGESTREAM_HANDLER_RESULTS_TOTAL
                             .with_label_values(&[
                                 metrics::PAGESTREAM_HANDLER_OUTCOME_INTERNAL_ERROR,
                             ])
                             .inc();
-                        // END HADRON
                         return Err(QueryError::Reconnect);
                     }
                     PageStreamError::Read(_)
                     | PageStreamError::LsnTimeout(_)
                     | PageStreamError::NotFound(_)
                     | PageStreamError::BadRequest(_) => {
-                        // BEGIN HADRON
                         if let PageStreamError::Read(_) | PageStreamError::LsnTimeout(_) = &e.err {
                             PAGESTREAM_HANDLER_RESULTS_TOTAL
                                 .with_label_values(&[
@@ -1530,7 +1523,6 @@ impl PageServerHandler {
                                 ])
                                 .inc();
                         }
-                        // END HADRON
 
                         // print the all details to the log with {:#}, but for the client the
                         // error message is enough.  Do not log if shutting down, as the anyhow::Error
@@ -1550,11 +1542,9 @@ impl PageServerHandler {
                     }
                 },
                 Ok((response_msg, _op_timer_already_observed, ctx)) => {
-                    // BEGIN HADRON
                     PAGESTREAM_HANDLER_RESULTS_TOTAL
                         .with_label_values(&[metrics::PAGESTREAM_HANDLER_OUTCOME_SUCCESS])
                         .inc();
-                    // END HADRON
 
                     (response_msg, Some(ctx))
                 }

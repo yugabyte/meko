@@ -10,7 +10,7 @@ pub(in crate::http) mod extension_server;
 pub(in crate::http) mod extensions;
 pub(in crate::http) mod failpoints;
 pub(in crate::http) mod grants;
-pub(in crate::http) mod hadron_liveness_probe;
+pub(in crate::http) mod liveness_probe;
 pub(in crate::http) mod insights;
 pub(in crate::http) mod lfc;
 pub(in crate::http) mod metrics;

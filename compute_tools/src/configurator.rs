@@ -14,10 +14,8 @@ fn configurator_main_loop(compute: &Arc<ComputeNode>) {
     info!("waiting for reconfiguration requests");
     loop {
         let mut state = compute.state.lock().unwrap();
-        /* BEGIN_HADRON */
         // RefreshConfiguration should only be used inside the loop
         assert_ne!(state.status, ComputeStatus::RefreshConfiguration);
-        /* END_HADRON */
 
         if compute.params.lakebase_mode {
             while state.status != ComputeStatus::ConfigurationPending

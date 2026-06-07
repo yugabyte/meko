@@ -330,7 +330,6 @@ enum RoutingResult<T: Types> {
 }
 
 impl<T: Types> Cache<T> {
-    /* BEGIN_HADRON */
     /// A wrapper of do_get to resolve the tenant shard for a get page request.
     #[instrument(level = "trace", skip_all)]
     pub(crate) async fn get(
@@ -371,7 +370,6 @@ impl<T: Types> Cache<T> {
             }
         }
     }
-    /* END_HADRON */
 
     /// See module-level comment for details.
     ///

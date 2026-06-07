@@ -34,7 +34,6 @@ use crate::tenant::{TenantShard, TenantState};
 static CONCURRENT_BACKGROUND_TASKS: Lazy<Semaphore> = Lazy::new(|| {
     let total_threads = TOKIO_WORKER_THREADS.get();
 
-    /*BEGIN_HADRON*/
     // ideally we should run at least one compaction task per tenant in order to (1) maximize
     // compaction throughput (2) avoid head-of-line blocking of large compactions. However doing
     // that may create too many compaction tasks with lots of memory overheads. So we limit the
@@ -46,7 +45,6 @@ static CONCURRENT_BACKGROUND_TASKS: Lazy<Semaphore> = Lazy::new(|| {
     //     .unwrap_or(4);
     // let permits = usize::max(1, total_threads * tasks_per_thread);
     // // assert!(permits < total_threads, "need threads for other work");
-    /*END_HADRON*/
 
     let permits = max(1, (total_threads * 3).checked_div(4).unwrap_or(0));
     assert_ne!(permits, 0, "we will not be adding in permits later");

@@ -2147,7 +2147,7 @@ impl Service {
             tenants: Vec::new(),
         };
 
-        // [Hadron] If the pageserver reports in the reattach message that it has an empty disk, it's possible that it just
+        // If the pageserver reports in the reattach message that it has an empty disk, it's possible that it just
         // recovered from a local disk failure. The response of the reattach request will contain a list of tenants but it
         // will not be honored by the pageserver in this case (disk failure). We should make sure we clear any observed
         // locations of tenants attached to the node so that the reconciler will discover the discrpancy and reconfigure the
@@ -5311,7 +5311,6 @@ impl Service {
         .ok_or_else(|| ApiError::NotFound(anyhow::anyhow!("Tenant {tenant_id} not found").into()))
     }
 
-    /* BEGIN_HADRON */
     pub(crate) async fn tenant_timeline_describe(
         &self,
         tenant_id: TenantId,
@@ -5395,7 +5394,6 @@ impl Service {
         })
         .await?
     }
-    /* END_HADRON */
 
     /// limit & offset are pagination parameters. Since we are walking an in-memory HashMap, `offset` does not
     /// avoid traversing data, it just avoid returning it. This is suitable for our purposes, since our in memory

@@ -29,7 +29,7 @@ use utils::id::{TenantId, TenantTimelineId, TimelineId};
 use utils::lsn::Lsn;
 
 use crate::debug_dump::TimelineDigestRequest;
-use crate::hadron::{get_filesystem_capacity, get_filesystem_usage};
+use crate::disk_usage::{get_filesystem_capacity, get_filesystem_usage};
 use crate::safekeeper::TermLsn;
 use crate::timelines_global_map::DeleteOrExclude;
 use crate::{GlobalTimelines, SafeKeeperConf, debug_dump, patch_control_file};

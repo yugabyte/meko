@@ -14,7 +14,7 @@ use tokio_postgres::error::SqlState;
 use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
 use crate::compute::{ComputeNode, ComputeNodeParams, ComputeState, create_databricks_roles};
-use crate::hadron_metrics::COMPUTE_CONFIGURE_STATEMENT_TIMEOUT_ERRORS;
+use crate::compute_metrics::COMPUTE_CONFIGURE_STATEMENT_TIMEOUT_ERRORS;
 use crate::pg_helpers::{
     DatabaseExt, Escaping, GenericOptionsSearch, RoleExt, get_existing_dbs_async,
     get_existing_roles_async,
@@ -192,10 +192,8 @@ impl ComputeNode {
             let phases = if self.params.lakebase_mode {
                 vec![
                     CreatePrivilegedRole,
-                // BEGIN_HADRON
                 CreateDatabricksRoles,
                 AlterDatabricksRoles,
-                // END_HADRON
                 DropInvalidDatabases,
                 RenameRoles,
                 CreateAndAlterRoles,
@@ -292,15 +290,11 @@ impl ComputeNode {
                 vec![
                 HandleOtherExtensions,
                 HandleNeonExtension, // This step depends on CreateSchemaNeon
-                // BEGIN_HADRON
                 HandleDatabricksAuthExtension,
-                // END_HADRON
                 CreateAvailabilityCheck,
                 DropRoles,
-                // BEGIN_HADRON
                 AddDatabricksGrants,
                 CreateDatabricksMisc,
-                // END_HADRON
             ]
             } else {
                 vec![
@@ -519,10 +513,8 @@ pub enum PerDatabasePhase {
 #[derive(Clone, Debug)]
 pub enum ApplySpecPhase {
     CreatePrivilegedRole,
-    // BEGIN_HADRON
     CreateDatabricksRoles,
     AlterDatabricksRoles,
-    // END_HADRON
     DropInvalidDatabases,
     RenameRoles,
     CreateAndAlterRoles,
@@ -535,14 +527,10 @@ pub enum ApplySpecPhase {
     DisablePostgresDBPgAudit,
     HandleOtherExtensions,
     HandleNeonExtension,
-    // BEGIN_HADRON
     HandleDatabricksAuthExtension,
-    // END_HADRON
     CreateAvailabilityCheck,
-    // BEGIN_HADRON
     AddDatabricksGrants,
     CreateDatabricksMisc,
-    // END_HADRON
     DropRoles,
     FinalizeDropLogicalSubscriptions,
 }
@@ -628,7 +616,6 @@ where
                     if !lakebase_mode {
                         return res;
                     }
-                    // BEGIN HADRON
                     if let Err(e) = res.as_ref() {
                         if let Some(sql_state) = e.code() {
                             if sql_state.code() == "57014" {
@@ -640,7 +627,6 @@ where
                             }
                         }
                     }
-                    // END HADRON
 
                     res
                 }
@@ -688,8 +674,6 @@ async fn get_operations<'a>(
             ),
             comment: None,
         }))),
-        // BEGIN_HADRON
-        // New Hadron phase
         ApplySpecPhase::CreateDatabricksRoles => {
             let queries = create_databricks_roles();
             let operations = queries.into_iter().map(|query| Operation {
@@ -715,8 +699,6 @@ async fn get_operations<'a>(
 
             Ok(Box::new(operations))
         }
-        // End of new Hadron Phase
-        // END_HADRON
         ApplySpecPhase::DropInvalidDatabases => {
             let mut ctx = ctx.write().await;
             let databases = &mut ctx.dbs;
@@ -1087,9 +1069,8 @@ async fn get_operations<'a>(
                                         role_name = escaped_role,
                                         outer_tag = outer_tag,
                                     )
-                                    // HADRON change:
+                                    // 
                                     .replace("neon_superuser", &params.privileged_role_name),
-                                    // HADRON change end                                    ,
                                     comment: None,
                                 },
                                 // This now will only drop privileges of the role
@@ -1199,7 +1180,6 @@ async fn get_operations<'a>(
 
             Ok(Box::new(operations))
         }
-        // BEGIN_HADRON
         // Note: we may want to version the extension someday, but for now we just drop it and recreate it.
         ApplySpecPhase::HandleDatabricksAuthExtension => {
             let operations = vec![
@@ -1220,7 +1200,6 @@ async fn get_operations<'a>(
 
             Ok(Box::new(operations))
         }
-        // END_HADRON
         ApplySpecPhase::CreateAvailabilityCheck => Ok(Box::new(once(Operation {
             query: String::from(include_str!("sql/add_availabilitycheck_tables.sql")),
             comment: None,
@@ -1239,8 +1218,6 @@ async fn get_operations<'a>(
             Ok(Box::new(operations))
         }
 
-        // BEGIN_HADRON
-        // New Hadron phases
         //
         // Grants permissions to roles that are used by Databricks.
         ApplySpecPhase::AddDatabricksGrants => {
@@ -1293,8 +1270,6 @@ async fn get_operations<'a>(
                 "The function databricks_monitor uses to convert exception to 0 or 1",
             )),
         }))),
-        // End of new Hadron phases
-        // END_HADRON
         ApplySpecPhase::FinalizeDropLogicalSubscriptions => Ok(Box::new(once(Operation {
             query: String::from(include_str!("sql/finalize_drop_subscriptions.sql")),
             comment: None,

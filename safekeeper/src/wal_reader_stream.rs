@@ -38,7 +38,7 @@ struct PositionedWalReader {
 pub(crate) struct StreamingWalReader {
     stream: BoxStream<'static, WalOrReset>,
     start_changed_tx: tokio::sync::watch::Sender<Lsn>,
-    // HADRON: Added TenantTimelineId for instrumentation purposes.
+    // Added TenantTimelineId for instrumentation purposes.
     pub(crate) ttid: TenantTimelineId,
 }
 

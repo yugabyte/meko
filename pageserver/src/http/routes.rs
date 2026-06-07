@@ -50,7 +50,6 @@ use utils::lsn::Lsn;
 use crate::config::PageServerConf;
 use crate::context;
 use crate::context::{DownloadBehavior, RequestContext, RequestContextBuilder};
-use crate::metrics::LOCAL_DATA_LOSS_SUSPECTED;
 use crate::pgdatadir_mapping::LsnForTimestamp;
 use crate::task_mgr::TaskKind;
 use crate::tenant::config::LocationConf;
@@ -357,7 +356,6 @@ async fn build_timeline_info(
                 .await?,
         );
     }
-    // HADRON
     if include_image_consistent_lsn {
         info.image_consistent_lsn = Some(timeline.compute_image_consistent_lsn().await?);
     }
@@ -459,7 +457,6 @@ async fn build_timeline_info_common(
         is_invisible: Some(is_invisible),
 
         walreceiver_status,
-        // HADRON
         image_consistent_lsn: None,
     };
     Ok(info)
@@ -853,7 +850,6 @@ async fn timeline_detail_handler(
         parse_query_param(&request, "include-non-incremental-logical-size")?;
     let force_await_initial_logical_size: Option<bool> =
         parse_query_param(&request, "force-await-initial-logical-size")?;
-    // HADRON
     let include_image_consistent_lsn: Option<bool> =
         parse_query_param(&request, "include-image-consistent-lsn")?;
     check_permission(&request, Some(tenant_id))?;
@@ -1886,7 +1882,6 @@ async fn get_utilization(
         .map_err(ApiError::InternalServerError)
 }
 
-/// HADRON
 async fn list_tenant_visible_size_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
@@ -2183,17 +2178,6 @@ async fn put_tenant_timeline_import_wal(
 
         json_response(StatusCode::OK, ())
     }.instrument(span).await
-}
-
-// [Hadron] Reset gauge metrics that are used to raised alerts. We need this API as a stop-gap measure to reset alerts
-// after we manually rectify situations such as local SSD data loss. We will eventually automate this.
-async fn hadron_reset_alert_gauges(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-    LOCAL_DATA_LOSS_SUSPECTED.set(0);
-    json_response(StatusCode::OK, ())
 }
 
 /// Read the end of a tar archive.
@@ -2537,8 +2521,5 @@ pub fn make_router(
             "/v1/tenant/:tenant_id/timeline/:timeline_id/import_wal",
             |r| api_handler(r, put_tenant_timeline_import_wal),
         )
-        .post("/hadron-internal/reset_alert_gauges", |r| {
-            api_handler(r, hadron_reset_alert_gauges)
-        })
         .any(handler_404))
 }

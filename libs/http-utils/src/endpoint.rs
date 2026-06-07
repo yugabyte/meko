@@ -257,7 +257,6 @@ pub async fn prometheus_metrics_handler(
 ) -> Result<Response<Body>, ApiError> {
     SERVE_METRICS_COUNT.inc();
 
-    // HADRON
     let requested_use_latest = parse_query_param(&req, "use_latest")?;
 
     let use_latest = match requested_use_latest {
@@ -297,7 +296,6 @@ pub async fn prometheus_metrics_handler(
 
         let _span = span.entered();
 
-        // HADRON
         let collected = if use_latest {
             // Skip caching the results if we always force metric collection on scrape.
             METRICS_COLLECTOR.run_once(!force_metric_collection_on_scrape)
@@ -321,7 +319,6 @@ pub async fn prometheus_metrics_handler(
         let encoded_in = encoded_at - gathered_at - writer.wait_time();
         let total = encoded_at - started_at;
 
-        // HADRON
         let staleness_ms = (encoded_at - collected.collected_at).as_millis();
         METRICS_STALE_MILLIS.set(staleness_ms as i64);
 

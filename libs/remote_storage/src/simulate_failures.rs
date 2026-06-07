@@ -28,12 +28,10 @@ pub struct UnreliableWrapper {
     // Tracks how many failed attempts of each operation has been made.
     attempts: Mutex<HashMap<RemoteOp, u64>>,
 
-    /* BEGIN_HADRON */
     // This the probability of failure for each operation, ranged from [0, 100].
     // The probability is default to 100, which means that all operations will fail.
     // Storage will fail by probability up to attempts_to_fail times.
     attempt_failure_probability: u64,
-    /* END_HADRON */
 }
 
 /// Used to identify retries of different unique operation.
@@ -90,7 +88,6 @@ impl UnreliableWrapper {
                     *p
                 };
 
-                /* BEGIN_HADRON */
                 // If there are more attempts to fail, fail the request by probability.
                 if (attempts_before_this < self.attempts_to_fail)
                     && (rng.random_range(0..=100) < self.attempt_failure_probability)
@@ -102,7 +99,6 @@ impl UnreliableWrapper {
                     e.remove();
                     Ok(attempts_before_this)
                 }
-                /* END_HADRON */
             }
             Entry::Vacant(e) => {
                 let error = anyhow::anyhow!("simulated failure of remote operation {:?}", e.key());

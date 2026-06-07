@@ -755,7 +755,6 @@ where
             ProposerAcceptorMessage::FlushWAL => self.handle_flush().await,
         };
 
-        // BEGIN HADRON
         match &res {
             Ok(_) => PROPOSER_ACCEPTOR_MESSAGES_TOTAL
                 .with_label_values(&["success"])
@@ -766,7 +765,6 @@ where
         };
 
         res
-        // END HADRON
     }
 
     /// Handle initial message from proposer: check its sanity and send my

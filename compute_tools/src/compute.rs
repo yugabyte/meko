@@ -46,7 +46,7 @@ use utils::pid_file;
 
 use crate::configurator::launch_configurator;
 use crate::disk_quota::set_disk_quota;
-use crate::hadron_metrics::COMPUTE_ATTACHED;
+use crate::compute_metrics::COMPUTE_ATTACHED;
 use crate::installed_extensions::get_installed_extensions;
 use crate::logger::{self, startup_context_from_env};
 use crate::lsn_lease::launch_lsn_lease_bg_task_for_static;
@@ -120,7 +120,7 @@ pub struct ComputeNodeParams {
 
     /// Interval for installed extensions collection
     pub installed_extensions_collection_interval: Arc<AtomicU64>,
-    /// Hadron instance ID of the compute node.
+    /// Trusted-instance ID of the compute node.
     pub instance_id: Option<String>,
     /// Timeout of PG compute startup in the Init state.
     pub pg_init_timeout: Option<Duration>,
@@ -442,7 +442,6 @@ struct StartVmMonitorResult {
     vm_monitor: Option<JoinHandle<Result<()>>>,
 }
 
-// BEGIN_HADRON
 /// This function creates roles that are used by Databricks.
 /// These roles are not needs to be botostrapped at PG Compute provisioning time.
 /// The auth method for these roles are configured in databricks_pg_hba.conf in universe repository.
@@ -821,7 +820,7 @@ impl ComputeNode {
             };
             _this_entered = start_compute_span.enter();
 
-            // Hadron: Record postgres start time (used to enforce pg_init_timeout).
+            // Record postgres start time (used to enforce pg_init_timeout).
             state_guard.pg_start_time.replace(Utc::now());
 
             state_guard.set_status(ComputeStatus::Init, &self.state_changed);
@@ -1727,9 +1726,8 @@ impl ComputeNode {
     /// Start and stop a postgres process to warm up the VM for startup.
     pub fn prewarm_postgres_vm_memory(&self) -> Result<()> {
         if self.params.lakebase_mode {
-            // We are running in Hadron mode. Disabling this prewarming step for now as it could run
-            // into dblet port conflicts and also doesn't add much value with our current infra.
-            info!("Skipping postgres prewarming in Hadron mode");
+            // Skip prewarming in lakebase mode: it can hit port conflicts and adds little value.
+            info!("Skipping postgres prewarming in lakebase mode");
             return Ok(());
         }
         info!("prewarming VM memory");
@@ -2296,7 +2294,6 @@ impl ComputeNode {
     pub fn check_for_core_dumps(&self) -> Result<()> {
         let core_dump_dir = match std::env::consts::OS {
             "macos" => Path::new("/cores/"),
-            // BEGIN HADRON
             // NB: Read core dump files from a fixed location outside of
             // the data directory since `compute_ctl` wipes the data directory
             // across container restarts.
@@ -2306,7 +2303,7 @@ impl ComputeNode {
                 } else {
                     Path::new(&self.params.pgdata)
                 }
-            } // END HADRON
+            }
         };
 
         // Collect core dump paths if any

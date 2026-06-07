@@ -23,7 +23,7 @@ pub struct ReAttachRequest {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub register: Option<NodeRegisterRequest>,
 
-    /// Hadron: Optional flag to indicate whether the node is starting with an empty local disk.
+    /// Optional flag to indicate whether the node is starting with an empty local disk.
     /// Will be set to true if the node couldn't find any local tenant data on startup, could be
     /// due to the node starting for the first time or due to a local SSD failure/disk wipe event.
     /// The flag may be used by the storage controller to update its observed state of the world

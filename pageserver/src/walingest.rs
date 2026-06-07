@@ -423,7 +423,7 @@ impl WalIngest {
             critical_timeline!(
                 modification.tline.tenant_id,
                 modification.tline.timeline_id,
-                // Hadron: No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
+                // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                 None::<&AtomicBool>,
                 "clear_vm_bits for unknown VM relation {vm_rel}"
             );
@@ -434,7 +434,7 @@ impl WalIngest {
                 critical_timeline!(
                     modification.tline.tenant_id,
                     modification.tline.timeline_id,
-                    // Hadron: No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
+                    // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                     None::<&AtomicBool>,
                     "new_vm_blk {blknum} not in {vm_rel} of size {vm_size}"
                 );
@@ -446,7 +446,7 @@ impl WalIngest {
                 critical_timeline!(
                     modification.tline.tenant_id,
                     modification.tline.timeline_id,
-                    // Hadron: No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
+                    // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                     None::<&AtomicBool>,
                     "old_vm_blk {blknum} not in {vm_rel} of size {vm_size}"
                 );

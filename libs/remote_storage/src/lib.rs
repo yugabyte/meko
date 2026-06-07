@@ -732,7 +732,6 @@ impl GenericRemoteStorage {
         })
     }
 
-    /* BEGIN_HADRON */
     pub fn unreliable_wrapper(s: Self, fail_first: u64, fail_probability: u64) -> Self {
         Self::Unreliable(Arc::new(UnreliableWrapper::new(
             s,
@@ -740,7 +739,6 @@ impl GenericRemoteStorage {
             fail_probability,
         )))
     }
-    /* END_HADRON */
 
     /// See [`RemoteStorage::upload`], which this method calls with `None` as metadata.
     pub async fn upload_storage_object(

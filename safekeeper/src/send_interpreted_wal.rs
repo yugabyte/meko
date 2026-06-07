@@ -306,7 +306,7 @@ impl InterpretedWalReader {
                             critical_timeline!(
                                 ttid.tenant_id,
                                 ttid.timeline_id,
-                                // Hadron: The corruption flag is only used in PS so that it can feed this information back to SKs.
+                                // The corruption flag is only used in PS so that it can feed this information back to SKs.
                                 // We do not use these flags in SKs.
                                 None::<&AtomicBool>,
                                 "failed to read WAL record: {err:?}"
@@ -379,7 +379,7 @@ impl InterpretedWalReader {
                 critical_timeline!(
                     ttid.tenant_id,
                     ttid.timeline_id,
-                    // Hadron: The corruption flag is only used in PS so that it can feed this information back to SKs.
+                    // The corruption flag is only used in PS so that it can feed this information back to SKs.
                     // We do not use these flags in SKs.
                     None::<&AtomicBool>,
                     "interpreted wal reader: failed to decode WAL record at start_pos={start_pos}: {err:?}"

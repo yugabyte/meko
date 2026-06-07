@@ -19,8 +19,6 @@ DROP TABLE IF EXISTS public.blobs;
 DROP TYPE IF EXISTS public.blob_namespace;
 
 -- storage_controller.* tables.
-DROP TABLE IF EXISTS storage_controller.hadron_timeline_safekeepers;
-DROP TABLE IF EXISTS storage_controller.hadron_safekeepers;
 DROP TABLE IF EXISTS storage_controller.timeline_imports;
 DROP TABLE IF EXISTS storage_controller.safekeeper_timeline_pending_ops;
 DROP TABLE IF EXISTS storage_controller.timelines;

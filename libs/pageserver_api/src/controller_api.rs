@@ -62,8 +62,6 @@ pub struct NodeRegisterRequest {
     pub availability_zone_id: AvailabilityZone,
 
     // Reachable IP address of the PS/SK registering, if known.
-    // Hadron Cluster Coordiantor will update the DNS record of the registering node
-    // with this IP address.
     pub node_ip_addr: Option<IpAddr>,
 }
 

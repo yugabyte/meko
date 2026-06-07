@@ -15,7 +15,7 @@ use utils::logging::SecretString;
 mod auth;
 pub mod control_file;
 pub mod debug_dump;
-pub mod hadron;
+pub mod disk_usage;
 pub mod handler;
 pub mod http;
 pub mod metrics;
@@ -304,7 +304,7 @@ pub static HTTP_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 /// Dedicated runtime for infrequent background tasks.
 pub static BACKGROUND_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
-        .thread_name("Hadron background worker")
+        .thread_name("SK background worker")
         // One worker thread is enough, as most of the actual tasks run on blocking threads
         // which has it own thread pool.
         .worker_threads(1)

@@ -3388,7 +3388,6 @@ impl TenantShard {
             .unwrap_or(0)
     }
 
-    /// HADRON
     /// Return the visible size of all timelines in this tenant.
     pub(crate) fn get_visible_size(&self) -> u64 {
         let timelines = self.timelines.lock().unwrap();

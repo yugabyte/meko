@@ -270,7 +270,7 @@ struct WalSendersShared {
     last_ps_feedback: PageserverFeedback,
     // total counter of pageserver feedbacks received
     ps_feedback_counter: u64,
-    // Hadron: true iff we received a pageserver feedback that incidated
+    // true iff we received a pageserver feedback that incidated
     // data corruption in the timeline
     ps_corruption_detected: bool,
     slots: Vec<Option<WalSenderState>>,

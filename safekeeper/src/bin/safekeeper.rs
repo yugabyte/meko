@@ -35,7 +35,7 @@ use utils::logging::{self, LogFormat, SecretString};
 use utils::metrics_collector::{METRICS_COLLECTION_INTERVAL, METRICS_COLLECTOR};
 use utils::{pid_file, project_build_tag, project_git_version, tcp_listener};
 
-use safekeeper::hadron::{
+use safekeeper::disk_usage::{
     GLOBAL_DISK_LIMIT_EXCEEDED, get_filesystem_capacity, get_filesystem_usage,
 };
 use safekeeper::metrics::GLOBAL_DISK_UTIL_CHECK_SECONDS;

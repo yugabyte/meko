@@ -77,7 +77,6 @@ pub(crate) static STORAGE_TIME_COUNT_PER_TIMELINE: Lazy<IntCounterVec> = Lazy::n
     .expect("failed to define a metric")
 });
 
-/* BEGIN_HADRON */
 pub(crate) static STORAGE_ACTIVE_COUNT_PER_TIMELINE: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "pageserver_active_storage_operations_count",
@@ -86,7 +85,6 @@ pub(crate) static STORAGE_ACTIVE_COUNT_PER_TIMELINE: Lazy<IntGaugeVec> = Lazy::n
     )
     .expect("failed to define a metric")
 });
-/*END_HADRON */
 
 // Buckets for background operations like compaction, GC, size calculation
 const STORAGE_OP_BUCKETS: &[f64] = &[0.010, 0.100, 1.0, 10.0, 100.0, 1000.0];
@@ -2531,10 +2529,8 @@ pub(crate) struct StorageTimeMetricsTimer {
 
 impl StorageTimeMetricsTimer {
     fn new(metrics: StorageTimeMetrics) -> Self {
-        /*BEGIN_HADRON */
         // record the active operation as the timer starts
         metrics.timeline_active_count.inc();
-        /*END_HADRON */
         Self {
             metrics,
             start: Instant::now(),
@@ -2554,10 +2550,8 @@ impl StorageTimeMetricsTimer {
         self.metrics.timeline_sum.inc_by(seconds);
         self.metrics.timeline_count.inc();
         self.metrics.global_histogram.observe(seconds);
-        /* BEGIN_HADRON*/
         self.stopped.set(true);
         self.metrics.timeline_active_count.dec();
-        /*END_HADRON */
         duration
     }
 
@@ -2568,7 +2562,6 @@ impl StorageTimeMetricsTimer {
     }
 }
 
-/*BEGIN_HADRON */
 impl Drop for StorageTimeMetricsTimer {
     fn drop(&mut self) {
         if !self.stopped.get() {
@@ -2576,7 +2569,6 @@ impl Drop for StorageTimeMetricsTimer {
         }
     }
 }
-/*END_HADRON */
 
 pub(crate) struct AlwaysRecordingStorageTimeMetricsTimer(Option<StorageTimeMetricsTimer>);
 
@@ -2596,10 +2588,8 @@ pub(crate) struct StorageTimeMetrics {
     timeline_sum: Counter,
     /// Number of oeprations, per operation, tenant_id and timeline_id
     timeline_count: IntCounter,
-    /*BEGIN_HADRON */
     /// Number of active operations per operation, tenant_id, and timeline_id
     timeline_active_count: IntGauge,
-    /*END_HADRON */
     /// Global histogram having only the "operation" label.
     global_histogram: Histogram,
 }
@@ -2614,11 +2604,9 @@ impl StorageTimeMetrics {
         let timeline_count = STORAGE_TIME_COUNT_PER_TIMELINE
             .get_metric_with_label_values(&[operation, tenant_id, timeline_id])
             .unwrap();
-        /*BEGIN_HADRON */
         let timeline_active_count = STORAGE_ACTIVE_COUNT_PER_TIMELINE
             .get_metric_with_label_values(&[operation, tenant_id, timeline_id])
             .unwrap();
-        /*END_HADRON */
         let global_histogram = STORAGE_TIME_GLOBAL
             .get_metric_with_label_values(&[operation])
             .unwrap();
@@ -2831,13 +2819,11 @@ impl TimelineMetrics {
                 STORAGE_TIME_SUM_PER_TIMELINE.remove_label_values(&[op, tenant_id, timeline_id]);
             let _ =
                 STORAGE_TIME_COUNT_PER_TIMELINE.remove_label_values(&[op, tenant_id, timeline_id]);
-            /* BEGIN_HADRON */
             let _ = STORAGE_ACTIVE_COUNT_PER_TIMELINE.remove_label_values(&[
                 op,
                 tenant_id,
                 timeline_id,
             ]);
-            /*END_HADRON */
         }
 
         for op in StorageIoSizeOperation::VARIANTS {

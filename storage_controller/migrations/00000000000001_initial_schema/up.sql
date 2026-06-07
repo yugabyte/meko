@@ -108,25 +108,6 @@ CREATE TABLE storage_controller.timeline_imports (
     PRIMARY KEY (tenant_id, timeline_id)
 );
 
--- Hadron-specific safekeeper registry (separate from upstream
--- `safekeepers` for the hadron-only fast path).
-CREATE TABLE storage_controller.hadron_safekeepers (
-    sk_node_id       BIGINT NOT NULL,
-    listen_http_addr VARCHAR NOT NULL,
-    listen_http_port INTEGER NOT NULL,
-    listen_pg_addr   VARCHAR NOT NULL,
-    listen_pg_port   INTEGER NOT NULL,
-    PRIMARY KEY (sk_node_id)
-);
-
--- Timeline → safekeeper assignment, hadron-side.
-CREATE TABLE storage_controller.hadron_timeline_safekeepers (
-    timeline_id        VARCHAR NOT NULL,
-    sk_node_id         BIGINT NOT NULL,
-    legacy_endpoint_id UUID,
-    PRIMARY KEY (timeline_id, sk_node_id)
-);
-
 -- =====================================================================
 -- public.* — blob namespace + blobs/wals storage tables.
 --

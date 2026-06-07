@@ -40,7 +40,7 @@ macro_rules! critical_timeline {
         }
         // Increment both metrics
         $crate::logging::TRACING_EVENT_COUNT_METRIC.inc_critical();
-        $crate::logging::HADRON_CRITICAL_STORAGE_EVENT_COUNT_METRIC.inc(&$tenant_shard_id.to_string(), &$timeline_id.to_string());
+        $crate::logging::CRITICAL_STORAGE_EVENT_COUNT_METRIC.inc(&$tenant_shard_id.to_string(), &$timeline_id.to_string());
         if let Some(c) = $corruption_detected.as_ref() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -81,35 +81,32 @@ pub struct TracingEventCountMetric {
     trace: IntCounter,
 }
 
-// Begin Hadron: Add a HadronCriticalStorageEventCountMetric metric that is sliced by tenant_id and timeline_id
-pub struct HadronCriticalStorageEventCountMetric {
+pub struct CriticalStorageEventCountMetric {
     critical: IntCounterVec,
 }
 
-pub static HADRON_CRITICAL_STORAGE_EVENT_COUNT_METRIC: Lazy<HadronCriticalStorageEventCountMetric> =
+pub static CRITICAL_STORAGE_EVENT_COUNT_METRIC: Lazy<CriticalStorageEventCountMetric> =
     Lazy::new(|| {
         let vec = metrics::register_int_counter_vec!(
-            "hadron_critical_storage_event_count",
+            "critical_storage_event_count",
             "Number of critical storage events, by tenant_id and timeline_id",
             &["tenant_shard_id", "timeline_id"]
         )
         .expect("failed to define metric");
-        HadronCriticalStorageEventCountMetric::new(vec)
+        CriticalStorageEventCountMetric::new(vec)
     });
 
-impl HadronCriticalStorageEventCountMetric {
+impl CriticalStorageEventCountMetric {
     fn new(vec: IntCounterVec) -> Self {
         Self { critical: vec }
     }
 
-    // Allow public access from `critical!` macro.
     pub fn inc(&self, tenant_shard_id: &str, timeline_id: &str) {
         self.critical
             .with_label_values(&[tenant_shard_id, timeline_id])
             .inc();
     }
 }
-// End Hadron
 
 pub static TRACING_EVENT_COUNT_METRIC: Lazy<TracingEventCountMetric> = Lazy::new(|| {
     let vec = metrics::register_int_counter_vec!(

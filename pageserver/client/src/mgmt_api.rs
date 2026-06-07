@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::error::Error as _;
 use std::time::Duration;
 
@@ -288,7 +288,6 @@ impl Client {
         Ok(())
     }
 
-    /* BEGIN_HADRON */
     pub async fn tenant_timeline_describe(
         &self,
         tenant_shard_id: &TenantId,
@@ -306,13 +305,6 @@ impl Client {
         let body = response.json().await.map_err(Error::ReceiveBody)?;
         Ok(body)
     }
-
-    pub async fn list_tenant_visible_size(&self) -> Result<BTreeMap<TenantId, u64>> {
-        let uri = format!("{}/v1/list_tenant_visible_size", self.mgmt_api_endpoint);
-        let resp = self.get(&uri).await?;
-        resp.json().await.map_err(Error::ReceiveBody)
-    }
-    /* END_HADRON */
 
     pub async fn tenant_scan_remote_storage(
         &self,
@@ -758,22 +750,6 @@ impl Client {
         );
 
         self.request(Method::POST, &uri, LsnLeaseRequest { lsn })
-            .await?
-            .json()
-            .await
-            .map_err(Error::ReceiveBody)
-    }
-
-    pub async fn reset_alert_gauges(&self) -> Result<()> {
-        let uri = format!(
-            "{}/hadron-internal/reset_alert_gauges",
-            self.mgmt_api_endpoint
-        );
-        self.start_request(Method::POST, uri)
-            .send()
-            .await
-            .map_err(Error::SendRequest)?
-            .error_from_body()
             .await?
             .json()
             .await

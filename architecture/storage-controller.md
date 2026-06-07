@@ -15,7 +15,7 @@ and YugabyteDB is wire-compatible with Postgres. The migration was a
 
 ### What it persists
 
-11 Diesel-managed tables (schema in `storage_controller/migrations/`):
+9 Diesel-managed tables (schema in `storage_controller/migrations/`):
 
 | Table | What it tracks |
 |---|---|
@@ -23,8 +23,6 @@ and YugabyteDB is wire-compatible with Postgres. The migration was a
 | `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), availability zone, lifecycle, scheduling policy |
 | `safekeepers` | Safekeeper identities: id, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
 | `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, ancestor info |
-| `hadron_safekeepers` | (HCC variant) parallel safekeeper registry |
-| `hadron_timeline_safekeepers` | (HCC variant) parallel timeline→safekeeper mapping |
 | `safekeeper_timeline_pending_ops` | Pending control operations on a (safekeeper, timeline) pair — used to recover after a controller restart |
 | `metadata_health` | Per-shard health markers (last successful scrub timestamps) |
 | `timeline_imports` | In-progress imports (e.g., from pg_dump) |

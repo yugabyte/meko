@@ -845,7 +845,6 @@ async fn handle_tenant_describe(
     json_response(StatusCode::OK, service.tenant_describe(tenant_id)?)
 }
 
-/* BEGIN_HADRON */
 async fn handle_tenant_timeline_describe(
     service: Arc<Service>,
     req: Request<Body>,
@@ -868,7 +867,6 @@ async fn handle_tenant_timeline_describe(
             .await?,
     )
 }
-/* END_HADRON */
 
 async fn handle_tenant_list(
     service: Arc<Service>,

@@ -1,10 +1,4 @@
 //! Filesystem-capacity reporting + the global "out of disk" flag.
-//!
-//! Originally this module also handled SK self-registration with the
-//! Hadron Cluster Coordinator and SK-to-SK timeline pulls — both
-//! structurally dead in yb-light's single-SK mode (durability comes
-//! from YB Raft, not SK quorum). What remains is the disk-usage
-//! watcher the HTTP routes scrape for capacity gauges.
 
 use std::sync::atomic::AtomicBool;
 

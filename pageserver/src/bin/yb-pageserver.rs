@@ -696,7 +696,6 @@ fn start_pageserver(
         (http_task, https_task)
     };
 
-    /* BEGIN_HADRON */
     let metrics_collection_task = {
         let cancel = shutdown_pageserver.child_token();
         let task = crate::BACKGROUND_RUNTIME.spawn({
@@ -729,7 +728,6 @@ fn start_pageserver(
         });
         MetricsCollectionTask(CancellableTask { task, cancel })
     };
-    /* END_HADRON */
 
     // Spawn a task to listen for libpq connections. It will spawn further tasks
     // for each connection. We created the listener earlier already.

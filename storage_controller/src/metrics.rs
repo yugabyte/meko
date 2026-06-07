@@ -152,19 +152,18 @@ pub(crate) struct StorageControllerMetricGroup {
     pub(crate) storage_controller_safekeeper_reconciles_complete:
         measured::CounterVec<SafekeeperReconcilerLabelGroupSet>,
 
-    /* BEGIN HADRON */
-    /// Hadron `config_watcher` reconciliation runs completed, broken down by success/failure.
+    /// `config_watcher` reconciliation runs completed, broken down by success/failure.
     pub(crate) storage_controller_config_watcher_complete:
         measured::CounterVec<ConfigWatcherCompleteLabelGroupSet>,
 
-    /// Hadron long waits for node state changes during drain and fill.
+    /// Long waits for node state changes during drain and fill.
     pub(crate) storage_controller_drain_and_fill_long_waits: measured::Counter,
 
     /// Set to 1 if we detect any page server pods with pending node pool rotation annotations.
     /// Requires manual reset after oncall investigation.
     pub(crate) storage_controller_ps_node_pool_rotation_pending: measured::Gauge,
 
-    /// Hadron storage scrubber status.
+    /// Storage scrubber status.
     pub(crate) storage_controller_storage_scrub_status:
         measured::CounterVec<StorageScrubberLabelGroupSet>,
 
@@ -173,7 +172,6 @@ pub(crate) struct StorageControllerMetricGroup {
 
     /// Desired number of safekeepers managed by the storage controller
     pub(crate) storage_controller_num_safekeeper_desired: measured::Gauge,
-    /* END HADRON */
 }
 
 impl StorageControllerMetrics {

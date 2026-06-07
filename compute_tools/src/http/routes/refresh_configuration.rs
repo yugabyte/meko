@@ -1,4 +1,3 @@
-// This file is added by Hadron
 
 use std::sync::Arc;
 
@@ -9,7 +8,7 @@ use axum::{
 use http::StatusCode;
 
 use crate::compute::ComputeNode;
-use crate::hadron_metrics::POSTGRES_PAGESTREAM_REQUEST_ERRORS;
+use crate::compute_metrics::POSTGRES_PAGESTREAM_REQUEST_ERRORS;
 use crate::http::JsonResponse;
 
 /// The /refresh_configuration POST method is used to nudge compute_ctl to pull a new spec

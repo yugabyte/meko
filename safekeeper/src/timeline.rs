@@ -25,7 +25,7 @@ use crate::metrics::{
     FullTimelineInfo, MISC_OPERATION_SECONDS, WAL_STORAGE_LIMIT_ERRORS, WalStorageMetrics,
 };
 
-use crate::hadron::GLOBAL_DISK_LIMIT_EXCEEDED;
+use crate::disk_usage::GLOBAL_DISK_LIMIT_EXCEEDED;
 use crate::receive_wal::WalReceivers;
 use crate::safekeeper::{AcceptorProposerMessage, ProposerAcceptorMessage, SafeKeeper, TermLsn};
 use crate::send_wal::{WalSenders, WalSendersTimelineMetricValues};
@@ -930,9 +930,8 @@ impl WalResidentTimeline {
         Ok(ss)
     }
 
-    // BEGIN HADRON
     // Check if disk usage by WAL segment files for this timeline exceeds the configured limit.
-    fn hadron_check_disk_usage(
+    fn check_disk_usage(
         &self,
         shared_state_locked: &mut WriteGuardSharedState<'_>,
     ) -> Result<()> {
@@ -966,7 +965,6 @@ impl WalResidentTimeline {
 
         Ok(())
     }
-    // END HADRON
 
     /// Pass arrived message to the safekeeper.
     pub async fn process_msg(
@@ -980,13 +978,10 @@ impl WalResidentTimeline {
         let mut rmsg: Option<AcceptorProposerMessage>;
         {
             let mut shared_state = self.write_shared_state().await;
-            // BEGIN HADRON
-            // Errors from the `hadron_check_disk_usage()` function fail the process_msg() function, which
-            // gets propagated upward and terminates the entire WalAcceptor. This will cause postgres to
-            // disconnect from the safekeeper and reestablish another connection. Postgres will keep retrying
-            // safekeeper connections every second until it can successfully propose WAL to the SK again.
-            self.hadron_check_disk_usage(&mut shared_state)?;
-            // END HADRON
+            // Errors from check_disk_usage() fail process_msg(), which propagates up and terminates the
+            // entire WalAcceptor. Postgres will disconnect and keep retrying every second until it can
+            // successfully propose WAL again.
+            self.check_disk_usage(&mut shared_state)?;
             rmsg = shared_state.sk.safekeeper().process_msg(msg).await?;
 
             // if this is AppendResponse, fill in proper hot standby feedback.

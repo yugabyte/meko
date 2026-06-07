@@ -67,7 +67,6 @@ pub struct CancellableTask {
 }
 pub struct HttpEndpointListener(pub CancellableTask);
 pub struct HttpsEndpointListener(pub CancellableTask);
-// HADRON
 pub struct MetricsCollectionTask(pub CancellableTask);
 
 impl CancellableTask {
@@ -202,7 +201,6 @@ pub async fn shutdown_pageserver(
     )
     .await;
 
-    // HADRON
     timed(
         metrics_collection_task.0.shutdown(),
         "shutdown metrics collections metrics",
