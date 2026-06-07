@@ -1021,6 +1021,15 @@ impl TenantShard {
         );
         let mut timelines = HashMap::with_capacity(rows.len());
         for row in rows {
+            info!(
+                timeline_id = %row.timeline_id,
+                disk_consistent_lsn = %row.disk_consistent_lsn,
+                prev_record_lsn = ?row.prev_record_lsn,
+                applied_gc_cutoff_lsn = %row.applied_gc_cutoff_lsn,
+                ancestor_lsn = ?row.ancestor_lsn,
+                initdb_lsn = ?row.initdb_lsn,
+                "preload: timeline LSNs read from pageserver.timeline_state"
+            );
             let metadata = synth_timeline_metadata_from_row(&row)?;
             timelines.insert(
                 row.timeline_id,
