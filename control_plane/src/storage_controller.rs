@@ -20,8 +20,8 @@ use hyper0::Uri;
 use nix::unistd::Pid;
 use pageserver_api::controller_api::{
     NodeConfigureRequest, NodeDescribeResponse, NodeRegisterRequest,
-    SafekeeperSchedulingPolicyRequest, SkSchedulingPolicy, TenantCreateRequest,
-    TenantCreateResponse, TenantLocateResponse,
+    SafekeeperSchedulingPolicyRequest, SetTimelineBranchNameRequest, SkSchedulingPolicy,
+    TenantCreateRequest, TenantCreateResponse, TenantLocateResponse, TimelineBranchName,
 };
 use pageserver_api::models::{
     TenantConfig, TenantConfigRequest, TimelineCreateRequest, TimelineInfo,
@@ -37,7 +37,7 @@ use tokio::process::Command;
 use tracing::instrument;
 use url::Url;
 use utils::auth::{Claims, Scope, encode_from_key_file};
-use utils::id::{NodeId, TenantId};
+use utils::id::{NodeId, TenantId, TimelineId};
 use whoami::username;
 use yb_tokio_postgres as tokio_postgres;
 
@@ -1211,5 +1211,28 @@ impl StorageController {
     pub async fn set_tenant_config(&self, req: &TenantConfigRequest) -> anyhow::Result<()> {
         self.dispatch(Method::PUT, "v1/tenant/config".to_string(), Some(req))
             .await
+    }
+
+    pub async fn set_timeline_branch_name(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        branch_name: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.dispatch::<_, ()>(
+            Method::PUT,
+            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/branch_name"),
+            Some(SetTimelineBranchNameRequest { branch_name }),
+        )
+        .await
+    }
+
+    pub async fn list_timeline_branch_names(&self) -> anyhow::Result<Vec<TimelineBranchName>> {
+        self.dispatch::<(), _>(
+            Method::GET,
+            "control/v1/timeline_branch_names".to_string(),
+            None,
+        )
+        .await
     }
 }

@@ -87,6 +87,7 @@ CREATE TABLE storage_controller.timelines (
     generation                  INTEGER NOT NULL,
     sk_set                      BIGINT[] NOT NULL,
     deleted_at                  TIMESTAMPTZ,
+    branch_name                 VARCHAR,
     PRIMARY KEY (tenant_id, timeline_id)
 );
 

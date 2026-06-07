@@ -21,8 +21,8 @@ use pageserver_api::controller_api::{
     MetadataHealthListOutdatedRequest, MetadataHealthListOutdatedResponse,
     MetadataHealthListUnhealthyResponse, MetadataHealthUpdateRequest, MetadataHealthUpdateResponse,
     NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, SafekeeperSchedulingPolicyRequest,
-    ShardsPreferredAzsRequest, TenantCreateRequest, TenantPolicyRequest, TenantShardMigrateRequest,
-    TimelineImportRequest,
+    SetTimelineBranchNameRequest, ShardsPreferredAzsRequest, TenantCreateRequest,
+    TenantPolicyRequest, TenantShardMigrateRequest, TimelineBranchName, TimelineImportRequest,
 };
 use pageserver_api::models::{
     DetachBehavior, LsnLeaseRequest, TenantConfigPatchRequest, TenantConfigRequest,
@@ -866,6 +866,40 @@ async fn handle_tenant_timeline_describe(
             .tenant_timeline_describe(tenant_id, timeline_id)
             .await?,
     )
+}
+
+async fn handle_set_timeline_branch_name(
+    service: Arc<Service>,
+    req: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+
+    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let mut req = match maybe_forward(req).await {
+        ForwardOutcome::Forwarded(res) => return res,
+        ForwardOutcome::NotForwarded(req) => req,
+    };
+    let body = json_request::<SetTimelineBranchNameRequest>(&mut req).await?;
+
+    service
+        .set_timeline_branch_name(tenant_id, timeline_id, body.branch_name)
+        .await?;
+    json_response(StatusCode::OK, ())
+}
+
+async fn handle_list_timeline_branch_names(
+    service: Arc<Service>,
+    req: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+    match maybe_forward(req).await {
+        ForwardOutcome::Forwarded(res) => return res,
+        ForwardOutcome::NotForwarded(_req) => {}
+    };
+
+    let names: Vec<TimelineBranchName> = service.list_timeline_branch_names().await?;
+    json_response(StatusCode::OK, names)
 }
 
 async fn handle_tenant_list(
@@ -2473,6 +2507,23 @@ pub fn make_router(
                 r,
                 handle_tenant_timeline_describe,
                 RequestName("v1_tenant_timeline_describe"),
+            )
+        })
+        .put(
+            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/branch_name",
+            |r| {
+                tenant_service_handler(
+                    r,
+                    handle_set_timeline_branch_name,
+                    RequestName("v1_set_timeline_branch_name"),
+                )
+            },
+        )
+        .get("/control/v1/timeline_branch_names", |r| {
+            tenant_service_handler(
+                r,
+                handle_list_timeline_branch_names,
+                RequestName("v1_list_timeline_branch_names"),
             )
         })
         .delete("/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {

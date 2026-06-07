@@ -81,12 +81,6 @@ pub struct LocalEnv {
     // storage controller's configuration.
     pub control_plane_hooks_api: Option<Url>,
 
-    /// Keep human-readable aliases in memory (and persist them to config), to hide ZId hex strings from the user.
-    // A `HashMap<String, HashMap<TenantId, TimelineId>>` would be more appropriate here,
-    // but deserialization into a generic toml object as `toml::Value::try_from` fails with an error.
-    // https://toml.io/en/v1.0.0 does not contain a concept of "a table inside another table".
-    pub branch_name_mappings: HashMap<String, Vec<(TenantId, TimelineId)>>,
-
     /// Flag to generate SSL certificates for components that need it.
     /// Also generates root CA certificate that is used to sign all other certificates.
     pub use_local_tls: bool,
@@ -112,7 +106,6 @@ pub struct OnDiskConfig {
     pub control_plane_api: Option<Url>,
     pub control_plane_hooks_api: Option<Url>,
     pub control_plane_compute_hook_api: Option<Url>,
-    branch_name_mappings: HashMap<String, Vec<(TenantId, TimelineId)>>,
     // Note: skip serializing because in compat tests old storage controller fails
     // to load new config file. May be removed after this field is in release branch.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -583,56 +576,51 @@ impl LocalEnv {
         Ok(instances)
     }
 
-    pub fn register_branch_mapping(
-        &mut self,
+    /// Persist a branch alias for the given timeline by calling into the storage controller.
+    /// Idempotent if the alias already points at the same timeline; rejects re-pointing.
+    pub async fn register_branch_mapping(
+        &self,
         branch_name: String,
         tenant_id: TenantId,
         timeline_id: TimelineId,
     ) -> anyhow::Result<()> {
-        let existing_values = self
-            .branch_name_mappings
-            .entry(branch_name.clone())
-            .or_default();
-
-        let existing_ids = existing_values
-            .iter()
-            .find(|(existing_tenant_id, _)| existing_tenant_id == &tenant_id);
-
-        if let Some((_, old_timeline_id)) = existing_ids {
-            if old_timeline_id == &timeline_id {
-                Ok(())
-            } else {
+        let sc = crate::storage_controller::StorageController::from_env(self);
+        let existing = sc.list_timeline_branch_names().await?;
+        if let Some(entry) = existing.iter().find(|e| e.branch_name == branch_name) {
+            if entry.tenant_id == tenant_id && entry.timeline_id == timeline_id {
+                return Ok(());
+            }
+            if entry.tenant_id == tenant_id {
                 bail!(
-                    "branch '{branch_name}' is already mapped to timeline {old_timeline_id}, cannot map to another timeline {timeline_id}"
+                    "branch '{branch_name}' is already mapped to timeline {}, cannot map to another timeline {timeline_id}",
+                    entry.timeline_id
                 );
             }
-        } else {
-            existing_values.push((tenant_id, timeline_id));
-            Ok(())
         }
+        sc.set_timeline_branch_name(tenant_id, timeline_id, Some(branch_name))
+            .await
     }
 
-    pub fn get_branch_timeline_id(
+    pub async fn get_branch_timeline_id(
         &self,
         branch_name: &str,
         tenant_id: TenantId,
-    ) -> Option<TimelineId> {
-        self.branch_name_mappings
-            .get(branch_name)?
-            .iter()
-            .find(|(mapped_tenant_id, _)| mapped_tenant_id == &tenant_id)
-            .map(|&(_, timeline_id)| timeline_id)
+    ) -> anyhow::Result<Option<TimelineId>> {
+        let sc = crate::storage_controller::StorageController::from_env(self);
+        let entries = sc.list_timeline_branch_names().await?;
+        Ok(entries
+            .into_iter()
+            .find(|e| e.branch_name == branch_name && e.tenant_id == tenant_id)
+            .map(|e| e.timeline_id))
     }
 
-    pub fn timeline_name_mappings(&self) -> HashMap<TenantTimelineId, String> {
-        self.branch_name_mappings
-            .iter()
-            .flat_map(|(name, tenant_timelines)| {
-                tenant_timelines.iter().map(|&(tenant_id, timeline_id)| {
-                    (TenantTimelineId::new(tenant_id, timeline_id), name.clone())
-                })
-            })
-            .collect()
+    pub async fn timeline_name_mappings(&self) -> anyhow::Result<HashMap<TenantTimelineId, String>> {
+        let sc = crate::storage_controller::StorageController::from_env(self);
+        let entries = sc.list_timeline_branch_names().await?;
+        Ok(entries
+            .into_iter()
+            .map(|e| (TenantTimelineId::new(e.tenant_id, e.timeline_id), e.branch_name))
+            .collect())
     }
 
     ///  Construct `Self` from on-disk state.
@@ -662,7 +650,6 @@ impl LocalEnv {
                 control_plane_api,
                 control_plane_hooks_api,
                 control_plane_compute_hook_api: _,
-                branch_name_mappings,
                 use_local_tls,
                 endpoint_storage,
             } = on_disk_config;
@@ -678,7 +665,6 @@ impl LocalEnv {
                 safekeepers,
                 control_plane_api: control_plane_api.unwrap(),
                 control_plane_hooks_api,
-                branch_name_mappings,
                 use_local_tls,
                 endpoint_storage,
             }
@@ -793,7 +779,6 @@ impl LocalEnv {
                 control_plane_api: Some(self.control_plane_api.clone()),
                 control_plane_hooks_api: self.control_plane_hooks_api.clone(),
                 control_plane_compute_hook_api: None,
-                branch_name_mappings: self.branch_name_mappings.clone(),
                 use_local_tls: self.use_local_tls,
                 endpoint_storage: self.endpoint_storage.clone(),
             },
@@ -950,7 +935,6 @@ impl LocalEnv {
             safekeepers,
             control_plane_api: control_plane_api.unwrap(),
             control_plane_hooks_api,
-            branch_name_mappings: Default::default(),
             use_local_tls,
             endpoint_storage,
         };

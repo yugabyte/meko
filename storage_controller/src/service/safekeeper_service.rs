@@ -301,6 +301,7 @@ impl Service {
             generation: 1,
             sk_set: sks_persistence.clone(),
             deleted_at: None,
+            branch_name: None,
         };
         let inserted = self
             .persistence
@@ -402,6 +403,7 @@ impl Service {
             generation: 1,
             sk_set: req.sk_set.iter().map(|sk_id| sk_id.0 as i64).collect(),
             deleted_at: None,
+            branch_name: None,
         };
         let inserted = self
             .persistence

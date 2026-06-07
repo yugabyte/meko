@@ -1485,6 +1485,66 @@ impl Persistence {
         Ok(timelines)
     }
 
+    /// Set or clear the `branch_name` column on a timeline row. Returns whether the row existed.
+    pub(crate) async fn set_timeline_branch_name(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        branch_name: Option<String>,
+    ) -> DatabaseResult<bool> {
+        use crate::schema::timelines::dsl;
+
+        let tenant_id = tenant_id.to_string();
+        let timeline_id = timeline_id.to_string();
+        let branch_name = &branch_name;
+        let tenant_id = &tenant_id;
+        let timeline_id = &timeline_id;
+
+        let updated = self
+            .with_measured_conn(DatabaseOperation::UpdateTimeline, move |conn| {
+                Box::pin(async move {
+                    let updated = diesel::update(dsl::timelines)
+                        .filter(dsl::tenant_id.eq(tenant_id))
+                        .filter(dsl::timeline_id.eq(timeline_id))
+                        .set(dsl::branch_name.eq(branch_name))
+                        .execute(conn)
+                        .await?;
+                    Ok(updated)
+                })
+            })
+            .await?;
+
+        match updated {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(DatabaseError::Logical(format!(
+                "unexpected number of rows ({updated})"
+            ))),
+        }
+    }
+
+    /// List every timeline with a non-NULL `branch_name`.
+    pub(crate) async fn list_timeline_branch_names(
+        &self,
+    ) -> DatabaseResult<Vec<(String, String, String)>> {
+        use crate::schema::timelines::dsl;
+
+        self.with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
+            Box::pin(async move {
+                let rows: Vec<(String, String, Option<String>)> = dsl::timelines
+                    .filter(dsl::branch_name.is_not_null())
+                    .select((dsl::tenant_id, dsl::timeline_id, dsl::branch_name))
+                    .load(conn)
+                    .await?;
+                Ok(rows
+                    .into_iter()
+                    .filter_map(|(t, tl, n)| n.map(|n| (t, tl, n)))
+                    .collect())
+            })
+        })
+        .await
+    }
+
     /// Persist pending op. Returns if it was newly inserted. If it wasn't, we haven't done any writes.
     pub(crate) async fn insert_pending_op(
         &self,
@@ -2318,6 +2378,7 @@ pub(crate) struct TimelinePersistence {
     pub(crate) generation: i32,
     pub(crate) sk_set: Vec<i64>,
     pub(crate) deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) branch_name: Option<String>,
 }
 
 /// This is separate from [TimelinePersistence] only because postgres allows NULLs
@@ -2334,6 +2395,7 @@ pub(crate) struct TimelineFromDb {
     pub(crate) generation: i32,
     pub(crate) sk_set: Vec<Option<i64>>,
     pub(crate) deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) branch_name: Option<String>,
 }
 
 impl TimelineFromDb {
@@ -2348,6 +2410,7 @@ impl TimelineFromDb {
             generation: self.generation,
             sk_set,
             deleted_at: self.deleted_at,
+            branch_name: self.branch_name,
         }
     }
 }

@@ -601,6 +601,18 @@ pub struct TimelineSafekeeperMigrateRequest {
     pub new_sk_set: Vec<NodeId>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SetTimelineBranchNameRequest {
+    pub branch_name: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TimelineBranchName {
+    pub tenant_id: TenantId,
+    pub timeline_id: TimelineId,
+    pub branch_name: String,
+}
+
 #[cfg(test)]
 mod test {
     use serde_json;

@@ -92,6 +92,7 @@ diesel::table! {
         generation -> Int4,
         sk_set -> Array<Nullable<Int8>>,
         deleted_at -> Nullable<Timestamptz>,
+        branch_name -> Nullable<Varchar>,
     }
 }
 

@@ -819,7 +819,7 @@ fn main() -> Result<()> {
                 rt.block_on(handle_endpoint_storage(&subcmd, env))
             }
             NeonLocalCmd::Endpoint(subcmd) => rt.block_on(handle_endpoint(&subcmd, env)),
-            NeonLocalCmd::Mappings(subcmd) => handle_mappings(&subcmd, env),
+            NeonLocalCmd::Mappings(subcmd) => rt.block_on(handle_mappings(&subcmd, env)),
         };
 
         let subcommand_result = if &original_env != env {
@@ -1126,7 +1126,8 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
                     timeline.timeline_id
                 );
 
-                env.register_branch_mapping(branch_name, tenant_id, timeline.timeline_id)?;
+                env.register_branch_mapping(branch_name, tenant_id, timeline.timeline_id)
+                    .await?;
             }
         }
         TenantCmd::Create(args) => {
@@ -1185,7 +1186,8 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
                 DEFAULT_BRANCH_NAME.to_string(),
                 tenant_id,
                 new_timeline_id,
-            )?;
+            )
+            .await?;
 
             println!("Created an initial timeline '{new_timeline_id}' for tenant: {tenant_id}",);
 
@@ -1226,7 +1228,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // where shard 0 is attached, and query there.
             let tenant_shard_id = get_tenant_shard_id(args.tenant_shard_id, env)?;
             let timelines = pageserver.timeline_list(&tenant_shard_id).await?;
-            print_timelines_tree(timelines, env.timeline_name_mappings())?;
+            print_timelines_tree(timelines, env.timeline_name_mappings().await?)?;
         }
         TimelineCmd::Create(args) => {
             let tenant_id = get_tenant_id(args.tenant_id, env)?;
@@ -1247,7 +1249,8 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                 .await?;
 
             let last_record_lsn = timeline_info.last_record_lsn;
-            env.register_branch_mapping(new_branch_name.to_string(), tenant_id, new_timeline_id)?;
+            env.register_branch_mapping(new_branch_name.to_string(), tenant_id, new_timeline_id)
+                .await?;
 
             println!(
                 "Created timeline '{}' at Lsn {last_record_lsn} for tenant: {tenant_id}",
@@ -1312,7 +1315,8 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                 };
                 default_sk.create_timeline(&req).await?;
             }
-            env.register_branch_mapping(branch_name.to_string(), tenant_id, timeline_id)?;
+            env.register_branch_mapping(branch_name.to_string(), tenant_id, timeline_id)
+                .await?;
             println!("Done");
         }
         TimelineCmd::Branch(args) => {
@@ -1325,6 +1329,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                 .unwrap_or(DEFAULT_BRANCH_NAME.to_owned());
             let ancestor_timeline_id = env
                 .get_branch_timeline_id(&ancestor_branch_name, tenant_id)
+                .await?
                 .ok_or_else(|| {
                     anyhow!("Found no timeline id for branch name '{ancestor_branch_name}'")
                 })?;
@@ -1346,7 +1351,8 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
 
             let last_record_lsn = timeline_info.last_record_lsn;
 
-            env.register_branch_mapping(new_branch_name.to_string(), tenant_id, new_timeline_id)?;
+            env.register_branch_mapping(new_branch_name.to_string(), tenant_id, new_timeline_id)
+                .await?;
 
             println!(
                 "Created timeline '{}' at Lsn {last_record_lsn} for tenant: {tenant_id}. Ancestor timeline: '{ancestor_branch_name}'",
@@ -1367,7 +1373,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
             // where shard 0 is attached, and query there.
             let tenant_shard_id = get_tenant_shard_id(args.tenant_shard_id, env)?;
 
-            let timeline_name_mappings = env.timeline_name_mappings();
+            let timeline_name_mappings = env.timeline_name_mappings().await?;
 
             let mut table = comfy_table::Table::new();
 
@@ -1433,6 +1439,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
 
             let timeline_id = env
                 .get_branch_timeline_id(&branch_name, tenant_id)
+                .await?
                 .ok_or_else(|| anyhow!("Found no timeline id for branch name '{branch_name}'"))?;
 
             let mode = match (args.lsn, args.hot_standby) {
@@ -1705,14 +1712,15 @@ fn parse_safekeepers(safekeepers_str: &Option<String>) -> Result<Option<Vec<Node
     }
 }
 
-fn handle_mappings(subcmd: &MappingsCmd, env: &mut local_env::LocalEnv) -> Result<()> {
+async fn handle_mappings(subcmd: &MappingsCmd, env: &local_env::LocalEnv) -> Result<()> {
     match subcmd {
         MappingsCmd::Map(args) => {
             env.register_branch_mapping(
                 args.branch_name.to_owned(),
                 args.tenant_id,
                 args.timeline_id,
-            )?;
+            )
+            .await?;
 
             Ok(())
         }

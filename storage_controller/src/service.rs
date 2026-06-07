@@ -29,6 +29,7 @@ use pageserver_api::controller_api::{
     SkSchedulingPolicy, TenantCreateRequest, TenantCreateResponse, TenantCreateResponseShard,
     TenantDescribeResponse, TenantDescribeResponseShard, TenantLocateResponse, TenantPolicyRequest,
     TenantShardMigrateRequest, TenantShardMigrateResponse, TenantTimelineDescribeResponse,
+    TimelineBranchName,
 };
 use pageserver_api::models::{
     self, DetachBehavior, LocationConfig, LocationConfigListResponse, LsnLease,
@@ -5393,6 +5394,45 @@ impl Service {
             })
         })
         .await?
+    }
+
+    /// Set (or clear) the human-readable branch name attached to a timeline.
+    pub(crate) async fn set_timeline_branch_name(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        branch_name: Option<String>,
+    ) -> Result<(), ApiError> {
+        let existed = self
+            .persistence
+            .set_timeline_branch_name(tenant_id, timeline_id, branch_name)
+            .await?;
+        if !existed {
+            return Err(ApiError::NotFound(
+                anyhow::anyhow!("Timeline {tenant_id}/{timeline_id} not found").into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// List every timeline that has a branch_name set.
+    pub(crate) async fn list_timeline_branch_names(
+        &self,
+    ) -> Result<Vec<TimelineBranchName>, ApiError> {
+        let rows = self.persistence.list_timeline_branch_names().await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (tenant_id, timeline_id, branch_name) in rows {
+            out.push(TimelineBranchName {
+                tenant_id: tenant_id
+                    .parse()
+                    .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
+                timeline_id: timeline_id
+                    .parse()
+                    .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
+                branch_name,
+            });
+        }
+        Ok(out)
     }
 
     /// limit & offset are pagination parameters. Since we are walking an in-memory HashMap, `offset` does not
