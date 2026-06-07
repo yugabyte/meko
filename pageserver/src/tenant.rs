@@ -629,6 +629,7 @@ pub enum InitdbError {
 #[allow(clippy::large_enum_variant, reason = "TODO")]
 enum LoadTimelineCause {
     Attach,
+    #[allow(dead_code)]
     Unoffload,
 }
 
@@ -1209,6 +1210,7 @@ impl TenantShard {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn check_ancestor_of_to_be_unarchived_is_not_archived(
         ancestor_timeline_id: TimelineId,
         timelines: &std::sync::MutexGuard<'_, HashMap<TimelineId, Arc<Timeline>>>,
@@ -1287,6 +1289,7 @@ impl TenantShard {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn tenant_shard_id(&self) -> TenantId {
         self.id
     }
@@ -2074,6 +2077,7 @@ impl TenantShard {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_shard_identity(&self) -> ShardIdentity {
         self.shard_identity
     }

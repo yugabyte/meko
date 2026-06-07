@@ -116,6 +116,7 @@ pub struct RequestContext {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(crate) enum Scope {
     Global {
         io_size_metrics: &'static crate::metrics::StorageIoSizeMetrics,
@@ -415,6 +416,7 @@ impl RequestContext {
         self.download_behavior
     }
 
+    #[allow(dead_code)]
     pub(crate) fn io_size_metrics(&self) -> &StorageIoSizeMetrics {
         match &self.scope {
             Scope::Global { io_size_metrics } => {

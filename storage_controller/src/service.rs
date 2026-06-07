@@ -5830,7 +5830,7 @@ impl Service {
             .map_err(|e| passthrough_api_error(&node, e))?;
 
         // A post-split tenant may contain a mixture of shard counts in remote storage: pick the highest count.
-        let Some(shard_count) = scan_result.shards.iter().map(|s| ShardCount(0)).max() else {
+        let Some(shard_count) = scan_result.shards.iter().map(|_s| ShardCount(0)).max() else {
             return Err(ApiError::NotFound(
                 anyhow::anyhow!("No shards found").into(),
             ));
@@ -7953,6 +7953,7 @@ impl Service {
     /// Fetches the top tenant shards from every available node, in descending order of
     /// max logical size. Offline nodes are skipped, and any errors from available nodes
     /// will be logged and ignored.
+    #[allow(dead_code)]
     async fn get_top_tenant_shards(
         &self,
         request: &TopTenantShardsRequest,

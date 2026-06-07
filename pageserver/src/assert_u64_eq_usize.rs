@@ -8,6 +8,7 @@ pub(crate) const _ASSERT_U64_EQ_USIZE: () = {
     }
 };
 
+#[allow(dead_code)]
 pub(crate) trait UsizeIsU64 {
     fn into_u64(self) -> u64;
 }

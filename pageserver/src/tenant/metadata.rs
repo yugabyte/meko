@@ -348,6 +348,7 @@ pub(crate) mod modern_serde {
 
     use super::{TimelineMetadata, TimelineMetadataBodyV2, TimelineMetadataHeader};
 
+    #[allow(dead_code)]
     pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<TimelineMetadata, D::Error>
     where
         D: serde::de::Deserializer<'de>,
@@ -390,6 +391,7 @@ pub(crate) mod modern_serde {
         deserializer.deserialize_any(Visitor)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn serialize<S>(
         metadata: &TimelineMetadata,
         serializer: S,

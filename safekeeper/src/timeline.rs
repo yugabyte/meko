@@ -54,10 +54,12 @@ pub struct LocalSkInfo {
 pub struct PeersInfo(pub Vec<PeerInfo>);
 
 impl PeersInfo {
+    #[allow(dead_code)]
     fn get(&mut self, id: NodeId) -> Option<&mut PeerInfo> {
         self.0.iter_mut().find(|p| p.sk_id == id)
     }
 
+    #[allow(dead_code)]
     fn upsert(&mut self, p: &PeerInfo) {
         match self.get(p.sk_id) {
             Some(rp) => *rp = p.clone(),
@@ -864,6 +866,7 @@ impl Timeline {
 
     /// Get the timeline guard for reading/writing WAL files if the timeline is resident,
     /// else return None
+    #[allow(dead_code)]
     pub(crate) async fn try_wal_residence_guard(
         self: &Arc<Self>,
     ) -> Result<Option<WalResidentTimeline>> {
@@ -1034,6 +1037,7 @@ impl Deref for ManagerTimeline {
 }
 
 impl ManagerTimeline {
+    #[allow(dead_code)]
     pub(crate) fn timeline_dir(&self) -> &Utf8PathBuf {
         &self.tli.timeline_dir
     }

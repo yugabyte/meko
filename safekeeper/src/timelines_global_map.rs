@@ -620,6 +620,7 @@ pub async fn create_temp_timeline_dir(
 /// blob back from remote storage and checking generation bounds.
 /// Returns `(commit_lsn, flush_lsn)` which in yb-mode both collapse to
 /// `timeline_start_lsn` at creation time.
+#[allow(dead_code)]
 pub async fn validate_temp_timeline(
     _conf: &SafeKeeperConf,
     ttid: TenantTimelineId,

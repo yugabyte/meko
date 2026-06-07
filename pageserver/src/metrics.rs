@@ -501,6 +501,7 @@ static LAST_RECORD_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+#[allow(dead_code)]
 pub(crate) static PROJECTED_REMOTE_CONSISTENT_LSN: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_projected_remote_consistent_lsn",
@@ -590,6 +591,7 @@ pub(crate) static RESIDENT_PHYSICAL_SIZE_GLOBAL: Lazy<UIntGauge> = Lazy::new(|| 
     .expect("failed to define a metric")
 });
 
+#[allow(dead_code)]
 static REMOTE_PHYSICAL_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_remote_physical_size",
@@ -600,6 +602,7 @@ static REMOTE_PHYSICAL_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+#[allow(dead_code)]
 static REMOTE_PHYSICAL_SIZE_GLOBAL: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
         "pageserver_remote_physical_size_global",
@@ -1005,6 +1008,7 @@ impl EvictionsWithLowResidenceDuration {
         format!("{}", threshold.as_secs())
     }
 
+    #[allow(dead_code)]
     pub fn change_threshold(
         &mut self,
         tenant_id: &str,
@@ -1088,7 +1092,9 @@ pub(crate) static STORAGE_IO_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
 
 #[derive(Clone, Debug)]
 pub(crate) struct StorageIoSizeMetrics {
+    #[allow(dead_code)]
     pub read: UIntGauge,
+    #[allow(dead_code)]
     pub write: UIntGauge,
 }
 
@@ -1922,6 +1928,7 @@ impl ComputeCommandCounters {
 
 // remote storage metrics
 
+#[allow(dead_code)]
 static REMOTE_TIMELINE_CLIENT_CALLS: Lazy<IntCounterPairVec> = Lazy::new(|| {
     register_int_counter_pair_vec!(
         "pageserver_remote_timeline_client_calls_started",
@@ -2036,6 +2043,7 @@ impl RemoteOpFileKind {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) static REMOTE_TIMELINE_CLIENT_COMPLETION_LATENCY: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "pageserver_remote_timeline_client_seconds_global",
@@ -2639,6 +2647,7 @@ pub(crate) struct TimelineMetrics {
     pub last_record_lsn_gauge: IntGauge,
     pub pitr_history_size: UIntGauge,
     pub archival_size: UIntGauge,
+    #[allow(dead_code)]
     pub standby_horizon_gauge: IntGauge,
     pub resident_physical_size_gauge: UIntGauge,
     pub visible_physical_size_gauge: UIntGauge,
@@ -2650,6 +2659,7 @@ pub(crate) struct TimelineMetrics {
     /// Number of valid LSN leases.
     pub valid_lsn_lease_count_gauge: UIntGauge,
     pub wal_records_received: IntCounter,
+    #[allow(dead_code)]
     pub storage_io_size: StorageIoSizeMetrics,
     pub wait_lsn_in_progress_micros: GlobalAndPerTenantIntCounter,
     pub wait_lsn_start_finish_counterpair: IntCounterPair,
@@ -2882,11 +2892,13 @@ pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantId) {
 /// physical size"). The struct survives because `RemoteTimelineClientMetrics`
 /// still keeps the field, but the setter / getter are gone and
 /// nothing ever advances `last_set` above zero. Drop is a no-op.
+#[allow(dead_code)]
 pub(crate) struct PerTimelineRemotePhysicalSizeGauge {
     last_set: AtomicU64,
 }
 
 impl PerTimelineRemotePhysicalSizeGauge {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             last_set: AtomicU64::new(0),
@@ -2900,6 +2912,7 @@ impl Drop for PerTimelineRemotePhysicalSizeGauge {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) struct RemoteTimelineClientMetrics {
     tenant_id: String,
     timeline_id: String,
@@ -2909,6 +2922,7 @@ pub(crate) struct RemoteTimelineClientMetrics {
 }
 
 impl RemoteTimelineClientMetrics {
+    #[allow(dead_code)]
     pub fn new(tenant_shard_id: &TenantId, timeline_id: &TimelineId) -> Self {
         let tenant_id_str = tenant_shard_id.to_string();
         let timeline_id_str = timeline_id.to_string();
@@ -2928,6 +2942,7 @@ impl RemoteTimelineClientMetrics {
         }
     }
 
+    #[allow(dead_code)]
     pub fn remote_operation_time(
         &self,
         task_kind: Option<TaskKind>,
@@ -2945,6 +2960,7 @@ impl RemoteTimelineClientMetrics {
             .unwrap()
     }
 
+    #[allow(dead_code)]
     fn calls_counter_pair(
         &self,
         file_kind: &RemoteOpFileKind,
@@ -2963,6 +2979,7 @@ impl RemoteTimelineClientMetrics {
 
 /// See [`RemoteTimelineClientMetrics::call_begin`].
 #[must_use]
+#[allow(dead_code)]
 pub(crate) struct RemoteTimelineClientCallMetricGuard {
     /// Decremented on drop.
     calls_counter_pair: Option<IntCounterPair>,
@@ -2980,6 +2997,7 @@ impl RemoteTimelineClientMetrics {
     /// Update the metrics that change when a call to the remote timeline client instance starts.
     /// Drop the returned guard object once the operation is finished to update the corresponding
     /// metrics that track completions.
+    #[allow(dead_code)]
     pub(crate) fn call_begin(
         &self,
         file_kind: &RemoteOpFileKind,
@@ -3021,6 +3039,7 @@ impl Drop for RemoteTimelineClientMetrics {
 
 /// Wrapper future that measures the time spent by a remote storage operation,
 /// and records the time and success/failure as a prometheus metric.
+#[allow(dead_code)]
 pub(crate) trait MeasureRemoteOp<O, E>: Sized + Future<Output = Result<O, E>> {
     async fn measure_remote_op(
         self,

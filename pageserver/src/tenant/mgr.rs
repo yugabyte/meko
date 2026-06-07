@@ -97,7 +97,7 @@ pub(crate) enum ShardSelector {
     /// ignore it.
     Zero,
     /// Pick the shard that holds this key
-    Page(Key),
+    Page(#[allow(dead_code)] Key),
     /// The shard ID is known: pick the given shard
     Known(ShardIndex),
 }
@@ -662,6 +662,7 @@ pub(crate) enum UpsertLocationError {
     InProgress,
 
     #[error("Failed to flush: {0}")]
+    #[allow(dead_code)]
     Flush(anyhow::Error),
 
     /// This error variant is for unexpected situations (soft assertions) where the system is in an unexpected state.

@@ -20,6 +20,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<F, S> DownloadStream<F, S> {
+    #[allow(dead_code)]
     pub(crate) fn new(cancellation: F, inner: S) -> Self {
         Self {
             cancellation,
@@ -64,6 +65,7 @@ where
 }
 
 /// Fires only on the first cancel or timeout, not on both.
+#[allow(dead_code)]
 pub(crate) fn cancel_or_timeout(
     timeout: Duration,
     cancel: CancellationToken,

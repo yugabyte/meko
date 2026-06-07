@@ -272,6 +272,7 @@ pub(crate) enum EvictionEvent {
     Restore,
 }
 
+#[allow(dead_code)]
 pub(crate) static EVICTION_EVENTS_STARTED: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "safekeeper_eviction_events_started_total",
@@ -281,6 +282,7 @@ pub(crate) static EVICTION_EVENTS_STARTED: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("Failed to register metric")
 });
 
+#[allow(dead_code)]
 pub(crate) static EVICTION_EVENTS_COMPLETED: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "safekeeper_eviction_events_completed_total",

@@ -145,10 +145,12 @@ pub(crate) struct ReconcilerConfig {
 
     // During live migration give up on warming-up the secondary
     // after this timeout.
+    #[allow(dead_code)]
     secondary_warmup_timeout: Option<Duration>,
 
     // During live migrations this is the amount of time that
     // the pagserver will hold our poll.
+    #[allow(dead_code)]
     secondary_download_request_timeout: Option<Duration>,
 
     // A hint indicating whether this reconciliation is done on the
@@ -169,12 +171,14 @@ impl ReconcilerConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_secondary_warmup_timeout(&self) -> Duration {
         const SECONDARY_WARMUP_TIMEOUT_DEFAULT: Duration = Duration::from_secs(300);
         self.secondary_warmup_timeout
             .unwrap_or(SECONDARY_WARMUP_TIMEOUT_DEFAULT)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_secondary_download_request_timeout(&self) -> Duration {
         const SECONDARY_DOWNLOAD_REQUEST_TIMEOUT_DEFAULT: Duration = Duration::from_secs(20);
         self.secondary_download_request_timeout
@@ -434,6 +438,7 @@ impl Reconciler {
             .collect())
     }
 
+    #[allow(dead_code)]
     async fn secondary_download(
         &self,
         tenant_shard_id: TenantId,

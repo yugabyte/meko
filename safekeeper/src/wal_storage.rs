@@ -416,7 +416,7 @@ impl WalReader {
     async fn open_segment(&self) -> Result<Pin<Box<dyn AsyncRead + Send + Sync>>> {
         let xlogoff = self.pos.segment_offset(self.wal_seg_size);
         let segno = self.pos.segment_number(self.wal_seg_size);
-        let wal_file_name = XLogFileName(PG_TLI, segno, self.wal_seg_size);
+        let _wal_file_name = XLogFileName(PG_TLI, segno, self.wal_seg_size);
 
         // Try to open local file, if we may have WAL locally
         if self.pos >= self.local_start_lsn {

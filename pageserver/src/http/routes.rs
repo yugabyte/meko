@@ -78,6 +78,7 @@ pub struct State {
     tenant_manager: Arc<TenantManager>,
     auth: Option<Arc<SwappableJwtAuth>>,
     allowlist_routes: &'static [&'static str],
+    #[allow(dead_code)]
     remote_storage: GenericRemoteStorage,
     latest_utilization: tokio::sync::Mutex<Option<(std::time::Instant, bytes::Bytes)>>,
 }

@@ -377,6 +377,7 @@ impl PageserverClient {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn top_tenant_shards(
         &self,
         request: TopTenantShardsRequest,

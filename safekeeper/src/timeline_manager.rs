@@ -41,12 +41,14 @@ pub(crate) struct StateSnapshot {
 
     // latest state
     pub(crate) flush_lsn: Lsn,
+    #[allow(dead_code)]
     pub(crate) last_log_term: Term,
 
     // misc
     pub(crate) cfile_last_persist_at: std::time::Instant,
     pub(crate) inmem_flush_pending: bool,
     pub(crate) wal_removal_on_hold: bool,
+    #[allow(dead_code)]
     pub(crate) peers: Vec<PeerInfo>,
 }
 
@@ -183,6 +185,7 @@ pub(crate) struct Manager {
     pub(crate) conf: SafeKeeperConf,
     pub(crate) wal_seg_size: usize,
     pub(crate) walsenders: Arc<WalSenders>,
+    #[allow(dead_code)]
     pub(crate) yb_wal: Option<Arc<YbWalConn>>,
 
     // current state
@@ -223,7 +226,7 @@ pub async fn main_task(
 
     let mut mgr = Manager::new(tli, conf, broker_active_set, manager_tx, yb_wal).await;
 
-    let last_state = 'outer: loop {
+    let _last_state = 'outer: loop {
         MANAGER_ITERATIONS_TOTAL.inc();
 
         mgr.set_status(Status::StateSnapshot);
@@ -324,6 +327,7 @@ impl Manager {
     ///
     /// This function is fallible because the guard may not be created if the timeline is
     /// shutting down.
+    #[allow(dead_code)]
     pub(crate) fn wal_resident_timeline(&mut self) -> anyhow::Result<WalResidentTimeline> {
         let guard = self.access_service.create_guard(
             self.tli

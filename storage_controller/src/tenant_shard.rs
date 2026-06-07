@@ -175,6 +175,7 @@ impl IntentState {
             preferred_az_id,
         }
     }
+    #[allow(dead_code)]
     pub(crate) fn single(
         scheduler: &mut Scheduler,
         node_id: Option<NodeId>,

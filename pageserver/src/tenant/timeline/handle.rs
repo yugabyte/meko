@@ -317,6 +317,7 @@ pub(crate) trait TenantManager<T: Types> {
 /// Abstract view of an [`Arc<Timeline>`], for testability.
 pub(crate) trait Timeline<T: Types> {
     fn shard_timeline_id(&self) -> ShardTimelineId;
+    #[allow(dead_code)]
     fn get_shard_identity(&self) -> &ShardIdentity;
     fn per_timeline_state(&self) -> &PerTimelineState<T>;
 }

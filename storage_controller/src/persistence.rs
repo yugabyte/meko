@@ -1823,6 +1823,7 @@ impl Persistence {
         .await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn is_tenant_importing_timeline(
         &self,
         tenant_id: TenantId,

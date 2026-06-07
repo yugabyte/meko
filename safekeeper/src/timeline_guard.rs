@@ -55,6 +55,7 @@ impl AccessService {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_empty(&self) -> bool {
         self.guards.is_empty()
     }

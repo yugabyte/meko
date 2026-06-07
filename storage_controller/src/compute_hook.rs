@@ -517,7 +517,7 @@ impl ComputeHook {
         let tenant = match tenants_locked.entry(tenant_id) {
             Entry::Vacant(e) => {
                 let ShardUpdate {
-                    tenant_id: tenant_id,
+                    tenant_id,
                     node_id,
                     stripe_size,
                     preferred_az,
@@ -743,7 +743,7 @@ impl ComputeHook {
     /// The goal is to avoid sending compute notifications with stale information (i.e.
     /// including detach pageservers).
     #[tracing::instrument(skip_all, fields(tenant_id=%tenant_id))]
-    pub(super) fn handle_detach(&self, tenant_id: TenantId, stripe_size: ShardStripeSize) {
+    pub(super) fn handle_detach(&self, tenant_id: TenantId, _stripe_size: ShardStripeSize) {
         use std::collections::hash_map::Entry;
 
         let mut tenants_locked = self.tenants.lock().unwrap();
