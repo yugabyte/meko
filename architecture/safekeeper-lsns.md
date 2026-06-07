@@ -137,9 +137,13 @@ the highest submitted `end_lsn`.
 ### `START_REPLICATION PHYSICAL <start_pos>`
 
 The **pageserver chooses `start_pos`**, not the safekeeper. See
-[`pageserver-lsns.md`](pageserver-lsns.md): on PS restart that is
-`normalize_lsn(last_record_lsn + padding, WAL_SEGMENT_SIZE)` where
-`last_record_lsn` was seeded from persisted `disk_consistent_lsn`.
+[`pageserver-lsns.md`](pageserver-lsns.md): the pageserver passes
+`normalize_lsn(consistent_lsn + padding, WAL_SEGMENT_SIZE)` where
+`consistent_lsn` is the durable, gap-free watermark from
+`pageserver.timeline_state.consistent_lsn`. The pageserver does NOT
+use its eager `applied_lsn` here, because on a (re)connect after an
+in-flight buffer flush, `applied_lsn` would point past records not
+yet in YB — and a subsequent crash would lose them.
 
 Safekeeper accepts the requested LSN and streams forward:
 
@@ -172,7 +176,7 @@ connection status.
 |-------|----------------|
 | `remote_consistent_lsn` | **Yes** — `update_remote_consistent_lsn`, WAL GC horizon, broker activity. |
 | `last_received_lsn` | Metrics only (`safekeeper_ps_last_received_lsn`). |
-| `disk_consistent_lsn` | Metrics only — **not** used for truncation. |
+| `disk_consistent_lsn` | Metrics only — **not** used for truncation. yb-mode pageserver populates this with the same value as `remote_consistent_lsn` (both come from `Timeline::get_consistent_lsn()`, the durable gap-free watermark); the two wire fields are semantically identical and one will be dropped in a future protocol bump. |
 
 ```rust
 // send_wal.rs
@@ -251,17 +255,23 @@ field that affects SK retention.
 
 ## Cross-link: pageserver restart → SK stream start
 
-1. PS loads `disk_consistent_lsn` from `pageserver.timeline_state`.
-2. PS sets `last_record_lsn = disk_consistent_lsn`.
-3. PS walreceiver sends `START_REPLICATION PHYSICAL {startpoint}` with
-   padding/page-header normalization.
+1. PS loads `consistent_lsn` from `pageserver.timeline_state`.
+2. PS seeds both the eager `Timeline::applied_lsn` (for in-RAM
+   `wait_lsn`) AND the durable `Timeline::remote_state.consistent_lsn`
+   slot (for SK feedback / restart resume) from that value.
+3. PS walreceiver reads `Timeline::get_consistent_lsn()` and sends
+   `START_REPLICATION PHYSICAL {startpoint}` with padding/page-header
+   normalization.
 4. SK walsender reads from `start_pos` up to `commit_lsn` (= `flush_lsn`).
-5. PS ingests, eventually sends `remote_consistent_lsn` back.
-6. SK advances inmem `remote_consistent_lsn`; periodic flush persists it.
+5. PS ingests; the eager `applied_lsn` races ahead at WAL speed so
+   GetPage@LSN reads don't stall. The slot stays put until a flush.
+6. After each successful `advance_consistent_lsn` UPSERT, PS bumps
+   the slot, which feeds `PageserverFeedback.remote_consistent_lsn`.
+7. SK advances inmem `remote_consistent_lsn`; periodic flush persists it.
 
-If PS persisted `disk_consistent_lsn` lags actual YB pages (flush
-throttle), step 3–4 **re-stream WAL already in YB** — safe (idempotent
-on PS side), wasteful.
+If PS persisted `consistent_lsn` lags actual YB pages (gen-fenced
+UPSERT throttle), step 3–4 **re-stream WAL already in YB** — safe
+(UPSERT-idempotent on PS side), wasteful.
 
 If SK `remote_consistent_lsn` lags PS feedback (control-file flush
 interval), SK retains extra WAL — safe, not data loss.
@@ -285,9 +295,11 @@ interval), SK retains extra WAL — safe, not data loss.
    restart, never more aggressively than persisted value).
 2. **`commit_lsn` name survives** in metrics/API but equals `flush_lsn` —
    misleading when reading upstream Neon docs.
-3. **Pageserver `disk_consistent_lsn` in feedback is ignored** — only
-   `remote_consistent_lsn` matters; PS may send an optimistic
-   `disk_consistent_lsn` (see pageserver doc).
+3. **Pageserver `disk_consistent_lsn` in feedback is ignored for
+   truncation** — only `remote_consistent_lsn` matters. Both fields
+   now carry the same durable, gap-free value from
+   `Timeline::get_consistent_lsn()`; the duplicate wire field is
+   kept for SK protocol back-compat.
 4. **Multi-SK / quorum paths** still exist in wire format but yb-light
    runs single-SK; term history + membership switch are mostly vestigial.
 

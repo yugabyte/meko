@@ -251,7 +251,14 @@ CREATE TABLE pageserver.tenant_config (
 CREATE TABLE pageserver.timeline_state (
     tenant_id              TEXT      NOT NULL,
     timeline_id            TEXT      NOT NULL,
-    disk_consistent_lsn    BIGINT    NOT NULL,
+    -- `consistent_lsn`: the gap-free durable watermark. Every record
+    -- with LSN ≤ this column is in `pageserver.pages` / `slru_pages`
+    -- / `meta`. Set by `PageStore::advance_consistent_lsn` after a
+    -- gen-fenced UPSERT in `PageWriter::flush`. Read at attach to
+    -- seed both the eager `Timeline::applied_lsn` (for read-side
+    -- waits) and `Timeline::remote_state.consistent_lsn` (for SK
+    -- feedback + restart resume).
+    consistent_lsn         BIGINT    NOT NULL,
     applied_gc_cutoff_lsn  BIGINT    NOT NULL,
     ancestor_timeline_id   TEXT,
     ancestor_lsn           BIGINT,

@@ -124,7 +124,7 @@ pub struct TimelineRow {
     /// Advances on every successful `PageWriter::flush`. Drives both
     /// safekeeper WAL truncation (SK keeps WAL ≥ this) and ingest
     /// resume on restart (walreceiver replays from this LSN forward).
-    pub disk_consistent_lsn: Lsn,
+    pub consistent_lsn: Lsn,
     pub applied_gc_cutoff_lsn: Lsn,
     pub ancestor_timeline_id: Option<TimelineId>,
     pub ancestor_lsn: Option<Lsn>,
@@ -167,13 +167,13 @@ pub struct TimelineRow {
 
 pub const DEFAULT_SCHEMA: &str = "pageserver";
 
-/// Result of `PageStore::advance_disk_consistent_lsn`. Distinguishes a
+/// Result of `PageStore::advance_consistent_lsn`. Distinguishes a
 /// successful UPDATE from generation-fence failure, the latter being
 /// fatal: a higher-generation pageserver has taken over and this one
 /// must shut down (its in-flight YB INSERTs will start being rejected
 /// by the same generation check, so it can't make forward progress).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdvanceDcLsnOutcome {
+pub enum AdvanceConsistentLsnOutcome {
     Updated,
     StaleGeneration { live_generation: u32 },
 }
@@ -182,7 +182,7 @@ pub enum AdvanceDcLsnOutcome {
 /// clause enforces `current_generation = $caller_gen`, so a stale
 /// pageserver — one whose generation has been bumped past since
 /// attach — gets `StaleGeneration`. The caller logs the skip; the
-/// next flush's `advance_disk_consistent_lsn` is what actually trips
+/// next flush's `advance_consistent_lsn` is what actually trips
 /// the shutdown-for-stale-generation path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateTimelineStateOutcome {
@@ -1225,7 +1225,7 @@ impl PageStore {
     /// similar; either way we shouldn't clobber the live row).
     ///
     /// **Not for incremental updates.** Per-flush UPDATEs of
-    /// `disk_consistent_lsn` go through [`Self::advance_disk_consistent_lsn`];
+    /// `consistent_lsn` go through [`Self::advance_consistent_lsn`];
     /// per-`UploadMetadata` UPDATEs from RTC go through
     /// [`Self::update_timeline_state`]. Both of those are gen-fenced;
     /// this one isn't, because at creation the row by definition
@@ -1287,7 +1287,7 @@ impl PageStore {
     pub async fn insert_timeline_at_creation(&self, row: &TimelineRow) -> Result<()> {
         let sql = format!(
             "INSERT INTO \"{}\".timeline_state \
-             (tenant_id, timeline_id, disk_consistent_lsn, \
+             (tenant_id, timeline_id, consistent_lsn, \
               applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
               current_generation, pg_version, initdb_lsn, prev_record_lsn, \
               archived_at, deleted_at, rel_size_migration, \
@@ -1303,7 +1303,7 @@ impl PageStore {
                 &[
                     &row.tenant_id.to_string(),
                     &row.timeline_id.to_string(),
-                    &(row.disk_consistent_lsn.0 as i64),
+                    &(row.consistent_lsn.0 as i64),
                     &(row.applied_gc_cutoff_lsn.0 as i64),
                     &row.ancestor_timeline_id.map(|id| id.to_string()),
                     &row.ancestor_lsn.map(|l| l.0 as i64),
@@ -1333,7 +1333,7 @@ impl PageStore {
     /// the live row — get 0 rows updated, returning
     /// [`UpdateTimelineStateOutcome::StaleGeneration`]. Caller should
     /// log and proceed (matching the pattern in
-    /// [`Self::advance_disk_consistent_lsn`]); the eventual
+    /// [`Self::advance_consistent_lsn`]); the eventual
     /// `task_mgr::shutdown_for_stale_generation` path on the next
     /// flush takes care of shutting the stale process down.
     ///
@@ -1349,7 +1349,7 @@ impl PageStore {
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let sql = format!(
             "UPDATE \"{}\".timeline_state SET \
-                disk_consistent_lsn   = $3, \
+                consistent_lsn   = $3, \
                 applied_gc_cutoff_lsn = $4, \
                 ancestor_timeline_id  = $5, \
                 ancestor_lsn          = $6, \
@@ -1373,7 +1373,7 @@ impl PageStore {
                 &[
                     &row.tenant_id.to_string(),
                     &row.timeline_id.to_string(),
-                    &(row.disk_consistent_lsn.0 as i64),
+                    &(row.consistent_lsn.0 as i64),
                     &(row.applied_gc_cutoff_lsn.0 as i64),
                     &row.ancestor_timeline_id.map(|id| id.to_string()),
                     &row.ancestor_lsn.map(|l| l.0 as i64),
@@ -1440,7 +1440,7 @@ impl PageStore {
         Ok(())
     }
 
-    /// Column-scoped UPDATE of `disk_consistent_lsn`. Caller guards
+    /// Column-scoped UPDATE of `consistent_lsn`. Caller guards
     /// monotonicity in memory — only call when the new value is
     /// strictly higher than the last value sent; no server-side
     /// monotonicity check.
@@ -1461,7 +1461,7 @@ impl PageStore {
     /// generation through to the YB column so the flush path's
     /// `current_generation <= $our` predicate matches on the first
     /// try (without this, the flush self-heals on its own — see
-    /// [`Self::advance_disk_consistent_lsn`] — but a stale PS could
+    /// [`Self::advance_consistent_lsn`] — but a stale PS could
     /// briefly write redundant rows in the gap between attach and
     /// first flush).
     ///
@@ -1536,7 +1536,7 @@ impl PageStore {
     /// lifetime of the attached PS: only attach paths write the
     /// column, and they only move it forward. So a stale PS's flush
     /// finds `YB.current_generation > our_gen` → zero rows → probe
-    /// → [`AdvanceDcLsnOutcome::StaleGeneration`] → fatal shutdown.
+    /// → [`AdvanceConsistentLsnOutcome::StaleGeneration`] → fatal shutdown.
     ///
     /// History: an earlier draft of this predicate paired with
     /// nothing in the attach path; a controller re-attach bumped the
@@ -1547,17 +1547,17 @@ impl PageStore {
     /// `=` here is a sharper fence (it fails the moment a newer PS
     /// bumps past us, no race window where a stale PS could still
     /// write redundant rows).
-    pub async fn advance_disk_consistent_lsn(
+    pub async fn advance_consistent_lsn(
         &self,
         tenant: TenantId,
         timeline: TimelineId,
         generation: utils::generation::Generation,
         new_dc_lsn: Lsn,
         new_prev_record_lsn: Option<Lsn>,
-    ) -> Result<AdvanceDcLsnOutcome> {
-        // Persist `prev_record_lsn` alongside `disk_consistent_lsn`
+    ) -> Result<AdvanceConsistentLsnOutcome> {
+        // Persist `prev_record_lsn` alongside `consistent_lsn`
         // so a restart can hand the safekeeper the right `xl_prev`
-        // for the record at `disk_consistent_lsn`. `COALESCE($5,
+        // for the record at `consistent_lsn`. `COALESCE($5,
         // prev_record_lsn)` keeps the existing column value when
         // the caller didn't resolve a fresh pairing (race —
         // pages flushed before their record's `finish_write` ran;
@@ -1566,7 +1566,7 @@ impl PageStore {
         // NULL on every throttled flush window.
         let sql = format!(
             "UPDATE \"{}\".timeline_state \
-             SET disk_consistent_lsn = $3, \
+             SET consistent_lsn = $3, \
                  prev_record_lsn      = COALESCE($5, prev_record_lsn) \
              WHERE tenant_id = $1 AND timeline_id = $2 \
                AND current_generation = $4",
@@ -1587,7 +1587,7 @@ impl PageStore {
                 ],
             )
             .await
-            .context("advance_disk_consistent_lsn")?;
+            .context("advance_consistent_lsn")?;
         if n == 0 {
             // Distinguish "row missing entirely" (init bug) from
             // "generation moved on" (we got fenced). One extra single-row
@@ -1601,21 +1601,21 @@ impl PageStore {
                 .ysql_client
                 .query_opt(&probe_sql, &[&tenant.to_string(), &timeline.to_string()])
                 .await
-                .context("advance_disk_consistent_lsn probe")?;
+                .context("advance_consistent_lsn probe")?;
             match row {
                 None => anyhow::bail!(
                     "no timeline row for {tenant}/{timeline} — \
-                     advance_disk_consistent_lsn called before timeline_create wrote the row"
+                     advance_consistent_lsn called before timeline_create wrote the row"
                 ),
                 Some(r) => {
                     let live_gen: i32 = r.get(0);
-                    Ok(AdvanceDcLsnOutcome::StaleGeneration {
+                    Ok(AdvanceConsistentLsnOutcome::StaleGeneration {
                         live_generation: live_gen as u32,
                     })
                 }
             }
         } else {
-            Ok(AdvanceDcLsnOutcome::Updated)
+            Ok(AdvanceConsistentLsnOutcome::Updated)
         }
     }
 
@@ -1877,7 +1877,7 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
 /// Column list shared by every `SELECT … FROM timeline_state` so the
 /// query layout stays in sync with `row_to_timeline`'s positional
 /// `try_get` indices.
-const TIMELINE_ROW_COLUMNS: &str = "tenant_id, timeline_id, disk_consistent_lsn, \
+const TIMELINE_ROW_COLUMNS: &str = "tenant_id, timeline_id, consistent_lsn, \
      applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
      current_generation, pg_version, initdb_lsn, prev_record_lsn, \
      archived_at, deleted_at, rel_size_migration, \
@@ -1904,7 +1904,7 @@ fn serialize_row_aux(row: &TimelineRow) -> Result<(Option<String>, serde_json::V
 fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
     let tenant_s: String = r.try_get(0)?;
     let timeline_s: String = r.try_get(1)?;
-    let disk_consistent_lsn: i64 = r.try_get(2)?;
+    let consistent_lsn: i64 = r.try_get(2)?;
     let applied_gc_cutoff_lsn: i64 = r.try_get(3)?;
     let ancestor_tl: Option<String> = r.try_get(4)?;
     let ancestor_lsn: Option<i64> = r.try_get(5)?;
@@ -1932,7 +1932,7 @@ fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
     Ok(TimelineRow {
         tenant_id: tenant_s.parse().context("parsing tenant_id")?,
         timeline_id: timeline_s.parse().context("parsing timeline_id")?,
-        disk_consistent_lsn: Lsn(disk_consistent_lsn as u64),
+        consistent_lsn: Lsn(consistent_lsn as u64),
         applied_gc_cutoff_lsn: Lsn(applied_gc_cutoff_lsn as u64),
         ancestor_timeline_id: ancestor_tl
             .map(|s| s.parse::<TimelineId>())
@@ -2605,7 +2605,7 @@ mod tests {
         TimelineRow {
             tenant_id: t,
             timeline_id: tl,
-            disk_consistent_lsn: Lsn(90),
+            consistent_lsn: Lsn(90),
             applied_gc_cutoff_lsn: Lsn(50),
             ancestor_timeline_id: None,
             ancestor_lsn: None,
@@ -2650,7 +2650,7 @@ mod tests {
         let timeline = rand_timeline();
         let mut row = sample_timeline_row(tenant, timeline);
         row.current_generation = 1;
-        row.disk_consistent_lsn = Lsn(0x1000);
+        row.consistent_lsn = Lsn(0x1000);
         store.insert_timeline_at_creation(&row).await.unwrap();
 
         // Bumped: stored gen=1, attach at gen=2 → succeeds, YB now 2.
@@ -2710,7 +2710,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn advance_disk_consistent_lsn_gen_gate() {
+    async fn advance_consistent_lsn_gen_gate() {
         use utils::generation::Generation;
         use utils::lsn::Lsn;
 
@@ -2719,12 +2719,12 @@ mod tests {
         let timeline = rand_timeline();
         let mut row = sample_timeline_row(tenant, timeline);
         row.current_generation = 5;
-        row.disk_consistent_lsn = Lsn(0x1000);
+        row.consistent_lsn = Lsn(0x1000);
         store.insert_timeline_at_creation(&row).await.unwrap();
 
         // Matching generation → Updated, persisted value advances.
         let res = store
-            .advance_disk_consistent_lsn(
+            .advance_consistent_lsn(
                 tenant,
                 timeline,
                 Generation::new(5),
@@ -2733,14 +2733,14 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(res, AdvanceDcLsnOutcome::Updated);
+        assert_eq!(res, AdvanceConsistentLsnOutcome::Updated);
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
-        assert_eq!(got.disk_consistent_lsn, Lsn(0x2000));
+        assert_eq!(got.consistent_lsn, Lsn(0x2000));
         assert_eq!(got.prev_record_lsn, Some(Lsn(0x1F00)));
 
         // Stale generation → StaleGeneration { live = 5 }, value unchanged.
         let res = store
-            .advance_disk_consistent_lsn(
+            .advance_consistent_lsn(
                 tenant,
                 timeline,
                 Generation::new(4),
@@ -2751,11 +2751,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             res,
-            AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 }
+            AdvanceConsistentLsnOutcome::StaleGeneration { live_generation: 5 }
         );
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
         assert_eq!(
-            got.disk_consistent_lsn,
+            got.consistent_lsn,
             Lsn(0x2000),
             "stale-gen UPDATE must not advance"
         );
@@ -2764,15 +2764,15 @@ mod tests {
         // row hasn't been UPSERT'd yet) → also stale: persisted row is
         // the source of truth.
         let res = store
-            .advance_disk_consistent_lsn(tenant, timeline, Generation::new(6), Lsn(0x4000), None)
+            .advance_consistent_lsn(tenant, timeline, Generation::new(6), Lsn(0x4000), None)
             .await
             .unwrap();
         assert_eq!(
             res,
-            AdvanceDcLsnOutcome::StaleGeneration { live_generation: 5 }
+            AdvanceConsistentLsnOutcome::StaleGeneration { live_generation: 5 }
         );
         let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
-        assert_eq!(got.disk_consistent_lsn, Lsn(0x2000));
+        assert_eq!(got.consistent_lsn, Lsn(0x2000));
 
         drop_schema(&store, &schema).await;
     }

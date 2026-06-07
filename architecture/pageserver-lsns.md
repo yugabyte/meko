@@ -1,12 +1,25 @@
 # Pageserver LSNs
 
-Updated: 2026-06-06
+Updated: 2026-06-07
 
 Inventory of every LSN the pageserver uses, derived from the Rust sources
 only (`pageserver/`, `safekeeper/`, `libs/utils`, `libs/pageserver_api`).
 Do not treat other architecture docs as authoritative for this topic —
-several of them overstate durability guarantees or describe upstream paths
-that no longer exist.
+several of them describe upstream paths that no longer exist.
+
+## The two key watermarks
+
+yb-mode splits the durability concept into two distinct atomics on
+`Timeline`. Conflating them is the original source of
+`findings-ps-wal-replay-restart-bug-2026-06-04`:
+
+| Atomic | Advances when | Use for |
+|---|---|---|
+| **`applied_lsn`** (eager, in-memory) | walreceiver puts a record into the `PageWriter` buffer (`put_batch` → `applied_lsn.fetch_max`) | Read-path waits: `wait_lsn`, GetPage@LSN, `compute_image_consistent_lsn`. Never blocks behind YB INSERT latency. |
+| **`consistent_lsn`** (durable, gap-free) | After a successful gen-fenced `PageStore::advance_consistent_lsn` UPSERT (inside `PageWriter::flush`'s success branch) | Anything that crosses a crash boundary or leaves the process: SK feedback (`remote_consistent_lsn` + `disk_consistent_lsn` wire fields), restart resume position, HTTP API durability field. |
+
+`applied_lsn ≥ consistent_lsn` at all times; the gap is the contents of the
+in-RAM `PageWriter` buffer.
 
 ## Overview: three layers
 
@@ -19,50 +32,83 @@ that no longer exist.
 ```mermaid
 flowchart LR
     SK[Safekeeper WAL] -->|physical replication| WR[walreceiver]
-    WR -->|walingest| LR[last_record_lsn<br>#40;in-memory#41;]
-    WR -->|put_batch| BUF[PageWriter buffer]
+    WR -->|walingest put_batch| AL[applied_lsn<br>#40;in-memory, eager#41;]
+    WR -->|put_batch rows| BUF[PageWriter buffer]
     BUF -->|flush INSERT| YB[(YB pages/slru/meta)]
-    BUF -->|throttled UPDATE| TS[timeline_state row]
-    LR -->|finish_write| PW_HIST[record_lsn_history]
+    BUF -->|gen-fenced UPSERT| TS[timeline_state row<br>consistent_lsn column]
+    TS -->|publish slot| CL[consistent_lsn<br>#40;remote_state slot#41;]
+    AL -->|finish_write| LR[last_record_lsn<br>#40;eager, with prev#41;]
+    LR -->|note_record_lsn| PW_HIST[record_lsn_history]
     PW_HIST -->|paired at flush| PREV[prev_record_lsn<br>#40;persisted#41;]
-    TS -->|disk_consistent_lsn<br>#40;persisted#41;| RESTART[restart resume]
-    TS -->|advance OK| RC[remote_consistent_lsn<br>#40;in-memory#41;]
-    RC -->|PageserverFeedback| SK
+    CL -->|get_consistent_lsn| START[START_REPLICATION position]
+    CL -->|PageserverFeedback| SK
+    AL -->|wait_lsn, GetPage@LSN| READS[read path]
 ```
 
 ---
 
 ## Timeline-global LSNs
 
-### `last_record_lsn` — in memory only
+### `applied_lsn` — eager, in-memory
+
+**Where:** `Timeline.applied_lsn: AtomicLsn`
+(`pageserver/src/tenant/timeline.rs`).
+
+**Meaning:** End of the last WAL record the walreceiver has put into the
+`PageWriter` buffer — i.e., the in-RAM ingest frontier. NOT a durability
+claim; the buffered rows may not yet be in YB.
+
+**Advances:** `TimelineWriter::put_batch` calls
+`self.tl.applied_lsn.fetch_max(batch_max_lsn)` immediately after the
+buffer write, so read-path waits don't block behind the YB INSERT
+round-trip.
+
+**Used for:**
+- Internal: `compute_image_consistent_lsn` (basebackup gate), error-log
+  diagnostics in `wait_lsn` timeouts.
+- (`last_record_lsn`'s `.last` advance — same value, exposed via
+  `SeqWait` for `wait_lsn` subscribers.)
+
+**On restart:** Seeded from persisted `consistent_lsn`. The two
+watermarks start at the same value; `applied_lsn` then runs ahead as
+the walreceiver ingests.
+
+**Do NOT use for:** anything that leaves the process. SK feedback,
+START_REPLICATION position, HTTP `disk_consistent_lsn` field, restart
+state — all must read `consistent_lsn` instead.
+
+---
+
+### `last_record_lsn` — eager, in-memory (with `prev` pairing)
 
 **Where:** `Timeline.last_record_lsn: SeqWait<RecordLsn, Lsn>`
 (`pageserver/src/tenant/timeline.rs`).
 
 **Meaning:** End of the last fully ingested WAL record (`RecordLsn.last`).
-`RecordLsn.prev` is the end of the record before that.
+`RecordLsn.prev` is the end of the record before that. Same eagerness
+class as `applied_lsn` — both advance per-record as walingest commits.
 
 **Advances:** `Timeline::finish_write()` after each
 `DatadirModification::commit()`. Never written to YB.
 
 **Used for:**
 - `wait_lsn()` — getpage blocks until this reaches the requested LSN.
-- Walreceiver resume startpoint (with padding / page-header normalization).
 - GC horizon: `last_record_lsn - gc_horizon`.
 - Metrics and HTTP status.
 
-**On restart:** Seeded from persisted `disk_consistent_lsn`, with `prev`
+**On restart:** Seeded from persisted `consistent_lsn`, with `prev`
 from persisted `prev_record_lsn` (or `Lsn(0)`):
 
 ```rust
 last_record_lsn: SeqWait::new(RecordLsn {
-    last: disk_consistent_lsn,
+    last: consistent_lsn,
     prev: metadata.prev_record_lsn().unwrap_or(Lsn(0)),
 }),
 ```
 
 **Correctness:** Ingest frontier. Can run **ahead of** durable YB storage
-because ingest finishes before flush.
+because ingest finishes before flush. **Not used for walreceiver
+START_REPLICATION position** — that reads `consistent_lsn` instead.
 
 ---
 
@@ -85,56 +131,60 @@ persisted `prev` may be NULL and walreceiver re-derives from the stream.
 
 ---
 
-### `disk_consistent_lsn` — three different copies
+### `consistent_lsn` — durable, gap-free
 
-This name is overloaded. The code maintains **three** values that are
-**not** kept in sync.
+**Where:**
+- Source of truth: `pageserver.timeline_state.consistent_lsn` (YB column).
+- In-memory slot: `Timeline.remote_state.consistent_lsn:
+  Arc<AtomicLsn>`. Held by `PageWriter` so the flush success path
+  can bump it without going through `Timeline`.
+- Accessor: `Timeline::get_consistent_lsn()`.
 
-| Copy | Location | When it advances |
-|------|----------|------------------|
-| **Timeline in-memory** | `Timeline.disk_consistent_lsn: AtomicLsn` | Init from YB row at attach; `fetch_max` on every `put_batch` (buffer write, **not** flush) |
-| **PageWriter trackers** | `dc_lsn_observed`, `dc_lsn_watermark` | `observed` after YB INSERT; `watermark` after successful `advance_disk_consistent_lsn` |
-| **Persisted** | `timeline_state.disk_consistent_lsn` | `PageStore::advance_disk_consistent_lsn` only (gen-fenced UPDATE, throttled to ~`max_age` per flush policy) |
+**Meaning:** Every record with LSN ≤ this is **durably** in
+`pageserver.pages` / `slru_pages` / `meta` AND the `timeline_state` row
+has been updated to claim it. The slot's value is the high-water mark
+beyond which the pageserver would never advertise progress to the
+safekeeper.
 
-The in-memory `AtomicLsn` has exactly two writers: initialization in
-`Timeline::new` and `fetch_max` in `TimelineWriter::put_batch`. Flush
-success does **not** update it.
+**Advances:** Only inside `PageWriter::flush`'s success branch
+(`pageserver/src/page_writer.rs`):
+1. `try_write_rows` lands the buffer in YB.
+2. The throttled, gen-fenced `PageStore::advance_consistent_lsn` UPSERT
+   updates `timeline_state.consistent_lsn`.
+3. On success, `PageWriter::publish_consistent_lsn(lsn)` bumps the
+   in-memory slot via `slot.fetch_max(lsn)`.
 
-**Callers:**
-- Walreceiver feedback `disk_consistent_lsn` → `timeline.get_disk_consistent_lsn()`
-  (optimistic in-memory copy).
-- HTTP status → same.
-- Attach / restart → YB row seeds `AtomicLsn` and `last_record_lsn`.
+The bookkeeping atomics in `PageWriter` track the two halves:
+- `consistent_lsn_observed` — max LSN of rows that landed in YB this
+  process lifetime (advanced unconditionally after `try_write_rows`).
+- `consistent_lsn_watermark` — max LSN actually persisted to the
+  `timeline_state` column (only advances after a successful UPSERT,
+  which is throttled to one per `max_age`).
 
-The walreceiver comment ("guarantees local persistence") is **wrong** for
-the in-memory atomic — it can be ahead of YB because `put_batch`
-advances it before flush.
+`observed ≥ watermark` always; the gap is recovered on clean
+shutdown by `force_upsert_consistent_lsn_if_advanced`.
 
-**Shutdown catch-up:** `PageWriter::force_upsert_dc_lsn_if_advanced`
-persists any gap between `dc_lsn_observed` and `dc_lsn_watermark` that
-the throttle skipped.
+**Used for:**
+- SK feedback fields: `disk_consistent_lsn` AND `remote_consistent_lsn`
+  in `PageserverFeedback` both come from
+  `Timeline::get_consistent_lsn()`. (Wire protocol carries both; in
+  yb-mode they're semantically identical and one will be dropped in a
+  future protocol bump.)
+- Walreceiver `START_REPLICATION` startpoint
+  (`walreceiver_connection.rs`).
+- HTTP API `TimelineInfo.disk_consistent_lsn` (field name kept for
+  back-compat).
 
----
-
-### `remote_consistent_lsn` — in memory only
-
-**Where:** `TimelineRemoteState.rc_lsn: Arc<AtomicLsn>`. Slot installed
-via `PageWriter::set_remote_consistent_lsn_slot` at attach.
-
-**Advances:** `PageWriter::publish_remote_consistent_lsn` only after a
-successful, generation-gated `advance_disk_consistent_lsn`.
-
-**Used for:** Safekeeper WAL truncation. This is the **conservative,
-crash-safe** bound — replaces upstream Neon's "uploaded to S3" LSN.
+**On restart:** YB column → `Timeline::new` seeds the in-memory slot
+via `state.consistent_lsn.fetch_max(disk_consistent_lsn)` so the very
+first walreceiver feedback already reports the correct value.
 
 **Safekeeper behavior:** `send_wal.rs` calls
 `update_remote_consistent_lsn(ps_feedback.remote_consistent_lsn)` only.
 `disk_consistent_lsn` and `last_received_lsn` from feedback are metrics
 only (`safekeeper_ps_last_received_lsn` gauge); no truncation logic uses
-them.
-
-Until the first successful persist, walreceiver sends `Lsn(0)` for this
-field (`unwrap_or(Lsn(0))`).
+them. With both wire fields now carrying the same `consistent_lsn`
+value, the truncation bound is correct by construction.
 
 ---
 
@@ -247,9 +297,18 @@ which is a no-op. No page-row pruning is implemented.
 
 | Field | Source | SK uses for truncation? |
 |-------|--------|------------------------|
-| `last_received_lsn` | ingest frontier | No (metrics) |
-| `disk_consistent_lsn` | `timeline.get_disk_consistent_lsn()` (optimistic) | No |
-| `remote_consistent_lsn` | `rc_lsn` slot | **Yes** |
+| `last_received_lsn` | ingest frontier (eager) | No (metrics) |
+| `disk_consistent_lsn` | `Timeline::get_consistent_lsn()` (durable slot) | No |
+| `remote_consistent_lsn` | `Timeline::get_consistent_lsn()` (durable slot) | **Yes** |
+
+Both LSN fields now carry the same value. Pre-2026-06 the
+`disk_consistent_lsn` wire field was sourced from the eager
+in-memory atomic, which could be ahead of YB after a buffer write
+but before flush — combined with PS crash-restart this lost the
+buffered records permanently
+(`findings-ps-wal-replay-restart-bug-2026-06-04`). Both fields are
+kept for SK protocol back-compat; one will be dropped in a future
+protocol bump.
 
 ---
 
@@ -267,12 +326,22 @@ which is a no-op. No page-row pruning is implemented.
 ```
 SK stream → walingest.ingest_record (sets modification.lsn)
          → DatadirModification::commit
-              → TimelineWriter::put_batch (buffer + disk_consistent_lsn.fetch_max)
+              → TimelineWriter::put_batch (buffer + applied_lsn.fetch_max)
               → finish_write per pending_lsn (last_record_lsn + note_record_lsn)
+
+PageWriter::flush (periodic)
+         → snapshot_unflushed
+         → try_write_rows → YB INSERT into pages/slru/meta
+         → mark_first_n_flushed + consistent_lsn_observed.fetch_max
+         → throttled, gen-fenced advance_consistent_lsn UPSERT
+              → consistent_lsn_watermark.store
+              → publish_consistent_lsn(lsn) → slot bumps
 ```
 
-Filtered-out SK records still advance `last_record_lsn` via
-`modification.set_lsn(next_record_lsn)` + commit.
+Filtered-out SK records still advance `applied_lsn` /
+`last_record_lsn` via `modification.set_lsn(next_record_lsn)` +
+commit. The durable `consistent_lsn` only moves when rows actually
+land in YB.
 
 **Getpage flow:**
 1. `effective_request_lsn` (clamp, GC cutoff check, lease check).
@@ -297,13 +366,17 @@ Filtered-out SK records still advance `last_record_lsn` via
 ```
 applied_gc_cutoff_lsn  ≤  valid read LSNs  (enforced at getpage)
 
-remote_consistent_lsn  ≤  dc_lsn_watermark  ≤  dc_lsn_observed  (YB pages)
-                         (after successful advance_disk_consistent_lsn)
+consistent_lsn (slot)  ≤  consistent_lsn_watermark  ≤  consistent_lsn_observed
+                         (after successful advance_consistent_lsn UPSERT
+                          the slot is published from observed)
 
-Timeline.disk_consistent_lsn  ≈  last_record_lsn  (both advanced on ingest;
-                         in-memory dc_lsn set by put_batch, not flush)
+applied_lsn  ≈  last_record_lsn  (both advanced eagerly on put_batch /
+                                  finish_write; same value modulo timing)
 
-persisted disk_consistent_lsn  ≤  dc_lsn_observed  (throttle lag, ≤ max_age)
+applied_lsn  ≥  consistent_lsn  (the gap is the in-RAM PageWriter buffer)
+
+persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
+                         (throttle lag, ≤ max_age between UPSERTs)
 ```
 
 ---
@@ -314,23 +387,29 @@ persisted disk_consistent_lsn  ≤  dc_lsn_observed  (throttle lag, ≤ max_age)
 - Ingest ordering via `SeqWait`; getpage waits on `last_record_lsn`.
 - Read correctness on a single timeline: buffer + YB blend; chains truncated
   at `will_init`.
-- SK truncation safety: `remote_consistent_lsn` only moves after gen-fenced
-  YB UPDATE.
-- Restart replay: `last_record_lsn` seeded from persisted row; WAL replay
-  from that point; YB upserts idempotent.
-- Generation fencing: stale PS loses `advance_disk_consistent_lsn` →
+- SK truncation safety: SK reads `remote_consistent_lsn` from feedback,
+  which is now sourced from the durable `consistent_lsn` slot — only
+  advances after a successful gen-fenced YB UPSERT.
+- Restart replay: `consistent_lsn` seeded from persisted YB column;
+  walreceiver `START_REPLICATION` position reads
+  `Timeline::get_consistent_lsn()`; on crash mid-flush the slot stays at
+  the last successful flush so re-streamed WAL is upserted idempotently
+  with no gaps.
+- Generation fencing: stale PS loses `advance_consistent_lsn` →
   `shutdown_for_stale_generation`.
+- GetPage@LSN does NOT block behind YB INSERT latency — read-path
+  waits use the eager `applied_lsn` / `last_record_lsn`.
 
-**Does not hold (code gaps):**
-1. `Timeline.disk_consistent_lsn` ≠ durable — `put_batch` advances before
-   flush; walreceiver overstates it in comments.
-2. Persisted `disk_consistent_lsn` can lag YB by up to `max_age` (flush
-   throttle); shutdown catch-up via `force_upsert_dc_lsn_if_advanced`.
-3. GC is cosmetic — `gc()` no-op; no row deletion; `applied_gc_cutoff_lsn`
+**Sharp edges (designed-in):**
+1. Persisted `consistent_lsn` can lag actual YB pages by up to `max_age`
+   (UPSERT throttle) — extra WAL retained on SK, recoverable; shutdown
+   catch-up via `force_upsert_consistent_lsn_if_advanced` closes most of
+   the gap on clean exit.
+2. GC is cosmetic — `gc()` no-op; no row deletion; `applied_gc_cutoff_lsn`
    frozen after creation.
-4. Branches broken for inherited data — no ancestor read in
+3. Branches broken for inherited data — no ancestor read in
    `get_vectored_via_page_writer`.
-5. `update_timeline_state` unused — full row upsert exists but nothing
+4. `update_timeline_state` unused — full row upsert exists but nothing
    calls it; HTTP GC cutoff patches don't persist.
 
 ---
@@ -339,27 +418,33 @@ persisted disk_consistent_lsn  ≤  dc_lsn_observed  (throttle lag, ≤ max_age)
 
 | Field | Written to YB by | Read from YB at attach |
 |-------|------------------|------------------------|
-| `disk_consistent_lsn` | `advance_disk_consistent_lsn` | Yes |
+| `consistent_lsn` | `advance_consistent_lsn` | Yes |
 | `prev_record_lsn` | same UPDATE | Yes |
 | `applied_gc_cutoff_lsn` | `insert_timeline_at_creation` only | Yes |
 | `ancestor_lsn` / `ancestor_timeline_id` | creation INSERT | Yes |
 | `initdb_lsn` | creation INSERT | Yes |
-| `last_record_lsn` | never | reconstructed from dc_lsn + prev |
-| `remote_consistent_lsn` | never | starts at 0; rebuilt from flushes |
+| `applied_lsn` / `last_record_lsn` | never | seeded from `consistent_lsn` + persisted `prev` |
+| `remote_state.consistent_lsn` slot | never | seeded from `consistent_lsn` |
 | Per-page `lsn` | `put_pages` / `put_slru_pages` / `put_meta` | on read |
 
 ---
 
 ## Code anchors
 
-- `pageserver/src/tenant/timeline.rs` — `last_record_lsn`, `disk_consistent_lsn`,
-  `applied_gc_cutoff_lsn`, `finish_write`, `get_vectored_via_page_writer`.
-- `pageserver/src/page_writer.rs` — flush, `dc_lsn_*` watermarks,
-  `publish_remote_consistent_lsn`, `record_lsn_history`.
-- `pageserver/src/page_store.rs` — `advance_disk_consistent_lsn`,
+- `pageserver/src/tenant/timeline.rs` — `last_record_lsn`, `applied_lsn`,
+  `get_consistent_lsn`, `applied_gc_cutoff_lsn`, `finish_write`,
+  `get_vectored_via_page_writer`.
+- `pageserver/src/tenant/timeline/remote_state.rs` — `consistent_lsn`
+  slot owned by `TimelineRemoteState`.
+- `pageserver/src/page_writer.rs` — flush, `consistent_lsn_observed` /
+  `consistent_lsn_watermark`, `publish_consistent_lsn`,
+  `force_upsert_consistent_lsn_if_advanced`, `record_lsn_history`.
+- `pageserver/src/page_store.rs` — `advance_consistent_lsn`,
   `insert_timeline_at_creation`, `update_timeline_state` (unused).
 - `pageserver/src/tenant/timeline/walreceiver/walreceiver_connection.rs` —
-  ingest, feedback, resume startpoint.
+  ingest, feedback, resume startpoint (both read `get_consistent_lsn`).
 - `pageserver/src/pgdatadir_mapping.rs` — `DatadirModification::commit`.
 - `safekeeper/src/send_wal.rs` — `update_remote_consistent_lsn` (truncation).
 - `libs/utils/src/pageserver_feedback.rs` — feedback wire format.
+- `storage_controller/migrations/00000000000001_initial_schema/up.sql` —
+  `pageserver.timeline_state.consistent_lsn` column.

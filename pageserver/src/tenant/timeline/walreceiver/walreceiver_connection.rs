@@ -246,9 +246,19 @@ pub(super) async fn handle_walreceiver_connection(
     //
     // Start streaming the WAL, from where we left off previously.
     //
+    // Use `consistent_lsn` (durable, gap-free) — NOT `last_record_lsn`
+    // (eager, in-memory). On every (re)connect within a running PS the
+    // eager value can be ahead of YB; if we asked SK to resume from
+    // there and then crashed before flushing the buffer, those records
+    // would be lost: on restart durable `consistent_lsn` is the smaller
+    // value, but we already advertised the larger one to SK and `disk_consistent_lsn`
+    // in `pageserver.pages` is missing the gap rows. Resuming from the
+    // durable watermark makes a crash-restart loop self-healing —
+    // walreceiver re-streams from there and UPSERTs fill any gap.
+    //
     // If we had previously received WAL up to some point in the middle of a WAL record, we
     // better start from the end of last full WAL record, not in the middle of one.
-    let mut last_rec_lsn = timeline.get_last_record_lsn();
+    let mut last_rec_lsn = timeline.get_consistent_lsn();
     let mut startpoint = last_rec_lsn;
 
     if startpoint == Lsn(0) {
@@ -267,7 +277,7 @@ pub(super) async fn handle_walreceiver_connection(
     startpoint = normalize_lsn(startpoint, WAL_SEGMENT_SIZE);
 
     info!(
-        "last_record_lsn {last_rec_lsn} starting replication from {startpoint}, safekeeper is at {end_of_wal}..."
+        "consistent_lsn {last_rec_lsn} starting replication from {startpoint}, safekeeper is at {end_of_wal}..."
     );
 
     let query = format!("START_REPLICATION PHYSICAL {startpoint}");
@@ -540,8 +550,14 @@ pub(super) async fn handle_walreceiver_connection(
 
             // The last LSN we processed. It is not guaranteed to survive pageserver crash.
             let last_received_lsn = last_lsn;
-            // `disk_consistent_lsn` is the LSN at which page server guarantees local persistence of all received data
-            let disk_consistent_lsn = timeline.get_disk_consistent_lsn();
+            // Wire field name kept as `disk_consistent_lsn` for SK
+            // protocol compat, but semantically this is `consistent_lsn`
+            // (durable, gap-free). Do NOT report `applied_lsn` here —
+            // SK / restart logic must see a value that's actually in
+            // `pageserver.pages`. In yb-mode this is the same value as
+            // `remote_consistent_lsn` below; both fields are kept for
+            // wire compat. TODO: drop one in a future protocol bump.
+            let disk_consistent_lsn = timeline.get_consistent_lsn();
             // The last LSN that is synced to remote storage and is guaranteed to survive pageserver crash
             // Used by safekeepers to remove WAL preceding `remote_consistent_lsn`.
             let remote_consistent_lsn = timeline_remote_consistent_lsn;

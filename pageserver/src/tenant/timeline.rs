@@ -148,14 +148,18 @@ pub struct Timeline {
     // keep track of it.
     last_record_lsn: SeqWait<RecordLsn, Lsn>,
 
-    // All WAL records have been processed and stored durably on files on
-    // local disk, up to this LSN. On crash and restart, we need to re-process
-    // the WAL starting from this point.
+    // Watermark of WAL the walreceiver has applied to in-memory state
+    // (PageWriter buffer + UnifiedPages). NOT a durability claim:
+    // `put_batch` advances this immediately, before the buffer is
+    // flushed to YB, so GetPage@LSN reads don't stall behind YB INSERT
+    // latency.
     //
-    // Some later WAL records might have been processed and also flushed to disk
-    // already, so don't be surprised to see some, but there's no guarantee on
-    // them yet.
-    disk_consistent_lsn: AtomicLsn,
+    // The gap-free, crash-safe durability watermark is
+    // `remote_state.consistent_lsn` (advanced only after a successful
+    // gen-fenced UPSERT in `page_writer::flush`). Use that for any
+    // value that leaves the process (SK feedback, restart resume
+    // position, HTTP API "disk_consistent_lsn" field).
+    applied_lsn: AtomicLsn,
 
     // Parent timeline that this timeline was branched from, and the LSN
     // of the branch point.
@@ -1044,14 +1048,30 @@ impl Timeline {
         self.last_record_lsn.status_receiver()
     }
 
-    pub(crate) fn get_disk_consistent_lsn(&self) -> Lsn {
-        self.disk_consistent_lsn.load()
+    /// Eager ingest watermark. Advances when the walreceiver puts a
+    /// record into the PageWriter buffer, BEFORE the buffer is flushed
+    /// to YB. Use this for read-path waits (`wait_lsn`,
+    /// GetPage@LSN) so reads don't stall behind YB INSERT latency. Do
+    /// NOT report this as a durability claim — that's
+    /// `get_consistent_lsn`.
+    pub(crate) fn get_applied_lsn(&self) -> Lsn {
+        self.applied_lsn.load()
+    }
+
+    /// Durable, gap-free consistency watermark. Advances only after a
+    /// successful gen-fenced `advance_consistent_lsn` UPSERT in
+    /// `page_writer::flush` — i.e., every record with LSN ≤ this is in
+    /// `pageserver.pages` AND the `timeline_state` row has been
+    /// updated. Use this for SK feedback, restart resume position, and
+    /// the HTTP API `disk_consistent_lsn` field.
+    pub(crate) fn get_consistent_lsn(&self) -> Lsn {
+        self.remote_state.consistent_lsn.load()
     }
 
     /// Phase 5b: write the full timeline row into `pageserver.timeline_state`
-    /// once at creation time, so the per-flush `advance_disk_consistent_lsn`
+    /// once at creation time, so the per-flush `advance_consistent_lsn`
     /// UPDATE has a row to target. Also seeds `PageWriter`'s in-memory
-    /// `dc_lsn_watermark` from the just-written `disk_consistent_lsn` —
+    /// `consistent_lsn_watermark` from the just-written `consistent_lsn` —
     /// otherwise the first flush would redundantly UPDATE to a value
     /// already on disk.
     ///
@@ -1062,7 +1082,7 @@ impl Timeline {
         let Some(pw) = self.page_writer.as_ref() else {
             return Ok(());
         };
-        let dc_lsn = self.get_disk_consistent_lsn();
+        let dc_lsn = self.get_applied_lsn();
         let gc_cutoff = *self.get_applied_gc_cutoff_lsn();
         let ancestor_id = self.get_ancestor_timeline_id();
         let ancestor_lsn = if ancestor_id.is_some() {
@@ -1073,7 +1093,7 @@ impl Timeline {
         let row = crate::page_store::TimelineRow {
             tenant_id: self.tenant_id,
             timeline_id: self.timeline_id,
-            disk_consistent_lsn: dc_lsn,
+            consistent_lsn: dc_lsn,
             applied_gc_cutoff_lsn: gc_cutoff,
             ancestor_timeline_id: ancestor_id,
             ancestor_lsn,
@@ -1097,7 +1117,7 @@ impl Timeline {
             .insert_timeline_at_creation(&row)
             .await
             .context("insert_timeline_at_creation")?;
-        pw.seed_dc_lsn_watermark(dc_lsn);
+        pw.seed_consistent_lsn_watermark(dc_lsn);
         Ok(())
     }
 
@@ -1144,19 +1164,19 @@ impl Timeline {
         }
     }
 
-    /// remote_consistent_lsn from the perspective of the tenant's current generation,
-    /// not validated with control plane yet. In yb-mode the slot is
-    /// driven directly by `PageWriter` (no upload pipeline), so
-    /// projected and visible are the same single `AtomicLsn`.
+    /// `consistent_lsn` from the perspective of the tenant's current generation.
+    /// In yb-mode the slot is driven directly by `PageWriter` (no upload
+    /// pipeline), so projected and visible are the same single `AtomicLsn`.
+    /// Kept as `remote_consistent_lsn` in HTTP/wire field names for back-compat.
     pub(crate) fn get_remote_consistent_lsn_projected(&self) -> Option<Lsn> {
-        let lsn = self.remote_state.rc_lsn.load();
+        let lsn = self.remote_state.consistent_lsn.load();
         (lsn != Lsn(0)).then_some(lsn)
     }
 
-    /// remote_consistent_lsn which the tenant is guaranteed not to go backward from.
+    /// `consistent_lsn` which the tenant is guaranteed not to go backward from.
     /// See [`Self::get_remote_consistent_lsn_projected`].
     pub(crate) fn get_remote_consistent_lsn_visible(&self) -> Option<Lsn> {
-        let lsn = self.remote_state.rc_lsn.load();
+        let lsn = self.remote_state.consistent_lsn.load();
         (lsn != Lsn(0)).then_some(lsn)
     }
 
@@ -1274,10 +1294,11 @@ impl Timeline {
                     Timeout => {
                         let walreceiver_status = self.walreceiver_status();
                         Err(WaitLsnError::Timeout(format!(
-                            "Timed out while waiting for WAL record at LSN {} to arrive, last_record_lsn {} disk consistent LSN={}, WalReceiver status: {}",
+                            "Timed out while waiting for WAL record at LSN {} to arrive, last_record_lsn {} applied_lsn={} consistent_lsn={}, WalReceiver status: {}",
                             lsn,
                             self.get_last_record_lsn(),
-                            self.get_disk_consistent_lsn(),
+                            self.get_applied_lsn(),
+                            self.get_consistent_lsn(),
                             walreceiver_status,
                         )))
                     }
@@ -1991,18 +2012,27 @@ impl Timeline {
                 walredo_mgr,
                 walreceiver: Mutex::new(None),
 
-                remote_state: Arc::new(remote_state::TimelineRemoteState::new()),
+                remote_state: {
+                    // Seed the durable consistent_lsn from the persisted
+                    // timeline_state column so the very first walreceiver
+                    // feedback (and any HTTP query before a flush runs)
+                    // reports the correct durable LSN rather than 0.
+                    let state = Arc::new(remote_state::TimelineRemoteState::new());
+                    state.consistent_lsn.fetch_max(disk_consistent_lsn);
+                    state
+                },
 
                 page_writer: page_writer.clone(),
                 page_writer_flush_task: std::sync::Mutex::new(page_writer_flush_task),
                 image_materializer_task: std::sync::Mutex::new(image_materializer_task),
 
-                // initialize in-memory 'last_record_lsn' from 'disk_consistent_lsn'.
+                // initialize the eager in-memory 'last_record_lsn' from the
+                // durable 'consistent_lsn' seed loaded from `timeline_state`.
                 last_record_lsn: SeqWait::new(RecordLsn {
                     last: disk_consistent_lsn,
                     prev: metadata.prev_record_lsn().unwrap_or(Lsn(0)),
                 }),
-                disk_consistent_lsn: AtomicLsn::new(disk_consistent_lsn.0),
+                applied_lsn: AtomicLsn::new(disk_consistent_lsn.0),
 
                 ancestor_timeline: ancestor,
                 ancestor_lsn: metadata.ancestor_lsn(),
@@ -2998,10 +3028,11 @@ impl Timeline {
     }
 
     /* BEGIN_HADRON */
-    /// yb-mode: there are no image layers; treat disk_consistent_lsn
-    /// as image-consistent.
+    /// yb-mode: there are no image layers; treat applied_lsn as
+    /// image-consistent so basebackup/compute reads don't stall behind
+    /// the slower durable watermark.
     pub(crate) async fn compute_image_consistent_lsn(&self) -> anyhow::Result<Lsn> {
-        Ok(self.get_disk_consistent_lsn())
+        Ok(self.get_applied_lsn())
     }
     /* END_HADRON */
 }
@@ -3084,13 +3115,15 @@ impl TimelineWriter<'_> {
         if !triples.is_empty() {
             page_writer.put(&triples).await?;
         }
-        // Advance disk_consistent_lsn so callers that depend on it
-        // (bootstrap finalisation, basebackup gate) see the row-store
-        // writes as durable. PageWriter's flush is periodic; treating
-        // the in-memory buffer as "durable enough" matches the
-        // layer-stack's behaviour where data is visible to
-        // disk_consistent_lsn before reaching remote storage.
-        self.tl.disk_consistent_lsn.fetch_max(batch_max_lsn);
+        // Advance applied_lsn — the in-memory ingest watermark
+        // GetPage@LSN waits on. This advances per put_batch so reads
+        // don't stall behind YB INSERT latency. NOT a durability
+        // claim; the durable watermark is `consistent_lsn`, advanced
+        // only after a successful gen-fenced UPSERT in
+        // `page_writer::flush`. Outward-facing reports (SK feedback,
+        // restart resume, HTTP API durability field) must read
+        // `Timeline::get_consistent_lsn()`, not this.
+        self.tl.applied_lsn.fetch_max(batch_max_lsn);
         // yb-mode: the legacy TimelineWriterState (prev_lsn, max_lsn,
         // open_layer) has no writers anymore — those fields fed the
         // deleted roll-layer trigger heuristic.

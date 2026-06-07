@@ -193,7 +193,7 @@ fn synth_timeline_metadata_from_row(
         v => anyhow::bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
     };
     Ok(TimelineMetadata::new(
-        row.disk_consistent_lsn,
+        row.consistent_lsn,
         // Persisted on flush; see PageWriter::take_prev_at_or_below.
         // NULL falls through as None and the walreceiver re-derives
         // prev from the SK stream.
@@ -204,7 +204,7 @@ fn synth_timeline_metadata_from_row(
         // initdb_lsn falls back to disk_consistent_lsn — only consulted
         // by the bootstrap-time image-layer optimisation (dead code in
         // yb-mode) and consumption metrics.
-        row.initdb_lsn.unwrap_or(row.disk_consistent_lsn),
+        row.initdb_lsn.unwrap_or(row.consistent_lsn),
         pg_major,
     ))
 }
@@ -715,23 +715,24 @@ impl TenantShard {
             None, // rel_size_migrated_at — always None in yb-mode
             ctx,
         )?;
-        let disk_consistent_lsn = timeline.get_disk_consistent_lsn();
+        let consistent_lsn_seed = timeline.get_applied_lsn();
 
-        if !disk_consistent_lsn.is_valid() {
-            anyhow::bail!("Timeline {tenant_id}/{timeline_id} has invalid disk_consistent_lsn");
+        if !consistent_lsn_seed.is_valid() {
+            anyhow::bail!("Timeline {tenant_id}/{timeline_id} has invalid consistent_lsn seed");
         }
 
         assert_eq!(
-            disk_consistent_lsn,
+            consistent_lsn_seed,
             metadata.disk_consistent_lsn(),
-            "these are used interchangeably"
+            "applied_lsn is seeded from the persisted consistent_lsn at construction"
         );
 
         // yb-mode: no upload queue to init. The PageWriter takes the
-        // `remote_state.rc_lsn` slot directly so flush success bumps
-        // the safekeeper-truncation bound.
+        // `remote_state.consistent_lsn` slot directly so flush success
+        // advances the durable, gap-free watermark that feeds SK
+        // feedback and restart-resume.
         if let Some(pw) = timeline.page_writer.as_ref() {
-            pw.set_remote_consistent_lsn_slot(timeline.remote_state.rc_lsn.clone());
+            pw.set_consistent_lsn_slot(timeline.remote_state.consistent_lsn.clone());
         }
 
         // Eager push of the controller-issued generation to YB. The
@@ -1023,7 +1024,7 @@ impl TenantShard {
         for row in rows {
             info!(
                 timeline_id = %row.timeline_id,
-                disk_consistent_lsn = %row.disk_consistent_lsn,
+                consistent_lsn = %row.consistent_lsn,
                 prev_record_lsn = ?row.prev_record_lsn,
                 applied_gc_cutoff_lsn = %row.applied_gc_cutoff_lsn,
                 ancestor_lsn = ?row.ancestor_lsn,

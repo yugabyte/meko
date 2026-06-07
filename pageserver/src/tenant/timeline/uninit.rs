@@ -107,19 +107,19 @@ impl<'t> UninitializedTimeline<'t> {
             ));
         }
 
-        // Check that the caller initialized disk_consistent_lsn
+        // Check that the caller initialized the timeline LSN seed.
         let new_disk_consistent_lsn = self
             .raw_timeline
             .as_ref()
             .expect("checked above")
             .0
-            .get_disk_consistent_lsn();
+            .get_applied_lsn();
 
         if !new_disk_consistent_lsn.is_valid() {
             self.abort().await;
 
             return Err(anyhow::anyhow!(
-                "new timeline {tenant_shard_id}/{timeline_id} has invalid disk_consistent_lsn"
+                "new timeline {tenant_shard_id}/{timeline_id} has invalid consistent_lsn seed"
             ));
         }
 
@@ -128,7 +128,7 @@ impl<'t> UninitializedTimeline<'t> {
         // mutex AND before the flush loop spawns. Three reasons:
         // (a) holding a std::sync::Mutex across an await is a
         // deadlock hazard, so this must precede the lock; (b) the
-        // flush path's per-success `advance_disk_consistent_lsn`
+        // flush path's per-success `advance_consistent_lsn`
         // UPDATE bails if no row matches — the row must exist by
         // the time `maybe_spawn_flush_loop` returns; (c) failing
         // here aborts creation before the timeline becomes visible
@@ -142,16 +142,15 @@ impl<'t> UninitializedTimeline<'t> {
             .await
             .context("Phase 5b: write timeline row at creation")?;
 
-        // Hand the upload-queue's `visible_remote_consistent_lsn` slot
-        // to PageWriter so its flush success path can advance the
-        // safekeeper-truncation bound directly. The upload queue is
-        // The PageWriter shares the timeline's `remote_state.rc_lsn`
-        // slot — bumping it on flush is what feeds the safekeeper's
-        // `remote_consistent_lsn` via walreceiver feedback.
+        // Hand the timeline's `remote_state.consistent_lsn` slot to
+        // PageWriter so its flush success path can advance it directly.
+        // That slot feeds Timeline::get_consistent_lsn(), which the
+        // walreceiver uses for the SK `remote_consistent_lsn` field and
+        // for START_REPLICATION resume position.
         {
             let tl = &self.raw_timeline.as_ref().expect("checked above").0;
             if let Some(pw) = tl.page_writer.as_ref() {
-                pw.set_remote_consistent_lsn_slot(tl.remote_state.rc_lsn.clone());
+                pw.set_consistent_lsn_slot(tl.remote_state.consistent_lsn.clone());
             }
         }
 

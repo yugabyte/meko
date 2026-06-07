@@ -157,7 +157,7 @@ pub struct PageWriter {
     tenant_id: TenantId,
     timeline_id: TimelineId,
     /// Storage-controller-assigned generation for this attach. Carried
-    /// through to `advance_disk_consistent_lsn` so the persisting UPDATE
+    /// through to `advance_consistent_lsn` so the persisting UPDATE
     /// can fail-fast if a higher generation has taken over.
     generation: utils::generation::Generation,
     compute_page_store: Arc<PageStore>,
@@ -192,19 +192,19 @@ pub struct PageWriter {
     delta_counts: DashMap<Bytes, DeltaTally>,
     materializer: Option<MaterializerHandle>,
     /// Highest LSN successfully reported as durable to
-    /// `pageserver.timeline_state.disk_consistent_lsn`. Advances only
+    /// `pageserver.timeline_state.consistent_lsn`. Advances only
     /// after `try_write_rows` succeeds AND the subsequent
-    /// `advance_disk_consistent_lsn` succeeds. Initialised to 0 at
+    /// `advance_consistent_lsn` succeeds. Initialised to 0 at
     /// construction; attach seeds it from the persisted row.
-    dc_lsn_watermark: std::sync::atomic::AtomicU64,
+    consistent_lsn_watermark: std::sync::atomic::AtomicU64,
     /// Highest LSN actually durabilised in `pageserver.pages` /
     /// `slru_pages` / `meta`. Advances on every successful flush,
     /// even when the throttle skips the YB UPDATE on
-    /// `disk_consistent_lsn`. Used by `force_upsert_dc_lsn_if_advanced`
+    /// `disk_consistent_lsn`. Used by `force_upsert_consistent_lsn_if_advanced`
     /// at shutdown to persist any tail the throttle deferred.
-    dc_lsn_observed: std::sync::atomic::AtomicU64,
+    consistent_lsn_observed: std::sync::atomic::AtomicU64,
     /// Wall-clock timestamp of the most recent successful
-    /// `advance_disk_consistent_lsn`. Used to throttle the YB UPDATE
+    /// `advance_consistent_lsn`. Used to throttle the YB UPDATE
     /// to one per `policy.max_age` window even if the size-based
     /// flush trigger fires faster than that (a burst of rel-page
     /// writes can flush every few hundred ms; persisting the row
@@ -216,10 +216,10 @@ pub struct PageWriter {
     /// contention is nil (only the flusher writes it) and `Instant`
     /// isn't atomically representable. `None` means "no upsert yet";
     /// the first flush always writes regardless of elapsed time.
-    last_dc_lsn_upsert_at: std::sync::Mutex<Option<Instant>>,
+    last_consistent_lsn_upsert_at: std::sync::Mutex<Option<Instant>>,
     /// `(last_record_lsn → prev_record_lsn)` for WAL records the
     /// walreceiver has finish_write'd but PageWriter hasn't yet
-    /// persisted via `advance_disk_consistent_lsn`. Populated by
+    /// persisted via `advance_consistent_lsn`. Populated by
     /// `Timeline::finish_write` (which knows both values atomically
     /// from `RecordLsn::cnt_advance`). The flush path looks up the
     /// prev for the max flushed lsn and prunes entries ≤ that lsn
@@ -235,13 +235,13 @@ pub struct PageWriter {
     /// — the value the walreceiver loop forwards to the safekeeper as
     /// `remote_consistent_lsn` in `PageserverFeedback`, which drives
     /// safekeeper WAL truncation. Bumped on every successful
-    /// generation-gated `advance_disk_consistent_lsn`. Set lazily
+    /// generation-gated `advance_consistent_lsn`. Set lazily
     /// after `init_upload_queue` runs (PageWriter is constructed
     /// before the upload queue is initialized), via
-    /// [`Self::set_remote_consistent_lsn_slot`]. If unset at flush
+    /// [`Self::set_consistent_lsn_slot`]. If unset at flush
     /// time (smoke tests, init-race), the publish is a no-op; the
     /// next flush retries.
-    remote_consistent_lsn_slot: std::sync::OnceLock<Arc<utils::lsn::AtomicLsn>>,
+    consistent_lsn_slot: std::sync::OnceLock<Arc<utils::lsn::AtomicLsn>>,
     /// Pulsed by `notify_waiters()` at the end of every successful
     /// `flush()`. `put()` blocks on this when the buffer exceeds
     /// `policy.backpressure_bytes`.
@@ -311,11 +311,11 @@ impl PageWriter {
             rows_written: AtomicU64::new(0),
             delta_counts: DashMap::new(),
             materializer: None,
-            dc_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
-            dc_lsn_observed: std::sync::atomic::AtomicU64::new(0),
-            last_dc_lsn_upsert_at: std::sync::Mutex::new(None),
+            consistent_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
+            consistent_lsn_observed: std::sync::atomic::AtomicU64::new(0),
+            last_consistent_lsn_upsert_at: std::sync::Mutex::new(None),
             record_lsn_history: std::sync::Mutex::new(std::collections::BTreeMap::new()),
-            remote_consistent_lsn_slot: std::sync::OnceLock::new(),
+            consistent_lsn_slot: std::sync::OnceLock::new(),
             flush_completed: tokio::sync::Notify::new(),
             backpressure_waits: std::sync::atomic::AtomicU64::new(0),
             flush_horizon_lsn: std::sync::atomic::AtomicU64::new(0),
@@ -328,12 +328,12 @@ impl PageWriter {
     /// already in YB (a no-op write but wasted round-trip). Idempotent
     /// — uses `fetch_max` so a later flush that already advanced the
     /// watermark isn't rolled back.
-    pub fn seed_dc_lsn_watermark(&self, lsn: utils::lsn::Lsn) {
+    pub fn seed_consistent_lsn_watermark(&self, lsn: utils::lsn::Lsn) {
         use std::sync::atomic::Ordering::Relaxed;
-        let prev = self.dc_lsn_watermark.load(Relaxed);
+        let prev = self.consistent_lsn_watermark.load(Relaxed);
         if lsn.0 > prev {
             // Single writer at attach; no race with the flush loop yet.
-            self.dc_lsn_watermark.store(lsn.0, Relaxed);
+            self.consistent_lsn_watermark.store(lsn.0, Relaxed);
         }
     }
 
@@ -349,13 +349,13 @@ impl PageWriter {
     /// path throttles the YB UPDATE on the timeline row to one per
     /// `policy.max_age`; on a clean shutdown we may have skipped the
     /// last few flushes' worth of dc_lsn advances. Catch them up by
-    /// upserting `dc_lsn_observed` if it exceeds the watermark.
+    /// upserting `consistent_lsn_observed` if it exceeds the watermark.
     /// No-op if the watermark is already at or past the observed
     /// value.
-    pub async fn force_upsert_dc_lsn_if_advanced(&self) -> Result<()> {
+    pub async fn force_upsert_consistent_lsn_if_advanced(&self) -> Result<()> {
         use std::sync::atomic::Ordering::Relaxed;
-        let observed = self.dc_lsn_observed.load(Relaxed);
-        let watermark = self.dc_lsn_watermark.load(Relaxed);
+        let observed = self.consistent_lsn_observed.load(Relaxed);
+        let watermark = self.consistent_lsn_watermark.load(Relaxed);
         if observed <= watermark {
             return Ok(());
         }
@@ -366,7 +366,7 @@ impl PageWriter {
         let prev = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
         match self
             .fpu_page_store
-            .advance_disk_consistent_lsn(
+            .advance_consistent_lsn(
                 self.tenant_id,
                 self.timeline_id,
                 self.generation,
@@ -375,12 +375,12 @@ impl PageWriter {
             )
             .await?
         {
-            crate::page_store::AdvanceDcLsnOutcome::Updated => {
-                self.dc_lsn_watermark.store(observed, Relaxed);
-                *self.last_dc_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
-                self.publish_remote_consistent_lsn(lsn);
+            crate::page_store::AdvanceConsistentLsnOutcome::Updated => {
+                self.consistent_lsn_watermark.store(observed, Relaxed);
+                *self.last_consistent_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
+                self.publish_consistent_lsn(lsn);
             }
-            crate::page_store::AdvanceDcLsnOutcome::StaleGeneration { live_generation } => {
+            crate::page_store::AdvanceConsistentLsnOutcome::StaleGeneration { live_generation } => {
                 // Shutdown path: another PS owns the timeline. Don't
                 // trigger a global shutdown here (we're already in
                 // one), but surface the fact so the operator can see
@@ -390,7 +390,7 @@ impl PageWriter {
                     timeline_id = %self.timeline_id,
                     our_generation = ?self.generation,
                     live_generation,
-                    "force_upsert_dc_lsn_if_advanced fenced by newer generation — \
+                    "force_upsert_consistent_lsn_if_advanced fenced by newer generation — \
                      leaving dc_lsn at previous watermark"
                 );
             }
@@ -402,17 +402,17 @@ impl PageWriter {
     /// the safekeeper. Called once after `RemoteTimelineClient::init_upload_queue`
     /// materialises the slot. Safe to call concurrently; idempotent —
     /// the OnceLock rejects a second `set` silently.
-    pub fn set_remote_consistent_lsn_slot(&self, slot: Arc<utils::lsn::AtomicLsn>) {
-        let _ = self.remote_consistent_lsn_slot.set(slot);
+    pub fn set_consistent_lsn_slot(&self, slot: Arc<utils::lsn::AtomicLsn>) {
+        let _ = self.consistent_lsn_slot.set(slot);
     }
 
     /// Bump the safekeeper-truncation slot. Called from the gen-gated
     /// flush success path; the value is already durable in YB
-    /// (`pageserver.timeline_state.disk_consistent_lsn`) so the
+    /// (`pageserver.timeline_state.consistent_lsn`) so the
     /// advertise can't lie. No-op if the slot hasn't been installed
     /// yet (init race / smoke tests).
-    fn publish_remote_consistent_lsn(&self, lsn: utils::lsn::Lsn) {
-        if let Some(slot) = self.remote_consistent_lsn_slot.get() {
+    fn publish_consistent_lsn(&self, lsn: utils::lsn::Lsn) {
+        if let Some(slot) = self.consistent_lsn_slot.get() {
             slot.fetch_max(lsn);
         }
     }
@@ -1086,14 +1086,14 @@ impl PageWriter {
             // dc_lsn hasn't moved.
             if let Some(new_lsn) = max_flushed_lsn {
                 use std::sync::atomic::Ordering::Relaxed;
-                // Always advance `dc_lsn_observed` — that's the
+                // Always advance `consistent_lsn_observed` — that's the
                 // "max durable in YB pages/slru/meta" tracker. The
                 // throttle below only gates the YB UPDATE on the
                 // timeline row, not the underlying durability.
-                self.dc_lsn_observed.fetch_max(new_lsn, Relaxed);
-                let prev = self.dc_lsn_watermark.load(Relaxed);
+                self.consistent_lsn_observed.fetch_max(new_lsn, Relaxed);
+                let prev = self.consistent_lsn_watermark.load(Relaxed);
                 let elapsed_ok = {
-                    let guard = self.last_dc_lsn_upsert_at.lock().unwrap();
+                    let guard = self.last_consistent_lsn_upsert_at.lock().unwrap();
                     match *guard {
                         None => true, // first upsert always goes through
                         Some(prev_at) => prev_at.elapsed() >= self.policy.max_age,
@@ -1101,11 +1101,11 @@ impl PageWriter {
                 };
                 if new_lsn > prev && elapsed_ok {
                     let lsn = utils::lsn::Lsn(new_lsn);
-                    // Best-effort pairing — see force_upsert_dc_lsn_if_advanced.
+                    // Best-effort pairing — see force_upsert_consistent_lsn_if_advanced.
                     let prev_record_lsn = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
                     match self
                         .fpu_page_store
-                        .advance_disk_consistent_lsn(
+                        .advance_consistent_lsn(
                             self.tenant_id,
                             self.timeline_id,
                             self.generation,
@@ -1114,9 +1114,9 @@ impl PageWriter {
                         )
                         .await
                     {
-                        Ok(crate::page_store::AdvanceDcLsnOutcome::Updated) => {
-                            self.dc_lsn_watermark.store(new_lsn, Relaxed);
-                            *self.last_dc_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
+                        Ok(crate::page_store::AdvanceConsistentLsnOutcome::Updated) => {
+                            self.consistent_lsn_watermark.store(new_lsn, Relaxed);
+                            *self.last_consistent_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
                             // Publish the just-advanced LSN as the
                             // safekeeper-truncation bound. The walreceiver
                             // loop forwards this slot to the safekeeper
@@ -1125,9 +1125,9 @@ impl PageWriter {
                             // The gen-fenced UPDATE above is the
                             // durability commit point — this publish
                             // only echoes a fact that's already in YB.
-                            self.publish_remote_consistent_lsn(lsn);
+                            self.publish_consistent_lsn(lsn);
                         }
-                        Ok(crate::page_store::AdvanceDcLsnOutcome::StaleGeneration {
+                        Ok(crate::page_store::AdvanceConsistentLsnOutcome::StaleGeneration {
                             live_generation,
                         }) => {
                             // Fatal: a higher-generation pageserver has
@@ -1156,7 +1156,7 @@ impl PageWriter {
                                 tenant_id = %self.tenant_id,
                                 timeline_id = %self.timeline_id,
                                 new_lsn = %lsn,
-                                "advance_disk_consistent_lsn failed: {e:#}"
+                                "advance_consistent_lsn failed: {e:#}"
                             );
                         }
                     }
@@ -1483,7 +1483,7 @@ impl PageWriter {
                 // safe for crash recovery (walreceiver re-applies the
                 // gap, idempotent INSERTs) but wasteful on restart
                 // and noisy in logs.
-                if let Err(e) = w.force_upsert_dc_lsn_if_advanced().await {
+                if let Err(e) = w.force_upsert_consistent_lsn_if_advanced().await {
                     crate::metrics::CORRECTNESS_ERRORS
                         .with_label_values(&["pagewriter_flush"])
                         .inc();
@@ -2836,13 +2836,13 @@ mod tests {
     /// Helper: insert a `timeline_state` row with `current_generation = 1`
     /// matching the generation used by the `writer` helper. Required
     /// for any test that wants `PageWriter::flush` to land its
-    /// generation-gated `advance_disk_consistent_lsn` UPDATE.
+    /// generation-gated `advance_consistent_lsn` UPDATE.
     async fn seed_timeline_row(store: &PageStore, tenant: TenantId, timeline: TimelineId) {
         store
             .insert_timeline_at_creation(&crate::page_store::TimelineRow {
                 tenant_id: tenant,
                 timeline_id: timeline,
-                disk_consistent_lsn: Lsn(0),
+                consistent_lsn: Lsn(0),
                 applied_gc_cutoff_lsn: Lsn(0),
                 ancestor_timeline_id: None,
                 ancestor_lsn: None,
@@ -2860,9 +2860,54 @@ mod tests {
             .unwrap();
     }
 
-    /// `PageWriter::flush` advances the `visible_remote_consistent_lsn`
-    /// slot installed via `set_remote_consistent_lsn_slot` whenever
-    /// the generation-gated `advance_disk_consistent_lsn` UPDATE
+    /// `consistent_lsn` slot must stay at its seed value through any
+    /// number of `put()` calls. It only advances inside the flush
+    /// success path, AFTER `try_write_rows` has landed the rows in YB
+    /// AND the gen-fenced `advance_consistent_lsn` UPSERT has updated
+    /// `timeline_state`. Wiring a buffer-write to the slot would
+    /// reintroduce the gap-on-crash bug (`findings-ps-wal-replay-
+    /// restart-bug-2026-06-04`): SK feedback / restart-resume would
+    /// see an LSN whose rows aren't actually in `pageserver.pages`.
+    #[tokio::test]
+    async fn put_alone_does_not_advance_consistent_lsn_slot() {
+        let (store, schema) = make_store("clsn_slot_no_advance_on_put").await;
+        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t, tl).await;
+
+        let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
+        w.set_consistent_lsn_slot(slot.clone());
+        assert_eq!(slot.load(), Lsn(0), "slot starts at the constructor seed");
+
+        // Three puts at ascending LSNs — exactly what walreceiver does
+        // between flushes. The slot must NOT move; only the in-RAM
+        // buffer is being touched.
+        w.put(&[(k(1), Lsn(0x100), image())]).await.unwrap();
+        w.put(&[(k(2), Lsn(0x200), image())]).await.unwrap();
+        w.put(&[(k(3), Lsn(0x300), image())]).await.unwrap();
+        assert_eq!(
+            slot.load(),
+            Lsn(0),
+            "consistent_lsn slot must not advance on put alone"
+        );
+
+        // After a real flush, the slot reaches the max successfully
+        // flushed LSN. That contract is exercised by
+        // `flush_publishes_remote_consistent_lsn`; the cross-check
+        // here is just that put→flush ordering is the only path that
+        // can move the slot.
+        w.flush().await.unwrap();
+        assert_eq!(
+            slot.load(),
+            Lsn(0x300),
+            "slot advances exactly once: in the flush success path"
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `PageWriter::flush` advances the `consistent_lsn`
+    /// slot installed via `set_consistent_lsn_slot` whenever
+    /// the generation-gated `advance_consistent_lsn` UPDATE
     /// succeeds. Walreceiver feedback reads that slot to drive
     /// safekeeper WAL truncation — regression on the publish path
     /// would silently freeze WAL retention.
@@ -2873,7 +2918,7 @@ mod tests {
         seed_timeline_row(&store, t, tl).await;
 
         let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
-        w.set_remote_consistent_lsn_slot(slot.clone());
+        w.set_consistent_lsn_slot(slot.clone());
 
         // Slot is zero before any flush.
         assert_eq!(slot.load(), Lsn(0));
@@ -2971,7 +3016,7 @@ mod tests {
     }
 
     /// End-to-end: walreceiver-style flow notes record_lsn after a
-    /// put + flush, the throttled `advance_disk_consistent_lsn` runs,
+    /// put + flush, the throttled `advance_consistent_lsn` runs,
     /// and the persisted `timeline_state.prev_record_lsn` reflects
     /// the noted prev. Restart correctness depends on this column
     /// being non-NULL; the previous shape never wrote it.
@@ -2989,7 +3034,7 @@ mod tests {
         w.flush().await.unwrap();
 
         let row = store.get_timeline(t, tl).await.unwrap().unwrap();
-        assert_eq!(row.disk_consistent_lsn, Lsn(42));
+        assert_eq!(row.consistent_lsn, Lsn(42));
         assert_eq!(
             row.prev_record_lsn,
             Some(Lsn(40)),
@@ -3014,14 +3059,14 @@ mod tests {
         w.flush().await.unwrap();
 
         let row = store.get_timeline(t, tl).await.unwrap().unwrap();
-        assert_eq!(row.disk_consistent_lsn, Lsn(42));
+        assert_eq!(row.consistent_lsn, Lsn(42));
         assert_eq!(row.prev_record_lsn, None);
 
         drop_schema(&store, &schema).await;
     }
 
     /// Once a non-NULL `prev_record_lsn` has been persisted, a
-    /// subsequent throttled `advance_disk_consistent_lsn` whose
+    /// subsequent throttled `advance_consistent_lsn` whose
     /// caller couldn't resolve a fresh pairing must NOT clobber the
     /// column with NULL. The SQL uses `COALESCE($5, prev_record_lsn)`
     /// to preserve the prior value in that case.
@@ -3034,7 +3079,7 @@ mod tests {
 
         // First advance with a real prev.
         store
-            .advance_disk_consistent_lsn(t, tl, Generation::new(1), Lsn(0x200), Some(Lsn(0x180)))
+            .advance_consistent_lsn(t, tl, Generation::new(1), Lsn(0x200), Some(Lsn(0x180)))
             .await
             .unwrap();
         let row = store.get_timeline(t, tl).await.unwrap().unwrap();
@@ -3043,11 +3088,11 @@ mod tests {
         // Second advance with no pairing (None). dc_lsn moves forward
         // but prev_record_lsn must retain its prior value.
         store
-            .advance_disk_consistent_lsn(t, tl, Generation::new(1), Lsn(0x300), None)
+            .advance_consistent_lsn(t, tl, Generation::new(1), Lsn(0x300), None)
             .await
             .unwrap();
         let row = store.get_timeline(t, tl).await.unwrap().unwrap();
-        assert_eq!(row.disk_consistent_lsn, Lsn(0x300));
+        assert_eq!(row.consistent_lsn, Lsn(0x300));
         assert_eq!(
             row.prev_record_lsn,
             Some(Lsn(0x180)),

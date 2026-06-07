@@ -6,11 +6,16 @@
 //! the RTC field + module.
 //!
 //! After migration this owns:
-//! - **`rc_lsn`** — the `Arc<AtomicLsn>` slot that
-//!   `walreceiver_connection::PageserverFeedback` exposes to the
-//!   safekeeper as `remote_consistent_lsn`. `PageWriter` installs
-//!   this slot via `set_remote_consistent_lsn_slot` and bumps it
-//!   on every successful flush so the SK can truncate WAL.
+//! - **`consistent_lsn`** — the `Arc<AtomicLsn>` slot exposed as
+//!   `Timeline::get_consistent_lsn()`. `PageWriter` installs it via
+//!   `set_consistent_lsn_slot` and bumps it on every successful
+//!   gen-fenced UPSERT, so every record with LSN ≤ this is durably
+//!   in `pageserver.pages` AND the `timeline_state` row has been
+//!   updated. Used for SK feedback (`remote_consistent_lsn` wire
+//!   field), restart resume position, and the HTTP API
+//!   `disk_consistent_lsn` field. Seeded at attach from the durable
+//!   `timeline_state.consistent_lsn` column so it's correct from the
+//!   first feedback.
 //! - **`archived`** — set by the storage_ctl
 //!   "timeline_archival" RPC. While set, the periodic flusher
 //!   skips its YB INSERT (the timeline is offline; no new WAL is
@@ -31,10 +36,10 @@ use std::sync::atomic::AtomicBool;
 use utils::lsn::AtomicLsn;
 
 pub struct TimelineRemoteState {
-    /// `remote_consistent_lsn` slot. `Arc` so `PageWriter` can hold a
-    /// clone and bump it without touching this struct on the hot
-    /// flush path.
-    pub rc_lsn: std::sync::Arc<AtomicLsn>,
+    /// Durable consistency watermark. `Arc` so `PageWriter` can hold a
+    /// clone and bump it without touching this struct on the hot flush
+    /// path. See module-level doc for the contract.
+    pub consistent_lsn: std::sync::Arc<AtomicLsn>,
     pub archived: AtomicBool,
     pub invisible: AtomicBool,
     pub deleting: AtomicBool,
@@ -43,7 +48,7 @@ pub struct TimelineRemoteState {
 impl TimelineRemoteState {
     pub fn new() -> Self {
         Self {
-            rc_lsn: std::sync::Arc::new(AtomicLsn::new(0)),
+            consistent_lsn: std::sync::Arc::new(AtomicLsn::new(0)),
             archived: AtomicBool::new(false),
             invisible: AtomicBool::new(false),
             deleting: AtomicBool::new(false),
