@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import re
+import socket
 import sys
 import urllib.request
 import urllib.error
@@ -36,6 +37,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 HTTP_TIMEOUT = 2.0  # seconds; the cluster is local, keep the UI snappy
+
+
+def tcp_alive(host, port, timeout=0.5):
+    """True if a TCP connection to host:port succeeds."""
+    if not port:
+        return False
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def http_get_json(url):
@@ -58,6 +70,33 @@ def http_get_json(url):
 # --------------------------------------------------------------------------
 # Discovery: learn service addresses from the .neon repo dir.
 # --------------------------------------------------------------------------
+
+def _norm_id(v):
+    """Strip hyphens so tenant/timeline ids match API + config formats."""
+    return (v or "").replace("-", "").lower()
+
+
+def parse_branch_mappings(cfg_text):
+    """Parse neon_local branch aliases from [branch_name_mappings] in .neon/config.
+
+    neon_local stores human-readable names (e.g. 'main') mapped to
+    (tenant_id, timeline_id) pairs. The pageserver/safekeeper APIs only
+    expose the hex timeline ids — branch names live here on disk.
+    """
+    out = {}
+    m = re.search(r'\[branch_name_mappings\](.*?)(?=\n\[|\Z)', cfg_text, re.DOTALL)
+    if not m:
+        return out
+    block = m.group(1)
+    for branch, body in re.findall(
+            r'^([A-Za-z0-9_-]+)\s*=\s*(\[[\s\S]*?\])\s*$', block, re.MULTILINE):
+        for tenant, timeline in re.findall(
+                r'\[\s*"?([0-9a-fA-F-]+)"?\s*,\s*"?([0-9a-fA-F-]+)"?\s*\]',
+                body):
+            key = f"{_norm_id(tenant)}/{_norm_id(timeline)}"
+            out[key] = branch
+    return out
+
 
 def discover(repo_dir):
     """Inspect the .neon repo dir and return a topology dict."""
@@ -132,6 +171,8 @@ def discover(repo_dir):
             except json.JSONDecodeError:
                 continue
 
+    branch_names = parse_branch_mappings(cfg_text)
+
     return {
         "repo_dir": os.path.abspath(repo_dir),
         "storage_controller": sc_url,
@@ -139,6 +180,7 @@ def discover(repo_dir):
         "safekeepers": safekeepers,
         "endpoint_storage": es_url,
         "endpoints": endpoints,
+        "branch_names": branch_names,
     }
 
 
@@ -185,11 +227,22 @@ def collect(repo_dir):
         services.append({"name": f"safekeeper-{sk['id']}", "kind": "safekeeper",
                          "url": sk["http"], "up": err is None, "detail": err,
                          "info": st})
+        # The list endpoint only returns {tenant_id, timeline_id}; the LSNs
+        # (flush_lsn, commit_lsn, remote_consistent_lsn, ...) live on the
+        # per-timeline detail endpoint, so fetch that for each entry.
         tl = []
         if err is None:
-            tl, _ = http_get_json(f"{sk['http']}/v1/tenant/timeline")
+            listing, _ = http_get_json(f"{sk['http']}/v1/tenant/timeline")
+            for entry in (listing or []):
+                tid = entry.get("tenant_id")
+                tlid = entry.get("timeline_id")
+                detail = None
+                if tid and tlid:
+                    detail, _ = http_get_json(
+                        f"{sk['http']}/v1/tenant/{tid}/timeline/{tlid}")
+                tl.append(detail if isinstance(detail, dict) else entry)
         safekeepers.append({"id": sk["id"], "url": sk["http"], "up": err is None,
-                            "timelines": tl or []})
+                            "timelines": tl})
 
     # Endpoint storage.
     es = topo["endpoint_storage"]
@@ -197,17 +250,21 @@ def collect(repo_dir):
     services.append({"name": "endpoint-storage", "kind": "endpoint_storage",
                      "url": es, "up": es_err is None, "detail": es_err})
 
-    # Compute endpoints: ping each one's external http port /status.
+    # Compute endpoints. compute_ctl's external HTTP /status requires a JWT,
+    # so a plain GET 400s; mirror neon_local's own status() and treat the
+    # endpoint as up when its Postgres pg_port accepts a TCP connection.
+    # /metrics on the external http port is unauthenticated, so use it as a
+    # secondary "compute_ctl is alive" signal.
     endpoints = []
     for ep in topo["endpoints"]:
-        port = ep.get("external_http_port")
-        running = False
-        cdetail = None
-        if port:
-            info, cerr = http_get_json(f"http://127.0.0.1:{port}/status")
-            running = cerr is None
-            cdetail = cerr if cerr else (info.get("status") if isinstance(info, dict) else None)
-        endpoints.append({**ep, "running": running, "compute_detail": cdetail})
+        pg_port = ep.get("pg_port")
+        http_port = ep.get("external_http_port")
+        running = tcp_alive("127.0.0.1", pg_port)
+        ctl_up = tcp_alive("127.0.0.1", http_port)
+        cdetail = "serving" if running else ("compute_ctl up, postgres not accepting"
+                                             if ctl_up else "down")
+        endpoints.append({**ep, "running": running, "compute_ctl_up": ctl_up,
+                          "compute_detail": cdetail})
 
     return {
         "topology": topo,
@@ -322,6 +379,21 @@ function pick(o, keys) {
   return undefined;
 }
 
+function normId(v) {
+  return String(v == null ? "" : v).replace(/-/g, "").toLowerCase();
+}
+
+function branchName(branchNames, tenantId, timelineId) {
+  if (!branchNames) return null;
+  const key = normId(tenantId) + "/" + normId(timelineId);
+  return branchNames[key] || null;
+}
+
+function branchCell(branchNames, tenantId, timelineId) {
+  const name = branchName(branchNames, tenantId, timelineId);
+  return name ? `<span class="pill ok">${esc(name)}</span>` : mono('-');
+}
+
 function rawDetails(label, obj) {
   return `<details><summary>${esc(label)}</summary><pre>${esc(JSON.stringify(obj, null, 2))}</pre></details>`;
 }
@@ -353,17 +425,29 @@ function renderNodes(nodes, err) {
   $("nodes").innerHTML = table(["id","http","libpq","availability","scheduling"], rows);
 }
 
+function isZeroLsn(v) {
+  return v === "0/0" || v === 0;
+}
+
+function lsnCell(v, stuck) {
+  if (v === undefined || v === null || v === "") return mono('-');
+  const cls = isZeroLsn(v) ? "pill bad" : (stuck ? "pill warn" : "");
+  const inner = esc(v);
+  return cls ? `<span class="${cls}" style="font-family:var(--mono);font-size:12px">${inner}</span>` : mono(v);
+}
+
 function lsnCols(tl) {
-  // Common LSN fields on a pageserver timeline detail.
   return {
     last_record_lsn: pick(tl,['last_record_lsn']),
     disk_consistent_lsn: pick(tl,['disk_consistent_lsn']),
     remote_consistent_lsn: pick(tl,['remote_consistent_lsn']),
+    initdb_lsn: pick(tl,['initdb_lsn']),
     ancestor_lsn: pick(tl,['ancestor_lsn']),
+    walreceiver_status: pick(tl,['walreceiver_status']),
   };
 }
 
-function renderTenants(tenants) {
+function renderTenants(tenants, branchNames) {
   if (!tenants.length) { $("tenants").innerHTML = `<div class="empty">no tenants attached</div>`; return; }
   $("tenants").innerHTML = tenants.map(entry => {
     const t = entry.tenant;
@@ -372,12 +456,20 @@ function renderTenants(tenants) {
     const stateStr = (typeof state === 'object') ? pick(state,['slug','Attached','state']) || JSON.stringify(state) : state;
     const rows = entry.timelines.map(tl => {
       const l = lsnCols(tl);
+      const walDisconnected = /disconnected/i.test(l.walreceiver_status || "");
+      const lastStuck = walDisconnected && !!l.last_record_lsn;
+      const wal = l.walreceiver_status
+        ? `<span class="pill ${walDisconnected ? 'bad' : 'ok'}">${esc((l.walreceiver_status.split(',')[0] || l.walreceiver_status).trim())}</span>`
+        : mono('-');
+      const tlid = pick(tl,['timeline_id']);
       return [
-        mono(pick(tl,['timeline_id'])),
-        mono(l.last_record_lsn||'-'),
-        mono(l.disk_consistent_lsn||'-'),
-        mono(l.remote_consistent_lsn||'-'),
+        branchCell(branchNames, tid, tlid),
+        mono(tlid),
+        lsnCell(l.last_record_lsn, lastStuck),
+        lsnCell(l.disk_consistent_lsn, false),
+        lsnCell(l.remote_consistent_lsn, false),
         mono(l.ancestor_lsn && l.ancestor_lsn!=="0/0" ? l.ancestor_lsn : '-'),
+        wal,
         rawDetails("raw", tl),
       ];
     });
@@ -389,21 +481,26 @@ function renderTenants(tenants) {
         <span class="pill">${entry.timelines.length} timeline(s)</span>
       </div>
       <div style="padding:10px 14px">
-        ${table(["timeline","last_record","disk_consistent","remote_consistent","ancestor",""], rows)}
+        ${table(["branch","timeline","last_record","disk_consistent","remote_consistent","ancestor","walreceiver",""], rows)}
       </div>
     </div>`;
   }).join("");
 }
 
-function renderSafekeepers(sks) {
+function renderSafekeepers(sks, branchNames) {
   $("safekeepers").innerHTML = sks.map(sk => {
-    const rows = sk.timelines.map(tl => [
-      mono(pick(tl,['tenant_id'])),
-      mono(pick(tl,['timeline_id'])),
+    const rows = sk.timelines.map(tl => {
+      const tenant = pick(tl,['tenant_id']);
+      const tlid = pick(tl,['timeline_id']);
+      return [
+      branchCell(branchNames, tenant, tlid),
+      mono(tenant),
+      mono(tlid),
       mono(pick(tl,['flush_lsn'])||'-'),
       mono(pick(tl,['commit_lsn'])||'-'),
       mono(pick(tl,['remote_consistent_lsn'])||'-'),
-    ]);
+    ];
+    });
     return `<div class="tenant">
       <div class="head">
         <span class="dot ${sk.up?'up':'down'}"></span>
@@ -412,38 +509,45 @@ function renderSafekeepers(sks) {
         <span class="pill">${sk.timelines.length} timeline(s)</span>
       </div>
       <div style="padding:10px 14px">
-        ${table(["tenant","timeline","flush_lsn","commit_lsn","remote_consistent",], rows)}
+        ${table(["branch","tenant","timeline","flush_lsn","commit_lsn","remote_consistent",], rows)}
       </div>
     </div>`;
   }).join("");
 }
 
-function renderEndpoints(eps) {
+function renderEndpoints(eps, branchNames) {
   if (!eps.length) { $("endpoints").innerHTML = `<div class="empty">no endpoints created (cargo neon endpoint create &lt;name&gt;)</div>`; return; }
-  const rows = eps.map(ep => [
+  const rows = eps.map(ep => {
+    let cls = 'bad', label = 'stopped';
+    if (ep.running) { cls = 'ok'; label = 'running'; }
+    else if (ep.compute_ctl_up) { cls = 'warn'; label = 'starting'; }
+    return [
     esc(ep.endpoint_id),
-    `<span class="pill ${ep.running?'ok':'bad'}">${ep.running?'running':'stopped'}</span>`,
+    branchCell(branchNames, ep.tenant_id, ep.timeline_id),
+    `<span class="pill ${cls}" title="${esc(ep.compute_detail||'')}">${label}</span>`,
     esc(ep.mode||'-'),
     mono(ep.tenant_id),
     mono(ep.timeline_id),
     mono('127.0.0.1:'+ep.pg_port),
     mono(ep.external_http_port),
-  ]);
+  ];
+  });
   $("endpoints").innerHTML = table(
-    ["endpoint","compute","mode","tenant","timeline","libpq","http"], rows);
+    ["endpoint","branch","compute","mode","tenant","timeline","libpq","http"], rows);
 }
 
 async function load() {
   try {
     const r = await fetch("/api/data", {cache:"no-store"});
     const d = await r.json();
+    const branchNames = d.topology.branch_names || {};
     $("banner").style.display = "none";
     $("repo").textContent = d.topology.repo_dir;
     renderServices(d.services);
     renderNodes(d.nodes, d.nodes_error);
-    renderTenants(d.tenants);
-    renderSafekeepers(d.safekeepers);
-    renderEndpoints(d.endpoints);
+    renderTenants(d.tenants, branchNames);
+    renderSafekeepers(d.safekeepers, branchNames);
+    renderEndpoints(d.endpoints, branchNames);
     $("updated").textContent = "updated " + new Date().toLocaleTimeString();
   } catch (e) {
     $("banner").style.display = "block";
