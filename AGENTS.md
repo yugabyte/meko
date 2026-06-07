@@ -106,8 +106,7 @@ Code anchors:
 `/home/yugabyte/yb-light-bundle/` instance on the AWS box has a separate
 handoff doc.)
 
-- The dev YB lives at `127.0.0.1:5433` (`yugabyted` under
-  `/tmp/yb-bench/`).
+- The dev YB lives at `127.0.0.1:5433`.
 - Topology spawns from `neon_local init --config <file>` then
   `neon_local start`. All durable state goes to YB; local FS only holds
   logs, pidfiles, and the compute's ephemeral `pgdata`.

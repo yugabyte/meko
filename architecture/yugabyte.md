@@ -318,7 +318,7 @@ and continue), so the same code path works in mixed environments.
 
 ### `yb_enable_read_committed_isolation = true`
 
-Set on the dev cluster (`/tmp/yb-bench`). Required for the storage
+Set on the dev cluster. Required for the storage
 controller's transactional updates to behave as expected.
 
 ## Client-side retry contract — every YB query must be idempotent
@@ -492,5 +492,4 @@ CREATE TABLE pageserver.timelines (
 - YB tserver web UI: `127.0.0.1:9000`
 - `yugabyted-ui`: `127.0.0.1:15433`
 
-Started via `~/Downloads/yugabyte/yugabyte-2025.2.3.0/bin/yugabyted start
---base_dir=/tmp/yb-bench --advertise_address=127.0.0.1`.
+Started via `~/Downloads/yugabyte/yugabyte-2025.2.3.0/bin/yugabyted start --base_dir=~/yb-storage --advertise_address=127.0.0.1`.
