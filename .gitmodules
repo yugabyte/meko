@@ -1,4 +1,4 @@
 [submodule "vendor/postgres-v17"]
 	path = vendor/postgres-v17
-	url = ../postgres.git
+	url = ../yb-light-postgres.git
 	branch = REL_17_STABLE_neon
