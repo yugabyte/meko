@@ -180,6 +180,35 @@ impl YbControlFileStorage {
         Ok(store)
     }
 
+    /// Enumerate every `(tenant_id, timeline_id)` pair persisted in
+    /// `safekeeper.timeline_state`. Used by SK startup in YB-WAL mode
+    /// to re-discover timelines after a restart — there's no on-disk
+    /// directory to scan and the storage_controller doesn't re-issue
+    /// `POST /v1/tenant/timeline` for existing timelines.
+    pub async fn list_all_ttids(client: &YsqlClient) -> Result<Vec<TenantTimelineId>> {
+        let rows = client
+            .query(
+                "SELECT tenant_id, timeline_id FROM safekeeper.timeline_state",
+                &[],
+            )
+            .await
+            .context("SELECT safekeeper.timeline_state list")?;
+        let mut ttids = Vec::with_capacity(rows.len());
+        for row in rows {
+            let tenant_id: String = row.try_get(0).context("read tenant_id")?;
+            let timeline_id: String = row.try_get(1).context("read timeline_id")?;
+            ttids.push(TenantTimelineId::new(
+                tenant_id
+                    .parse()
+                    .with_context(|| format!("parse tenant_id {tenant_id}"))?,
+                timeline_id
+                    .parse()
+                    .with_context(|| format!("parse timeline_id {timeline_id}"))?,
+            ));
+        }
+        Ok(ttids)
+    }
+
     /// Delete the row for `ttid`. Used by the timeline-delete flow.
     pub async fn delete(client: &YsqlClient, ttid: &TenantTimelineId) -> Result<()> {
         let sql = "DELETE FROM safekeeper.timeline_state WHERE tenant_id = $1 AND timeline_id = $2";

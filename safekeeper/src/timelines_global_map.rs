@@ -3,7 +3,6 @@
 //! all from the disk on startup and keeping them in memory.
 
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,7 +13,7 @@ use safekeeper_api::ServerInfo;
 use safekeeper_api::membership::{Configuration, SafekeeperGeneration};
 use safekeeper_api::models::{SafekeeperUtilization, TimelineDeleteResult};
 use tracing::*;
-use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
+use utils::id::{NodeId, TenantId, TenantTimelineId};
 use utils::lsn::Lsn;
 
 use crate::state::TimelinePersistentState;
@@ -154,100 +153,49 @@ impl GlobalTimelines {
     }
 
     /// Inject dependencies needed for the timeline constructors and load all timelines to memory.
+    /// yb-light's safekeeper persists state in `safekeeper.timeline_state`,
+    /// not on the local filesystem, so the on-disk workdir is only used
+    /// for logs and tmp dirs and has no tenant subdirs to scan.
     pub async fn init(&self) -> Result<()> {
-        // clippy isn't smart enough to understand that drop(state) releases the
-        // lock, so use explicit block
-        let tenants_dir = {
+        let yb_wal = {
             let state = self.state.lock().unwrap();
-            // Iterate through all directories and load tenants for all directories
-            // named as a valid tenant_id.
-            state.conf.workdir.clone()
+            state.yb_wal.clone()
         };
-        let mut tenant_count = 0;
-        for tenants_dir_entry in std::fs::read_dir(&tenants_dir)
-            .with_context(|| format!("failed to list tenants dir {tenants_dir}"))?
-        {
-            match &tenants_dir_entry {
-                Ok(tenants_dir_entry) => {
-                    if let Ok(tenant_id) =
-                        TenantId::from_str(tenants_dir_entry.file_name().to_str().unwrap_or(""))
-                    {
-                        tenant_count += 1;
-                        self.load_tenant_timelines(tenant_id).await?;
-                    }
-                }
-                Err(e) => error!(
-                    "failed to list tenants dir entry {:?} in directory {}, reason: {:?}",
-                    tenants_dir_entry, tenants_dir, e
-                ),
-            }
-        }
+        let yb_wal = yb_wal.context("safekeeper init requires --wal-yb-config")?;
 
+        let ttids = control_file::YbControlFileStorage::list_all_ttids(&yb_wal.client)
+            .await
+            .context("enumerate safekeeper.timeline_state on init")?;
+        for ttid in ttids {
+            self.load_one_timeline(ttid).await;
+        }
         info!(
-            "found {} tenants directories, successfully loaded {} timelines",
-            tenant_count,
+            "loaded {} timelines from safekeeper.timeline_state",
             self.state.lock().unwrap().timelines.len()
         );
         Ok(())
     }
 
-    /// Loads all timelines for the given tenant to memory. Returns fs::read_dir
-    /// errors if any.
-    ///
-    /// It is async, but self.state lock is sync and there is no important
-    /// reason to make it async (it is always held for a short while), so we
-    /// just lock and unlock it for each timeline -- this function is called
-    /// during init when nothing else is running, so this is fine.
-    async fn load_tenant_timelines(&self, tenant_id: TenantId) -> Result<()> {
+    /// Load a single timeline by ttid and register it in the global map.
+    /// Errors are logged but not propagated — a single corrupt timeline
+    /// shouldn't take down the whole safekeeper at startup.
+    async fn load_one_timeline(&self, ttid: TenantTimelineId) {
         let (conf, broker_active_set, yb_wal) = {
             let state = self.state.lock().unwrap();
             state.get_dependencies()
         };
-
-        let timelines_dir = get_tenant_dir(&conf, &tenant_id);
-        for timelines_dir_entry in std::fs::read_dir(&timelines_dir)
-            .with_context(|| format!("failed to list timelines dir {timelines_dir}"))?
-        {
-            match &timelines_dir_entry {
-                Ok(timeline_dir_entry) => {
-                    if let Ok(timeline_id) =
-                        TimelineId::from_str(timeline_dir_entry.file_name().to_str().unwrap_or(""))
-                    {
-                        let ttid = TenantTimelineId::new(tenant_id, timeline_id);
-                        match Timeline::load_timeline(conf.clone(), ttid, yb_wal.clone()).await {
-                            Ok(tli) => {
-                                let mut shared_state = tli.write_shared_state().await;
-                                self.state
-                                    .lock()
-                                    .unwrap()
-                                    .timelines
-                                    .insert(ttid, GlobalMapTimeline::Timeline(tli.clone()));
-                                tli.bootstrap(
-                                    &mut shared_state,
-                                    &conf,
-                                    broker_active_set.clone(),
-                                    yb_wal.clone(),
-                                );
-                            }
-                            // If we can't load a timeline, it's most likely because of a corrupted
-                            // directory. We will log an error and won't allow to delete/recreate
-                            // this timeline. The only way to fix this timeline is to repair manually
-                            // and restart the safekeeper.
-                            Err(e) => error!(
-                                "failed to load timeline {} for tenant {}, reason: {:?}",
-                                timeline_id, tenant_id, e
-                            ),
-                        }
-                    }
-                }
-                Err(e) => error!(
-                    "failed to list timelines dir entry {:?} in directory {}, reason: {:?}",
-                    timelines_dir_entry, timelines_dir, e
-                ),
+        match Timeline::load_timeline(conf.clone(), ttid, yb_wal.clone()).await {
+            Ok(tli) => {
+                let mut shared_state = tli.write_shared_state().await;
+                self.state
+                    .lock()
+                    .unwrap()
+                    .timelines
+                    .insert(ttid, GlobalMapTimeline::Timeline(tli.clone()));
+                tli.bootstrap(&mut shared_state, &conf, broker_active_set, yb_wal);
             }
+            Err(e) => error!("failed to load timeline {ttid}, reason: {e:?}"),
         }
-
-        Ok(())
     }
 
     /// Get the number of timelines in the map.
