@@ -2214,16 +2214,27 @@ impl DatadirModification<'_> {
             RelDirectory::des(&self.get(rel_dir_key, ctx).await?)?
         };
 
-        // Add the new relation to the rel directory entry, and write it back
-        if !rel_dir.rels.insert((rel.relnode, rel.forknum)) {
-            Err(WalIngestErrorKind::RelationAlreadyExists(rel))?;
-        }
+        // Add the new relation to the rel directory entry, and write
+        // it back. Idempotent replay: if the rel is already in the
+        // directory (because a prior PS lifetime's flush landed in YB
+        // before `pageserver.timeline_state.consistent_lsn` was
+        // advanced past this LSN — throttle is by design), `insert`
+        // is a no-op and we still rewrite the same image. Subsequent
+        // page/size records in the replay window re-apply too; once
+        // walreceiver catches up the final keyspace state is
+        // identical to the pre-crash one.
+        // See `pageserver/src/page_writer.rs::tests::
+        // consistent_lsn_lag_under_throttle_is_expected` for the
+        // window this protects.
+        let newly_inserted = rel_dir.rels.insert((rel.relnode, rel.forknum));
         if !dbdir_exists {
             self.pending_directory_entries
                 .push((DirectoryKind::Rel, MetricsUpdate::Set(0)))
         }
-        self.pending_directory_entries
-            .push((DirectoryKind::Rel, MetricsUpdate::Add(1)));
+        if newly_inserted {
+            self.pending_directory_entries
+                .push((DirectoryKind::Rel, MetricsUpdate::Add(1)));
+        }
         self.put(
             rel_dir_key,
             Value::Image(Bytes::from(RelDirectory::ser(&rel_dir)?)),
@@ -2241,12 +2252,13 @@ impl DatadirModification<'_> {
         let sparse_rel_dir_key =
             rel_tag_sparse_key(rel.spcnode, rel.dbnode, rel.relnode, rel.forknum);
         // check if the rel_dir_key exists in v2
+        // Idempotent replay: same window as put_rel_creation_v1 —
+        // rewriting the same `Exists` marker is a no-op. Subsequent
+        // page records re-apply, so the final state is identical.
         let val = self.sparse_get(sparse_rel_dir_key, ctx).await?;
         let val = RelDirExists::decode_option(val)
             .map_err(|_| WalIngestErrorKind::InvalidRelDirKey(sparse_rel_dir_key))?;
-        if val == RelDirExists::Exists {
-            Err(WalIngestErrorKind::RelationAlreadyExists(rel))?;
-        }
+        let already_exists = val == RelDirExists::Exists;
         self.put(
             sparse_rel_dir_key,
             Value::Image(RelDirExists::Exists.encode()),
@@ -2255,8 +2267,10 @@ impl DatadirModification<'_> {
             self.pending_directory_entries
                 .push((DirectoryKind::RelV2, MetricsUpdate::Set(0)));
         }
-        self.pending_directory_entries
-            .push((DirectoryKind::RelV2, MetricsUpdate::Add(1)));
+        if !already_exists {
+            self.pending_directory_entries
+                .push((DirectoryKind::RelV2, MetricsUpdate::Add(1)));
+        }
         Ok(())
     }
 

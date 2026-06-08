@@ -159,17 +159,37 @@ if ! timeout "$ENDPOINT_START_TIMEOUT" "$NEON" endpoint start main >/dev/null; t
     echo "FAIL — endpoint failed to start within ${ENDPOINT_START_TIMEOUT}s"
     echo "  most likely the pageserver could not catch up to the safekeeper's WAL gap"
     echo "  (tail of pageserver log:)"
-    tail -n 50 "$NEON_REPO_DIR/pageserver_1/pageserver.log"
+    DEST="${RUN_LOG_DIR:-${NEON_REPO_DIR}-logs}"
+    mkdir -p "$DEST"
+    cp "$NEON_REPO_DIR/pageserver_1/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
+    find "$NEON_REPO_DIR" -name 'safekeeper.log' -exec cp {} "$DEST/restart-wal-replay-sk-$$.log" \; 2>/dev/null || true
+    tail -n 500 "$NEON_REPO_DIR/pageserver_1/pageserver.log"
     exit 1
 fi
 
+preserve_logs_on_failure() {
+    local DEST="${RUN_LOG_DIR:-${NEON_REPO_DIR}-logs}"
+    mkdir -p "$DEST"
+    cp "$NEON_REPO_DIR/pageserver_1/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
+    find "$NEON_REPO_DIR" -name 'safekeeper.log' -exec cp {} "$DEST/restart-wal-replay-sk-$$.log" \; 2>/dev/null || true
+}
+
 step "Read back n and verify catch-up"
+# Capture stderr separately so the libpq version-info warnings (printed
+# unconditionally by psql against this libdir) don't pollute the numeric
+# value we hand to `(( ... ))`. Anything on stderr that looks like an
+# ERROR line is preserved as a test-failure indicator.
+psql_err=$(mktemp)
 n_after=$(PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -At -t \
-    -c "SELECT n FROM single_page WHERE id = 1")
+    -c "SELECT n FROM single_page WHERE id = 1" 2>"$psql_err")
+psql_stderr=$(cat "$psql_err")
+rm -f "$psql_err"
 echo "n after restart: $n_after  (before PS stop: $n_before_stop)"
 
-if [[ -z $n_after ]]; then
+if [[ -z $n_after ]] || [[ "$psql_stderr" == *ERROR* ]]; then
     echo "FAIL — could not read row back from restarted cluster"
+    echo "  psql stderr: $psql_stderr"
+    preserve_logs_on_failure
     exit 1
 fi
 if (( n_after < n_before_stop )); then

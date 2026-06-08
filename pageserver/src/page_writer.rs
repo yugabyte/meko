@@ -3153,6 +3153,70 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// Documents the contract the `pgdatadir_mapping::put_rel_creation`
+    /// idempotency check leans on: within a `policy.max_age` window
+    /// of back-to-back flushes, `pageserver.pages` rows are durable
+    /// at LSN X while `pageserver.timeline_state.consistent_lsn`
+    /// still reads X' < X. This lag is intentional — the throttle
+    /// keeps a single hot table row from absorbing one UPSERT per
+    /// flush — but it means a `kill -9` mid-window leaves the next
+    /// PS lifetime resuming WAL replay from X'. Re-applying records
+    /// whose effects are already in YB would panic walreceiver with
+    /// `RelationAlreadyExists` on the first CREATE in (X', X];
+    /// `put_rel_creation` returns early when the rel is already in
+    /// the keyspace to keep replay safe over this window. See the
+    /// e2e `restart-wal-replay.sh` after `restart-wal-replay-yb.sh`
+    /// in `run.sh all` for the end-to-end repro.
+    #[tokio::test]
+    async fn consistent_lsn_lag_under_throttle_is_expected() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let (store, schema) = make_store("clsn_lag_expected").await;
+        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t, tl).await;
+
+        // First flush: the first upsert always goes through.
+        w.put(&[(k(1), Lsn(0x100), image())]).await.unwrap();
+        w.flush().await.unwrap();
+        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        assert_eq!(row.consistent_lsn, Lsn(0x100));
+
+        // Second flush within `policy.max_age`: pages durable, the
+        // timeline_state UPDATE is throttled.
+        w.put(&[(k(2), Lsn(0x200), image())]).await.unwrap();
+        w.flush().await.unwrap();
+
+        // Page row IS durable in `pages`.
+        let chain = store
+            .read_chain(t, tl, &key_to_bytes(k(2)), Lsn(0x300))
+            .await
+            .unwrap();
+        let max_page_lsn = chain.iter().map(|r| r.lsn).max().unwrap_or(Lsn(0));
+        assert_eq!(
+            max_page_lsn,
+            Lsn(0x200),
+            "page row at 0x200 is durable in pageserver.pages"
+        );
+
+        // In-memory tracker knows the true LSN.
+        let observed = w.consistent_lsn_observed.load(Relaxed);
+        assert_eq!(Lsn(observed), Lsn(0x200));
+
+        // Persisted column stays at the first flush's LSN — by
+        // design. The replay window between this LSN and the actual
+        // max durable LSN is what `put_rel_creation`'s idempotency
+        // check protects against.
+        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        assert_eq!(
+            row.consistent_lsn,
+            Lsn(0x100),
+            "throttle keeps consistent_lsn at the prior upsert; \
+             pageserver.pages can be ahead within the window"
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
     // TODO: end-to-end WAL GC test. Spin up safekeeper + pageserver,
     // ingest WAL, advance dc_lsn on PS, verify safekeeper deletes wals
     // rows ≤ that LSN. Needs a multi-binary harness; tracked as
