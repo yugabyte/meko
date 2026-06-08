@@ -335,7 +335,7 @@ impl PageStore {
         &self,
         tenant: TenantId,
         timeline: TimelineId,
-        rows: &[PageRow],
+        rows: &[Arc<PageRow>],
     ) -> Result<()> {
         // PostgreSQL caps a query at 65535 parameters; chunk to stay
         // well below it. 11 columns/row × 4000 rows = 44k params.
@@ -440,7 +440,7 @@ impl PageStore {
         timeline: TimelineId,
         key: &[u8],
         target_lsn: Lsn,
-    ) -> Result<Vec<PageRow>> {
+    ) -> Result<Vec<Arc<PageRow>>> {
         let (sp, db, rel, fork, blk) = key_columns(key)?;
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
@@ -489,7 +489,7 @@ impl PageStore {
             order_check.push((row.lsn, row.is_image, row.will_init));
             assert_chain_order_for_key(&order_check, "read_chain");
             let anchor = row.will_init;
-            chain.push(row);
+            chain.push(Arc::new(row));
             if anchor {
                 break;
             }
@@ -528,7 +528,7 @@ impl PageStore {
         timeline: TimelineId,
         range: Range<Key>,
         target_lsn: Lsn,
-    ) -> Result<HashMap<Bytes, Vec<PageRow>>> {
+    ) -> Result<HashMap<Bytes, Vec<Arc<PageRow>>>> {
         if range.start.field1 != 0 || range.end.field1 > 1 {
             bail!(
                 "PageStore::scan_range: range [{}, {}) extends outside the relation-page \
@@ -715,7 +715,7 @@ impl PageStore {
         // an image, this kicks in at the image row (always will_init).
         // For blocks without an image, it finds the latest will_init
         // delta and trims older rows.
-        let mut by_key: HashMap<Bytes, Vec<PageRow>> = HashMap::new();
+        let mut by_key: HashMap<Bytes, Vec<Arc<PageRow>>> = HashMap::new();
         let mut order_check: HashMap<Bytes, Vec<(Lsn, bool, bool)>> = HashMap::new();
         for r in rows {
             let row = row_to_page(r)?;
@@ -730,7 +730,7 @@ impl PageStore {
             if chain.last().is_some_and(|last| last.will_init) {
                 continue;
             }
-            chain.push(row);
+            chain.push(Arc::new(row));
         }
         Ok(by_key)
     }
@@ -2032,14 +2032,20 @@ mod tests {
         )
     }
 
-    fn page_row(key: Bytes, lsn: u64, is_image: bool, will_init: bool, payload: &[u8]) -> PageRow {
-        PageRow {
+    fn page_row(
+        key: Bytes,
+        lsn: u64,
+        is_image: bool,
+        will_init: bool,
+        payload: &[u8],
+    ) -> Arc<PageRow> {
+        Arc::new(PageRow {
             key,
             lsn: Lsn(lsn),
             is_image,
             will_init,
             payload: Bytes::copy_from_slice(payload),
-        }
+        })
     }
 
     #[tokio::test]

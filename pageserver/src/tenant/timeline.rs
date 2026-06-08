@@ -934,8 +934,10 @@ impl Timeline {
         let total_keyspace = query.total_keyspace();
         let target_lsn = query.high_watermark_lsn()?;
 
-        let mut chains_by_key: std::collections::HashMap<Key, Vec<crate::page_store::PageRow>> =
-            std::collections::HashMap::new();
+        let mut chains_by_key: std::collections::HashMap<
+            Key,
+            Vec<std::sync::Arc<crate::page_store::PageRow>>,
+        > = std::collections::HashMap::new();
         // Meta keys go straight into the results map — no walredo.
         let mut meta_results: BTreeMap<Key, Result<Bytes, PageReconstructError>> = BTreeMap::new();
 
@@ -964,14 +966,16 @@ impl Timeline {
                     })?;
                 for (blknum, chain) in scan {
                     let key = pageserver_api::key::slru_block_to_key(kind, segno, blknum);
-                    let converted: Vec<crate::page_store::PageRow> = chain
+                    let converted: Vec<std::sync::Arc<crate::page_store::PageRow>> = chain
                         .into_iter()
-                        .map(|sr| crate::page_store::PageRow {
-                            key: slru_key_bytes(&sr),
-                            lsn: sr.lsn,
-                            is_image: sr.is_image,
-                            will_init: sr.will_init,
-                            payload: sr.payload,
+                        .map(|sr| {
+                            std::sync::Arc::new(crate::page_store::PageRow {
+                                key: slru_key_bytes(&sr),
+                                lsn: sr.lsn,
+                                is_image: sr.is_image,
+                                will_init: sr.will_init,
+                                payload: sr.payload,
+                            })
                         })
                         .collect();
                     chains_by_key.entry(key).or_default().extend(converted);
@@ -3203,7 +3207,7 @@ fn slru_key_bytes(row: &crate::page_store::SlruPageRow) -> bytes::Bytes {
 ///   `NeonWalRecord`. Kept in descending-LSN order; `reconstruct_value`
 ///   reverses to ascending internally before applying.
 fn chain_to_value_reconstruct_state(
-    chain: &[crate::page_store::PageRow],
+    chain: &[std::sync::Arc<crate::page_store::PageRow>],
 ) -> anyhow::Result<crate::tenant::storage_layer::ValueReconstructState> {
     use crate::tenant::storage_layer::ValueReconstructState;
     use utils::bin_ser::BeSer;
@@ -3218,7 +3222,7 @@ fn chain_to_value_reconstruct_state(
     let anchor_idx = chain.len() - 1;
     let anchor = &chain[anchor_idx];
 
-    let records_slice: &[crate::page_store::PageRow] = if anchor.is_image {
+    let records_slice: &[std::sync::Arc<crate::page_store::PageRow>] = if anchor.is_image {
         // Image anchor: hand it to walredo as base_img, deltas above
         // become records.
         state.img = Some((anchor.lsn, anchor.payload.clone()));

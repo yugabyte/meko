@@ -95,7 +95,7 @@ const BASE_REDO_CONCURRENCY: usize = 8;
 /// [`ImageMaterializer::commit_phase`] needs to bulk-INSERT a batch's
 /// rebuilt images into YB and install them into the in-RAM cache.
 struct RedoOutcome {
-    images: Vec<PageRow>,
+    images: Vec<std::sync::Arc<PageRow>>,
     /// Bytes already added to `MATERIALIZER_INFLIGHT_BYTES` during
     /// redo. `commit_phase` is responsible for decrementing this on
     /// every exit path — the gauge then reflects bytes-still-held
@@ -314,7 +314,7 @@ impl ImageMaterializer {
         use futures::stream::FuturesUnordered;
 
         let t0 = std::time::Instant::now();
-        let mut images: Vec<PageRow> = Vec::with_capacity(jobs.len());
+        let mut images: Vec<std::sync::Arc<PageRow>> = Vec::with_capacity(jobs.len());
         let mut total_chain_rows = 0usize;
         let mut total_records = 0usize;
         // Bytes held in `images` so far. Owned by the resulting
@@ -353,7 +353,7 @@ impl ImageMaterializer {
                     let b = image_row.payload.len() as u64;
                     crate::metrics::MATERIALIZER_INFLIGHT_BYTES.add(b);
                     held_image_bytes += b;
-                    images.push(image_row);
+                    images.push(std::sync::Arc::new(image_row));
                 }
                 Ok(None) => {} // nothing-to-do (no chain / already image-anchored)
                 Err(e) => {
@@ -614,7 +614,9 @@ impl ImageMaterializer {
 /// returns the tuple directly so we don't pull in the read-path's
 /// `ValueReconstructState` (which lives in `storage_layer`, slated for
 /// removal in Phase 4d).
-fn parse_chain(chain: &[PageRow]) -> Result<(Option<(Lsn, Bytes)>, Vec<(Lsn, NeonWalRecord)>)> {
+fn parse_chain(
+    chain: &[std::sync::Arc<PageRow>],
+) -> Result<(Option<(Lsn, Bytes)>, Vec<(Lsn, NeonWalRecord)>)> {
     use utils::bin_ser::BeSer;
 
     if chain.is_empty() {

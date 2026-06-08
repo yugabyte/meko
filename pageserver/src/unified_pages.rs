@@ -82,20 +82,23 @@ use crate::page_store::PageRow;
 /// to decrement the per-key `unflushed_count`. The CAS form also makes
 /// the (rare, defensively-handled) double-mark case a no-op.
 pub(crate) struct PageEntry {
-    row: PageRow,
+    row: Arc<PageRow>,
     durable: AtomicBool,
 }
 
 impl PageEntry {
-    fn new(row: PageRow, durable: bool) -> Arc<Self> {
+    fn from_arc_row(row: Arc<PageRow>, durable: bool) -> Arc<Self> {
         Arc::new(Self {
             row,
             durable: AtomicBool::new(durable),
         })
     }
 
-    pub(crate) fn row(&self) -> &PageRow {
-        &self.row
+    /// Cheap refcount bump, no clone of the row's bytes. Used by
+    /// `mark_flushed` callers that need to hand the `PageRow` off
+    /// to the YB INSERT path without copying the chain bytes.
+    pub(crate) fn row_arc(&self) -> Arc<PageRow> {
+        Arc::clone(&self.row)
     }
 
     fn is_durable(&self) -> bool {
@@ -201,9 +204,17 @@ impl UnifiedPages {
     /// materialiser after a successful `put_pages`. Promotes the key
     /// to the back of the LRU; eviction picks up cold keys first.
     pub fn push_durable(&self, row: PageRow) {
+        self.push_durable_arc(Arc::new(row));
+    }
+
+    /// Same as `push_durable`, but takes a pre-wrapped `Arc<PageRow>`.
+    /// The materialiser builds its image as an `Arc<PageRow>` so the
+    /// same Arc reaches both the YB INSERT (`put_pages`) and the cache
+    /// install — no struct copy at the boundary.
+    pub fn push_durable_arc(&self, row: Arc<PageRow>) {
         let key = row.key.clone();
         let lsn = row.lsn;
-        self.insert_entry(key, lsn, row, true);
+        self.insert_arc_entry(key, lsn, row, true);
     }
 
     /// Mark each entry in the snapshot durable. The snapshot holds an
@@ -353,19 +364,19 @@ impl UnifiedPages {
     /// Includes unflushed. Does NOT touch the LRU position — LRU
     /// order tracks write recency only, which is sufficient: hot
     /// keys keep getting written.
-    pub fn lookup_chain(&self, key: &Bytes, target_lsn: Lsn) -> Vec<PageRow> {
+    pub fn lookup_chain(&self, key: &Bytes, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
         let Some(ks) = self.by_key.get(key) else {
             return Vec::new();
         };
         ks.chain
             .range(..=target_lsn)
             .rev()
-            .map(|(_, e)| e.row.clone())
+            .map(|(_, e)| e.row_arc())
             .collect()
     }
 
     /// Like `lookup_chain` but only durable rows.
-    pub fn lookup_chain_durable(&self, key: &Bytes, target_lsn: Lsn) -> Vec<PageRow> {
+    pub fn lookup_chain_durable(&self, key: &Bytes, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
         let Some(ks) = self.by_key.get(key) else {
             return Vec::new();
         };
@@ -373,7 +384,7 @@ impl UnifiedPages {
             .range(..=target_lsn)
             .rev()
             .filter(|(_, e)| e.is_durable())
-            .map(|(_, e)| e.row.clone())
+            .map(|(_, e)| e.row_arc())
             .collect()
     }
 
@@ -385,12 +396,16 @@ impl UnifiedPages {
     /// between the anchor and `target_lsn`: if the key is here,
     /// every row for it that we ever cached is here too. Anchor
     /// presence is therefore both necessary and sufficient.
-    pub fn lookup_chain_if_complete(&self, key: &Bytes, target_lsn: Lsn) -> Option<Vec<PageRow>> {
+    pub fn lookup_chain_if_complete(
+        &self,
+        key: &Bytes,
+        target_lsn: Lsn,
+    ) -> Option<Vec<Arc<PageRow>>> {
         let ks = self.by_key.get(key)?;
         let mut out = Vec::new();
         let mut has_anchor = false;
         for (_, e) in ks.chain.range(..=target_lsn).rev() {
-            out.push(e.row.clone());
+            out.push(e.row_arc());
             if e.row.will_init {
                 has_anchor = true;
                 break;
@@ -414,7 +429,7 @@ impl UnifiedPages {
         &self,
         key: &Bytes,
         target_lsn: Lsn,
-    ) -> Option<Vec<PageRow>> {
+    ) -> Option<Vec<Arc<PageRow>>> {
         let ks = self.by_key.get(key)?;
         let mut out = Vec::new();
         for (_, e) in ks.chain.range(..=target_lsn).rev() {
@@ -425,7 +440,7 @@ impl UnifiedPages {
                  target_lsn above the flush horizon",
                 e.row.lsn, target_lsn,
             );
-            out.push(e.row.clone());
+            out.push(e.row_arc());
             if e.row.will_init {
                 return Some(out);
             }
@@ -444,20 +459,21 @@ impl UnifiedPages {
         start_key: &Bytes,
         end_key: &Bytes,
         target_lsn: Lsn,
-    ) -> HashMap<Bytes, Vec<PageRow>> {
-        let mut out: HashMap<Bytes, Vec<PageRow>> = HashMap::new();
+    ) -> HashMap<Bytes, Vec<Arc<PageRow>>> {
+        let mut out: HashMap<Bytes, Vec<Arc<PageRow>>> = HashMap::new();
         for entry in self.by_key.iter() {
             let k = entry.key();
             if k.as_ref() < start_key.as_ref() || k.as_ref() >= end_key.as_ref() {
                 continue;
             }
-            let rows: Vec<PageRow> = entry
+            let rows: Vec<Arc<PageRow>> = entry
                 .value()
                 .chain
                 .range(..=target_lsn)
                 .rev()
-                .map(|(_, e)| e.row.clone())
-                .collect();
+                .map(|(_, e)| e.row_arc())
+                .collect()
+                ;
             if !rows.is_empty() {
                 out.insert(k.clone(), rows);
             }
@@ -505,8 +521,12 @@ impl UnifiedPages {
     /// Lock order: LRU lock → DashMap shard lock. `evict_to_capacity`
     /// follows the same order, so no deadlock.
     fn insert_entry(&self, key: Bytes, lsn: Lsn, row: PageRow, durable: bool) {
+        self.insert_arc_entry(key, lsn, Arc::new(row), durable);
+    }
+
+    fn insert_arc_entry(&self, key: Bytes, lsn: Lsn, row: Arc<PageRow>, durable: bool) {
         let size = row_size(&row);
-        let entry = PageEntry::new(row, durable);
+        let entry = PageEntry::from_arc_row(row, durable);
 
         // Step 1: ensure the key is at the back of the LRU.
         {
@@ -738,8 +758,8 @@ mod tests {
         u.push(mk(b"k", 3, false, b"c"));
         let snap = u.snapshot_unflushed(None);
         assert_eq!(snap.len(), 2);
-        assert_eq!(snap[0].row().lsn, Lsn(2));
-        assert_eq!(snap[1].row().lsn, Lsn(3));
+        assert_eq!(snap[0].row.lsn, Lsn(2));
+        assert_eq!(snap[1].row.lsn, Lsn(3));
     }
 
     #[test]

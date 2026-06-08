@@ -676,7 +676,7 @@ impl PageWriter {
         &self,
         range: std::ops::Range<Key>,
         target_lsn: Lsn,
-    ) -> Result<std::collections::HashMap<Key, Vec<PageRow>>> {
+    ) -> Result<std::collections::HashMap<Key, Vec<Arc<PageRow>>>> {
         let t0 = Instant::now();
         // GetPage hot path: a 1-key vectored read arrives as
         // `[k..k.next())`. Dispatch to `read_chain`, which holds the
@@ -703,14 +703,14 @@ impl PageWriter {
         let start_bytes = key_to_bytes(range.start);
         let end_bytes = key_to_bytes(range.end);
         let t_lock_start = Instant::now();
-        let cached: std::collections::HashMap<bytes::Bytes, Vec<PageRow>> = self
+        let cached: std::collections::HashMap<bytes::Bytes, Vec<Arc<PageRow>>> = self
             .pages
             .lookup_range(&start_bytes, &end_bytes, target_lsn);
         let t_cache = t_lock_start.elapsed();
         let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
         let cached_rows: usize = cached.values().map(|v| v.len()).sum();
         let t_merge_start = Instant::now();
-        let mut out: std::collections::HashMap<Key, Vec<PageRow>> =
+        let mut out: std::collections::HashMap<Key, Vec<Arc<PageRow>>> =
             std::collections::HashMap::with_capacity(persisted.len() + cached.len());
         for (key_bytes, chain) in persisted {
             let k = Key::from_slice(&key_bytes);
@@ -795,7 +795,7 @@ impl PageWriter {
         }
     }
 
-    pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<PageRow>> {
+    pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<Arc<PageRow>>> {
         let key_bytes = key_to_bytes(key);
         // Cache-only fast path: if the cache holds a complete chain
         // (image-anchor reachable from target_lsn, no eviction in
@@ -806,7 +806,7 @@ impl PageWriter {
         if let Some(chain) = self.pages.lookup_chain_if_complete(&key_bytes, target_lsn) {
             return Ok(chain);
         }
-        let cached: Vec<PageRow> = self.pages.lookup_chain(&key_bytes, target_lsn);
+        let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain(&key_bytes, target_lsn);
         let persisted = self
             .compute_page_store
             .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
@@ -830,7 +830,11 @@ impl PageWriter {
     /// sources (post-flush cache + PageStore). Pre-flush rows are
     /// EXCLUDED. The image materialiser uses this so its image is
     /// built only from data that survives a process crash.
-    pub async fn read_chain_durable(&self, key: Key, target_lsn: Lsn) -> Result<Vec<PageRow>> {
+    pub async fn read_chain_durable(
+        &self,
+        key: Key,
+        target_lsn: Lsn,
+    ) -> Result<Vec<Arc<PageRow>>> {
         // `target_lsn` is the caller's contract: it must be ≤
         // `flush_horizon_lsn` so a YB read above the horizon can't
         // surface a mid-flush partial-chunk view. The post-flush
@@ -848,7 +852,7 @@ impl PageWriter {
         {
             return Ok(chain);
         }
-        let cached: Vec<PageRow> = self.pages.lookup_chain_durable(&key_bytes, target_lsn);
+        let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain_durable(&key_bytes, target_lsn);
         // Materialiser-side cache miss → the internal conn (same one
         // the materialiser's write path uses). Keeping this off
         // `compute_page_store` is the whole point of the split: a
@@ -877,7 +881,7 @@ impl PageWriter {
     /// indexes the new image as a durable cache entry; subsequent
     /// `read_chain` / `read_chain_durable` find the image first and
     /// don't walk the chain back.
-    pub async fn install_materialized_image(&self, image: PageRow) {
+    pub async fn install_materialized_image(&self, image: Arc<PageRow>) {
         // No outer lock — `pages` is internally sharded. The three
         // calls below only touch the image's key shard (trim, push)
         // plus the LRU (small parking_lot::Mutex held for ns) plus
@@ -891,7 +895,7 @@ impl PageWriter {
         self.pages.trim_key_up_to(&key, lsn);
         let t_trim = t_trim_start.elapsed();
         let t_push_start = Instant::now();
-        self.pages.push_durable(image);
+        self.pages.push_durable_arc(image);
         let t_push = t_push_start.elapsed();
         let t_evict_start = Instant::now();
         self.pages.evict_to_capacity();
@@ -918,12 +922,13 @@ impl PageWriter {
         // on rel-size sentinels). After the INSERT succeeds we flip
         // those rows from unflushed → durable in one FIFO pass.
         let rel_snapshot = self.pages.snapshot_unflushed(None);
-        // Build the `PageRow` slice `try_write_rows` expects. `PageRow`
-        // is cheap to clone (its `payload: Bytes` is internally Arc'd),
-        // and keeping the `Arc<PageEntry>` snapshot alive separately
-        // is what lets `mark_flushed` flip durable on the exact entry
-        // we wrote — never re-looking-up by (key, lsn).
-        let rel_rows: Vec<PageRow> = rel_snapshot.iter().map(|e| e.row().clone()).collect();
+        // Hand the YB INSERT the same `Arc<PageRow>`s the cache slots
+        // hold — just a refcount bump per row, no PageRow copy. The
+        // separate `Arc<PageEntry>` snapshot stays alive so the
+        // subsequent `mark_flushed` can flip durable on the exact
+        // entries we wrote.
+        let rel_rows: Vec<Arc<PageRow>> =
+            rel_snapshot.iter().map(|e| e.row_arc()).collect();
         let (slru_rows, meta_rows) = {
             let aux = self.aux.lock();
             (aux.slru_buffer.clone(), aux.meta_buffer.clone())
@@ -1179,7 +1184,7 @@ impl PageWriter {
 
     async fn try_write_rows(
         &self,
-        rel_rows: &[PageRow],
+        rel_rows: &[Arc<PageRow>],
         slru_rows: &[SlruPageRow],
         meta_rows: &[MetaRow],
     ) -> Result<()> {
