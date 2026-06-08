@@ -60,7 +60,8 @@
 //! successful image INSERT to drop the deltas the image superseded.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -70,11 +71,44 @@ use utils::lsn::Lsn;
 
 use crate::page_store::PageRow;
 
-/// A row plus its durability bit.
-#[derive(Clone)]
-struct PageEntry {
+/// A row plus its durability bit. Held by `Arc` so the cache slot and
+/// any in-flight flush snapshot share the same entry — `mark_flushed`
+/// flips the `durable` bit on the very `Arc` it pulled out of the
+/// snapshot, never going back through `(key, lsn)`.
+///
+/// `durable` is `AtomicBool` so `mark_flushed` can flip the bit
+/// without holding the per-key shard lock — flush bookkeeping touches
+/// the snapshot's Arcs directly, and the lock is only acquired briefly
+/// to decrement the per-key `unflushed_count`. The CAS form also makes
+/// the (rare, defensively-handled) double-mark case a no-op.
+pub(crate) struct PageEntry {
     row: PageRow,
-    durable: bool,
+    durable: AtomicBool,
+}
+
+impl PageEntry {
+    fn new(row: PageRow, durable: bool) -> Arc<Self> {
+        Arc::new(Self {
+            row,
+            durable: AtomicBool::new(durable),
+        })
+    }
+
+    pub(crate) fn row(&self) -> &PageRow {
+        &self.row
+    }
+
+    fn is_durable(&self) -> bool {
+        self.durable.load(Ordering::Acquire)
+    }
+
+    /// Try to flip `false → true`. Returns `true` iff this call did the
+    /// transition (so the caller is responsible for counter bookkeeping).
+    fn try_promote(&self) -> bool {
+        self.durable
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+    }
 }
 
 /// Per-key bookkeeping stored as the DashMap value. DashMap gives us
@@ -82,7 +116,7 @@ struct PageEntry {
 /// lock — accessing it goes through a DashMap guard which already
 /// serialises mutations to the same key.
 struct KeyState {
-    chain: BTreeMap<Lsn, PageEntry>,
+    chain: BTreeMap<Lsn, Arc<PageEntry>>,
     /// Count of `PageEntry`s in `chain` with `durable == false`.
     /// When > 0 the key is pinned and `evict_to_capacity` skips it.
     unflushed_count: u32,
@@ -105,7 +139,7 @@ impl KeyState {
 pub struct UnifiedPages {
     /// Per-key state, sharded for concurrent access. Reads
     /// (`lookup_chain*`) on different keys proceed in parallel;
-    /// writes (`push*`, `trim`, `mark_first_n_flushed`) only contend
+    /// writes (`push*`, `trim`, `mark_flushed`) only contend
     /// when they hit the same shard.
     by_key: DashMap<Bytes, KeyState>,
     /// LRU sidecar: just the key set, in promotion order. Back =
@@ -114,7 +148,7 @@ pub struct UnifiedPages {
     /// reads do not. Holds are O(1).
     lru: Mutex<LinkedHashMap<Bytes, ()>>,
     /// Insertion-ordered list of (key, lsn) pairs for unflushed
-    /// entries. Drives `snapshot_unflushed` + `mark_first_n_flushed`
+    /// entries. Drives `snapshot_unflushed` + `mark_flushed`
     /// so flushes hit YB in monotonic put-order.
     unflushed_fifo: Mutex<VecDeque<(Bytes, Lsn)>>,
     total_bytes: AtomicUsize,
@@ -152,24 +186,15 @@ impl UnifiedPages {
         self.by_key.len()
     }
 
-    /// Append a row as unflushed. Same-`(key, lsn)` overwrites the
-    /// existing entry's payload and adjusts the byte counters. The
-    /// key is promoted to the back of the LRU.
+    /// Append a row as unflushed. Walreceiver's LSNs are strictly
+    /// monotonic within a PS lifetime so this never overlaps an
+    /// existing slot; on restart the cache is empty. Both invariants
+    /// are checked by the debug-assert in `insert_entry`.
     pub fn push(&self, row: PageRow) {
         let key = row.key.clone();
         let lsn = row.lsn;
-        let prev_was_unflushed = self.insert_entry(key.clone(), lsn, row, false);
-        // Tracking: if we replaced a row that was unflushed, the old
-        // entry is being superseded — no need to append a new fifo
-        // entry, the existing one still applies. If the old row was
-        // durable, the new row is unflushed and needs a fifo append.
-        let need_fifo = match prev_was_unflushed {
-            Some(prev_was_unflushed) => !prev_was_unflushed,
-            None => true,
-        };
-        if need_fifo {
-            self.unflushed_fifo.lock().push_back((key, lsn));
-        }
+        self.insert_entry(key.clone(), lsn, row, false);
+        self.unflushed_fifo.lock().push_back((key, lsn));
     }
 
     /// Append a row that is already durable in YB. Used by the image
@@ -178,41 +203,45 @@ impl UnifiedPages {
     pub fn push_durable(&self, row: PageRow) {
         let key = row.key.clone();
         let lsn = row.lsn;
-        // Old entry's durability is irrelevant — the new row is
-        // durable. If it was unflushed, switch counters; if it was
-        // durable, just update bytes. Stale fifo refs are dropped
-        // lazily in mark_first_n_flushed.
-        let _ = self.insert_entry(key, lsn, row, true);
+        self.insert_entry(key, lsn, row, true);
     }
 
-    /// Mark the first `n` unflushed entries durable. `n` must equal
-    /// the snapshot count submitted to `try_write_rows`.
-    pub fn mark_first_n_flushed(&self, n: usize) {
-        let mut promoted = 0usize;
-        while promoted < n {
-            let next = self.unflushed_fifo.lock().pop_front();
-            let Some((key, lsn)) = next else { break };
-            // Look up the entry: it may have been trimmed,
-            // overwritten with a durable row by the materialiser, or
-            // already flipped (defensively).
-            let Some(mut entry) = self.by_key.get_mut(&key) else {
-                continue;
-            };
-            let ks = entry.value_mut();
-            let Some(page_entry) = ks.chain.get_mut(&lsn) else {
-                continue;
-            };
-            if page_entry.durable {
-                // Already promoted (push_durable raced ahead). Don't
-                // count this towards `n` — caller asked us to
-                // promote n *unflushed* rows, this one wasn't one.
-                continue;
+    /// Mark each entry in the snapshot durable. The snapshot holds an
+    /// `Arc<PageEntry>` per row, so we flip the bit on the very same
+    /// entry the caller flushed to YB.
+    /// If the cache slot was concurrently overwritten
+    /// (materialiser raced an image into the same LSN) the old entry's
+    /// `durable` bit was already flipped to `true` by `insert_entry`;
+    /// our CAS observes `Err(true)` and we skip without touching the
+    /// counters (insert_entry already adjusted them).
+    pub(crate) fn mark_flushed(&self, snapshot: &[Arc<PageEntry>]) {
+        // Per-key list of promoted lsns, so we drop their stale FIFO
+        // refs in one pass at the end instead of scanning per row.
+        let mut promoted_by_key: HashMap<Bytes, Vec<Lsn>> = HashMap::new();
+
+        for entry in snapshot {
+            if !entry.try_promote() {
+                continue; // insert_entry already claimed this entry.
             }
-            page_entry.durable = true;
-            let size = row_size(&page_entry.row);
+            let size = row_size(&entry.row);
             self.unflushed_bytes.fetch_sub(size, Ordering::Relaxed);
-            ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
-            promoted += 1;
+            if let Some(mut ks_guard) = self.by_key.get_mut(&entry.row.key) {
+                let ks = ks_guard.value_mut();
+                ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
+            }
+            promoted_by_key
+                .entry(entry.row.key.clone())
+                .or_default()
+                .push(entry.row.lsn);
+        }
+
+        if !promoted_by_key.is_empty() {
+            let mut fifo = self.unflushed_fifo.lock();
+            fifo.retain(|(k, l)| {
+                promoted_by_key
+                    .get(k)
+                    .is_none_or(|lsns| !lsns.contains(l))
+            });
         }
     }
 
@@ -299,7 +328,7 @@ impl UnifiedPages {
             let to_remove: Vec<Lsn> = ks
                 .chain
                 .range(..=max_lsn)
-                .filter(|(_, e)| e.durable)
+                .filter(|(_, e)| e.is_durable())
                 .map(|(l, _)| *l)
                 .collect();
             for lsn in to_remove {
@@ -343,7 +372,7 @@ impl UnifiedPages {
         ks.chain
             .range(..=target_lsn)
             .rev()
-            .filter(|(_, e)| e.durable)
+            .filter(|(_, e)| e.is_durable())
             .map(|(_, e)| e.row.clone())
             .collect()
     }
@@ -376,7 +405,7 @@ impl UnifiedPages {
     ///
     /// Caller invariant: `target_lsn ≤ flush_horizon_lsn`. Under that
     /// invariant every cache row with LSN ≤ target_lsn is durable
-    /// (post-flush `mark_first_n_flushed` promotes them all
+    /// (post-flush `mark_flushed` promotes them all
     /// atomically), so this is a plain backward walk for an anchor.
     /// The `debug_assert!` guards the invariant so callers that
     /// regress to passing a pre-flush LSN crash in tests rather than
@@ -390,7 +419,7 @@ impl UnifiedPages {
         let mut out = Vec::new();
         for (_, e) in ks.chain.range(..=target_lsn).rev() {
             debug_assert!(
-                e.durable,
+                e.is_durable(),
                 "lookup_chain_durable_if_complete saw an unflushed row at \
                  lsn={} while walking ≤ target_lsn={} — caller passed a \
                  target_lsn above the flush horizon",
@@ -436,11 +465,15 @@ impl UnifiedPages {
         out
     }
 
-    /// Take a snapshot of up to `max` (or all) unflushed rows in
+    /// Take a snapshot of up to `max` (or all) unflushed entries in
     /// insertion order. Caller (`flush`) uses this to drive the YB
     /// INSERT without holding any per-shard or per-key lock for the
-    /// duration of the round-trip.
-    pub fn snapshot_unflushed(&self, max: Option<usize>) -> Vec<PageRow> {
+    /// duration of the round-trip. Each entry is returned as an
+    /// `Arc<PageEntry>` shared with the cache slot, so the matching
+    /// `mark_flushed` call flips `durable` on the exact entry the
+    /// caller wrote — no `(key, lsn)` lookup, no risk of the FIFO
+    /// pointing at a stale slot.
+    pub(crate) fn snapshot_unflushed(&self, max: Option<usize>) -> Vec<Arc<PageEntry>> {
         // Clone the FIFO order so we can release the lock before
         // walking it. The FIFO is small (one entry per unflushed
         // row), and snapshot is called once per flush — cheap.
@@ -453,9 +486,9 @@ impl UnifiedPages {
         for (key, lsn) in &pairs {
             if let Some(ks) = self.by_key.get(key)
                 && let Some(entry) = ks.chain.get(lsn)
-                && !entry.durable
+                && !entry.is_durable()
             {
-                out.push(entry.row.clone());
+                out.push(Arc::clone(entry));
             }
         }
         out
@@ -471,9 +504,9 @@ impl UnifiedPages {
     ///
     /// Lock order: LRU lock → DashMap shard lock. `evict_to_capacity`
     /// follows the same order, so no deadlock.
-    fn insert_entry(&self, key: Bytes, lsn: Lsn, row: PageRow, durable: bool) -> Option<bool> {
+    fn insert_entry(&self, key: Bytes, lsn: Lsn, row: PageRow, durable: bool) {
         let size = row_size(&row);
-        let entry = PageEntry { row, durable };
+        let entry = PageEntry::new(row, durable);
 
         // Step 1: ensure the key is at the back of the LRU.
         {
@@ -490,16 +523,29 @@ impl UnifiedPages {
         let ks = shard.value_mut();
 
         let prev = ks.chain.insert(lsn, entry);
-        let prev_was_unflushed = prev.as_ref().map(|p| !p.durable);
 
+        // Production invariant: if we overwrote an existing slot, that
+        // slot was already durable.
+        //   - `push()` is walreceiver-only and walreceiver's LSNs are
+        //     strictly monotonic within a PS lifetime, so it never
+        //     overlaps a same-LSN slot. (On restart the cache is empty.)
+        //   - `push_durable()` is materialiser-only and the materialiser
+        //     bounds its target_lsn ≤ flush_horizon_lsn (only advanced
+        //     after `mark_flushed`), so any same-LSN slot is durable by
+        //     the time the image arrives.
+        // So only the byte counters move on overwrite — the unflushed
+        // counters can't be touched.
         if let Some(prev) = prev {
+            debug_assert!(
+                prev.is_durable(),
+                "insert_entry overwriting an unflushed slot at lsn={lsn}: \
+                 violates the monotonic-LSN (push) / target_lsn≤horizon (push_durable) \
+                 contract — the row in the unflushed slot would be lost if it isn't \
+                 also in YB",
+            );
             let prev_size = row_size(&prev.row);
             ks.bytes -= prev_size;
             self.total_bytes.fetch_sub(prev_size, Ordering::Relaxed);
-            if !prev.durable {
-                self.unflushed_bytes.fetch_sub(prev_size, Ordering::Relaxed);
-                ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
-            }
         }
         ks.bytes += size;
         self.total_bytes.fetch_add(size, Ordering::Relaxed);
@@ -507,7 +553,6 @@ impl UnifiedPages {
             self.unflushed_bytes.fetch_add(size, Ordering::Relaxed);
             ks.unflushed_count += 1;
         }
-        prev_was_unflushed
     }
 }
 
@@ -529,6 +574,15 @@ mod tests {
         }
     }
 
+    /// Test shortcut: snapshot the first `n` unflushed entries and
+    /// flip them durable. Mirrors prod's flush sequence
+    /// (`snapshot_unflushed(Some(n))` + `mark_flushed`) so the tests
+    /// exercise the same code path as `PageWriter::flush`.
+    fn flush_first_n(u: &UnifiedPages, n: usize) {
+        let snap = u.snapshot_unflushed(Some(n));
+        u.mark_flushed(&snap);
+    }
+
     #[test]
     fn push_and_lookup_chain_descending() {
         let u = UnifiedPages::new(4096);
@@ -548,7 +602,7 @@ mod tests {
         u.push(mk(b"k", 3, false, b"c"));
         let unflushed_before = u.unflushed_bytes();
 
-        u.mark_first_n_flushed(2);
+        flush_first_n(&u, 2);
         assert!(u.unflushed_bytes() > 0);
         assert!(u.unflushed_bytes() < unflushed_before);
 
@@ -561,7 +615,7 @@ mod tests {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 1, true, b"img"));
         u.push(mk(b"k", 2, false, b"d2"));
-        u.mark_first_n_flushed(1);
+        flush_first_n(&u, 1);
         u.push(mk(b"k", 3, false, b"d3"));
 
         let all = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
@@ -641,7 +695,7 @@ mod tests {
         u.push(mk(b"k", 10, false, b"d10"));
         u.push(mk(b"k", 20, false, b"d20"));
         u.push(mk(b"k", 30, false, b"d30"));
-        u.mark_first_n_flushed(2);
+        flush_first_n(&u, 2);
         u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(25));
         let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1);
@@ -652,7 +706,7 @@ mod tests {
     fn trim_leaves_unflushed_in_range() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, false, b"d10"));
-        u.mark_first_n_flushed(1);
+        flush_first_n(&u, 1);
         u.push(mk(b"k", 20, false, b"d20"));
         u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(50));
         let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
@@ -666,7 +720,7 @@ mod tests {
         for i in 1..=5 {
             u.push(mk(b"k", i * 10, false, &[i as u8; 4]));
         }
-        u.mark_first_n_flushed(5);
+        flush_first_n(&u, 5);
         u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(50));
         u.push_durable(mk(b"k", 50, true, b"full-page-image"));
         let chain = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
@@ -680,12 +734,12 @@ mod tests {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 1, false, b"a"));
         u.push(mk(b"k", 2, false, b"b"));
-        u.mark_first_n_flushed(1);
+        flush_first_n(&u, 1);
         u.push(mk(b"k", 3, false, b"c"));
         let snap = u.snapshot_unflushed(None);
         assert_eq!(snap.len(), 2);
-        assert_eq!(snap[0].lsn, Lsn(2));
-        assert_eq!(snap[1].lsn, Lsn(3));
+        assert_eq!(snap[0].row().lsn, Lsn(2));
+        assert_eq!(snap[1].row().lsn, Lsn(3));
     }
 
     #[test]
@@ -751,12 +805,18 @@ mod tests {
         }
     }
 
+    /// The materialiser overwrite path: a durable delta at lsn=L gets
+    /// replaced by a durable image at lsn=L. The byte counters must
+    /// reflect the new payload size; the chain must show the image.
+    /// (The pre-overwrite slot is durable — overwriting an unflushed
+    /// slot is forbidden by `insert_entry`'s debug-assert.)
     #[test]
     fn overwrite_same_key_lsn_adjusts_bytes() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, false, b"small"));
+        flush_first_n(&u, 1); // promote to durable first
         let b1 = u.total_bytes();
-        u.push(mk(b"k", 10, true, b"larger-replacement"));
+        u.push_durable(mk(b"k", 10, true, b"larger-replacement"));
         assert!(u.total_bytes() > b1);
         let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1);
@@ -826,36 +886,27 @@ mod tests {
         assert_eq!(u.by_key_entries(), 5, "all keys still resident");
     }
 
-    /// A `push_durable` overwrite of an unflushed entry must keep the
-    /// counters consistent: the unflushed slot disappears, the durable
-    /// row replaces it, and a subsequent `mark_first_n_flushed` doesn't
-    /// double-decrement (the stale fifo ref is recognised and skipped).
+    /// `push_durable` overwriting an unflushed slot violates the
+    /// target_lsn ≤ horizon contract — the materialiser must never
+    /// run for an LSN whose cache entry isn't already durable. The
+    /// debug-assert in `insert_entry` catches the contract break.
     #[test]
-    fn push_durable_overwrites_unflushed_without_breaking_mark_flushed() {
+    #[should_panic(expected = "insert_entry overwriting an unflushed slot")]
+    fn push_durable_over_unflushed_panics_in_debug() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, false, b"unflushed"));
-        let unflushed_before = u.unflushed_bytes();
-        // Materialiser races and installs a durable row at the same lsn.
         u.push_durable(mk(b"k", 10, true, b"image-replacement"));
-        // The unflushed counter must have dropped to zero — the old
-        // (key,10) entry is no longer unflushed.
-        assert_eq!(
-            u.unflushed_bytes(),
-            0,
-            "overwrite by push_durable promotes the entry; \
-             unflushed_bytes should drain even though unflushed_fifo \
-             still holds the stale ref",
-        );
-        // mark_first_n_flushed must NOT count the stale ref as a flush
-        // (it's already durable; it shouldn't decrement unflushed below 0).
-        u.mark_first_n_flushed(1);
-        assert_eq!(u.unflushed_bytes(), 0);
-        // Sanity: the durable row is still there.
-        let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
-        assert_eq!(chain.len(), 1);
-        assert!(chain[0].is_image);
-        // And it shouldn't have looked anything like the original.
-        assert_ne!(unflushed_before, 0);
+    }
+
+    /// `push` overwriting any existing slot violates walreceiver's
+    /// monotonic-LSN invariant — the same WAL record can't land twice
+    /// at the same LSN. The debug-assert catches it.
+    #[test]
+    #[should_panic(expected = "insert_entry overwriting an unflushed slot")]
+    fn push_over_unflushed_panics_in_debug() {
+        let u = UnifiedPages::new(4096);
+        u.push(mk(b"k", 10, false, b"first"));
+        u.push(mk(b"k", 10, false, b"second"));
     }
 
     /// Regression for the AWS BTREE walredo PANIC on 2026-06-02:
@@ -870,9 +921,9 @@ mod tests {
     fn durable_if_complete_debug_asserts_on_unflushed_in_range() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, true, b"anchor"));
-        u.mark_first_n_flushed(1);
+        flush_first_n(&u, 1);
         u.push(mk(b"k", 20, false, b"d20"));
-        u.mark_first_n_flushed(1);
+        flush_first_n(&u, 1);
         u.push(mk(b"k", 30, false, b"d30")); // UNFLUSHED
         u.push_durable(mk(b"k", 40, false, b"d40")); // already durable
         // target_lsn=100 covers an unflushed row (d30); the assertion
@@ -891,7 +942,7 @@ mod tests {
         u.push(mk(b"k", 10, true, b"old-image"));
         u.push(mk(b"k", 20, false, b"d20"));
         u.push(mk(b"k", 30, false, b"d30"));
-        u.mark_first_n_flushed(3);
+        flush_first_n(&u, 3);
         // Install fresh image at lsn 25.
         u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(25));
         u.push_durable(mk(b"k", 25, true, b"materialised"));

@@ -251,7 +251,7 @@ pub struct PageWriter {
     /// for telemetry / smoke tests.
     backpressure_waits: std::sync::atomic::AtomicU64,
     /// Upper bound on rel-page LSNs the materialiser is allowed to
-    /// consult in YB. Advanced only when `mark_first_n_flushed` runs
+    /// consult in YB. Advanced only when `mark_flushed` runs
     /// (after every chunk of a flush has committed). Materialiser
     /// reads cap their `target_lsn` at this value so a mid-flush
     /// partial-YB-view can never feed walredo a chain with a hole
@@ -503,7 +503,7 @@ impl PageWriter {
             return Ok(());
         }
         // Accumulate per-key delta counters here; the materialiser
-        // trigger fires from `flush()` (after `mark_first_n_flushed`
+        // trigger fires from `flush()` (after `mark_flushed`
         // advances `flush_horizon_lsn`), not from this put loop. That
         // way every job's `target_lsn` is durable by construction —
         // see `flush()` for the trigger site.
@@ -917,7 +917,13 @@ impl PageWriter {
         // during the YB round-trip — critical for walreceiver's RMW
         // on rel-size sentinels). After the INSERT succeeds we flip
         // those rows from unflushed → durable in one FIFO pass.
-        let rel_rows = self.pages.snapshot_unflushed(None);
+        let rel_snapshot = self.pages.snapshot_unflushed(None);
+        // Build the `PageRow` slice `try_write_rows` expects. `PageRow`
+        // is cheap to clone (its `payload: Bytes` is internally Arc'd),
+        // and keeping the `Arc<PageEntry>` snapshot alive separately
+        // is what lets `mark_flushed` flip durable on the exact entry
+        // we wrote — never re-looking-up by (key, lsn).
+        let rel_rows: Vec<PageRow> = rel_snapshot.iter().map(|e| e.row().clone()).collect();
         let (slru_rows, meta_rows) = {
             let aux = self.aux.lock();
             (aux.slru_buffer.clone(), aux.meta_buffer.clone())
@@ -954,17 +960,19 @@ impl PageWriter {
                 .chain(slru_rows.iter().map(|r| r.lsn.0))
                 .chain(meta_rows.iter().map(|r| r.lsn.0))
                 .max();
-            // Promote rel rows in-place (no copy), then opportunistically
-            // shrink the cache if it's over capacity. Both touch only
-            // per-key shards / the LRU mutex — no global lock.
-            self.pages.mark_first_n_flushed(rel_count);
+            // Promote rel rows in-place: flip durable on the exact
+            // `Arc<PageEntry>`s we captured in the snapshot. No
+            // by-(key, lsn) lookup, so a materialiser race that
+            // overwrote a same-LSN slot can't make us over-pop the
+            // FIFO and steal a fresh row from the next batch.
+            self.pages.mark_flushed(&rel_snapshot);
             self.pages.evict_to_capacity();
             // Advance the materialiser's safe-to-read-from-YB watermark
             // to the just-flushed max LSN. Until this point, YB
             // contained a partial view of this flush's chunks
             // (buffer_unordered dispatch order ≠ commit order) and
             // the materialiser would have seen holes in the chain.
-            // After mark_first_n_flushed every snapshot row is durable
+            // After mark_flushed every snapshot row is durable
             // in both cache and YB.
             if let Some(max) = max_flushed_lsn {
                 let cur = self.flush_horizon_lsn.load(Ordering::Relaxed);
@@ -2689,7 +2697,7 @@ mod tests {
     }
 
     /// `flush_horizon_lsn` advances atomically inside
-    /// `mark_first_n_flushed` to `max(snapshot.lsn)`. The post-flush
+    /// `mark_flushed` to `max(snapshot.lsn)`. The post-flush
     /// materialiser trigger relies on this — every job has
     /// `target_lsn ≤ horizon` by construction, which is what makes
     /// `read_chain_durable` safe.
@@ -2717,7 +2725,7 @@ mod tests {
             w.flush_horizon_lsn
                 .load(std::sync::atomic::Ordering::Relaxed),
             30,
-            "horizon advances to max(snapshot.lsn) after mark_first_n_flushed",
+            "horizon advances to max(snapshot.lsn) after mark_flushed",
         );
 
         // A second flush with smaller-LSN-then-larger pushes
