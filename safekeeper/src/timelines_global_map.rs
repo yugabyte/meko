@@ -163,7 +163,7 @@ impl GlobalTimelines {
         };
         let yb_wal = yb_wal.context("safekeeper init requires --wal-yb-config")?;
 
-        let ttids = control_file::YbControlFileStorage::list_all_ttids(&yb_wal.client)
+        let ttids = control_file::YbControlFileStorage::list_all_ttids(&yb_wal.system_client)
             .await
             .context("enumerate safekeeper.timeline_state on init")?;
         for ttid in ttids {
@@ -248,7 +248,8 @@ impl GlobalTimelines {
         let yb_wal = yb_wal
             .clone()
             .context("control-file create requires --wal-yb-config")?;
-        control_file::ControlFileStorage::create_new(yb_wal.client.clone(), &ttid, state).await?;
+        control_file::ControlFileStorage::create_new(yb_wal.fpu_client.clone(), &ttid, state)
+            .await?;
         let timeline = self
             .load_temp_timeline(ttid, &tmp_dir_path, generation)
             .await?;
@@ -580,7 +581,7 @@ pub async fn validate_temp_timeline(
         .cloned()
         .context("control-file validate requires --wal-yb-config")?;
     let control_store =
-        control_file::ControlFileStorage::restore_new(yb_wal.client.clone(), &ttid).await?;
+        control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), &ttid).await?;
     if control_store.server.wal_seg_size == 0 {
         bail!("wal_seg_size is not set");
     }

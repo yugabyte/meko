@@ -244,7 +244,7 @@ impl SharedState {
             .cloned()
             .context("control-file restore requires --wal-yb-config")?;
         let control_store =
-            control_file::ControlFileStorage::restore_new(yb_wal.client.clone(), ttid).await?;
+            control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), ttid).await?;
         if control_store.server.wal_seg_size == 0 {
             bail!(TimelineError::UninitializedWalSegSize(*ttid));
         }
@@ -612,7 +612,7 @@ impl Timeline {
         tokio::task::spawn(
             async move {
                 let r = if let Some(yb_wal) = yb_wal {
-                    control_file::YbControlFileStorage::delete(&yb_wal.client, &ttid).await
+                    control_file::YbControlFileStorage::delete(&yb_wal.system_client, &ttid).await
                 } else {
                     tracing::info!(
                         "skipping remote deletion because --wal-yb-config is not set; this effectively leaks the control-file row"
