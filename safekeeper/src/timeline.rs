@@ -337,6 +337,24 @@ impl From<TimelineError> for ApiError {
     }
 }
 
+// Convert to PG query error. NotFound / Deleted route to
+// `QueryError::NotFound`, which logs at info!; the storage_controller
+// races PS-attach (which starts the walreceiver and IDENTIFY_SYSTEMs us)
+// against `POST /v1/tenant/timeline` (which loads the timeline here),
+// and the walreceiver retries cheaply once the timeline appears.
+// Logging that retry-once race at error! makes a routine event look
+// like a bug. Everything else is still a real error.
+impl From<TimelineError> for postgres_backend::QueryError {
+    fn from(te: TimelineError) -> postgres_backend::QueryError {
+        match te {
+            TimelineError::NotFound(_) | TimelineError::Deleted(_) => {
+                postgres_backend::QueryError::NotFound(te.to_string().into())
+            }
+            _ => postgres_backend::QueryError::Other(anyhow!("{}", te)),
+        }
+    }
+}
+
 /// We run remote deletion in a background task, this is how it sends its results back.
 type RemoteDeletionReceiver = tokio::sync::watch::Receiver<Option<anyhow::Result<()>>>;
 

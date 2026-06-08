@@ -448,10 +448,7 @@ impl SafekeeperPostgresHandler {
         &mut self,
         pgb: &mut PostgresBackend<IO>,
     ) -> Result<(), QueryError> {
-        let tli = self
-            .global_timelines
-            .get(self.ttid)
-            .map_err(|e| QueryError::Other(e.into()))?;
+        let tli = self.global_timelines.get(self.ttid)?;
 
         // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum), so both
         // branches return the same value.

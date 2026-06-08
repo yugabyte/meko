@@ -2,15 +2,19 @@
 #
 # End-to-end test runner. Brings up one neon_local cluster against an
 # ephemeral YB database, then iterates over every test in each
-# requested category. Each test gets its own clean+init+start so it
-# starts from a known-good state — the *.sh tests routinely stop PS
-# or SK as part of their scenarios and don't reliably reset, so
-# sharing the cluster across tests gets messy.
+# requested category.
 #
-#   *.sh   — runs after a fresh tenant + `main` endpoint. Exports
-#            $TID, $COMPUTE_PORT, $NEON, $NEON_REPO_DIR, $YB_DBNAME.
-#   *.sql  — psql workload against the same shared cluster, set up
-#            once after all the .sh tests finish.
+# All tests share a single cluster + tenant + endpoint to minimize
+# setup cost; between tests we re-up any cluster components the prior
+# test left stopped and recycle the compute endpoint so each test
+# starts from a clean compute state (fresh basebackup, fresh
+# walproposer). The tenant + timeline persist across tests, so test
+# scripts must use unique table names.
+#
+#   *.sh   — runs after the prep step has ensured the cluster + a
+#            running endpoint named `main`. Exports $TID,
+#            $COMPUTE_PORT, $NEON, $NEON_REPO_DIR, $YB_DBNAME.
+#   *.sql  — psql workload against the same shared cluster.
 #
 # After every test the pageserver log is scanned for corruption
 # markers; the first hit aborts the run.
@@ -64,6 +68,15 @@ cleanup_on_exit() {
 }
 trap cleanup_on_exit EXIT
 
+# Capture stdout+stderr to a per-run log. The log lives outside
+# NEON_REPO_DIR because clean.sh wipes that dir at the start of every
+# run; siblings persist across runs and let you diff successive runs.
+RUN_LOG_DIR=${RUN_LOG_DIR:-${NEON_REPO_DIR}-logs}
+mkdir -p "$RUN_LOG_DIR"
+RUN_LOG=$RUN_LOG_DIR/run_$(date +%Y%m%d-%H%M%S).log
+exec > >(tee -a "$RUN_LOG") 2>&1
+echo "Logging run to $RUN_LOG"
+
 NEON=${NEON:-$REPO/target/debug/neon_local}
 export NEON
 [[ -x $NEON ]] || { echo "neon_local binary not found at $NEON; run 'cargo build --bin neon_local'"; exit 1; }
@@ -72,11 +85,27 @@ step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 
 MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
 
-# Bring up a fresh cluster + tenant + endpoint. clean.sh kills any
-# leftover procs and drops the ephemeral DB; neon_local init applies
-# the diesel migrations against the freshly created DB; neon_local
-# start spawns SC, PS, SK, endpoint_storage. Exports $TID for the
-# caller.
+# Pidfile locations under NEON_REPO_DIR.
+PS_PIDFILE=$NEON_REPO_DIR/pageserver_1/pageserver.pid
+SK_PIDFILE=$NEON_REPO_DIR/safekeepers/sk1/safekeeper.pid
+SC_PIDFILE=$NEON_REPO_DIR/storage_controller_1/storage_controller.pid
+ES_PIDFILE=$NEON_REPO_DIR/endpoint_storage/endpoint_storage.pid
+EP_COMPUTE_PIDFILE=$NEON_REPO_DIR/endpoints/main/compute_ctl.pid
+EP_PG_PIDFILE=$NEON_REPO_DIR/endpoints/main/pgdata/postmaster.pid
+
+LOG=$NEON_REPO_DIR/pageserver_1/pageserver.log
+
+is_running() {
+    local pidfile=$1
+    [[ -f $pidfile ]] || return 1
+    local pid
+    pid=$(cat "$pidfile" 2>/dev/null) || return 1
+    [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# Bring the cluster up from scratch. Runs once at the start of the
+# suite: clean leftover state, init+start the stack, create one
+# tenant and one endpoint that every test will share. Exports $TID.
 setup_cluster() {
     "$REPO/test/e2e/clean.sh"
 
@@ -89,26 +118,99 @@ setup_cluster() {
     [[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
     export TID
     echo "tenant: $TID"
-    "$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
+    # Default port allocation picks pg=55432, ext_http=55433,
+    # int_http=55434 for the first endpoint — matches the
+    # $COMPUTE_PORT default. (If $COMPUTE_PORT was overridden, the
+    # caller is on their own.)
+    "$NEON" endpoint create main --tenant-id "$TID" --branch-name main \
+        --pg-version 17 >/dev/null
     "$NEON" endpoint start main >/dev/null
 }
 
-LOG=$NEON_REPO_DIR/pageserver_1/pageserver.log
+# Restart any cluster component the prior test left stopped, then
+# recycle the compute endpoint. `endpoint stop` followed by
+# `endpoint start` kills the running postgres + compute_ctl, redoes
+# basebackup against the (possibly-reattached) pageserver, and
+# spawns a fresh walproposer — so the next test starts from a clean
+# compute state regardless of what the previous test did.
+#
+# Pidfiles are checked rather than blindly invoking `start`: the
+# start path doesn't no-op when a daemon is already running, it
+# tries to bind the port and fails.
+prep_for_next_test() {
+    if ! is_running "$SC_PIDFILE"; then
+        step "restart storage_controller (prior test left it down)"
+        "$NEON" storage_controller start >/dev/null
+    fi
+    if ! is_running "$PS_PIDFILE"; then
+        step "restart pageserver (prior test left it down)"
+        "$NEON" pageserver start >/dev/null
+    fi
+    if ! is_running "$SK_PIDFILE"; then
+        step "restart safekeeper (prior test left it down)"
+        "$NEON" safekeeper start >/dev/null
+    fi
+    if ! is_running "$ES_PIDFILE"; then
+        step "restart endpoint_storage (prior test left it down)"
+        "$NEON" endpoint_storage start >/dev/null
+    fi
 
-run_workload() {
+    # Always recycle the compute. `endpoint stop` is tolerant of the
+    # postgres / compute_ctl already being gone — pg_ctl returns
+    # cleanly when there's no postmaster.pid — so we don't need to
+    # gate on status here. We use `immediate` because some tests
+    # (restart-wal-replay-yb) leave the compute mid-flight talking
+    # to a pageserver that just churned through catch-up; a fast
+    # shutdown blocks on the next walproposer round-trip and adds
+    # 10+ s. The compute's WAL has already been verified by the
+    # test itself, so we don't need the clean checkpoint.
+    local t0 t1
+    t0=$(date +%s)
+    "$NEON" endpoint stop main --mode immediate >/dev/null 2>&1 || true
+    "$NEON" endpoint start main >/dev/null
+    t1=$(date +%s)
+    if (( t1 - t0 > 2 )); then echo "  (endpoint recycle: $((t1 - t0))s)"; fi
+}
+
+run_sh_test() {
+    local sh=$1
+    local rel=${sh#$REPO/}
+    step "script: $rel"
+    local before_lines after_lines
+    before_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo 0)
+    local t0 t1
+    t0=$(date +%s)
+    bash "$sh"
+    t1=$(date +%s)
+    after_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo "$before_lines")
+    local new_hits=0
+    if (( after_lines > before_lines )); then
+        new_hits=$(tail -n $((after_lines - before_lines)) "$LOG" | grep -cE "$MARKERS" || true)
+    fi
+    if (( new_hits > 0 )); then
+        echo "FAIL — $new_hits corruption marker(s) introduced by $rel"
+        tail -n $((after_lines - before_lines)) "$LOG" | grep -E "$MARKERS" | head -5
+        exit 1
+    fi
+    echo "  ok  ($(( t1 - t0 ))s)"
+}
+
+run_sql_workload() {
     local sql=$1
     local rel=${sql#$REPO/}
     step "workload: $rel"
     local before_lines after_lines
-    before_lines=$(wc -l < "$LOG")
+    before_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo 0)
     local t0 t1
     t0=$(date +%s)
     PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres \
         -v ON_ERROR_STOP=1 -f "$sql"
     t1=$(date +%s)
-    after_lines=$(wc -l < "$LOG")
-    local new_hits
-    new_hits=$(tail -n $((after_lines - before_lines)) "$LOG" | grep -cE "$MARKERS" || true)
+    after_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo "$before_lines")
+    local new_hits=0
+    if (( after_lines > before_lines )); then
+        new_hits=$(tail -n $((after_lines - before_lines)) "$LOG" | grep -cE "$MARKERS" || true)
+    fi
     if (( new_hits > 0 )); then
         echo "FAIL — $new_hits corruption marker(s) introduced by $rel"
         tail -n $((after_lines - before_lines)) "$LOG" | grep -E "$MARKERS" | head -5
@@ -117,40 +219,18 @@ run_workload() {
     echo "  ok  ($(( t1 - t0 ))s, +$((after_lines - before_lines)) log lines)"
 }
 
-run_sh_tests() {
+# Collect all test files (.sh and .sql, in lexical order) for each
+# requested category.
+collect_tests() {
     local cat=$1
     local dir=$REPO/test/e2e/$cat
     [[ -d $dir ]] || return 0
     shopt -s nullglob
-    local scripts=("$dir"/*.sh)
-    shopt -u nullglob
-    for sh in "${scripts[@]}"; do
-        local rel=${sh#$REPO/}
-        step "script: $rel"
-        setup_cluster
-        local t0 t1
-        t0=$(date +%s)
-        bash "$sh"
-        t1=$(date +%s)
-        echo "  ok  ($(( t1 - t0 ))s)"
+    local f
+    for f in "$dir"/*.sh "$dir"/*.sql; do
+        echo "$f"
     done
-}
-
-run_sql_workloads() {
-    local cat=$1
-    local dir=$REPO/test/e2e/$cat
-    [[ -d $dir ]] || { echo "skip $cat sql (no directory)"; return 0; }
-    shopt -s nullglob
-    local sqls=("$dir"/*.sql)
     shopt -u nullglob
-    if (( ${#sqls[@]} == 0 )); then
-        echo "skip $cat sql (no .sql files)"
-        return 0
-    fi
-    setup_cluster
-    for sql in "${sqls[@]}"; do
-        run_workload "$sql"
-    done
 }
 
 categories=()
@@ -160,15 +240,17 @@ case "$CATEGORY" in
     all)  categories=(fast slow) ;;
 esac
 
-# Phase 1: every *.sh test, in lexical order, across every requested
-# category. Each gets a fresh cluster.
-for cat in "${categories[@]}"; do
-    run_sh_tests "$cat"
-done
+setup_cluster
 
-# Phase 2: SQL workloads against a fresh cluster.
 for cat in "${categories[@]}"; do
-    run_sql_workloads "$cat"
+    while IFS= read -r f; do
+        [[ -z $f ]] && continue
+        prep_for_next_test
+        case "$f" in
+            *.sh)  run_sh_test "$f" ;;
+            *.sql) run_sql_workload "$f" ;;
+        esac
+    done < <(collect_tests "$cat")
 done
 
 step "Final verdict"
