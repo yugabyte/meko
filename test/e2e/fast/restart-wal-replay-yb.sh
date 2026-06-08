@@ -10,7 +10,7 @@
 # SK → restart both → verify n advanced. Exercises the YB-WAL read
 # path (YbSegmentReader / wals table backfill) on PS catch-up.
 #
-# Usage: test/e2e/restart-wal-replay-yb.sh
+# Usage: test/e2e/fast/restart-wal-replay-yb.sh
 
 set -euo pipefail
 

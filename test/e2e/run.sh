@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 #
-# End-to-end test runner. Iterates SQL workloads under test/e2e/<cat>/
-# against a single shared neon_local cluster + tenant + endpoint,
-# scans pageserver.log after each, and exits non-zero on the first
-# corruption marker (or if any psql command errors out).
+# End-to-end test runner. Each category directory under
+# `test/e2e/<cat>/` mixes two kinds of tests:
+#
+#   *.sh   — self-contained scripts that own their cluster
+#            lifecycle (clean.sh + init + start + workload + verdict).
+#            Run first so the SQL workloads below see a clean slate.
+#   *.sql  — psql workloads against a shared cluster set up once per
+#            run. Fast: cluster startup amortizes across files.
+#
+# After every workload the pageserver log is scanned for corruption
+# markers; the first hit aborts the run.
 #
 # Usage:
 #   test/e2e/run.sh                          # fast suite, fresh cluster
@@ -11,14 +18,10 @@
 #   test/e2e/run.sh slow                     # slow suite only
 #   test/e2e/run.sh all                      # fast then slow
 #   test/e2e/run.sh fast --noclean           # reuse existing cluster
-#                                            # (skip clean.sh + init/start;
-#                                            # assumes endpoint 'main' is up)
-#
-# Workloads are *.sql files under test/e2e/<category>/, run in lexical
-# order. Each runs against a fresh schema (its own CREATE TABLE) so
-# there's no cross-test state. The pageserver log is scanned ONCE at
-# the end against the full set of corruption markers; per-workload
-# scans add per-test attribution.
+#                                            # (skip the shared cluster
+#                                            # setup; .sh tests still
+#                                            # run and clean their own
+#                                            # state)
 #
 set -euo pipefail
 
@@ -50,10 +53,11 @@ step() { echo; echo "=== $* ==="; }
 
 MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
 
-log_baseline_lines=0
-
-# Bring up a fresh cluster + tenant + endpoint, unless caller opted out.
-if (( NOCLEAN == 0 )); then
+# Bring up a single neon_local cluster + tenant + endpoint that the
+# *.sql workloads share. Called after all *.sh tests finish (those
+# tear down/rebuild their own clusters) so the shared cluster doesn't
+# get blown away mid-run.
+setup_shared_cluster() {
     "$REPO/test/e2e/clean.sh"
 
     step "neon_local init + start"
@@ -61,16 +65,16 @@ if (( NOCLEAN == 0 )); then
     "$NEON" start
 
     step "tenant + endpoint"
-    TID=$("$NEON" tenant create --pg-version 16 2>&1 | awk '/successfully created/{print $2}')
+    TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
     [[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
     echo "tenant: $TID"
-    "$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 16 >/dev/null
+    "$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
     "$NEON" endpoint start main >/dev/null
-fi
+}
 
 LOG=$NEON_REPO_DIR/pageserver_1/pageserver.log
 
-# Per-workload runner: prints the workload's psql output, then
+# Per-SQL-workload runner: prints the workload's psql output, then
 # attributes any new corruption markers to it.
 run_workload() {
     local sql=$1
@@ -94,26 +98,67 @@ run_workload() {
     echo "  ok  ($(( t1 - t0 ))s, +$((after_lines - before_lines)) log lines)"
 }
 
-run_category() {
+# Run every *.sh test in a category directory. Each is responsible for
+# its own clean.sh + init + start; we just dispatch and bubble the
+# exit status.
+run_sh_tests() {
     local cat=$1
     local dir=$REPO/test/e2e/$cat
-    [[ -d $dir ]] || { echo "skip $cat (no directory)"; return 0; }
-    local found=0
-    for sql in "$dir"/*.sql; do
-        [[ -f $sql ]] || continue
-        found=1
-        run_workload "$sql"
+    [[ -d $dir ]] || return 0
+    shopt -s nullglob
+    local scripts=("$dir"/*.sh)
+    shopt -u nullglob
+    for sh in "${scripts[@]}"; do
+        local rel=${sh#$REPO/}
+        step "script: $rel"
+        local t0 t1
+        t0=$(date +%s)
+        bash "$sh"
+        t1=$(date +%s)
+        echo "  ok  ($(( t1 - t0 ))s)"
     done
-    if (( found == 0 )); then
-        echo "skip $cat (no .sql files)"
-    fi
 }
 
+run_sql_workloads() {
+    local cat=$1
+    local dir=$REPO/test/e2e/$cat
+    [[ -d $dir ]] || { echo "skip $cat sql (no directory)"; return 0; }
+    shopt -s nullglob
+    local sqls=("$dir"/*.sql)
+    shopt -u nullglob
+    if (( ${#sqls[@]} == 0 )); then
+        echo "skip $cat sql (no .sql files)"
+        return 0
+    fi
+    for sql in "${sqls[@]}"; do
+        run_workload "$sql"
+    done
+}
+
+categories=()
 case "$CATEGORY" in
-    fast) run_category fast ;;
-    slow) run_category slow ;;
-    all)  run_category fast; run_category slow ;;
+    fast) categories=(fast) ;;
+    slow) categories=(slow) ;;
+    all)  categories=(fast slow) ;;
 esac
+
+# Phase 1: self-contained *.sh tests, in order, across every requested
+# category. Each one teardowns + rebuilds its own cluster, so they
+# come before the shared-cluster phase below.
+for cat in "${categories[@]}"; do
+    run_sh_tests "$cat"
+done
+
+# Phase 2: shared cluster + *.sql workloads. Skipped under --noclean
+# IFF no shared cluster exists yet (we assume the caller knows what
+# they're doing — typically reusing one from an interactive session).
+if (( NOCLEAN == 0 )); then
+    setup_shared_cluster
+fi
+
+for cat in "${categories[@]}"; do
+    run_sql_workloads "$cat"
+done
 
 step "Final verdict"
 COUNTER=$(curl -sS http://127.0.0.1:9989/metrics 2>/dev/null \

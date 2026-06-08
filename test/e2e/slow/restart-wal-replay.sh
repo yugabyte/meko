@@ -29,7 +29,7 @@
 #      this hangs (or basebackup fails with an LSN timeout); if fixed,
 #      the value of n reflects the writes done while the PS was down.
 #
-# Usage: test/e2e/restart-wal-replay.sh
+# Usage: test/e2e/slow/restart-wal-replay.sh
 
 set -euo pipefail
 
@@ -69,10 +69,10 @@ step "neon_local init + start"
 "$NEON" start
 
 step "tenant + endpoint"
-TID=$("$NEON" tenant create --pg-version 16 2>&1 | awk '/successfully created/{print $2}')
+TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
 [[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
 echo "tenant: $TID"
-"$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 16 >/dev/null
+"$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
 "$NEON" endpoint start main >/dev/null
 
 step "Seed a single-page table and checkpoint"
@@ -166,7 +166,13 @@ step "Restart compute endpoint (forces basebackup from PS)"
 # basebackup at the safekeeper's current commit LSN. If the PS hasn't
 # caught up the basebackup request times out with an LSN-timeout
 # error against last_record_lsn.
-"$NEON" endpoint stop main >/dev/null
+#
+# `--mode immediate` because the SK was just restarted from
+# `-m immediate` and the walproposer may not have re-synced yet; a
+# graceful `pg_ctl -m fast` shutdown tries to flush WAL through that
+# connection and hangs. We're about to re-bootstrap via basebackup
+# anyway, so a clean shutdown adds nothing.
+"$NEON" endpoint stop main --mode immediate >/dev/null
 ENDPOINT_START_TIMEOUT=${ENDPOINT_START_TIMEOUT:-60}
 if ! timeout "$ENDPOINT_START_TIMEOUT" "$NEON" endpoint start main >/dev/null; then
     echo "FAIL — endpoint failed to start within ${ENDPOINT_START_TIMEOUT}s"

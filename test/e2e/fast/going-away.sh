@@ -8,7 +8,7 @@
 # frame the compute waits up to pageserver_response_disconnect_timeout
 # (default 30 s) before tearing down the half-closed connection.
 #
-# Usage: test/e2e/going-away.sh
+# Usage: test/e2e/fast/going-away.sh
 
 set -euo pipefail
 
@@ -32,10 +32,10 @@ step "neon_local init + start"
 "$NEON" start
 
 step "tenant + endpoint"
-TID=$("$NEON" tenant create --pg-version 16 2>&1 | awk '/successfully created/{print $2}')
+TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
 [[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
 echo "tenant: $TID"
-"$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 16 >/dev/null
+"$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
 "$NEON" endpoint start main >/dev/null
 
 step "Seed a small table so the compute has something to read"

@@ -6,6 +6,11 @@
 # - Kill any neon-stack processes still running locally
 #   (yb-pageserver, safekeeper, storage_broker, endpoint_storage,
 #   storage_controller, neon_local, compute_ctl).
+# - Kill any leftover compute postgres processes anchored under
+#   NEON_REPO_DIR (compute_ctl spawns postgres as a child; if a prior
+#   test's `endpoint stop` hung on pg_ctl, the postgres process can
+#   outlive the test and squat on COMPUTE_PORT, breaking the next
+#   `endpoint start`).
 # - Terminate sessions on the YugabyteDB `yb_storage` database and
 #   drop it.
 # - Remove the on-disk `NEON_REPO_DIR` so init can start fresh.
@@ -26,6 +31,10 @@ step() { echo; echo "=== $* ==="; }
 
 step "Stop any running pageserver/neon processes"
 pkill -9 -f "yb-pageserver|safekeeper|storage_broker|endpoint_storag|storage_controller|neon_local|compute_ctl" 2>/dev/null || true
+# Compute postgres survives a hung pg_ctl shutdown. It runs as
+# `postgres -D <NEON_REPO_DIR>/endpoints/<id>/pgdata`, so anchor the
+# pattern on the repo dir to avoid hitting the YugabyteDB postgres.
+pkill -9 -f "postgres .*${NEON_REPO_DIR}/endpoints" 2>/dev/null || true
 sleep 2
 
 step "Drop yb_storage"
