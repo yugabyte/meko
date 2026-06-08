@@ -44,7 +44,7 @@ YB_PORT=${YB_PORT:-5433}
 # accumulate more WAL gap — make this overrideable for stress runs.
 SOAK_SECS=${SOAK_SECS:-10}
 
-step() { echo; echo "=== $* ==="; }
+step() { echo; printf "%(%H:%M:%S)T === %s ===\n" -1 "$*"; }
 
 cleanup() {
     # Best-effort kill the background UPDATE loop and its psql, in case

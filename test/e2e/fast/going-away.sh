@@ -16,7 +16,7 @@ set -euo pipefail
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
-step() { echo; echo "=== $* ==="; }
+step() { echo; printf "%(%H:%M:%S)T === %s ===\n" -1 "$*"; }
 
 step "Seed a small table so the compute has something to read"
 PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -v ON_ERROR_STOP=1 <<'SQL'

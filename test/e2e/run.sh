@@ -1,28 +1,25 @@
 #!/usr/bin/env bash
 #
-# End-to-end test runner. Each category directory under
-# `test/e2e/<cat>/` mixes two kinds of tests:
+# End-to-end test runner. Brings up one neon_local cluster against an
+# ephemeral YB database, then iterates over every test in each
+# requested category. Each test gets its own clean+init+start so it
+# starts from a known-good state — the *.sh tests routinely stop PS
+# or SK as part of their scenarios and don't reliably reset, so
+# sharing the cluster across tests gets messy.
 #
-#   *.sh   — run against a tenant+endpoint that this runner sets up
-#            fresh before each script (clean.sh + init + start +
-#            tenant create + endpoint create + endpoint start). The
-#            tenant id is exported as $TID; the script just runs its
-#            scenario.
-#   *.sql  — psql workloads against a shared cluster set up once per
-#            run, after all the .sh tests have finished.
+#   *.sh   — runs after a fresh tenant + `main` endpoint. Exports
+#            $TID, $COMPUTE_PORT, $NEON, $NEON_REPO_DIR, $YB_DBNAME.
+#   *.sql  — psql workload against the same shared cluster, set up
+#            once after all the .sh tests finish.
 #
-# After every workload the pageserver log is scanned for corruption
+# After every test the pageserver log is scanned for corruption
 # markers; the first hit aborts the run.
 #
 # Usage:
-#   test/e2e/run.sh                          # fast suite, fresh cluster
-#   test/e2e/run.sh fast                     # explicit
-#   test/e2e/run.sh slow                     # slow suite only
-#   test/e2e/run.sh all                      # fast then slow
-#   test/e2e/run.sh fast --noclean           # skip the shared-cluster
-#                                            # setup at the end. .sh
-#                                            # tests still get a fresh
-#                                            # cluster each.
+#   test/e2e/run.sh                # fast suite
+#   test/e2e/run.sh fast           # explicit
+#   test/e2e/run.sh slow           # slow only
+#   test/e2e/run.sh all            # fast then slow
 #
 set -euo pipefail
 
@@ -30,16 +27,14 @@ REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
 CATEGORY=fast
-NOCLEAN=0
 for arg in "$@"; do
     case "$arg" in
         fast|slow|all) CATEGORY=$arg ;;
-        --noclean)     NOCLEAN=1 ;;
-        *) echo "usage: $0 [fast|slow|all] [--noclean]"; exit 2;;
+        *) echo "usage: $0 [fast|slow|all]"; exit 2;;
     esac
 done
 
-NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.neon-localfs}
+NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.e2e-tests}
 export NEON_REPO_DIR
 export YB_PS_VERIFY_WAL_ROUNDTRIP=${YB_PS_VERIFY_WAL_ROUNDTRIP:-1}
 
@@ -48,22 +43,45 @@ YB_PORT=${YB_PORT:-5433}
 COMPUTE_PORT=${COMPUTE_PORT:-55432}
 export COMPUTE_PORT
 
+# Ephemeral YB database for this run; dropped on exit so concurrent
+# runs (and the dev box's manually-managed yb_storage) don't collide.
+YB_DBNAME=${YB_DBNAME:-yb_storage_e2e_$$_$RANDOM}
+export YB_DBNAME
+
+# Per-run init TOML, derived from /tmp/neon-init.toml with the YB
+# dbname swapped to the ephemeral one in every place that references
+# it: SC's `database_url` and the inline-table `dbname` on the PS
+# `remote_storage` / SK `wal_yb_config` lines.
+INIT_TOML=/tmp/neon-init-e2e-$$.toml
+sed -E \
+    -e "s#/yb_storage\\b#/$YB_DBNAME#g" \
+    -e "s#user = 'yugabyte'#user = 'yugabyte', dbname = '$YB_DBNAME'#g" \
+    /tmp/neon-init.toml > "$INIT_TOML"
+
+cleanup_on_exit() {
+    "$REPO/test/e2e/clean.sh" >/dev/null 2>&1 || true
+    rm -f "$INIT_TOML"
+}
+trap cleanup_on_exit EXIT
+
 NEON=${NEON:-$REPO/target/debug/neon_local}
 export NEON
 [[ -x $NEON ]] || { echo "neon_local binary not found at $NEON; run 'cargo build --bin neon_local'"; exit 1; }
 
-step() { echo; echo "=== $* ==="; }
+step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 
 MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
 
-# Bring up a single neon_local cluster with one tenant and one
-# "main" endpoint. Exports $TID so the caller (a *.sh test or the
-# *.sql phase below) can use it.
+# Bring up a fresh cluster + tenant + endpoint. clean.sh kills any
+# leftover procs and drops the ephemeral DB; neon_local init applies
+# the diesel migrations against the freshly created DB; neon_local
+# start spawns SC, PS, SK, endpoint_storage. Exports $TID for the
+# caller.
 setup_cluster() {
     "$REPO/test/e2e/clean.sh"
 
-    step "neon_local init + start"
-    "$NEON" init --config /tmp/neon-init.toml
+    step "neon_local init + start (db=$YB_DBNAME)"
+    "$NEON" init --config "$INIT_TOML"
     "$NEON" start
 
     step "tenant + endpoint"
@@ -77,8 +95,6 @@ setup_cluster() {
 
 LOG=$NEON_REPO_DIR/pageserver_1/pageserver.log
 
-# Per-SQL-workload runner: prints the workload's psql output, then
-# attributes any new corruption markers to it.
 run_workload() {
     local sql=$1
     local rel=${sql#$REPO/}
@@ -101,9 +117,6 @@ run_workload() {
     echo "  ok  ($(( t1 - t0 ))s, +$((after_lines - before_lines)) log lines)"
 }
 
-# Run every *.sh test in a category directory. Each gets a fresh
-# cluster + tenant + endpoint via setup_cluster() so the previous
-# test's state can't bleed in.
 run_sh_tests() {
     local cat=$1
     local dir=$REPO/test/e2e/$cat
@@ -134,6 +147,7 @@ run_sql_workloads() {
         echo "skip $cat sql (no .sql files)"
         return 0
     fi
+    setup_cluster
     for sql in "${sqls[@]}"; do
         run_workload "$sql"
     done
@@ -146,18 +160,13 @@ case "$CATEGORY" in
     all)  categories=(fast slow) ;;
 esac
 
-# Phase 1: *.sh tests, in order, across every requested category.
-# Each gets its own fresh cluster.
+# Phase 1: every *.sh test, in lexical order, across every requested
+# category. Each gets a fresh cluster.
 for cat in "${categories[@]}"; do
     run_sh_tests "$cat"
 done
 
-# Phase 2: shared cluster + *.sql workloads. Skipped under
-# --noclean for callers reusing an already-running cluster.
-if (( NOCLEAN == 0 )); then
-    setup_cluster
-fi
-
+# Phase 2: SQL workloads against a fresh cluster.
 for cat in "${categories[@]}"; do
     run_sql_workloads "$cat"
 done

@@ -72,12 +72,13 @@ impl EndpointStorage {
             .get_user()
             .context("storage_controller.database_url must include a user")?
             .to_string();
+        let dbname = parsed.get_dbname().unwrap_or("yb_storage").to_string();
         let json = serde_json::json!({
             "type": "YbStore",
             "host": host,
             "port": port,
             "user": user,
-            "dbname": "yb_storage",
+            "dbname": dbname,
             "table_name": "blobs",
         });
         Ok(serde_json::to_string(&json)?)

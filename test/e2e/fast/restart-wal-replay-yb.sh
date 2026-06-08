@@ -21,7 +21,7 @@ YB_PORT=${YB_PORT:-5433}
 
 SOAK_SECS=${SOAK_SECS:-10}
 
-step() { echo; echo "=== $* ==="; }
+step() { echo; printf "%(%H:%M:%S)T === %s ===\n" -1 "$*"; }
 
 cleanup() {
     if [[ -n ${BG_PID:-} ]] && kill -0 "$BG_PID" 2>/dev/null; then
@@ -143,7 +143,7 @@ if (( WEDGE_HITS > 5 )); then
     tail -n 60 "$NEON_REPO_DIR/safekeepers/sk1/safekeeper-1.log" 2>/dev/null || true
     echo
     echo "  --- yb_storage.wals layout (per-segno min/max/count) ---"
-    PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yb_storage -c \
+    PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d "$YB_DBNAME" -c \
         "SELECT segno, min(chunk_offset) AS min_off,
                 max(chunk_offset + chunk_size) AS max_end,
                 min(chunk_seq) AS min_seq, max(chunk_seq) AS max_seq,

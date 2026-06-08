@@ -27,7 +27,7 @@ cd "$REPO"
 YB_HOST=${YB_HOST:-127.0.0.1}
 YB_PORT=${YB_PORT:-5433}
 
-step() { echo; echo "=== $* ==="; }
+step() { echo; printf "%(%H:%M:%S)T === %s ===\n" -1 "$*"; }
 
 step "Write a small workload (table + inserts + updates)"
 PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -v ON_ERROR_STOP=1 <<'SQL'
@@ -44,7 +44,7 @@ step "Stop endpoint, then pageserver (graceful — should force_upsert pending d
 "$NEON" pageserver stop >/dev/null
 
 step "Confirm prev_record_lsn was persisted (non-NULL after PS shutdown)"
-PREV=$(PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yb_storage \
+PREV=$(PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d "$YB_DBNAME" \
     -At -c "SELECT prev_record_lsn FROM pageserver.timeline_state WHERE tenant_id = '$TID'")
 if [[ -z $PREV ]]; then
     echo "FAIL — prev_record_lsn was not persisted (column is NULL after graceful shutdown)"
