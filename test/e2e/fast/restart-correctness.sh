@@ -2,12 +2,12 @@
 #
 # End-to-end verification of the prev_record_lsn restart fix.
 #
-# Brings up a fresh cluster, writes data, restarts the pageserver,
-# then re-reads. With the fix in place, the pageserver attaches
-# without re-deriving prev_record_lsn from scratch — the value
-# persisted alongside disk_consistent_lsn on the previous flush is
-# loaded back from `pageserver.timeline_state`. Without the fix the
-# attach hardcoded prev = None.
+# Writes data, restarts the pageserver, then re-reads. With the fix
+# in place, the pageserver attaches without re-deriving
+# prev_record_lsn from scratch — the value persisted alongside
+# disk_consistent_lsn on the previous flush is loaded back from
+# `pageserver.timeline_state`. Without the fix the attach hardcoded
+# prev = None.
 #
 # This script directly exercises the failure mode: without the
 # patched UPDATE, prev_record_lsn stays NULL forever; without the
@@ -16,38 +16,18 @@
 # historically led to corruption-class incidents (the original
 # motivation for this task).
 #
-# Usage: test/e2e/fast/restart-correctness.sh
+# Run via test/e2e/run.sh — it provides $NEON, $NEON_REPO_DIR,
+# $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
 
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
-NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.neon-localfs}
-export NEON_REPO_DIR
-
 YB_HOST=${YB_HOST:-127.0.0.1}
 YB_PORT=${YB_PORT:-5433}
-COMPUTE_PORT=${COMPUTE_PORT:-55432}
-
-NEON=${NEON:-$REPO/target/debug/neon_local}
-[[ -x $NEON ]] || { echo "neon_local binary not found at $NEON"; exit 1; }
 
 step() { echo; echo "=== $* ==="; }
-
-# Clean slate.
-"$REPO/test/e2e/clean.sh"
-
-step "neon_local init + start"
-"$NEON" init --config /tmp/neon-init.toml
-"$NEON" start
-
-step "tenant + endpoint"
-TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
-[[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
-echo "tenant: $TID"
-"$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
-"$NEON" endpoint start main >/dev/null
 
 step "Write a small workload (table + inserts + updates)"
 PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -v ON_ERROR_STOP=1 <<'SQL'

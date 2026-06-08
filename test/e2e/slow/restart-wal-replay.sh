@@ -29,26 +29,20 @@
 #      this hangs (or basebackup fails with an LSN timeout); if fixed,
 #      the value of n reflects the writes done while the PS was down.
 #
-# Usage: test/e2e/slow/restart-wal-replay.sh
+# Run via test/e2e/run.sh — it provides $NEON, $NEON_REPO_DIR,
+# $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
 
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
-NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.neon-localfs}
-export NEON_REPO_DIR
-
 YB_HOST=${YB_HOST:-127.0.0.1}
 YB_PORT=${YB_PORT:-5433}
-COMPUTE_PORT=${COMPUTE_PORT:-55432}
 
 # Soak window after the PS stop, before we stop the SK. Larger values
 # accumulate more WAL gap — make this overrideable for stress runs.
 SOAK_SECS=${SOAK_SECS:-10}
-
-NEON=${NEON:-$REPO/target/debug/neon_local}
-[[ -x $NEON ]] || { echo "neon_local binary not found at $NEON"; exit 1; }
 
 step() { echo; echo "=== $* ==="; }
 
@@ -61,19 +55,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-
-"$REPO/test/e2e/clean.sh"
-
-step "neon_local init + start"
-"$NEON" init --config /tmp/neon-init.toml
-"$NEON" start
-
-step "tenant + endpoint"
-TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
-[[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
-echo "tenant: $TID"
-"$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
-"$NEON" endpoint start main >/dev/null
 
 step "Seed a single-page table and checkpoint"
 # autovacuum off keeps the row pinned to one page despite HOT churn.

@@ -3,11 +3,13 @@
 # End-to-end test runner. Each category directory under
 # `test/e2e/<cat>/` mixes two kinds of tests:
 #
-#   *.sh   — self-contained scripts that own their cluster
-#            lifecycle (clean.sh + init + start + workload + verdict).
-#            Run first so the SQL workloads below see a clean slate.
+#   *.sh   — run against a tenant+endpoint that this runner sets up
+#            fresh before each script (clean.sh + init + start +
+#            tenant create + endpoint create + endpoint start). The
+#            tenant id is exported as $TID; the script just runs its
+#            scenario.
 #   *.sql  — psql workloads against a shared cluster set up once per
-#            run. Fast: cluster startup amortizes across files.
+#            run, after all the .sh tests have finished.
 #
 # After every workload the pageserver log is scanned for corruption
 # markers; the first hit aborts the run.
@@ -17,11 +19,10 @@
 #   test/e2e/run.sh fast                     # explicit
 #   test/e2e/run.sh slow                     # slow suite only
 #   test/e2e/run.sh all                      # fast then slow
-#   test/e2e/run.sh fast --noclean           # reuse existing cluster
-#                                            # (skip the shared cluster
-#                                            # setup; .sh tests still
-#                                            # run and clean their own
-#                                            # state)
+#   test/e2e/run.sh fast --noclean           # skip the shared-cluster
+#                                            # setup at the end. .sh
+#                                            # tests still get a fresh
+#                                            # cluster each.
 #
 set -euo pipefail
 
@@ -45,19 +46,20 @@ export YB_PS_VERIFY_WAL_ROUNDTRIP=${YB_PS_VERIFY_WAL_ROUNDTRIP:-1}
 YB_HOST=${YB_HOST:-127.0.0.1}
 YB_PORT=${YB_PORT:-5433}
 COMPUTE_PORT=${COMPUTE_PORT:-55432}
+export COMPUTE_PORT
 
 NEON=${NEON:-$REPO/target/debug/neon_local}
+export NEON
 [[ -x $NEON ]] || { echo "neon_local binary not found at $NEON; run 'cargo build --bin neon_local'"; exit 1; }
 
 step() { echo; echo "=== $* ==="; }
 
 MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
 
-# Bring up a single neon_local cluster + tenant + endpoint that the
-# *.sql workloads share. Called after all *.sh tests finish (those
-# tear down/rebuild their own clusters) so the shared cluster doesn't
-# get blown away mid-run.
-setup_shared_cluster() {
+# Bring up a single neon_local cluster with one tenant and one
+# "main" endpoint. Exports $TID so the caller (a *.sh test or the
+# *.sql phase below) can use it.
+setup_cluster() {
     "$REPO/test/e2e/clean.sh"
 
     step "neon_local init + start"
@@ -67,6 +69,7 @@ setup_shared_cluster() {
     step "tenant + endpoint"
     TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
     [[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
+    export TID
     echo "tenant: $TID"
     "$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
     "$NEON" endpoint start main >/dev/null
@@ -98,9 +101,9 @@ run_workload() {
     echo "  ok  ($(( t1 - t0 ))s, +$((after_lines - before_lines)) log lines)"
 }
 
-# Run every *.sh test in a category directory. Each is responsible for
-# its own clean.sh + init + start; we just dispatch and bubble the
-# exit status.
+# Run every *.sh test in a category directory. Each gets a fresh
+# cluster + tenant + endpoint via setup_cluster() so the previous
+# test's state can't bleed in.
 run_sh_tests() {
     local cat=$1
     local dir=$REPO/test/e2e/$cat
@@ -111,6 +114,7 @@ run_sh_tests() {
     for sh in "${scripts[@]}"; do
         local rel=${sh#$REPO/}
         step "script: $rel"
+        setup_cluster
         local t0 t1
         t0=$(date +%s)
         bash "$sh"
@@ -142,18 +146,16 @@ case "$CATEGORY" in
     all)  categories=(fast slow) ;;
 esac
 
-# Phase 1: self-contained *.sh tests, in order, across every requested
-# category. Each one teardowns + rebuilds its own cluster, so they
-# come before the shared-cluster phase below.
+# Phase 1: *.sh tests, in order, across every requested category.
+# Each gets its own fresh cluster.
 for cat in "${categories[@]}"; do
     run_sh_tests "$cat"
 done
 
-# Phase 2: shared cluster + *.sql workloads. Skipped under --noclean
-# IFF no shared cluster exists yet (we assume the caller knows what
-# they're doing — typically reusing one from an interactive session).
+# Phase 2: shared cluster + *.sql workloads. Skipped under
+# --noclean for callers reusing an already-running cluster.
 if (( NOCLEAN == 0 )); then
-    setup_shared_cluster
+    setup_cluster
 fi
 
 for cat in "${categories[@]}"; do

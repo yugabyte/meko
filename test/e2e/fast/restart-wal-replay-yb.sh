@@ -1,33 +1,25 @@
 #!/usr/bin/env bash
 #
-# Variant of restart-wal-replay.sh that brings up a cluster matching
-# the production config from
-# findings-ps-wal-replay-restart-bug-2026-06-04.md:
-#   --wal-yb-config                (live WAL mirrored into yb_storage.wals)
-#   --wal-cache-size-mib 512
+# PS-restart catch-up sequence over YB-WAL:
+#   write loop → stop PS → soak → stop SK → restart both →
+#   verify n advanced.
 #
-# The PS-restart catch-up sequence: write loop → stop PS → soak → stop
-# SK → restart both → verify n advanced. Exercises the YB-WAL read
-# path (YbSegmentReader / wals table backfill) on PS catch-up.
+# Exercises the YB-WAL read path (YbSegmentReader / wals table
+# backfill) on PS catch-up. Background:
+# findings-ps-wal-replay-restart-bug-2026-06-04.md.
 #
-# Usage: test/e2e/fast/restart-wal-replay-yb.sh
+# Run via test/e2e/run.sh — it provides $NEON, $NEON_REPO_DIR,
+# $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
 
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
-NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.neon-localfs}
-export NEON_REPO_DIR
-
 YB_HOST=${YB_HOST:-127.0.0.1}
 YB_PORT=${YB_PORT:-5433}
-COMPUTE_PORT=${COMPUTE_PORT:-55432}
 
 SOAK_SECS=${SOAK_SECS:-10}
-
-NEON=${NEON:-$REPO/target/debug/neon_local}
-[[ -x $NEON ]] || { echo "neon_local binary not found at $NEON"; exit 1; }
 
 step() { echo; echo "=== $* ==="; }
 
@@ -38,54 +30,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-
-"$REPO/test/e2e/clean.sh"
-
-step "Generate AWS-style neon_local init config (YB-WAL + remote-storage CF)"
-INIT_TOML=/tmp/neon-init-yb.toml
-cat > "$INIT_TOML" <<'TOML'
-use_local_tls = false
-default_tenant_id = "11da26b359f5f72061ce4fc6461fab3f"
-control_plane_api = "http://127.0.0.1:1254/upcall/v1/"
-
-[storage_controller]
-max_offline = "10s"
-max_warming_up = "30s"
-heartbeat_interval = "1s"
-timelines_onto_safekeepers = true
-database_url = "postgresql://yugabyte:yugabyte@127.0.0.1:5433/yb_storage"
-
-[[pageservers]]
-id = 1
-listen_pg_addr = "127.0.0.1:64200"
-listen_http_addr = "127.0.0.1:9989"
-listen_grpc_addr = "127.0.0.1:51251"
-pg_auth_type = "Trust"
-http_auth_type = "Trust"
-grpc_auth_type = "Trust"
-remote_storage = "{ host = '127.0.0.1', port = 5433, user = 'yugabyte' }"
-
-[[safekeepers]]
-id = 1
-pg_port = 5484
-http_port = 7696
-wal_yb_config = "{ host = '127.0.0.1', port = 5433, user = 'yugabyte', table_name = 'wals' }"
-wal_cache_size_mib = 512
-
-[endpoint_storage]
-listen_addr = "127.0.0.1:9984"
-TOML
-
-step "neon_local init + start"
-"$NEON" init --config "$INIT_TOML"
-"$NEON" start
-
-step "tenant + endpoint"
-TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
-[[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
-echo "tenant: $TID"
-"$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
-"$NEON" endpoint start main >/dev/null
 
 step "Seed a single-page table and checkpoint"
 PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -v ON_ERROR_STOP=1 <<'SQL'

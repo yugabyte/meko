@@ -2,41 +2,21 @@
 #
 # End-to-end verification of the page_service "GoingAway" frame.
 #
-# Boots a cluster, runs a workload that keeps a pagestream connection
-# busy, gracefully stops the pageserver, and verifies the compute
-# logs the GoingAway receipt and reconnects quickly. Without the
-# frame the compute waits up to pageserver_response_disconnect_timeout
+# Runs a workload that keeps a pagestream connection busy,
+# gracefully stops the pageserver, and verifies the compute logs the
+# GoingAway receipt and reconnects quickly. Without the frame the
+# compute waits up to pageserver_response_disconnect_timeout
 # (default 30 s) before tearing down the half-closed connection.
 #
-# Usage: test/e2e/fast/going-away.sh
+# Run via test/e2e/run.sh — it provides $NEON, $NEON_REPO_DIR,
+# $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
 
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
-NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.neon-localfs}
-export NEON_REPO_DIR
-
-COMPUTE_PORT=${COMPUTE_PORT:-55432}
-
-NEON=${NEON:-$REPO/target/debug/neon_local}
-[[ -x $NEON ]] || { echo "neon_local binary not found at $NEON"; exit 1; }
-
 step() { echo; echo "=== $* ==="; }
-
-"$REPO/test/e2e/clean.sh"
-
-step "neon_local init + start"
-"$NEON" init --config /tmp/neon-init.toml
-"$NEON" start
-
-step "tenant + endpoint"
-TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
-[[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
-echo "tenant: $TID"
-"$NEON" endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 >/dev/null
-"$NEON" endpoint start main >/dev/null
 
 step "Seed a small table so the compute has something to read"
 PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -v ON_ERROR_STOP=1 <<'SQL'
