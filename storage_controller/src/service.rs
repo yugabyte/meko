@@ -438,8 +438,6 @@ pub struct Config {
     /// When set, actively checks and initiates heatmap downloads/uploads.
     pub kick_secondary_downloads: bool,
 
-    // Feature flag: Whether the storage controller should act to rectify pageserver-reported local disk loss.
-    pub handle_ps_local_disk_loss: bool,
 }
 
 impl From<DatabaseError> for ApiError {
@@ -2148,32 +2146,29 @@ impl Service {
             tenants: Vec::new(),
         };
 
-        // If the pageserver reports in the reattach message that it has an empty disk, it's possible that it just
-        // recovered from a local disk failure. The response of the reattach request will contain a list of tenants but it
-        // will not be honored by the pageserver in this case (disk failure). We should make sure we clear any observed
-        // locations of tenants attached to the node so that the reconciler will discover the discrpancy and reconfigure the
-        // missing tenants on the node properly.
-        if self.config.handle_ps_local_disk_loss && reattach_req.empty_local_disk.unwrap_or(false) {
-            tracing::info!(
-                "Pageserver {node_id} reports empty local disk, clearing observed locations referencing the pageserver for all tenants",
-                node_id = reattach_req.node_id
-            );
-            let mut num_tenant_shards_affected = 0;
-            for (tenant_shard_id, shard) in tenants.iter_mut() {
-                if shard
-                    .observed
-                    .locations
-                    .remove(&reattach_req.node_id)
-                    .is_some()
-                {
-                    tracing::info!("Cleared observed location for tenant shard {tenant_shard_id}");
-                    num_tenant_shards_affected += 1;
-                }
+        // yb-mode: pageservers carry no authoritative local tenant state — the
+        // re-attach response is what they'll honor, and any prior observed
+        // location for this node is stale. Clear it so the reconciler will
+        // re-discover and reconfigure as needed.
+        tracing::info!(
+            "Pageserver {node_id} re-attached, clearing observed locations referencing the pageserver for all tenants",
+            node_id = reattach_req.node_id
+        );
+        let mut num_tenant_shards_affected = 0;
+        for (tenant_shard_id, shard) in tenants.iter_mut() {
+            if shard
+                .observed
+                .locations
+                .remove(&reattach_req.node_id)
+                .is_some()
+            {
+                tracing::info!("Cleared observed location for tenant shard {tenant_shard_id}");
+                num_tenant_shards_affected += 1;
             }
-            tracing::info!(
-                "Cleared observed locations for {num_tenant_shards_affected} tenant shards"
-            );
         }
+        tracing::info!(
+            "Cleared observed locations for {num_tenant_shards_affected} tenant shards"
+        );
 
         // TODO: cancel/restart any running reconciliation for this tenant, it might be trying
         // to call location_conf API with an old generation.  Wait for cancellation to complete

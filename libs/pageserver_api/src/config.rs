@@ -193,7 +193,6 @@ pub struct ConfigToml {
     pub background_task_maximum_delay: Duration,
     pub control_plane_api: Option<reqwest::Url>,
     pub control_plane_api_token: Option<String>,
-    pub control_plane_emergency_mode: bool,
     /// Unstable feature: subject to change or removal without notice.
     /// See <https://github.com/neondatabase/neon/pull/9218>.
     pub import_pgdata_upcall_api: Option<reqwest::Url>,
@@ -757,7 +756,6 @@ impl Default for ConfigToml {
 
             control_plane_api: (None),
             control_plane_api_token: (None),
-            control_plane_emergency_mode: (false),
 
             import_pgdata_upcall_api: (None),
             import_pgdata_upcall_api_token: (None),

@@ -1325,15 +1325,10 @@ async fn update_tenant_config_handler(
     let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
     tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
-    // This is a legacy API that only operates on attached tenants: the preferred
-    // API to use is the location_config/ endpoint, which lets the caller provide
-    // the full LocationConf.
-    let location_conf = LocationConf::attached(tenant.get_generation());
-
-    crate::tenant::TenantShard::persist_tenant_config(state.conf, &tenant_id, &location_conf)
-        .await
-        .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!(e)))?;
-
+    // Legacy API that only operates on attached tenants: prefer location_config/.
+    // TenantConfig lives in YB (pageserver.tenant_config); storage_controller is
+    // the canonical writer. Mutating in-memory only here is best-effort for the
+    // legacy callers and will be overwritten on next attach.
     let _ = tenant
         .update_tenant_config(|_crnt| Ok(new_tenant_conf.clone()))
         .expect("Closure returns Ok()");
@@ -1356,23 +1351,14 @@ async fn patch_tenant_config_handler(
     let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
     tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
-    let updated = tenant
+    let _updated = tenant
         .update_tenant_config(|crnt| {
             crnt.apply_patch(request_data.config.clone())
                 .map_err(anyhow::Error::new)
         })
         .map_err(ApiError::BadRequest)?;
 
-    // This is a legacy API that only operates on attached tenants: the preferred
-    // API to use is the location_config/ endpoint, which lets the caller provide
-    // the full LocationConf.
-    let _ = updated;
-    let location_conf = LocationConf::attached(tenant.get_generation());
-
-    crate::tenant::TenantShard::persist_tenant_config(state.conf, &tenant_id, &location_conf)
-        .await
-        .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!(e)))?;
-
+    // Legacy API; in-memory mutation only. See update_tenant_config_handler.
     json_response(StatusCode::OK, ())
 }
 

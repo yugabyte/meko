@@ -407,10 +407,6 @@ struct StorageControllerStartCmdArgs {
     /// pageserver cplane api).
     #[clap(long)]
     base_port: Option<u16>,
-
-    /// Whether the storage controller should handle pageserver-reported local disk loss events.
-    #[clap(long)]
-    handle_ps_local_disk_loss: Option<bool>,
 }
 
 /// Stop storage controller.
@@ -1803,7 +1799,6 @@ async fn handle_storage_controller(
                 instance_id: args.instance_id,
                 base_port: args.base_port,
                 start_timeout: args.start_timeout,
-                handle_ps_local_disk_loss: args.handle_ps_local_disk_loss,
             };
 
             if let Err(e) = svc.start(start_args).await {

@@ -1,13 +1,16 @@
-//! Per-tenant configuration, persisted to `<workdir>/tenants/<id>/config-v1`.
+//! Per-tenant location configuration, in-memory only.
 //!
 //! In yb-mode a tenant is either *attached* to this pageserver (with a
 //! storage_controller-assigned generation number used for fencing YB
-//! writes) or it isn't here at all. Detachment is represented by
-//! absence of the on-disk config file. yb-mode tenants are always
+//! writes) or it isn't here at all. yb-mode tenants are always
 //! unsharded — YugabyteDB tablet-shards the keyspace internally — so
 //! `LocationConf` has nothing left but the generation.
 //!
-//! `TenantConfig` lives in `pageserver.tenant_config` (task 17.c).
+//! Source of truth for attachment is storage_controller (sent at
+//! startup via the re-attach upcall, and at runtime via the
+//! location_config PUT). `TenantConfig` lives in
+//! `pageserver.tenant_config` (task 17.c). Neither is persisted on
+//! the pageserver's local disk.
 
 use pageserver_api::models;
 use serde::{Deserialize, Serialize};
@@ -30,12 +33,6 @@ impl LocationConf {
     /// Construct an attachment record.
     pub(crate) fn attached(generation: Generation) -> Self {
         Self { generation }
-    }
-
-    /// Update the generation stored in this record. Called on
-    /// attach / re-attach.
-    pub(crate) fn attach_in_generation(&mut self, generation: Generation) {
-        self.generation = generation;
     }
 
     /// Decode an external `LocationConfig` request into a

@@ -1,14 +1,15 @@
 //! Originally a layer-file FD cache (the `VirtualFile` clock-LRU pool)
 //! plus a full async read/write API. The yb-pageserver fork moved
-//! every page to YugabyteDB, so the layer stack is gone and the only
-//! surviving on-disk write is `Tenant::persist_tenant_config_at`
-//! calling `VirtualFile::crashsafe_overwrite` (~1 call per tenant per
-//! attachment change).
+//! every page to YugabyteDB, so the layer stack is gone. The remaining
+//! on-disk artifacts (initdb tarballs, basebackup cache) are written
+//! through plain `tokio::fs`; this module exposes only a crash-safe
+//! atomic-overwrite helper that survives in case a future on-disk
+//! artifact needs one.
 //!
 //! What's left here:
 //!
 //! - [`VirtualFile::crashsafe_overwrite`] — async wrapper around
-//!   [`utils::crashsafe::overwrite`], bypasses any FD pool.
+//!   [`utils::crashsafe::overwrite`], no FD pool involved.
 //! - [`PAGE_SZ`] — 8 KiB constant still consumed by `walredo::process`.
 //! - [`is_fatal_io_error`] / [`on_fatal_io_error`] / [`MaybeFatalIo`]
 //!   — IO-error classification + abort helpers used across the

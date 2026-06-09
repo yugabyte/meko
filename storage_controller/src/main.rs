@@ -202,10 +202,6 @@ struct Cli {
     /// Primarily useful for testing to reduce test execution time.
     #[arg(long, default_value = "false", action=ArgAction::Set)]
     kick_secondary_downloads: bool,
-
-    /// **Feature Flag** Whether the storage controller should act to rectify pageserver-reported local disk loss.
-    #[arg(long, default_value = "false")]
-    handle_ps_local_disk_loss: bool,
 }
 
 enum StrictMode {
@@ -430,7 +426,6 @@ async fn async_main() -> anyhow::Result<()> {
         use_local_compute_notifications: args.use_local_compute_notifications,
         timeline_safekeeper_count: args.timeline_safekeeper_count,
         kick_secondary_downloads: args.kick_secondary_downloads,
-        handle_ps_local_disk_loss: args.handle_ps_local_disk_loss,
     };
 
     // Validate that we can connect to the database

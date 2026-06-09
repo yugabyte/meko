@@ -27,7 +27,6 @@ use reqwest::Url;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::{LogFormat, SecretString};
 
-use crate::TENANT_LOCATION_CONFIG_NAME;
 use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
 
 /// Global state of pageserver.
@@ -163,10 +162,6 @@ pub struct PageServerConf {
     /// JWT token for use with the control plane API.
     pub control_plane_api_token: Option<SecretString>,
 
-    /// If true, pageserver will make best-effort to operate without a control plane: only
-    /// for use in major incidents.
-    pub control_plane_emergency_mode: bool,
-
     /// Maximum number of WAL records to be ingested and committed at the same time
     pub ingest_batch_size: u64,
 
@@ -292,13 +287,6 @@ impl PageServerConf {
         self.tenants_path().join(tenant_shard_id.to_string())
     }
 
-    /// Points to a place in pageserver's local directory,
-    /// where certain tenant's LocationConf be stored.
-    pub(crate) fn tenant_location_config_path(&self, tenant_shard_id: &TenantId) -> Utf8PathBuf {
-        self.tenant_path(tenant_shard_id)
-            .join(TENANT_LOCATION_CONFIG_NAME)
-    }
-
     pub fn timelines_path(&self, tenant_shard_id: &TenantId) -> Utf8PathBuf {
         self.tenant_path(tenant_shard_id)
             .join(TIMELINES_SEGMENT_NAME)
@@ -374,7 +362,6 @@ impl PageServerConf {
             background_task_maximum_delay,
             control_plane_api,
             control_plane_api_token,
-            control_plane_emergency_mode,
             import_pgdata_upcall_api: _,
             import_pgdata_upcall_api_token: _,
             import_pgdata_aws_endpoint_url: _,
@@ -453,7 +440,6 @@ impl PageServerConf {
             background_task_maximum_delay,
             control_plane_api: control_plane_api
                 .ok_or_else(|| anyhow::anyhow!("`control_plane_api` must be set"))?,
-            control_plane_emergency_mode,
             ingest_batch_size,
             max_vectored_read_bytes,
             max_get_vectored_keys,

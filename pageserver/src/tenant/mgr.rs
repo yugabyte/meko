@@ -9,8 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use camino::{Utf8DirEntry, Utf8Path, Utf8PathBuf};
-use futures::StreamExt;
+use camino::{Utf8Path, Utf8PathBuf};
 use pageserver_api::key::Key;
 use pageserver_api::models::{ShardIdentity, ShardIndex};
 use pageserver_api::upcall_api::ReAttachResponseTenant;
@@ -22,7 +21,6 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::crashsafe::path_with_suffix_extension;
-use utils::fs_ext::PathExt;
 use utils::generation::Generation;
 use utils::id::{TenantId, TimelineId};
 use utils::{backoff, completion};
@@ -34,14 +32,12 @@ use crate::controller_upcall_client::{
     RetryForeverError, StorageControllerUpcallApi, StorageControllerUpcallClient,
 };
 use crate::http::routes::ACTIVE_TENANT_TIMEOUT;
-use crate::metrics::{LOCAL_DATA_LOSS_SUSPECTED, TENANT, TENANT_MANAGER as METRICS};
+use crate::metrics::{TENANT, TENANT_MANAGER as METRICS};
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind};
 use crate::tenant::config::LocationConf;
 use crate::tenant::span::debug_assert_current_span_has_tenant_id;
 use crate::tenant::timeline::ShutdownMode;
-use crate::tenant::{
-    AttachedTenantConf, GcError, LoadConfigError, SpawnMode, TenantShard, TenantState,
-};
+use crate::tenant::{AttachedTenantConf, GcError, SpawnMode, TenantShard, TenantState};
 use crate::virtual_file::MaybeFatalIo;
 use crate::{InitializationOrder, TEMP_FILE_SUFFIX};
 use initdb_storage::remote_tenant_path;
@@ -263,135 +259,83 @@ pub struct TenantManager {
     background_purges: BackgroundPurges,
 }
 
-fn emergency_generations(
-    tenant_confs: &HashMap<TenantId, Result<LocationConf, LoadConfigError>>,
-) -> HashMap<TenantId, TenantStartupMode> {
-    tenant_confs
-        .iter()
-        .filter_map(|(tid, lc)| {
-            let lc = match lc {
-                Ok(lc) => lc,
-                Err(_) => return None,
-            };
-            Some((*tid, TenantStartupMode::Attached(lc.generation)))
-        })
-        .collect()
-}
-
+/// Ask storage_controller (via the re-attach upcall) which tenants this
+/// pageserver should be attached to, and in which generation. This is the
+/// sole source of truth at startup — there is no local on-disk record of
+/// attachment any more (config-v1 was retired with task 17 follow-up).
 async fn init_load_generations(
     conf: &'static PageServerConf,
-    tenant_confs: &HashMap<TenantId, Result<LocationConf, LoadConfigError>>,
     cancel: &CancellationToken,
-) -> anyhow::Result<Option<HashMap<TenantId, TenantStartupMode>>> {
-    let generations = if conf.control_plane_emergency_mode {
-        error!(
-            "Emergency mode!  Tenants will be attached unsafely using their last known generation"
-        );
-        emergency_generations(tenant_confs)
-    } else {
-        let client = StorageControllerUpcallClient::new(conf, cancel);
-        info!("Calling {} API to re-attach tenants", client.base_url());
-        // If we are configured to use the control plane API, then it is the source of truth for what tenants to load.
-        let empty_local_disk = tenant_confs.is_empty();
-        match client.re_attach(conf, empty_local_disk).await {
-            Ok(tenants) => tenants
-                .into_iter()
-                .flat_map(|(id, rart)| {
-                    TenantStartupMode::from_reattach_tenant(rart).map(|tsm| (id, tsm))
-                })
-                .collect(),
-            Err(RetryForeverError::ShuttingDown) => {
-                anyhow::bail!("Shut down while waiting for control plane re-attach response")
-            }
+) -> anyhow::Result<HashMap<TenantId, Generation>> {
+    let client = StorageControllerUpcallClient::new(conf, cancel);
+    info!("Calling {} API to re-attach tenants", client.base_url());
+    let response = match client.re_attach(conf).await {
+        Ok(tenants) => tenants,
+        Err(RetryForeverError::ShuttingDown) => {
+            anyhow::bail!("Shut down while waiting for control plane re-attach response")
         }
     };
 
-    Ok(Some(generations))
+    Ok(response
+        .into_iter()
+        .flat_map(|(id, rart)| {
+            TenantStartupMode::from_reattach_tenant(rart).map(|tsm| match tsm {
+                TenantStartupMode::Attached(gen_) => (id, gen_),
+            })
+        })
+        .collect())
 }
 
-/// Given a directory discovered in the pageserver's tenants/ directory, attempt
-/// to load a tenant config from it.
+/// Sweep the local `tenants/` directory for entries that don't correspond to a
+/// tenant the storage_controller currently expects us to own, and queue them for
+/// background purge. Temp dirs are removed inline.
 ///
-/// If we cleaned up something expected (like an empty dir or a temp dir), return None.
-fn load_tenant_config(
+/// Stale entries can occur after a crash mid-detach or after a tenant migrated
+/// away while this pageserver was down. They hold only initdb tarballs and
+/// basebackup caches in yb-mode, so removing them is always safe.
+async fn purge_stale_tenant_dirs(
     conf: &'static PageServerConf,
-    tenant_shard_id: TenantId,
-    dentry: Utf8DirEntry,
-) -> Option<Result<LocationConf, LoadConfigError>> {
-    let tenant_dir_path = dentry.path().to_path_buf();
-    if crate::is_temporary(&tenant_dir_path) {
-        info!("Found temporary tenant directory, removing: {tenant_dir_path}");
-        // No need to use safe_remove_tenant_dir_all because this is already
-        // a temporary path
-        std::fs::remove_dir_all(&tenant_dir_path).fatal_err("delete temporary tenant dir");
-        return None;
-    }
-
-    // This case happens if we crash during attachment before writing a config into the dir
-    let is_empty = tenant_dir_path
-        .is_empty_dir()
-        .fatal_err("Checking for empty tenant dir");
-    if is_empty {
-        info!("removing empty tenant directory {tenant_dir_path:?}");
-        std::fs::remove_dir(&tenant_dir_path).fatal_err("delete empty tenant dir");
-        return None;
-    }
-
-    Some(TenantShard::load_tenant_config(conf, &tenant_shard_id))
-}
-
-/// Initial stage of load: walk the local tenants directory, clean up any temp files,
-/// and load configurations for the tenants we found.
-///
-/// Do this in parallel, because we expect 10k+ tenants, so serial execution can take
-/// seconds even on reasonably fast drives.
-async fn init_load_tenant_configs(
-    conf: &'static PageServerConf,
-) -> HashMap<TenantId, Result<LocationConf, LoadConfigError>> {
+    attached: &HashMap<TenantId, Generation>,
+    background_purges: &BackgroundPurges,
+) {
     let tenants_dir = conf.tenants_path();
-
-    let dentries = tokio::task::spawn_blocking(move || -> Vec<Utf8DirEntry> {
-        let context = format!("read tenants dir {tenants_dir}");
-        let dir_entries = tenants_dir.read_dir_utf8().fatal_err(&context);
-
-        dir_entries
-            .collect::<Result<Vec<_>, std::io::Error>>()
-            .fatal_err(&context)
+    let dentries = match tokio::task::spawn_blocking(move || {
+        tenants_dir
+            .read_dir_utf8()
+            .and_then(|it| it.collect::<Result<Vec<_>, _>>())
     })
     .await
-    .expect("Config load task panicked");
+    .expect("read tenants dir task panicked")
+    {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("Failed to read tenants dir while purging stale entries: {e}");
+            return;
+        }
+    };
 
-    let mut configs = HashMap::new();
-
-    let mut join_set = JoinSet::new();
     for dentry in dentries {
-        let tenant_shard_id = match dentry.file_name().parse::<TenantId>() {
-            Ok(id) => id,
-            Err(_) => {
-                warn!(
-                    "Invalid tenant path (garbage in our repo directory?): '{}'",
-                    dentry.file_name()
-                );
-                continue;
+        let path = dentry.path().to_path_buf();
+        if crate::is_temporary(&path) {
+            info!("removing temporary tenant directory {path}");
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                warn!("failed to remove temporary tenant directory {path}: {e}");
             }
+            continue;
+        }
+        let Ok(tenant_id) = dentry.file_name().parse::<TenantId>() else {
+            warn!("Invalid tenant path (garbage in our repo directory?): '{}'", dentry.file_name());
+            continue;
         };
-
-        join_set.spawn_blocking(move || {
-            (
-                tenant_shard_id,
-                load_tenant_config(conf, tenant_shard_id, dentry),
-            )
-        });
-    }
-
-    while let Some(r) = join_set.join_next().await {
-        let (tenant_shard_id, tenant_config) = r.expect("Panic in config load task");
-        if let Some(tenant_config) = tenant_config {
-            configs.insert(tenant_shard_id, tenant_config);
+        if attached.contains_key(&tenant_id) {
+            continue;
+        }
+        info!(%tenant_id, "Purging local tenant dir not present in re-attach response");
+        match safe_rename_tenant_dir(&path).await {
+            Ok(tmp) => background_purges.spawn(tmp),
+            Err(e) => warn!(%tenant_id, "Failed to rename stale tenant dir {path}: {e}"),
         }
     }
-
-    configs
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -445,126 +389,34 @@ pub async fn init_tenant_mgr(
 
     // yb-mode: no ephemeral layers, no dirty-byte budget to wire up.
 
-    // Scan local filesystem for attached tenants
-    let tenant_configs = init_load_tenant_configs(conf).await;
+    // The storage_controller's re-attach response is the sole source of truth
+    // for which tenants this pageserver should own and at what generation.
+    // The local tenants/ dir is just scratch (initdb tarballs, basebackup cache),
+    // never authoritative.
+    let attached = init_load_generations(conf, cancel).await?;
 
-    // Determine which tenants are to be secondary or attached, and in which generation
-    let tenant_modes = init_load_generations(conf, &tenant_configs, cancel).await?;
-
-    // Local SSD check: raise an alert if our local filesystem does not contain any tenants but the re-attach request returned tenants.
-    // This can happen if the PS suffered a Kubernetes node failure resulting in loss of all local data, but recovered quickly on another node
-    // so the Storage Controller has not had the time to move tenants out.
-    let data_loss_suspected = if let Some(tenant_modes) = &tenant_modes {
-        tenant_configs.is_empty() && !tenant_modes.is_empty()
-    } else {
-        false
-    };
-    if data_loss_suspected {
-        tracing::error!(
-            "Local data loss suspected: no tenants found on local filesystem, but re-attach request returned tenants"
-        );
-    }
-    LOCAL_DATA_LOSS_SUSPECTED.set(if data_loss_suspected { 1 } else { 0 });
+    purge_stale_tenant_dirs(conf, &attached, background_purges).await;
 
     tracing::info!(
         "Attaching {} tenants at startup, warming up {} at a time",
-        tenant_configs.len(),
+        attached.len(),
         conf.concurrent_tenant_warmup.initial_permits()
     );
-    TENANT.startup_scheduled.inc_by(tenant_configs.len() as u64);
+    TENANT.startup_scheduled.inc_by(attached.len() as u64);
 
-    // Accumulate futures for writing tenant configs, so that we can execute in parallel
-    let mut config_write_futs = Vec::new();
-
-    // Update the location configs according to the re-attach response and persist them to disk
-    tracing::info!("Updating {} location configs", tenant_configs.len());
-    for (tenant_shard_id, location_conf) in tenant_configs {
+    for (tenant_shard_id, generation) in attached {
         let tenant_dir_path = conf.tenant_path(&tenant_shard_id);
+        let timelines_path = conf.timelines_path(&tenant_shard_id);
+        // tenant/timelines dir is just a cache (initdb.tar.zst, basebackup_cache).
+        // Doesn't need crash-safe sync.
+        tokio::fs::create_dir_all(&timelines_path)
+            .await
+            .fatal_err("create timelines/ dir");
 
-        let mut location_conf = match location_conf {
-            Ok(l) => l,
-            Err(e) => {
-                // This should only happen in the case of a serialization bug or critical local I/O error: we cannot load this tenant
-                error!(tenant_id=%tenant_shard_id, "Failed to load tenant config, failed to {e:#}");
-                continue;
-            }
-        };
-
-        if let Some(tenant_modes) = &tenant_modes {
-            // We have a generation map: treat it as the authority for whether
-            // this tenant is really attached.
-            match tenant_modes.get(&tenant_shard_id) {
-                None => {
-                    info!(tenant_id=%tenant_shard_id, "Detaching tenant, control plane omitted it in re-attach response");
-
-                    match safe_rename_tenant_dir(&tenant_dir_path).await {
-                        Ok(tmp_path) => {
-                            background_purges.spawn(tmp_path);
-                        }
-                        Err(e) => {
-                            error!(tenant_id=%tenant_shard_id,
-                            "Failed to move detached tenant directory '{tenant_dir_path}': {e:?}");
-                        }
-                    };
-
-                    // We deleted local content: move on to next tenant, don't try and spawn this one.
-                    continue;
-                }
-                Some(TenantStartupMode::Attached(generation)) => {
-                    if &location_conf.generation > generation {
-                        tracing::error!(tenant_id=%tenant_shard_id,
-                            "Control plane gave decreasing generation ({generation:?}) in re-attach response for tenant that was attached in generation {:?}; skipping",
-                            location_conf.generation
-                        );
-                        continue;
-                    }
-                    location_conf.attach_in_generation(*generation);
-                }
-            }
-        } else {
-            // Legacy mode: no generation information, any tenant present
-            // on local disk may activate
-            info!(tenant_id=%tenant_shard_id, "Starting tenant in legacy mode, no generation",);
-        };
-
-        // Presence of a generation number implies attachment: attach the tenant
-        // if it wasn't already, and apply the generation number.
-        config_write_futs.push(async move {
-            let r =
-                TenantShard::persist_tenant_config(conf, &tenant_shard_id, &location_conf).await;
-            (tenant_shard_id, location_conf, r)
-        });
-    }
-
-    // Execute config writes with concurrency, to avoid bottlenecking on local FS write latency
-    tracing::info!(
-        "Writing {} location config files...",
-        config_write_futs.len()
-    );
-    let config_write_results = futures::stream::iter(config_write_futs)
-        .buffer_unordered(16)
-        .collect::<Vec<_>>()
-        .await;
-
-    tracing::info!(
-        "Spawning {} tenant shard locations...",
-        config_write_results.len()
-    );
-    // For those shards that have live configurations, construct `Tenant` objects and start them running
-    for (tenant_shard_id, location_conf, config_write_result) in config_write_results {
-        // Writing a config to local disk is foundational to startup up tenants: panic if we can't.
-        config_write_result.fatal_err("write tenant shard config file");
-
-        let tenant_dir_path = conf.tenant_path(&tenant_shard_id);
         let shard_identity = pageserver_api::models::ShardIdentity::unsharded();
-        let generation = location_conf.generation;
-        // Task 17.c: refresh `tenant_conf` from the YB-side
-        // `pageserver.tenant_config` table. The local `config-v1`
-        // copy is a stale snapshot; storage_controller is the
-        // source of truth and may have updated it since the last
-        // location_config notification. If the YB row is missing
-        // (e.g. a tenant created before this migration), fall back
-        // to the disk copy.
+        // Task 17.c: TenantConfig lives in `pageserver.tenant_config` (YB).
+        // storage_controller is the sole writer; we re-read on every attach.
+        // Missing row → defaults (tenant created before migration, or in flight).
         let tenant_conf = match resources
             .fpu_page_store
             .load_tenant_config(tenant_shard_id)
@@ -606,7 +458,7 @@ pub async fn init_tenant_mgr(
         tenants.insert(tenant_shard_id, slot);
     }
 
-    info!("Processed {} local tenants at startup", tenants.len());
+    info!("Processed {} tenants at startup", tenants.len());
 
     let mut tenant_map = tenant_manager.tenants.write().unwrap();
     *tenant_map = TenantsMap::Open(tenants);
@@ -627,16 +479,11 @@ fn tenant_spawn(
     mode: SpawnMode,
     ctx: &RequestContext,
 ) -> Result<Arc<TenantShard>, GlobalShutDown> {
-    // All these conditions should have been satisfied by our caller: the tenant dir exists, is a well formed
-    // path, and contains a configuration file.  Assertions that do synchronous I/O are limited to debug mode
-    // to avoid impacting prod runtime performance.
+    // Caller is responsible for ensuring tenant_path exists. Assertions that do
+    // synchronous I/O are limited to debug mode to avoid impacting prod runtime
+    // performance.
     assert!(!crate::is_temporary(tenant_path));
     debug_assert!(tenant_path.is_dir());
-    debug_assert!(
-        conf.tenant_location_config_path(&tenant_shard_id)
-            .try_exists()
-            .unwrap()
-    );
 
     TenantShard::spawn(
         conf,
@@ -787,19 +634,12 @@ impl TenantManager {
             }
         };
 
-        // Fast-path continued: having dropped out of the self.tenants lock, do the async
-        // phase of writing config and/or waiting for flush, before returning.
+        // Fast-path continued: having dropped out of the self.tenants lock, return.
+        // Generation lives in-memory in TenantShard.generation; nothing to persist.
         match fast_path_taken {
             Some(FastPathModified::Attached(tenant)) => {
-                TenantShard::persist_tenant_config(
-                    self.conf,
-                    &tenant_shard_id,
-                    &new_location_config,
-                )
-                .await
-                .fatal_err("write tenant shard config");
-
                 let _ = flush; // AttachedStale-flush dance was dead in yb-mode
+                let _ = new_location_config;
                 return Ok(Some(tenant));
             }
             None => {
@@ -862,21 +702,12 @@ impl TenantManager {
         let tenant_path = self.conf.tenant_path(&tenant_shard_id);
         let timelines_path = self.conf.timelines_path(&tenant_shard_id);
 
-        // Directory structure is the same for attached and secondary modes:
-        // create it if it doesn't exist.  Timeline load/creation expects the
-        // timelines/ subdir to already exist.
-        //
-        // Does not need to be fsync'd because local storage is just a cache.
+        // Timeline load/creation expects the timelines/ subdir to already exist.
+        // Does not need to be fsync'd because local storage is just a cache
+        // (initdb.tar.zst, basebackup_cache).
         tokio::fs::create_dir_all(&timelines_path)
             .await
             .fatal_err("create timelines/ dir");
-
-        // Before activating either secondary or attached mode, persist the
-        // configuration, so that on restart we will re-attach (or re-start
-        // secondary) on the tenant.
-        TenantShard::persist_tenant_config(self.conf, &tenant_shard_id, &new_location_config)
-            .await
-            .fatal_err("write tenant shard config");
 
         let new_slot = {
             let shard_identity = pageserver_api::models::ShardIdentity::unsharded();
@@ -1049,6 +880,10 @@ impl TenantManager {
             anyhow::bail!("Tenant is not in attached state");
         };
 
+        // Capture the current generation before shutdown — that's the source
+        // of truth now that the on-disk config file is gone.
+        let location_conf = LocationConf::attached(tenant.generation);
+
         let (_guard, progress) = utils::completion::channel();
         match tenant.shutdown(progress, ShutdownMode::Hard).await {
             Ok(()) => {
@@ -1062,7 +897,6 @@ impl TenantManager {
 
         let tenant_path = self.conf.tenant_path(&tenant_shard_id);
         let timelines_path = self.conf.timelines_path(&tenant_shard_id);
-        let config = TenantShard::load_tenant_config(self.conf, &tenant_shard_id)?;
 
         if drop_cache {
             tracing::info!("Dropping local file cache");
@@ -1094,7 +928,7 @@ impl TenantManager {
             tenant_shard_id,
             &tenant_path,
             self.resources.clone(),
-            AttachedTenantConf::try_from(self.conf, config, tenant_conf)?,
+            AttachedTenantConf::try_from(self.conf, location_conf, tenant_conf)?,
             shard_identity,
             None,
             SpawnMode::Eager,

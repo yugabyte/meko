@@ -254,10 +254,6 @@ pub async fn shutdown_pageserver(
     std::process::exit(exit_code);
 }
 
-/// Per-tenant configuration file.
-/// Full path: `tenants/<tenant_id>/config-v1`.
-pub(crate) const TENANT_LOCATION_CONFIG_NAME: &str = "config-v1";
-
 /// A suffix used for various temporary files. Any temporary files found in the
 /// data directory at pageserver startup can be automatically removed.
 pub(crate) const TEMP_FILE_SUFFIX: &str = "___temp";
