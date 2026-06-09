@@ -38,8 +38,13 @@ for arg in "$@"; do
     esac
 done
 
-NEON_REPO_DIR=${NEON_REPO_DIR:-$REPO/.e2e-tests}
+TEST_DIR=${TEST_DIR:-$REPO/.e2e-tests}
+export TEST_DIR
+RUN_ID=$(date +%Y%m%d-%H%M%S)
+
+NEON_REPO_DIR=${NEON_REPO_DIR:-$TEST_DIR/run_$RUN_ID}
 export NEON_REPO_DIR
+mkdir -p "$NEON_REPO_DIR"
 export YB_PS_VERIFY_WAL_ROUNDTRIP=${YB_PS_VERIFY_WAL_ROUNDTRIP:-1}
 
 YB_HOST=${YB_HOST:-127.0.0.1}
@@ -71,9 +76,9 @@ trap cleanup_on_exit EXIT
 # Capture stdout+stderr to a per-run log. The log lives outside
 # NEON_REPO_DIR because clean.sh wipes that dir at the start of every
 # run; siblings persist across runs and let you diff successive runs.
-RUN_LOG_DIR=${RUN_LOG_DIR:-${NEON_REPO_DIR}-logs}
+RUN_LOG_DIR=${RUN_LOG_DIR:-${TEST_DIR}}
 mkdir -p "$RUN_LOG_DIR"
-RUN_LOG=$RUN_LOG_DIR/run_$(date +%Y%m%d-%H%M%S).log
+RUN_LOG=$RUN_LOG_DIR/run_$RUN_ID.log
 exec > >(tee -a "$RUN_LOG") 2>&1
 echo "Logging run to $RUN_LOG"
 
