@@ -1,6 +1,6 @@
 # Safekeeper LSNs
 
-Updated: 2026-06-06
+Updated: 2026-06-08
 
 Inventory of every LSN the safekeeper uses, derived from the Rust sources
 only (`safekeeper/`, `libs/utils`, `libs/safekeeper_api`). Do not treat
@@ -61,12 +61,19 @@ headers are ignored on append (`safekeeper.rs`).
 Persisted in YB (`control_file::YbControlFileStorage`). Loaded at timeline
 attach; updated via `TimelineState::finish_change` / `flush`.
 
-| Column / field | Meaning |
-|----------------|---------|
+Authoritative current column list is `COLUMNS` in
+`safekeeper/src/control_file.rs`.
+
+| Column | Meaning |
+|--------|---------|
 | `timeline_start_lsn` | Earliest LSN this timeline conceptually covers (branch/bootstrap point). Set on first `ProposerElected` if still zero. |
 | `local_start_lsn` | Earliest LSN this **safekeeper node** has contiguous WAL from. Set to `start_streaming_at` on election. |
 | `remote_consistent_lsn` | Oldest checkpoint the pageserver has durably ingested — **do not delete WAL at or above this** from the pageserver's perspective. Fed by `PageserverFeedback.remote_consistent_lsn`. |
-| `term` + `term_history` | Raft acceptor state: term switches anchored at LSNs (`TermLsn` pairs in JSONB). |
+| `term` (BIGINT) + `term_history` (JSONB `Vec<TermLsn>`) | Raft acceptor state: current term + the term-switch LSN trail. |
+| `pg_version`, `system_id`, `wal_seg_size` | Server info, set at timeline create; immutable thereafter. |
+| `proposer_uuid` (BYTEA, 16 B) | Last *elected* proposer's id — monitoring only, not load-bearing. |
+| `mconf` (JSONB) | Membership `Configuration` — generation + safekeeper set. |
+| `creation_ts` (TIMESTAMPTZ) | When the row was first inserted. |
 
 **In-memory overlay** (`TimelineMemState`):
 - `remote_consistent_lsn` — updated immediately on pageserver feedback;

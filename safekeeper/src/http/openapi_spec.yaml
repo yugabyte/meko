@@ -259,10 +259,6 @@ components:
           type: string
         commit_lsn:
           type: string
-        backup_lsn:
-          type: string
-        peer_horizon_lsn:
-          type: string
         remote_consistent_lsn:
           type: string
 

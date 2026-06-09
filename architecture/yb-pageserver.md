@@ -23,8 +23,8 @@ The refactor deleted the entire layer-file machinery (~25 K lines:
 storage-implementation-specific — is:
 - `pageserver_api` (Key, Lsn, configs, shard identity, controller
   protocol)
-- `pageserver_compaction`, `pageserver_client`, `pageserver_client_grpc`,
-  `pageserver_page_api` (sibling crates now living at `pageserver/{compaction,client,client_grpc,page_api}/`)
+- `pageserver_client`, `pageserver_client_grpc`,
+  `pageserver_page_api` (sibling crates now living at `pageserver/{client,client_grpc,page_api}/`)
 - `wal_decoder` (Value, NeonWalRecord)
 - `remote_storage::YsqlClient` (reconnecting YB Postgres-protocol
   wrapper)
@@ -38,7 +38,7 @@ The binary name is `yb-pageserver`. Builds with
 | Upstream artifact | yb-pageserver replacement |
 |---|---|
 | `(Key, LSN) → Value` stored as B-tree leaves in delta/image layer files | One row per version in `pageserver.pages` (YB) |
-| Open in-memory layer + frozen layer + flush loop | In-RAM write buffer (5 s / 100 MB defaults), flushed as `INSERT … VALUES (…),(…),…` into `pageserver.pages` |
+| Open in-memory layer + frozen layer + flush loop | In-RAM write buffer (5 s / 25 MiB defaults), flushed as `INSERT … VALUES (…),(…),…` into `pageserver.pages` |
 | L0 → L1 compaction, image-layer creation | **Image-anchored reads** + background image materialiser (this file) |
 | `index_part.json` (per-timeline layer list) | The `pageserver.timeline_state` state row |
 | `metadata` (local file with ancestor/LSN bookkeeping) | Columns on the `pageserver.timeline_state` row |
@@ -51,16 +51,22 @@ storage-controller handshake are unchanged.
 
 ## Schema
 
-Two tables live in the `pageserver` schema inside `yb_storage`,
-auto-provisioned by `neon_local` alongside `public.blobs` and
-`public.wals`. See [`yugabyte.md`](yugabyte.md) for the full DDL.
+Five tables live in the `pageserver` schema inside `yb_storage`:
+`pages` (relation pages), `slru_pages` (SLRU blocks), `meta`
+(everything else — relsize sentinels, dir listings, aux files,
+two-phase commit, repl origins), `tenant_config` (per-tenant
+`TenantConfig` JSON), and `timeline_state` (per-timeline state row).
+DDL is owned by the diesel migration at
+`storage_controller/migrations/00000000000001_initial_schema/up.sql`
+(lines 163-250). See [`yugabyte.md`](yugabyte.md) for the full DDL.
 
 ### `pageserver.pages`
 
 One row per (Key, LSN). The PK partitions by the **(spcnode, dbnode,
 relnode, forknum)** fork identity (each fork's whole block-set lives on
-one tablet), then clusters by `(blknum, is_image, lsn DESC)` so a
-per-block image lookup is a single seek, not a scan.
+one tablet), then clusters by `(blknum, lsn DESC, is_image)` so a
+per-block, per-LSN scan walks rows in LSN-descending order and an
+anchor lookup at a given LSN is a single seek, not a scan.
 
 ```sql
 CREATE TABLE pageserver.pages (
@@ -76,15 +82,18 @@ CREATE TABLE pageserver.pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, is_image, lsn DESC)
+                 blknum, lsn DESC, is_image)
 );
 ```
 
 Only **relation-page keys** live here — keys where
 `Key::is_rel_block_key()` holds (`field1 == 0x00`, `field4 != 0`,
-`field6 != 0xffffffff`). Non-page keys (SLRUs, metadata, dir listings,
-aux files, repl origins, rel-size sentinels) continue through the
-layer-file path in `public.blobs`.
+`field6 != 0xffffffff`). SLRU blocks go to `pageserver.slru_pages`
+(see `up.sql:183-195`; `PageStore::put_slru_pages` / `read_slru_chain`
+in `page_store.rs`). Everything else — metadata, dir listings, aux
+files, repl origins, rel-size sentinels — goes to `pageserver.meta`
+(see `up.sql:203-210`; `PageStore::put_meta` / `read_meta`). Nothing
+in the pageserver writes to `public.blobs` anymore.
 
 `is_image` is whether the payload is an 8 KiB Postgres page (vs. a
 serialised `NeonWalRecord`). `will_init` mirrors `Value::will_init()` —
@@ -101,23 +110,30 @@ One row per timeline. Replaces the upstream split of `metadata` +
 
 ```sql
 CREATE TABLE pageserver.timeline_state (
-    tenant_id              TEXT    NOT NULL,
-    timeline_id            TEXT    NOT NULL,
-    disk_consistent_lsn    BIGINT  NOT NULL,
-    applied_gc_cutoff_lsn  BIGINT  NOT NULL,
+    tenant_id              TEXT      NOT NULL,
+    timeline_id            TEXT      NOT NULL,
+    consistent_lsn         BIGINT    NOT NULL,
+    applied_gc_cutoff_lsn  BIGINT    NOT NULL,
     ancestor_timeline_id   TEXT,
     ancestor_lsn           BIGINT,
-    current_generation     INT     NOT NULL,
-    pg_version             INT     NOT NULL,
+    current_generation     INT       NOT NULL,
+    pg_version             INT       NOT NULL,
+    initdb_lsn             BIGINT,
+    prev_record_lsn        BIGINT,
+    archived_at            TIMESTAMP,
+    deleted_at             TIMESTAMP,
+    rel_size_migration     TEXT,
+    rel_size_migrated_at   BIGINT,
+    lineage                JSONB,
     PRIMARY KEY ((tenant_id) HASH, timeline_id)
 );
 ```
 
-- `disk_consistent_lsn` — highest LSN durably present in `pageserver.pages`/
+- `consistent_lsn` — highest LSN durably present in `pageserver.pages`/
   `slru_pages`/`meta`. Advances on every successful `PageWriter::flush`.
   Drives both safekeeper WAL truncation and ingest resume on restart.
   `last_record_lsn` is intentionally not persisted — on restart, the
-  walreceiver streams from `disk_consistent_lsn` forward and the
+  walreceiver streams from `consistent_lsn` forward and the
   in-memory value re-derives within seconds.
 - `applied_gc_cutoff_lsn` — same meaning as upstream; reads below this
   LSN aren't supported.
@@ -138,30 +154,34 @@ CREATE TABLE pageserver.timeline_state (
    the anchor — image → walredo base, will_init delta → first record.
 3. Drive walredo as today (`Timeline::reconstruct_value`).
 
-The SQL that `PageStore::read_chain` issues (single-key path) is a
-two-step CTE:
+The SQL that `PageStore::read_chain` issues (single-key path) uses a
+scalar-subquery anchor with `COALESCE(..., 0)` for the lower bound so
+both ends of the LSN range are pushed into a single DocDB scan (no
+CTE):
 
 ```sql
--- Fast path: anchor on the latest image at or before target.
-WITH anchor AS (
-    SELECT lsn AS anchor_lsn
-    FROM pageserver.pages
-    WHERE <key_filter> AND is_image=TRUE AND lsn <= $target
-    ORDER BY lsn DESC LIMIT 1
-)
-SELECT … FROM pageserver.pages p, anchor
+SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum,
+       p.lsn, p.is_image, p.will_init, p.payload
+FROM pageserver.pages p
 WHERE <key_filter>
-  AND p.lsn >= anchor.anchor_lsn AND p.lsn <= $target
-ORDER BY p.lsn DESC;
+  AND p.lsn <= $target
+  AND p.lsn >= COALESCE((
+        SELECT a.lsn FROM pageserver.pages a
+        WHERE <key_filter>
+          AND a.is_image = TRUE AND a.lsn <= $target
+        ORDER BY a.lsn DESC LIMIT 1), 0)
+ORDER BY p.lsn DESC, p.is_image DESC;
 ```
 
 With `is_image` in the clustering key the anchor seek is `O(log B)`
 where `B` is the # of image rows for that block — typically 1. If no
-image exists (`anchor` CTE empty), `read_chain` falls back to a plain
-LSN-descending scan and walks rows until it hits a `will_init=true`
-delta. Correct in all cases; the fallback is the only "slow" path and
-only fires for cold blocks the background image materialiser hasn't
-visited yet.
+image exists, the scalar subquery returns NULL and `COALESCE(..., 0)`
+turns the lower bound into `p.lsn >= 0` — a plain LSN-descending scan
+of the whole chain. The Rust-side trim walks the returned rows
+LSN-desc and stops at the first `will_init=true` row, so both the
+image-anchored and the no-image case shorten correctly. The
+no-image case is the only "slow" path and only fires for cold blocks
+the background image materialiser hasn't visited yet.
 
 Reads above `last_record_lsn` block on `wait_lsn`. Reads below
 `applied_gc_cutoff_lsn` return an error.
@@ -183,10 +203,15 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
 4. Rel-page rows live in `UnifiedPages` — one in-RAM structure that
    indexes both pre-flush (pinned in RAM until durable) and post-flush
    (LRU-ish cache for read-latency) entries. SLRU and meta entries
-   stay in their own simpler `Vec` buffers for now. Everything is
-   under one `RwLock<WriterState>`: `put` and the flush cursor flip
-   take `.write()`; all readers (`read_chain`, `read_chain_durable`,
-   `scan_range`, `read_meta`, `should_flush`, `stats`) take `.read()`.
+   stay in their own simpler `Vec` buffers for now. There is no
+   monolithic `RwLock<WriterState>` anymore: per-key state lives in
+   sharded `DashMap`s inside `UnifiedPages` (writes hit only the
+   target shard), aux (SLRU/meta) buffers sit behind a small
+   `parking_lot::Mutex<AuxBuffers>`, and counters like `rows_written`
+   / `consistent_lsn_watermark` are atomics
+   (`page_writer.rs:175-199`, `unified_pages.rs`). Phase 3.f / 4.f
+   killed the single-RwLock model so the writer fan-in goes straight
+   to DashMap shards instead of serialising on a global lock.
    Concurrent get_page handlers filter the cache in parallel. Flushes
    fire when either trigger crosses threshold (default 5 s / 25 MiB).
 5. Flush snapshots the unflushed prefix of `UnifiedPages` (no copy of
@@ -206,16 +231,24 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
    `read_chain` / `scan_range` (dedup by LSN, truncate at the first
    `will_init=true` row). Because flushes don't move the data, in-flight
    INSERTed rows remain visible.
-7. Background image materialiser: when `PageWriter::put` observes a
-   key crossing `image_chain_limit` consecutive non-image, non-`will_init`
-   deltas, it `try_send`s a `MaterializeJob { key, target_lsn }` to a
-   bounded mpsc. The materialiser task drains the queue: per job it
-   calls `read_chain_durable` (cache + YB, **never** pre-flush — see
-   below), walredos to a fresh page image, `put_pages` the image to
-   YB, then `install_materialized_image` to trim the cache for that
-   key up to the image LSN and push the new image in as a durable
-   cache entry. Subsequent reads at LSN ≥ image_lsn anchor on the
-   image instead of walking back to the latest `will_init` delta.
+7. Background image materialiser: when `PageWriter::flush` observes
+   keys whose per-key delta tally crossed `image_chain_limit` (or the
+   payload-bytes threshold) during the just-flushed window, it
+   dispatches `MaterializeJob { key, target_lsn }` entries onto a
+   bounded mpsc (blocking send — backpressures the walreceiver if the
+   materialiser falls behind). The materialiser worker drains the
+   queue in batches of up to `BATCH_DRAIN_LIMIT` jobs and runs a
+   two-phase pipeline: `redo_phase` (chain reads + walredo on this
+   task, with `redo_concurrency`-scaled fan-out) followed by
+   `commit_phase` (bulk INSERTs + `install_materialized_image`
+   spawned onto a separate task, bounded by
+   `BASE_MAX_INFLIGHT_INSERTS`). The pipeline lets batch N+1's redo
+   run concurrently with batch N's YB INSERT round-trip while
+   keeping per-batch correctness — see `image_materializer.rs:148-291`.
+   `install_materialized_image` trims the cache for the key up to the
+   image LSN and pushes the new image in as a durable cache entry.
+   Subsequent reads at LSN ≥ image_lsn anchor on the image instead of
+   walking back to the latest `will_init` delta.
 
 Why the materialiser uses **durable-only** reads: if it built an
 image from pre-flush rows and the process crashed, WAL replay would
@@ -236,7 +269,7 @@ Default knobs (configurable via `pageserver.toml` under the
 | `backpressure_bytes` | 50 MiB | Hard ceiling on the pre-flush buffer. `PageWriter::put` blocks until a flush drains below it. `0` disables (legacy unbounded growth) |
 | `image_chain_limit` | 20 | Deltas-since-anchor before a key is queued for materialisation (`0` disables count trigger) |
 | `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for materialisation (`0` disables size trigger) |
-| `materialize_queue_capacity` | 1000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
+| `materialize_queue_capacity` | 2000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
 | `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Durable entries are evicted FIFO when crossed; pre-flush entries are pinned regardless |
 
 ## Backpressure
@@ -264,7 +297,7 @@ Set `backpressure_bytes = 0` to opt out (legacy unbounded growth).
 
 **Materialiser-side backpressure.** The write-time materialisation
 trigger does a **blocking** `mpsc::send` into the materialiser channel
-(capacity `materialize_queue_capacity`, default 1000). When the
+(capacity `materialize_queue_capacity`, default 2000). When the
 materialiser can't drain — usually because its own `read_chain_durable`
 + walredo + `put_pages` chain is bottlenecked on the dedicated YSQL
 connection — the channel fills and the walreceiver blocks at the
@@ -296,11 +329,17 @@ the channel.
 
 ## Background image materialiser
 
-Triggered **at write time**: when `PageWriter::put` observes a key
-accumulating `image_chain_limit` consecutive non-image, non-`will_init`
-deltas (counter resets on any image / will_init for the key, per-key
-state under the same RwLock as the buffer). On cross, a
-`MaterializeJob { key, target_lsn }` is `try_send`'d to a bounded mpsc.
+Triggered **post-flush**: `PageWriter::put` keeps a per-key tally in
+the sharded `delta_counts` DashMap (counter + payload-bytes; reset on
+any image / `will_init` for the key — see `page_writer.rs:505-535`).
+After every successful flush, `flush()` walks `delta_counts` for keys
+whose tally crossed `image_chain_limit` (or
+`image_chain_payload_bytes_limit`) during the flushed window and
+dispatches a `MaterializeJob { key, target_lsn }` per key at the
+flushed-window's max LSN — durable in YB by construction
+(`page_writer.rs:571-619`, `992-1058`). Dispatch is a **blocking**
+`mpsc::send`, so the walreceiver backpressures when the materialiser
+falls behind.
 
 The worker task (`ImageMaterializer::spawn`, one per timeline) drains
 the queue:
@@ -327,9 +366,9 @@ the queue:
 Failure / restart behaviour: on any error the job is logged and
 dropped; the next delta past the (now-reset) counter re-enqueues. On
 process restart, per-key counters start at zero — restart-survivor
-keys with long chains keep reading via the slow path until 10 more
-deltas trigger materialisation. A periodic backstop scan could close
-that gap later; not in v1.
+keys with long chains keep reading via the slow path until 20 more
+deltas (or 4 KiB combined delta payload) trigger materialisation. A
+periodic backstop scan could close that gap later; not in v1.
 
 GC of the superseded deltas in YB is Phase 6 — until then, the row
 count grows. The materialiser pays only for read-latency wins; size
@@ -344,11 +383,21 @@ Sequence:
    learns the new gen from the attach payload.
 2. yb-pageserver opens the timeline: reads the current state row, asserts
    `row.current_generation == attach_gen`.
-3. Each flush transaction wraps the `INSERT INTO pages …` in a
-   `BEGIN; UPDATE pageserver.timeline_state SET disk_consistent_lsn = $new
-   WHERE tenant_id=$1 AND timeline_id=$2 AND current_generation =
-   $expected; … COMMIT`. If the `UPDATE`'s row count is 0, the gen has
-   moved; the flush aborts and the pageserver tears down the timeline.
+3. Row INSERTs run as independent chunks via
+   `stream::iter(...).buffer_unordered(N)` against
+   `pageserver.pages` / `slru_pages` / `meta` — there is no `BEGIN
+   / COMMIT` wrapping the data INSERTs (`page_store.rs:351-457`). The
+   generation fence is a **subsequent standalone UPDATE** in
+   `advance_consistent_lsn` (`page_store.rs:1589-1659`):
+   `UPDATE pageserver.timeline_state
+    SET consistent_lsn=$3,
+        prev_record_lsn=COALESCE($5, prev_record_lsn)
+    WHERE tenant_id=$1 AND timeline_id=$2 AND current_generation=$4`.
+   If the `UPDATE`'s row count is 0, a one-shot probe SELECT
+   disambiguates "row missing entirely" (init bug) from
+   `StaleGeneration { live_generation }`; on the latter the flush
+   reports `StaleGeneration` to its caller and the pageserver tears
+   down the timeline.
 
 This collapses the upstream "every layer file carries its gen in the
 name + every delete is gen-checked" machinery into one column.
@@ -356,9 +405,9 @@ name + every delete is gen-checked" machinery into one column.
 ## What yb-pageserver does NOT do
 
 - **Compaction** — none. Image-layer creation moves from synchronous
-  compaction to an async background image materialiser (see above). The
-  `pageserver_compaction` crate is still a build-time dep so the fork
-  stays buildable; it's unused at runtime.
+  compaction to an async background image materialiser (see above).
+  The `pageserver_compaction` crate has been deleted; no runtime or
+  build-time dependency on it remains.
 - **Local layer cache** — none. Every read hits YB. If profiling later
   shows a `(key, lsn) → page` LRU would help, that's a follow-up — but
   it'd live above PageStore, not as a copy of the upstream file-cache.
@@ -397,9 +446,9 @@ where they differ from upstream:
 |---|---|---|---|
 | TCP connect | libpq, no explicit cap in `control_plane/src/endpoint.rs::local_pageserver_conf_to_conn_info` | **Unset** → OS TCP SYN-retry (~127 s on Linux) | Currently no `connect_timeout=` parameter is appended to the constructed connstring. |
 | First WARN log on stalled response | `neon.pageserver_response_log_timeout` (`libpagestore.c:87`) | **10 s** | Cosmetic; request keeps waiting. |
-| Disconnect + reconnect on stalled response | `neon.pageserver_response_disconnect_timeout` (`libpagestore.c:89`) | **30 s** *(was 150 s upstream)* | Lowered in yb-light: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
+| Disconnect + reconnect on stalled response | `neon.pageserver_response_disconnect_timeout` (`libpagestore.c:95`) | **30 s** *(was 150 s upstream)* | Lowered in yb-light: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
 | Reconnect attempts before erroring back to compute | `max_reconnect_attempts` (`libpagestore.c:83`) | **60** (1 s backoff each) | Combined with the disconnect timeout, a hard-down pageserver surfaces to the compute query in ~30 s + 60 × 1 s ≈ ~90 s. |
-| Pageserver-side tenant-activate wait for an inbound getpage | `ACTIVE_TENANT_TIMEOUT` (`pageserver/src/page_service.rs:96`) | **5 s** | If the tenant isn't `Active` within 5 s of the getpage arriving, the pageserver replies retry-able rather than hanging. |
+| Pageserver-side tenant-activate wait for an inbound getpage | `ACTIVE_TENANT_TIMEOUT` (`pageserver/src/page_service.rs:91`) | **5 s** | If the tenant isn't `Active` within 5 s of the getpage arriving, the pageserver replies retry-able rather than hanging. |
 
 Pageserver doesn't apply an idle/recv timeout to inbound compute
 libpq connections (the keepalive constants in `page_service.rs` are
@@ -412,7 +461,7 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 
 > ⚠️ **Test debt** — many phases below landed without per-phase
 > regression tests on the new code paths. Particularly thin
-> coverage: the `disk_consistent_lsn` UPDATE path, the
+> coverage: the `consistent_lsn` UPDATE path, the
 > `visible_remote_consistent_lsn` slot publish, the safekeeper-side
 > WAL truncation feedback loop, the image materialiser's
 > `read_chain_durable` cache-miss path, the basebackup-cache
@@ -429,7 +478,12 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 - `pageserver/src/tenant/timeline.rs` — `get_vectored_via_page_writer`
   drives the row-store read path; `chain_to_value_reconstruct_state`
   converts a chain into walredo inputs.
-- `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
-  — DDL bootstrap for `pageserver` schema.
-- `architecture/yugabyte.md` — full DDL reference for `pageserver.pages`
-  and `pageserver.timeline_state`.
+- `storage_controller/migrations/00000000000001_initial_schema/up.sql`
+  — diesel-managed DDL for the `pageserver` schema (`pages`,
+  `slru_pages`, `meta`, `tenant_config`, `timeline_state`) and the
+  rest of `yb_storage` (task 10). Replaces the earlier
+  `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
+  bootstrap, which has been removed.
+- `architecture/yugabyte.md` — full DDL reference for
+  `pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`,
+  `pageserver.tenant_config`, and `pageserver.timeline_state`.

@@ -94,3 +94,6 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 16 | [Unwind dead RTC plumbing](16_rtc-dead-code-unwind.md) | ✅ done | medium | yb-pageserver |
 | 17 | [Move tenant_conf to YB + shrink LocationConf](17_move-tenant-conf-to-yb.md) | ✅ done | medium | yb-pageserver |
 | 18 | [Drop tenant-sharding machinery](18_drop-sharding.md) | ✅ done | medium | yb-pageserver |
+| 19 | [SK control file → YB columns](19_sk-control-file-to-yb-columns.md) | ✅ done | medium | safekeeper |
+| 20 | [Remove storage broker](20_remove-storage-broker.md) | ✅ done | medium | safekeeper |
+| 21 | [Drop `commit_lsn` / `peer_horizon_lsn` from wire](21_drop-commit-lsn-peer-horizon-from-wire.md) | ✅ done | low | safekeeper |

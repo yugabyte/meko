@@ -16,11 +16,14 @@ upstream Neon can skim) and **changes in yb-light**.
 |---|---|
 | [`high-level.md`](high-level.md) | Cluster topology, components, end-to-end data flows |
 | [`compute.md`](compute.md) | The user-facing Postgres + Neon smgr hooks |
-| [`safekeeper.md`](safekeeper.md) | WAL Raft cluster, control file, WAL storage |
-| [`pageserver.md`](pageserver.md) | Layer files, getpage, remote_storage |
+| [`safekeeper.md`](safekeeper.md) | Single-SK WAL durability, control file, WAL storage |
+| [`safekeeper-lsns.md`](safekeeper-lsns.md) | SK-side LSN inventory + flows |
+| [`pageserver.md`](pageserver.md) | Inherited Neon pageserver design |
+| [`yb-pageserver.md`](yb-pageserver.md) | yb-light pageserver fork: page-store, materialiser, write path |
+| [`pageserver-lsns.md`](pageserver-lsns.md) | PS-side LSN inventory + flows |
 | [`storage-controller.md`](storage-controller.md) | Cluster control plane (relational state) |
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
-| [`yugabyte.md`](yugabyte.md) | What lives in YB: databases, tables, schemas |
+| [`yugabyte.md`](yugabyte.md) | What lives in YB: databases, schemas, tables |
 
 ## Quick mental model
 
@@ -34,21 +37,23 @@ upstream Neon can skim) and **changes in yb-light**.
                   push  v               v
               +----------------+   +----------------+
               |   Safekeeper   |   |   Pageserver   |
-              |                |-->|  (per-tenant)  |
+              |   (single)     |-->|  (per-tenant)  |
               +----------------+   +----------------+
                         \                 |
-                         \                |
-                          \               |  remote_storage
-                           \              |  (RemoteStorage trait)
+                         \                |  YsqlClient
+                          \               |  (tokio_postgres)
+                           \              |
                             v             v
               +-----------------------------------------+
-              |              YugabyteDB                 |
-              |  db: yb_storage         db: storage_    |
-              |    table: blobs           controller    |
-              |    table: wals            (11 tables)   |
+              |          YugabyteDB (db: yb_storage)    |
+              |   schema  storage_controller (8 tables) |
+              |   schema  pageserver (5 tables)         |
+              |   schema  safekeeper (timeline_state)   |
+              |   schema  public (blobs, wals)          |
               +-----------------------------------------+
 ```
 
-What's on local FS in yb-light (when YB-backed): the pageserver's layer-file
-cache, the compute's `pgdata`, and operational files (logs, pidfiles).
-Everything that has to *survive a wipe of that disk* is in YB.
+What's on local FS in yb-light: the pageserver's layer-file cache, the
+compute's `pgdata`, and operational files (logs, pidfiles). Everything
+that has to *survive a wipe of that disk* lives in YB. Authoritative
+schema is `storage_controller/migrations/00000000000001_initial_schema/up.sql`.

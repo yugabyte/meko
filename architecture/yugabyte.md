@@ -10,30 +10,35 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 
 | Schema | Tables | Owner | Provisioned by |
 |---|---|---|---|
-| `public` | `blobs`, `wals`, `blob_namespace` ENUM | yugabyte | `neon_local` (auto) |
-| `pageserver` | `pages`, `slru_pages`, `meta`, `timeline_state` | yugabyte | `neon_local` (auto) |
-| `storage_controller` | 11 Diesel-managed tables (`tenant_shards`, `nodes`, `timelines`, …) | yugabyte | `neon_local` creates the schema; the controller binary runs migrations on first start |
+| `public` | `blobs`, `wals`, `blob_namespace` ENUM | yugabyte | controller migrations |
+| `pageserver` | `pages`, `slru_pages`, `meta`, `tenant_config`, `timeline_state` | yugabyte | controller migrations |
+| `safekeeper` | `timeline_state` | yugabyte | controller migrations |
+| `storage_controller` | 8 Diesel-managed tables (`tenant_shards`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `safekeeper_timeline_pending_ops`, `timeline_imports`) | yugabyte | controller migrations |
 
-`neon_local` auto-provisions everything on first start: it connects to
-YB's `yugabyte` admin DB with the same credentials as the controller's
-`database_url`, `CREATE DATABASE yb_storage`, then inside that DB
-creates the `public.blob_namespace` ENUM + `public.blobs` /
-`public.wals` tables (schema-qualified DDL so they can't drift into
-`storage_controller` via search_path). The controller's URL is
-amended on its side with `options=-c search_path=storage_controller,public`
-so its migrations land in the `storage_controller` schema. All
-idempotent — re-runs are no-ops. No operator DDL is required on a
-fresh YB cluster.
+`neon_local` only `CREATE DATABASE`s `yb_storage`
+(`control_plane/src/storage_controller.rs::ensure_external_database`);
+every schema, ENUM, and table — across `public`, `pageserver`,
+`safekeeper`, and `storage_controller` — is created by the storage
+controller binary's Diesel migrations on first start. The single
+authoritative migration is
+`storage_controller/migrations/00000000000001_initial_schema/up.sql`,
+which `CREATE SCHEMA IF NOT EXISTS`'s all four schemas and creates
+every table referenced below. The controller amends its connection
+URL with `options=-c search_path=storage_controller,public` so
+unqualified DDL lands in `storage_controller`; cross-schema DDL is
+written schema-qualified. All idempotent — re-runs are no-ops. No
+operator DDL is required on a fresh YB cluster.
 
 ## `yb_storage.blobs`
 
 Generic chunked blob store used by:
 
 - The pageserver (`remote_storage` config: `prefix = 'pageserver-yb/'`).
-- The safekeeper for control-file persistence (`prefix = 'safekeeper-yb/safekeeper-control/...'`).
-- The safekeeper for sealed-segment WAL backup (`prefix = 'safekeeper-yb/.../<XLogFileName>'`).
 
-Subsystems are segregated by **key prefix**, not by separate tables.
+The safekeeper has no consumer of `blobs` today — control-file state
+moved to `safekeeper.timeline_state` (one row per timeline) and live
+WAL goes to `public.wals`. Subsystems are segregated by **key
+prefix**, not by separate tables.
 
 ```sql
 CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
@@ -83,8 +88,10 @@ A row in this schema looks like:
 | `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `index_part.json` | `1` |
 | `pageserver` | `c8178f5e…1f966a` | *(empty)* | `tenant-manifest.json` | `1` |
 | `pageserver` | `c8178f5e…1f966a` | *(empty)* | `heatmap-v1.json` | *(NULL)* |
-| `safekeeper` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `safekeeper-control` | *(NULL)* |
-| `safekeeper` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `000000010000000000000005` | *(NULL)* |
+
+The `safekeeper` ENUM variant is reserved but currently unused —
+safekeeper state lives in `safekeeper.timeline_state` and live WAL in
+`public.wals`.
 
 The PK puts `(tenant_id, timeline_id, key)` in the hash partition so
 every key has its own hash tablet (no hot tablet on big tenants).
@@ -102,11 +109,7 @@ Schema documented in detail in [`remote-storage.md`](remote-storage.md).
 key prefix          | distinct objects | typical row count | bytes
 --------------------+------------------+-------------------+-------
 pageserver-yb/      |              ~30 | 1-3 chunks each   |  ~600 MB
-safekeeper-yb/      |              ~30 | 1-2 chunks each   |  ~300 MB
 ```
-
-(`safekeeper-yb/` contains: 1 row for the control file, plus N rows for the
-sealed WAL segments that wal_backup has uploaded.)
 
 ### Useful diagnostic queries
 
@@ -144,20 +147,22 @@ LIMIT 10;
 
 Per-write log used by the safekeeper's live-WAL mirror (when
 `--wal-yb-config` is set). Schema is *different* from `blobs` — keyed by
-`(tenant, timeline, segno, chunk_seq)` and ordered by `chunk_seq` for
-last-write-wins reassembly.
+`(tenant, timeline, segno, chunk_offset)`. Each row is one chunk of
+one `write_wal()` call; the writer never produces overlapping chunks
+(`truncate_wal` aligns the next write at exactly the truncation
+point), so `chunk_offset` alone identifies a chunk within a segment
+and a same-PK INSERT is an idempotent retry of the same bytes.
 
 ```sql
 CREATE TABLE public.wals (
     tenant_id        TEXT    NOT NULL,
     timeline_id      TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
-    chunk_seq        INT     NOT NULL,
     chunk_offset     BIGINT  NOT NULL,
     chunk_size       INT     NOT NULL,
     data             BYTEA   NOT NULL,
     last_modified_us BIGINT  NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)
 );
 ```
 
@@ -168,7 +173,6 @@ Schema documented in detail in [`safekeeper.md`](safekeeper.md).
 ```sql
 -- Per-segment summary for one timeline
 SELECT segno, count(*) AS chunks,
-       max(chunk_seq) AS max_seq,
        max(chunk_offset + chunk_size) AS end_offset,
        pg_size_pretty(sum(chunk_size)::bigint) AS bytes
 FROM wals
@@ -193,7 +197,7 @@ One row per `(block, LSN)`. Holds **relation pages only** —
 aux files, repl origins, rel-size sentinels) continue through
 `public.blobs`. Hash partition by `(tenant, timeline, spcnode, dbnode,
 relnode, forknum)` so each fork's whole block-set lives on one tablet.
-Clustering by `(blknum, is_image, lsn DESC)` means a per-block image
+Clustering by `(blknum, lsn DESC, is_image)` means a per-block image
 lookup is a single seek, not a scan.
 
 ```sql
@@ -210,7 +214,7 @@ CREATE TABLE pageserver.pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, is_image, lsn DESC)
+                 blknum, lsn DESC, is_image)
 );
 ```
 
@@ -241,25 +245,33 @@ a `will_init=true` delta. This is the cold path; a background image
 materialiser ([Phase 3e](yb-pageserver.md#background-image-materialiser-planned))
 keeps it rare.
 
-### `pageserver.timelines`
+### `pageserver.timeline_state`
 
 One row per timeline. Replaces the upstream split of `metadata`,
 `index_part.json`, and `tenant-manifest.json` with a single
-transactionally-updatable record. `current_generation` is the gate that
-fences a stale pageserver — every flush is wrapped in a transaction
-that conditionally updates this row.
+transactionally-updatable record. `current_generation` is the gate
+that fences a stale pageserver — every flush is wrapped in a
+transaction that conditionally updates this row. The `lineage` JSONB
+is a forward-looking slot for ancestor-detach state (always `Default`
+in yb-mode today).
 
 ```sql
-CREATE TABLE pageserver.timelines (
-    tenant_id              TEXT    NOT NULL,
-    timeline_id            TEXT    NOT NULL,
-    last_record_lsn        BIGINT  NOT NULL,
-    disk_consistent_lsn    BIGINT  NOT NULL,
-    applied_gc_cutoff_lsn  BIGINT  NOT NULL,
+CREATE TABLE pageserver.timeline_state (
+    tenant_id              TEXT      NOT NULL,
+    timeline_id            TEXT      NOT NULL,
+    consistent_lsn         BIGINT    NOT NULL,
+    applied_gc_cutoff_lsn  BIGINT    NOT NULL,
     ancestor_timeline_id   TEXT,
     ancestor_lsn           BIGINT,
-    current_generation     INT     NOT NULL,
-    pg_version             INT     NOT NULL,
+    current_generation     INT       NOT NULL,
+    pg_version             INT       NOT NULL,
+    initdb_lsn             BIGINT,
+    prev_record_lsn        BIGINT,
+    archived_at            TIMESTAMP,
+    deleted_at             TIMESTAMP,
+    rel_size_migration     TEXT,
+    rel_size_migrated_at   BIGINT,
+    lineage                JSONB,
     PRIMARY KEY ((tenant_id) HASH, timeline_id)
 );
 ```
@@ -305,8 +317,9 @@ than this. We work around it by:
 ### `yb_enable_upsert_mode`
 
 A per-session GUC we `SET` on every yb-light connection (centrally in
-`YsqlClient::open_*` — used by both `YbStore::new` and
-`WalBackup::new`). When `true`, plain `INSERT` skips DocDB's
+`YsqlClient::from_yb_config` / `from_yb_config_pooled` — used by
+`YbStore::new`, `PageStore`, and `YbWalStorage::new`). When `true`,
+plain `INSERT` skips DocDB's
 read-before-write conflict check — a meaningful speedup for the
 upsert-heavy workload our blob store creates.
 
@@ -362,8 +375,8 @@ contract today:
   [`yb_enable_upsert_mode = true`](#yb_enable_upsert_mode) (same
   semantics — the conflict path is a no-op upsert), or
   generation-fenced `UPDATE pageserver.timeline_state SET ... WHERE
-  generation = $expected_gen` (replay sees the same gen, applies the
-  same row state).
+  current_generation = $expected_gen` (replay sees the same gen,
+  applies the same row state).
 - **DELETEs** are `WHERE` -keyed deletes (`DELETE FROM ... WHERE id =
   $1`); replay against an already-deleted row is a no-op.
 
@@ -393,81 +406,30 @@ the signal that something is wrong upstream of the client.
 
 ## Provisioning DDL — full reference
 
-`neon_local` runs this DDL itself on first start (see
-`control_plane/src/storage_controller.rs::ensure_external_database`).
-Listed here for reference / disaster-recovery; you do **not** need to
-run any of it by hand.
+The authoritative provisioning DDL is a single Diesel migration:
+[`storage_controller/migrations/00000000000001_initial_schema/up.sql`](../storage_controller/migrations/00000000000001_initial_schema/up.sql).
+`neon_local` only `CREATE DATABASE`s `yb_storage` (see
+`control_plane/src/storage_controller.rs::ensure_external_database`);
+the controller binary applies the migration on first start, which
+creates every schema, ENUM, and table in one shot. Listed here for
+reference / disaster-recovery; you do **not** need to run any of it
+by hand.
 
-```sql
--- on a fresh YB cluster (auto-run by neon_local)
-CREATE DATABASE yb_storage;
-\c yb_storage
+| Schema | Object | Purpose |
+|---|---|---|
+| `public` | `blob_namespace` ENUM | `pageserver` / `safekeeper` discriminator on `blobs`. |
+| `public` | `blobs` | Chunked blob store (pageserver remote_storage). |
+| `public` | `wals` | Live-WAL chunks; PK `((tenant, timeline) HASH, segno, chunk_offset)`. |
+| `pageserver` | `pages` | Relation pages, one row per (block, LSN); PK `((tenant, timeline, spc, db, rel, fork) HASH, blknum, lsn DESC, is_image)`. |
+| `pageserver` | `slru_pages` | SLRU blocks (pg_xact, pg_multixact_*); same shape as `pages`, keyed by `(kind, segno)`. |
+| `pageserver` | `meta` | Metadata blobs (relsize sentinels, dir listings, aux, two-phase, repl origins); full-overwrite semantics. |
+| `pageserver` | `tenant_config` | Per-tenant `TenantConfig` (GC horizon, PITR, …); authoritative copy, controller-written. |
+| `pageserver` | `timeline_state` | Per-timeline state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`. |
+| `safekeeper` | `timeline_state` | Per-timeline safekeeper control file (replaces upstream's local-FS `safekeeper.control` blob). |
+| `storage_controller` | 8 tables | `tenant_shards`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `safekeeper_timeline_pending_ops`, `timeline_imports`. |
 
--- The controller's tables live in a dedicated schema inside the
--- same DB; the bootstrap step in `Persistence::migration_run` issues
--- the CREATE SCHEMA before Diesel migrations run.
-CREATE SCHEMA IF NOT EXISTS storage_controller;
-
-CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
-
-CREATE TABLE public.blobs (
-    tenant_id        TEXT                  NOT NULL,
-    timeline_id      TEXT                  NOT NULL,
-    namespace        public.blob_namespace NOT NULL,
-    key              TEXT                  NOT NULL,
-    generation       INT,
-    chunk_idx        INT                   NOT NULL,
-    data             BYTEA                 NOT NULL,
-    size_bytes       BIGINT                NOT NULL,
-    etag             TEXT                  NOT NULL,
-    last_modified_us BIGINT                NOT NULL,
-    metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
-);
-
-CREATE TABLE public.wals (
-    tenant_id        TEXT    NOT NULL,
-    timeline_id      TEXT    NOT NULL,
-    segno            BIGINT  NOT NULL,
-    chunk_seq        INT     NOT NULL,
-    chunk_offset     BIGINT  NOT NULL,
-    chunk_size       INT     NOT NULL,
-    data             BYTEA   NOT NULL,
-    last_modified_us BIGINT  NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)
-);
-
-CREATE SCHEMA IF NOT EXISTS pageserver;
-
-CREATE TABLE pageserver.pages (
-    tenant_id    TEXT     NOT NULL,
-    timeline_id  TEXT     NOT NULL,
-    spcnode      BIGINT   NOT NULL,
-    dbnode       BIGINT   NOT NULL,
-    relnode      BIGINT   NOT NULL,
-    forknum      SMALLINT NOT NULL,
-    blknum       BIGINT   NOT NULL,
-    is_image     BOOLEAN  NOT NULL,
-    lsn          BIGINT   NOT NULL,
-    will_init    BOOLEAN  NOT NULL,
-    payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, is_image, lsn DESC)
-);
-
-CREATE TABLE pageserver.timelines (
-    tenant_id              TEXT    NOT NULL,
-    timeline_id            TEXT    NOT NULL,
-    last_record_lsn        BIGINT  NOT NULL,
-    disk_consistent_lsn    BIGINT  NOT NULL,
-    applied_gc_cutoff_lsn  BIGINT  NOT NULL,
-    ancestor_timeline_id   TEXT,
-    ancestor_lsn           BIGINT,
-    current_generation     INT     NOT NULL,
-    pg_version             INT     NOT NULL,
-    PRIMARY KEY ((tenant_id) HASH, timeline_id)
-);
-```
+See `up.sql` for the exact column lists, PK ordering, and FK
+relationships.
 
 ## Failure modes
 

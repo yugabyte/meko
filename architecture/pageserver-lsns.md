@@ -10,8 +10,8 @@ several of them describe upstream paths that no longer exist.
 ## The two key watermarks
 
 yb-mode splits the durability concept into two distinct atomics on
-`Timeline`. Conflating them is the original source of
-`findings-ps-wal-replay-restart-bug-2026-06-04`:
+`Timeline`. Conflating them is what made restart-after-flush lose
+records before the eager/durable split was introduced:
 
 | Atomic | Advances when | Use for |
 |---|---|---|
@@ -121,7 +121,7 @@ START_REPLICATION position** — that reads `consistent_lsn` instead.
 **Advances:** On each `finish_write`, the old `last` becomes the new
 record's `prev`. `PageWriter::note_record_lsn` stores `(last → prev)` in
 a `BTreeMap`; at flush, `take_prev_at_or_below` pairs it with the flushed
-LSN and persists via `advance_disk_consistent_lsn` (`COALESCE($5,
+LSN and persists via `advance_consistent_lsn` (`COALESCE($5,
 prev_record_lsn)` keeps an existing value when the pairing misses).
 
 **Used for:** Correct `xl_prev` when walreceiver resumes after restart.
@@ -290,14 +290,14 @@ which is a no-op. No page-row pruning is implemented.
 |-----|-------|------|
 | `commit_lsn` | `WalReceiverConnectionStatus` | SK committed WAL end |
 | `streaming_lsn` | same | SK streaming position |
-| `last_received_msg_lsn` | `WalReceiverInfo` | Last processed this session |
+| `last_received_msg_lsn` | `WalReceiverInfo` | Last streaming / keepalive LSN advertised; same value as the `last_received_lsn` wire field — not the eager ingest frontier (`applied_lsn`). |
 | `end_of_wal` | local var | From `IDENTIFY_SYSTEM` |
 
 **PageserverFeedback** (after each processed record):
 
 | Field | Source | SK uses for truncation? |
 |-------|--------|------------------------|
-| `last_received_lsn` | ingest frontier (eager) | No (metrics) |
+| `last_received_lsn` | streaming_lsn of last processed message (== `last_received_msg_lsn`) | No (metrics) |
 | `disk_consistent_lsn` | `Timeline::get_consistent_lsn()` (durable slot) | No |
 | `remote_consistent_lsn` | `Timeline::get_consistent_lsn()` (durable slot) | **Yes** |
 
@@ -305,10 +305,8 @@ Both LSN fields now carry the same value. Pre-2026-06 the
 `disk_consistent_lsn` wire field was sourced from the eager
 in-memory atomic, which could be ahead of YB after a buffer write
 but before flush — combined with PS crash-restart this lost the
-buffered records permanently
-(`findings-ps-wal-replay-restart-bug-2026-06-04`). Both fields are
-kept for SK protocol back-compat; one will be dropped in a future
-protocol bump.
+buffered records permanently. Both fields are kept for SK protocol
+back-compat; one will be dropped in a future protocol bump.
 
 ---
 
@@ -332,7 +330,7 @@ SK stream → walingest.ingest_record (sets modification.lsn)
 PageWriter::flush (periodic)
          → snapshot_unflushed
          → try_write_rows → YB INSERT into pages/slru/meta
-         → mark_first_n_flushed + consistent_lsn_observed.fetch_max
+         → mark_flushed(snapshot) + consistent_lsn_observed.fetch_max
          → throttled, gen-fenced advance_consistent_lsn UPSERT
               → consistent_lsn_watermark.store
               → publish_consistent_lsn(lsn) → slot bumps
@@ -445,6 +443,8 @@ persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
   ingest, feedback, resume startpoint (both read `get_consistent_lsn`).
 - `pageserver/src/pgdatadir_mapping.rs` — `DatadirModification::commit`.
 - `safekeeper/src/send_wal.rs` — `update_remote_consistent_lsn` (truncation).
+- [`safekeeper-lsns.md`](safekeeper-lsns.md) — SK-side LSN inventory; the
+  pair to this doc.
 - `libs/utils/src/pageserver_feedback.rs` — feedback wire format.
 - `storage_controller/migrations/00000000000001_initial_schema/up.sql` —
   `pageserver.timeline_state.consistent_lsn` column.

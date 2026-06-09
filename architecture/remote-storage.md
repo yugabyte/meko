@@ -1,13 +1,18 @@
 # `RemoteStorage` and the `YbStore` backend
 
-`RemoteStorage` is Neon's abstraction over object stores. It's the single
-seam through which the pageserver (and now the safekeeper) writes durable
-bytes to "somewhere not the local disk". yb-light adds one new backend
-(`YbStore`) to the existing four.
+`RemoteStorage` is Neon's abstraction over object stores. In yb-light
+it's the seam through which the pageserver writes durable bytes to
+"somewhere not the local disk". The cloud backends (S3, Azure Blob, GCS)
+were removed in lane E (commit `f26243aaa`) along with their SDK
+dependencies and integration tests, and the dev-only LocalFs backend
+was dropped subsequently — `YbStore` is now the only real backend,
+alongside the `Unreliable` test wrapper. The safekeeper no longer uses
+`RemoteStorage`: its `--remote-storage` flag was removed (task 19) and
+it now talks to YB directly via `YsqlClient` (see below).
 
 ## The trait (inherited from Neon)
 
-`libs/remote_storage/src/lib.rs:331`:
+`libs/remote_storage/src/lib.rs:333`:
 
 ```rust
 pub trait RemoteStorage: Send + Sync + 'static {
@@ -31,17 +36,15 @@ rest of the codebase can hold a single concrete type:
 
 ```rust
 pub enum GenericRemoteStorage<Other: Clone = Arc<UnreliableWrapper>> {
-    LocalFs(LocalFs),
-    AwsS3(Arc<S3Bucket>),
-    AzureBlob(Arc<AzureBlobStorage>),
     Unreliable(Other),
-    GCS(Arc<GCSBucket>),
-    YbStore(Arc<YbStore>),  // <-- new in yb-light
+    YbStore(Arc<YbStore>),
 }
 ```
 
 Construction goes through `GenericRemoteStorage::from_config(&RemoteStorageConfig)`
-which deserializes a TOML and picks the variant.
+which deserializes a TOML and picks the variant. `RemoteStorageKind` is
+now effectively a unit choice — its only non-test variant is
+`YbStore(YbStoreConfig)` (`config.rs:74-77`).
 
 ## YbStore: design (new in yb-light)
 
@@ -124,8 +127,11 @@ the original `RemotePath` for `list` outputs by applying the layout:
 |---|---|---|
 | `pageserver` | non-empty | `<prefix>tenants/<T>/timelines/<TL>/<body>` |
 | `pageserver` | empty | `<prefix>tenants/<T>/<body>` |
-| `safekeeper` | body == `safekeeper-control` | `<prefix>safekeeper-control/<T>/<TL>` |
-| `safekeeper` | otherwise (WAL backup) | `<prefix><T>/<TL>/<body>` |
+
+(`reconstruct_key` still has a dead `safekeeper` arm — `yb_store.rs:379-385`
+— but no writer emits safekeeper rows anymore. The safekeeper's control
+file now lives in typed columns in the `safekeeper.timeline_state` table,
+not in `blobs` — commit `840e56aae`.)
 
 Sample rows:
 
@@ -134,8 +140,6 @@ Sample rows:
 | pageserver | c8178f5e…1f966a | 77ffde89…089eaa | `000000-FFF__layer-1` |
 | pageserver | c8178f5e…1f966a | 77ffde89…089eaa | `index_part.json-00000001` |
 | pageserver | c8178f5e…1f966a | *(empty)* | `tenant-manifest-00000001.json` |
-| safekeeper | c8178f5e…1f966a | 77ffde89…089eaa | `safekeeper-control` |
-| safekeeper | c8178f5e…1f966a | 77ffde89…089eaa | `000000010000000000000005` |
 
 The PK puts `(tenant_id, timeline_id)` in the hash partition so every
 point-lookup (`head_object`, `download`'s metadata + streaming SELECT,
@@ -233,25 +237,46 @@ picks `YbStore` automatically when the TOML has `host`/`user`/`dbname`/
 
 ### Connection handling — `YsqlClient`
 
-`libs/remote_storage/src/ysql_client.rs` defines `YsqlClient`, the
-auto-reconnecting wrapper around `tokio_postgres::Client` used by every
-yb-light component that talks to YB over the Postgres wire (this crate's
-`YbStore`, the safekeeper's `YbWalStorage`, neon_local's
-`ensure_external_database`).
+`libs/ysql_client/src/lib.rs` defines `YsqlClient`, the auto-reconnecting
+wrapper around `tokio_postgres::Client` used by every yb-light component
+that talks to YB over the Postgres wire (this crate's `YbStore`, the
+safekeeper's `YbWalStorage`, the pageserver's `PageStore`). It was
+extracted from `remote_storage` into its own crate in commit `f399c049e`
+and is re-exported from `remote_storage::lib.rs:23` for compatibility.
+neon_local's `ensure_external_database` does **not** go through
+`YsqlClient` — it issues raw one-shot `tokio_postgres::Config::connect`
+calls (`control_plane/src/storage_controller.rs:320-350`).
 
 - Owns the `tokio_postgres::Config` plus a reconnect closure baked at
   construction time (`connect_no_tls` or `connect_rustls`).
-- Every `execute` / `query` / `query_opt` checks `is_closed()` and
-  reconnects lazily; on a connection-closed error during the op,
-  forces a reconnect and retries **once**.
-- `current()` exposes the raw `Arc<Client>` for streaming reads
-  (`query_raw` / `execute_raw`) that don't compose with retry-once
-  semantics; the next `current()` call after a failed stream
-  reconnects.
-- The high-level factory `YsqlClient::from_yb_config(&YbStoreConfig,
-  application_name)` does password_env lookup + sslmode/sslrootcert
-  dispatch in one place. `YbStore::new` uses it; safekeeper's
-  `WalBackup::new` uses the same.
+- `YsqlClient` is **pooled**: every constructor takes a `pool_size >= 1`,
+  opens that many independent connections eagerly, and each slot has its
+  own mutex. `from_yb_config_pooled` is the standard entrypoint; the
+  single-connection `from_yb_config` is sugar for `pool_size = 1`
+  (`ysql_client/src/lib.rs:138-225`).
+- Every `execute` / `query` / `query_opt` flows through `run_with_retries`
+  (`ysql_client/src/lib.rs:341-470`), which classifies each
+  `tokio_postgres::Error` as `ConnectionDrop` (socket died — force
+  reconnect of the slot, dropping the prepared-statement cache),
+  `Transient` (SQLSTATE `40001`/`40P01`/`25P03` or a known retryable
+  `XX000` message), or `Fatal` (logic / schema errors, returned
+  immediately). Retries use jittered backoff up to `MAX_TOTAL_ATTEMPTS`,
+  with `ConnectionDrop`s separately capped at `MAX_CONNECTION_DROPS`
+  (each one costs a TCP+TLS handshake). Idempotent SQL is a
+  precondition.
+- Prepared statements are cached per slot keyed by SQL text and
+  invalidated when the slot reconnects (the `Statement` is bound to the
+  dead client). Repeat calls with the same SQL skip `Parse`.
+- Raw streaming access (`query_raw` / `execute_raw`) goes through
+  `current_client_at(slot)` / `pick_slot` instead of the retry helper —
+  these expose the underlying `Arc<tokio_postgres::Client>` for a single
+  slot.
+- The high-level factory `YsqlClient::from_yb_config(&YbConnConfig,
+  application_name, set_fast_path_upsert)` does password_env lookup +
+  sslmode/sslrootcert dispatch in one place. `YbStore::new` uses it;
+  the safekeeper's `YbWalStorage::new` constructs three pooled
+  `YsqlClient`s (FPU / read / system lanes) via the same factory
+  (`safekeeper/src/yb_wal_storage.rs:199-209`).
 
 ### TLS
 
@@ -264,10 +289,12 @@ yb-light component that talks to YB over the Postgres wire (this crate's
   rustls verifying against the supplied PEM-encoded CA bundle.
 
 `build_yb_rustls_connector(sslrootcert: Option<&str>)` (in
-`ysql_client.rs`, re-exported from `lib.rs`) is the shared
-constructor; the storage_controller wrapper in `control_plane` reuses
-it for its own one-shot `CREATE DATABASE` / DDL connections (see
-[`storage-controller.md`](storage-controller.md)).
+`libs/ysql_client/src/lib.rs:679`, re-exported from
+`remote_storage::lib.rs:23`) is the shared constructor; the
+storage_controller wrapper in `control_plane` reuses it for its own
+one-shot `CREATE DATABASE` / DDL connections (see
+[`storage-controller.md`](storage-controller.md)). The rustls path was
+introduced in commit `7a424639e`.
 
 ### Sample TOML
 
@@ -284,19 +311,12 @@ remote_storage = {
 }
 ```
 
-For the safekeeper's control-file + wal-backup storage (same DB, same table,
-different prefix):
-
-```toml
-{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'blobs', prefix = 'safekeeper-yb/'}
-```
-
-For the safekeeper's live-WAL mirror (different table — `wals`, with a
-different schema; see [`safekeeper.md`](safekeeper.md)):
-
-```toml
-{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'wals'}
-```
+The safekeeper no longer takes `--remote-storage`. Its control file lives
+in typed columns in `safekeeper.timeline_state` (commit `840e56aae`) and
+its live-WAL mirror lives in `public.wals` (commit `7ffb8b4d6`). Both go
+through `YsqlClient` directly — the safekeeper consumes a `YbStoreConfig`
+purely to address the YB cluster + `wals` table, but its writes do **not**
+flow through the `RemoteStorage` trait. See [`safekeeper.md`](safekeeper.md).
 
 With TLS against a YBA-managed universe:
 
@@ -327,9 +347,9 @@ pageserver / safekeeper through it.
 - `RemotePath` is rooted at the prefix configured on the backend, not at
   the system root. Within `YbStore` the actual key stored is
   `<prefix><relative-path>`.
-- `Cancellation tokens` propagate through every method. The `YbStore`
-  impl uses `tokio::select!` on `cancel.cancelled()` to bail out of
-  in-flight queries.
+- `Cancellation tokens` propagate through every pageserver-side
+  `RemoteStorage` method. The `YbStore` impl uses `tokio::select!` on
+  `cancel.cancelled()` to bail out of in-flight queries.
 - Timeouts: `RemoteStorageConfig::timeout` (default 120 s) wraps every
   per-operation future.
 

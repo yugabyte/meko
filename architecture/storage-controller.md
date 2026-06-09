@@ -7,27 +7,38 @@ data path — neither WAL nor pages flow through it.
 
 In yb-light, the storage controller's relational state has been moved into
 YugabyteDB. **Zero lines of storage-controller code were changed** for
-this — the controller speaks Postgres wire protocol to its DB via Diesel,
-and YugabyteDB is wire-compatible with Postgres. The migration was a
-`createdb` + `pg_dump | psql` and a `--database-url` change.
+this — the controller speaks Postgres wire protocol via Diesel and
+YugabyteDB is wire-compatible with Postgres. SC tables live in the
+`storage_controller` schema inside the shared `yb_storage` database
+(single DB, no separate `storage_controller` DB); bootstrap is a
+fresh-schema apply of the collapsed Diesel migration, not a
+`pg_dump | psql`. See `control_plane/src/storage_controller.rs` (the
+`DB_NAME = "yb_storage"` constant) and `storage_controller/src/persistence.rs`
+(`SC_SCHEMA = "storage_controller"`, applied via `search_path=storage_controller,public`).
 
-## Inherited from Neon (unchanged)
+## What it persists
 
-### What it persists
-
-9 Diesel-managed tables (schema in `storage_controller/migrations/`):
+A single collapsed migration (`storage_controller/migrations/00000000000001_initial_schema/up.sql`)
+creates the 8 storage_controller tables below plus the pageserver, safekeeper,
+and public schemas (blobs / wals / blob_namespace, pageserver.pages /
+slru_pages / meta / tenant_config / timeline_state, safekeeper.timeline_state)
+in the same `yb_storage` DB.
 
 | Table | What it tracks |
 |---|---|
 | `tenant_shards` | Each (tenant, shard) → pageserver assignment, generation, scheduling policy, splitting state, opaque config JSON |
 | `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), availability zone, lifecycle, scheduling policy |
-| `safekeepers` | Safekeeper identities: id, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
-| `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, ancestor info |
+| `safekeepers` | Safekeeper identities: id, region_id, version, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
+| `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name |
 | `safekeeper_timeline_pending_ops` | Pending control operations on a (safekeeper, timeline) pair — used to recover after a controller restart |
 | `metadata_health` | Per-shard health markers (last successful scrub timestamps) |
 | `timeline_imports` | In-progress imports (e.g., from pg_dump) |
 | `controllers` | Multi-controller leader election rows (only one controller is leader at a time) |
-| `__diesel_schema_migrations` | Diesel's own migration log |
+
+The controller also writes to `pageserver.tenant_config` (in the same DB,
+created by the same collapsed migration) on tenant create / config update
+— task 17 moved `TenantConfig` out of pageserver-local state into YB, so
+this is now the authoritative per-tenant config table the SC owns.
 
 ### What it does
 
@@ -40,6 +51,22 @@ and YugabyteDB is wire-compatible with Postgres. The migration was a
   or via the control-plane API) when its pageserver assignment changes.
 - **Heartbeats**: pings each pageserver + safekeeper on `--heartbeat-interval`
   to detect liveness.
+
+### Diverges from Neon
+
+The safekeeper reconciler path is no longer upstream-parity:
+
+- **Storage broker removed** (task 20): SC no longer pushes membership
+  through `storage_broker`; safekeepers learn membership over plain HTTP.
+- **SK control-file in YB** (task 19): per-timeline safekeeper state lives
+  in `safekeeper.timeline_state` (one row per timeline) instead of an
+  on-disk control file blob, so SC reconciles against DB rows rather than
+  the legacy filesystem path.
+- **Membership-switch HTTP surface stripped** (commit `1a9ca7ec1`): the
+  multi-SK membership-change endpoints / state-machine were removed.
+- **Multi-SK reconciler simplified**: with `--timeline-safekeeper-count 1`
+  the default and no membership churn, the reconciler is a much-reduced
+  subset of the upstream code path.
 
 ### Wire protocol
 
@@ -67,15 +94,18 @@ yb-light replaces this with the same YB cluster that holds everything else.
 
 **There is no Rust code change for this.** The controller's
 `--database-url` flag accepts any Postgres-compatible URI; pointing it at
-`postgresql://yugabyte@127.0.0.1:5433/storage_controller` is sufficient.
+`postgresql://yugabyte@127.0.0.1:5433/yb_storage` is sufficient. (The
+SC binary in fact rejects any other DB name — see the validation in
+`control_plane/src/storage_controller.rs` around the `DB_NAME` constant.)
 
-What we did at runtime:
+What we do at runtime:
 
-1. `CREATE DATABASE storage_controller` on YB.
-2. `pg_dump` the existing local-PG schema + data, `psql` it into YB.
-3. Re-spawn the `storage_controller` binary with
-   `--database-url postgresql://yugabyte@127.0.0.1:5433/storage_controller`.
-4. Stopped the orphaned local PG v16.
+1. `CREATE DATABASE yb_storage` on YB (if not present).
+2. Spawn the `storage_controller` binary with
+   `--database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage`.
+   It then runs the collapsed Diesel migration, which creates the
+   `storage_controller`, `pageserver`, `safekeeper`, and `public` schemas
+   and all their tables.
 
 Diesel migrations + every SELECT/INSERT/UPDATE work unchanged because YB's
 YSQL frontend is Postgres-protocol-compatible.
@@ -106,27 +136,29 @@ the controller as `--database-url`. `neon_local stop` likewise skips
 
 Before pointing the controller at the URL, neon_local **connects to
 YB's `yugabyte` admin database** on the same host with the same
-credentials and provisions everything yb-light needs:
+credentials and provisions the one DB yb-light needs:
 
-- `CREATE DATABASE storage_controller` — the controller's Diesel
-  migrations then create the 11 tables inside it on first start.
-- `CREATE DATABASE yb_storage` — the pageserver / safekeeper YbStore
-  schema home.
-- Inside `yb_storage`: `CREATE TYPE blob_namespace` (ENUM), plus
-  `CREATE TABLE IF NOT EXISTS blobs` and `CREATE TABLE IF NOT EXISTS
-  wals` — see [`yugabyte.md`](yugabyte.md) for the schemas.
+- `CREATE DATABASE yb_storage` — the single shared DB. On the
+  controller's first start, the collapsed Diesel migration
+  (`storage_controller/migrations/00000000000001_initial_schema/up.sql`)
+  creates everything inside it: the `storage_controller.*` tables, the
+  `pageserver.*` tables (pages, slru_pages, meta, tenant_config,
+  timeline_state), `safekeeper.timeline_state`, and the `public.*`
+  blob-store (`blob_namespace` ENUM + `blobs` + `wals`). See
+  [`yugabyte.md`](yugabyte.md) for the blob/WAL schemas.
 
-All steps are idempotent. A fresh YB cluster needs no operator DDL.
+The step is idempotent. A fresh YB cluster needs no operator DDL beyond
+`CREATE DATABASE yb_storage`, which neon_local issues.
 
 Set it via the init TOML (`neon_local init --config <file>`):
 
 ```toml
 [storage_controller]
-database_url = "postgresql://yugabyte@127.0.0.1:5433/storage_controller"
+database_url = "postgresql://yugabyte@127.0.0.1:5433/yb_storage"
 # or against a remote YB cluster:
-# database_url = "postgresql://yugabyte@yb-host.example.com:5433/storage_controller"
+# database_url = "postgresql://yugabyte@yb-host.example.com:5433/yb_storage"
 # TLS against a YBA-managed universe:
-# database_url = "postgresql://yugabyte:PW@yb-host.example.com:5433/storage_controller?sslmode=require"
+# database_url = "postgresql://yugabyte:PW@yb-host.example.com:5433/yb_storage?sslmode=require"
 ```
 
 The controller itself still links against `libpq`, so the Postgres v17
@@ -146,7 +178,7 @@ are routed through a small `connect_external` helper in
   uses for its main `--database-url` connection.
 
 So a `database_url` like
-`postgresql://yugabyte:PW@yb-host:5433/storage_controller?sslmode=require`
+`postgresql://yugabyte:PW@yb-host:5433/yb_storage?sslmode=require`
 brings up cleanly against a TLS-only YB universe with no proxy. The
 SC binary's own connection (via `establish_connection_rustls` in
 `storage_controller/src/persistence.rs`) was always TLS-capable; this
@@ -158,7 +190,7 @@ path that runs once at first start.
 ```
 storage_controller \
     --dev \
-    --database-url 'postgresql://yugabyte@127.0.0.1:5433/storage_controller' \
+    --database-url 'postgresql://yugabyte@127.0.0.1:5433/yb_storage' \
     --max-offline-interval     10s \
     --max-warming-up-interval  30s \
     --heartbeat-interval       1s \

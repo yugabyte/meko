@@ -1,9 +1,10 @@
 # Compute
 
 The compute is a vanilla Postgres 17.5 backend (built from `vendor/postgres-v17`)
-with Neon's smgr / extension patches applied. **This component is unchanged in
-yb-light** — we did not modify Postgres or `compute_ctl`. It's here for
-completeness so a reader has the full picture.
+with Neon's smgr / extension patches applied. The Postgres source tree itself
+is unmodified; `compute_ctl` is upstream Neon. The `neon` extension at
+`pgxn/neon/` lives in this repo and has had a small number of wire-protocol
+edits (see "Changes in yb-light" below).
 
 ## Inherited from Neon
 
@@ -29,18 +30,22 @@ reconstructs them on demand.
 
 Neon's WAL push side. Replaces `pg_basebackup`/`walsender` for getting WAL out
 of the compute: pushes each WAL batch to the configured safekeepers, waits for
-a quorum ACK before unblocking the commit. The yb-light dev cluster runs one
-safekeeper so "quorum" is just that single ACK.
+a quorum ACK before unblocking the commit. yb-light is hard-wired single-SK;
+walproposer's multi-SK code paths in `pgxn/neon/walproposer.c`
+(`n_safekeepers`, `MAX_SAFEKEEPERS`, etc.) are vestigial and unexercised.
 
 ### LFC (Local File Cache)
 
 Neon-specific on-disk page cache that backs `shared_buffers`. Sits between the
 compute's buffer pool and the pageserver. Knobs:
 
-- `neon.file_cache_size_limit` — max size (default 1 GB)
-- `neon.max_file_cache_size` — hard cap
-- Setting both to `0` disables LFC entirely; every buffer miss goes straight
-  to the pageserver via getpage RPC.
+- `neon.max_file_cache_size` — startup cap (`PGC_POSTMASTER`). Default `0`,
+  which disables LFC entirely. Operators must set this to a non-zero value
+  at postmaster start to enable the cache.
+- `neon.file_cache_size_limit` — live-tunable soft limit (`PGC_SIGHUP`).
+  Default `0`. Capped above by `max_file_cache_size`.
+- When both are `0` (the default), every buffer miss goes straight to the
+  pageserver via getpage RPC.
 
 ### Compute spec / `compute_ctl`
 
@@ -55,7 +60,9 @@ The endpoint's `pgdata` directory holds:
 
 - `postgresql.conf`, `pg_hba.conf`, `pg_ident.conf` — generated from spec.
 - `PG_VERSION`, `global/pg_control`, system catalog files — pulled from
-  pageserver via a basebackup-over-libpq when the endpoint first starts.
+  pageserver via basebackup over gRPC (default for new endpoints) or libpq
+  (legacy connstrings). `compute_tools/src/compute.rs` picks the path based
+  on the connection string scheme.
 - `pg_wal/` — WAL segments produced *here* before they're shipped to the
   safekeeper. Ephemeral by design — destroyed when the endpoint is dropped.
 - `pg_xact/`, `pg_subtrans/`, `pg_multixact/` — SLRU files. Touched by PG,
@@ -65,7 +72,19 @@ The endpoint's `pgdata` directory holds:
 
 ## Changes in yb-light
 
-**None.** This component is unchanged.
+The Postgres source (`vendor/postgres-v17/`) and `compute_tools/` are
+untouched. The `neon` extension at `pgxn/neon/` has a small number of
+yb-light-specific edits:
+
+- `pgxn/neon/walproposer.c` / `walproposer.h` — v2 wire protocol stripped
+  (commit `045fce42d`). Only v3 remains on the wire.
+- `pgxn/neon/libpagestore.c` — `pageserver_response_disconnect_timeout`
+  lowered 150 s → 30 s (`e296d43df`).
+- Small unrelated touches: `databricks_metrics_shared` NULL-check
+  (`bc2a2e8e7`), walredo seccomp filter (`7a85e8aff`).
+
+The user-facing wire protocols (getpage RPC, libpq replication) are
+otherwise identical to upstream Neon.
 
 ## Implications of yb-light for the compute
 
@@ -86,5 +105,6 @@ deployment using a local-FS or S3 backend.
 
 - Postgres source: `vendor/postgres-v17/` (git submodule, Neon's patched fork).
 - `compute_ctl`: `compute_tools/`.
-- Neon's PG extension (`neon.so`, smgr hooks): in the vendored postgres tree.
+- Neon's PG extension (`neon.so`, smgr hooks, walproposer): `pgxn/neon/`
+  (top-level in this repo, NOT in the vendored postgres tree).
 - Endpoint creation in the dev wrapper: `control_plane/src/endpoint.rs`.

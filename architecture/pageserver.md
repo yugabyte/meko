@@ -4,10 +4,12 @@ The pageserver is the only component that holds the durable copy of user
 table & index data. Computes don't have relfiles; they ask the pageserver
 for pages on demand via `getpage` RPC.
 
-In yb-light, the pageserver's "remote storage" (where it durably stashes
-layer files, the index, the initdb tarball, and tenant manifests) is YB
-instead of S3/Azure/GCS. The pageserver itself was barely modified —
-all the YB stuff is plumbed via the existing `RemoteStorage` trait.
+In yb-light, the pageserver was forked into **yb-pageserver**: page data
+lives in YB tables (via `PageStore` / `PageWriter`), and the upstream
+layer-file machinery has been deleted. The remaining `RemoteStorage`
+artifacts (basebackup, initdb tarball, tenant manifest) still go through
+`YbStore`. See [`yb-pageserver.md`](yb-pageserver.md) for the fork-specific
+design (PageStore, PageWriter, image_materializer, per-key LRU).
 
 ## Inherited from Neon
 
@@ -29,12 +31,12 @@ pageserver_*/tenants/<tenant_id>-<shard_count>-<shard_number>/
                      timelines/<timeline_id>/<layer-files…>
 ```
 
-In the running yb-light dev cluster we use `ShardCount = 0` (unsharded;
-the tenant is a single shard hosted on a single pageserver), but the
-machinery is there for production deployments to scale a single tenant
-across multiple pageservers. From the layer-file machinery's
-perspective, each shard is independent — it has its own layer files,
-its own compactor, its own remote_storage prefix.
+In yb-light only single-shard tenants are supported. `ShardCount` /
+`TenantShardId` / `ShardIdentity` types still exist in
+`libs/pageserver_api/src/keyspace.rs` and on the on-disk path, but the
+shard-split machinery in `storage_controller` was removed. The dev
+cluster runs `ShardCount = 0` (unsharded; one shard per tenant on one
+pageserver).
 
 ### Tenant / timeline layout
 
@@ -191,105 +193,6 @@ lookups, each one a tightly-encoded 18-byte tuple whose ordering
 properties drive everything from layer-file design through
 compaction.
 
-### Layer files
-
-Two flavors:
-
-- **Image layer**: full materialized pages (`(Key, Lsn) → page bytes`) at
-  a single LSN. Read-cheap, build-expensive.
-- **Delta layer**: WAL-record deltas over an LSN range
-  (`(Key, Lsn) → (will_init | WalRecord | Image)`). Append-only output of
-  WAL ingestion + L0→L1 compaction.
-
-Filename encodes the layer's coverage. The format is:
-
-```
-<key_start>-<key_end>__<lsn_start>-<lsn_end>-<generation>
-```
-
-with widths:
-
-| Field | Width | Encoding |
-|---|---|---|
-| `key_start` | 36 hex chars (18 bytes) | the full `Key` struct, big-endian |
-| `key_end` | 36 hex chars (18 bytes) | exclusive upper bound |
-| `lsn_start` | 16 hex chars (8 bytes) | `Lsn` as `u64`, big-endian |
-| `lsn_end` | 16 hex chars (8 bytes) | exclusive upper bound; for image layers `lsn_start == lsn_end` |
-| `generation` | 8 hex chars (4 bytes) | tenant attach generation |
-
-A real example from `.neon-yb/pageserver_1/...`:
-
-```
-000000000000000000000000000000000000-FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF__0000000001540438-00000000015404B1-00000001
-└─────────── key_start (18 B) ──────┘└──────────  key_end (18 B) ──────┘  └─ lsn_start ──┘ └── lsn_end ──┘ └─ gen ─┘
-```
-
-So a directory listing alone tells the pageserver which file covers
-which `(key_range, lsn_range)`. Image layers have `lsn_start == lsn_end`
-because their Summary uses a single `lsn: Lsn`, not a range — see
-"Image layers vs delta layers" below.
-
-### Layer file internal layout
-
-Both formats are 8 KiB-aligned (`PAGE_SZ = postgres_ffi::BLCKSZ = 8192`)
-so they share alignment with Postgres. A layer file looks like:
-
-```
-+---------------------------+  ← block 0       (PAGE_SZ = 8192 bytes)
-|        Summary            |  bincode header, zero-padded to 8 KiB
-+---------------------------+  ← block 1
-|                           |
-|        VALUES             |  concatenated blobs (one per (key, lsn) entry)
-|                           |
-|         ...               |
-+---------------------------+  ← index_start_blk
-|                           |
-|         INDEX             |  on-disk B-tree
-|                           |
-+---------------------------+
-```
-
-**Summary** (`pageserver/src/tenant/storage_layer/{delta,image}_layer.rs`):
-
-```rust
-struct Summary {
-    magic: u16,                 // DELTA_FILE_MAGIC (0x5A61) or IMAGE_FILE_MAGIC (0x5A60)
-    format_version: u16,        // STORAGE_FORMAT_VERSION = 3
-    tenant_id, timeline_id,
-    key_range: Range<Key>,      // what keys this file covers
-    lsn_range: Range<Lsn>,      // delta only; image has a single `lsn: Lsn`
-    index_start_blk: u32,       // where INDEX section starts
-    index_root_blk: u32,        // root B-tree page within INDEX
-}
-```
-
-**VALUES** — concatenated blobs, no padding between them. The B-tree
-gives the byte offsets:
-
-- **Image layer**: each blob is a full 8 KiB Postgres page (possibly
-  compressed by the codec configured at write time).
-- **Delta layer**: each blob is a serialized `Value`:
-  - `Value::Image(Bytes)` — a full page snapshot.
-  - `Value::WalRecord(NeonWalRecord)` — one WAL record's contribution to
-    one page. To reconstruct, replay records in LSN order; a `will_init`
-    record resets the chain.
-
-**INDEX** — a disk-resident B-tree implemented in
-`pageserver/src/tenant/disk_btree.rs`. Nodes are sized to `PAGE_SZ`.
-
-- **Image layer index key**: `Key` itself — 18 bytes.
-- **Delta layer index key**: `DeltaKey = Key ++ LSN` — `KEY_SIZE + 8 = 26`
-  bytes. LSN appended big-endian so byte order matches `(key, lsn)` order.
-- **Index leaf value**: `BlobRef(u64)` — 8 bytes, packed:
-
-  ```text
-  BlobRef = (byte_offset_in_VALUES << 1) | will_init_bit
-  ```
-
-  Putting `will_init` in the BlobRef means the reader can decide whether
-  to keep walking back through older deltas *without* dereferencing the
-  blob — cuts I/O during page reconstruction.
-
 ### LSN-versioned MVCC and time-travel reads
 
 The pageserver doesn't store "the current state of each page" — it stores
@@ -323,518 +226,70 @@ is what makes branching ("create a new timeline as of LSN L") and PITR
 ("restore the database as of yesterday 14:00") possible — those
 operations just point a new timeline at an LSN inside the window.
 
-### Image layers vs delta layers: one LSN vs an LSN range
+### Image-layer materialization
 
-This is the central asymmetry in the storage format. The `Summary`
-fields tell the story:
-
-| Layer | `lsn` field shape | What that means |
-|---|---|---|
-| **Image** | `lsn: Lsn` (singular) | Every entry in this file is the page bytes **at exactly this one LSN**. Many keys, one LSN. |
-| **Delta** | `lsn_range: Range<Lsn>` | Every entry is a WAL record (or image) at *some* LSN inside the range. Many keys, many LSNs per key. |
-
-So **an image layer contains many 8 KiB pages, all materialised at the
-same single LSN**. The B-tree index on an image layer is keyed by `Key`
-alone (18 bytes) — no LSN — because the LSN is implicit and identical
-for the whole file. If you want page `K` at a different LSN, you go
-find a *different* image layer (or stack of delta layers on top of
-this one).
-
-A delta layer holds the *changes* over an LSN range. One key can appear
-multiple times in a delta layer — once per WAL record affecting it
-within that range. The B-tree on a delta layer is keyed by
-`DeltaKey = Key ++ LSN` (26 bytes) for exactly this reason.
-
-#### Reconstruction across layer kinds (the read path)
-
-For a read of `(K, target_lsn)`:
-
-1. Find the most recent **image layer** that covers `K` with
-   `image.lsn ≤ target_lsn`. That's the **starting state**.
-2. Find all **delta layers** that cover `K` with
-   `delta.lsn_range ∩ (image.lsn, target_lsn] ≠ ∅`.
-3. Within each delta layer, fetch the records for `K` whose LSN is in
-   `(image.lsn, target_lsn]`, in LSN order.
-4. Apply those records on top of the starting image via walredo
-   (a Postgres binary running in a sidecar that knows how to replay
-   WAL records onto pages). Each `Value::WalRecord` mutates the
-   page; a `Value::Image` (in a delta layer) or a record with
-   `will_init = true` resets the page from scratch.
-5. After replaying the last record at or before `target_lsn`, return
-   the page bytes.
-
-If no image layer exists for `K`, walk the delta layers backwards
-until you hit a record with `will_init = true` (or an embedded
-`Value::Image`), then forward-replay from there.
-
-This is why **image layers are an optimization, not a requirement**.
-Without them, every read would walk every delta record back to the
-timeline's creation — fast at the start of a timeline's life,
-catastrophically slow after enough churn. Compaction materializes
-image layers periodically to bound replay depth.
-
-### Lookup procedure
-
-To answer "give me page `K` as of LSN `L`":
-
-1. Read block 0; deserialize `Summary`. Confirm `K ∈ key_range` and `L`
-   is consistent with `lsn_range`/`lsn`.
-2. Open the B-tree at `(index_start_blk + index_root_blk) * PAGE_SZ`.
-3. Walk the B-tree:
-   - Delta: largest `DeltaKey ≤ (K, L)`.
-   - Image: exact `K`.
-4. Decode the `BlobRef` → seek into VALUES, read the blob.
-5. Decode the blob:
-   - Image: that's the page, done.
-   - Delta value is an `Image` or carries `will_init`: done.
-   - Otherwise: keep walking *back* through delta records (across more
-     layer files if needed) until an image or `will_init` is hit, then
-     replay forward, applying each record on top of the previous page
-     state.
-
-For batch reads (the common case — reconstructing many pages for a
-single compute query), `VectoredReadPlanner` /
-`StreamingVectoredReadPlanner` (`pageserver/src/tenant/vectored_blob_io.rs`)
-coalesce adjacent blobs in VALUES into single read syscalls.
-
-### Layer file sizes & when the pageserver splits them
-
-Layer files are not infinitely long-lived single objects — the
-pageserver runs a multi-stage lifecycle that bounds their size and
-periodically rewrites them. The relevant knobs (defaults from
-`libs/pageserver_api/src/config.rs::tenant_conf_defaults`):
-
-| Knob | Default | Meaning |
-|---|---:|---|
-| `checkpoint_distance` | **256 MiB** | An open in-memory layer ("frozen layer") gets sealed and written as an L0 delta file when its accumulated WAL crosses this. **Hard cap on L0 delta size.** |
-| `checkpoint_timeout` | 10 min | Even if `checkpoint_distance` isn't hit, the layer is frozen after this much wall time. |
-| `compaction_target_size` | **128 MiB** | Output size target when L0 → L1 compaction rewrites layers. **Soft cap on L1 delta and image layer size.** A single output that grows past this triggers a split. |
-| `compaction_threshold` | 10 | Number of L0 layers that must accumulate before L0→L1 compaction kicks in. |
-| `compaction_period` | 20 s | Background compaction loop period. |
-| `image_creation_threshold` | 3 | Per key-range, after this many delta layers have stacked on top of the last image, the pageserver materializes a new image layer to short-circuit reconstruction. |
-| `S3_UPLOAD_LIMIT` | **4.5 GB** | Emergency ceiling, not a target. The only way to hit it is the pathological "single hot key with > 4.5 GB of WAL accumulated since the last image" case, at which point `BatchLayerWriter` **bails with an error** ("a single key is updated too often") rather than producing the layer. Set to stay under S3's 5 GB single-PUT object limit. (`pageserver/src/tenant/storage_layer/layer.rs:39`) |
-| `gc_horizon` | 64 MiB | Garbage-collection horizon for stale layers below the PITR window. |
-| `pitr_interval` | 7 days | How far back time-travel reads stay supported (gates GC). |
-
-### Layer lifecycle: where each split happens
-
-```
-                          WAL records arrive
-                                  │
-                                  ▼
-                  ┌──────────────────────────────────┐
-                  │  In-memory layer (writable)      │  ← per timeline, grows as WAL ingests
-                  └──────────────────────────────────┘
-                                  │
-                                  │  size ≥ checkpoint_distance (256 MiB)
-                                  │  OR   age ≥ checkpoint_timeout (10 min)
-                                  ▼
-                  ┌──────────────────────────────────┐
-                  │  Frozen layer (read-only, mem)   │
-                  └──────────────────────────────────┘
-                                  │
-                                  │  flush_loop writes to disk
-                                  ▼
-                  ┌──────────────────────────────────┐
-                  │  L0 delta file (≤ checkpoint_distance) │  ← ~256 MiB cap
-                  └──────────────────────────────────┘
-                                  │
-                                  │  ≥ compaction_threshold (10) L0 layers accumulate
-                                  ▼
-                  ┌──────────────────────────────────┐
-                  │  L0 → L1 compaction              │  background task, period 20s
-                  └──────────────────────────────────┘
-                                  │
-                                  │  rewrites N L0 deltas into M L1 deltas,
-                                  │  splitting at compaction_target_size (128 MiB)
-                                  │  per key range
-                                  ▼
-                  ┌──────────────────────────────────┐
-                  │  L1 delta files (~128 MiB each)  │  ← key-range partitioned
-                  └──────────────────────────────────┘
-                                  │
-                                  │  for any key range that's been deltas-only
-                                  │  for ≥ image_creation_threshold (3) layers
-                                  ▼
-                  ┌──────────────────────────────────┐
-                  │  Image layer (~128 MiB target)   │  ← materialized snapshot,
-                  └──────────────────────────────────┘    short-circuits delta replay
-                                  │
-                                  │  layer is < disk_consistent_lsn - pitr_interval
-                                  ▼
-                                 GC
-                                  │
-                                  ▼
-                              dropped
-```
-
-### How splits actually happen mechanically
-
-The writer that turns a stream of (Key, Lsn, Value) entries into one or
-more layer files is `BatchLayerWriter`
-(`pageserver/src/tenant/storage_layer/batch_split_writer.rs`). It tracks
-`estimated_size()` as the input stream advances and rotates to a new
-output file when:
-
-1. The current writer's `estimated_size() >= compaction_target_size`
-   (the configured 128 MiB target), **and** the next entry would start
-   a new key — i.e. we don't split mid-key.
-2. **Or** the current writer's `estimated_size() >= S3_UPLOAD_LIMIT`
-   (4.5 GB) — at which point it actually **errors out** with
-   *"a single key is updated too often"*. The 4.5 GB number is not
-   a routine split point; it's the floor at which the writer
-   refuses to produce a layer at all, because the result couldn't
-   be PUT to S3 in a single request.
-
-Image-layer creation has its own size logic in
-`pageserver/src/tenant/timeline/compaction.rs:2261` onward: it iterates
-keys in order, accumulates `key_values_total_size`, and starts a new
-output file whenever `written_size + key_values_total_size >
-target_file_size` and we're at a key boundary.
-
-If a single key's accumulated values are themselves bigger than
-`target_file_size` (a hot rel with many WAL records), the writer just
-emits that one as an oversized layer and logs a warning at
-`target_file_size * 2 + 2*PAGE_SZ` — the layer is still functionally
-correct, just bigger than the configured target.
-
-#### The "single hot key" pathological case
-
-A "hot key" means a single Postgres 8 KiB page being updated repeatedly.
-Recall a `Key` corresponds to one `(rel, fork, blknum)` triple — so
-many updates to *different rows* on the *same page* all stack records
-on the same `Key`. Real workloads where this happens:
-
-| Workload | Why one key stays hot |
-|---|---|
-| Counter table (`UPDATE counters SET n = n + 1` on a single row) | Same heap block every update |
-| Small hot-pinned lookup row | Same page |
-| Index leaf for a monotonic PK (`bigserial`) | Inserts target the rightmost leaf until it splits |
-| Heap-page tail during a bulk-INSERT | Same block while it fills |
-| `pg_class` / `pg_attribute` row in a heavily-DDL'd schema | Same catalog page |
-
-Why this builds up: WAL records for the same key get stacked as
-`Value::WalRecord` entries in delta layers. Image-layer materialization
-(`image_creation_threshold = 3`) is supposed to short-circuit
-reconstruction by snapshotting the page's current state, but if WAL
-arrives for one key faster than image-layer creation can keep up,
-delta records keep piling. L0→L1 compaction won't split mid-key, so
-all the records for that key go into one output file. The file grows
-past the 128 MiB target (warning at ~256 MiB), past 1 GB, …
-
-At `S3_UPLOAD_LIMIT = 4.5 GB` the writer **errors out** with:
-
-```
-a single key is updated too often: key={…}, estimated_size={…}, and
-the layer file cannot be produced
-```
-
-— because the resulting object wouldn't fit in a single S3 PUT.
-
-**Back-of-envelope**: a NeonWalRecord is ~30–100 bytes serialized.
-4.5 GB ÷ 80 B ≈ 56 M records. So you need on the order of tens of
-millions of WAL records targeting one page since the last image layer
-was materialized to hit this. A single-row counter table at 50K ops/s
-gets there in ~20 minutes if image-layer creation is starved.
-
-**Mitigations** when the error fires:
-- Trigger a manual image layer:
-  `PUT /v1/tenant/<id>/timeline/<id>/compact?force_image_layer_creation=true`.
-- Tune `image_creation_threshold` lower for the affected tenant.
-- Fix the application: a workload that updates one page 56 M times
-  before an image layer materializes is almost certainly contention
-  on a hot row that ought to be partitioned.
+`image_creation_threshold` is implemented by the `image_materializer` in
+yb-pageserver — see [`yb-pageserver.md`](yb-pageserver.md).
 
 ### Practical sizes in the running yb-light cluster
 
-Snapshot from the YB table after the cold-cache stress test
-(`benchmarks/yb-store/`):
+`YbStore` now carries only a handful of artifact kinds. Page data is in
+`yb_storage.pages` (see [`yb-pageserver.md`](yb-pageserver.md)).
 
-| Layer kind | Observed sizes |
+| Artifact | Observed size |
 |---|---|
-| Initial `initdb.tar.zst` (per timeline, written once) | ~1.6 MiB |
-| Initial image layer (timeline bootstrap, fits the empty DB state) | ~24 MiB |
+| `initdb.tar.zst` (per timeline, written once) | ~1.6 MiB |
 | `index_part.json-<gen>` | < 1 KiB |
 | `tenant-manifest-<gen>.json` | < 200 B |
-| Sealed L1 delta on a small bench | 23–294 MiB (cluster of similar sizes around the 128 MiB target, with occasional outliers near the L0 cap of 256 MiB before compaction) |
-| Largest single object ever produced by our bench | ~294 MiB (a freshly-flushed L0 that hadn't yet been compacted) |
+| Basebackup (cached per-LSN) | tens of MiB |
 
-The 294 MiB case is what motivated `YbStore`'s **100 MiB chunking** —
-without it, the single `INSERT` of a 294 MiB BYTEA tripped YB's
-`rpc_max_message_size` (256 MiB) and the upload retry-looped. See
-[`remote-storage.md`](remote-storage.md) for the chunk-size derivation.
-
-### How layer files map to `YbStore`
-
-From `YbStore`'s perspective, none of the internal Summary/Values/Index
-structure matters: a layer file is just an opaque `Bytes` blob keyed by
-its `RemotePath` (`tenants/<id>/timelines/<id>/<layer-file-name>`). The
-file arrives 8 KiB-aligned, gets chunked at 100 MiB boundaries, and
-lands as N rows in `yb_storage.blobs`. The `Key` abstraction never
-crosses the `RemoteStorage` boundary — it lives entirely inside the
-pageserver.
-
-### What compaction actually does
-
-A timeline that just keeps ingesting WAL forever, with no compaction,
-would become useless: every `getpage` would walk an ever-growing stack
-of L0 delta layers, paying the cost of every WAL record ever applied
-to that key. Compaction is the background work that bounds that cost.
-
-There are three distinct things happening under the umbrella name
-"compaction", in `pageserver/src/tenant/timeline/compaction.rs`. The
-entry point is `Timeline::compact_legacy` (line 1206), called on a
-20-second loop by default.
-
-#### 1. L0 → L1 compaction
-
-L0 layers come out of WAL ingest. Each L0 is a delta layer covering
-**the full key range** over a **small LSN range** (one
-`checkpoint_distance` worth of WAL). After 10 L0s accumulate, you have
-10 layers each spanning the entire keyspace — every page read has to
-consult all of them.
-
-`compact_level0` rewrites those N L0s into M L1 delta layers, where
-each L1 covers a **smaller key range** over a **larger LSN range**.
-That's a transpose:
-
-```
-Before (10 L0s — wide key range, narrow LSN range each):
-  ┌───────────────────────────────────────────────────┐
-  │ L0:  keyspace-wide │ lsn 100..120  │              │
-  │ L0:  keyspace-wide │ lsn 120..140  │              │
-  │ L0:  keyspace-wide │ lsn 140..160  │              │
-  │ ...                                               │
-  │ L0:  keyspace-wide │ lsn 280..300  │              │
-  └───────────────────────────────────────────────────┘
-  Every page read must scan all 10 layers.
-
-After L0→L1 compaction (each L1 — narrow key range, wide LSN range):
-  ┌─────────┬─────────┬─────────┬─────────┬─────────┐
-  │ L1: keys│ L1: keys│ L1: keys│ L1: keys│ L1: keys│
-  │  0..100 │ 100..200│ 200..300│ 300..400│ 400..500│
-  │ lsn 100 │ lsn 100 │ lsn 100 │ lsn 100 │ lsn 100 │
-  │  ..300  │  ..300  │  ..300  │  ..300  │  ..300  │
-  └─────────┴─────────┴─────────┴─────────┴─────────┘
-  A page read only touches the one L1 whose key range covers it.
-```
-
-The split happens at `compaction_target_size = 128 MiB` boundaries at
-key transitions. Within one L1, all records for a given key are still
-grouped together in LSN order, so a single key's history can be
-replayed by reading one contiguous chunk of the file (this is what the
-`VectoredReadPlanner` exploits).
-
-L0 compaction is **read-amplification critical**: too many L0s and
-every read is slow. The compaction loop runs aggressively on L0s
-(default `compaction_l0_first = true` + a dedicated semaphore), and
-the `--compact?force-l0-compaction` HTTP endpoint forces an immediate
-pass.
-
-#### 2. Image-layer creation
-
-L1 deltas still require walredo to materialize each page (each read is
-"start from the image, apply records"). If a key range accumulates
-deep delta stacks, reads get slow even with L0→L1 done — they're
-walking many L1s.
-
-When `repartition` detects that a key range has `image_creation_threshold`
-(default 3) delta layers above its last image, the compactor
-materializes a new image layer:
-
-1. Pick an LSN — typically the current `last_record_lsn` (or the L0→L1
-   boundary).
-2. For every key in that partition's range, do a vectored read at the
-   chosen LSN: reconstruct the page once.
-3. Write all those reconstructed pages into a new image-layer file
-   (Summary's `lsn` = the chosen LSN; `key_range` = the partition).
-
-After this, page reads in that key range start from the new image
-instead of walking deep delta stacks. The deltas it superseded
-become eligible for GC once they're older than `pitr_interval`.
-
-Image layers are **expensive to create** (you have to reconstruct
-every page in the partition), so the compactor partitions the
-keyspace and only creates images for partitions that need them —
-guided by `image_creation_threshold` plus heuristics in
-`repartition`.
-
-#### 3. GC and gc-compaction
-
-After `pitr_interval` (default 7 days), data older than the retention
-window can be dropped. The simple GC path drops whole layer files
-whose `lsn_range.end < applied_gc_cutoff_lsn`. Layers that straddle
-the cutoff stay.
-
-`gc_compaction` (a newer pass, `DEFAULT_GC_COMPACTION_ENABLED = true`)
-is the smarter variant: it rewrites partially-stale layers, dropping
-records below the cutoff while preserving the still-needed tail. It
-also drops obsolete delta records that have been superseded by image
-layers within the PITR window. This recovers space without losing
-PITR capability.
-
-#### Compaction algorithms
-
-There are two algorithms in the tree:
-
-- **Legacy** (`DEFAULT_COMPACTION_ALGORITHM = Legacy`) — the one
-  described above. The `compact_legacy` entry point in
-  `compaction.rs:1206`.
-- **Tiered** — a newer leveled algorithm with finer control over
-  layer densities. Opt-in via tenant config; not the default in our
-  cluster.
-
-#### Why this matters for `YbStore`
-
-Compaction is mostly invisible to the storage backend: it produces
-new layer files and deletes old ones. From `YbStore`'s perspective:
-
-- New layer file → `upload` (multi-row INSERT, chunked at 100 MiB).
-- Compacted-away layer file → `delete`.
-- Two layers that compaction merged into one → first `upload` of the
-  new one, then `delete` of the two old ones. No in-place updates.
-
-The throughput cost of compaction on the YB side is mostly DELETE
-load: each compaction pass drops the layers it just superseded.
-With the PK `((tenant_id, timeline_id, key) HASH, namespace,
-chunk_idx)`, a `DELETE FROM blobs WHERE tenant_id=? AND
-timeline_id=? AND namespace=? AND key=? AND generation IS NOT
-DISTINCT FROM ?` is a hash lookup on the (tenant, timeline, key)
-hash + a small range scan within the tablet — fast in YB terms but
-real load if compaction is busy. The generation column is matched
-explicitly so a delete at gen=N never accidentally clears a row
-written at a newer gen.
-
-### Cache miss → download: it's the whole file, by design
-
-When the pageserver doesn't have a layer locally and needs to serve a
-page out of it, it does **not** issue a byte-range read for just that
-page. The full layer file is downloaded from `remote_storage` into a
-temp file on local disk, then renamed into place; subsequent reads of
-that layer are local-disk reads.
-
-Code path: `pageserver/src/tenant/storage_layer/layer.rs:Layer::download`
-→ `pageserver/src/tenant/remote_timeline_client/download.rs::download_layer_file`
-→ `download_object`, which calls
-
-```rust
-storage.download(src_path, &DownloadOpts::default(), cancel).await?;
-```
-
-`DownloadOpts::default()` has `byte_start = Unbounded`, `byte_end =
-Unbounded` — the entire layer is requested.
-
-Why the whole file, not byte ranges:
-
-1. **The B-tree index lives at the *end* of the file**, after the
-   VALUES section. Just one page lookup would need three or more
-   round-trips: Summary (block 0) + several B-tree nodes near
-   `index_start_blk` + the actual blob somewhere in VALUES. With a
-   remote object store, each round-trip has 10–100 ms latency. One
-   bulk download is cheaper.
-2. **Layer files are bounded** (~128 MiB target, ~256 MiB L0 cap,
-   ~294 MiB worst-case in our bench, 4.5 GB hard ceiling). A single
-   sequential read amortises across every subsequent page lookup from
-   that layer.
-
-The `RemoteStorage` trait *does* support byte ranges
-(`DownloadOpts { byte_start, byte_end }`) — the S3 backend implements
-them via the HTTP `Range:` header — but the pageserver doesn't use them
-for layer downloads. The only place ranged reads happen is the
-safekeeper's WAL fetch path.
-
-### Streaming the download (so memory stays small)
-
-The download is **streaming on the wire**, not "load 4 GB into RAM". The
-trait shape is:
-
-```rust
-pub struct Download {
-    pub download_stream: Pin<Box<dyn Stream<Item = io::Result<Bytes>> + Send + Sync + 'static>>,
-    pub last_modified: SystemTime,
-    pub etag: Etag,
-    pub metadata: Option<StorageMetadata>,
-}
-```
-
-`download_layer_file` pulls chunks off `download_stream` via
-`StreamExt::next` and writes them to a `BufferedWriter<TempVirtualFile>`.
-Only a small fixed-size buffer ever sits in pageserver RAM.
-
-For **S3/Azure/GCS/LocalFs**, this is true straightforwardly: each
-backend's `download` returns a real byte stream backed by the upstream
-HTTP body / file read syscall, so memory peaks at the buffer size
-regardless of object size.
-
-For **`YbStore`**, this required some care. The first cut bulk-fetched
-all chunks with `client.query(...)`, concatenated the BYTEAs into one
-`Vec<u8>`, and wrapped it in `futures::stream::once` — pageserver RAM
-peak was the full layer size. Fixed in `libs/remote_storage/src/yb_store.rs::download`
-by:
-
-1. **Phase 1 (metadata):** single-row `SELECT size_bytes, etag,
-   last_modified_us, metadata_json … WHERE key = $1 AND chunk_idx = 0`
-   so we can serve the `If-None-Match` shortcut and compute byte-range
-   math without touching the bulk data.
-2. **Phase 2 (streaming chunks):** open a `tokio_postgres::RowStream`
-   via `client.query_raw(...)` filtered to the chunk_idx range that
-   overlaps the requested byte range. Wrap it in
-   `async_stream::stream!` and yield one chunk's bytea as a `Bytes`
-   per stream poll. `Bytes::from(Vec<u8>)` is zero-copy and `slice(..)`
-   on it is pointer+length adjustment — no copies for the common
-   whole-file case.
-3. **Byte-range math:** chunks are predictably sized (each is
-   `YB_CHUNK_SIZE = 100 MiB` except possibly the last), so
-   `start_chunk = start_byte / YB_CHUNK_SIZE`,
-   `end_chunk = (end_byte - 1) / YB_CHUNK_SIZE`, with trim offsets
-   `start_byte % YB_CHUNK_SIZE` on the first chunk and
-   `(end_byte - 1) % YB_CHUNK_SIZE + 1` on the last. No request
-   reads chunks it doesn't need.
-
-After the fix, `YbStore` peaks at one chunk (up to 100 MiB) in flight,
-matching S3/Azure/GCS modulo chunk granularity.
+`YB_CHUNK_SIZE` in `libs/remote_storage/src/yb_store.rs:72` is still
+100 MiB; it now only sizes basebackup and initdb writes, since layer
+files no longer exist.
 
 ### `getpage` RPC
 
 Custom Postgres-message-typed gRPC (in `pageserver/page_api`) issued by the
 compute's `NEON_SMGR` for every page miss. The pageserver:
 
-1. Look up the (tenant, timeline) shard.
-2. Find the layer-file stack covering the requested page at the requested LSN.
-3. If any needed layer is not local, download from `remote_storage`.
-4. Reconstruct the page.
-5. Stream it back.
+1. Look up the (tenant, timeline) tenant slot.
+2. Walk the YB page-row chain for the requested `(Key, LSN)` via
+   `PageStore::read_chain` (anchor image + later deltas).
+3. Walredo to reconstruct the page if the chain doesn't end on an image.
+4. Stream it back.
 
 ### WAL ingest
 
-`WalReceiver` runs per-timeline, connects to the safekeepers via
-`START_REPLICATION`, decodes WAL records, and feeds the in-memory layer.
-Periodically flushes the in-memory layer to disk and uploads to remote.
-
-### Compaction & GC
-
-Background tasks: L0 → L1 compaction (merge many small delta layers into
-fewer larger ones), image-layer generation (materialize pages at a fresh
-LSN), and GC (drop layers older than `pitr_interval`).
+`WalReceiver` runs per-timeline, connects to the safekeeper via
+`START_REPLICATION`, and decodes WAL records, routing each record
+through `PageWriter` into YB. No in-memory layer is opened; the flush
+loop (`Timeline::maybe_spawn_flush_loop`) is a no-op in the fork.
 
 ### Remote storage
 
-The pageserver uses `remote_storage::GenericRemoteStorage` for durability:
-upload layers + index after every flush; download on demand; delete on GC.
-The contract is the `RemoteStorage` trait (see
-[`remote-storage.md`](remote-storage.md)).
+The pageserver uses `remote_storage::GenericRemoteStorage` for durability,
+but only for the basebackup / initdb / index / manifest artifacts (see
+sizes table above). Page data goes through `PageStore` into
+`pageserver.pages` directly, not via the `RemoteStorage` trait. The
+trait contract is documented in [`remote-storage.md`](remote-storage.md).
 
 ### Code layout
 
 - `pageserver/src/tenant/` — tenant + timeline machinery.
-- `pageserver/src/tenant/remote_timeline_client/` — bridges layer events
-  (created, sealed, deleted) to `RemoteStorage` operations.
 - `pageserver/src/tenant/timeline/walreceiver/` — WAL ingest.
-- `pageserver/src/tenant/timeline/layer_manager.rs` — in-memory layer state.
-- `pageserver/src/feature_resolver.rs` — small bits of config-dependent
-  logic; the only file modified for YbStore other than the variant-add
-  match arms.
-- `libs/remote_storage/` — the trait + all backends, including `YbStore`.
+- `pageserver/src/page_store.rs` — YB-backed row store for page data.
+- `pageserver/src/page_writer.rs` — buffered write path; routes records
+  to `PageStore` and serves blended reads from the in-RAM buffer +
+  PageStore.
+- `pageserver/src/image_materializer.rs` — background image
+  materialiser (replaces image-layer compaction).
+- `pageserver/src/unified_pages.rs` — shared page-row types.
+- `pageserver/src/pgdatadir_mapping.rs` — `(Key, LSN)` ↔ Postgres
+  mapping.
+- `pageserver/src/walredo.rs`, `pageserver/src/walredo/` — walredo
+  sidecar.
+- `libs/remote_storage/` — the trait + `YbStore` (basebackup, initdb,
+  manifest).
 
 ## Changes in yb-light
 
@@ -849,13 +304,9 @@ table. The trait stays unchanged; this is *additive*. See
   `RemoteStorageKind::YbStore(YbStoreConfig)`.
 - `libs/remote_storage/src/lib.rs` — adds the `YbStore(Arc<YbStore>)`
   variant to `GenericRemoteStorage` and the dispatch arms.
-- `pageserver/src/feature_resolver.rs` — adds the new arm to the
-  region-inference match (returns `"yb"`).
-- `pageserver/src/tenant/remote_timeline_client/upload.rs` — adds the
-  new arm to the exhaustive `match storage { ... }` block.
 
-That's the entirety of the pageserver-side change. The trait dispatch
-does the rest.
+The `remote_timeline_client` was subsequently unwound; only basebackup,
+initdb, and tenant-manifest still flow through `YbStore`.
 
 ### 2. Chunked, pipelined writes
 
@@ -874,29 +325,16 @@ pageserver started uploading ~290 MiB layer files. Fix:
 
 See [`remote-storage.md`](remote-storage.md) for the schema.
 
-### 3. Local layer cache still exists
-
-This is **unchanged from upstream Neon**, but worth calling out for the
-deployment model: even with YbStore configured, the pageserver still
-maintains its full local layer cache under
-`<workdir>/pageserver_*/tenants/.../timelines/...`. Layer files are
-written *first* locally, *then* uploaded to YB. Reads prefer local; YB
-is consulted on misses.
-
-If you wipe the local cache, the pageserver re-downloads from YB on next
-attach. Tested in the benchmark suite — see
-`../hari-neon/benchmarks/neon-vs-yb-vs-vanilla.md` ("YbStore cold-cache
-stress test").
-
 ## What's on local FS vs in YB
 
 | State | Local FS | YB |
 |---|---|---|
-| Layer files | yes (cache, evictable) | yes (durable copy) |
-| `index_part.json` | yes | yes |
-| `tenant-manifest.json` | yes | yes |
-| `initdb.tar.zst` | yes | yes |
-| `metadata` | yes only | — (rebuilt from index) |
+| Page data (`(Key, LSN) → bytes`) | — | `yb_storage.pages` (durable) |
+| Per-key cache (LRU, eviction-bounded) | RAM only | — |
+| `index_part.json` | yes (cache) | yes (durable) |
+| `tenant-manifest.json` | yes (cache) | yes (durable) |
+| `initdb.tar.zst` | yes (cache) | yes (durable) |
+| Timeline state (was the `metadata` file) | — | `pageserver.timeline_state` row |
 | Operational (pidfile, logs) | yes | — |
 
 ## Run / configure
@@ -922,20 +360,22 @@ remote_storage = {
 `neon_local init` accepts a top-level config with this `remote_storage`
 inline table; the generated `pageserver.toml` carries it through.
 
+`YbStore` is the only `RemoteStorage` backend in yb-light; LocalFs, S3,
+Azure, and GCS were removed (commit `f26243aaa` "drop LocalFs").
+
 ## Performance characteristics
 
-- **Steady-state reads**: served from local layer cache. Indistinguishable
-  from Neon-on-S3 or Neon-on-LocalFs (whose local cache plays the same role).
-- **Steady-state writes**: layer flush → local file → background upload to
-  YB. Upload latency is hidden from the compute write path — `flush` to
-  pageserver is async w.r.t. commit.
-- **Cold pageserver** (empty layer cache, fresh re-attach): every layer
-  needed for serving a query is one YB query of N chunks. The benchmark
-  with 100 MB of data + cold pageserver completed `SELECT count(*)` in
-  19 s on YbStore vs 19 s on LocalFs — equivalent within noise. Both pull
-  the same bytes off the same local-machine disk; the abstraction layer
-  costs little.
-- **YB blob size**: ~24 MiB at fresh-timeline bootstrap (initdb + initial
-  image layer + index_part + manifest). ~320 MiB for a 100 MiB user
-  dataset after pageserver compaction. Storage growth dominated by layer
-  rewrites during compaction, same as on S3.
+- **Steady-state reads**: `PageStore` reads against `yb_storage.pages`
+  for a `(Key, LSN)` chain. The per-key in-RAM cache (LRU, bounded) hits
+  the cache-only fast path when warm; misses run one SQL `read_chain`
+  per key.
+- **Steady-state writes**: `PageWriter::put` buffers records in RAM,
+  then issues batched `PageStore::put_pages` into YB. The walreceiver
+  back-pressures on `backpressure_bytes` if the pre-flush buffer can't
+  drain.
+- **Image materialisation**: triggered at write time when a key has
+  accumulated `image_creation_threshold` WAL records since the last
+  image. Reconstructs once and writes the image row to YB, then trims
+  the cache for that key.
+- **GC**: image-row writes supersede older deltas; cleanup is a YB
+  delete against `pages` keyed by `(tenant, timeline, key)`.
