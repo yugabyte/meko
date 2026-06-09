@@ -62,20 +62,21 @@ safekeeper.rs" estimate was made before our prior cleanups
 removal — the actual remaining surface is the bare minimum
 walproposer needs to talk to one SK.
 
-Persistent state leftovers (still part of the control-file
-format, still serialised in YB but no longer mutated at runtime):
-`partial_backup`, `eviction_state`, `backup_lsn`. Removing them
-needs either a versioned migration or a clean break of the
-on-disk format — gated on task 19 (SK control file → YB columns).
+## Wave-1 leftovers — closed out
 
-`RateLimiter` is still threaded through `Manager` /
-`GlobalTimelines` even though both semaphores have no callers —
-trivial to delete, a wider edit than warranted as cleanup.
+The three cleanup-only items left open at end of wave 1 have
+since landed:
 
-`safekeeper_api::PullTimeline{Request,Response}` are still on the
-API surface for the storage_controller's still-living multi-SK
-reconciler. Their deletion is gated on a separate
-storage_controller slim.
+- `partial_backup` / `eviction_state` / `backup_lsn` dropped from
+  `TimelinePersistentState` — commit `a8fe507cb` (rode on top of
+  the task-19 control-file → YB columns migration that unblocked
+  the schema break).
+- `RateLimiter` plumbing removed from `Manager` /
+  `GlobalTimelines` — commit `b152ccf24`.
+- `safekeeper_api::PullTimeline{Request,Response}` deleted —
+  commit `1a9ca7ec1`, after the storage_controller stopped driving
+  multi-SK migration (`259d6e9a1`) and the dead HTTP endpoints
+  could be stripped together.
 
 ## Wave 1 commits
 
@@ -124,21 +125,6 @@ storage_controller slim.
   `safekeeper_partial_backup_uploads_total`,
   `safekeeper_wal_backup_tasks_*`,
   `safekeeper_evicted_timelines`, ...).
-
-## Wave 1 leftovers (not blocking; cleanup-only)
-
-- **state.rs**: `partial_backup`, `eviction_state`, `backup_lsn`
-  fields are dead at runtime but persisted in the control file
-  format. Removing them needs either a versioned migration or a
-  clean break — gated on task 19 (SK control file → YB columns).
-- **RateLimiter**: still threaded through `Manager` /
-  `GlobalTimelines` even though both semaphores (partial_backup +
-  eviction) have no callers. Trivial to delete, just a wider edit.
-- **`safekeeper_api::PullTimelineRequest`/`Response`**: kept on the
-  API surface because the storage_controller's multi-SK reconciler
-  still composes them. Their deletion cascades into
-  `SafekeeperTimelineOpKind::Pull` and the timeline-creation flow —
-  out of scope; the storage_controller slim is a separate task.
 
 ## Wave 2 — consensus state-machine slimming (PENDING)
 
