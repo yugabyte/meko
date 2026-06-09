@@ -89,16 +89,6 @@ CREATE TABLE storage_controller.timelines (
     PRIMARY KEY (tenant_id, timeline_id)
 );
 
--- Queue of pending generation-bump ops per (timeline, safekeeper).
-CREATE TABLE storage_controller.safekeeper_timeline_pending_ops (
-    sk_id       BIGINT NOT NULL,
-    tenant_id   VARCHAR NOT NULL,
-    timeline_id VARCHAR NOT NULL,
-    generation  INTEGER NOT NULL,
-    op_kind     VARCHAR NOT NULL,
-    PRIMARY KEY (tenant_id, timeline_id, sk_id)
-);
-
 -- Per-timeline import progress, shard-keyed JSON.
 CREATE TABLE storage_controller.timeline_imports (
     tenant_id      VARCHAR NOT NULL,

@@ -80,7 +80,7 @@ key the pageserver/safekeeper use. In YB the path is split across the
 | Pageserver tenant manifest | YB `yb_storage.blobs` | `pageserver-yb/tenants/<id>/tenant-manifest-<gen>.json` |
 | Safekeeper control file | YB `safekeeper.timeline_state` schema | one row per timeline, typed columns |
 | Safekeeper live WAL | YB `yb_storage.wals` | `((tenant_id, timeline_id) HASH, segno, chunk_offset)` |
-| Storage controller relational state | YB `yb_storage` DB, `storage_controller` schema | 8 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
+| Storage controller relational state | YB `yb_storage` DB, `storage_controller` schema | 7 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
 | Pageserver local layer cache | local FS | `.neon-yb/pageserver_*/tenants/.../timelines/.../<layer>` |
 | Safekeeper local FS | local FS | `.neon-yb/safekeepers/sk*/` — only logs + pidfile (no WAL, no control file, no id) |
 | Compute `pgdata` | local FS | `.neon-yb/endpoints/main/pgdata/` (catalogs + ephemeral WAL pre-ship buffer) |
@@ -120,7 +120,7 @@ yugabyted                       :7100 (master), :5433 (ysql)
         |     |                        not stored, they live in their own columns
         |     +-- table `wals`         per-write rows,
         |                              PK ((tenant_id, timeline_id) HASH, segno, chunk_offset)
-        +-- schema `storage_controller`  Diesel-managed; 8 tables
+        +-- schema `storage_controller`  Diesel-managed; 7 tables
         +-- schema `pageserver`
         +-- schema `safekeeper`          incl. `timeline_state` (typed control-file rows)
 

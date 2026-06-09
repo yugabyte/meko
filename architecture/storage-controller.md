@@ -19,7 +19,7 @@ fresh-schema apply of the collapsed Diesel migration, not a
 ## What it persists
 
 A single collapsed migration (`storage_controller/migrations/00000000000001_initial_schema/up.sql`)
-creates the 8 storage_controller tables below plus the pageserver, safekeeper,
+creates the 7 storage_controller tables below plus the pageserver, safekeeper,
 and public schemas (blobs / wals / blob_namespace, pageserver.pages /
 slru_pages / meta / tenant_config / timeline_state, safekeeper.timeline_state)
 in the same `yb_storage` DB.
@@ -30,7 +30,6 @@ in the same `yb_storage` DB.
 | `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), lifecycle, scheduling policy |
 | `safekeepers` | Safekeeper identities: id, region_id, version, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
 | `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name |
-| `safekeeper_timeline_pending_ops` | Pending control operations on a (safekeeper, timeline) pair — used to recover after a controller restart |
 | `metadata_health` | Per-shard health markers (last successful scrub timestamps) |
 | `timeline_imports` | In-progress imports (e.g., from pg_dump) |
 | `controllers` | Multi-controller leader election rows (only one controller is leader at a time) |
@@ -64,9 +63,11 @@ The safekeeper reconciler path is no longer upstream-parity:
   the legacy filesystem path.
 - **Membership-switch HTTP surface stripped** (commit `1a9ca7ec1`): the
   multi-SK membership-change endpoints / state-machine were removed.
-- **Multi-SK reconciler simplified**: with `--timeline-safekeeper-count 1`
-  the default and no membership churn, the reconciler is a much-reduced
-  subset of the upstream code path.
+- **Background safekeeper reconciler removed**: the persistent
+  `safekeeper_timeline_pending_ops` queue and its per-SK reconciler task
+  (`safekeeper_reconciler.rs`) are gone. With one compute / one SK / one PS,
+  timeline and tenant deletions are issued to the safekeeper synchronously
+  (inline, with retries) and the `timelines` row is removed on success.
 
 ### Wire protocol
 

@@ -13,7 +13,7 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | `public` | `blobs`, `wals`, `blob_namespace` ENUM | yugabyte | controller migrations |
 | `pageserver` | `pages`, `slru_pages`, `meta`, `tenant_config`, `timeline_state` | yugabyte | controller migrations |
 | `safekeeper` | `timeline_state` | yugabyte | controller migrations |
-| `storage_controller` | 8 Diesel-managed tables (`tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `safekeeper_timeline_pending_ops`, `timeline_imports`) | yugabyte | controller migrations |
+| `storage_controller` | 7 Diesel-managed tables (`tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `timeline_imports`) | yugabyte | controller migrations |
 
 `neon_local` only `CREATE DATABASE`s `yb_storage`
 (`control_plane/src/storage_controller.rs::ensure_external_database`);
@@ -426,7 +426,7 @@ by hand.
 | `pageserver` | `tenant_config` | Per-tenant `TenantConfig` (GC horizon, PITR, …); authoritative copy, controller-written. |
 | `pageserver` | `timeline_state` | Per-timeline state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`. |
 | `safekeeper` | `timeline_state` | Per-timeline safekeeper control file (replaces upstream's local-FS `safekeeper.control` blob). |
-| `storage_controller` | 8 tables | `tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `safekeeper_timeline_pending_ops`, `timeline_imports`. |
+| `storage_controller` | 7 tables | `tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `timeline_imports`. |
 
 See `up.sql` for the exact column lists, PK ordering, and FK
 relationships.

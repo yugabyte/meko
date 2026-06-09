@@ -37,16 +37,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    safekeeper_timeline_pending_ops (tenant_id, timeline_id, sk_id) {
-        sk_id -> Int8,
-        tenant_id -> Varchar,
-        timeline_id -> Varchar,
-        generation -> Int4,
-        op_kind -> Varchar,
-    }
-}
-
-diesel::table! {
     safekeepers (id) {
         id -> Int8,
         region_id -> Text,
@@ -98,7 +88,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     controllers,
     metadata_health,
     nodes,
-    safekeeper_timeline_pending_ops,
     safekeepers,
     tenants,
     timeline_imports,

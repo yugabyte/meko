@@ -46,7 +46,7 @@ upstream Neon can skim) and **changes in yb-light**.
                             v             v
               +-----------------------------------------+
               |          YugabyteDB (db: yb_storage)    |
-              |   schema  storage_controller (8 tables) |
+              |   schema  storage_controller (7 tables) |
               |   schema  pageserver (5 tables)         |
               |   schema  safekeeper (timeline_state)   |
               |   schema  public (blobs, wals)          |

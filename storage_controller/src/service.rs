@@ -1,5 +1,4 @@
 pub mod chaos_injector;
-pub(crate) mod safekeeper_reconciler;
 mod safekeeper_service;
 mod tenant_shard_iterator;
 
@@ -49,7 +48,6 @@ use pageserver_api::upcall_api::{
 use pageserver_client::{BlockUnblock, mgmt_api};
 use reqwest::{Certificate, StatusCode};
 use safekeeper_api::models::SafekeeperUtilization;
-use safekeeper_reconciler::SafekeeperReconcilers;
 use tenant_shard_iterator::{TenantShardExclusiveIterator, create_shared_shard_iterator};
 use tokio::sync::TryAcquireError;
 use tokio::sync::mpsc::error::TrySendError;
@@ -200,7 +198,6 @@ enum ShardGenerationValidity {
 
 pub const RECONCILER_CONCURRENCY_DEFAULT: usize = 128;
 pub const PRIORITY_RECONCILER_CONCURRENCY_DEFAULT: usize = 256;
-pub const SAFEKEEPER_RECONCILER_CONCURRENCY_DEFAULT: usize = 32;
 
 // Number of consecutive reconciliations that have occurred for one shard,
 // after which the shard is ignored when considering to run optimizations.
@@ -220,8 +217,6 @@ struct ServiceState {
     nodes: Arc<HashMap<NodeId, Node>>,
 
     safekeepers: Arc<HashMap<NodeId, Safekeeper>>,
-
-    safekeeper_reconcilers: SafekeeperReconcilers,
 
     scheduler: Scheduler,
 
@@ -298,7 +293,6 @@ impl ServiceState {
         scheduler: Scheduler,
         delayed_reconcile_rx: tokio::sync::mpsc::Receiver<TenantId>,
         initial_leadership_status: LeadershipStatus,
-        reconcilers_cancel: CancellationToken,
     ) -> Self {
         metrics::update_leadership_status(initial_leadership_status);
 
@@ -307,7 +301,6 @@ impl ServiceState {
             tenants,
             nodes: Arc::new(nodes),
             safekeepers: Arc::new(safekeepers),
-            safekeeper_reconcilers: SafekeeperReconcilers::new(reconcilers_cancel),
             scheduler,
             ongoing_operation: None,
             delayed_reconcile_rx,
@@ -396,9 +389,6 @@ pub struct Config {
 
     /// How many high-priority Reconcilers may be spawned concurrently
     pub priority_reconciler_concurrency: usize,
-
-    /// How many safekeeper reconciles may happen concurrently (per safekeeper)
-    pub safekeeper_reconciler_concurrency: usize,
 
     /// How many API requests per second to allow per tenant, across all
     /// tenant-scoped API endpoints. Further API requests queue until ready.
@@ -785,30 +775,9 @@ impl Service {
             std::process::exit(1);
         }
 
-        let safekeepers = self.inner.read().unwrap().safekeepers.clone();
-        let sk_schedule_requests =
-            match safekeeper_reconciler::load_schedule_requests(self, &safekeepers).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to load safekeeper pending ops at startup: {e}." // Don't abort for now: " Aborting start-up..."
-                    );
-                    // std::process::exit(1);
-                    Vec::new()
-                }
-            };
-
         {
             let mut locked = self.inner.write().unwrap();
             locked.become_leader();
-
-            for (sk_id, _sk) in locked.safekeepers.clone().iter() {
-                locked.safekeeper_reconcilers.start_reconciler(*sk_id, self);
-            }
-
-            locked
-                .safekeeper_reconcilers
-                .schedule_request_vec(sk_schedule_requests);
         }
 
         // TODO: if any tenant's intent now differs from its loaded generation_pageserver, we should clear that
@@ -1680,7 +1649,6 @@ impl Service {
                 scheduler,
                 delayed_reconcile_rx,
                 initial_leadership_status,
-                reconcilers_cancel.clone(),
             ))),
             config: config.clone(),
             persistence,

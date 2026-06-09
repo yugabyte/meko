@@ -3,13 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::safekeeper_reconciler::ScheduleRequest;
 use crate::heartbeater::SafekeeperState;
 use crate::metrics;
-use crate::persistence::{
-    DatabaseError, SafekeeperTimelineOpKind, TimelinePendingOpPersistence, TimelinePersistence,
-    TimelineUpdate,
-};
+use crate::persistence::{DatabaseError, TimelinePersistence, TimelineUpdate};
 use crate::safekeeper::Safekeeper;
 use crate::safekeeper_client::SafekeeperClient;
 use crate::timeline_import::TimelineImportFinalizeError;
@@ -457,7 +453,10 @@ impl Service {
         })
     }
 
-    /// Perform timeline deletion on safekeepers. Will return success: we persist the deletion into the reconciler.
+    /// Perform timeline deletion on the safekeeper(s), then remove it from the db.
+    ///
+    /// yb-light is single-SK with no background safekeeper reconciler, so the
+    /// deletion is done synchronously inline (with retries inside the op helper).
     pub(super) async fn tenant_timeline_delete_safekeepers(
         self: &Arc<Self>,
         tenant_id: TenantId,
@@ -476,56 +475,44 @@ impl Service {
         self.persistence
             .timeline_set_deleted_at(tenant_id, timeline_id)
             .await?;
-        let all_sks = tl.sk_set.iter().collect::<HashSet<_>>();
 
-        // The timeline has no safekeepers: we need to delete it from the db manually,
-        // as no safekeeper reconciler will get to it
-        if all_sks.is_empty() {
-            if let Err(err) = self
-                .persistence
-                .delete_timeline(tenant_id, timeline_id)
-                .await
-            {
-                tracing::warn!(%tenant_id, %timeline_id, "couldn't delete timeline from db: {err}");
-            }
-        }
-
-        // Schedule reconciliations
-        for &sk_id in all_sks.iter() {
-            let pending_op = TimelinePendingOpPersistence {
-                tenant_id: tenant_id.to_string(),
-                timeline_id: timeline_id.to_string(),
-                generation: i32::MAX,
-                op_kind: SafekeeperTimelineOpKind::Delete,
-                sk_id: *sk_id,
-            };
-            tracing::info!("writing pending op for sk id {sk_id}");
-            self.persistence.insert_pending_op(pending_op).await?;
-        }
-        {
-            let locked = self.inner.read().unwrap();
-            for sk_id in all_sks {
-                let sk_id = NodeId(*sk_id as u64);
-                let Some(sk) = locked.safekeepers.get(&sk_id) else {
+        let safekeepers = self.get_safekeepers(&tl.sk_set)?;
+        if !safekeepers.is_empty() {
+            const SK_DELETE_TIMELINE_TIMEOUT: Duration = Duration::from_secs(30);
+            let results = self
+                .tenant_timeline_safekeeper_op(
+                    &safekeepers,
+                    move |client| async move {
+                        client.delete_timeline(tenant_id, timeline_id).await
+                    },
+                    SK_DELETE_TIMELINE_TIMEOUT,
+                )
+                .await?;
+            for (sk, res) in safekeepers.iter().zip(results) {
+                if let Err(err) = res {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                        "Couldn't find safekeeper with id {sk_id}"
+                        "failed to delete timeline {tenant_id}/{timeline_id} on safekeeper {}: {err}",
+                        sk.get_id()
                     )));
-                };
-
-                let req = ScheduleRequest {
-                    safekeeper: Box::new(sk.clone()),
-                    tenant_id,
-                    timeline_id: Some(timeline_id),
-                    generation: i32::MAX as u32,
-                    kind: SafekeeperTimelineOpKind::Delete,
-                };
-                locked.safekeeper_reconcilers.schedule_request(req);
+                }
+                tracing::info!("deleted timeline from safekeeper {}", sk.get_id());
             }
+        }
+
+        if let Err(err) = self
+            .persistence
+            .delete_timeline(tenant_id, timeline_id)
+            .await
+        {
+            tracing::warn!(%tenant_id, %timeline_id, "couldn't delete timeline from db: {err}");
         }
         Ok(())
     }
 
-    /// Perform tenant deletion on safekeepers.
+    /// Perform tenant deletion on the safekeeper(s), then remove its timelines from the db.
+    ///
+    /// yb-light is single-SK with no background safekeeper reconciler, so the
+    /// deletion is done synchronously inline (with retries inside the op helper).
     pub(super) async fn tenant_delete_safekeepers(
         self: &Arc<Self>,
         tenant_id: TenantId,
@@ -551,69 +538,48 @@ impl Service {
             })
             .collect::<Result<Vec<_>, ApiError>>()?;
 
-        // Remove pending ops from db, and set `deleted_at`.
-        // We cancel them in a later iteration once we hold the state lock.
         for (timeline_id, _timeline) in timeline_list.iter() {
-            self.persistence
-                .remove_pending_ops_for_timeline(tenant_id, Some(*timeline_id))
-                .await?;
             self.persistence
                 .timeline_set_deleted_at(tenant_id, *timeline_id)
                 .await?;
         }
 
-        // The list of safekeepers that have any of the timelines
-        let mut sk_list = HashSet::new();
-
-        // List all pending ops for all timelines, cancel them
+        // The set of safekeepers that have any of the tenant's timelines.
+        let mut sk_set = HashSet::new();
         for (_timeline_id, timeline) in timeline_list.iter() {
-            let sk_iter = timeline.sk_set.iter().map(|id| NodeId(*id as u64));
-            sk_list.extend(sk_iter);
+            sk_set.extend(timeline.sk_set.iter().copied());
         }
+        let sk_ids = sk_set.into_iter().collect::<Vec<_>>();
+        let safekeepers = self.get_safekeepers(&sk_ids)?;
 
-        for &sk_id in sk_list.iter() {
-            let pending_op = TimelinePendingOpPersistence {
-                tenant_id: tenant_id.to_string(),
-                timeline_id: String::new(),
-                generation: i32::MAX,
-                op_kind: SafekeeperTimelineOpKind::Delete,
-                sk_id: sk_id.0 as i64,
-            };
-            tracing::info!("writing pending op for sk id {sk_id}");
-            self.persistence.insert_pending_op(pending_op).await?;
-        }
-
-        let mut locked = self.inner.write().unwrap();
-
-        for (timeline_id, _timeline) in timeline_list.iter() {
-            for sk_id in sk_list.iter() {
-                locked
-                    .safekeeper_reconcilers
-                    .cancel_reconciles_for_timeline(*sk_id, tenant_id, Some(*timeline_id));
+        if !safekeepers.is_empty() {
+            const SK_DELETE_TENANT_TIMEOUT: Duration = Duration::from_secs(30);
+            let results = self
+                .tenant_timeline_safekeeper_op(
+                    &safekeepers,
+                    move |client| async move { client.delete_tenant(tenant_id).await },
+                    SK_DELETE_TENANT_TIMEOUT,
+                )
+                .await?;
+            for (sk, res) in safekeepers.iter().zip(results) {
+                if let Err(err) = res {
+                    return Err(ApiError::InternalServerError(anyhow::anyhow!(
+                        "failed to delete tenant {tenant_id} on safekeeper {}: {err}",
+                        sk.get_id()
+                    )));
+                }
+                tracing::info!(%tenant_id, "deleted tenant from safekeeper {}", sk.get_id());
             }
         }
 
-        // unwrap is safe: we return above for an empty timeline list
-        let max_generation = timeline_list
-            .iter()
-            .map(|(_tl_id, tl)| tl.generation as u32)
-            .max()
-            .unwrap();
-
-        for sk_id in sk_list {
-            let Some(safekeeper) = locked.safekeepers.get(&sk_id) else {
-                tracing::warn!("Couldn't find safekeeper with id {sk_id}");
-                continue;
-            };
-            // Add pending op for tenant deletion
-            let req = ScheduleRequest {
-                generation: max_generation,
-                kind: SafekeeperTimelineOpKind::Delete,
-                safekeeper: Box::new(safekeeper.clone()),
-                tenant_id,
-                timeline_id: None,
-            };
-            locked.safekeeper_reconcilers.schedule_request(req);
+        for (timeline_id, _timeline) in timeline_list.iter() {
+            if let Err(err) = self
+                .persistence
+                .delete_timeline(tenant_id, *timeline_id)
+                .await
+            {
+                tracing::warn!(%tenant_id, %timeline_id, "couldn't delete timeline from db: {err}");
+            }
         }
         Ok(())
     }
@@ -751,9 +717,6 @@ impl Service {
                     );
                 }
             }
-            locked
-                .safekeeper_reconcilers
-                .start_reconciler(node_id, self);
             locked.safekeepers = Arc::new(safekeepers);
             metrics::METRICS_REGISTRY
                 .metrics_group
@@ -798,19 +761,6 @@ impl Service {
             .get_mut(&node_id)
             .ok_or(DatabaseError::Logical("Not found".to_string()))?;
         sk.set_scheduling_policy(scheduling_policy);
-
-        match scheduling_policy {
-            SkSchedulingPolicy::Active => {
-                locked
-                    .safekeeper_reconcilers
-                    .start_reconciler(node_id, self);
-            }
-            SkSchedulingPolicy::Decomissioned
-            | SkSchedulingPolicy::Pause
-            | SkSchedulingPolicy::Activating => {
-                locked.safekeeper_reconcilers.stop_reconciler(node_id);
-            }
-        }
 
         locked.safekeepers = Arc::new(safekeepers);
         Ok(())

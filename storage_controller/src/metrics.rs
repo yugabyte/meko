@@ -137,14 +137,6 @@ pub(crate) struct StorageControllerMetricGroup {
     pub(crate) storage_controller_reconcile_long_running:
         measured::CounterVec<ReconcileLongRunningLabelGroupSet>,
 
-    /// Indicator of safekeeper reconciler queue depth, broken down by safekeeper, excluding ongoing reconciles.
-    pub(crate) storage_controller_safekeeper_reconciles_queued:
-        measured::GaugeVec<SafekeeperReconcilerLabelGroupSet>,
-
-    /// Indicator of completed safekeeper reconciles, broken down by safekeeper.
-    pub(crate) storage_controller_safekeeper_reconciles_complete:
-        measured::CounterVec<SafekeeperReconcilerLabelGroupSet>,
-
     /// `config_watcher` reconciliation runs completed, broken down by success/failure.
     pub(crate) storage_controller_config_watcher_complete:
         measured::CounterVec<ConfigWatcherCompleteLabelGroupSet>,
@@ -330,17 +322,6 @@ pub(crate) enum Method {
     Post,
     Delete,
     Other,
-}
-
-#[derive(measured::LabelGroup, Clone)]
-#[label(set = SafekeeperReconcilerLabelGroupSet)]
-pub(crate) struct SafekeeperReconcilerLabelGroup<'a> {
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) sk_az: &'a str,
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) sk_node_id: &'a str,
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) sk_hostname: &'a str,
 }
 
 impl From<hyper::Method> for Method {
