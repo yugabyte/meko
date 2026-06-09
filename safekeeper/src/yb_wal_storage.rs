@@ -1063,9 +1063,14 @@ impl YbSegmentReader {
                             guard.insert(segno, c.chunk_offset, c.data.clone());
                         }
                     }
+                    // First row's chunk_offset == pos by construction
+                    // (see `fetch_chunks_from_yb` contract). Treat any
+                    // row whose chunk_offset > pos as a real WAL hole
+                    // and propagate `None` so the reader surfaces it.
                     let covering = fetched
                         .into_iter()
-                        .find(|c| pos >= c.chunk_offset && pos < c.end_offset);
+                        .next()
+                        .filter(|c| c.chunk_offset == pos);
                     Ok(covering)
                 }
                 Err(e) => Err(e),
@@ -1164,15 +1169,6 @@ impl AsyncRead for YbSegmentReader {
     }
 }
 
-/// Maximum chunk_offset distance we look back from `byte_offset` to
-/// find the chunk that *covers* it. Chunks are produced by the
-/// safekeeper writer at <= one WAL-segment write at a time and the
-/// walproposer rarely pushes more than ~256 KiB in a single send, but
-/// we leave 1 MiB of headroom — the per-chunk decoder doesn't care
-/// about extra rows at the front of the result set, we just throw
-/// them away.
-const FETCH_LOOKBACK_BYTES: u64 = 1024 * 1024;
-
 /// Soft caps on the forward prefetch window. Each fetch turns into
 /// one YB round trip, so amortising it across more chunks is the
 /// whole point — but pulling 16 MiB at once would also be silly. With
@@ -1182,14 +1178,17 @@ const FETCH_LOOKBACK_BYTES: u64 = 1024 * 1024;
 const FETCH_FORWARD_CHUNKS: usize = 64;
 const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Fetch chunks covering `(segno, byte_offset)` *and the next few
-/// chunks past it* from `yb_storage.wals`, in a single SELECT.
+/// Fetch chunks starting at `(segno, byte_offset)` from
+/// `yb_storage.wals`, in a single SELECT.
 ///
-/// The covering chunk is what the caller (`YbSegmentReader::start_fetch`)
-/// needs to make forward progress; the prefetched ones populate the
-/// in-memory `WalCache` so the next reads stream from RAM. One YB
-/// round trip per ~`FETCH_FORWARD_CHUNKS` chunks of WAL instead of
-/// the previous one-round-trip-per-chunk.
+/// `byte_offset` must equal an existing `chunk_offset` (it always does
+/// — the WAL sender consumes whole chunks and only re-enters this
+/// path at chunk boundaries; the cache lookup that runs before us
+/// already covers any sub-chunk position via its `range(..=)` walk).
+/// The first returned row is the covering chunk; the rest populate the
+/// `WalCache` so the WAL sender's forward-sequential reads hit RAM.
+/// One YB round trip per ~`FETCH_FORWARD_CHUNKS` chunks instead of the
+/// previous one-round-trip-per-chunk.
 async fn fetch_chunks_from_yb(
     client: &YsqlClient,
     table: &str,
@@ -1207,7 +1206,7 @@ async fn fetch_chunks_from_yb(
         quote_ident(table)
     );
     let segno_i: i64 = segno as i64;
-    let lo_i: i64 = byte_offset.saturating_sub(FETCH_LOOKBACK_BYTES) as i64;
+    let lo_i: i64 = byte_offset as i64;
     let hi_i: i64 = byte_offset.saturating_add(FETCH_FORWARD_BYTES) as i64;
     let limit_i: i64 = FETCH_FORWARD_CHUNKS as i64;
     let params: [&(dyn ToSql + Sync); 6] = [
@@ -1226,14 +1225,7 @@ async fn fetch_chunks_from_yb(
         let chunk_offset: i64 = row.get("chunk_offset");
         let chunk_size: i32 = row.get("chunk_size");
         let data: Vec<u8> = row.get("data");
-        // Drop any leading row whose end is at or before byte_offset
-        // (the lookback window may scoop one such row in front of the
-        // covering chunk). Keeps the covering chunk first in `out`
-        // when present.
         let end = (chunk_offset as u64) + (chunk_size as u64);
-        if end <= byte_offset {
-            continue;
-        }
         total_bytes += chunk_size as u64;
         out.push(CurrentChunk {
             chunk_offset: chunk_offset as u64,
