@@ -29,7 +29,7 @@ acceptor:
 - **Out**: pageservers (and any read replica) connect via the same port and
   issue `START_REPLICATION PHYSICAL <lsn>` to stream WAL forward.
 
-### Per-timeline state
+### Per-timeline state (upstream Neon)
 
 - **Control file**: 388 B binary blob holding the consensus state (`term`,
   `vote`, peer set, `commit_lsn`, `backup_lsn`, `peer_horizon_lsn`,
@@ -39,21 +39,28 @@ acceptor:
   `XLogFileName(PG_TLI, segno, wal_seg_size)` → e.g.
   `000000010000000000000001`.
 
+In yb-light both are replaced — see "Changes in yb-light" §1
+(control file → typed columns in `safekeeper.timeline_state`) and §2
+(WAL chunks mirrored row-by-row into `public.wals`). The local FS holds
+nothing per-timeline.
+
 ### Background tasks
 
-- `wal_backup`: once a segment is sealed (and the offloader is elected via
-  the storage_broker), uploads it through `GenericRemoteStorage` for
-  long-term retention.
-- `wal_backup_partial`: uploads the in-flight last segment periodically.
+Upstream Neon also ran `wal_backup` (sealed-segment S3 offload via
+`GenericRemoteStorage`) and `wal_backup_partial` (in-flight last-segment
+upload). Both modules are deleted in yb-light — durability is the
+`yb_storage.wals` mirror, not S3 — see "Changes in yb-light" §8 below.
+
+Surviving background work:
 - Periodic control-file flush every `control_file_save_interval`
   (default 300 s) plus on-state-change flushes via `finish_change()`.
 
-### Code layout (unchanged module names)
+### Code layout
 
 - `safekeeper/src/control_file.rs` — control-file `Storage` trait + impls.
 - `safekeeper/src/wal_storage.rs` — WAL `Storage` trait + `PhysicalStorage` impl + `WalReader`.
-- `safekeeper/src/wal_backup.rs` — sealed-segment backup, partial-backup task,
-  `WalBackup` struct (now also holds the live-WAL YB connection).
+- `safekeeper/src/yb_wal_storage.rs` — YB mirror (`yb_storage.wals`),
+  producer/consumer writer, `load_write_lsn` restart rehydrate.
 - `safekeeper/src/timeline.rs` — `SharedState`, `Timeline::load_timeline`.
 - `safekeeper/src/timelines_global_map.rs` — `GlobalTimelines`, startup scan.
 - `safekeeper/src/safekeeper.rs` — the consensus state machine.
@@ -61,32 +68,44 @@ acceptor:
 
 ## Changes in yb-light
 
-### 1. Control file → YB-backed (commit `c4c7c1350`)
+### 1. Control file → YB columns (commits `c4c7c1350`, `840e56aae`)
 
-New `control_file::ControlFileStorage` enum dispatches between the existing
-`FileStorage` and a new `YbControlFileStorage`:
+`YbControlFileStorage` is the sole `Storage` impl (`safekeeper/src/control_file.rs`).
+The local-FS `FileStorage` path, the `ControlFileStorage` dispatch enum,
+the bincode + crc32c blob framing, and `control_file_upgrade.rs` (V1..V9
+legacy upgrade paths, 778 LOC) were all deleted in `840e56aae` once the
+intermediate blob-in-`yb_storage.blobs` form was replaced with a typed row.
 
+Each timeline owns one row in `safekeeper.timeline_state`:
+
+```sql
+CREATE TABLE safekeeper.timeline_state (
+    tenant_id              TEXT     NOT NULL,
+    timeline_id            TEXT     NOT NULL,
+    timeline_start_lsn     BIGINT   NOT NULL,
+    local_start_lsn        BIGINT   NOT NULL,
+    remote_consistent_lsn  BIGINT   NOT NULL,
+    pg_version             INT      NOT NULL,
+    system_id              BIGINT   NOT NULL,
+    wal_seg_size           INT      NOT NULL,
+    term                   BIGINT   NOT NULL,
+    term_history           JSONB    NOT NULL,        -- Vec<{term, lsn}>
+    proposer_uuid          BYTEA    NOT NULL,        -- 16 bytes
+    mconf                  JSONB    NOT NULL,        -- membership Configuration
+    creation_ts            TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY ((tenant_id, timeline_id) HASH)
+);
 ```
-+- enum ControlFileStorage
-   +- File(FileStorage)      <-- existing local-FS impl
-   +- Yb(YbControlFileStorage) <-- new: stores the 388B blob in yb_storage.blobs
-                                  under the key
-                                  safekeeper-control/<tenant>/<timeline>
-```
 
-The on-the-wire bytes are *bit-identical* to what `FileStorage` writes —
-magic (4 B) + version (4 B) + serialized `TimelinePersistentState` + crc32c
-(4 B). So a per-timeline migration between backends is a copy of the blob.
+The `commit_lsn` / `backup_lsn` / `peer_horizon_lsn` / `partial_backup` /
+`eviction_state` columns from the original task-19 design were dropped
+once their in-memory counterparts went away (`a8fe507cb`, plus the
+`commit_lsn` / `peer_horizon_lsn` removals in earlier sessions).
 
-- `SafeKeeperConf::control_file_backend: ControlFileBackend { File | RemoteStorage }`
-- CLI: `--control-file-backend file|remote-storage` (default `file`).
-- When `remote-storage` is selected, the control file uses the same
-  `GenericRemoteStorage` constructed from `--remote-storage` (a `YbStore`
-  config in our setup).
-- `StateSK::Loaded` / `Offloaded` and `TimelineState<CTRL>` now use
-  `ControlFileStorage` as their `CTRL` type parameter (was `FileStorage`).
-- `SharedState::restore` and `Timeline::load_timeline` became `async` to
-  support the YB load path.
+- `persist()` is an UPSERT against the row, scoped via `YsqlClient`.
+- `SharedState::restore` and `Timeline::load_timeline` are `async` to
+  await the YB load.
+- No CLI flag selects the backend — there's nothing to dispatch over.
 
 ### 2. Live WAL → YB-mirrored (Phase 1, commit `35e610db6`)
 
@@ -365,43 +384,25 @@ Result: flushes are driven by the 2 ms ticker, so multiple
 `YbWalStorage` producer push pattern. Commit latency rises by at most
 ~2 ms; throughput stops being capped by single-AppendRequest INSERTs.
 
-### 8. `wal_backup` task disabled in YB-WAL mode (commit `9bca7c2ef`)
+### 8. `wal_backup*` and `backup_lsn` removed (commits `1a32d69b4`, `a8fe507cb`)
 
-The `wal_backup` task offloads sealed local-FS WAL segments into the
-`blobs` table for long-term retention. In YB-WAL mode the live WAL is
-already mirrored row-by-row into `yb_storage.wals` and the per-segment
-local files never exist (`no_local_writes`), so the offload loop has
-no source — every iteration would `open()` a non-existent file, fail,
-retry. Under sustained WAL pressure the retry loop back-pressured
-SyncRep enough to stall compute commits (observed with HikariCP 180 s
-timeouts, 0 successful TPC-C transactions).
+Durability in yb-light is the `yb_storage.wals` mirror written
+synchronously by `flush_wal()` — there is no S3 offload tier.
+Consequently:
 
-`wal_backup::update_task` now short-circuits `should_task_run = false`
-when `mgr.conf.is_yb_wal_mode()` is true. The existing kill-if-running
-branch handles teardown of any task left over from before a config
-change.
+- `safekeeper/src/wal_backup.rs` and `wal_backup_partial.rs` are
+  deleted (`1a32d69b4` slimmed `wal_backup.rs` 921 → 197 LOC keeping
+  only the YB-WAL plumbing + `delete_timeline`; later commits dropped
+  the file entirely once `WalBackup` no longer existed). The
+  intermediate "disable the task in YB-WAL mode" patch
+  (`9bca7c2ef`) is now obsolete history.
+- `backup_lsn` / `partial_backup` / `eviction_state` were dropped from
+  `TimelinePersistentState` in `a8fe507cb`.
+- `remove_wal::calc_horizon_lsn` is now `min(cfile_remote_consistent_lsn,
+  flush_lsn, extra_horizon_lsn?)` — the `backup_lsn` clamp and the
+  `yb_wal_mode` skip parameter are gone (`remove_wal.rs`).
 
-### 9. `calc_horizon_lsn` skips `backup_lsn` in YB-WAL mode (commit `e7eb6acf4`)
-
-`remove_wal::calc_horizon_lsn` returns the oldest LSN the safekeeper
-must keep on durable storage; segments below it are eligible for
-`remove_up_to` (which in YB-WAL mode is a DELETE against
-`yb_storage.wals`). It takes the min of:
-
-- `cfile_remote_consistent_lsn` — pageserver-consumed.
-- `cfile_backup_lsn` — sealed-segment offloader caught up.
-- `cfile_commit_lsn`.
-- `flush_lsn`.
-
-In YB-WAL mode the `wal_backup` task is disabled (see §8), so
-`backup_lsn` never advances past the initial `commit_lsn` at boot.
-Keeping `backup_lsn` in the min would pin the WAL removal horizon and
-the `wals` table would grow forever. The function takes a
-`yb_wal_mode: bool` parameter that skips the `backup_lsn` clamp when
-true. The other horizon contributors (`remote_consistent_lsn`,
-`commit_lsn`, `flush_lsn`) still apply.
-
-### 10. Auto-reconnecting YB clients via `YsqlClient` (commits `8b5e2b2b4`, `27f1e354c`, `7a424639e`)
+### 9. Auto-reconnecting YB clients via `YsqlClient` (commits `8b5e2b2b4`, `27f1e354c`, `7a424639e`)
 
 Both the control-file connection (via `GenericRemoteStorage` → `YbStore`)
 and the live-WAL mirror connection used to hold an
@@ -428,7 +429,7 @@ shared factory used by `YbStore::new`, `WalBackup::new` (the live-WAL
 mirror), and any other YB-Postgres connection in yb-light. It handles
 `password_env` lookup and the sslmode / sslrootcert dispatch.
 
-### 11. TLS support (commit `7a424639e`)
+### 10. TLS support (commit `7a424639e`)
 
 `YbStoreConfig` carries an optional `sslmode` field (`"disable"` /
 `"require"` / `"verify-ca"` / etc.) and `sslrootcert` (path to a PEM-
@@ -468,21 +469,22 @@ safekeeper \
     --id 1 \
     --listen-pg 127.0.0.1:5474 \
     --listen-http 127.0.0.1:7686 \
-    --broker-endpoint http://127.0.0.1:50061/ \
     --availability-zone sk-1 \
-    --control-file-backend remote-storage \
-    --remote-storage   "{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'blobs', prefix = 'safekeeper-yb/', sslmode = 'require'}" \
     --wal-yb-config    "{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'wals', sslmode = 'require'}"
 ```
 
-The two YB configs intentionally point at the *same* DB but *different*
-tables: `blobs` is the chunked blob store (shared with the pageserver and
-control file), `wals` is the per-write append log.
+`--wal-yb-config` is the single YB connection used for both the
+`safekeeper.timeline_state` row (control file) and the `public.wals` chunk
+stream — same DB, two tables. `table_name` names the WAL chunk table;
+`safekeeper.timeline_state` is reached via the same `YsqlClient`.
 
 `sslmode = "require"` is needed against YBA-managed universes (they
 default to TLS-mandatory `hostssl` rules). Add
 `sslrootcert = '/path/to/ca.pem'` for stricter (verify-ca) checks
 instead of the AcceptAll default.
+
+The storage broker was removed wholesale, so there is no
+`--broker-endpoint` flag.
 
 ## Performance characteristics
 
