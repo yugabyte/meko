@@ -234,6 +234,11 @@ impl UnifiedPages {
             if !entry.try_promote() {
                 continue; // insert_entry already claimed this entry.
             }
+            pageserver_api::write_trace::trace_stage_bytes(
+                "durable",
+                &entry.row.key,
+                entry.row.lsn,
+            );
             let size = row_size(&entry.row);
             self.unflushed_bytes.fetch_sub(size, Ordering::Relaxed);
             if let Some(mut ks_guard) = self.by_key.get_mut(&entry.row.key) {

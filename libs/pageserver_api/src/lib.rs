@@ -11,3 +11,4 @@ pub mod reltag;
 pub mod upcall_api;
 
 pub mod config;
+pub mod write_trace;

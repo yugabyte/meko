@@ -249,6 +249,7 @@ impl SerializedValueBatch {
                     }));
                 record.batch.max_lsn = std::cmp::max(record.batch.max_lsn, next_record_lsn);
                 record.batch.len += 1;
+                pageserver_api::write_trace::trace_stage("decode", &key, next_record_lsn);
             }
         }
 

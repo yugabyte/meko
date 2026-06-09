@@ -395,12 +395,25 @@ impl PageStore {
             }
             let chunk_rows = chunk.len();
             let ysql_client = Arc::clone(&self.ysql_client);
+            // Per-traced-row pre-INSERT event for the env-gated trace,
+            // plus first/last (key, lsn) capture for the CRITICAL log if
+            // YB's affected-row count comes back short.
+            let traced_in_chunk: Vec<(Bytes, Lsn)> = chunk
+                .iter()
+                .filter(|row| pageserver_api::write_trace::is_traced_bytes(&row.key))
+                .map(|row| (row.key.clone(), row.lsn))
+                .collect();
+            for (k, l) in &traced_in_chunk {
+                pageserver_api::write_trace::trace_stage_bytes("put_pages_in", k, *l);
+            }
+            let chunk_first = chunk.first().map(|r| (r.key.clone(), r.lsn));
+            let chunk_last = chunk.last().map(|r| (r.key.clone(), r.lsn));
             futs.push(Box::pin(async move {
                 let params_ref: Vec<&(dyn ToSql + Sync)> = params
                     .iter()
                     .map(|p| p.as_ref() as &(dyn ToSql + Sync))
                     .collect();
-                ysql_client
+                let affected = ysql_client
                     .execute(&sql, &params_ref)
                     .await
                     .with_context(|| {
@@ -408,6 +421,32 @@ impl PageStore {
                             "put_pages tenant={tenant} timeline={timeline} chunk_rows={chunk_rows}"
                         )
                     })?;
+                // Hard invariant: every row in `chunk` is a distinct
+                // INSERT target — same (tenant, timeline, key, lsn,
+                // is_image) PK can only appear once per chunk because
+                // walreceiver's LSNs are monotonic per key and
+                // materialiser writes don't share an LSN with another
+                // image. So the YB `affected` count must equal
+                // `chunk_rows`. With `yb_enable_upsert_mode=true` an
+                // idempotent rewrite of the same PK still counts as
+                // affected. If `affected < chunk_rows`, YB silently
+                // dropped row(s) — log a CRITICAL with the chunk's
+                // boundary keys so an operator can grep.
+                if (affected as usize) < chunk_rows {
+                    tracing::error!(
+                        target: "yb_ps_trace",
+                        tenant = %tenant,
+                        timeline = %timeline,
+                        chunk_rows,
+                        affected,
+                        first = ?chunk_first,
+                        last = ?chunk_last,
+                        "CRITICAL: put_pages chunk affected fewer rows than it sent — YB silently dropped row(s)"
+                    );
+                }
+                for (k, l) in &traced_in_chunk {
+                    pageserver_api::write_trace::trace_stage_bytes("put_pages_ok", k, *l);
+                }
                 Ok(())
             }));
         }

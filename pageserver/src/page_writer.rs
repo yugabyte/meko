@@ -519,6 +519,7 @@ impl PageWriter {
             let lsn = row.lsn;
             let resets_chain = row.is_image || row.will_init;
             let payload_len = row.payload.len() as u32;
+            pageserver_api::write_trace::trace_stage_bytes("put", &key, lsn);
             self.pages.push(row);
             self.rows_written.fetch_add(1, Ordering::Relaxed);
 
@@ -929,6 +930,9 @@ impl PageWriter {
         // entries we wrote.
         let rel_rows: Vec<Arc<PageRow>> =
             rel_snapshot.iter().map(|e| e.row_arc()).collect();
+        for row in &rel_rows {
+            pageserver_api::write_trace::trace_stage_bytes("snapshot", &row.key, row.lsn);
+        }
         let (slru_rows, meta_rows) = {
             let aux = self.aux.lock();
             (aux.slru_buffer.clone(), aux.meta_buffer.clone())
