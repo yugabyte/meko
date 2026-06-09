@@ -1038,11 +1038,39 @@ impl YbSegmentReader {
         let timeline_id = self.timeline_id.clone();
         let segno = self.segno;
         let pos = self.pos;
+        let cache = self.cache.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let res =
-                fetch_chunk_from_yb(&client, &table, &tenant_id, &timeline_id, segno, pos).await;
-            let _ = tx.send(res);
+            let res = fetch_chunks_from_yb(
+                &client,
+                &table,
+                &tenant_id,
+                &timeline_id,
+                segno,
+                pos,
+            )
+            .await;
+            // Populate the cache with the prefetched chunks before
+            // returning the covering one. Subsequent sequential reads
+            // (the WAL sender streams forward) hit cache instead of
+            // re-fetching. Best-effort: a failed lock is fine, the
+            // covering chunk is still returned via the oneshot below.
+            let covering = match res {
+                Ok(fetched) => {
+                    if let Some(cache) = &cache {
+                        let mut guard = cache.lock().unwrap();
+                        for c in &fetched {
+                            guard.insert(segno, c.chunk_offset, c.data.clone());
+                        }
+                    }
+                    let covering = fetched
+                        .into_iter()
+                        .find(|c| pos >= c.chunk_offset && pos < c.end_offset);
+                    Ok(covering)
+                }
+                Err(e) => Err(e),
+            };
+            let _ = tx.send(covering);
         });
         self.fetch = Some(rx);
     }
@@ -1136,44 +1164,89 @@ impl AsyncRead for YbSegmentReader {
     }
 }
 
-/// Fetch the chunk covering `(segno, byte_offset)` from
-/// `yb_storage.wals`. By construction the writer produces at most one
-/// chunk covering any given offset within a segment (writes never
-/// overlap — see the module-level "Notes" on chunk_offset uniqueness),
-/// so the range filter selects at most one row and we don't need an
-/// ORDER BY / LIMIT tiebreaker.
-async fn fetch_chunk_from_yb(
+/// Maximum chunk_offset distance we look back from `byte_offset` to
+/// find the chunk that *covers* it. Chunks are produced by the
+/// safekeeper writer at <= one WAL-segment write at a time and the
+/// walproposer rarely pushes more than ~256 KiB in a single send, but
+/// we leave 1 MiB of headroom — the per-chunk decoder doesn't care
+/// about extra rows at the front of the result set, we just throw
+/// them away.
+const FETCH_LOOKBACK_BYTES: u64 = 1024 * 1024;
+
+/// Soft caps on the forward prefetch window. Each fetch turns into
+/// one YB round trip, so amortising it across more chunks is the
+/// whole point — but pulling 16 MiB at once would also be silly. With
+/// chunks averaging ~10 KiB observed on TPCC, 64 chunks ≈ 640 KiB per
+/// round trip is enough to make the WAL sender's sequential stream
+/// hit cache every time after the first miss in a run.
+const FETCH_FORWARD_CHUNKS: usize = 64;
+const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Fetch chunks covering `(segno, byte_offset)` *and the next few
+/// chunks past it* from `yb_storage.wals`, in a single SELECT.
+///
+/// The covering chunk is what the caller (`YbSegmentReader::start_fetch`)
+/// needs to make forward progress; the prefetched ones populate the
+/// in-memory `WalCache` so the next reads stream from RAM. One YB
+/// round trip per ~`FETCH_FORWARD_CHUNKS` chunks of WAL instead of
+/// the previous one-round-trip-per-chunk.
+async fn fetch_chunks_from_yb(
     client: &YsqlClient,
     table: &str,
     tenant_id: &str,
     timeline_id: &str,
     segno: u64,
     byte_offset: u64,
-) -> anyhow::Result<Option<CurrentChunk>> {
+) -> anyhow::Result<Vec<CurrentChunk>> {
     let sql = format!(
         "SELECT chunk_offset, chunk_size, data FROM {} \
          WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-           AND chunk_offset <= $4 AND chunk_offset + chunk_size > $4 \
-         LIMIT 1",
+           AND chunk_offset >= $4 AND chunk_offset < $5 \
+         ORDER BY chunk_offset ASC \
+         LIMIT $6",
         quote_ident(table)
     );
     let segno_i: i64 = segno as i64;
-    let pos_i: i64 = byte_offset as i64;
-    let params: [&(dyn ToSql + Sync); 4] = [&tenant_id, &timeline_id, &segno_i, &pos_i];
-    let row_opt = client
-        .query_opt(&sql, &params)
+    let lo_i: i64 = byte_offset.saturating_sub(FETCH_LOOKBACK_BYTES) as i64;
+    let hi_i: i64 = byte_offset.saturating_add(FETCH_FORWARD_BYTES) as i64;
+    let limit_i: i64 = FETCH_FORWARD_CHUNKS as i64;
+    let params: [&(dyn ToSql + Sync); 6] = [
+        &tenant_id, &timeline_id, &segno_i, &lo_i, &hi_i, &limit_i,
+    ];
+    let started_at = std::time::Instant::now();
+    let rows = client
+        .query(&sql, &params)
         .await
-        .context("YB WAL fetch_chunk_from_yb")?;
-    Ok(row_opt.map(|row| {
+        .context("YB WAL fetch_chunks_from_yb")?;
+    let elapsed = started_at.elapsed();
+
+    let mut out: Vec<CurrentChunk> = Vec::with_capacity(rows.len());
+    let mut total_bytes: u64 = 0;
+    for row in rows {
         let chunk_offset: i64 = row.get("chunk_offset");
         let chunk_size: i32 = row.get("chunk_size");
         let data: Vec<u8> = row.get("data");
-        CurrentChunk {
-            chunk_offset: chunk_offset as u64,
-            end_offset: (chunk_offset as u64) + (chunk_size as u64),
-            data: Arc::new(data),
+        // Drop any leading row whose end is at or before byte_offset
+        // (the lookback window may scoop one such row in front of the
+        // covering chunk). Keeps the covering chunk first in `out`
+        // when present.
+        let end = (chunk_offset as u64) + (chunk_size as u64);
+        if end <= byte_offset {
+            continue;
         }
-    }))
+        total_bytes += chunk_size as u64;
+        out.push(CurrentChunk {
+            chunk_offset: chunk_offset as u64,
+            end_offset: end,
+            data: Arc::new(data),
+        });
+    }
+
+    crate::metrics::WAL_CACHE_YB_FETCH_SECONDS.observe(elapsed.as_secs_f64());
+    crate::metrics::WAL_CACHE_YB_FETCH_CHUNKS.observe(out.len() as f64);
+    crate::metrics::WAL_CACHE_YB_FETCH_BYTES.observe(total_bytes as f64);
+
+    Ok(out)
 }
 
 /// WAL storage used by the safekeeper. Kept as a type alias so existing
