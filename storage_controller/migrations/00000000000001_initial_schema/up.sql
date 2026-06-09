@@ -17,7 +17,7 @@ CREATE SCHEMA IF NOT EXISTS safekeeper;
 -- Per-tenant placement record. yb-mode doesn't shard tenants
 -- across pageservers (YB tablet-shards the keyspace itself), so
 -- this is keyed only by `tenant_id`.
-CREATE TABLE storage_controller.tenant_shards (
+CREATE TABLE storage_controller.tenants (
     tenant_id              VARCHAR NOT NULL,
     -- NULL once the tenant has been detached / never attached.
     generation             INTEGER,
@@ -26,7 +26,6 @@ CREATE TABLE storage_controller.tenant_shards (
     -- JSON-encoded TenantConfig; opaque to the database.
     config                 TEXT NOT NULL,
     scheduling_policy      VARCHAR NOT NULL DEFAULT '"Active"',
-    preferred_az_id        VARCHAR,
     PRIMARY KEY (tenant_id)
 );
 
@@ -38,7 +37,6 @@ CREATE TABLE storage_controller.nodes (
     listen_http_port     INTEGER NOT NULL,
     listen_pg_addr       VARCHAR NOT NULL,
     listen_pg_port       INTEGER NOT NULL,
-    availability_zone_id VARCHAR NOT NULL,
     listen_https_port    INTEGER,
     lifecycle            VARCHAR NOT NULL DEFAULT 'active',
     listen_grpc_addr     VARCHAR,
@@ -68,7 +66,7 @@ CREATE TABLE storage_controller.metadata_health (
     last_scrubbed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (tenant_id),
     FOREIGN KEY (tenant_id)
-        REFERENCES storage_controller.tenant_shards (tenant_id)
+        REFERENCES storage_controller.tenants (tenant_id)
         ON DELETE CASCADE
 );
 

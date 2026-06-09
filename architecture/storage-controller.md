@@ -26,8 +26,8 @@ in the same `yb_storage` DB.
 
 | Table | What it tracks |
 |---|---|
-| `tenant_shards` | Each (tenant, shard) → pageserver assignment, generation, scheduling policy, splitting state, opaque config JSON |
-| `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), availability zone, lifecycle, scheduling policy |
+| `tenants` | Each tenant → pageserver assignment, generation, scheduling policy, splitting state, opaque config JSON |
+| `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), lifecycle, scheduling policy |
 | `safekeepers` | Safekeeper identities: id, region_id, version, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
 | `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name |
 | `safekeeper_timeline_pending_ops` | Pending control operations on a (safekeeper, timeline) pair — used to recover after a controller restart |

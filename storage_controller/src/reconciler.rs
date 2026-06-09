@@ -1,10 +1,9 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use json_structural_diff::JsonDiff;
-use pageserver_api::controller_api::{AvailabilityZone, MigrationConfig, PlacementPolicy};
+use pageserver_api::controller_api::{MigrationConfig, PlacementPolicy};
 use pageserver_api::models::ShardIdentity;
 use pageserver_api::models::{LocationConfig, TenantConfig, TenantWaitLsnRequest};
 use pageserver_client::mgmt_api;
@@ -43,7 +42,6 @@ pub(super) struct Reconciler {
     pub(crate) reconciler_config: ReconcilerConfig,
 
     pub(crate) config: TenantConfig,
-    pub(crate) preferred_az: Option<AvailabilityZone>,
 
     /// Observed state from the point of view of the reconciler.
     /// This gets updated as the reconciliation makes progress.
@@ -942,7 +940,6 @@ impl Reconciler {
                         tenant_id: self.tenant_shard_id,
                         node_id: node.get_id(),
                         stripe_size: self.shard.stripe_size,
-                        preferred_az: self.preferred_az.as_ref().map(Cow::Borrowed),
                     },
                     &self.cancel,
                 )

@@ -55,7 +55,6 @@ pub struct ConnectionConfigArgs<'a> {
     pub listen_pg_addr_str: &'a str,
 
     pub auth_token: Option<&'a str>,
-    pub availability_zone: Option<&'a str>,
 }
 
 impl<'a> ConnectionConfigArgs<'a> {
@@ -94,13 +93,9 @@ pub fn wal_stream_connection_config(
     let (host, port) =
         parse_host_port(args.listen_pg_addr_str).context("Unable to parse listen_pg_addr_str")?;
     let port = port.unwrap_or(5432);
-    let mut connstr = PgConnectionConfig::new_host_port(host, port)
+    let connstr = PgConnectionConfig::new_host_port(host, port)
         .extend_options(args.options())
         .set_password(args.auth_token.map(|s| s.to_owned()));
-
-    if let Some(availability_zone) = args.availability_zone {
-        connstr = connstr.extend_options([format!("availability_zone={availability_zone}")]);
-    }
 
     Ok(connstr)
 }

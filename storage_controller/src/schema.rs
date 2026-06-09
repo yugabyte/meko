@@ -29,7 +29,6 @@ diesel::table! {
         listen_http_port -> Int4,
         listen_pg_addr -> Varchar,
         listen_pg_port -> Int4,
-        availability_zone_id -> Varchar,
         listen_https_port -> Nullable<Int4>,
         lifecycle -> Varchar,
         listen_grpc_addr -> Nullable<Varchar>,
@@ -62,14 +61,13 @@ diesel::table! {
 }
 
 diesel::table! {
-    tenant_shards (tenant_id) {
+    tenants (tenant_id) {
         tenant_id -> Varchar,
         generation -> Nullable<Int4>,
         generation_pageserver -> Nullable<Int8>,
         placement_policy -> Varchar,
         config -> Text,
         scheduling_policy -> Varchar,
-        preferred_az_id -> Nullable<Varchar>,
     }
 }
 
@@ -102,7 +100,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     nodes,
     safekeeper_timeline_pending_ops,
     safekeepers,
-    tenant_shards,
+    tenants,
     timeline_imports,
     timelines,
 );

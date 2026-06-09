@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::num::NonZeroU32;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -23,9 +23,9 @@ use http_utils::error::ApiError;
 use hyper::Uri;
 use itertools::Itertools;
 use pageserver_api::controller_api::{
-    AvailabilityZone, MetadataHealthRecord, MetadataHealthUpdateRequest, NodeAvailability,
+    MetadataHealthRecord, MetadataHealthUpdateRequest, NodeAvailability,
     NodeRegisterRequest, NodeSchedulingPolicy, NodeShard, NodeShardResponse, PlacementPolicy,
-    ShardSchedulingPolicy, ShardsPreferredAzsRequest, ShardsPreferredAzsResponse,
+    ShardSchedulingPolicy,
     SkSchedulingPolicy, TenantCreateRequest, TenantCreateResponse, TenantCreateResponseShard,
     TenantDescribeResponse, TenantDescribeResponseShard, TenantLocateResponse, TenantPolicyRequest,
     TenantShardMigrateRequest, TenantShardMigrateResponse, TenantTimelineDescribeResponse,
@@ -764,9 +764,6 @@ impl Service {
                             tenant_id: *tenant_shard_id,
                             node_id: attached_at,
                             stripe_size: tenant_shard.shard.stripe_size,
-                            preferred_az: tenant_shard
-                                .preferred_az()
-                                .map(|az| Cow::Owned(az.clone())),
                         });
                     }
                 }
@@ -1571,8 +1568,6 @@ impl Service {
 
         #[cfg(feature = "testing")]
         {
-            use pageserver_api::controller_api::AvailabilityZone;
-
             // Hack: insert scheduler state for all nodes referenced by shards, as compatibility
             // tests only store the shards, not the nodes.  The nodes will be loaded shortly
             // after when pageservers start up and register.
@@ -1593,7 +1588,6 @@ impl Service {
                     123,
                     None,
                     None,
-                    AvailabilityZone("test_az".to_string()),
                     false,
                 )
                 .unwrap();
@@ -1606,11 +1600,7 @@ impl Service {
 
             // We will populate intent properly later in [`Self::startup_reconcile`], initially populate
             // it with what we can infer: the node for which a generation was most recently issued.
-            let mut intent = IntentState::new(
-                tsp.preferred_az_id
-                    .as_ref()
-                    .map(|az| AvailabilityZone(az.clone())),
-            );
+            let mut intent = IntentState::new();
             if let Some(generation_pageserver) = tsp.generation_pageserver.map(|n| NodeId(n as u64))
             {
                 if nodes.contains_key(&generation_pageserver) {
@@ -1828,7 +1818,6 @@ impl Service {
                 config: serde_json::to_string(&config).unwrap(),
                 scheduling_policy: serde_json::to_string(&ShardSchedulingPolicy::default())
                     .unwrap(),
-                preferred_az_id: None,
             };
 
             match self.persistence.insert_tenant_shards(vec![tsp]).await {
@@ -1851,7 +1840,6 @@ impl Service {
                         attach_req.tenant_shard_id,
                         ShardIdentity::unsharded(),
                         PlacementPolicy::Attached(0),
-                        None,
                     );
                     shard.config = config;
 
@@ -2412,16 +2400,6 @@ impl Service {
             )
         };
 
-        let preferred_az_id = {
-            let locked = self.inner.read().unwrap();
-            // Idempotency: take the existing value if the tenant already exists
-            if let Some(shard) = locked.tenants.get(create_ids.first().unwrap()) {
-                shard.preferred_az().cloned()
-            } else {
-                locked.scheduler.get_az_for_new_tenant()
-            }
-        };
-
         // Ordering: we persist tenant shards before creating them on the pageserver.  This enables a caller
         // to clean up after themselves by issuing a tenant deletion if something goes wrong and we restart
         // during the creation, rather than risking leaving orphan objects in S3.
@@ -2437,7 +2415,6 @@ impl Service {
                 config: serde_json::to_string(&create_req.config).unwrap(),
                 scheduling_policy: serde_json::to_string(&ShardSchedulingPolicy::default())
                     .unwrap(),
-                preferred_az_id: preferred_az_id.as_ref().map(|az| az.to_string()),
             })
             .collect();
 
@@ -2485,7 +2462,6 @@ impl Service {
                     create_req.shard_parameters,
                     create_req.config.clone(),
                     placement_policy.clone(),
-                    preferred_az_id.as_ref(),
                     &mut schedule_context,
                 )
                 .await;
@@ -2542,7 +2518,6 @@ impl Service {
         shard_params: ShardParameters,
         config: TenantConfig,
         placement_policy: PlacementPolicy,
-        preferred_az_id: Option<&AvailabilityZone>,
         schedule_context: &mut ScheduleContext,
     ) -> InitialShardScheduleOutcome {
         let mut locked = self.inner.write().unwrap();
@@ -2576,7 +2551,6 @@ impl Service {
                     tenant_shard_id,
                     ShardIdentity::from_params(ShardNumber(0), shard_params),
                     placement_policy,
-                    preferred_az_id.cloned(),
                 ));
 
                 state.generation = initial_generation;
@@ -2749,25 +2723,22 @@ impl Service {
     ) -> Result<(), ApiError> {
         // Check if the tenant is present in memory, and select an AZ to use when loading
         // if we will load it.
-        let load_in_az = {
+        {
             let locked = self.inner.read().unwrap();
             let existing = locked
                 .tenants
                 .range(TenantId::tenant_range(tenant_id))
                 .next();
 
-            // If the tenant is not present in memory, we expect to load it from database,
-            // so let's figure out what AZ to load it into while we have self.inner locked.
-            if existing.is_none() {
-                locked
-                    .scheduler
-                    .get_az_for_new_tenant()
-                    .ok_or(ApiError::BadRequest(anyhow::anyhow!(
-                        "No AZ with nodes found to load tenant"
-                    )))?
-            } else {
+            if existing.is_some() {
                 // We already have this tenant in memory
                 return Ok(());
+            }
+
+            if locked.nodes.is_empty() {
+                return Err(ApiError::BadRequest(anyhow::anyhow!(
+                    "No nodes found to load tenant"
+                )));
             }
         };
 
@@ -2778,21 +2749,6 @@ impl Service {
             ));
         }
 
-        // Update the persistent shards with the AZ that we are about to apply to in-memory state
-        self.persistence
-            .set_tenant_shard_preferred_azs(
-                tenant_shards
-                    .iter()
-                    .map(|t| {
-                        (
-                            t.get_tenant_shard_id().expect("Corrupt shard in database"),
-                            Some(load_in_az.clone()),
-                        )
-                    })
-                    .collect(),
-            )
-            .await?;
-
         let mut locked = self.inner.write().unwrap();
         tracing::info!(
             "Loaded {} shards for tenant {}",
@@ -2801,7 +2757,7 @@ impl Service {
         );
 
         locked.tenants.extend(tenant_shards.into_iter().map(|p| {
-            let intent = IntentState::new(Some(load_in_az.clone()));
+            let intent = IntentState::new();
             let shard =
                 TenantShard::from_persistent(p, intent).expect("Corrupt shard row in database");
 
@@ -5277,7 +5233,6 @@ impl Service {
                 is_splitting: matches!(shard.splitting, SplitState::Splitting),
                 is_importing: shard.importing == TimelineImportState::Importing,
                 scheduling_policy: shard.get_scheduling_policy(),
-                preferred_az_id: shard.preferred_az().map(ToString::to_string),
             })
         }
 
@@ -6622,7 +6577,6 @@ impl Service {
             register_req.listen_pg_port,
             register_req.listen_grpc_addr.clone(),
             register_req.listen_grpc_port,
-            register_req.availability_zone_id.clone(),
             self.config.use_https_pageserver_api,
         );
         let new_node = match new_node {
@@ -6683,17 +6637,15 @@ impl Service {
         match registration_status {
             RegistrationStatus::New => {
                 tracing::info!(
-                    "Registered pageserver {} ({}), now have {} pageservers",
+                    "Registered pageserver {}, now have {} pageservers",
                     register_req.node_id,
-                    register_req.availability_zone_id,
                     locked.nodes.len()
                 );
             }
             RegistrationStatus::NeedUpdate => {
                 tracing::info!(
-                    "Re-registered and updated node {} ({})",
+                    "Re-registered and updated node {}",
                     register_req.node_id,
-                    register_req.availability_zone_id,
                 );
             }
             _ => unreachable!("Other statuses have been processed earlier"),
@@ -7498,7 +7450,6 @@ impl Service {
         // all tenants.
         let mut pending_reconciles = 0;
         let mut stuck_reconciles = 0;
-        let mut az_violations = 0;
 
         // If we find any tenants to drop from memory, stash them to offload after
         // we're done traversing the map of tenants.
@@ -7508,19 +7459,6 @@ impl Service {
         let mut has_delayed_reconciles = false;
 
         for shard in tenants.values_mut() {
-            // Accumulate scheduling statistics
-            if let (Some(attached), Some(preferred)) =
-                (shard.intent.get_attached(), shard.preferred_az())
-            {
-                let node_az = nodes
-                    .get(attached)
-                    .expect("Nodes exist if referenced")
-                    .get_availability_zone_id();
-                if node_az != preferred {
-                    az_violations += 1;
-                }
-            }
-
             // Skip checking if this shard is already enqueued for reconciliation
             if shard.delayed_reconcile && self.reconciler_concurrency.available_permits() == 0 {
                 // If there is something delayed, then return a nonzero count so that
@@ -7578,11 +7516,6 @@ impl Service {
         for (tenant_id, guard) in drop_detached_tenants {
             self.maybe_drop_tenant(tenant_id, &mut locked, &guard);
         }
-
-        metrics::METRICS_REGISTRY
-            .metrics_group
-            .storage_controller_schedule_az_violation
-            .set(az_violations as i64);
 
         metrics::METRICS_REGISTRY
             .metrics_group
@@ -7716,7 +7649,7 @@ impl Service {
                 }
 
                 // Fast path: we may quickly identify shards that don't have any possible optimisations
-                if !shard.maybe_optimizable(scheduler, &schedule_context) {
+                if !shard.maybe_optimizable(&schedule_context) {
                     if cfg!(feature = "testing") {
                         // Check that maybe_optimizable doesn't disagree with the actual optimization functions.
                         // Only do this in testing builds because it is not a correctness-critical check, so we shouldn't
@@ -8343,81 +8276,28 @@ impl Service {
     ///    those shards have a home AZ that doesn't match the node we're filling.
     fn fill_node_plan(&self, node_id: NodeId) -> Vec<TenantId> {
         let mut locked = self.inner.write().unwrap();
-        let (nodes, tenants, _scheduler) = locked.parts_mut();
-
-        let node_az = nodes
-            .get(&node_id)
-            .expect("Node must exist")
-            .get_availability_zone_id()
-            .clone();
+        let (_nodes, tenants, _scheduler) = locked.parts_mut();
 
         // The tenant shard IDs that we plan to promote from secondary to attached on this node
         let mut plan = Vec::new();
 
-        // Collect shards which do not have a preferred AZ & are elegible for moving in stage 2
+        // Collect shards which have a secondary on this node and are elegible for moving.
         let mut free_tids_by_node: HashMap<NodeId, Vec<TenantId>> = HashMap::new();
 
-        // Don't respect AZ preferences if there is only one AZ.  This comes up in tests, but it could
-        // conceivably come up in real life if deploying a single-AZ region intentionally.
-        let respect_azs = nodes
-            .values()
-            .map(|n| n.get_availability_zone_id())
-            .unique()
-            .count()
-            > 1;
-
-        // Step 1: collect all shards that we are required to migrate back to this node because their AZ preference
-        // requires it.
         for (tsid, tenant_shard) in tenants {
             if !tenant_shard.intent.get_secondary().contains(&node_id) {
                 // Shard doesn't have a secondary on this node, ignore it.
                 continue;
             }
 
-            // AZ check: when filling nodes after a restart, our intent is to move _back_ the
-            // shards which belong on this node, not to promote shards whose scheduling preference
-            // would be on their currently attached node.  So will avoid promoting shards whose
-            // home AZ doesn't match the AZ of the node we're filling.
-            match tenant_shard.preferred_az() {
-                _ if !respect_azs => {
-                    if let Some(primary) = tenant_shard.intent.get_attached() {
-                        free_tids_by_node.entry(*primary).or_default().push(*tsid);
-                    }
-                }
-                None => {
-                    // Shard doesn't have an AZ preference: it is elegible to be moved, but we
-                    // will only do so if our target shard count requires it.
-                    if let Some(primary) = tenant_shard.intent.get_attached() {
-                        free_tids_by_node.entry(*primary).or_default().push(*tsid);
-                    }
-                }
-                Some(az) if az == &node_az => {
-                    // This shard's home AZ is equal to the node we're filling: it should
-                    // be moved back to this node as part of filling, unless its currently
-                    // attached location is also in its home AZ.
-                    if let Some(primary) = tenant_shard.intent.get_attached() {
-                        if nodes
-                            .get(primary)
-                            .expect("referenced node must exist")
-                            .get_availability_zone_id()
-                            != tenant_shard
-                                .preferred_az()
-                                .expect("tenant must have an AZ preference")
-                        {
-                            plan.push(*tsid)
-                        }
-                    } else {
-                        plan.push(*tsid)
-                    }
-                }
-                Some(_) => {
-                    // This shard's home AZ is somewhere other than the node we're filling,
-                    // it may not be moved back to this node as part of filling.  Ignore it
-                }
+            // The shard is elegible to be moved, but we will only do so if our target shard
+            // count requires it (handled in step 2 below).
+            if let Some(primary) = tenant_shard.intent.get_attached() {
+                free_tids_by_node.entry(*primary).or_default().push(*tsid);
             }
         }
 
-        // Step 2: also promote any AZ-agnostic shards as required to achieve the target number of attachments
+        // Step 2: promote shards as required to achieve the target number of attachments
         let fill_requirement = locked.scheduler.compute_fill_requirement(node_id);
 
         let expected_attached = locked.scheduler.expected_attached_shard_count();
@@ -8749,37 +8629,5 @@ impl Service {
         }
 
         global_observed
-    }
-
-    pub(crate) async fn update_shards_preferred_azs(
-        &self,
-        req: ShardsPreferredAzsRequest,
-    ) -> Result<ShardsPreferredAzsResponse, ApiError> {
-        let preferred_azs = req.preferred_az_ids.into_iter().collect::<Vec<_>>();
-        let updated = self
-            .persistence
-            .set_tenant_shard_preferred_azs(preferred_azs)
-            .await
-            .map_err(|err| {
-                ApiError::InternalServerError(anyhow::anyhow!(
-                    "Failed to persist preferred AZs: {err}"
-                ))
-            })?;
-
-        let mut updated_in_mem_and_db = Vec::default();
-
-        let mut locked = self.inner.write().unwrap();
-        let state = locked.deref_mut();
-        for (tid, az_id) in updated {
-            let shard = state.tenants.get_mut(&tid);
-            if let Some(shard) = shard {
-                shard.set_preferred_az(&mut state.scheduler, az_id);
-                updated_in_mem_and_db.push(tid);
-            }
-        }
-
-        Ok(ShardsPreferredAzsResponse {
-            updated: updated_in_mem_and_db,
-        })
     }
 }

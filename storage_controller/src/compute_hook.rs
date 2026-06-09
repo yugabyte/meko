@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::error::Error as _;
 use std::sync::Arc;
@@ -14,7 +13,6 @@ use control_plane::local_env::LocalEnv;
 use futures::StreamExt;
 use hyper::StatusCode;
 use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT;
-use pageserver_api::controller_api::AvailabilityZone;
 use pageserver_api::models::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
 use postgres_connection::parse_host_port;
 use serde::{Deserialize, Serialize};
@@ -35,7 +33,6 @@ pub(crate) const API_CONCURRENCY: usize = 32;
 /// Unsharded/Sharded enum is collapsed into one struct.
 struct ComputeHookTenantState {
     node_id: NodeId,
-    preferred_az: Option<AvailabilityZone>,
     send_lock: Arc<tokio::sync::Mutex<Option<ComputeRemoteTenantState>>>,
 }
 
@@ -87,15 +84,9 @@ trait ApiMethod {
 struct ComputeHookTenant(ComputeHookTenantState);
 
 impl ComputeHookTenant {
-    fn new(
-        _tenant_id: TenantId,
-        _stripe_size: ShardStripeSize,
-        preferred_az: Option<AvailabilityZone>,
-        node_id: NodeId,
-    ) -> Self {
+    fn new(_tenant_id: TenantId, _stripe_size: ShardStripeSize, node_id: NodeId) -> Self {
         Self(ComputeHookTenantState {
             node_id,
-            preferred_az,
             send_lock: Arc::default(),
         })
     }
@@ -105,13 +96,7 @@ impl ComputeHookTenant {
     }
 
     fn update(&mut self, shard_update: ShardUpdate) {
-        let node_id = shard_update.node_id;
-        let preferred_az = shard_update.preferred_az;
-
-        self.0.node_id = node_id;
-        if self.0.preferred_az.as_ref() != preferred_az.as_ref().map(|az| az.as_ref()) {
-            self.0.preferred_az = preferred_az.map(|az| az.as_ref().clone());
-        }
+        self.0.node_id = shard_update.node_id;
     }
 }
 
@@ -125,7 +110,6 @@ struct NotifyAttachRequestShard {
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 struct NotifyAttachRequest {
     tenant_id: TenantId,
-    preferred_az: Option<String>,
     stripe_size: Option<ShardStripeSize>,
     shards: Vec<NotifyAttachRequestShard>,
 }
@@ -205,7 +189,6 @@ impl ApiMethod for ComputeHookTenant {
                 node_id: self.0.node_id,
             }],
             stripe_size: None,
-            preferred_az: self.0.preferred_az.as_ref().map(|az| az.0.clone()),
         });
 
         match request {
@@ -242,7 +225,6 @@ impl ApiMethod for ComputeHookTenant {
             tenant_id,
             shards,
             stripe_size,
-            preferred_az: _preferred_az,
         } = req;
 
         for (endpoint_name, endpoint) in &cplane.endpoints {
@@ -340,11 +322,10 @@ pub(super) struct ComputeHook {
 /// of notifications in the background.  This is a 'notification' in the sense of
 /// other code notifying us of a shard's status, rather than being the final notification
 /// that we send upwards to the control plane for the whole tenant.
-pub(crate) struct ShardUpdate<'a> {
+pub(crate) struct ShardUpdate {
     pub(crate) tenant_id: TenantId,
     pub(crate) node_id: NodeId,
     pub(crate) stripe_size: ShardStripeSize,
-    pub(crate) preferred_az: Option<Cow<'a, AvailabilityZone>>,
 }
 
 impl ComputeHook {
@@ -520,14 +501,8 @@ impl ComputeHook {
                     tenant_id,
                     node_id,
                     stripe_size,
-                    preferred_az,
                 } = shard_update;
-                e.insert(ComputeHookTenant::new(
-                    tenant_id,
-                    stripe_size,
-                    preferred_az.map(|az| az.into_owned()),
-                    node_id,
-                ))
+                e.insert(ComputeHookTenant::new(tenant_id, stripe_size, node_id))
             }
             Entry::Occupied(e) => {
                 let tenant = e.into_mut();
@@ -728,9 +703,9 @@ impl ComputeHook {
     /// ensuring that they eventually call again to ensure that the compute is eventually notified of
     /// the proper pageserver nodes for a tenant.
     #[tracing::instrument(skip_all, fields(tenant_id=%shard_update.tenant_id, node_id))]
-    pub(super) async fn notify_attach<'a>(
+    pub(super) async fn notify_attach(
         &self,
-        shard_update: ShardUpdate<'a>,
+        shard_update: ShardUpdate,
         cancel: &CancellationToken,
     ) -> Result<(), NotifyError> {
         let maybe_send_result = self.notify_attach_prepare(shard_update);
@@ -775,7 +750,7 @@ pub(crate) mod tests {
         let tenant_id = TenantId::generate();
         let stripe_size = DEFAULT_STRIPE_SIZE;
         let mut tenant_state =
-            ComputeHookTenant::new(tenant_id, ShardStripeSize(12345), None, NodeId(1));
+            ComputeHookTenant::new(tenant_id, ShardStripeSize(12345), NodeId(1));
 
         // An unsharded tenant is always ready to emit a notification, but won't
         // send the same one twice
@@ -803,7 +778,6 @@ pub(crate) mod tests {
         tenant_state.update(ShardUpdate {
             tenant_id,
             stripe_size,
-            preferred_az: None,
             node_id: NodeId(1),
         });
         assert!(matches!(
@@ -815,7 +789,6 @@ pub(crate) mod tests {
         tenant_state.update(ShardUpdate {
             tenant_id,
             stripe_size,
-            preferred_az: None,
             node_id: NodeId(1),
         });
 

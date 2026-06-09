@@ -307,7 +307,6 @@ impl ConnectionManagerState {
             shard_stripe_size: Some(0),
             listen_pg_addr_str: safekeeper_pg_addr,
             auth_token: conf.auth_token.as_ref().map(|t| t.as_str()),
-            availability_zone: conf.availability_zone.as_deref(),
         };
         wal_stream_connection_config(connection_conf_args)
             .with_context(|| format!("build wal source connstr for {safekeeper_pg_addr}"))

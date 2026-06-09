@@ -21,7 +21,7 @@ for scaling. The unit of striping is a **shard**: each tenant has
 (`libs/pageserver_api/src/shard.rs::TenantShardId`). The
 `ShardIdentity` carries the `stripe_size`; keys are mapped to shard
 numbers by hashing `(spcnode, dbnode, relnode)` and indexing by
-`stripe_size`. The storage controller's `tenant_shards` table is the
+`stripe_size`. The storage controller's `tenants` table is the
 source of truth for "which pageserver owns shard N of tenant T".
 
 On-disk directory layout reflects shards:

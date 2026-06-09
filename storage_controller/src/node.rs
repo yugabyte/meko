@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use pageserver_api::controller_api::{
-    AvailabilityZone, NodeAvailability, NodeDescribeResponse, NodeLifecycle, NodeRegisterRequest,
+    NodeAvailability, NodeDescribeResponse, NodeLifecycle, NodeRegisterRequest,
     NodeSchedulingPolicy, TenantLocateResponseShard,
 };
 use pageserver_client::mgmt_api;
@@ -38,8 +38,6 @@ pub(crate) struct Node {
     listen_pg_port: u16,
     listen_grpc_addr: Option<String>,
     listen_grpc_port: Option<u16>,
-
-    availability_zone_id: AvailabilityZone,
 
     // Flag from storcon's config to use https for pageserver admin API.
     // Invariant: if |true|, listen_https_port should contain a value.
@@ -111,11 +109,6 @@ impl Node {
         self.id
     }
 
-    #[allow(unused)]
-    pub(crate) fn get_availability_zone_id(&self) -> &AvailabilityZone {
-        &self.availability_zone_id
-    }
-
     pub(crate) fn get_scheduling(&self) -> NodeSchedulingPolicy {
         self.scheduling
     }
@@ -138,7 +131,6 @@ impl Node {
             // [`Self::need_update`] for more details.
             && self.listen_pg_addr == register_req.listen_pg_addr
             && self.listen_pg_port == register_req.listen_pg_port
-            && self.availability_zone_id == register_req.availability_zone_id
     }
 
     // Do we need to update an existing record in DB on this registration request?
@@ -251,7 +243,6 @@ impl Node {
         listen_pg_port: u16,
         listen_grpc_addr: Option<String>,
         listen_grpc_port: Option<u16>,
-        availability_zone_id: AvailabilityZone,
         use_https: bool,
     ) -> anyhow::Result<Self> {
         if use_https && listen_https_port.is_none() {
@@ -277,7 +268,6 @@ impl Node {
             scheduling: NodeSchedulingPolicy::Active,
             lifecycle: NodeLifecycle::Active,
             availability: NodeAvailability::Offline,
-            availability_zone_id,
             use_https,
             cancel: CancellationToken::new(),
         })
@@ -295,7 +285,6 @@ impl Node {
             listen_pg_port: self.listen_pg_port as i32,
             listen_grpc_addr: self.listen_grpc_addr.clone(),
             listen_grpc_port: self.listen_grpc_port.map(|port| port as i32),
-            availability_zone_id: self.availability_zone_id.0.clone(),
         }
     }
 
@@ -329,7 +318,6 @@ impl Node {
             listen_pg_port: np.listen_pg_port as u16,
             listen_grpc_addr: np.listen_grpc_addr,
             listen_grpc_port: np.listen_grpc_port.map(|port| port as u16),
-            availability_zone_id: AvailabilityZone(np.availability_zone_id),
             use_https,
             cancel: CancellationToken::new(),
         })
@@ -412,7 +400,6 @@ impl Node {
             id: self.id,
             availability: self.availability.clone().into(),
             scheduling: self.scheduling,
-            availability_zone_id: self.availability_zone_id.0.clone(),
             listen_http_addr: self.listen_http_addr.clone(),
             listen_http_port: self.listen_http_port,
             listen_https_port: self.listen_https_port,

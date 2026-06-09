@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures::future::{self, Either};
 use itertools::Itertools;
-use pageserver_api::controller_api::{AvailabilityZone, PlacementPolicy, ShardSchedulingPolicy};
+use pageserver_api::controller_api::{PlacementPolicy, ShardSchedulingPolicy};
 use pageserver_api::models::ShardIdentity;
 use pageserver_api::models::{LocationConfig, TenantConfig};
 use serde::{Deserialize, Serialize};
@@ -161,55 +161,33 @@ pub(crate) struct TenantShard {
 pub(crate) struct IntentState {
     attached: Option<NodeId>,
     secondary: Vec<NodeId>,
-
-    // We should attempt to schedule this shard in the provided AZ to
-    // decrease chances of cross-AZ compute.
-    preferred_az_id: Option<AvailabilityZone>,
 }
 
 impl IntentState {
-    pub(crate) fn new(preferred_az_id: Option<AvailabilityZone>) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             attached: None,
             secondary: vec![],
-            preferred_az_id,
         }
     }
     #[allow(dead_code)]
-    pub(crate) fn single(
-        scheduler: &mut Scheduler,
-        node_id: Option<NodeId>,
-        preferred_az_id: Option<AvailabilityZone>,
-    ) -> Self {
+    pub(crate) fn single(scheduler: &mut Scheduler, node_id: Option<NodeId>) -> Self {
         if let Some(node_id) = node_id {
-            scheduler.update_node_ref_counts(
-                node_id,
-                preferred_az_id.as_ref(),
-                RefCountUpdate::Attach,
-            );
+            scheduler.update_node_ref_counts(node_id, RefCountUpdate::Attach);
         }
         Self {
             attached: node_id,
             secondary: vec![],
-            preferred_az_id,
         }
     }
 
     pub(crate) fn set_attached(&mut self, scheduler: &mut Scheduler, new_attached: Option<NodeId>) {
         if self.attached != new_attached {
             if let Some(old_attached) = self.attached.take() {
-                scheduler.update_node_ref_counts(
-                    old_attached,
-                    self.preferred_az_id.as_ref(),
-                    RefCountUpdate::Detach,
-                );
+                scheduler.update_node_ref_counts(old_attached, RefCountUpdate::Detach);
             }
             if let Some(new_attached) = &new_attached {
-                scheduler.update_node_ref_counts(
-                    *new_attached,
-                    self.preferred_az_id.as_ref(),
-                    RefCountUpdate::Attach,
-                );
+                scheduler.update_node_ref_counts(*new_attached, RefCountUpdate::Attach);
             }
             self.attached = new_attached;
         }
@@ -235,17 +213,9 @@ impl IntentState {
         let demoted = self.attached;
         self.attached = Some(promote_secondary);
 
-        scheduler.update_node_ref_counts(
-            promote_secondary,
-            self.preferred_az_id.as_ref(),
-            RefCountUpdate::PromoteSecondary,
-        );
+        scheduler.update_node_ref_counts(promote_secondary, RefCountUpdate::PromoteSecondary);
         if let Some(demoted) = demoted {
-            scheduler.update_node_ref_counts(
-                demoted,
-                self.preferred_az_id.as_ref(),
-                RefCountUpdate::DemoteAttached,
-            );
+            scheduler.update_node_ref_counts(demoted, RefCountUpdate::DemoteAttached);
         }
     }
 
@@ -256,11 +226,7 @@ impl IntentState {
         // assume any valid state transition of the intent state may have occurred
         assert!(!self.secondary.contains(&new_secondary));
         assert!(self.attached != Some(new_secondary));
-        scheduler.update_node_ref_counts(
-            new_secondary,
-            self.preferred_az_id.as_ref(),
-            RefCountUpdate::AddSecondary,
-        );
+        scheduler.update_node_ref_counts(new_secondary, RefCountUpdate::AddSecondary);
         self.secondary.push(new_secondary);
     }
 
@@ -268,43 +234,27 @@ impl IntentState {
     pub(crate) fn remove_secondary(&mut self, scheduler: &mut Scheduler, node_id: NodeId) {
         let index = self.secondary.iter().position(|n| *n == node_id);
         if let Some(index) = index {
-            scheduler.update_node_ref_counts(
-                node_id,
-                self.preferred_az_id.as_ref(),
-                RefCountUpdate::RemoveSecondary,
-            );
+            scheduler.update_node_ref_counts(node_id, RefCountUpdate::RemoveSecondary);
             self.secondary.remove(index);
         }
     }
 
     pub(crate) fn clear_secondary(&mut self, scheduler: &mut Scheduler) {
         for secondary in self.secondary.drain(..) {
-            scheduler.update_node_ref_counts(
-                secondary,
-                self.preferred_az_id.as_ref(),
-                RefCountUpdate::RemoveSecondary,
-            );
+            scheduler.update_node_ref_counts(secondary, RefCountUpdate::RemoveSecondary);
         }
     }
 
     /// Remove the last secondary node from the list of secondaries
     pub(crate) fn pop_secondary(&mut self, scheduler: &mut Scheduler) {
         if let Some(node_id) = self.secondary.pop() {
-            scheduler.update_node_ref_counts(
-                node_id,
-                self.preferred_az_id.as_ref(),
-                RefCountUpdate::RemoveSecondary,
-            );
+            scheduler.update_node_ref_counts(node_id, RefCountUpdate::RemoveSecondary);
         }
     }
 
     pub(crate) fn clear(&mut self, scheduler: &mut Scheduler) {
         if let Some(old_attached) = self.attached.take() {
-            scheduler.update_node_ref_counts(
-                old_attached,
-                self.preferred_az_id.as_ref(),
-                RefCountUpdate::Detach,
-            );
+            scheduler.update_node_ref_counts(old_attached, RefCountUpdate::Detach);
         }
 
         self.clear_secondary(scheduler);
@@ -339,46 +289,11 @@ impl IntentState {
         if self.attached == Some(node_id) {
             self.attached = None;
             self.secondary.push(node_id);
-            scheduler.update_node_ref_counts(
-                node_id,
-                self.preferred_az_id.as_ref(),
-                RefCountUpdate::DemoteAttached,
-            );
+            scheduler.update_node_ref_counts(node_id, RefCountUpdate::DemoteAttached);
             true
         } else {
             false
         }
-    }
-
-    pub(crate) fn set_preferred_az(
-        &mut self,
-        scheduler: &mut Scheduler,
-        preferred_az: Option<AvailabilityZone>,
-    ) {
-        let new_az = preferred_az.as_ref();
-        let old_az = self.preferred_az_id.as_ref();
-
-        if old_az != new_az {
-            if let Some(node_id) = self.attached {
-                scheduler.update_node_ref_counts(
-                    node_id,
-                    new_az,
-                    RefCountUpdate::ChangePreferredAzFrom(old_az),
-                );
-            }
-            for node_id in &self.secondary {
-                scheduler.update_node_ref_counts(
-                    *node_id,
-                    new_az,
-                    RefCountUpdate::ChangePreferredAzFrom(old_az),
-                );
-            }
-            self.preferred_az_id = preferred_az;
-        }
-    }
-
-    pub(crate) fn get_preferred_az(&self) -> Option<&AvailabilityZone> {
-        self.preferred_az_id.as_ref()
     }
 }
 
@@ -587,7 +502,6 @@ impl TenantShard {
         tenant_shard_id: TenantId,
         shard: ShardIdentity,
         policy: PlacementPolicy,
-        preferred_az_id: Option<AvailabilityZone>,
     ) -> Self {
         metrics::METRICS_REGISTRY
             .metrics_group
@@ -597,7 +511,7 @@ impl TenantShard {
         Self {
             tenant_shard_id,
             policy,
-            intent: IntentState::new(preferred_az_id),
+            intent: IntentState::new(),
             generation: Some(Generation::new(0)),
             shard,
             observed: ObservedState::default(),
@@ -675,11 +589,8 @@ impl TenantShard {
             Ok((true, promote_secondary))
         } else {
             // Pick a fresh node: either we had no secondaries or none were schedulable
-            let node_id = scheduler.schedule_shard::<AttachedShardTag>(
-                &self.intent.secondary,
-                &self.intent.preferred_az_id,
-                context,
-            )?;
+            let node_id =
+                scheduler.schedule_shard::<AttachedShardTag>(&self.intent.secondary, context)?;
             tracing::debug!("Selected {} as attached", node_id);
             self.intent.set_attached(scheduler, Some(node_id));
             Ok((true, node_id))
@@ -739,11 +650,8 @@ impl TenantShard {
 
                 let mut used_pageservers = vec![attached_node_id];
                 while self.intent.secondary.len() < secondary_count {
-                    let node_id = scheduler.schedule_shard::<SecondaryShardTag>(
-                        &used_pageservers,
-                        &self.intent.preferred_az_id,
-                        context,
-                    )?;
+                    let node_id = scheduler
+                        .schedule_shard::<SecondaryShardTag>(&used_pageservers, context)?;
                     self.intent.push_secondary(scheduler, node_id);
                     used_pageservers.push(node_id);
                     modified = true;
@@ -756,30 +664,19 @@ impl TenantShard {
 
                     modified = true;
                 } else if self.intent.secondary.is_empty() {
-                    // Populate secondary by scheduling a fresh node
+                    // Populate secondary by scheduling a fresh node.
                     //
                     // We use [`AttachedShardTag`] because when a secondary location is the only one
                     // a shard has, we expect that its next use will be as an attached location: we want
-                    // the tenant to be ready to warm up and run fast in their preferred AZ.
-                    let node_id = scheduler.schedule_shard::<AttachedShardTag>(
-                        &[],
-                        &self.intent.preferred_az_id,
-                        context,
-                    )?;
+                    // the tenant to be ready to warm up and run fast.
+                    let node_id = scheduler.schedule_shard::<AttachedShardTag>(&[], context)?;
                     self.intent.push_secondary(scheduler, node_id);
                     modified = true;
                 }
                 while self.intent.secondary.len() > 1 {
-                    // If we have multiple secondaries (e.g. when transitioning from Attached to Secondary and
-                    // having just demoted our attached location), then we should prefer to keep the location
-                    // in our preferred AZ.  Tenants in Secondary mode want to be in the preferred AZ so that
-                    // they have a warm location to become attached when transitioning back into Attached.
-
-                    let mut candidates = self.intent.get_secondary().clone();
-                    // Sort to get secondaries outside preferred AZ last
-                    candidates
-                        .sort_by_key(|n| scheduler.get_node_az(n).as_ref() != self.preferred_az());
-                    let secondary_to_remove = candidates.pop().unwrap();
+                    // If we have multiple secondaries (e.g. when transitioning from Attached to
+                    // Secondary and having just demoted our attached location), drop the extras.
+                    let secondary_to_remove = self.intent.get_secondary().last().copied().unwrap();
                     self.intent.remove_secondary(scheduler, secondary_to_remove);
                     modified = true;
                 }
@@ -848,11 +745,9 @@ impl TenantShard {
         current: NodeId,
         candidate: NodeId,
     ) -> Option<bool> {
-        let Some(candidate_score) = scheduler.compute_node_score::<T::Score>(
-            candidate,
-            &self.intent.preferred_az_id,
-            schedule_context,
-        ) else {
+        let Some(candidate_score) =
+            scheduler.compute_node_score::<T::Score>(candidate, schedule_context)
+        else {
             // The candidate node is unavailable for scheduling or otherwise couldn't get a score
             return None;
         };
@@ -866,11 +761,7 @@ impl TenantShard {
             }
         }
 
-        match scheduler.compute_node_score::<T::Score>(
-            current,
-            &self.intent.preferred_az_id,
-            schedule_context,
-        ) {
+        match scheduler.compute_node_score::<T::Score>(current, schedule_context) {
             Some(current_score) => {
                 // Ignore utilization components when comparing scores: we don't want to migrate
                 // because of transient load variations, it risks making the system thrash, and
@@ -921,11 +812,8 @@ impl TenantShard {
         }
 
         // Look for a lower-scoring location to attach to
-        let Ok(candidate_node) = scheduler.schedule_shard::<T>(
-            hard_exclude,
-            &self.intent.preferred_az_id,
-            schedule_context,
-        ) else {
+        let Ok(candidate_node) = scheduler.schedule_shard::<T>(hard_exclude, schedule_context)
+        else {
             // A scheduling error means we have no possible candidate replacements
             tracing::debug!("No candidate node found");
             return None;
@@ -948,11 +836,7 @@ impl TenantShard {
     /// If we return true, it only means that optimization _might_ be possible, not that it necessarily is.  If we
     /// return no, it definitely means that calling [`Self::optimize_attachment`] or [`Self::optimize_secondary`] would do no
     /// work.
-    pub(crate) fn maybe_optimizable(
-        &self,
-        scheduler: &mut Scheduler,
-        schedule_context: &ScheduleContext,
-    ) -> bool {
+    pub(crate) fn maybe_optimizable(&self, schedule_context: &ScheduleContext) -> bool {
         // Tenant with preferred node: check if it is not already at the preferred node
         if let Some(preferred) = self.preferred_node.as_ref() {
             if Some(preferred) != self.intent.get_attached().as_ref() {
@@ -969,22 +853,6 @@ impl TenantShard {
                         return true;
                     }
                 }
-            }
-        }
-
-        // Attached tenant: check if the attachment is outside the preferred AZ
-        if let PlacementPolicy::Attached(_) = self.policy {
-            if let Some(attached) = self.intent.get_attached() {
-                if scheduler.get_node_az(attached) != self.intent.preferred_az_id {
-                    return true;
-                }
-            }
-        }
-
-        // Tenant with secondary locations: check if any are within the preferred AZ
-        for secondary in self.intent.get_secondary() {
-            if scheduler.get_node_az(secondary) == self.intent.preferred_az_id {
-                return true;
             }
         }
 
@@ -1049,7 +917,6 @@ impl TenantShard {
                         *node_id,
                         scheduler.compute_node_score::<NodeSecondarySchedulingScore>(
                             *node_id,
-                            &self.intent.preferred_az_id,
                             &schedule_context,
                         ),
                     )
@@ -1071,15 +938,12 @@ impl TenantShard {
                 // where its score can't be calculated), and drop the others.  This enables us to make progress in
                 // most cases, even if some nodes are offline or have scheduling=pause set.
 
-                debug_assert!(self.intent.attached.is_some()); // We should not make it here unless attached -- this
-                // logic presumes we are in a mode where we want secondaries to be in non-home AZ
+                debug_assert!(self.intent.attached.is_some()); // We should not make it here unless attached
                 if let Some(retain_secondary) = self.intent.get_secondary().iter().find(|n| {
-                    let in_home_az = scheduler.get_node_az(n) == self.intent.preferred_az_id;
-                    let is_available = secondary_scores
+                    secondary_scores
                         .get(n)
                         .expect("Built from same list of nodes")
-                        .is_some();
-                    is_available && !in_home_az
+                        .is_some()
                 }) {
                     // Great, we found one to retain.  Pick some other to drop.
                     if let Some(victim) = self
@@ -1121,40 +985,16 @@ impl TenantShard {
         );
 
         // We have found a candidate and confirmed that its score is preferable
-        // to our current location. See if we have a secondary location in the preferred location already: if not,
+        // to our current location. See if we have a secondary location at that node already: if not,
         // then create one.
         if let Some(replacement) = replacement {
-            // If we are currently in non-preferred AZ, then the scheduler might suggest a location that is better, but still
-            // not in our preferred AZ.  Migration has a cost in resources an impact to the workload, so we want to avoid doing
-            // multiple hops where we might go to some other AZ before eventually finding a suitable location in our preferred
-            // AZ: skip this optimization if it is not in our final, preferred AZ.
-            //
-            // This should be a transient state, there should always be capacity eventually in our preferred AZ (even if nodes
-            // there are too overloaded for scheduler to suggest them, more should be provisioned eventually).
-            if self.preferred_node.is_none()
-                && self.intent.preferred_az_id.is_some()
-                && scheduler.get_node_az(&replacement) != self.intent.preferred_az_id
-            {
-                tracing::debug!(
-                    "Candidate node {replacement} is not in preferred AZ {:?}",
-                    self.intent.preferred_az_id
-                );
-
-                // This should only happen if our current location is not in the preferred AZ, otherwise
-                // [`Self::find_better_location`]` should have rejected any other location outside the preferred Az, because
-                // AZ is the highest priority part of NodeAttachmentSchedulingScore.
-                debug_assert!(scheduler.get_node_az(&attached) != self.intent.preferred_az_id);
-
-                return None;
-            }
-
             if !self.intent.get_secondary().contains(&replacement) {
                 Some(ScheduleOptimization {
                     sequence: self.sequence,
                     action: ScheduleOptimizationAction::CreateSecondary(replacement),
                 })
             } else {
-                // We already have a secondary in the preferred location, let's try migrating to it.  Our caller
+                // We already have a secondary at the preferred location, let's try migrating to it.  Our caller
                 // will check the warmth of the destination before deciding whether to really execute this.
                 Some(ScheduleOptimization {
                     sequence: self.sequence,
@@ -1366,36 +1206,12 @@ impl TenantShard {
     ///  - When draining a node for restart
     ///  - When responding to a node failure
     ///
-    /// In this context, 'preferred' does not mean the node with the best scheduling score: instead
-    /// we want to pick the node which is best for use _temporarily_ while the previous attached location
-    /// is unavailable (e.g. because it's down or deploying).  That means we prefer to use secondary
-    /// locations in a non-preferred AZ, as they're more likely to have awarm cache than a temporary
-    /// secondary in the preferred AZ (which are usually only created for migrations, and if they exist
-    /// they're probably not warmed up yet). The latter behavior is based oni
-    ///
     /// If the input is empty, or all the nodes are not elegible for scheduling, return None: the
     /// caller needs to a pick a node some other way.
     pub(crate) fn preferred_secondary(&self, scheduler: &Scheduler) -> Option<NodeId> {
-        let candidates = scheduler.filter_usable_nodes(&self.intent.secondary);
-
-        // We will sort candidates to prefer nodes which are _not_ in our preferred AZ, i.e. we prefer
-        // to migrate to a long-lived secondary location (which would have been scheduled in a non-preferred AZ),
-        // rather than a short-lived secondary location being used for optimization/migration (which would have
-        // been scheduled in our preferred AZ).
-        let mut candidates = candidates
-            .iter()
-            .map(|(node_id, node_az)| {
-                if node_az == &self.intent.preferred_az_id {
-                    (1, *node_id)
-                } else {
-                    (0, *node_id)
-                }
-            })
-            .collect::<Vec<_>>();
-
+        let mut candidates = scheduler.filter_usable_nodes(&self.intent.secondary);
         candidates.sort();
-
-        candidates.first().map(|i| i.1)
+        candidates.first().copied()
     }
 
     /// Query whether the tenant's observed state for attached node matches its intent state, and if so,
@@ -1688,7 +1504,6 @@ impl TenantShard {
             detach,
             reconciler_config,
             config: self.config.clone(),
-            preferred_az: self.intent.preferred_az_id.clone(),
             observed: self.observed.clone(),
             original_observed: self.observed.clone(),
             compute_hook: compute_hook.clone(),
@@ -1928,20 +1743,7 @@ impl TenantShard {
             placement_policy: serde_json::to_string(&self.policy).unwrap(),
             config: serde_json::to_string(&self.config).unwrap(),
             scheduling_policy: serde_json::to_string(&self.scheduling_policy).unwrap(),
-            preferred_az_id: self.intent.preferred_az_id.as_ref().map(|az| az.0.clone()),
         }
-    }
-
-    pub(crate) fn preferred_az(&self) -> Option<&AvailabilityZone> {
-        self.intent.get_preferred_az()
-    }
-
-    pub(crate) fn set_preferred_az(
-        &mut self,
-        scheduler: &mut Scheduler,
-        preferred_az_id: Option<AvailabilityZone>,
-    ) {
-        self.intent.set_preferred_az(scheduler, preferred_az_id);
     }
 
     /// Returns all the nodes to which this tenant shard is attached according to the
@@ -2021,22 +1823,6 @@ impl TenantShard {
         }
     }
 
-    /// Returns true if the tenant shard is attached to a node that is outside the preferred AZ.
-    ///
-    /// If the shard does not have a preferred AZ, returns false.
-    pub(crate) fn is_attached_outside_preferred_az(&self, nodes: &HashMap<NodeId, Node>) -> bool {
-        self.intent
-            .get_attached()
-            .map(|node_id| {
-                Some(
-                    nodes
-                        .get(&node_id)
-                        .expect("referenced node exists")
-                        .get_availability_zone_id(),
-                ) != self.intent.preferred_az_id.as_ref()
-            })
-            .unwrap_or(false)
-    }
 }
 
 impl Drop for TenantShard {
@@ -2054,42 +1840,29 @@ pub(crate) mod tests {
     use std::rc::Rc;
 
     use pageserver_api::controller_api::NodeAvailability;
-    use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardNumber};
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
     use utils::id::TenantId;
 
     use super::*;
     use crate::scheduler::test_utils::make_test_nodes;
 
     fn make_test_tenant_shard(policy: PlacementPolicy) -> TenantShard {
-        TenantShard::new(
-            TenantId::generate(),
-            ShardIdentity::unsharded(),
-            policy,
-            None,
-        )
+        TenantShard::new(TenantId::generate(), ShardIdentity::unsharded(), policy)
     }
 
-    pub(crate) fn make_test_tenant(
-        policy: PlacementPolicy,
-        preferred_az: Option<AvailabilityZone>,
-    ) -> Vec<TenantShard> {
-        make_test_tenant_with_id(TenantId::generate(), policy, preferred_az)
+    pub(crate) fn make_test_tenant(policy: PlacementPolicy) -> Vec<TenantShard> {
+        make_test_tenant_with_id(TenantId::generate(), policy)
     }
 
     /// yb-mode: every tenant is single-shard.
     pub(crate) fn make_test_tenant_with_id(
         tenant_id: TenantId,
         policy: PlacementPolicy,
-        preferred_az: Option<AvailabilityZone>,
     ) -> Vec<TenantShard> {
         let tenant_shard_id = TenantId::unsharded(tenant_id);
         vec![TenantShard::new(
             tenant_shard_id,
             ShardIdentity::unsharded(),
             policy,
-            preferred_az,
         )]
     }
 
@@ -2099,7 +1872,7 @@ pub(crate) mod tests {
     fn tenant_ha_scheduling() -> anyhow::Result<()> {
         // Start with three nodes.  Our tenant will only use two.  The third one is
         // expected to remain unused.
-        let mut nodes = make_test_nodes(3, &[]);
+        let mut nodes = make_test_nodes(3);
 
         let mut scheduler = Scheduler::new(nodes.values());
         let mut context = ScheduleContext::default();
@@ -2151,7 +1924,7 @@ pub(crate) mod tests {
 
     #[test]
     fn intent_from_observed() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(3, &[]);
+        let nodes = make_test_nodes(3);
         let mut scheduler = Scheduler::new(nodes.values());
 
         let mut tenant_shard = make_test_tenant_shard(PlacementPolicy::Attached(1));
@@ -2189,7 +1962,7 @@ pub(crate) mod tests {
 
     #[test]
     fn scheduling_mode() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(3, &[]);
+        let nodes = make_test_nodes(3);
         let mut scheduler = Scheduler::new(nodes.values());
 
         let mut tenant_shard = make_test_tenant_shard(PlacementPolicy::Attached(1));
@@ -2217,25 +1990,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    /// Simple case: moving attachment to somewhere better where we already have a secondary
+    /// Simple case: when two shards are crammed onto two nodes and a third node is free, the
+    /// optimizer balances by creating a secondary on the free node, as a stepping stone toward
+    /// migrating the attachment there.
     fn optimize_attachment_simple() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(
-            3,
-            &[
-                AvailabilityZone("az-a".to_string()),
-                AvailabilityZone("az-b".to_string()),
-                AvailabilityZone("az-c".to_string()),
-            ],
-        );
+        let nodes = make_test_nodes(3);
         let mut scheduler = Scheduler::new(nodes.values());
 
         let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        shard_a.intent.preferred_az_id = Some(AvailabilityZone("az-a".to_string()));
         let mut shard_b = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        shard_b.intent.preferred_az_id = Some(AvailabilityZone("az-a".to_string()));
 
-        // Initially: both nodes attached on shard 1, and both have secondary locations
-        // on different nodes.
+        // Initially: both shards are attached/secondary on nodes 1 and 2, leaving node 3 free.
         shard_a.intent.set_attached(&mut scheduler, Some(NodeId(2)));
         shard_a.intent.push_secondary(&mut scheduler, NodeId(1));
         shard_b.intent.set_attached(&mut scheduler, Some(NodeId(1)));
@@ -2254,10 +2019,7 @@ pub(crate) mod tests {
             optimization_a,
             Some(ScheduleOptimization {
                 sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-                    old_attached_node_id: NodeId(2),
-                    new_attached_node_id: NodeId(1)
-                })
+                action: ScheduleOptimizationAction::CreateSecondary(NodeId(3))
             })
         );
         shard_a.apply_optimization(&mut scheduler, optimization_a.unwrap());
@@ -2312,23 +2074,13 @@ pub(crate) mod tests {
     /// Complicated case: moving attachment to somewhere better where we do not have a secondary
     /// already, creating one as needed.
     fn optimize_attachment_multistep() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(
-            3,
-            &[
-                AvailabilityZone("az-a".to_string()),
-                AvailabilityZone("az-b".to_string()),
-                AvailabilityZone("az-c".to_string()),
-            ],
-        );
+        let nodes = make_test_nodes(3);
         let mut scheduler = Scheduler::new(nodes.values());
 
-        // Two shards of a tenant that wants to be in AZ A
         let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        shard_a.intent.preferred_az_id = Some(AvailabilityZone("az-a".to_string()));
         let mut shard_b = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        shard_b.intent.preferred_az_id = Some(AvailabilityZone("az-a".to_string()));
 
-        // Both shards are initially attached in non-home AZ _and_ have secondaries in non-home AZs
+        // Both shards are initially attached and have a secondary on a different node.
         shard_a.intent.set_attached(&mut scheduler, Some(NodeId(2)));
         shard_a.intent.push_secondary(&mut scheduler, NodeId(3));
         shard_b.intent.set_attached(&mut scheduler, Some(NodeId(3)));
@@ -2391,20 +2143,10 @@ pub(crate) mod tests {
     /// How the optimisation code handles a shard with a preferred node set; this is an example
     /// of the multi-step migration, but driven by a different input.
     fn optimize_attachment_multi_preferred_node() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(
-            4,
-            &[
-                AvailabilityZone("az-a".to_string()),
-                AvailabilityZone("az-a".to_string()),
-                AvailabilityZone("az-b".to_string()),
-                AvailabilityZone("az-b".to_string()),
-            ],
-        );
+        let nodes = make_test_nodes(4);
         let mut scheduler = Scheduler::new(nodes.values());
 
-        // Two shards of a tenant that wants to be in AZ A
         let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        shard_a.intent.preferred_az_id = Some(AvailabilityZone("az-a".to_string()));
 
         // Initially attached in a stable location
         shard_a.intent.set_attached(&mut scheduler, Some(NodeId(1)));
@@ -2456,7 +2198,7 @@ pub(crate) mod tests {
             optimization_a_cleanup,
             Some(ScheduleOptimization {
                 sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::RemoveSecondary(NodeId(1))
+                action: ScheduleOptimizationAction::RemoveSecondary(NodeId(3))
             })
         );
         shard_a.apply_optimization(&mut scheduler, optimization_a_cleanup.unwrap());
@@ -2472,12 +2214,12 @@ pub(crate) mod tests {
     /// 1 AffinityScore -- this ensures that we don't have a bug like the intermediate secondary
     /// counting toward the affinity score such that it prevents the rest of the migration from happening.
     fn optimize_attachment_marginal() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(2, &[]);
+        let nodes = make_test_nodes(2);
         let mut scheduler = Scheduler::new(nodes.values());
 
         // Multi-sharded tenant, we will craft a situation where affinity
         // scores differ only slightly
-        let mut shards = make_test_tenant(PlacementPolicy::Attached(0), None);
+        let mut shards = make_test_tenant(PlacementPolicy::Attached(0));
 
         // 1 attached on node 1
         shards[0]
@@ -2574,7 +2316,7 @@ pub(crate) mod tests {
 
     #[test]
     fn optimize_secondary() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(4, &[]);
+        let nodes = make_test_nodes(4);
         let mut scheduler = Scheduler::new(nodes.values());
 
         let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
@@ -2619,23 +2361,12 @@ pub(crate) mod tests {
     /// Test how the optimisation code behaves with an extra secondary
     #[test]
     fn optimize_removes_secondary() -> anyhow::Result<()> {
-        let az_a_tag = AvailabilityZone("az-a".to_string());
-        let az_b_tag = AvailabilityZone("az-b".to_string());
-        let mut nodes = make_test_nodes(
-            4,
-            &[
-                az_a_tag.clone(),
-                az_b_tag.clone(),
-                az_a_tag.clone(),
-                az_b_tag.clone(),
-            ],
-        );
+        let mut nodes = make_test_nodes(4);
         let mut scheduler = Scheduler::new(nodes.values());
 
         let mut schedule_context = ScheduleContext::default();
 
         let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        shard_a.intent.preferred_az_id = Some(az_a_tag.clone());
         shard_a
             .schedule(&mut scheduler, &mut schedule_context)
             .unwrap();
@@ -2746,7 +2477,7 @@ pub(crate) mod tests {
                 );
                 if let Some(optimization) = optimization {
                     // Check that maybe_optimizable wouldn't have wrongly claimed this optimization didn't exist
-                    assert!(shard.maybe_optimizable(scheduler, &schedule_context));
+                    assert!(shard.maybe_optimizable(&schedule_context));
                     optimizations.push(optimization.clone());
                     shard.apply_optimization(scheduler, optimization);
                     any_changed = true;
@@ -2761,7 +2492,7 @@ pub(crate) mod tests {
                 );
                 if let Some(optimization) = optimization {
                     // Check that maybe_optimizable wouldn't have wrongly claimed this optimization didn't exist
-                    assert!(shard.maybe_optimizable(scheduler, &schedule_context));
+                    assert!(shard.maybe_optimizable(&schedule_context));
 
                     optimizations.push(optimization.clone());
                     shard.apply_optimization(scheduler, optimization);
@@ -2787,33 +2518,15 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "yb-mode: single-shard tenants, multi-shard balancing logic doesn't apply"]
     fn optimize_add_nodes() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(
-            9,
-            &[
-                // Initial 6 nodes
-                AvailabilityZone("az-a".to_string()),
-                AvailabilityZone("az-a".to_string()),
-                AvailabilityZone("az-b".to_string()),
-                AvailabilityZone("az-b".to_string()),
-                AvailabilityZone("az-c".to_string()),
-                AvailabilityZone("az-c".to_string()),
-                // Three we will add later
-                AvailabilityZone("az-a".to_string()),
-                AvailabilityZone("az-b".to_string()),
-                AvailabilityZone("az-c".to_string()),
-            ],
-        );
+        let nodes = make_test_nodes(9);
 
-        // Only show the scheduler two nodes in each AZ to start with
+        // Only show the scheduler six nodes to start with
         let mut scheduler = Scheduler::new([].iter());
         for i in 1..=6 {
             scheduler.node_upsert(nodes.get(&NodeId(i)).unwrap());
         }
 
-        let mut shards = make_test_tenant(
-            PlacementPolicy::Attached(1),
-            Some(AvailabilityZone("az-a".to_string())),
-        );
+        let mut shards = make_test_tenant(PlacementPolicy::Attached(1));
         let mut schedule_context = ScheduleContext::default();
         for shard in &mut shards {
             assert!(
@@ -2885,16 +2598,16 @@ pub(crate) mod tests {
     fn initial_scheduling_is_optimal() -> anyhow::Result<()> {
         use itertools::Itertools;
 
-        let nodes = make_test_nodes(2, &[]);
+        let nodes = make_test_nodes(2);
 
         let mut scheduler = Scheduler::new([].iter());
         scheduler.node_upsert(nodes.get(&NodeId(1)).unwrap());
         scheduler.node_upsert(nodes.get(&NodeId(2)).unwrap());
 
-        let mut a = make_test_tenant(PlacementPolicy::Attached(1), None);
+        let mut a = make_test_tenant(PlacementPolicy::Attached(1));
         let a_context = Rc::new(RefCell::new(ScheduleContext::default()));
 
-        let mut b = make_test_tenant(PlacementPolicy::Attached(1), None);
+        let mut b = make_test_tenant(PlacementPolicy::Attached(1));
         let b_context = Rc::new(RefCell::new(ScheduleContext::default()));
 
         let a_shards_with_context = a.iter_mut().map(|shard| (shard, a_context.clone()));
@@ -2920,184 +2633,20 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "yb-mode: single-shard tenants, randomized multi-shard AZ scheduling doesn't apply"]
-    fn random_az_shard_scheduling() -> anyhow::Result<()> {
-        use rand::seq::SliceRandom;
-
-        for seed in 0..50 {
-            eprintln!("Running test with seed {seed}");
-            let mut rng = StdRng::seed_from_u64(seed);
-
-            let az_a_tag = AvailabilityZone("az-a".to_string());
-            let az_b_tag = AvailabilityZone("az-b".to_string());
-            let azs = [az_a_tag, az_b_tag];
-            let nodes = make_test_nodes(4, &azs);
-            let mut shards_per_az: HashMap<AvailabilityZone, u32> = HashMap::new();
-
-            let mut scheduler = Scheduler::new([].iter());
-            for node in nodes.values() {
-                scheduler.node_upsert(node);
-            }
-
-            let mut shards = Vec::default();
-            let mut contexts = Vec::default();
-            let mut az_picker = azs.iter().cycle().cloned();
-            for i in 0..100 {
-                let az = az_picker.next().unwrap();
-                // yb-mode: always single-shard.
-                *shards_per_az.entry(az.clone()).or_default() += 1;
-
-                let tenant_shards = make_test_tenant(PlacementPolicy::Attached(1), Some(az));
-                let context = Rc::new(RefCell::new(ScheduleContext::default()));
-
-                contexts.push(context.clone());
-                let with_ctx = tenant_shards
-                    .into_iter()
-                    .map(|shard| (shard, context.clone()));
-                for shard_with_ctx in with_ctx {
-                    shards.push(shard_with_ctx);
-                }
-            }
-
-            shards.shuffle(&mut rng);
-
-            #[derive(Default, Debug)]
-            struct NodeStats {
-                attachments: u32,
-                secondaries: u32,
-            }
-
-            let mut node_stats: HashMap<NodeId, NodeStats> = HashMap::default();
-            let mut attachments_in_wrong_az = 0;
-            let mut secondaries_in_wrong_az = 0;
-
-            for (shard, context) in &mut shards {
-                let context = &mut *context.borrow_mut();
-                shard.schedule(&mut scheduler, context).unwrap();
-
-                let attached_node = shard.intent.get_attached().unwrap();
-                let stats = node_stats.entry(attached_node).or_default();
-                stats.attachments += 1;
-
-                let secondary_node = *shard.intent.get_secondary().first().unwrap();
-                let stats = node_stats.entry(secondary_node).or_default();
-                stats.secondaries += 1;
-
-                let attached_node_az = nodes
-                    .get(&attached_node)
-                    .unwrap()
-                    .get_availability_zone_id();
-                let secondary_node_az = nodes
-                    .get(&secondary_node)
-                    .unwrap()
-                    .get_availability_zone_id();
-                let preferred_az = shard.preferred_az().unwrap();
-
-                if attached_node_az != preferred_az {
-                    eprintln!(
-                        "{} attachment was scheduled in AZ {} but preferred AZ {}",
-                        shard.tenant_shard_id, attached_node_az, preferred_az
-                    );
-                    attachments_in_wrong_az += 1;
-                }
-
-                if secondary_node_az == preferred_az {
-                    eprintln!(
-                        "{} secondary was scheduled in AZ {} which matches preference",
-                        shard.tenant_shard_id, attached_node_az
-                    );
-                    secondaries_in_wrong_az += 1;
-                }
-            }
-
-            let mut violations = Vec::default();
-
-            if attachments_in_wrong_az > 0 {
-                violations.push(format!(
-                    "{attachments_in_wrong_az} attachments scheduled to the incorrect AZ"
-                ));
-            }
-
-            if secondaries_in_wrong_az > 0 {
-                violations.push(format!(
-                    "{secondaries_in_wrong_az} secondaries scheduled to the incorrect AZ"
-                ));
-            }
-
-            eprintln!(
-                "attachments_in_wrong_az={attachments_in_wrong_az} secondaries_in_wrong_az={secondaries_in_wrong_az}"
-            );
-
-            for (node_id, stats) in &node_stats {
-                let node_az = nodes.get(node_id).unwrap().get_availability_zone_id();
-                let ideal_attachment_load = shards_per_az.get(node_az).unwrap() / 2;
-                let allowed_attachment_load =
-                    (ideal_attachment_load - 1)..(ideal_attachment_load + 2);
-
-                if !allowed_attachment_load.contains(&stats.attachments) {
-                    violations.push(format!(
-                        "Found {} attachments on node {}, but expected {}",
-                        stats.attachments, node_id, ideal_attachment_load
-                    ));
-                }
-
-                eprintln!(
-                    "{}: attachments={} secondaries={} ideal_attachment_load={}",
-                    node_id, stats.attachments, stats.secondaries, ideal_attachment_load
-                );
-            }
-
-            assert!(violations.is_empty(), "{violations:?}");
-
-            for (mut shard, _ctx) in shards {
-                shard.intent.clear(&mut scheduler);
-            }
-        }
-        Ok(())
-    }
-
     /// Check how the shard's scheduling behaves when in PlacementPolicy::Secondary mode.
     #[test]
     fn tenant_secondary_scheduling() -> anyhow::Result<()> {
-        let az_a = AvailabilityZone("az-a".to_string());
-        let nodes = make_test_nodes(
-            3,
-            &[
-                az_a.clone(),
-                AvailabilityZone("az-b".to_string()),
-                AvailabilityZone("az-c".to_string()),
-            ],
-        );
+        let nodes = make_test_nodes(3);
 
         let mut scheduler = Scheduler::new(nodes.values());
         let mut context = ScheduleContext::default();
 
         let mut tenant_shard = make_test_tenant_shard(PlacementPolicy::Secondary);
-        tenant_shard.intent.preferred_az_id = Some(az_a.clone());
         tenant_shard
             .schedule(&mut scheduler, &mut context)
             .expect("we have enough nodes, scheduling should work");
         assert_eq!(tenant_shard.intent.secondary.len(), 1);
         assert!(tenant_shard.intent.attached.is_none());
-
-        // Should have scheduled into the preferred AZ
-        assert_eq!(
-            scheduler
-                .get_node_az(&tenant_shard.intent.secondary[0])
-                .as_ref(),
-            tenant_shard.preferred_az()
-        );
-
-        // Optimizer should agree
-        assert_eq!(
-            tenant_shard.optimize_attachment(&mut scheduler, &context),
-            None
-        );
-        assert_eq!(
-            tenant_shard.optimize_secondary(&mut scheduler, &context),
-            None
-        );
 
         // Switch to PlacementPolicy::Attached
         tenant_shard.policy = PlacementPolicy::Attached(1);
@@ -3106,29 +2655,10 @@ pub(crate) mod tests {
             .expect("we have enough nodes, scheduling should work");
         assert_eq!(tenant_shard.intent.secondary.len(), 1);
         assert!(tenant_shard.intent.attached.is_some());
-        // Secondary should now be in non-preferred AZ
+        // Attached and secondary should be on different nodes
         assert_ne!(
-            scheduler
-                .get_node_az(&tenant_shard.intent.secondary[0])
-                .as_ref(),
-            tenant_shard.preferred_az()
-        );
-        // Attached should be in preferred AZ
-        assert_eq!(
-            scheduler
-                .get_node_az(&tenant_shard.intent.attached.unwrap())
-                .as_ref(),
-            tenant_shard.preferred_az()
-        );
-
-        // Optimizer should agree
-        assert_eq!(
-            tenant_shard.optimize_attachment(&mut scheduler, &context),
-            None
-        );
-        assert_eq!(
-            tenant_shard.optimize_secondary(&mut scheduler, &context),
-            None
+            Some(tenant_shard.intent.secondary[0]),
+            tenant_shard.intent.attached
         );
 
         // Switch back to PlacementPolicy::Secondary
@@ -3138,23 +2668,6 @@ pub(crate) mod tests {
             .expect("we have enough nodes, scheduling should work");
         assert_eq!(tenant_shard.intent.secondary.len(), 1);
         assert!(tenant_shard.intent.attached.is_none());
-        // When we picked a location to keep, we should have kept the one in the preferred AZ
-        assert_eq!(
-            scheduler
-                .get_node_az(&tenant_shard.intent.secondary[0])
-                .as_ref(),
-            tenant_shard.preferred_az()
-        );
-
-        // Optimizer should agree
-        assert_eq!(
-            tenant_shard.optimize_attachment(&mut scheduler, &context),
-            None
-        );
-        assert_eq!(
-            tenant_shard.optimize_secondary(&mut scheduler, &context),
-            None
-        );
 
         tenant_shard.intent.clear(&mut scheduler);
 

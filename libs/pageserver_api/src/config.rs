@@ -155,7 +155,6 @@ pub struct ConfigToml {
     #[serde(with = "humantime_serde")]
     pub ssl_cert_reload_period: Duration,
     pub ssl_ca_file: Option<Utf8PathBuf>,
-    pub availability_zone: Option<String>,
     #[serde(with = "humantime_serde")]
     pub wait_lsn_timeout: Duration,
     #[serde(with = "humantime_serde")]
@@ -715,7 +714,6 @@ impl Default for ConfigToml {
             ssl_cert_file: Utf8PathBuf::from(DEFAULT_SSL_CERT_FILE),
             ssl_cert_reload_period: Duration::from_secs(60),
             ssl_ca_file: None,
-            availability_zone: (None),
             wait_lsn_timeout: (humantime::parse_duration(DEFAULT_WAIT_LSN_TIMEOUT)
                 .expect("cannot parse default wait lsn timeout")),
             wal_redo_timeout: (humantime::parse_duration(DEFAULT_WAL_REDO_TIMEOUT)

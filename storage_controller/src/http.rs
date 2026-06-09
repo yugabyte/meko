@@ -21,7 +21,7 @@ use pageserver_api::controller_api::{
     MetadataHealthListOutdatedRequest, MetadataHealthListOutdatedResponse,
     MetadataHealthListUnhealthyResponse, MetadataHealthUpdateRequest, MetadataHealthUpdateResponse,
     NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, SafekeeperSchedulingPolicyRequest,
-    SetTimelineBranchNameRequest, ShardsPreferredAzsRequest, TenantCreateRequest,
+    SetTimelineBranchNameRequest, TenantCreateRequest,
     TenantPolicyRequest, TenantShardMigrateRequest, TimelineBranchName, TimelineImportRequest,
 };
 use pageserver_api::models::{
@@ -1390,25 +1390,6 @@ async fn handle_tenant_update_policy(req: Request<Body>) -> Result<Response<Body
     )
 }
 
-async fn handle_update_preferred_azs(req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permissions(&req, Scope::Admin)?;
-
-    let mut req = match maybe_forward(req).await {
-        ForwardOutcome::Forwarded(res) => {
-            return res;
-        }
-        ForwardOutcome::NotForwarded(req) => req,
-    };
-
-    let azs_req = json_request::<ShardsPreferredAzsRequest>(&mut req).await?;
-    let state = get_state(&req);
-
-    json_response(
-        StatusCode::OK,
-        state.service.update_shards_preferred_azs(azs_req).await?,
-    )
-}
-
 async fn handle_step_down(req: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::ControllerPeer)?;
 
@@ -2446,13 +2427,6 @@ pub fn make_router(
                 r,
                 handle_tenant_update_policy,
                 RequestName("control_v1_tenant_policy"),
-            )
-        })
-        .put("/control/v1/preferred_azs", |r| {
-            named_request_span(
-                r,
-                handle_update_preferred_azs,
-                RequestName("control_v1_preferred_azs"),
             )
         })
         .put("/control/v1/step_down", |r| {

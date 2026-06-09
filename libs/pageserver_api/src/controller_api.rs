@@ -1,5 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -59,8 +58,6 @@ pub struct NodeRegisterRequest {
     pub listen_http_port: u16,
     pub listen_https_port: Option<u16>,
 
-    pub availability_zone_id: AvailabilityZone,
-
     // Reachable IP address of the PS/SK registering, if known.
     pub node_ip_addr: Option<IpAddr>,
 }
@@ -77,26 +74,6 @@ pub struct NodeConfigureRequest {
 pub struct TenantPolicyRequest {
     pub placement: Option<PlacementPolicy>,
     pub scheduling: Option<ShardSchedulingPolicy>,
-}
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
-pub struct AvailabilityZone(pub String);
-
-impl Display for AvailabilityZone {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ShardsPreferredAzsRequest {
-    #[serde(flatten)]
-    pub preferred_az_ids: HashMap<TenantId, Option<AvailabilityZone>>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ShardsPreferredAzsResponse {
-    pub updated: Vec<TenantId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -158,8 +135,6 @@ pub struct NodeDescribeResponse {
     pub availability: NodeAvailabilityWrapper,
     pub scheduling: NodeSchedulingPolicy,
 
-    pub availability_zone_id: String,
-
     pub listen_http_addr: String,
     pub listen_http_port: u16,
     pub listen_https_port: Option<u16>,
@@ -189,8 +164,6 @@ pub struct TenantDescribeResponseShard {
     pub is_importing: bool,
 
     pub scheduling_policy: ShardSchedulingPolicy,
-
-    pub preferred_az_id: Option<String>,
 }
 
 /// Migration request for a given tenant shard to a given node.

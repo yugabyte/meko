@@ -39,7 +39,6 @@ pub struct WalReceiverConf {
     /// The Lsn lag to use to determine when the current connection is lagging to much behind and reconnect to the other one.
     pub max_lsn_wal_lag: NonZeroU64,
     pub auth_token: Option<Arc<String>>,
-    pub availability_zone: Option<String>,
     pub ingest_batch_size: u64,
     pub validate_wal_contiguity: bool,
 }

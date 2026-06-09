@@ -74,9 +74,6 @@ pub struct PageServerConf {
     /// Trusted root CA certificates to use in https APIs in PEM format.
     pub ssl_ca_certs: Vec<Pem>,
 
-    /// Current availability zone. Used for traffic metrics.
-    pub availability_zone: Option<String>,
-
     // Timeout when waiting for WAL receiver to catch up to an LSN given in a GetPage@LSN call.
     pub wait_lsn_timeout: Duration,
     // How long to wait for WAL redo to complete.
@@ -340,7 +337,6 @@ impl PageServerConf {
             ssl_cert_file,
             ssl_cert_reload_period,
             ssl_ca_file,
-            availability_zone,
             wait_lsn_timeout,
             wal_redo_timeout,
             superuser,
@@ -419,7 +415,6 @@ impl PageServerConf {
             ssl_key_file,
             ssl_cert_file,
             ssl_cert_reload_period,
-            availability_zone,
             wait_lsn_timeout,
             wal_redo_timeout,
             walredo_pool_size,

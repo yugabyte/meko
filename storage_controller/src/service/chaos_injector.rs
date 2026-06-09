@@ -194,14 +194,11 @@ impl ChaosInjector {
         }
 
         for victim in victims.into_iter() {
-            // Find a node in the same AZ as the shard, or if the shard has no AZ preference, which
-            // is not where they are currently attached.
+            // Find a node that is not where the shard is currently attached.
             let candidate_nodes = nodes
                 .values()
                 .filter(|node| {
-                    if let Some(preferred_az) = victim.preferred_az() {
-                        node.get_availability_zone_id() == preferred_az
-                    } else if let Some(attached) = *victim.intent.get_attached() {
+                    if let Some(attached) = *victim.intent.get_attached() {
                         node.get_id() != attached
                     } else {
                         true
@@ -210,9 +207,9 @@ impl ChaosInjector {
                 .collect::<Vec<_>>();
 
             let Some(victim_node) = candidate_nodes.choose(&mut rand::rng()) else {
-                // This can happen if e.g. we are in a small region with only one pageserver per AZ.
+                // This can happen if e.g. we are in a small region with only one pageserver.
                 tracing::info!(
-                    "no candidate nodes found for migrating shard {tenant_shard_id} within its home AZ",
+                    "no candidate nodes found for migrating shard {tenant_shard_id}",
                     tenant_shard_id = victim.tenant_shard_id
                 );
                 continue;
@@ -239,43 +236,14 @@ impl ChaosInjector {
         let mut inner = self.service.inner.write().unwrap();
         let (nodes, tenants, scheduler) = inner.parts_mut();
 
-        // Prefer to migrate tenants that are currently outside their home AZ.  This avoids the chaos injector
-        // continuously pushing tenants outside their home AZ: instead, we'll tend to cycle between picking some
-        // random tenants to move, and then on next chaos iteration moving them back, then picking some new
-        // random tenants on the next iteration.
-        let (out_of_home_az, in_home_az): (Vec<_>, Vec<_>) = tenants
-            .values()
-            .map(|shard| {
-                (
-                    shard.tenant_shard_id,
-                    shard.is_attached_outside_preferred_az(nodes),
-                )
-            })
-            .partition(|(_id, is_outside)| *is_outside);
-
-        let mut out_of_home_az: Vec<_> = out_of_home_az.into_iter().map(|(id, _)| id).collect();
-        let mut in_home_az: Vec<_> = in_home_az.into_iter().map(|(id, _)| id).collect();
-
-        let mut victims = Vec::with_capacity(batch_size);
-        if out_of_home_az.len() >= batch_size {
-            tracing::info!(
-                "Injecting chaos: found {batch_size} shards to migrate back to home AZ (total {} out of home AZ)",
-                out_of_home_az.len()
-            );
-
-            out_of_home_az.shuffle(&mut rand::rng());
-            victims.extend(out_of_home_az.into_iter().take(batch_size));
-        } else {
-            tracing::info!(
-                "Injecting chaos: found {} shards to migrate back to home AZ, picking {} random shards to migrate",
-                out_of_home_az.len(),
-                std::cmp::min(batch_size - out_of_home_az.len(), in_home_az.len())
-            );
-
-            victims.extend(out_of_home_az);
-            in_home_az.shuffle(&mut rand::rng());
-            victims.extend(in_home_az.into_iter().take(batch_size - victims.len()));
-        }
+        // Pick some random shards to migrate to their secondary location.
+        let mut victims: Vec<_> = tenants.values().map(|shard| shard.tenant_shard_id).collect();
+        victims.shuffle(&mut rand::rng());
+        victims.truncate(batch_size);
+        tracing::info!(
+            "Injecting chaos: picking {} random shards to migrate",
+            victims.len()
+        );
 
         for victim in victims {
             self.maybe_migrate_to_secondary(victim, nodes, tenants, scheduler);

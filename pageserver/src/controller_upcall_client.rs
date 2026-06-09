@@ -3,7 +3,7 @@ use std::net::IpAddr;
 
 use futures::Future;
 use pageserver_api::config::NodeMetadata;
-use pageserver_api::controller_api::{AvailabilityZone, NodeRegisterRequest};
+use pageserver_api::controller_api::NodeRegisterRequest;
 use pageserver_api::models::ShardImportStatus;
 use pageserver_api::upcall_api::{
     PutTimelineImportStatusRequest, ReAttachRequest, ReAttachResponse, ReAttachResponseTenant,
@@ -167,29 +167,6 @@ impl StorageControllerUpcallApi for StorageControllerUpcallClient {
                     // dump all metadata.
                     tracing::info!("Loaded node metadata: {m}");
 
-                    let az_id = {
-                        let az_id_from_metadata = m
-                            .other
-                            .get("availability_zone_id")
-                            .and_then(|jv| jv.as_str().map(|str| str.to_owned()));
-
-                        match az_id_from_metadata {
-                            Some(az_id) => Some(AvailabilityZone(az_id)),
-                            None => {
-                                tracing::warn!(
-                                    "metadata.json does not contain an 'availability_zone_id' field"
-                                );
-                                conf.availability_zone.clone().map(AvailabilityZone)
-                            }
-                        }
-                    };
-
-                    if az_id.is_none() {
-                        panic!(
-                            "Availablity zone id could not be inferred from metadata.json or pageserver config"
-                        );
-                    }
-
                     Some(NodeRegisterRequest {
                         node_id: conf.id,
                         listen_pg_addr: m.postgres_host,
@@ -200,7 +177,6 @@ impl StorageControllerUpcallApi for StorageControllerUpcallClient {
                         listen_http_port: m.http_port,
                         listen_https_port: m.https_port,
                         node_ip_addr: self.node_ip_addr,
-                        availability_zone_id: az_id.expect("Checked above"),
                     })
                 }
                 Err(e) => {

@@ -214,23 +214,6 @@ impl PageServerNode {
         );
         io::stdout().flush()?;
 
-        // If the config file we got as a CLI argument includes the `availability_zone`
-        // config, then use that to populate the `metadata.json` file for the pageserver.
-        // In production the deployment orchestrator does this for us.
-        let az_id = conf
-            .other
-            .get("availability_zone")
-            .map(|toml| {
-                let az_str = toml.to_string();
-                // Trim the (") chars from the toml representation
-                if az_str.starts_with('"') && az_str.ends_with('"') {
-                    az_str[1..az_str.len() - 1].to_string()
-                } else {
-                    az_str
-                }
-            })
-            .unwrap_or("local".to_string());
-
         let config = self
             .pageserver_init_make_toml(conf)
             .context("make pageserver toml")?;
@@ -304,10 +287,7 @@ impl PageServerNode {
                 http_host,
                 http_port,
                 https_port,
-                other: HashMap::from([(
-                    "availability_zone_id".to_string(),
-                    serde_json::json!(az_id),
-                )]),
+                other: HashMap::new(),
             })
             .unwrap(),
         )

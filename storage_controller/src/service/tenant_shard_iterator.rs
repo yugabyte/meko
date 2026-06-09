@@ -157,17 +157,14 @@ mod tests {
         let mut t_1_shards = make_test_tenant_with_id(
             TenantId::from_str("af0480929707ee75372337efaa5ecf96").unwrap(),
             PlacementPolicy::Attached(1),
-            None,
         );
         let t_2_shards = make_test_tenant_with_id(
             TenantId::from_str("bf0480929707ee75372337efaa5ecf96").unwrap(),
             PlacementPolicy::Attached(1),
-            None,
         );
         let mut t_3_shards = make_test_tenant_with_id(
             TenantId::from_str("cf0480929707ee75372337efaa5ecf96").unwrap(),
             PlacementPolicy::Attached(1),
-            None,
         );
 
         let t1_id = t_1_shards[0].tenant_shard_id;
@@ -181,7 +178,7 @@ mod tests {
         }
         tenants.insert(t_3_shards[0].tenant_shard_id, t_3_shards.pop().unwrap());
 
-        let nodes = make_test_nodes(3, &[]);
+        let nodes = make_test_nodes(3);
         let mut scheduler = Scheduler::new(nodes.values());
         let mut context = ScheduleContext::default();
         for shard in tenants.values_mut() {

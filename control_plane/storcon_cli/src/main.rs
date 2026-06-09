@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -6,10 +6,10 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use pageserver_api::controller_api::{
-    AvailabilityZone, MigrationConfig, NodeAvailabilityWrapper, NodeConfigureRequest,
+    MigrationConfig, NodeAvailabilityWrapper, NodeConfigureRequest,
     NodeDescribeResponse, NodeRegisterRequest, NodeSchedulingPolicy, NodeShardResponse,
     PlacementPolicy, SafekeeperDescribeResponse, SafekeeperSchedulingPolicyRequest,
-    ShardSchedulingPolicy, ShardsPreferredAzsRequest, ShardsPreferredAzsResponse,
+    ShardSchedulingPolicy,
     SkSchedulingPolicy, TenantCreateRequest, TenantDescribeResponse, TenantPolicyRequest,
     TenantShardMigrateRequest, TenantShardMigrateResponse, TimelineSafekeeperMigrateRequest,
 };
@@ -45,9 +45,6 @@ enum Command {
         listen_http_port: u16,
         #[arg(long)]
         listen_https_port: Option<u16>,
-
-        #[arg(long)]
-        availability_zone_id: String,
     },
 
     /// Modify a node's configuration in the storage controller
@@ -178,12 +175,6 @@ enum Command {
     TenantDescribe {
         #[arg(long)]
         tenant_id: TenantId,
-    },
-    TenantSetPreferredAz {
-        #[arg(long)]
-        tenant_id: TenantId,
-        #[arg(long)]
-        preferred_az: Option<String>,
     },
     /// Uncleanly drop a tenant from the storage controller: this doesn't delete anything from pageservers. Appropriate
     /// if you e.g. used `tenant-warmup` by mistake on a tenant ID that doesn't really exist, or is in some other region.
@@ -452,7 +443,6 @@ async fn main() -> anyhow::Result<()> {
             listen_http_addr,
             listen_http_port,
             listen_https_port,
-            availability_zone_id,
         } => {
             storcon_client
                 .dispatch::<_, ()>(
@@ -467,7 +457,6 @@ async fn main() -> anyhow::Result<()> {
                         listen_http_addr,
                         listen_http_port,
                         listen_https_port,
-                        availability_zone_id: AvailabilityZone(availability_zone_id),
                         node_ip_addr: None,
                     }),
                 )
@@ -506,12 +495,11 @@ async fn main() -> anyhow::Result<()> {
             resp.sort_by(|a, b| a.listen_http_addr.cmp(&b.listen_http_addr));
 
             let mut table = comfy_table::Table::new();
-            table.set_header(["Id", "Hostname", "AZ", "Scheduling", "Availability"]);
+            table.set_header(["Id", "Hostname", "Scheduling", "Availability"]);
             for node in resp {
                 table.add_row([
                     format!("{}", node.id),
                     node.listen_http_addr,
-                    node.availability_zone_id,
                     format!("{:?}", node.scheduling),
                     format!("{:?}", node.availability),
                 ]);
@@ -575,7 +563,6 @@ async fn main() -> anyhow::Result<()> {
             let mut table = comfy_table::Table::new();
             table.set_header([
                 "TenantId",
-                "Preferred AZ",
                 "ShardCount",
                 "StripeSize",
                 "Placement",
@@ -614,11 +601,6 @@ async fn main() -> anyhow::Result<()> {
                     let shard_zero = tenant.shards.into_iter().next().unwrap();
                     table.add_row([
                         format!("{}", tenant.tenant_id),
-                        shard_zero
-                            .preferred_az_id
-                            .as_ref()
-                            .cloned()
-                            .unwrap_or("".to_string()),
                         // yb-mode: always single-shard (count = 1).
                         "1".to_string(),
                         format!("{:?}", tenant.stripe_size),
@@ -775,14 +757,7 @@ async fn main() -> anyhow::Result<()> {
             println!("{table}");
             println!("Shards:");
             let mut table = comfy_table::Table::new();
-            table.set_header([
-                "Shard",
-                "Attached",
-                "Attached AZ",
-                "Secondary",
-                "Last error",
-                "status",
-            ]);
+            table.set_header(["Shard", "Attached", "Secondary", "Last error", "status"]);
             for shard in shards {
                 let secondary = shard
                     .node_secondary
@@ -815,75 +790,12 @@ async fn main() -> anyhow::Result<()> {
                     attached_node
                         .map(|n| format!("{} ({})", n.listen_http_addr, n.id))
                         .unwrap_or(String::new()),
-                    attached_node
-                        .map(|n| n.availability_zone_id.clone())
-                        .unwrap_or(String::new()),
                     secondary,
                     shard.last_error,
                     status,
                 ]);
             }
             println!("{table}");
-        }
-        Command::TenantSetPreferredAz {
-            tenant_id,
-            preferred_az,
-        } => {
-            // First learn about the tenant's shards
-            let describe_response = storcon_client
-                .dispatch::<(), TenantDescribeResponse>(
-                    Method::GET,
-                    format!("control/v1/tenant/{tenant_id}"),
-                    None,
-                )
-                .await?;
-
-            // Learn about nodes to validate the AZ ID
-            let nodes = storcon_client
-                .dispatch::<(), Vec<NodeDescribeResponse>>(
-                    Method::GET,
-                    "control/v1/node".to_string(),
-                    None,
-                )
-                .await?;
-
-            if let Some(preferred_az) = &preferred_az {
-                let azs = nodes
-                    .into_iter()
-                    .map(|n| (n.availability_zone_id))
-                    .collect::<HashSet<_>>();
-                if !azs.contains(preferred_az) {
-                    anyhow::bail!(
-                        "AZ {} not found on any node: known AZs are: {:?}",
-                        preferred_az,
-                        azs
-                    );
-                }
-            } else {
-                // Make it obvious to the user that since they've omitted an AZ, we're clearing it
-                eprintln!("Clearing preferred AZ for tenant {tenant_id}");
-            }
-
-            // Construct a request that modifies all the tenant's shards
-            let req = ShardsPreferredAzsRequest {
-                preferred_az_ids: describe_response
-                    .shards
-                    .into_iter()
-                    .map(|s| {
-                        (
-                            s.tenant_shard_id,
-                            preferred_az.clone().map(AvailabilityZone),
-                        )
-                    })
-                    .collect(),
-            };
-            storcon_client
-                .dispatch::<ShardsPreferredAzsRequest, ShardsPreferredAzsResponse>(
-                    Method::PUT,
-                    "control/v1/preferred_azs".to_string(),
-                    Some(req),
-                )
-                .await?;
         }
         Command::TenantDrop { tenant_id, unclean } => {
             if !unclean {
@@ -969,12 +881,11 @@ async fn main() -> anyhow::Result<()> {
             resp.sort_by(|a, b| a.listen_http_addr.cmp(&b.listen_http_addr));
 
             let mut table = comfy_table::Table::new();
-            table.set_header(["Id", "Hostname", "AZ", "Scheduling", "Availability"]);
+            table.set_header(["Id", "Hostname", "Scheduling", "Availability"]);
             for node in resp {
                 table.add_row([
                     format!("{}", node.id),
                     node.listen_http_addr,
-                    node.availability_zone_id,
                     format!("{:?}", node.scheduling),
                     format!("{:?}", node.availability),
                 ]);
