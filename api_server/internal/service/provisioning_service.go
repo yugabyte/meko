@@ -177,7 +177,6 @@ func (s *ProvisioningService) logLangfuseProvisioningDetails(
 			"project_id", projectKeys.ProjectID,
 			"project_name", projectKeys.ProjectName,
 			"project_public_key", projectKeys.PublicKey,
-			"project_secret_key", projectKeys.SecretKey,
 		)
 	}
 

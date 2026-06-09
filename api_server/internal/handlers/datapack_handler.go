@@ -89,6 +89,7 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 		h.langfuse.ProvisionForDatapack(account, resp.DatapackID, resp.Name)
 	}
 
+	redactCreateResponse(resp)
 	return ok(c, http.StatusCreated, resp)
 }
 
@@ -116,6 +117,7 @@ func (h *DatapackHandler) List(c echo.Context) error {
 	if datapacks == nil {
 		datapacks = []models.Datapack{}
 	}
+	redactDatapacks(datapacks)
 	return ok(c, http.StatusOK, datapacks)
 }
 
@@ -165,6 +167,7 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 		}
 	}
 
+	redactDatapack(dp)
 	return ok(c, http.StatusOK, dp)
 }
 
@@ -286,6 +289,7 @@ func (h *DatapackHandler) Status(c echo.Context) error {
 			"INTERNAL_ERROR", err.Error())
 	}
 
+	redactDatapackStatus(st)
 	return ok(c, http.StatusOK, st)
 }
 

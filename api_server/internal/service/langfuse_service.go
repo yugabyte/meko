@@ -659,7 +659,6 @@ func (s *LangfuseService) ensureProjectMapping(
 		"project_id", projectResp.ID,
 		"project_name", projectResp.Name,
 		"project_public_key", keyResp.PublicKey,
-		"project_secret_key", keyResp.SecretKey,
 	)
 
 	if err := s.repo.UpsertProjectMapping(datapackID, projectResp.ID, projectResp.Name, keyResp.PublicKey, keyResp.SecretKey); err != nil {

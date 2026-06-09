@@ -330,6 +330,8 @@ func DatapackProvisionStatusHandler(dpRepo *repository.DatapackRepo) echo.Handle
 		}
 		details.MCPAPIKey = token
 
+		redactProvisionDetails(details)
+
 		return ok(c, http.StatusOK, details)
 	}
 }
