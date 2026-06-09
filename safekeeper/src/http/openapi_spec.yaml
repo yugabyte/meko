@@ -182,41 +182,6 @@ paths:
         default:
           $ref: "#/components/responses/GenericError"
 
-  /v1/record_safekeeper_info/{tenant_id}/{timeline_id}:
-    parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
-
-    post:
-      tags:
-      - "Tests"
-      summary: Used only in tests to hand craft required data
-      description: ""
-      operationId: v1RecordSafekeeperInfo
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SkTimelineInfo"
-      responses:
-        "200":
-          description: Timeline info posted
-          # TODO: return timeline info?
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
-        default:
-          $ref: "#/components/responses/GenericError"
-
 
 components:
   securitySchemes:
@@ -257,33 +222,6 @@ components:
           type: string
           format: hex
         until_lsn:
-          type: string
-
-    SkTimelineInfo:
-      type: object
-      required:
-        - last_log_term
-        - flush_lsn
-        - commit_lsn
-        - backup_lsn
-        - remote_consistent_lsn
-        - peer_horizon_lsn
-        - safekeeper_connstr
-      properties:
-        last_log_term:
-          type: integer
-          minimum: 0
-        flush_lsn:
-          type: string
-        commit_lsn:
-          type: string
-        backup_lsn:
-          type: string
-        remote_consistent_lsn:
-          type: string
-        peer_horizon_lsn:
-          type: string
-        safekeeper_connstr:
           type: string
 
     #

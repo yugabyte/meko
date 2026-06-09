@@ -208,43 +208,6 @@ pub struct TimelineDeleteResult {
 
 pub type TenantDeleteResult = std::collections::HashMap<String, TimelineDeleteResult>;
 
-fn lsn_invalid() -> Lsn {
-    Lsn::INVALID
-}
-
-/// Data about safekeeper's timeline, mirrors broker.proto.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SkTimelineInfo {
-    /// Term.
-    pub term: Option<u64>,
-    /// Term of the last entry.
-    pub last_log_term: Option<u64>,
-    /// LSN of the last record.
-    #[serde(default = "lsn_invalid")]
-    pub flush_lsn: Lsn,
-    /// Up to which LSN safekeeper regards its WAL as committed.
-    #[serde(default = "lsn_invalid")]
-    pub commit_lsn: Lsn,
-    /// LSN up to which safekeeper has backed WAL.
-    #[serde(default = "lsn_invalid")]
-    pub backup_lsn: Lsn,
-    /// LSN of last checkpoint uploaded by pageserver.
-    #[serde(default = "lsn_invalid")]
-    pub remote_consistent_lsn: Lsn,
-    #[serde(default = "lsn_invalid")]
-    pub local_start_lsn: Lsn,
-    /// A connection string to use for WAL receiving.
-    #[serde(default)]
-    pub safekeeper_connstr: Option<String>,
-    #[serde(default)]
-    pub http_connstr: Option<String>,
-    #[serde(default)]
-    pub https_connstr: Option<String>,
-    // Minimum of all active RO replicas flush LSN
-    #[serde(default = "lsn_invalid")]
-    pub standby_horizon: Lsn,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SafekeeperUtilization {
     pub timeline_count: u64,
