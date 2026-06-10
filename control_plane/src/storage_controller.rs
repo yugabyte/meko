@@ -402,9 +402,7 @@ impl StorageController {
                 let is_dup = e.as_db_error().is_some_and(|d| {
                     d.code() == &tokio_postgres::error::SqlState::DUPLICATE_DATABASE
                 });
-                if is_dup {
-                    println!("Database '{name}' already exists");
-                } else {
+                if !is_dup {
                     return Err(
                         anyhow::Error::from(e).context(format!("creating database '{name}'"))
                     );
