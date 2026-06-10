@@ -78,9 +78,22 @@ Consequences elsewhere:
   `last_record_lsn` from the observed `TimelineInfo`.
 - `yb_light_local start` skips a pageserver whose toml has no
   identity yet; `tenant create` bakes the identity in and starts it.
-- `timeline create` / `timeline branch` CLI return errors until
-  per-endpoint pageserver orchestration lands (a second timeline
-  needs a second pageserver process).
+- `timeline branch` provisions a NEW pageserver + safekeeper pair for
+  the branch: it allocates the next node ids/ports, clones the
+  ancestor pageserver's toml (patching listen addresses and
+  `safekeeper_pg_addr`), bakes the branch identity +
+  `[timeline_init] mode="branch"`, creates the timeline on the new
+  safekeeper at the branch LSN, and starts both. The default branch
+  LSN is the ancestor **safekeeper's `flush_lsn`** (durable WAL end),
+  not the ancestor pageserver's `last_record_lsn` — the latter is an
+  ingest position that can lag a just-committed transaction; the
+  branch pageserver's startup retry waits for the ancestor's
+  `consistent_lsn` to catch up before writing the branch row. Endpoints resolve
+  their pageserver and safekeeper from the timeline they sit on
+  (`LocalEnv::pageserver_conf_for_timeline` /
+  `safekeepers_for_timeline`) — the storage_ctl `tenant_locate` path
+  is no longer used. `timeline create` (a second root timeline) still
+  errors; create a new tenant instead.
 
 ## Lineage-aware reads (branches)
 
@@ -94,10 +107,15 @@ for the process lifetime. Every PageStore read path (`read_chain`,
 `scan_range`, `read_slru_chain`, `scan_slru_range`, `read_meta`,
 `scan_meta_range`) has a `*_lineage` variant that walks the segments
 nearest-first, capping each segment's read LSN at
-`min(target_lsn, cap)`, and stops as soon as the chain is anchored
-(`will_init`) / the meta key is found. The `PageWriter` passes the
-lineage through everywhere, including the materialiser's
-`read_chain_durable`.
+`min(target_lsn, cap)`. The walk stops only at an anchor (`will_init`)
+whose LSN is **at or above the next segment's cap** (for meta: once
+the key is found). An anchor *below* the cap — e.g. a materialiser
+copy-up image — does not end the walk: ancestor deltas in
+`(anchor_lsn, cap]` still apply and must be layered on top. The
+`PageWriter` passes the lineage through everywhere, including the
+materialiser's `read_chain_durable`, and its cache fast paths only
+short-circuit when the cached anchor covers the lineage the same way
+(`cache_anchor_covers_lineage`).
 
 Iterative per-segment queries (not one UNION ALL) on purpose:
 `timeline_id` is in the hash partition key, so segments live on

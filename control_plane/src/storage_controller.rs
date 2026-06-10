@@ -1205,6 +1205,23 @@ impl StorageController {
             .await
     }
 
+    /// Register a launcher-created timeline (branch) in the storage
+    /// controller's `timelines` table.
+    #[instrument(skip(self))]
+    pub async fn timeline_register(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        req: pageserver_api::controller_api::TimelineRegisterRequest,
+    ) -> anyhow::Result<()> {
+        self.dispatch::<_, ()>(
+            Method::POST,
+            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/register"),
+            Some(req),
+        )
+        .await
+    }
+
     pub async fn set_timeline_branch_name(
         &self,
         tenant_id: TenantId,

@@ -332,8 +332,12 @@ lives in YB, layering Paxos on top of YB would be double consensus — two
 protocols racing on different LSN views, harder semantics, no extra
 safety.
 
-The yb-light build therefore **requires exactly one safekeeper** when
-`--wal-yb-config` is set. The enforcement is in two places:
+The yb-light build therefore **requires exactly one safekeeper per
+timeline** when `--wal-yb-config` is set (the membership configuration
+must have a single member). Multiple safekeeper *processes* may run on
+a host — the per-endpoint topology gives each branch its own dedicated
+safekeeper — but each timeline's membership is always one safekeeper.
+The enforcement is in two places:
 
 - **Boot**: `SharedState::restore` loads the control file, and if YB WAL
   mode is on (`SafeKeeperConf::is_yb_wal_mode()`), calls

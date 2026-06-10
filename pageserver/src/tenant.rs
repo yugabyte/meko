@@ -19,7 +19,7 @@ use std::fs;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use futures::StreamExt;
@@ -1033,17 +1033,37 @@ impl TenantShard {
                         %ancestor_lsn,
                         "creating branch timeline row"
                     );
-                    let row = self
-                        .fpu_page_store
-                        .create_branch_row(
-                            self.id,
-                            identity.timeline_id,
-                            *ancestor_timeline_id,
-                            *ancestor_lsn,
-                            generation_i32,
-                        )
-                        .await
-                        .context("create branch timeline row")?;
+                    // The launcher picks the branch LSN from the
+                    // ancestor's last_record_lsn, which can run ahead
+                    // of the ancestor's DURABLE consistent_lsn by up
+                    // to one flush interval (5 s default). Retry the
+                    // durability validation until it catches up;
+                    // other validation failures are fatal.
+                    let deadline =
+                        tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+                    let row = loop {
+                        match self
+                            .fpu_page_store
+                            .create_branch_row(
+                                self.id,
+                                identity.timeline_id,
+                                *ancestor_timeline_id,
+                                *ancestor_lsn,
+                                generation_i32,
+                            )
+                            .await
+                        {
+                            Ok(row) => break row,
+                            Err(e)
+                                if format!("{e:#}").contains("not yet durable")
+                                    && tokio::time::Instant::now() < deadline =>
+                            {
+                                info!("branch point not yet durable on ancestor, retrying: {e:#}");
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            }
+                            Err(e) => return Err(e.context("create branch timeline row")),
+                        }
+                    };
                     let metadata = synth_timeline_metadata_from_row(&row)?;
                     timeline_ancestors.insert(identity.timeline_id, metadata);
                 }
@@ -1056,8 +1076,10 @@ impl TenantShard {
         let gc_blocks: HashMap<TimelineId, enumset::EnumSet<gc_block::GcBlockingReason>> =
             HashMap::new();
 
-        let sorted_timelines = tree_sort_timelines(timeline_ancestors, |m| m.ancestor_timeline())?;
-        for (timeline_id, remote_metadata) in sorted_timelines {
+        // Single-timeline pageserver: at most one timeline loads here,
+        // and a branch's ancestor is served by a DIFFERENT process —
+        // no in-process ancestor ordering to respect.
+        for (timeline_id, remote_metadata) in timeline_ancestors {
             // TODO again handle early failure
             let effect = self
                 .load_remote_timeline(
@@ -1635,57 +1657,6 @@ impl TenantShard {
         self.shard_identity
     }
 
-}
-
-/// Given a Vec of timelines and their ancestors (timeline_id, ancestor_id),
-/// perform a topological sort, so that the parent of each timeline comes
-/// before the children.
-/// E extracts the ancestor from T
-/// This allows for T to be different. It can be TimelineMetadata, can be Timeline itself, etc.
-fn tree_sort_timelines<T, E>(
-    timelines: HashMap<TimelineId, T>,
-    extractor: E,
-) -> anyhow::Result<Vec<(TimelineId, T)>>
-where
-    E: Fn(&T) -> Option<TimelineId>,
-{
-    let mut result = Vec::with_capacity(timelines.len());
-
-    let mut now = Vec::with_capacity(timelines.len());
-    // (ancestor, children)
-    let mut later: HashMap<TimelineId, Vec<(TimelineId, T)>> =
-        HashMap::with_capacity(timelines.len());
-
-    for (timeline_id, value) in timelines {
-        if let Some(ancestor_id) = extractor(&value) {
-            let children = later.entry(ancestor_id).or_default();
-            children.push((timeline_id, value));
-        } else {
-            now.push((timeline_id, value));
-        }
-    }
-
-    while let Some((timeline_id, metadata)) = now.pop() {
-        result.push((timeline_id, metadata));
-        // All children of this can be loaded now
-        if let Some(mut children) = later.remove(&timeline_id) {
-            now.append(&mut children);
-        }
-    }
-
-    // All timelines should be visited now. Unless there were timelines with missing ancestors.
-    if !later.is_empty() {
-        for (missing_id, orphan_ids) in later {
-            for (orphan_id, _) in orphan_ids {
-                error!(
-                    "could not load timeline {orphan_id} because its ancestor timeline {missing_id} could not be loaded"
-                );
-            }
-        }
-        bail!("could not load tenant because some timelines are missing ancestors");
-    }
-
-    Ok(result)
 }
 
 impl TenantShard {

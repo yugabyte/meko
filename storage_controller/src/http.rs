@@ -23,6 +23,7 @@ use pageserver_api::controller_api::{
     NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, SafekeeperSchedulingPolicyRequest,
     SetTimelineBranchNameRequest, TenantCreateRequest,
     TenantPolicyRequest, TenantShardMigrateRequest, TimelineBranchName, TimelineImportRequest,
+ TimelineRegisterRequest,
 };
 use pageserver_api::models::{
     DetachBehavior, LsnLeaseRequest, TenantConfigPatchRequest, TenantConfigRequest,
@@ -884,6 +885,26 @@ async fn handle_set_timeline_branch_name(
 
     service
         .set_timeline_branch_name(tenant_id, timeline_id, body.branch_name)
+        .await?;
+    json_response(StatusCode::OK, ())
+}
+
+async fn handle_timeline_register(
+    service: Arc<Service>,
+    req: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+
+    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let mut req = match maybe_forward(req).await {
+        ForwardOutcome::Forwarded(res) => return res,
+        ForwardOutcome::NotForwarded(req) => req,
+    };
+    let body = json_request::<TimelineRegisterRequest>(&mut req).await?;
+
+    service
+        .timeline_register(tenant_id, timeline_id, body.start_lsn, body.sk_set)
         .await?;
     json_response(StatusCode::OK, ())
 }
@@ -2558,6 +2579,16 @@ pub fn make_router(
                     r,
                     handle_set_timeline_branch_name,
                     RequestName("v1_set_timeline_branch_name"),
+                )
+            },
+        )
+        .post(
+            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/register",
+            |r| {
+                tenant_service_handler(
+                    r,
+                    handle_timeline_register,
+                    RequestName("v1_timeline_register"),
                 )
             },
         )

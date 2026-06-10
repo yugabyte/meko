@@ -596,6 +596,18 @@ pub struct SetTimelineBranchNameRequest {
     pub branch_name: Option<String>,
 }
 
+/// Register a launcher-created timeline in the storage controller's
+/// `timelines` table (per-endpoint topology: the launcher provisions
+/// the branch's pageserver + safekeeper itself and reports the result
+/// here for cluster bookkeeping — branch names, deletion flows).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct TimelineRegisterRequest {
+    /// The timeline's start LSN (branch point for branches).
+    pub start_lsn: Lsn,
+    /// Safekeeper node ids serving this timeline.
+    pub sk_set: Vec<NodeId>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TimelineBranchName {
     pub tenant_id: TenantId,

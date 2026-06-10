@@ -271,6 +271,12 @@ pub struct PageServerConf {
     pub http_auth_type: AuthType,
     pub grpc_auth_type: AuthType,
     pub no_sync: bool,
+    /// The single (tenant, timeline) this pageserver serves, read from
+    /// the `tenant_id` / `timeline_id` keys of its `pageserver.toml`.
+    /// `None` until the launcher assigns one (`tenant create` /
+    /// `timeline branch`).
+    pub tenant_id: Option<TenantId>,
+    pub timeline_id: Option<TimelineId>,
 }
 
 impl Default for PageServerConf {
@@ -285,6 +291,8 @@ impl Default for PageServerConf {
             http_auth_type: AuthType::Trust,
             grpc_auth_type: AuthType::Trust,
             no_sync: false,
+            tenant_id: None,
+            timeline_id: None,
         }
     }
 }
@@ -341,6 +349,8 @@ impl From<&YbLightLocalInitPageserverConf> for PageServerConf {
             grpc_auth_type: *grpc_auth_type,
             http_auth_type: *http_auth_type,
             no_sync: *no_sync,
+            tenant_id: None,
+            timeline_id: None,
         }
     }
 }
@@ -366,6 +376,10 @@ pub struct SafekeeperConf {
     /// `wal_yb_config`. `Some(0)` disables the cache; `None` lets the
     /// safekeeper apply its built-in default.
     pub wal_cache_size_mib: Option<u32>,
+    /// The timeline this safekeeper is dedicated to (per-endpoint
+    /// safekeeper topology). `None` for the legacy/main safekeeper
+    /// that serves the initial timeline.
+    pub timeline_id: Option<TimelineId>,
 }
 
 impl Default for SafekeeperConf {
@@ -381,6 +395,7 @@ impl Default for SafekeeperConf {
             listen_addr: None,
             wal_yb_config: None,
             wal_cache_size_mib: None,
+            timeline_id: None,
         }
     }
 }
@@ -415,6 +430,35 @@ impl SafekeeperConf {
     /// it is configured.
     pub fn get_compute_port(&self) -> u16 {
         self.pg_tenant_only_port.unwrap_or(self.pg_port)
+    }
+}
+
+impl LocalEnv {
+    /// The pageserver dedicated to `timeline_id` (per-endpoint pageserver
+    /// topology: one pageserver process per timeline, identity baked into
+    /// its `pageserver.toml`).
+    pub fn pageserver_conf_for_timeline(&self, timeline_id: TimelineId) -> Option<&PageServerConf> {
+        self.pageservers
+            .iter()
+            .find(|ps| ps.timeline_id == Some(timeline_id))
+    }
+
+    /// The safekeepers serving `timeline_id`: the dedicated one if
+    /// provisioned, otherwise the legacy set (safekeepers with no
+    /// `timeline_id`, i.e. the main timeline's).
+    pub fn safekeepers_for_timeline(&self, timeline_id: TimelineId) -> Vec<&SafekeeperConf> {
+        let dedicated: Vec<&SafekeeperConf> = self
+            .safekeepers
+            .iter()
+            .filter(|sk| sk.timeline_id == Some(timeline_id))
+            .collect();
+        if !dedicated.is_empty() {
+            return dedicated;
+        }
+        self.safekeepers
+            .iter()
+            .filter(|sk| sk.timeline_id.is_none())
+            .collect()
     }
 }
 
@@ -709,6 +753,10 @@ impl LocalEnv {
                     grpc_auth_type: AuthType,
                     #[serde(default)]
                     no_sync: bool,
+                    #[serde(default)]
+                    tenant_id: Option<TenantId>,
+                    #[serde(default)]
+                    timeline_id: Option<TimelineId>,
                 }
                 let config_toml_path = dentry.path().join("pageserver.toml");
                 let config_toml: PageserverConfigTomlSubset = toml_edit::de::from_str(
@@ -735,6 +783,8 @@ impl LocalEnv {
                     http_auth_type,
                     grpc_auth_type,
                     no_sync,
+                    tenant_id,
+                    timeline_id,
                 } = config_toml;
                 let IdentityTomlSubset {
                     id: identity_toml_id,
@@ -755,6 +805,8 @@ impl LocalEnv {
                     http_auth_type,
                     grpc_auth_type,
                     no_sync,
+                    tenant_id,
+                    timeline_id,
                 };
                 pageservers.push(conf);
             }

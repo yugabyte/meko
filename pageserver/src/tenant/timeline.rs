@@ -168,8 +168,12 @@ pub struct Timeline {
     applied_lsn: AtomicLsn,
 
     // Parent timeline that this timeline was branched from, and the LSN
-    // of the branch point.
+    // of the branch point. The Arc link is best-effort (present only in
+    // multi-timeline test setups); the id comes from the persisted
+    // metadata and is authoritative — a branch's ancestor is served by
+    // a different pageserver process and reached via lineage reads.
     ancestor_timeline: Option<Arc<Timeline>>,
+    ancestor_timeline_id: Option<TimelineId>,
     ancestor_lsn: Lsn,
 
     pub(crate) metrics: Arc<TimelineMetrics>,
@@ -683,9 +687,7 @@ impl Timeline {
 
     /// Get the ancestor's timeline id
     pub(crate) fn get_ancestor_timeline_id(&self) -> Option<TimelineId> {
-        self.ancestor_timeline
-            .as_ref()
-            .map(|ancestor| ancestor.timeline_id)
+        self.ancestor_timeline_id
     }
 
     /// Get the bytes written since the PITR cutoff on this branch, and
@@ -2042,6 +2044,7 @@ impl Timeline {
                 applied_lsn: AtomicLsn::new(disk_consistent_lsn.0),
 
                 ancestor_timeline: ancestor,
+                ancestor_timeline_id: metadata.ancestor_timeline(),
                 ancestor_lsn: metadata.ancestor_lsn(),
 
                 metrics,

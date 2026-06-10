@@ -65,6 +65,45 @@ multi-tenant/multi-timeline machinery. Design + stage breakdown in
   remnants, archival checks, set_broken, gc_block summary/insert/
   remove, collect_keyspace, ancestor_timeline accessor, etc.
 
+## Landed (per-endpoint topology — `timeline branch` end-to-end)
+
+- `timeline branch` provisions a dedicated pageserver + safekeeper
+  pair per branch: next node ids, ports offset from the lowest-id
+  node's, ancestor's `pageserver.toml` cloned + patched
+  (`PageServerNode::initialize_from_template`), branch identity +
+  `[timeline_init] mode="branch"` baked, SK timeline created at the
+  branch LSN (single-member mconf), both processes started, Active
+  polled.
+- `LocalEnv` carries per-node timeline identities
+  (`PageServerConf.{tenant_id,timeline_id}` read from
+  `pageserver.toml`, `SafekeeperConf.timeline_id` persisted in
+  `.yb_light/config`) with `pageserver_conf_for_timeline` /
+  `safekeepers_for_timeline` lookups.
+- Endpoints resolve PS conn-info and `neon.safekeepers` from their
+  timeline's dedicated pair; storage_ctl `tenant_locate` is unused.
+- e2e: `test/e2e/fast/branch-endpoint.sh` — branch endpoint reads
+  pre-branch data via lineage, writes isolated both directions,
+  survives a branch-pageserver restart. Uses `VACUUM FREEZE` on the
+  seed to sidestep the pre-existing task-24 CLOG hole.
+- Branch-point fix found by the e2e test: the default branch LSN is
+  the ancestor safekeeper's `flush_lsn` (durable WAL end), not the
+  ancestor pageserver's `last_record_lsn` — the PS ingest position
+  lags the compute's flushed WAL, so branching there right after a
+  commit cut the seed transaction out of the branch (the branch saw a
+  consistent-but-mid-transaction snapshot: table present, 0 rows).
+- Lineage correctness fix found by the e2e test: the chain walk must
+  only stop at an own-segment anchor that sits AT OR ABOVE the next
+  segment's cap — a materialiser copy-up image below the cap must
+  still have ancestor deltas in `(anchor_lsn, cap]` layered on top
+  (`read_chain_lineage`, `read_slru_chain_lineage`, and the
+  PageWriter cache fast-path gate `cache_anchor_covers_lineage`).
+  Regression test:
+  `read_chain_lineage_layers_ancestor_deltas_above_sub_cap_anchor`.
+  NB: a branch whose pageserver served stale reads before this fix
+  may have flushed FPIs of stale pages into its own timeline
+  (post-cap own images) — such branches are poisoned and must be
+  recreated; only branches created with the fix are sound.
+
 ## Remaining (cosmetic, future)
 
 - timelines `HashMap` → single `Arc<Timeline>` field +
@@ -77,8 +116,6 @@ multi-tenant/multi-timeline machinery. Design + stage breakdown in
 
 ## Deferred (future tasks)
 
-- Per-endpoint pageserver/safekeeper orchestration (multi-PS ports,
-  datadirs, `timeline branch` end-to-end).
 - GC ancestor-pin enforcement: ancestor pruning must respect
   `min(child.ancestor_lsn)` — an ancestor row at `lsn ≤ cap` may be a
   branch's only anchor source (noted in `7_gc.md`).

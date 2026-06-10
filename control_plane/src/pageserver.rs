@@ -257,6 +257,86 @@ impl PageServerNode {
         self.merge_config_fragment(fragment)
     }
 
+    /// Provision a NEW pageserver datadir by cloning `template`'s
+    /// `pageserver.toml` and patching the per-node bits (listen
+    /// addresses, safekeeper address). The timeline identity is NOT
+    /// set here — the caller bakes it via
+    /// [`Self::set_timeline_identity`] before starting the process.
+    pub fn initialize_from_template(
+        &self,
+        template: &PageServerNode,
+        safekeeper_pg_addr: &str,
+    ) -> anyhow::Result<()> {
+        let datadir = self.repo_path();
+        std::fs::create_dir_all(&datadir)
+            .with_context(|| format!("create pageserver datadir {datadir:?}"))?;
+        let template_toml_path = template.repo_path().join("pageserver.toml");
+        let template_toml = std::fs::read_to_string(&template_toml_path)
+            .with_context(|| format!("read template {template_toml_path:?}"))?;
+        let mut doc = template_toml
+            .parse::<toml_edit::DocumentMut>()
+            .with_context(|| format!("parse template {template_toml_path:?}"))?;
+
+        doc.insert(
+            "listen_pg_addr",
+            toml_edit::value(self.conf.listen_pg_addr.clone()),
+        );
+        doc.insert(
+            "listen_http_addr",
+            toml_edit::value(self.conf.listen_http_addr.clone()),
+        );
+        match &self.conf.listen_grpc_addr {
+            Some(addr) => {
+                doc.insert("listen_grpc_addr", toml_edit::value(addr.clone()));
+            }
+            None => {
+                doc.remove("listen_grpc_addr");
+            }
+        }
+        match &self.conf.listen_https_addr {
+            Some(addr) => {
+                doc.insert("listen_https_addr", toml_edit::value(addr.clone()));
+            }
+            None => {
+                doc.remove("listen_https_addr");
+            }
+        }
+        doc.insert(
+            "safekeeper_pg_addr",
+            toml_edit::value(safekeeper_pg_addr.to_string()),
+        );
+        // Strip any identity inherited from the template: this node
+        // serves its own timeline, assigned by the caller.
+        for key in ["tenant_id", "timeline_id", "generation", "timeline_init"] {
+            doc.remove(key);
+        }
+
+        let config_file_path = datadir.join("pageserver.toml");
+        let mut config_file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&config_file_path)
+            .with_context(|| format!("open pageserver toml for write: {config_file_path:?}"))?;
+        config_file
+            .write_all(doc.to_string().as_bytes())
+            .context("write pageserver toml")?;
+        drop(config_file);
+
+        let identity_file_path = datadir.join("identity.toml");
+        let identity_toml = self.pageserver_make_identity_toml(self.conf.id);
+        std::fs::write(&identity_file_path, identity_toml.to_string())
+            .with_context(|| format!("write identity toml: {identity_file_path:?}"))?;
+
+        if self.env.use_local_tls {
+            self.env.generate_ssl_cert(
+                datadir.join("server.crt").as_path(),
+                datadir.join("server.key").as_path(),
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Merge top-level keys of `fragment` into `pageserver.toml`,
     /// overwriting existing values.
     fn merge_config_fragment(&self, fragment: toml_edit::DocumentMut) -> anyhow::Result<()> {

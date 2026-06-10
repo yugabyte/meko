@@ -1314,7 +1314,18 @@ impl PageStore {
     ) -> Result<Vec<Arc<PageRow>>> {
         let mut chain: Vec<Arc<PageRow>> = Vec::new();
         for seg in lineage {
-            if chain.last().is_some_and(|r| r.will_init) {
+            // Skip this (and every deeper) segment only when the chain
+            // is already anchored AT OR ABOVE the segment's cap: the
+            // segment's rows are all ≤ cap, so none can sit above the
+            // anchor. An anchor BELOW the cap does NOT suffice — a
+            // materialiser copy-up image lands in the descendant at
+            // its chain-head LSN, which can be below the ancestor's
+            // head at the cap, and the ancestor deltas in
+            // (anchor_lsn, cap] must still be layered on top.
+            if chain
+                .iter()
+                .any(|r| r.will_init && r.lsn >= seg.cap_lsn)
+            {
                 break;
             }
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
@@ -1322,10 +1333,11 @@ impl PageStore {
             chain.extend(rows);
         }
         if lineage.len() > 1 {
-            // A copy-up image in the descendant can tie an ancestor
-            // row's LSN at the branch boundary. Re-sort (image first
-            // on ties), dedup by LSN, and trim at the first anchor —
-            // same blend rules as PageWriter's in-RAM merge.
+            // Cross-segment rows can interleave (an ancestor delta
+            // above a descendant copy-up image) and tie at the branch
+            // boundary. Re-sort (image first on ties), dedup by LSN,
+            // and trim at the first anchor — same blend rules as
+            // PageWriter's in-RAM merge.
             chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
             chain.dedup_by(|a, b| a.lsn == b.lsn);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
@@ -1394,7 +1406,12 @@ impl PageStore {
     ) -> Result<Vec<SlruPageRow>> {
         let mut chain: Vec<SlruPageRow> = Vec::new();
         for seg in lineage {
-            if chain.last().is_some_and(|r| r.will_init) {
+            // See read_chain_lineage: an anchor below this segment's
+            // cap doesn't cover the segment's rows above it.
+            if chain
+                .iter()
+                .any(|r| r.will_init && r.lsn >= seg.cap_lsn)
+            {
                 break;
             }
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
@@ -3404,6 +3421,81 @@ mod tests {
             chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
             vec![40, 20, 10],
             "ancestor row at lsn 30 (> branch point 25) must be excluded"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Regression (task 22 branch debugging): a materialiser copy-up
+    /// image lands in the DESCENDANT at its chain-head LSN, which can
+    /// be BELOW the ancestor's head at the branch cap. The walk must
+    /// still descend and layer the ancestor deltas in
+    /// (anchor_lsn, cap] on top of the copy-up anchor — stopping at
+    /// the own-segment anchor loses them (observed as a branch
+    /// serving stale pg_class/heap pages).
+    #[tokio::test]
+    async fn read_chain_lineage_layers_ancestor_deltas_above_sub_cap_anchor() {
+        let (store, schema) = make_store("lin_subcap").await;
+        let tenant = rand_tenant();
+        let anc = rand_timeline();
+        let child = rand_timeline();
+        let k = page_key(1663, 5, 16384, 0, 7);
+
+        store
+            .put_pages(
+                tenant,
+                anc,
+                &[
+                    page_row(k.clone(), 10, true, true, b"anc-img"),
+                    page_row(k.clone(), 20, false, false, b"anc-delta-A"),
+                    // deltas BETWEEN the copy-up anchor (25) and the cap (40)
+                    page_row(k.clone(), 30, false, false, b"anc-delta-B"),
+                    page_row(k.clone(), 38, false, false, b"anc-delta-C"),
+                    // diverged past the cap — must stay invisible
+                    page_row(k.clone(), 50, false, false, b"anc-diverged"),
+                ],
+            )
+            .await
+            .unwrap();
+        // Copy-up image in the child at LSN 25 — below the cap.
+        store
+            .put_pages(
+                tenant,
+                child,
+                &[page_row(k.clone(), 25, true, true, b"copy-up-img")],
+            )
+            .await
+            .unwrap();
+
+        let lineage = lineage2(child, anc, 40);
+        let chain = store
+            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(
+            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![38, 30, 25],
+            "ancestor deltas above the sub-cap copy-up anchor must be layered on top"
+        );
+        assert!(chain[2].is_image, "anchored on the copy-up image");
+
+        // An own anchor AT or ABOVE the cap covers everything — the
+        // walk must not descend (fast path preserved).
+        store
+            .put_pages(
+                tenant,
+                child,
+                &[page_row(k.clone(), 45, true, true, b"post-cap-img")],
+            )
+            .await
+            .unwrap();
+        let chain = store
+            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(
+            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![45],
+            "post-cap own anchor shadows the whole ancestor history"
         );
         drop_schema(&store, &schema).await;
     }

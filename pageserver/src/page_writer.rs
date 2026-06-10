@@ -843,6 +843,19 @@ impl PageWriter {
                 .is_some_and(|r| r.lsn <= self.lineage[1].cap_lsn)
     }
 
+    /// Whether a cache-only (own-timeline) chain is self-sufficient
+    /// under lineage: its anchor must sit at or above the branch cap,
+    /// otherwise ancestor rows in (anchor_lsn, cap] may exist that the
+    /// cache cannot know about.
+    fn cache_anchor_covers_lineage(&self, chain: &[Arc<PageRow>]) -> bool {
+        if self.lineage.len() <= 1 {
+            return true;
+        }
+        chain
+            .last()
+            .is_some_and(|r| r.will_init && r.lsn >= self.lineage[1].cap_lsn)
+    }
+
     pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<Arc<PageRow>>> {
         let key_bytes = key_to_bytes(key);
         // Cache-only fast path: if the cache holds a complete chain
@@ -851,8 +864,16 @@ impl PageWriter {
         // common case for hot pages after the materialiser has run.
         // Lock-free against put/flush/materialiser-install for
         // different keys — only the key's DashMap shard.
+        //
+        // Lineage caveat: the cache holds only OWN-timeline rows. A
+        // cached anchor BELOW the branch cap (a materialiser copy-up
+        // installed at its chain-head LSN) does not cover ancestor
+        // deltas in (anchor_lsn, cap] — fall through to the lineage
+        // walk in that case.
         if let Some(chain) = self.pages.lookup_chain_if_complete(&key_bytes, target_lsn) {
-            return Ok(chain);
+            if self.cache_anchor_covers_lineage(&chain) {
+                return Ok(chain);
+            }
         }
         let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain(&key_bytes, target_lsn);
         let persisted = self
@@ -894,12 +915,14 @@ impl PageWriter {
         let key_bytes = key_to_bytes(key);
         // Cache-only fast path (durable-only variant for the
         // materialiser): same completeness criterion as `read_chain`,
-        // but restricted to durable rows.
+        // including the lineage caveat on sub-cap anchors.
         if let Some(chain) = self
             .pages
             .lookup_chain_durable_if_complete(&key_bytes, target_lsn)
         {
-            return Ok(chain);
+            if self.cache_anchor_covers_lineage(&chain) {
+                return Ok(chain);
+            }
         }
         let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain_durable(&key_bytes, target_lsn);
         // Materialiser-side cache miss → the internal conn (same one

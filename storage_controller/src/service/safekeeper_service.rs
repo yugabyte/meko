@@ -349,6 +349,36 @@ impl Service {
         Ok(ret)
     }
 
+    /// Register a launcher-created timeline in the `timelines` table
+    /// (per-endpoint topology: the launcher provisioned the branch's
+    /// pageserver + safekeeper itself; this records the result for
+    /// cluster bookkeeping — branch names, deletion flows). Idempotent:
+    /// an existing row is left untouched.
+    pub(crate) async fn timeline_register(
+        self: &Arc<Self>,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        start_lsn: utils::lsn::Lsn,
+        sk_set: Vec<utils::id::NodeId>,
+    ) -> Result<(), ApiError> {
+        let timeline_persist = TimelinePersistence {
+            tenant_id: tenant_id.to_string(),
+            timeline_id: timeline_id.to_string(),
+            start_lsn: start_lsn.into(),
+            generation: 1,
+            sk_set: sk_set.iter().map(|id| id.0 as i64).collect(),
+            deleted_at: None,
+            branch_name: None,
+        };
+        let inserted = self.persistence.insert_timeline(timeline_persist).await?;
+        if !inserted {
+            tracing::info!(
+                "timeline {tenant_id}/{timeline_id} already registered, leaving row untouched"
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) async fn tenant_timeline_create_safekeepers_until_success(
         self: &Arc<Self>,
         tenant_id: TenantId,

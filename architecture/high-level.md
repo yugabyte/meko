@@ -109,7 +109,9 @@ These subsystems run unmodified upstream Neon code in yb-light:
 
 ## Topology in our current dev cluster
 
-Single host, single YB instance, single pageserver, single safekeeper.
+Single host, single YB instance, one pageserver + one safekeeper **per
+timeline** (the main timeline's pair comes up with `tenant create`;
+`timeline branch` provisions a dedicated pair for each branch).
 
 ```
 yugabyted                       :7100 (master), :5433 (ysql)
