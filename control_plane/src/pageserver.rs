@@ -16,7 +16,10 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use camino::Utf8PathBuf;
-use pageserver_api::config::{DEFAULT_GRPC_LISTEN_PORT, DEFAULT_HTTP_LISTEN_PORT};
+use pageserver_api::config::{
+    DEFAULT_GRPC_LISTEN_PORT, DEFAULT_HTTP_LISTEN_PORT, TimelineInitConfig,
+};
+use pageserver_api::controller_api::NodeRegisterRequest;
 use pageserver_api::models::{self, TenantInfo, TimelineInfo};
 use pageserver_client::mgmt_api;
 use postgres_backend::AuthType;
@@ -200,7 +203,136 @@ impl PageServerNode {
     }
 
     pub async fn start(&self, retry_timeout: &Duration) -> anyhow::Result<()> {
+        // Single-timeline pageserver: every process start is an
+        // attach, so bump the generation fence first. A stale process
+        // still holding the old generation gets fenced out by the
+        // CAS on the pageserver.timeline_state row.
+        self.register_and_attach().await?;
         self.start_node(retry_timeout).await
+    }
+
+    /// Read the single-timeline identity baked into this pageserver's
+    /// `pageserver.toml`, if any. `None` means the launcher hasn't
+    /// assigned a timeline yet (fresh repo, pre-`tenant create`).
+    pub fn read_timeline_identity(&self) -> anyhow::Result<Option<(TenantId, TimelineId)>> {
+        let config_file_path = self.repo_path().join("pageserver.toml");
+        let contents = std::fs::read_to_string(&config_file_path)
+            .with_context(|| format!("read {config_file_path:?}"))?;
+        let doc = contents
+            .parse::<toml_edit::DocumentMut>()
+            .with_context(|| format!("parse {config_file_path:?}"))?;
+        let get_str = |key: &str| doc.get(key).and_then(|item| item.as_str());
+        match (get_str("tenant_id"), get_str("timeline_id")) {
+            (Some(tenant), Some(timeline)) => Ok(Some((
+                tenant.parse().context("parse tenant_id in pageserver.toml")?,
+                timeline
+                    .parse()
+                    .context("parse timeline_id in pageserver.toml")?,
+            ))),
+            _ => Ok(None),
+        }
+    }
+
+    /// Bake the single-timeline identity into `pageserver.toml`
+    /// (read-modify-write; overwrites any previous identity).
+    /// `generation` is just a placeholder here — [`Self::start`] bumps
+    /// it via the storage controller on every spawn.
+    pub fn set_timeline_identity(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        generation: u32,
+        timeline_init: Option<&TimelineInitConfig>,
+    ) -> anyhow::Result<()> {
+        let mut fragment = toml_edit::DocumentMut::new();
+        fragment.insert("tenant_id", toml_edit::value(tenant_id.to_string()));
+        fragment.insert("timeline_id", toml_edit::value(timeline_id.to_string()));
+        fragment.insert("generation", toml_edit::value(generation as i64));
+        if let Some(init) = timeline_init {
+            let init_doc =
+                toml_edit::ser::to_document(init).context("serialize [timeline_init]")?;
+            fragment.insert(
+                "timeline_init",
+                toml_edit::Item::Table(init_doc.as_table().clone()),
+            );
+        }
+        self.merge_config_fragment(fragment)
+    }
+
+    /// Merge top-level keys of `fragment` into `pageserver.toml`,
+    /// overwriting existing values.
+    fn merge_config_fragment(&self, fragment: toml_edit::DocumentMut) -> anyhow::Result<()> {
+        let config_file_path = self.repo_path().join("pageserver.toml");
+        let contents = std::fs::read_to_string(&config_file_path)
+            .with_context(|| format!("read {config_file_path:?}"))?;
+        let mut doc = contents
+            .parse::<toml_edit::DocumentMut>()
+            .with_context(|| format!("parse {config_file_path:?}"))?;
+        for (key, item) in fragment.iter() {
+            doc.insert(key, item.clone());
+        }
+        std::fs::write(&config_file_path, doc.to_string())
+            .with_context(|| format!("write {config_file_path:?}"))?;
+        Ok(())
+    }
+
+    fn node_register_request(&self) -> NodeRegisterRequest {
+        let (_, http_port) =
+            parse_host_port(&self.conf.listen_http_addr).expect("Unable to parse listen_http_addr");
+        let http_port = http_port.unwrap_or(DEFAULT_HTTP_LISTEN_PORT);
+        let https_port = self.conf.listen_https_addr.as_ref().map(|https_addr| {
+            let (_, https_port) =
+                parse_host_port(https_addr).expect("Unable to parse listen_https_addr");
+            https_port.unwrap_or(9899)
+        });
+        let (mut grpc_host, mut grpc_port) = (None, None);
+        if let Some(grpc_addr) = &self.conf.listen_grpc_addr {
+            let (_, port) = parse_host_port(grpc_addr).expect("Unable to parse listen_grpc_addr");
+            grpc_host = Some("localhost".to_string());
+            grpc_port = Some(port.unwrap_or(DEFAULT_GRPC_LISTEN_PORT));
+        }
+        NodeRegisterRequest {
+            node_id: self.conf.id,
+            listen_pg_addr: "localhost".to_string(),
+            listen_pg_port: self.pg_connection_config.port(),
+            listen_grpc_addr: grpc_host,
+            listen_grpc_port: grpc_port,
+            listen_http_addr: "localhost".to_string(),
+            listen_http_port: http_port,
+            listen_https_port: https_port,
+            node_ip_addr: None,
+        }
+    }
+
+    /// If an identity is baked into `pageserver.toml`: register this
+    /// node with the storage controller (idempotent), bump the
+    /// tenant's generation against this node via the attach-hook API,
+    /// and persist the fresh generation back into the toml so the
+    /// next process spawn picks it up. No-op without an identity.
+    ///
+    /// Returns the granted generation, or `None` if no identity is
+    /// configured.
+    pub async fn register_and_attach(&self) -> anyhow::Result<Option<u32>> {
+        let Some((tenant_id, timeline_id)) = self.read_timeline_identity()? else {
+            return Ok(None);
+        };
+        let storage_controller = crate::storage_controller::StorageController::from_env(&self.env);
+        storage_controller
+            .node_register(self.node_register_request())
+            .await
+            .context("register pageserver node with storage controller")?;
+        let generation = storage_controller
+            .attach_hook(tenant_id, self.conf.id)
+            .await?
+            .context("attach_hook did not return a generation")?;
+        let mut fragment = toml_edit::DocumentMut::new();
+        fragment.insert("generation", toml_edit::value(generation as i64));
+        self.merge_config_fragment(fragment)?;
+        println!(
+            "pageserver {} serves {tenant_id}/{timeline_id} at generation {generation}",
+            self.conf.id
+        );
+        Ok(Some(generation))
     }
 
     fn pageserver_init(&self, conf: YbLightLocalInitPageserverConf) -> anyhow::Result<()> {

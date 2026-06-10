@@ -42,17 +42,38 @@ this is now the authoritative per-tenant config table the SC owns.
 
 ### What it does
 
-- **Tenant placement**: picks a pageserver for a new tenant; reschedules
-  on node loss (heartbeat timeout).
-- **Tenant attach / detach**: tells the pageserver via its HTTP API to
-  attach a tenant at a specific generation.
+- **Generation authority**: owns `tenants.generation`. The launcher
+  (neon_local today) bumps it through the attach-hook API on every
+  pageserver spawn and bakes the value into that pageserver's
+  `pageserver.toml` — see "Single-timeline process model" in
+  [`yb-pageserver.md`](yb-pageserver.md). The controller no longer
+  pushes attachments to pageservers.
+- **Timeline observation**: on `tenant_timeline_create` it polls the
+  attached pageserver's `timeline_detail` until the timeline (created
+  by the pageserver itself from its `[timeline_init]` config) reports
+  Active, then runs the safekeeper leg with the observed
+  `last_record_lsn`.
 - **Safekeeper assignment**: picks the safekeeper set for a new timeline.
-- **Compute notification**: tells the compute (via `--use-local-compute-notifications`
-  or via the control-plane API) when its pageserver assignment changes.
 - **Heartbeats**: pings each pageserver + safekeeper on `--heartbeat-interval`
   to detect liveness.
 
 ### Diverges from Neon
+
+The pageserver-facing control path is launcher-managed (task 22):
+
+- **Pageserver reconciler is a no-op**: `maybe_configured_reconcile_shard`
+  returns `None` in yb-mode. Pageserver attachment is decided at spawn
+  time by the launcher (identity + generation in `pageserver.toml`),
+  and the pageserver-side `location_config` / timeline-create APIs the
+  reconciler would drive are going away. There is nothing to converge.
+- **No pageserver re-attach**: the pageserver no longer calls
+  `/upcall/v1/re-attach` (its `controller_upcall_client` is deleted).
+  Node registration + generation bumps arrive via the launcher
+  (`node_register` + attach-hook). The upcall handlers still exist
+  server-side but are unused by the yb pageserver.
+- **Timeline creation observes, not commands**:
+  `tenant_timeline_create_pageservers` polls `timeline_detail` instead
+  of POSTing a create request.
 
 The safekeeper reconciler path is no longer upstream-parity:
 
@@ -74,10 +95,15 @@ The safekeeper reconciler path is no longer upstream-parity:
 
 The controller exposes an HTTP API on `--listen` for:
 
-- Pageservers and safekeepers to "upcall" (re-attach, register, post heartbeat).
-- `yb_light_local` / external operators to manage tenants, shards, and
-  compute endpoints (`/control/v1/endpoint`).
-- The compute to look up its current pageserver address.
+- The launcher (`yb_light_local`) to register pageserver nodes
+  (`/control/v1/node`) and bump generations (`/debug/v1/attach-hook`)
+  before each pageserver spawn.
+- `yb_light_local` / external operators to manage tenants, timelines,
+  and compute endpoints (`/control/v1/endpoint`).
+- The compute to look up its current pageserver address
+  (`tenant_locate`).
+- Legacy upcall handlers (re-attach / validate) remain but the yb
+  pageserver no longer calls them.
 
 ### Code layout
 

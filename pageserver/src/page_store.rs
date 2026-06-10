@@ -116,6 +116,37 @@ fn slru_kind_from_i16(v: i16) -> Result<SlruKind> {
     })
 }
 
+/// One segment of a timeline's ancestry chain, ordered nearest-first
+/// (segment 0 is the timeline itself with `cap_lsn = Lsn::MAX`).
+///
+/// A branch's pre-branch-point pages live in YB under the ANCESTOR's
+/// `timeline_id`; lineage-aware reads walk these segments so a branch
+/// pageserver can serve reads without hosting the ancestor timeline
+/// in-process. `cap_lsn` is the highest LSN at which the segment's
+/// rows are visible to the descendant: `min` of every `ancestor_lsn`
+/// on the path down to (and including) that segment, so caps are
+/// non-increasing along the chain.
+///
+/// The lineage is built once at startup by [`PageStore::load_lineage`]
+/// and is immutable for the process lifetime — ancestry never changes
+/// for a live timeline (detach-ancestor is unsupported in yb-mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineageSegment {
+    pub timeline_id: TimelineId,
+    pub cap_lsn: Lsn,
+}
+
+impl LineageSegment {
+    /// The trivial single-segment lineage of a timeline with no
+    /// ancestor (and the safe default before `load_lineage` runs).
+    pub fn single(timeline_id: TimelineId) -> Vec<LineageSegment> {
+        vec![LineageSegment {
+            timeline_id,
+            cap_lsn: Lsn::MAX,
+        }]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineRow {
     pub tenant_id: TenantId,
@@ -1254,6 +1285,228 @@ impl PageStore {
         Ok(())
     }
 
+    // ------------------- lineage-aware reads -------------------------------
+    //
+    // A branch's pre-branch-point rows live under the ANCESTOR's
+    // timeline_id. Each method below walks the lineage segments
+    // nearest-first, capping the per-segment read LSN at
+    // `min(target_lsn, seg.cap_lsn)`, and stops as soon as the chain
+    // is anchored (page/SLRU) or the key is found (meta).
+    //
+    // Iterative per-segment queries (not one UNION ALL) on purpose:
+    // `timeline_id` is in the hash partition key, so segments live on
+    // different tablets. The iterative walk touches ONE tablet in the
+    // steady state — always for unbranched timelines, and for branch
+    // keys once the image materialiser has copied an anchor up into
+    // the descendant's own timeline_id. Only cold branch keys pay the
+    // extra round trip, and each such read self-heals via the
+    // read-side materialise trigger.
+
+    /// Lineage-aware [`Self::read_chain`]. `lineage` is the ordered
+    /// segment list from [`Self::load_lineage`]; `lineage[0]` must be
+    /// the reading timeline itself.
+    pub async fn read_chain_lineage(
+        &self,
+        tenant: TenantId,
+        lineage: &[LineageSegment],
+        key: &[u8],
+        target_lsn: Lsn,
+    ) -> Result<Vec<Arc<PageRow>>> {
+        let mut chain: Vec<Arc<PageRow>> = Vec::new();
+        for seg in lineage {
+            if chain.last().is_some_and(|r| r.will_init) {
+                break;
+            }
+            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
+            let rows = self.read_chain(tenant, seg.timeline_id, key, eff).await?;
+            chain.extend(rows);
+        }
+        if lineage.len() > 1 {
+            // A copy-up image in the descendant can tie an ancestor
+            // row's LSN at the branch boundary. Re-sort (image first
+            // on ties), dedup by LSN, and trim at the first anchor —
+            // same blend rules as PageWriter's in-RAM merge.
+            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+            chain.dedup_by(|a, b| a.lsn == b.lsn);
+            if let Some(idx) = chain.iter().position(|r| r.will_init) {
+                chain.truncate(idx + 1);
+            }
+        }
+        Ok(chain)
+    }
+
+    /// Lineage-aware [`Self::scan_range`]. Ancestor segments are
+    /// always scanned (when present): keys written only before the
+    /// branch point are undiscoverable from the descendant's segment
+    /// alone. Per-key chains are merged nearest-first, then
+    /// sorted/deduped/trimmed at the anchor.
+    pub async fn scan_range_lineage(
+        &self,
+        tenant: TenantId,
+        lineage: &[LineageSegment],
+        range: Range<Key>,
+        target_lsn: Lsn,
+    ) -> Result<HashMap<Bytes, Vec<Arc<PageRow>>>> {
+        let Some((first, rest)) = lineage.split_first() else {
+            bail!("scan_range_lineage: empty lineage");
+        };
+        let mut out = self
+            .scan_range(
+                tenant,
+                first.timeline_id,
+                range.clone(),
+                std::cmp::min(target_lsn, first.cap_lsn),
+            )
+            .await?;
+        if rest.is_empty() {
+            return Ok(out);
+        }
+        for seg in rest {
+            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
+            let anc = self
+                .scan_range(tenant, seg.timeline_id, range.clone(), eff)
+                .await?;
+            for (key, rows) in anc {
+                out.entry(key).or_default().extend(rows);
+            }
+        }
+        for chain in out.values_mut() {
+            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+            chain.dedup_by(|a, b| a.lsn == b.lsn);
+            if let Some(idx) = chain.iter().position(|r| r.will_init) {
+                chain.truncate(idx + 1);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Lineage-aware [`Self::read_slru_chain`]. Required for branches:
+    /// branching copies nothing, so a fresh branch's pg_xact / SLRU
+    /// state lives entirely under the ancestor's timeline_id.
+    pub async fn read_slru_chain_lineage(
+        &self,
+        tenant: TenantId,
+        lineage: &[LineageSegment],
+        kind: SlruKind,
+        segno: u32,
+        blknum: u32,
+        target_lsn: Lsn,
+    ) -> Result<Vec<SlruPageRow>> {
+        let mut chain: Vec<SlruPageRow> = Vec::new();
+        for seg in lineage {
+            if chain.last().is_some_and(|r| r.will_init) {
+                break;
+            }
+            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
+            let rows = self
+                .read_slru_chain(tenant, seg.timeline_id, kind, segno, blknum, eff)
+                .await?;
+            chain.extend(rows);
+        }
+        if lineage.len() > 1 {
+            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+            chain.dedup_by(|a, b| a.lsn == b.lsn);
+            if let Some(idx) = chain.iter().position(|r| r.will_init) {
+                chain.truncate(idx + 1);
+            }
+        }
+        Ok(chain)
+    }
+
+    /// Lineage-aware [`Self::scan_slru_range`].
+    pub async fn scan_slru_range_lineage(
+        &self,
+        tenant: TenantId,
+        lineage: &[LineageSegment],
+        kind: SlruKind,
+        segno: u32,
+        blknum_range: Range<u32>,
+        target_lsn: Lsn,
+    ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
+        let Some((first, rest)) = lineage.split_first() else {
+            bail!("scan_slru_range_lineage: empty lineage");
+        };
+        let mut out = self
+            .scan_slru_range(
+                tenant,
+                first.timeline_id,
+                kind,
+                segno,
+                blknum_range.clone(),
+                std::cmp::min(target_lsn, first.cap_lsn),
+            )
+            .await?;
+        if rest.is_empty() {
+            return Ok(out);
+        }
+        for seg in rest {
+            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
+            let anc = self
+                .scan_slru_range(
+                    tenant,
+                    seg.timeline_id,
+                    kind,
+                    segno,
+                    blknum_range.clone(),
+                    eff,
+                )
+                .await?;
+            for (blk, rows) in anc {
+                out.entry(blk).or_default().extend(rows);
+            }
+        }
+        for chain in out.values_mut() {
+            chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
+            chain.dedup_by(|a, b| a.lsn == b.lsn);
+            if let Some(idx) = chain.iter().position(|r| r.will_init) {
+                chain.truncate(idx + 1);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Lineage-aware [`Self::read_meta`]. Meta rows are full values
+    /// (latest-wins), so the first segment that has the key at or
+    /// below its effective LSN shadows everything older.
+    pub async fn read_meta_lineage(
+        &self,
+        tenant: TenantId,
+        lineage: &[LineageSegment],
+        key: &[u8],
+        target_lsn: Lsn,
+    ) -> Result<Option<MetaRow>> {
+        for seg in lineage {
+            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
+            if let Some(row) = self.read_meta(tenant, seg.timeline_id, key, eff).await? {
+                return Ok(Some(row));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Lineage-aware [`Self::scan_meta_range`]. Nearest-segment-wins
+    /// per key: a descendant's version of a key (reldir listing,
+    /// relsize sentinel, …) shadows the ancestor's.
+    pub async fn scan_meta_range_lineage(
+        &self,
+        tenant: TenantId,
+        lineage: &[LineageSegment],
+        range: Range<Key>,
+        target_lsn: Lsn,
+    ) -> Result<HashMap<Bytes, MetaRow>> {
+        let mut out: HashMap<Bytes, MetaRow> = HashMap::new();
+        for seg in lineage {
+            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
+            let rows = self
+                .scan_meta_range(tenant, seg.timeline_id, range.clone(), eff)
+                .await?;
+            for (k, v) in rows {
+                out.entry(k).or_insert(v);
+            }
+        }
+        Ok(out)
+    }
+
     // ------------------- timelines ----------------------------------------
 
     /// One-shot INSERT used at timeline creation by Phase 5b's
@@ -1465,6 +1718,142 @@ impl PageStore {
             .await
             .context("list_timelines")?;
         rows.into_iter().map(row_to_timeline).collect()
+    }
+
+    /// Build the ordered lineage for `timeline` by walking
+    /// `ancestor_timeline_id` / `ancestor_lsn` links in
+    /// `timeline_state`. Segment 0 is the timeline itself at
+    /// `Lsn::MAX`; each ancestor's cap is the running `min` of the
+    /// `ancestor_lsn`s on the path (non-increasing by the branch
+    /// validation invariant — the `min` is belt-and-braces).
+    ///
+    /// Called once at startup; ancestry never changes for a live
+    /// process. The `lineage` JSONB column is NOT consulted — it
+    /// carries upstream detach-ancestor state, not the ancestry chain.
+    pub async fn load_lineage(
+        &self,
+        tenant: TenantId,
+        timeline: TimelineId,
+    ) -> Result<Vec<LineageSegment>> {
+        const MAX_DEPTH: usize = 64;
+        let mut segments = LineageSegment::single(timeline);
+        let mut seen: std::collections::HashSet<TimelineId> = std::iter::once(timeline).collect();
+        let mut row = self.get_timeline(tenant, timeline).await?.with_context(|| {
+            format!("load_lineage: timeline {timeline} has no timeline_state row")
+        })?;
+        let mut cap = Lsn::MAX;
+        while let Some(anc_id) = row.ancestor_timeline_id {
+            let anc_lsn = row.ancestor_lsn.with_context(|| {
+                format!(
+                    "load_lineage: timeline {} has ancestor_timeline_id but no ancestor_lsn",
+                    row.timeline_id
+                )
+            })?;
+            cap = std::cmp::min(cap, anc_lsn);
+            if !seen.insert(anc_id) {
+                bail!("load_lineage: ancestry cycle at {anc_id}");
+            }
+            if segments.len() >= MAX_DEPTH {
+                bail!("load_lineage: ancestry deeper than {MAX_DEPTH} segments");
+            }
+            segments.push(LineageSegment {
+                timeline_id: anc_id,
+                cap_lsn: cap,
+            });
+            row = self
+                .get_timeline(tenant, anc_id)
+                .await?
+                .with_context(|| format!("load_lineage: ancestor {anc_id} row missing"))?;
+        }
+        Ok(segments)
+    }
+
+    /// Create the `timeline_state` row for a branch of `ancestor` at
+    /// `ancestor_lsn`, validating against the ancestor's persisted row
+    /// only — no in-process ancestor Timeline required. This is the
+    /// cross-process distillation of the old `branch_timeline_impl`:
+    ///
+    /// - branch point must not predate the ancestor's own branch point
+    /// - branch point must already be durable on the ancestor
+    ///   (`anc.consistent_lsn >= ancestor_lsn` replaces the in-process
+    ///   `wait_lsn`; the launcher picked an LSN ≤ the ancestor's
+    ///   `last_record_lsn`, so durability catches up within one flush
+    ///   interval — callers may retry briefly on this error)
+    /// - branch point must not be below the ancestor's GC cutoff
+    ///
+    /// The new row's `consistent_lsn` is set to `ancestor_lsn` — the
+    /// walreceiver resume point. It must never be 0 (a 0 would make
+    /// the safekeeper stream from segment 1). Idempotent on crash-retry
+    /// via the `ON CONFLICT DO NOTHING` insert.
+    pub async fn create_branch_row(
+        &self,
+        tenant: TenantId,
+        new_timeline: TimelineId,
+        ancestor: TimelineId,
+        ancestor_lsn: Lsn,
+        generation: i32,
+    ) -> Result<TimelineRow> {
+        let anc = self.get_timeline(tenant, ancestor).await?.with_context(|| {
+            format!("create_branch_row: ancestor {ancestor} has no timeline_state row")
+        })?;
+        if anc.deleted_at.is_some() {
+            bail!("create_branch_row: ancestor {ancestor} is deleted");
+        }
+        if anc.archived_at.is_some() {
+            bail!("create_branch_row: ancestor {ancestor} is archived");
+        }
+        if let Some(anc_anc_lsn) = anc.ancestor_lsn {
+            if ancestor_lsn < anc_anc_lsn {
+                bail!(
+                    "create_branch_row: branch point {ancestor_lsn} predates ancestor \
+                     {ancestor}'s own branch point {anc_anc_lsn}"
+                );
+            }
+        }
+        if anc.consistent_lsn < ancestor_lsn {
+            bail!(
+                "create_branch_row: branch point {ancestor_lsn} not yet durable on ancestor \
+                 {ancestor} (consistent_lsn {})",
+                anc.consistent_lsn
+            );
+        }
+        if ancestor_lsn < anc.applied_gc_cutoff_lsn {
+            bail!(
+                "create_branch_row: branch point {ancestor_lsn} is below ancestor {ancestor}'s \
+                 gc cutoff {}",
+                anc.applied_gc_cutoff_lsn
+            );
+        }
+        // `prev_record_lsn` is only knowable when the branch point is
+        // exactly the ancestor's durable head; otherwise leave None
+        // and let basebackup emit "PREV LSN: none" (valid at a branch
+        // point — see basebackup.rs is_ancestor_lsn handling).
+        let prev_record_lsn = if anc.consistent_lsn == ancestor_lsn {
+            anc.prev_record_lsn
+        } else {
+            None
+        };
+        let row = TimelineRow {
+            tenant_id: tenant,
+            timeline_id: new_timeline,
+            consistent_lsn: ancestor_lsn,
+            applied_gc_cutoff_lsn: anc.applied_gc_cutoff_lsn,
+            ancestor_timeline_id: Some(ancestor),
+            ancestor_lsn: Some(ancestor_lsn),
+            current_generation: generation,
+            pg_version: anc.pg_version,
+            initdb_lsn: anc.initdb_lsn,
+            prev_record_lsn,
+            archived_at: None,
+            deleted_at: None,
+            // A branch reads the ancestor's rows, so it must interpret
+            // relsize keys with the same migration scheme.
+            rel_size_migration: anc.rel_size_migration.clone(),
+            rel_size_migrated_at: anc.rel_size_migrated_at,
+            lineage: Lineage::default(),
+        };
+        self.insert_timeline_at_creation(&row).await?;
+        Ok(row)
     }
 
     pub async fn delete_timeline(&self, tenant: TenantId, timeline: TimelineId) -> Result<()> {
@@ -2909,6 +3298,484 @@ mod tests {
                 .expect("row");
             assert_eq!(got.payload.as_ref(), format!("v{i}").as_bytes());
         }
+        drop_schema(&store, &schema).await;
+    }
+
+    // ------------------- lineage tests -------------------------------------
+
+    /// Two-segment lineage: `child` (at MAX) branched off `anc` at `cap`.
+    fn lineage2(child: TimelineId, anc: TimelineId, cap: u64) -> Vec<LineageSegment> {
+        vec![
+            LineageSegment {
+                timeline_id: child,
+                cap_lsn: Lsn::MAX,
+            },
+            LineageSegment {
+                timeline_id: anc,
+                cap_lsn: Lsn(cap),
+            },
+        ]
+    }
+
+    /// A branch chain anchors in the ancestor: pre-branch rows live
+    /// under the ancestor's timeline_id and the lineage walk stitches
+    /// them below the descendant's deltas.
+    #[tokio::test]
+    async fn read_chain_lineage_anchors_in_ancestor() {
+        let (store, schema) = make_store("lin_anchor").await;
+        let tenant = rand_tenant();
+        let anc = rand_timeline();
+        let child = rand_timeline();
+        let k = page_key(1663, 5, 16384, 0, 1);
+
+        store
+            .put_pages(
+                tenant,
+                anc,
+                &[
+                    page_row(k.clone(), 10, true, true, b"img"),
+                    page_row(k.clone(), 20, false, false, b"anc-delta"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                tenant,
+                child,
+                &[
+                    page_row(k.clone(), 30, false, false, b"child-A"),
+                    page_row(k.clone(), 40, false, false, b"child-B"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let lineage = lineage2(child, anc, 25);
+        let chain = store
+            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(
+            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![40, 30, 20, 10]
+        );
+        assert!(chain[3].is_image, "anchor is the ancestor's image");
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Ancestor rows ABOVE the branch point must be invisible to the
+    /// descendant — they belong to the ancestor's diverged future.
+    #[tokio::test]
+    async fn read_chain_lineage_caps_ancestor_at_branch_point() {
+        let (store, schema) = make_store("lin_cap").await;
+        let tenant = rand_tenant();
+        let anc = rand_timeline();
+        let child = rand_timeline();
+        let k = page_key(1663, 5, 16384, 0, 2);
+
+        store
+            .put_pages(
+                tenant,
+                anc,
+                &[
+                    page_row(k.clone(), 10, true, true, b"img"),
+                    page_row(k.clone(), 20, false, false, b"pre-branch"),
+                    page_row(k.clone(), 30, false, false, b"anc-diverged"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                tenant,
+                child,
+                &[page_row(k.clone(), 40, false, false, b"child")],
+            )
+            .await
+            .unwrap();
+
+        let lineage = lineage2(child, anc, 25);
+        let chain = store
+            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(
+            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![40, 20, 10],
+            "ancestor row at lsn 30 (> branch point 25) must be excluded"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Once the descendant's own segment is anchored (e.g. a copy-up
+    /// image from the materialiser), the walk must not descend.
+    #[tokio::test]
+    async fn read_chain_lineage_stops_at_own_anchor() {
+        let (store, schema) = make_store("lin_own").await;
+        let tenant = rand_tenant();
+        let anc = rand_timeline();
+        let child = rand_timeline();
+        let k = page_key(1663, 5, 16384, 0, 3);
+
+        store
+            .put_pages(
+                tenant,
+                anc,
+                &[
+                    page_row(k.clone(), 10, true, true, b"anc-img"),
+                    page_row(k.clone(), 20, false, false, b"anc-delta"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                tenant,
+                child,
+                &[page_row(k.clone(), 35, true, true, b"copy-up-img")],
+            )
+            .await
+            .unwrap();
+
+        let lineage = lineage2(child, anc, 25);
+        let chain = store
+            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(chain.len(), 1, "own image shadows the whole ancestor chain");
+        assert_eq!(chain[0].lsn, Lsn(35));
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Range scans must surface keys that exist ONLY in the ancestor
+    /// (written before the branch point, untouched since).
+    #[tokio::test]
+    async fn scan_range_lineage_discovers_ancestor_only_keys() {
+        let (store, schema) = make_store("lin_scan").await;
+        let tenant = rand_tenant();
+        let anc = rand_timeline();
+        let child = rand_timeline();
+        let k_anc_only = page_key(1663, 5, 16384, 0, 1);
+        let k_shared = page_key(1663, 5, 16384, 0, 2);
+
+        store
+            .put_pages(
+                tenant,
+                anc,
+                &[
+                    page_row(k_anc_only.clone(), 10, true, true, b"a-img"),
+                    page_row(k_shared.clone(), 10, true, true, b"s-img"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                tenant,
+                child,
+                &[page_row(k_shared.clone(), 30, false, false, b"s-child")],
+            )
+            .await
+            .unwrap();
+
+        let lineage = lineage2(child, anc, 25);
+        let start = Key::from_slice(&page_key(1663, 5, 16384, 0, 0));
+        let end = Key::from_slice(&page_key(1663, 5, 16384, 0, 10));
+        let out = store
+            .scan_range_lineage(tenant, &lineage, start..end, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            out[&k_anc_only]
+                .iter()
+                .map(|r| r.lsn.0)
+                .collect::<Vec<_>>(),
+            vec![10],
+            "ancestor-only key must be discovered"
+        );
+        assert_eq!(
+            out[&k_shared].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![30, 10],
+            "shared key blends child delta over ancestor image"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// SLRU lineage: a fresh branch's pg_xact lives entirely under the
+    /// ancestor; the walk must stitch it in.
+    #[tokio::test]
+    async fn read_slru_chain_lineage_blends() {
+        let (store, schema) = make_store("lin_slru").await;
+        let tenant = rand_tenant();
+        let anc = rand_timeline();
+        let child = rand_timeline();
+        let slru_row = |lsn: u64, is_image: bool, will_init: bool, payload: &[u8]| SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: 1,
+            blknum: 0,
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::copy_from_slice(payload),
+        };
+
+        store
+            .put_slru_pages(tenant, anc, &[slru_row(10, true, true, b"anc-img")])
+            .await
+            .unwrap();
+        store
+            .put_slru_pages(tenant, child, &[slru_row(30, false, false, b"child-delta")])
+            .await
+            .unwrap();
+
+        let lineage = lineage2(child, anc, 25);
+        let chain = store
+            .read_slru_chain_lineage(tenant, &lineage, SlruKind::Clog, 1, 0, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(
+            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![30, 10]
+        );
+
+        // And the range-scan variant sees the ancestor-only block.
+        let scanned = store
+            .scan_slru_range_lineage(tenant, &lineage, SlruKind::Clog, 1, 0..4, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(
+            scanned[&0].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![30, 10]
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    fn meta_key(suffix: u32) -> Vec<u8> {
+        let mut buf = vec![0u8; KEY_SIZE];
+        buf[0] = 0x60;
+        buf[14..18].copy_from_slice(&suffix.to_be_bytes());
+        buf
+    }
+
+    /// Meta lineage: nearest segment wins; ancestor rows above the
+    /// branch point stay invisible.
+    #[tokio::test]
+    async fn meta_lineage_nearest_segment_wins() {
+        let (store, schema) = make_store("lin_meta").await;
+        let tenant = rand_tenant();
+        let anc = rand_timeline();
+        let child = rand_timeline();
+        let shared = meta_key(1);
+        let anc_late = meta_key(2); // only exists in anc, ABOVE the cap
+        let anc_only = meta_key(3);
+
+        store
+            .put_meta(
+                tenant,
+                anc,
+                &[
+                    MetaRow {
+                        key: Bytes::from(shared.clone()),
+                        lsn: Lsn(10),
+                        payload: Bytes::from_static(b"anc"),
+                    },
+                    MetaRow {
+                        key: Bytes::from(anc_late.clone()),
+                        lsn: Lsn(28),
+                        payload: Bytes::from_static(b"anc-late"),
+                    },
+                    MetaRow {
+                        key: Bytes::from(anc_only.clone()),
+                        lsn: Lsn(12),
+                        payload: Bytes::from_static(b"anc-only"),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_meta(
+                tenant,
+                child,
+                &[MetaRow {
+                    key: Bytes::from(shared.clone()),
+                    lsn: Lsn(30),
+                    payload: Bytes::from_static(b"child"),
+                }],
+            )
+            .await
+            .unwrap();
+
+        let lineage = lineage2(child, anc, 25);
+
+        // Nearest segment wins for the shared key.
+        let got = store
+            .read_meta_lineage(tenant, &lineage, &shared, Lsn(100))
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(got.payload.as_ref(), b"child");
+
+        // Below the child's version, the ancestor's value shows through.
+        let got = store
+            .read_meta_lineage(tenant, &lineage, &shared, Lsn(15))
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(got.payload.as_ref(), b"anc");
+
+        // Ancestor row above the branch point: invisible.
+        let got = store
+            .read_meta_lineage(tenant, &lineage, &anc_late, Lsn(100))
+            .await
+            .unwrap();
+        assert!(got.is_none(), "lsn 28 > cap 25 must be invisible");
+
+        // Range scan: shared key takes the child version, ancestor-only
+        // key is discovered, capped key is absent.
+        let start = Key::from_slice(&meta_key(0));
+        let end = Key::from_slice(&meta_key(10));
+        let out = store
+            .scan_meta_range_lineage(tenant, &lineage, start..end, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[shared.as_slice()].payload.as_ref(), b"child");
+        assert_eq!(out[anc_only.as_slice()].payload.as_ref(), b"anc-only");
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `create_branch_row` validation matrix + the happy paths.
+    #[tokio::test]
+    async fn create_branch_row_validations() {
+        let (store, schema) = make_store("branch_row").await;
+        let tenant = rand_tenant();
+        let anc = rand_timeline();
+        // Ancestor: consistent 90, gc cutoff 50, prev_record 85.
+        let mut anc_row = sample_timeline_row(tenant, anc);
+        anc_row.prev_record_lsn = Some(Lsn(85));
+        store.insert_timeline_at_creation(&anc_row).await.unwrap();
+
+        // Branch point above the durable head → rejected.
+        let err = store
+            .create_branch_row(tenant, rand_timeline(), anc, Lsn(95), 1)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not yet durable"), "{err}");
+
+        // Branch point below the gc cutoff → rejected.
+        let err = store
+            .create_branch_row(tenant, rand_timeline(), anc, Lsn(40), 1)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("gc cutoff"), "{err}");
+
+        // Missing ancestor → rejected.
+        let err = store
+            .create_branch_row(tenant, rand_timeline(), rand_timeline(), Lsn(70), 1)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no timeline_state row"), "{err}");
+
+        // Happy path mid-history: prev_record_lsn unknown → None.
+        let child = rand_timeline();
+        let row = store
+            .create_branch_row(tenant, child, anc, Lsn(70), 3)
+            .await
+            .unwrap();
+        assert_eq!(row.consistent_lsn, Lsn(70), "walreceiver resume point");
+        assert_eq!(row.ancestor_timeline_id, Some(anc));
+        assert_eq!(row.ancestor_lsn, Some(Lsn(70)));
+        assert_eq!(row.current_generation, 3);
+        assert_eq!(row.pg_version, anc_row.pg_version);
+        assert_eq!(row.prev_record_lsn, None);
+        let persisted = store.get_timeline(tenant, child).await.unwrap().unwrap();
+        assert_eq!(persisted, row);
+
+        // Happy path at the durable head: prev_record_lsn inherited.
+        let child2 = rand_timeline();
+        let row = store
+            .create_branch_row(tenant, child2, anc, Lsn(90), 1)
+            .await
+            .unwrap();
+        assert_eq!(row.prev_record_lsn, Some(Lsn(85)));
+
+        // Branching below the ancestor's own branch point → rejected.
+        let grandchild_bad = rand_timeline();
+        let err = store
+            .create_branch_row(tenant, grandchild_bad, child, Lsn(60), 1)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("own branch point"), "{err}");
+
+        // Deleted ancestor → rejected.
+        let dead = rand_timeline();
+        let mut dead_row = sample_timeline_row(tenant, dead);
+        dead_row.deleted_at = Some(chrono::Utc::now().naive_utc());
+        store.insert_timeline_at_creation(&dead_row).await.unwrap();
+        let err = store
+            .create_branch_row(tenant, rand_timeline(), dead, Lsn(70), 1)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("deleted"), "{err}");
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// `load_lineage` walks ancestor links with running-min caps.
+    #[tokio::test]
+    async fn load_lineage_walks_ancestor_links() {
+        let (store, schema) = make_store("lin_load").await;
+        let tenant = rand_tenant();
+        let grandparent = rand_timeline();
+        let parent = rand_timeline();
+        let child = rand_timeline();
+
+        store
+            .insert_timeline_at_creation(&sample_timeline_row(tenant, grandparent))
+            .await
+            .unwrap();
+        let mut parent_row = sample_timeline_row(tenant, parent);
+        parent_row.ancestor_timeline_id = Some(grandparent);
+        parent_row.ancestor_lsn = Some(Lsn(50));
+        store.insert_timeline_at_creation(&parent_row).await.unwrap();
+        let mut child_row = sample_timeline_row(tenant, child);
+        child_row.ancestor_timeline_id = Some(parent);
+        child_row.ancestor_lsn = Some(Lsn(70));
+        store.insert_timeline_at_creation(&child_row).await.unwrap();
+
+        let lineage = store.load_lineage(tenant, child).await.unwrap();
+        assert_eq!(
+            lineage,
+            vec![
+                LineageSegment {
+                    timeline_id: child,
+                    cap_lsn: Lsn::MAX
+                },
+                LineageSegment {
+                    timeline_id: parent,
+                    cap_lsn: Lsn(70)
+                },
+                LineageSegment {
+                    timeline_id: grandparent,
+                    cap_lsn: Lsn(50)
+                },
+            ]
+        );
+
+        // A root timeline gets the trivial single-segment lineage.
+        let root_lineage = store.load_lineage(tenant, grandparent).await.unwrap();
+        assert_eq!(root_lineage, LineageSegment::single(grandparent));
+
+        // Missing row → error, not an empty lineage.
+        let err = store
+            .load_lineage(tenant, rand_timeline())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no timeline_state row"), "{err}");
+
         drop_schema(&store, &schema).await;
     }
 }

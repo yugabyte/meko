@@ -12,7 +12,6 @@ use anyhow::Context;
 use camino::{Utf8Path, Utf8PathBuf};
 use pageserver_api::key::Key;
 use pageserver_api::models::{ShardIdentity, ShardIndex};
-use pageserver_api::upcall_api::ReAttachResponseTenant;
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use remote_storage::TimeoutOrCancel;
@@ -28,9 +27,6 @@ use utils::{backoff, completion};
 use super::{GlobalShutDown, TenantSharedResources};
 use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};
-use crate::controller_upcall_client::{
-    RetryForeverError, StorageControllerUpcallApi, StorageControllerUpcallClient,
-};
 use crate::http::routes::ACTIVE_TENANT_TIMEOUT;
 use crate::metrics::{TENANT, TENANT_MANAGER as METRICS};
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind};
@@ -96,24 +92,6 @@ pub(crate) enum ShardSelector {
     Page(#[allow(dead_code)] Key),
     /// The shard ID is known: pick the given shard
     Known(ShardIndex),
-}
-
-/// A convenience for use with the re_attach ControllerUpcallClient function: rather
-/// than the serializable struct, we build this enum that encapsulates
-/// the invariant that attached tenants always have generations.
-///
-/// This represents the subset of a LocationConfig that we receive during re-attach.
-pub(crate) enum TenantStartupMode {
-    Attached(Generation),
-}
-
-impl TenantStartupMode {
-    /// Return the generation that should be used when starting this
-    /// tenant, or `None` if the re-attach response says the tenant is
-    /// not attached here.
-    fn from_reattach_tenant(rart: ReAttachResponseTenant) -> Option<Self> {
-        rart.r#gen.map(|g| Self::Attached(Generation::new(g)))
-    }
 }
 
 /// Result type for looking up a TenantId to a specific shard
@@ -259,33 +237,6 @@ pub struct TenantManager {
     background_purges: BackgroundPurges,
 }
 
-/// Ask storage_controller (via the re-attach upcall) which tenants this
-/// pageserver should be attached to, and in which generation. This is the
-/// sole source of truth at startup — there is no local on-disk record of
-/// attachment any more (config-v1 was retired with task 17 follow-up).
-async fn init_load_generations(
-    conf: &'static PageServerConf,
-    cancel: &CancellationToken,
-) -> anyhow::Result<HashMap<TenantId, Generation>> {
-    let client = StorageControllerUpcallClient::new(conf, cancel);
-    info!("Calling {} API to re-attach tenants", client.base_url());
-    let response = match client.re_attach(conf).await {
-        Ok(tenants) => tenants,
-        Err(RetryForeverError::ShuttingDown) => {
-            anyhow::bail!("Shut down while waiting for control plane re-attach response")
-        }
-    };
-
-    Ok(response
-        .into_iter()
-        .flat_map(|(id, rart)| {
-            TenantStartupMode::from_reattach_tenant(rart).map(|tsm| match tsm {
-                TenantStartupMode::Attached(gen_) => (id, gen_),
-            })
-        })
-        .collect())
-}
-
 /// Sweep the local `tenants/` directory for entries that don't correspond to a
 /// tenant the storage_controller currently expects us to own, and queue them for
 /// background purge. Temp dirs are removed inline.
@@ -389,11 +340,19 @@ pub async fn init_tenant_mgr(
 
     // yb-mode: no ephemeral layers, no dirty-byte budget to wire up.
 
-    // The storage_controller's re-attach response is the sole source of truth
-    // for which tenants this pageserver should own and at what generation.
-    // The local tenants/ dir is just scratch (initdb tarballs, basebackup cache),
-    // never authoritative.
-    let attached = init_load_generations(conf, cancel).await?;
+    // Single-timeline pageserver: the identity baked into
+    // pageserver.toml by the launcher is the sole source of truth for
+    // which (tenant, timeline) this process serves and at what
+    // generation. The local tenants/ dir is just scratch (initdb
+    // tarballs, basebackup cache), never authoritative.
+    let _ = cancel;
+    let Some(identity) = conf.timeline_identity else {
+        anyhow::bail!(
+            "pageserver.toml must set tenant_id/timeline_id/generation: this pageserver \
+             serves exactly one timeline, assigned by the launcher before spawn"
+        );
+    };
+    let attached = HashMap::from([(identity.tenant_id, identity.generation)]);
 
     purge_stale_tenant_dirs(conf, &attached, background_purges).await;
 
@@ -448,7 +407,11 @@ pub async fn init_tenant_mgr(
                 AttachedTenantConf::new(conf, tenant_conf, generation),
                 shard_identity,
                 Some(init_order.clone()),
-                SpawnMode::Lazy,
+                // Single-timeline pageserver: attach eagerly — the
+                // launcher's storage_controller polls timeline_detail
+                // for Active right after spawn, and there is only one
+                // timeline to warm up anyway.
+                SpawnMode::Eager,
                 &ctx,
             )
             .expect("global shutdown during init_tenant_mgr cannot happen"),

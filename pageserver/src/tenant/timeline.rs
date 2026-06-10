@@ -80,6 +80,11 @@ pub struct TimelineResources {
     /// Internal-traffic `PageStore` (see
     /// `TenantSharedResources::fpu_page_store`).
     pub fpu_page_store: Arc<crate::page_store::PageStore>,
+    /// Ancestry lineage for lineage-aware PageStore reads, built by
+    /// `PageStore::load_lineage` from the timeline_state row chain.
+    /// `None` → the trivial single-segment lineage (fresh bootstrap,
+    /// where the row doesn't exist yet; bootstraps have no ancestor).
+    pub lineage: Option<Vec<crate::page_store::LineageSegment>>,
 }
 
 pub struct Timeline {
@@ -1952,6 +1957,12 @@ impl Timeline {
                 },
                 pw_cfg.read_cache_bytes,
             );
+            // Lineage-aware reads: a branch serves pre-branch-point
+            // data from its ancestors' rows. Must be installed before
+            // the writer is shared (set_lineage takes &mut).
+            if let Some(lineage) = resources.lineage.clone() {
+                writer.set_lineage(lineage);
+            }
 
             // Materialiser channel: established BEFORE we wrap the writer
             // in an Arc so we can set_materializer on `&mut writer`. The

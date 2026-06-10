@@ -38,7 +38,7 @@ use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
 use pageserver_api::reltag::SlruKind;
 
-use crate::page_store::{MetaRow, PageRow, PageStore, SlruPageRow};
+use crate::page_store::{LineageSegment, MetaRow, PageRow, PageStore, SlruPageRow};
 
 /// Flush triggers (whichever fires first). Override via
 /// `YbPageWriterConfig` in `pageserver.toml`.
@@ -156,6 +156,14 @@ struct DeltaTally {
 pub struct PageWriter {
     tenant_id: TenantId,
     timeline_id: TimelineId,
+    /// Ordered ancestry segments, nearest-first (`lineage[0]` is this
+    /// timeline at `Lsn::MAX`). All PageStore reads go through the
+    /// lineage-aware variants so a branch serves pre-branch-point
+    /// data from the ancestor's rows. Writes always target
+    /// `timeline_id` — never an ancestor. Set once before the writer
+    /// is shared (see [`Self::set_lineage`]); defaults to the trivial
+    /// single-segment lineage.
+    lineage: Vec<LineageSegment>,
     /// Storage-controller-assigned generation for this attach. Carried
     /// through to `advance_consistent_lsn` so the persisting UPDATE
     /// can fail-fast if a higher generation has taken over.
@@ -297,6 +305,7 @@ impl PageWriter {
         Self {
             tenant_id,
             timeline_id,
+            lineage: LineageSegment::single(timeline_id),
             generation,
             compute_page_store,
             fpu_page_store,
@@ -420,6 +429,20 @@ impl PageWriter {
     /// Install the image-materialiser handle. Counter logic in `put`
     /// is a no-op until this is called. Must be called before any
     /// `put` traffic for that traffic to be observed.
+    /// Install the lineage built by [`PageStore::load_lineage`].
+    /// Must be called before the writer is shared (same wiring window
+    /// as [`Self::set_materializer`]); `lineage[0]` must be this
+    /// writer's own timeline.
+    pub fn set_lineage(&mut self, lineage: Vec<LineageSegment>) {
+        assert!(
+            lineage.first().map(|s| s.timeline_id) == Some(self.timeline_id),
+            "lineage[0] must be the writer's own timeline ({}), got {:?}",
+            self.timeline_id,
+            lineage.first(),
+        );
+        self.lineage = lineage;
+    }
+
     pub fn set_materializer(&mut self, handle: MaterializerHandle) {
         self.materializer = Some(handle);
     }
@@ -698,7 +721,7 @@ impl PageWriter {
         }
         let persisted = self
             .compute_page_store
-            .scan_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
+            .scan_range_lineage(self.tenant_id, &self.lineage, range.clone(), target_lsn)
             .await?;
         let t_yb = t0.elapsed();
         let start_bytes = key_to_bytes(range.start);
@@ -734,7 +757,8 @@ impl PageWriter {
             // crash, queue overflow). Enqueue a fresh materialise so
             // the next read of the same key is fast.
             let key_bytes = key_to_bytes(*key);
-            self.maybe_dispatch_read_side_materialize(&key_bytes, target_lsn, chain.len());
+            let crossed = self.chain_crossed_segment(chain);
+            self.maybe_dispatch_read_side_materialize(&key_bytes, target_lsn, chain.len(), crossed);
         }
         let t_merge = t_merge_start.elapsed();
         let total = t0.elapsed();
@@ -767,6 +791,7 @@ impl PageWriter {
         key_bytes: &bytes::Bytes,
         target_lsn: Lsn,
         chain_len: usize,
+        crossed_segment: bool,
     ) {
         let Some(m) = self.materializer.as_ref() else {
             return;
@@ -784,16 +809,38 @@ impl PageWriter {
             return;
         }
         let bounded_target = std::cmp::min(target_lsn, horizon);
+        // A chain that crossed into an ancestor segment dispatches
+        // regardless of length: materialising an image into the OWN
+        // timeline copies the key up, so the branch converges to
+        // single-tablet reads after one slow read per key instead of
+        // after `count_limit` more deltas.
+        let effective_len = if crossed_segment {
+            usize::MAX
+        } else {
+            chain_len
+        };
         if try_dispatch_read_side(
             key_bytes,
             bounded_target,
-            chain_len,
+            effective_len,
             m.count_limit,
             &m.in_flight,
             &m.tx,
         ) {
             crate::metrics::MATERIALIZER_READ_SIDE_DISPATCHES.inc();
         }
+    }
+
+    /// True when `chain`'s tail reaches into an ancestor lineage
+    /// segment — i.e. the read had to leave this timeline's own rows.
+    /// (A copy-up image installed at an LSN ≤ the branch point can
+    /// false-positive here; the materialiser's "already an image"
+    /// check makes the redundant dispatch a cheap no-op.)
+    fn chain_crossed_segment(&self, chain: &[Arc<PageRow>]) -> bool {
+        self.lineage.len() > 1
+            && chain
+                .last()
+                .is_some_and(|r| r.lsn <= self.lineage[1].cap_lsn)
     }
 
     pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<Arc<PageRow>>> {
@@ -810,7 +857,7 @@ impl PageWriter {
         let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain(&key_bytes, target_lsn);
         let persisted = self
             .compute_page_store
-            .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
+            .read_chain_lineage(self.tenant_id, &self.lineage, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
@@ -823,7 +870,8 @@ impl PageWriter {
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
         }
-        self.maybe_dispatch_read_side_materialize(&key_bytes, target_lsn, merged.len());
+        let crossed = self.chain_crossed_segment(&merged);
+        self.maybe_dispatch_read_side_materialize(&key_bytes, target_lsn, merged.len(), crossed);
         Ok(merged)
     }
 
@@ -860,7 +908,7 @@ impl PageWriter {
         // long materialiser walredo-and-INSERT can't stall compute.
         let persisted = self
             .fpu_page_store
-            .read_chain(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
+            .read_chain_lineage(self.tenant_id, &self.lineage, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
@@ -1315,7 +1363,7 @@ impl PageWriter {
         };
         let persisted = self
             .compute_page_store
-            .read_meta(self.tenant_id, self.timeline_id, &key_bytes, target_lsn)
+            .read_meta_lineage(self.tenant_id, &self.lineage, &key_bytes, target_lsn)
             .await?;
         Ok(match (buffered, persisted) {
             (Some(b), Some(p)) => Some(if b.lsn >= p.lsn { b } else { p }),
@@ -1332,7 +1380,7 @@ impl PageWriter {
     ) -> Result<std::collections::HashMap<bytes::Bytes, MetaRow>> {
         let mut out = self
             .compute_page_store
-            .scan_meta_range(self.tenant_id, self.timeline_id, range.clone(), target_lsn)
+            .scan_meta_range_lineage(self.tenant_id, &self.lineage, range.clone(), target_lsn)
             .await?;
         let aux = self.aux.lock();
         for row in aux.meta_buffer.iter() {
@@ -1374,9 +1422,9 @@ impl PageWriter {
         };
         let persisted = self
             .compute_page_store
-            .read_slru_chain(
+            .read_slru_chain_lineage(
                 self.tenant_id,
-                self.timeline_id,
+                &self.lineage,
                 kind,
                 segno,
                 blknum,
@@ -1402,9 +1450,9 @@ impl PageWriter {
     ) -> Result<std::collections::HashMap<u32, Vec<SlruPageRow>>> {
         let persisted = self
             .compute_page_store
-            .scan_slru_range(
+            .scan_slru_range_lineage(
                 self.tenant_id,
-                self.timeline_id,
+                &self.lineage,
                 kind,
                 segno,
                 blknum_range.clone(),

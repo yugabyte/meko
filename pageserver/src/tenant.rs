@@ -696,6 +696,17 @@ impl TenantShard {
             }
         };
 
+        // Build the ancestry lineage for lineage-aware reads. This is
+        // the open-existing path, so the timeline_state row (and its
+        // ancestor chain) is guaranteed to exist.
+        let mut resources = resources;
+        resources.lineage = Some(
+            self.compute_page_store
+                .load_lineage(tenant_id, timeline_id)
+                .await
+                .context("load timeline lineage")?,
+        );
+
         let (timeline, _timeline_ctx) = self.create_timeline_struct(
             timeline_id,
             &metadata,
@@ -998,37 +1009,61 @@ impl TenantShard {
     ) -> anyhow::Result<TenantPreload> {
         span::debug_assert_current_span_has_tenant_id();
 
-        // The authoritative timeline set lives in
-        // `pageserver.timeline_state`; one SQL fetch builds the full
-        // preload. Offloaded timelines aren't supported in yb-mode, so
-        // the tenant-manifest blob is also skipped.
+        // Single-timeline pageserver: load ONLY the configured
+        // timeline's row. The tenant may have other rows in
+        // `pageserver.timeline_state` (ancestors and branches served
+        // by other pageserver processes) — those are reached through
+        // lineage-aware PageStore reads, never hosted here.
         let tenant_id = self.id;
-        let rows = tokio::select! {
-            r = self.compute_page_store.list_timelines(tenant_id) => r?,
+        let identity = self
+            .conf
+            .timeline_identity
+            .context("preload requires a timeline identity in pageserver.toml")?;
+        anyhow::ensure!(
+            identity.tenant_id == tenant_id,
+            "preload: tenant {} does not match configured identity {}",
+            tenant_id,
+            identity.tenant_id,
+        );
+        let row = tokio::select! {
+            r = self.compute_page_store.get_timeline(tenant_id, identity.timeline_id) => r?,
             _ = cancel.cancelled() => anyhow::bail!("cancelled"),
         };
-        info!(
-            "preload: {} timelines from pageserver.timeline_state",
-            rows.len()
-        );
-        let mut timelines = HashMap::with_capacity(rows.len());
-        for row in rows {
-            info!(
-                timeline_id = %row.timeline_id,
-                consistent_lsn = %row.consistent_lsn,
-                prev_record_lsn = ?row.prev_record_lsn,
-                applied_gc_cutoff_lsn = %row.applied_gc_cutoff_lsn,
-                ancestor_lsn = ?row.ancestor_lsn,
-                initdb_lsn = ?row.initdb_lsn,
-                "preload: timeline LSNs read from pageserver.timeline_state"
-            );
-            let metadata = synth_timeline_metadata_from_row(&row)?;
-            timelines.insert(
-                row.timeline_id,
-                Some(TimelinePreload {
-                    metadata: Ok(metadata),
-                }),
-            );
+        let mut timelines = HashMap::with_capacity(1);
+        match row {
+            Some(row) => {
+                if row.deleted_at.is_some() {
+                    anyhow::bail!(
+                        "timeline {} is marked deleted (deleted_at = {:?}); refusing to open",
+                        row.timeline_id,
+                        row.deleted_at,
+                    );
+                }
+                info!(
+                    timeline_id = %row.timeline_id,
+                    consistent_lsn = %row.consistent_lsn,
+                    prev_record_lsn = ?row.prev_record_lsn,
+                    applied_gc_cutoff_lsn = %row.applied_gc_cutoff_lsn,
+                    ancestor_lsn = ?row.ancestor_lsn,
+                    initdb_lsn = ?row.initdb_lsn,
+                    "preload: timeline LSNs read from pageserver.timeline_state"
+                );
+                let metadata = synth_timeline_metadata_from_row(&row)?;
+                timelines.insert(
+                    row.timeline_id,
+                    Some(TimelinePreload {
+                        metadata: Ok(metadata),
+                    }),
+                );
+            }
+            None => {
+                // Row absent: attach() runs the [timeline_init]
+                // create-if-missing path (bootstrap or branch).
+                info!(
+                    timeline_id = %identity.timeline_id,
+                    "preload: no timeline_state row yet; will create at attach if configured"
+                );
+            }
         }
         Ok(TenantPreload { timelines })
     }
@@ -1064,6 +1099,114 @@ impl TenantShard {
                 .expect("yb-mode preload always builds an Ok TimelineMetadata");
             timeline_ancestors.insert(timeline_id, metadata);
         }
+
+        // Create-if-missing: the configured timeline has no
+        // `pageserver.timeline_state` row yet. Create it per the
+        // `[timeline_init]` block of pageserver.toml — bootstrap runs
+        // initdb + import (and inserts the row via finish_creation);
+        // branch only writes a row pointing at the ancestor (the data
+        // is reached via lineage-aware reads).
+        let identity = self
+            .conf
+            .timeline_identity
+            .context("attach requires a timeline identity in pageserver.toml")?;
+        let mut bootstrapped_timeline = None;
+        if !timeline_ancestors.contains_key(&identity.timeline_id) {
+            use pageserver_api::config::TimelineInitConfig;
+            match &self.conf.timeline_init {
+                None => anyhow::bail!(
+                    "timeline {} has no timeline_state row and no [timeline_init] is \
+                     configured in pageserver.toml",
+                    identity.timeline_id,
+                ),
+                Some(TimelineInitConfig::Bootstrap { pg_version }) => {
+                    // Crash-retry idempotency: if a previous bootstrap
+                    // attempt uploaded the initdb tar but crashed before
+                    // the row insert, REUSE that tar. initdb output is
+                    // not bit-deterministic, and the orphan page rows
+                    // from the failed import must be overwritten with
+                    // identical payloads on retry.
+                    let initdb_blob = initdb_storage::remote_initdb_archive_path(
+                        &self.id,
+                        &identity.timeline_id,
+                    );
+                    let load_existing_initdb = match self
+                        .remote_storage
+                        .head_object(&initdb_blob, &self.cancel)
+                        .await
+                    {
+                        Ok(_) => {
+                            info!(
+                                timeline_id = %identity.timeline_id,
+                                "bootstrap: reusing initdb tar from a previous attempt"
+                            );
+                            Some(identity.timeline_id)
+                        }
+                        Err(DownloadError::NotFound) => None,
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(e)
+                                .context("probe initdb tar before bootstrap"));
+                        }
+                    };
+                    info!(
+                        timeline_id = %identity.timeline_id,
+                        pg_version = %pg_version,
+                        "bootstrapping configured timeline (initdb + import)"
+                    );
+                    // The nested span carries timeline_id: the timeline
+                    // creation internals (UninitializedTimeline::write,
+                    // flush loop spawn) debug-assert that both tenant_id
+                    // and timeline_id are on the current span. The
+                    // surrounding attach span only has tenant_id.
+                    let result = self
+                        .bootstrap_timeline(
+                            identity.timeline_id,
+                            *pg_version,
+                            load_existing_initdb,
+                            ctx,
+                        )
+                        .instrument(info_span!("bootstrap_timeline", timeline_id = %identity.timeline_id))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("bootstrap configured timeline: {e}"))?;
+                    // finish_creation inserted the timeline into
+                    // self.timelines and wrote the timeline_state row;
+                    // activation happens in TenantShard::activate.
+                    let (CreateTimelineResult::Created(t)
+                    | CreateTimelineResult::Idempotent(t)) = result;
+                    bootstrapped_timeline = Some(t.timeline_id);
+                }
+                Some(TimelineInitConfig::Branch {
+                    ancestor_timeline_id,
+                    ancestor_lsn,
+                }) => {
+                    let generation_i32: i32 = self
+                        .generation
+                        .into()
+                        .map(|g: u32| g as i32)
+                        .unwrap_or(0);
+                    info!(
+                        timeline_id = %identity.timeline_id,
+                        ancestor = %ancestor_timeline_id,
+                        %ancestor_lsn,
+                        "creating branch timeline row"
+                    );
+                    let row = self
+                        .fpu_page_store
+                        .create_branch_row(
+                            self.id,
+                            identity.timeline_id,
+                            *ancestor_timeline_id,
+                            *ancestor_lsn,
+                            generation_i32,
+                        )
+                        .await
+                        .context("create branch timeline row")?;
+                    let metadata = synth_timeline_metadata_from_row(&row)?;
+                    timeline_ancestors.insert(identity.timeline_id, metadata);
+                }
+            }
+        }
+        let _ = bootstrapped_timeline;
 
         // gc_blocking lived on index_part.json; yb-mode has no source for
         // it yet, so initialise empty.
@@ -1153,18 +1296,14 @@ impl TenantShard {
 
         info!("loading timeline {}", timeline_id);
 
-        let ancestor = if let Some(ancestor_id) = remote_metadata.ancestor_timeline() {
-            let timelines = self.timelines.lock().unwrap();
-            Some(Arc::clone(timelines.get(&ancestor_id).ok_or_else(
-                || {
-                    anyhow::anyhow!(
-                        "cannot find ancestor timeline {ancestor_id} for timeline {timeline_id}"
-                    )
-                },
-            )?))
-        } else {
-            None
-        };
+        // Single-timeline pageserver: a branch's ancestor is served by
+        // a DIFFERENT pageserver process and is never hosted here. The
+        // in-process Arc link is therefore best-effort (present only in
+        // multi-timeline test setups); reads below the branch point go
+        // through lineage-aware PageStore reads instead.
+        let ancestor = remote_metadata
+            .ancestor_timeline()
+            .and_then(|ancestor_id| self.timelines.lock().unwrap().get(&ancestor_id).cloned());
 
         self.timeline_init_and_sync(
             timeline_id,
@@ -2293,10 +2432,17 @@ impl TenantShard {
         ctx: &RequestContext,
     ) -> anyhow::Result<(Arc<Timeline>, RequestContext)> {
         let ancestor_id = new_metadata.ancestor_timeline();
-        anyhow::ensure!(
-            ancestor_id == ancestor.as_ref().map(|t| t.timeline_id),
-            "Timeline's {new_timeline_id} ancestor {ancestor_id:?} was not found"
-        );
+        // If an in-process ancestor Arc is supplied it must match the
+        // metadata; its ABSENCE is fine — branches read their ancestor
+        // through lineage-aware PageStore reads, not an in-process link.
+        if let Some(ancestor) = ancestor.as_ref() {
+            anyhow::ensure!(
+                ancestor_id == Some(ancestor.timeline_id),
+                "Timeline's {new_timeline_id} ancestor {ancestor_id:?} does not match \
+                 supplied ancestor {}",
+                ancestor.timeline_id,
+            );
+        }
         let state = TimelineState::Loading;
 
         let pg_version = new_metadata.pg_version();
@@ -3114,6 +3260,7 @@ impl TenantShard {
             basebackup_cache: self.basebackup_cache.clone(),
             compute_page_store: self.compute_page_store.clone(),
             fpu_page_store: self.fpu_page_store.clone(),
+            lineage: None,
         }
     }
 

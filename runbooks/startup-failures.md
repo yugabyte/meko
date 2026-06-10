@@ -28,9 +28,18 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 1. **storage_controller** → checkpoint: `curl $SC_BASE/control/v1/node` returns (even if `[]`).
 2. **safekeeper** → checkpoint: its HTTP `/v1/status` (or process up + port listening).
 3. **endpoint_storage** (if used) → checkpoint: process up, no TLS errors in its log.
-4. **pageserver** → checkpoint: `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
-5. **Register PS + SK with the SC** (see "Manual registration" — they may not auto-register).
-6. **Create tenant/timeline** (via yb_light_local or SC API).
+4. **pageserver** — *single-timeline model (task 22)*: the process refuses to start unless
+   `pageserver.toml` carries `tenant_id`/`timeline_id`/`generation`. On a fresh repo this is
+   normal: `yb_light_local start` prints `Skipping pageserver …: no timeline identity yet` and
+   `tenant create` bakes the identity in, bumps the generation via the SC attach-hook, and starts
+   the pageserver itself. Manual deployments must write the identity (and `[timeline_init]` for a
+   first boot) before spawning. Checkpoint once started:
+   `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
+5. **Register SK with the SC** (see "Manual registration"). PS registration is launcher-driven
+   (`node_register` + attach-hook happen inside every `yb_light_local pageserver start`).
+6. **Create tenant/timeline** (via yb_light_local; the pageserver bootstraps the timeline from its
+   `[timeline_init]` config — the SC only observes via `timeline_detail` and then creates the
+   timeline on the safekeeper).
 7. **Create + start the compute endpoint** → checkpoint: `psql … 'SELECT 1'`.
 
 ---
@@ -43,6 +52,8 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SK: `unexpected argument '--<flag>'` | flag removed/renamed in this build | **C** |
 | endpoint_storage / PS: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
+| PS exits at startup: `pageserver.toml must set tenant_id/timeline_id/generation` | single-timeline identity missing — launcher hasn't assigned one (run `tenant create`, or write the identity + `[timeline_init]` into pageserver.toml) | — |
+| PS exits at startup: `timeline … has no timeline_state row and no [timeline_init]` | row missing and no creation mode configured (wiped YB DB, or toml written without `[timeline_init]`) | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
 | Compute postmaster dies with `EADDRINUSE` on its own port | yb_light_local port collision | **H** |

@@ -38,13 +38,8 @@ use pageserver_api::config::{
     DEFAULT_HTTP_LISTEN_PORT as DEFAULT_PAGESERVER_HTTP_PORT,
     DEFAULT_PG_LISTEN_PORT as DEFAULT_PAGESERVER_PG_PORT,
 };
-use pageserver_api::controller_api::{
-    NodeAvailabilityWrapper, PlacementPolicy, TenantCreateRequest,
-};
-use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardStripeSize};
-use pageserver_api::models::{
-    ShardParameters, TenantConfigRequest, TimelineCreateRequest, TimelineInfo,
-};
+use pageserver_api::controller_api::{NodeAvailabilityWrapper, PlacementPolicy};
+use pageserver_api::models::{TenantConfigRequest, TimelineCreateRequest, TimelineInfo};
 use postgres_backend::AuthType;
 use safekeeper_api::membership::{SafekeeperGeneration, SafekeeperId};
 use safekeeper_api::{
@@ -1134,37 +1129,48 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
 
             // If tenant ID was not specified, generate one
             let tenant_id = args.tenant_id.unwrap_or_else(TenantId::generate);
-
-            // We must register the tenant with the storage controller, so
-            // that when the pageserver restarts, it will be re-attached.
-            let storage_controller = StorageController::from_env(env);
-            storage_controller
-                .tenant_create(TenantCreateRequest {
-                    // Note that ::unsharded here isn't actually because the tenant is unsharded, its because the
-                    // storage controller expects a shard-naive tenant_id in this attribute, and the TenantCreateRequest
-                    // type is used both in the storage controller (for creating tenants) and in the pageserver (for
-                    // creating shards)
-                    new_tenant_id: TenantId::unsharded(tenant_id),
-                    generation: None,
-                    shard_parameters: ShardParameters {
-                        count: ShardCount::new(args.shard_count),
-                        stripe_size: args
-                            .shard_stripe_size
-                            .map(ShardStripeSize)
-                            .unwrap_or(DEFAULT_STRIPE_SIZE),
-                    },
-                    placement_policy: args.placement_policy.clone(),
-                    config: tenant_conf,
-                })
-                .await?;
-            println!("tenant {tenant_id} successfully created on the pageserver");
-
-            // Create an initial timeline for the new tenant
             let new_timeline_id = args.timeline_id.unwrap_or(TimelineId::generate());
 
-            // FIXME: passing None for ancestor_start_lsn is not kosher in a sharded world: we can't have
-            // different shards picking different start lsns.  Maybe we have to teach storage controller
-            // to let shard 0 branch first and then propagate the chosen LSN to other shards.
+            // Single-timeline pageserver flow: bake the identity into
+            // pageserver.toml, then start the process. The pageserver
+            // bootstraps the timeline itself (initdb + import) because
+            // its timeline_state row doesn't exist yet.
+            let pageserver = get_default_pageserver(env);
+            pageserver.set_timeline_identity(
+                tenant_id,
+                new_timeline_id,
+                0, // placeholder; start() bumps via attach_hook
+                Some(&pageserver_api::config::TimelineInitConfig::Bootstrap {
+                    pg_version: args.pg_version,
+                }),
+            )?;
+
+            // Register the node + tenant with the storage controller
+            // up front so the tenant config below has a row to land on.
+            pageserver
+                .register_and_attach()
+                .await
+                .context("register tenant with storage controller")?;
+            let storage_controller = StorageController::from_env(env);
+            storage_controller
+                .set_tenant_config(&TenantConfigRequest {
+                    tenant_id,
+                    config: tenant_conf,
+                })
+                .await
+                .context("set tenant config")?;
+
+            pageserver
+                .start(&std::time::Duration::from_secs(60))
+                .await
+                .context("start pageserver")?;
+            // NB: test/e2e/run.sh extracts the tenant id from this exact
+            // line (`awk '/successfully created/{print $2}'`).
+            println!("tenant {tenant_id} successfully created on the pageserver");
+
+            // The storage controller waits for the pageserver-side
+            // bootstrap to complete (it polls timeline_detail), then
+            // creates the timeline on the safekeeper.
             storage_controller
                 .tenant_timeline_create(
                     tenant_id,
@@ -1226,31 +1232,11 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             let timelines = pageserver.timeline_list(&tenant_shard_id).await?;
             print_timelines_tree(timelines, env.timeline_name_mappings().await?)?;
         }
-        TimelineCmd::Create(args) => {
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
-            let new_branch_name = &args.branch_name;
-            let new_timeline_id_opt = args.timeline_id;
-            let new_timeline_id = new_timeline_id_opt.unwrap_or(TimelineId::generate());
-
-            let storage_controller = StorageController::from_env(env);
-            let create_req = TimelineCreateRequest {
-                new_timeline_id,
-                mode: pageserver_api::models::TimelineCreateRequestMode::Bootstrap {
-                    existing_initdb_timeline_id: None,
-                    pg_version: Some(args.pg_version),
-                },
-            };
-            let timeline_info = storage_controller
-                .tenant_timeline_create(tenant_id, create_req)
-                .await?;
-
-            let last_record_lsn = timeline_info.last_record_lsn;
-            env.register_branch_mapping(new_branch_name.to_string(), tenant_id, new_timeline_id)
-                .await?;
-
-            println!(
-                "Created timeline '{}' at Lsn {last_record_lsn} for tenant: {tenant_id}",
-                timeline_info.timeline_id
+        TimelineCmd::Create(_) => {
+            anyhow::bail!(
+                "`timeline create` is not supported: each pageserver serves exactly one \
+                 timeline (created by `tenant create`). A second timeline requires a second \
+                 pageserver — per-endpoint pageserver support is the next step."
             );
         }
         // TODO: rename to import-basebackup-plus-wal
@@ -1315,44 +1301,12 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                 .await?;
             println!("Done");
         }
-        TimelineCmd::Branch(args) => {
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
-            let new_timeline_id = args.timeline_id.unwrap_or(TimelineId::generate());
-            let new_branch_name = &args.branch_name;
-            let ancestor_branch_name = args
-                .ancestor_branch_name
-                .clone()
-                .unwrap_or(DEFAULT_BRANCH_NAME.to_owned());
-            let ancestor_timeline_id = env
-                .get_branch_timeline_id(&ancestor_branch_name, tenant_id)
-                .await?
-                .ok_or_else(|| {
-                    anyhow!("Found no timeline id for branch name '{ancestor_branch_name}'")
-                })?;
-
-            let start_lsn = args.ancestor_start_lsn;
-            let storage_controller = StorageController::from_env(env);
-            let create_req = TimelineCreateRequest {
-                new_timeline_id,
-                mode: pageserver_api::models::TimelineCreateRequestMode::Branch {
-                    ancestor_timeline_id,
-                    ancestor_start_lsn: start_lsn,
-                    read_only: false,
-                    pg_version: None,
-                },
-            };
-            let timeline_info = storage_controller
-                .tenant_timeline_create(tenant_id, create_req)
-                .await?;
-
-            let last_record_lsn = timeline_info.last_record_lsn;
-
-            env.register_branch_mapping(new_branch_name.to_string(), tenant_id, new_timeline_id)
-                .await?;
-
-            println!(
-                "Created timeline '{}' at Lsn {last_record_lsn} for tenant: {tenant_id}. Ancestor timeline: '{ancestor_branch_name}'",
-                timeline_info.timeline_id
+        TimelineCmd::Branch(_) => {
+            anyhow::bail!(
+                "`timeline branch` is not supported yet in the single-timeline-pageserver \
+                 world: a branch needs its own pageserver process. The storage primitives \
+                 (branch rows + lineage-aware reads) are in place; per-endpoint pageserver \
+                 orchestration is the next step."
             );
         }
     }
@@ -1985,6 +1939,27 @@ async fn handle_start_all_impl(
         for ps_conf in &env.pageservers {
             js.spawn(async move {
                 let pageserver = PageServerNode::from_env(env, ps_conf);
+                // Single-timeline pageserver: the process needs a
+                // (tenant, timeline) identity in its pageserver.toml to
+                // start. A fresh repo doesn't have one yet — `tenant
+                // create` bakes it in and starts the pageserver itself.
+                match pageserver.read_timeline_identity() {
+                    Ok(None) => {
+                        println!(
+                            "Skipping pageserver {}: no timeline identity yet \
+                             (run `tenant create` to assign one and start it)",
+                            ps_conf.id
+                        );
+                        return Ok(());
+                    }
+                    Ok(Some(_)) => {}
+                    Err(e) => {
+                        return Err(e.context(format!(
+                            "read timeline identity of pageserver {}",
+                            ps_conf.id
+                        )));
+                    }
+                }
                 pageserver
                     .start(&retry_timeout)
                     .await
@@ -2046,8 +2021,27 @@ async fn neon_start_status_check(
 
         let mut passed = true;
         let mut nodes = storcon.node_list().await?;
-        let mut pageservers = env.pageservers.clone();
+        // Only pageservers with a timeline identity were started (a
+        // fresh repo's pageserver starts later, at `tenant create`).
+        let mut pageservers = env
+            .pageservers
+            .iter()
+            .filter(|ps_conf| {
+                PageServerNode::from_env(env, ps_conf)
+                    .read_timeline_identity()
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
 
+        if nodes.len() < pageservers.len() {
+            continue;
+        }
+        // Extra registered nodes (e.g. a node row surviving from a
+        // previous identity) are tolerated; check only the expected ones.
+        nodes.retain(|n| pageservers.iter().any(|ps| ps.id == n.id));
         if nodes.len() != pageservers.len() {
             continue;
         }

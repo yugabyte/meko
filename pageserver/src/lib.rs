@@ -6,7 +6,6 @@ pub mod basebackup;
 pub mod basebackup_cache;
 pub mod config;
 pub mod context;
-pub mod controller_upcall_client;
 
 pub mod http;
 pub mod import_datadir;

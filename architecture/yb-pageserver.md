@@ -12,7 +12,98 @@ deployments.
 This document is the design and roadmap. The corresponding upstream
 component is documented in [`pageserver.md`](pageserver.md); read that
 first for the parts that are inherited unchanged (Key encoding, walredo,
-WAL ingest, getpage RPC, sharding, generation handshake).
+WAL ingest, getpage RPC).
+
+## Single-timeline process model
+
+One yb-pageserver process serves exactly **one (tenant_id,
+timeline_id) for its entire lifetime** (the long-term topology gives
+each compute endpoint its own pageserver + safekeeper). The identity
+is baked into `pageserver.toml` by the launcher before spawn:
+
+```toml
+tenant_id   = "c8178f5e..."   # required
+timeline_id = "77ffde89..."   # required
+generation  = 7               # required; launcher bumps on EVERY spawn
+
+[timeline_init]               # consulted only when the timeline_state row is absent
+mode       = "bootstrap"      # or "branch" + ancestor_timeline_id + ancestor_lsn
+pg_version = 17
+```
+
+Startup is **open-or-create**:
+
+- Row exists in `pageserver.timeline_state` → open it (restarts are
+  trivially idempotent; `[timeline_init]` is ignored). A row with
+  `deleted_at` set refuses to open.
+- Row absent + `mode = "bootstrap"` → run initdb + import, then
+  insert the row (`UninitializedTimeline::finish_creation`). If the
+  initdb tar for this timeline already exists in remote storage, it is
+  REUSED — initdb output is not bit-deterministic, and a crash-retry
+  must overwrite any orphan page rows with identical payloads.
+- Row absent + `mode = "branch"` → validate against the ancestor's
+  persisted row only (`PageStore::create_branch_row`: branch point
+  durable, not below GC cutoff, not below the ancestor's own branch
+  point) and insert a row with `consistent_lsn = ancestor_lsn` (the
+  walreceiver resume point — never 0). No in-process ancestor object
+  is needed; reads go through the lineage walk (below).
+- Row absent + no `[timeline_init]` → fatal.
+
+**Generation handoff is launcher-owned.** The pageserver no longer
+calls the storage_ctl `/upcall/v1/re-attach` API (the
+`controller_upcall_client` module is deleted). Instead, every
+`PageServerNode::start` in neon_local: registers the node with
+storage_ctl (idempotent), calls the attach-hook API (which increments
+`storage_controller.tenants.generation` against this node and returns
+it), rewrites `generation` in `pageserver.toml`, and only then spawns
+the process. The YB-side CAS (`cas_bump_generation_on_attach`)
+enforces the fence at open regardless of how the number arrived.
+
+Consequences elsewhere:
+- storage_ctl's reconciler is a no-op in yb-mode
+  (`maybe_configured_reconcile_shard` returns `None`): there is no
+  location_config to converge — attachment is decided at spawn time.
+- storage_ctl's timeline-create no longer POSTs to the pageserver; it
+  **observes** (polls `timeline_detail` until `Active`, generous
+  timeout for debug-build initdb), then runs the safekeeper leg with
+  `last_record_lsn` from the observed `TimelineInfo`.
+- `yb_light_local start` skips a pageserver whose toml has no
+  identity yet; `tenant create` bakes the identity in and starts it.
+- `timeline create` / `timeline branch` CLI return errors until
+  per-endpoint pageserver orchestration lands (a second timeline
+  needs a second pageserver process).
+
+## Lineage-aware reads (branches)
+
+A branch's pre-branch-point rows live in YB under the **ancestor's**
+`timeline_id`; nothing is copied at branch time (pages, SLRU and meta
+alike). At startup the pageserver walks the
+`ancestor_timeline_id`/`ancestor_lsn` links in `timeline_state` once
+(`PageStore::load_lineage`) and builds an ordered segment list
+`[(self, MAX), (parent, cap), (grandparent, min(caps)), …]` — static
+for the process lifetime. Every PageStore read path (`read_chain`,
+`scan_range`, `read_slru_chain`, `scan_slru_range`, `read_meta`,
+`scan_meta_range`) has a `*_lineage` variant that walks the segments
+nearest-first, capping each segment's read LSN at
+`min(target_lsn, cap)`, and stops as soon as the chain is anchored
+(`will_init`) / the meta key is found. The `PageWriter` passes the
+lineage through everywhere, including the materialiser's
+`read_chain_durable`.
+
+Iterative per-segment queries (not one UNION ALL) on purpose:
+`timeline_id` is in the hash partition key, so segments live on
+different tablets. The walk touches ONE tablet in the steady state —
+always for unbranched timelines, and per-key after the materialiser
+copies an anchor image up into the descendant's own timeline_id. A
+chain that crossed a segment boundary force-dispatches a read-side
+materialise job, so each cold branch key converges to local after one
+slow read. Writes (`put_*`, materialiser installs,
+`advance_consistent_lsn`, `delete_all_for_timeline`) always target the
+own timeline_id, never an ancestor.
+
+Note the `lineage` JSONB column on `timeline_state` is unrelated: it
+carries upstream detach-ancestor state (always `Default` in yb-mode);
+the ancestry chain is derived from the `ancestor_*` columns.
 
 ## What was kept from upstream
 
