@@ -30,8 +30,8 @@ sudo chown -R "$(id -u)":"$(id -g)" "$MOUNTPOINT"
 TEST_OUTPUT="$MOUNTPOINT/test_output"
 mkdir "$TEST_OUTPUT"
 
-NEON_REPO_DIR="$MOUNTPOINT/repo_dir"
-mkdir "$NEON_REPO_DIR"
+YB_LIGHT_REPO_DIR="$MOUNTPOINT/repo_dir"
+mkdir "$YB_LIGHT_REPO_DIR"
 
 cat <<EOF
 SETUP COMPLETE
@@ -47,9 +47,7 @@ run the following commands from the top of the neon.git checkout
     DEFAULT_PG_VERSION=16 BUILD_TYPE=release ./scripts/pytest test_runner/performance/test_latency.py
 
     # for interactive use
-    export NEON_REPO_DIR="$NEON_REPO_DIR"
+    export YB_LIGHT_REPO_DIR="$YB_LIGHT_REPO_DIR"
     cargo build_testing --release
     ./target/release/yb_light_local init --force empty-dir-ok
 EOF
-
-

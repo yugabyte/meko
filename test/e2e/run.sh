@@ -13,7 +13,7 @@
 #
 #   *.sh   — runs after the prep step has ensured the cluster + a
 #            running endpoint named `main`. Exports $TID,
-#            $COMPUTE_PORT, $NEON, $NEON_REPO_DIR, $YB_DBNAME.
+#            $COMPUTE_PORT, $NEON, $YB_LIGHT_REPO_DIR, $YB_DBNAME.
 #   *.sql  — psql workload against the same shared cluster.
 #
 # After every test the pageserver log is scanned for corruption
@@ -42,9 +42,9 @@ TEST_DIR=${TEST_DIR:-$REPO/.e2e-tests}
 export TEST_DIR
 RUN_ID=$(date +%Y%m%d-%H%M%S)
 
-NEON_REPO_DIR=${NEON_REPO_DIR:-$TEST_DIR/run_$RUN_ID}
-export NEON_REPO_DIR
-mkdir -p "$NEON_REPO_DIR"
+YB_LIGHT_REPO_DIR=${YB_LIGHT_REPO_DIR:-$TEST_DIR/run_$RUN_ID}
+export YB_LIGHT_REPO_DIR
+mkdir -p "$YB_LIGHT_REPO_DIR"
 export YB_PS_VERIFY_WAL_ROUNDTRIP=${YB_PS_VERIFY_WAL_ROUNDTRIP:-1}
 
 YB_HOST=${YB_HOST:-127.0.0.1}
@@ -74,7 +74,7 @@ cleanup_on_exit() {
 trap cleanup_on_exit EXIT
 
 # Capture stdout+stderr to a per-run log. The log lives outside
-# NEON_REPO_DIR because clean.sh wipes that dir at the start of every
+# YB_LIGHT_REPO_DIR because clean.sh wipes that dir at the start of every
 # run; siblings persist across runs and let you diff successive runs.
 RUN_LOG_DIR=${RUN_LOG_DIR:-${TEST_DIR}}
 mkdir -p "$RUN_LOG_DIR"
@@ -90,15 +90,15 @@ step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 
 MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
 
-# Pidfile locations under NEON_REPO_DIR.
-PS_PIDFILE=$NEON_REPO_DIR/pageserver_1/pageserver.pid
-SK_PIDFILE=$NEON_REPO_DIR/safekeepers/sk1/safekeeper.pid
-SC_PIDFILE=$NEON_REPO_DIR/storage_controller_1/storage_controller.pid
-ES_PIDFILE=$NEON_REPO_DIR/endpoint_storage/endpoint_storage.pid
-EP_COMPUTE_PIDFILE=$NEON_REPO_DIR/endpoints/main/compute_ctl.pid
-EP_PG_PIDFILE=$NEON_REPO_DIR/endpoints/main/pgdata/postmaster.pid
+# Pidfile locations under YB_LIGHT_REPO_DIR.
+PS_PIDFILE=$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.pid
+SK_PIDFILE=$YB_LIGHT_REPO_DIR/safekeepers/sk1/safekeeper.pid
+SC_PIDFILE=$YB_LIGHT_REPO_DIR/storage_controller_1/storage_controller.pid
+ES_PIDFILE=$YB_LIGHT_REPO_DIR/endpoint_storage/endpoint_storage.pid
+EP_COMPUTE_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/compute_ctl.pid
+EP_PG_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/pgdata/postmaster.pid
 
-LOG=$NEON_REPO_DIR/pageserver_1/pageserver.log
+LOG=$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log
 
 is_running() {
     local pidfile=$1

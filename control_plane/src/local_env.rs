@@ -39,7 +39,7 @@ pub struct LocalEnv {
     // compute endpoints).
     //
     // This is not stored in the config file. Rather, this is the path where the
-    // config file itself is. It is read from the NEON_REPO_DIR env variable which
+    // config file itself is. It is read from the YB_LIGHT_REPO_DIR env variable which
     // must be an absolute path. If the env var is not set, $PWD/.yb_light is used.
     pub base_data_dir: PathBuf,
 
@@ -999,12 +999,12 @@ impl LocalEnv {
 }
 
 pub fn base_path() -> PathBuf {
-    let path = match std::env::var_os("NEON_REPO_DIR") {
+    let path = match std::env::var_os("YB_LIGHT_REPO_DIR") {
         Some(val) => {
             let path = PathBuf::from(val);
             if !path.is_absolute() {
                 // repeat the env var in the error because our default is always absolute
-                panic!("NEON_REPO_DIR must be an absolute path, got {path:?}");
+                panic!("YB_LIGHT_REPO_DIR must be an absolute path, got {path:?}");
             }
             path
         }

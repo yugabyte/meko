@@ -597,7 +597,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description="Standalone yb-light cluster UI")
-    ap.add_argument("--repo-dir", default=os.environ.get("NEON_REPO_DIR", ".yb_light"),
+    ap.add_argument("--repo-dir", default=os.environ.get("YB_LIGHT_REPO_DIR", ".yb_light"),
                     help="path to the .yb_light repo dir (default: .yb_light)")
     ap.add_argument("--host", default="127.0.0.1")
     # 9099 by default: 9000 is YugabyteDB's tserver web UI, 7000 the master UI.

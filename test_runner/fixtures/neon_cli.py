@@ -179,7 +179,7 @@ class YbLightLocalCli(AbstractNeonCli):
             env_vars = {}
         else:
             env_vars = extra_env.copy()
-        env_vars["NEON_REPO_DIR"] = str(repo_dir)
+        env_vars["YB_LIGHT_REPO_DIR"] = str(repo_dir)
         env_vars["POSTGRES_DISTRIB_DIR"] = str(pg_distrib_dir)
 
         super().__init__(env_vars, binpath)

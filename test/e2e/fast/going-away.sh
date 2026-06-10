@@ -8,7 +8,7 @@
 # compute waits up to pageserver_response_disconnect_timeout
 # (default 30 s) before tearing down the half-closed connection.
 #
-# Run via test/e2e/run.sh — it provides $NEON, $NEON_REPO_DIR,
+# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR,
 # $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
@@ -52,7 +52,7 @@ step "Confirm the pageserver wrote GoingAway frames during shutdown"
 # emission is the load-bearing half of the protocol; compute
 # wire-up is exercised by libpagestore unit-level logic and the
 # C `T_NeonGoingAwayResponse` parser, both verified at build time.
-PS_LOG="$NEON_REPO_DIR/pageserver_1/pageserver.log"
+PS_LOG="$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log"
 [[ -r $PS_LOG ]] || { echo "FAIL — pageserver log not readable at $PS_LOG"; exit 1; }
 
 FRAMES=$(grep -c "writing GoingAway frame on graceful shutdown" "$PS_LOG" || true)

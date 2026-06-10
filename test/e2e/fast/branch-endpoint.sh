@@ -9,7 +9,7 @@
 #   2. post-branch writes — isolated from the ancestor in both
 #      directions.
 #
-# Run via test/e2e/run.sh — it provides $NEON, $NEON_REPO_DIR,
+# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR,
 # $COMPUTE_PORT, $TID and a fresh cluster + running `main` endpoint.
 
 set -euo pipefail

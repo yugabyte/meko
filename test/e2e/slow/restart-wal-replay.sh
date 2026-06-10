@@ -29,7 +29,7 @@
 #      this hangs (or basebackup fails with an LSN timeout); if fixed,
 #      the value of n reflects the writes done while the PS was down.
 #
-# Run via test/e2e/run.sh — it provides $NEON, $NEON_REPO_DIR,
+# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR,
 # $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
@@ -159,19 +159,19 @@ if ! timeout "$ENDPOINT_START_TIMEOUT" "$NEON" endpoint start main >/dev/null; t
     echo "FAIL — endpoint failed to start within ${ENDPOINT_START_TIMEOUT}s"
     echo "  most likely the pageserver could not catch up to the safekeeper's WAL gap"
     echo "  (tail of pageserver log:)"
-    DEST="${RUN_LOG_DIR:-${NEON_REPO_DIR}-logs}"
+    DEST="${RUN_LOG_DIR:-${YB_LIGHT_REPO_DIR}-logs}"
     mkdir -p "$DEST"
-    cp "$NEON_REPO_DIR/pageserver_1/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
-    find "$NEON_REPO_DIR" -name 'safekeeper.log' -exec cp {} "$DEST/restart-wal-replay-sk-$$.log" \; 2>/dev/null || true
-    tail -n 500 "$NEON_REPO_DIR/pageserver_1/pageserver.log"
+    cp "$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
+    find "$YB_LIGHT_REPO_DIR" -name 'safekeeper.log' -exec cp {} "$DEST/restart-wal-replay-sk-$$.log" \; 2>/dev/null || true
+    tail -n 500 "$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log"
     exit 1
 fi
 
 preserve_logs_on_failure() {
-    local DEST="${RUN_LOG_DIR:-${NEON_REPO_DIR}-logs}"
+    local DEST="${RUN_LOG_DIR:-${YB_LIGHT_REPO_DIR}-logs}"
     mkdir -p "$DEST"
-    cp "$NEON_REPO_DIR/pageserver_1/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
-    find "$NEON_REPO_DIR" -name 'safekeeper.log' -exec cp {} "$DEST/restart-wal-replay-sk-$$.log" \; 2>/dev/null || true
+    cp "$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
+    find "$YB_LIGHT_REPO_DIR" -name 'safekeeper.log' -exec cp {} "$DEST/restart-wal-replay-sk-$$.log" \; 2>/dev/null || true
 }
 
 step "Read back n and verify catch-up"
@@ -207,7 +207,7 @@ fi
 echo "  ok — n advanced by $(( n_after - n_before_stop )) during the SK-only window"
 
 step "Scan pageserver log for catch-up failure markers"
-LOG=$NEON_REPO_DIR/pageserver_1/pageserver.log
+LOG=$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log
 [[ -r $LOG ]] || { echo "FAIL — pageserver log not readable at $LOG"; exit 1; }
 
 # The signature of the bug is the walreceiver retry loop hammering
