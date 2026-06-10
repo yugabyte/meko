@@ -98,3 +98,4 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 20 | [Remove storage broker](20_remove-storage-broker.md) | ✅ done | medium | safekeeper |
 | 21 | [Drop `commit_lsn` / `peer_horizon_lsn` from wire](21_drop-commit-lsn-peer-horizon-from-wire.md) | ✅ done | low | safekeeper |
 | 22 | [Single-(tenant,timeline) pageserver](22_single-timeline-pageserver.md) | 🚧 in_progress | high | yb-pageserver |
+| 23 | [Flaky: SK kill-9 recovery hits "YB WAL hole"](23_sk-kill9-wal-hole-flake.md) | ⏳ pending | high | safekeeper |

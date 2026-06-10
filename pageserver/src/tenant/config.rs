@@ -12,7 +12,6 @@
 //! `pageserver.tenant_config` (task 17.c). Neither is persisted on
 //! the pageserver's local disk.
 
-use pageserver_api::models;
 use serde::{Deserialize, Serialize};
 use utils::generation::Generation;
 
@@ -30,22 +29,6 @@ impl std::fmt::Debug for LocationConf {
 }
 
 impl LocationConf {
-    /// Construct an attachment record.
-    pub(crate) fn attached(generation: Generation) -> Self {
-        Self { generation }
-    }
-
-    /// Decode an external `LocationConfig` request into a
-    /// `LocationConf`. Fails if `generation` is absent — detachment
-    /// is signaled by the absence of a `LocationConf`, not by
-    /// decoding an empty one.
-    pub(crate) fn try_from(conf: &'_ models::LocationConfig) -> anyhow::Result<Self> {
-        let generation = conf
-            .generation
-            .map(Generation::new)
-            .ok_or_else(|| anyhow::anyhow!("Generation must be set when attaching"))?;
-        Ok(Self { generation })
-    }
 }
 
 impl Default for LocationConf {

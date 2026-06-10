@@ -45,18 +45,35 @@ multi-tenant/multi-timeline machinery. Design + stage breakdown in
   identity-less pageservers; `timeline create`/`branch` error until
   per-endpoint orchestration lands.
 
-## Remaining (stage C — the strip)
+## Landed (stage C — the strip, e2e fast+slow green)
 
-- HTTP surface prune (~26 tenant/timeline CRUD + location_config +
-  archival + import routes).
-- page_service + gRPC resolver swap (`SingleTimelineResolver`,
-  identity validation; keep `handle.rs` machinery).
-- Dissolve `TenantManager` (`tenant/mgr.rs`), then the tenant state
-  machine (lazy activation, `TenantState`, timelines HashMap →
-  single `Arc<Timeline>`); rename `TenantShard` → `PageServer`.
+- HTTP surface pruned to the single-timeline set (~26 routes deleted:
+  tenant/timeline CRUD, location_config, archival, detach_ancestor,
+  block/unblock_gc, wait_lsn, keyspace, top_tenants, import, aux
+  files, page_trace, …) plus their handler/error plumbing and the
+  import_basebackup/import_wal ingestion paths.
+- page_service + gRPC resolve against the configured identity
+  (misrouted requests rejected); shard-split rerouting
+  (`maybe_split_get_page`) deleted; `handle.rs` machinery kept.
+- `tenant/mgr.rs` rewritten as a single-slot holder (1878 → ~490
+  lines): TenantsMap/TenantSlot/slot guards, upsert_location,
+  detach/delete, resolve_attached_shard, slot metrics all gone.
+- Lazy-activation machinery deleted (`SpawnMode::Lazy`, warmup
+  semaphore wait, `AttachType`); attach is always eager.
+- Dead multi-timeline code deleted from `tenant.rs`/`timeline.rs`:
+  create_timeline/branch_timeline (in-process), DeleteTimelineFlow
+  remnants, archival checks, set_broken, gc_block summary/insert/
+  remove, collect_keyspace, ancestor_timeline accessor, etc.
+
+## Remaining (cosmetic, future)
+
+- timelines `HashMap` → single `Arc<Timeline>` field +
+  `TenantShard` → `PageServer` rename + synchronous open-before-
+  listeners startup (drops `TenantState` machine and the in-protocol
+  active-waits).
 - TenantConfig collapse (drop `pageserver.tenant_config` read path;
-  effective config = toml), dead ConfigToml fields, metrics trim.
-- Final: e2e fast + slow.
+  effective config = toml), dead ConfigToml fields
+  (`concurrent_tenant_warmup`, …).
 
 ## Deferred (future tasks)
 

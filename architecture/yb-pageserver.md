@@ -59,6 +59,15 @@ it), rewrites `generation` in `pageserver.toml`, and only then spawns
 the process. The YB-side CAS (`cas_bump_generation_on_attach`)
 enforces the fence at open regardless of how the number arrived.
 
+The management HTTP surface is correspondingly small: status /
+metrics / profile / utilization, the single timeline's list + detail
+(`GET /v1/tenant/:t/timeline[/:tl]`), `get_lsn_by_timestamp`,
+`get_timestamp_of_lsn`, `lsn_lease`, `do_gc`, `checkpoint`, and test
+plumbing (failpoints, panic, tracing/event,
+reload_auth_validation_keys). Inbound page-service requests (libpq
+query string / gRPC metadata) are validated against the configured
+identity and rejected as misrouted on mismatch.
+
 Consequences elsewhere:
 - storage_ctl's reconciler is a no-op in yb-mode
   (`maybe_configured_reconcile_shard` returns `None`): there is no

@@ -14,7 +14,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::fs;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
@@ -27,11 +27,9 @@ use futures::stream::FuturesUnordered;
 use itertools::Itertools as _;
 use once_cell::sync::Lazy;
 pub use pageserver_api::models::TenantState;
-use pageserver_api::models::{self, RelSizeMigration};
-use pageserver_api::models::{DEFAULT_STRIPE_SIZE, ShardIdentity, ShardStripeSize};
-use pageserver_api::models::{
-    TimelineArchivalState, TimelineState, TopTenantShardItem, WalRedoManagerStatus,
-};
+use pageserver_api::models::RelSizeMigration;
+use pageserver_api::models::ShardIdentity;
+use pageserver_api::models::TimelineState;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
 use tokio::io::BufReader;
@@ -45,11 +43,10 @@ use utils::try_rcu::ArcSwapExt;
 use utils::zstd::{create_zst_tarball, extract_zst_tarball};
 use utils::{backoff, completion, failpoint_support, fs_ext, pausable_failpoint};
 
-use self::config::LocationConf;
 use self::metadata::TimelineMetadata;
 use self::mgr::{GetActiveTenantError, GetTenantError};
 use self::timeline::uninit::{TimelineCreateGuard, TimelineExclusionError, UninitializedTimeline};
-use self::timeline::{GcCutoffs, TimelineResources, WaitLsnError};
+use self::timeline::{GcCutoffs, TimelineResources};
 use crate::basebackup_cache::BasebackupCache;
 use crate::config::PageServerConf;
 use crate::context;
@@ -73,7 +70,7 @@ static INIT_DB_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(8));
 use utils::crashsafe;
 use utils::generation::Generation;
 use utils::id::{TenantId, TimelineId};
-use utils::lsn::{Lsn, RecordLsn};
+use utils::lsn::Lsn;
 
 pub mod metadata;
 pub mod storage_layer;
@@ -154,13 +151,6 @@ impl AttachedTenantConf {
         }
     }
 
-    fn try_from(
-        conf: &'static PageServerConf,
-        location_conf: LocationConf,
-        tenant_conf: pageserver_api::models::TenantConfig,
-    ) -> anyhow::Result<Self> {
-        Ok(Self::new(conf, tenant_conf, location_conf.generation))
-    }
 
     fn is_gc_blocked_by_lsn_lease_deadline(&self) -> bool {
         self.lsn_lease_deadline
@@ -208,13 +198,12 @@ fn synth_timeline_metadata_from_row(
     ))
 }
 
-/// When we spawn a tenant, there is a special mode for tenant creation that
-/// avoids trying to read anything from remote storage.
+/// How to spawn the tenant. Single-timeline pageservers always attach
+/// eagerly: the launcher's storage_controller polls for Active right
+/// after spawn, and there is only one timeline to warm up.
 pub(crate) enum SpawnMode {
     /// Activate as soon as possible
     Eager,
-    /// Lazy activation in the background, with the option to skip the queue if the need comes up
-    Lazy,
 }
 
 ///
@@ -397,10 +386,6 @@ impl WalRedoManager {
             .await
     }
 
-    pub(crate) fn status(&self) -> Option<WalRedoManagerStatus> {
-        let WalRedoManager::Prod(_, m) = self;
-        Some(m.status())
-    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -458,46 +443,6 @@ impl Debug for DeleteTimelineError {
     }
 }
 
-#[derive(thiserror::Error)]
-pub enum TimelineArchivalError {
-    #[error("NotFound")]
-    NotFound,
-
-    #[error("Timeout")]
-    Timeout,
-
-    #[error("Cancelled")]
-    Cancelled,
-
-    #[error("ancestor is archived: {}", .0)]
-    HasArchivedParent(TimelineId),
-
-    #[error("HasUnarchivedChildren")]
-    HasUnarchivedChildren(Vec<TimelineId>),
-
-    #[error("Timeline archival is already in progress")]
-    AlreadyInProgress,
-
-    #[error(transparent)]
-    Other(anyhow::Error),
-}
-
-impl Debug for TimelineArchivalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound => write!(f, "NotFound"),
-            Self::Timeout => write!(f, "Timeout"),
-            Self::Cancelled => write!(f, "Cancelled"),
-            Self::HasArchivedParent(p) => f.debug_tuple("HasArchivedParent").field(p).finish(),
-            Self::HasUnarchivedChildren(c) => {
-                f.debug_tuple("HasUnarchivedChildren").field(c).finish()
-            }
-            Self::AlreadyInProgress => f.debug_tuple("AlreadyInProgress").finish(),
-            Self::Other(e) => f.debug_tuple("Other").field(e).finish(),
-        }
-    }
-}
-
 pub enum SetStoppingError {
     AlreadyStopping(completion::Barrier),
     Broken,
@@ -510,33 +455,6 @@ impl Debug for SetStoppingError {
             Self::Broken => write!(f, "Broken"),
         }
     }
-}
-
-/// Arguments to [`TenantShard::create_timeline`].
-///
-/// Not usable as an idempotency key for timeline creation because if [`CreateTimelineParamsBranch::ancestor_start_lsn`]
-/// is `None`, the result of the timeline create call is not deterministic.
-///
-/// See [`CreateTimelineIdempotency`] for an idempotency key.
-#[derive(Debug)]
-pub(crate) enum CreateTimelineParams {
-    Bootstrap(CreateTimelineParamsBootstrap),
-    Branch(CreateTimelineParamsBranch),
-}
-
-#[derive(Debug)]
-pub(crate) struct CreateTimelineParamsBootstrap {
-    pub(crate) new_timeline_id: TimelineId,
-    pub(crate) existing_initdb_timeline_id: Option<TimelineId>,
-    pub(crate) pg_version: PgMajorVersion,
-}
-
-/// NB: See comment on [`CreateTimelineIdempotency::Branch`] for why there's no `pg_version` here.
-#[derive(Debug)]
-pub(crate) struct CreateTimelineParamsBranch {
-    pub(crate) new_timeline_id: TimelineId,
-    pub(crate) ancestor_timeline_id: TimelineId,
-    pub(crate) ancestor_start_lsn: Option<Lsn>,
 }
 
 /// What is used to determine idempotency of a [`TenantShard::create_timeline`] call in  [`TenantShard::start_creating_timeline`] in  [`TenantShard::start_creating_timeline`].
@@ -556,8 +474,6 @@ pub(crate) struct CreateTimelineParamsBranch {
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CreateTimelineIdempotency {
-    /// NB: special treatment, see comment in [`Self`].
-    FailWithConflict,
     Bootstrap {
         pg_version: PgMajorVersion,
     },
@@ -588,14 +504,6 @@ enum CreateTimelineResult {
     Idempotent(Arc<Timeline>),
 }
 
-impl CreateTimelineResult {
-    fn discriminant(&self) -> &'static str {
-        match self {
-            Self::Created(_) => "Created",
-            Self::Idempotent(_) => "Idempotent",
-        }
-    }
-}
 
 #[derive(thiserror::Error, Debug)]
 pub enum CreateTimelineError {
@@ -893,70 +801,19 @@ impl TenantShard {
                     .as_mut()
                     .and_then(|x| x.initial_tenant_load_remote.take());
 
-                enum AttachType<'a> {
-                    /// We are attaching this tenant lazily in the background.
-                    Warmup {
-                        _permit: tokio::sync::SemaphorePermit<'a>,
-                        during_startup: bool
-                    },
-                    /// We are attaching this tenant as soon as we can, because for example an
-                    /// endpoint tried to access it.
-                    OnDemand,
-                    /// During normal operations after startup, we are attaching a tenant, and
-                    /// eager attach was requested.
-                    Normal,
-                }
-
-                let attach_type = if matches!(mode, SpawnMode::Lazy) {
-                    // Before doing any I/O, wait for at least one of:
-                    // - A client attempting to access to this tenant (on-demand loading)
-                    // - A permit becoming available in the warmup semaphore (background warmup)
-
-                    tokio::select!(
-                        permit = tenant_clone.activate_now_sem.acquire() => {
-                            let _ = permit.expect("activate_now_sem is never closed");
-                            tracing::info!("Activating tenant (on-demand)");
-                            AttachType::OnDemand
-                        },
-                        permit = conf.concurrent_tenant_warmup.inner().acquire() => {
-                            let _permit = permit.expect("concurrent_tenant_warmup semaphore is never closed");
-                            tracing::info!("Activating tenant (warmup)");
-                            AttachType::Warmup {
-                                _permit,
-                                during_startup: init_order.is_some()
-                            }
-                        }
-                        _ = tenant_clone.cancel.cancelled() => {
-                            // This is safe, but should be pretty rare: it is interesting if a tenant
-                            // stayed in Activating for such a long time that shutdown found it in
-                            // that state.
-                            tracing::info!(state=%tenant_clone.current_state(), "Tenant shut down before activation");
-                            // Set the tenant to Stopping to signal `set_stopping` that we're done.
-                            make_broken_or_stopping(&tenant_clone, anyhow::anyhow!("Shut down while Attaching"));
+                let SpawnMode::Eager = mode;
+                let preload = {
+                    let _preload_timer = TENANT.preload.start_timer();
+                    let res = tenant_clone
+                        .preload(&remote_storage, task_mgr::shutdown_token())
+                        .await;
+                    match res {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            make_broken_or_stopping(&tenant_clone, anyhow::anyhow!(e));
                             return Ok(());
-                        },
-                    )
-                } else {
-                    // SpawnMode::{Create,Eager} always cause jumping ahead of the
-                    // concurrent_tenant_warmup queue
-                    AttachType::Normal
-                };
-
-                let preload = match &mode {
-                    SpawnMode::Eager | SpawnMode::Lazy => {
-                        let _preload_timer = TENANT.preload.start_timer();
-                        let res = tenant_clone
-                            .preload(&remote_storage, task_mgr::shutdown_token())
-                            .await;
-                        match res {
-                            Ok(p) => Some(p),
-                            Err(e) => {
-                                make_broken_or_stopping(&tenant_clone, anyhow::anyhow!(e));
-                                return Ok(());
-                            }
                         }
                     }
-
                 };
 
                 // Remote preload is complete.
@@ -978,20 +835,6 @@ impl TenantShard {
                         tenant_clone.activate(None, &ctx);
                     }
                     Err(e) => make_broken_or_stopping(&tenant_clone, anyhow::anyhow!(e)),
-                }
-
-                // If we are doing an opportunistic warmup attachment at startup, initialize
-                // logical size at the same time.  This is better than starting a bunch of idle tenants
-                // with cold caches and then coming back later to initialize their logical sizes.
-                //
-                // It also prevents the warmup proccess competing with the concurrency limit on
-                // logical size calculations: if logical size calculation semaphore is saturated,
-                // then warmup will wait for that before proceeding to the next tenant.
-                if matches!(attach_type, AttachType::Warmup { during_startup: true, .. }) {
-                    let mut futs: FuturesUnordered<_> = tenant_clone.timelines.lock().unwrap().values().cloned().map(|t| t.await_initial_logical_size()).collect();
-                    tracing::info!("Waiting for initial logical sizes while warming up...");
-                    while futs.next().await.is_some() {}
-                    tracing::info!("Warm-up complete");
                 }
 
                 Ok(())
@@ -1316,108 +1159,6 @@ impl TenantShard {
         .await
     }
 
-    fn check_to_be_archived_has_no_unarchived_children(
-        timeline_id: TimelineId,
-        timelines: &std::sync::MutexGuard<'_, HashMap<TimelineId, Arc<Timeline>>>,
-    ) -> Result<(), TimelineArchivalError> {
-        let children: Vec<TimelineId> = timelines
-            .iter()
-            .filter_map(|(id, entry)| {
-                if entry.get_ancestor_timeline_id() != Some(timeline_id) {
-                    return None;
-                }
-                if entry.is_archived() == Some(true) {
-                    return None;
-                }
-                Some(*id)
-            })
-            .collect();
-
-        if !children.is_empty() {
-            return Err(TimelineArchivalError::HasUnarchivedChildren(children));
-        }
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn check_ancestor_of_to_be_unarchived_is_not_archived(
-        ancestor_timeline_id: TimelineId,
-        timelines: &std::sync::MutexGuard<'_, HashMap<TimelineId, Arc<Timeline>>>,
-    ) -> Result<(), TimelineArchivalError> {
-        let has_archived_parent =
-            if let Some(ancestor_timeline) = timelines.get(&ancestor_timeline_id) {
-                ancestor_timeline.is_archived() == Some(true)
-            } else {
-                error!("ancestor timeline {ancestor_timeline_id} not found");
-                if cfg!(debug_assertions) {
-                    panic!("ancestor timeline {ancestor_timeline_id} not found");
-                }
-                return Err(TimelineArchivalError::NotFound);
-            };
-        if has_archived_parent {
-            return Err(TimelineArchivalError::HasArchivedParent(
-                ancestor_timeline_id,
-            ));
-        }
-        Ok(())
-    }
-
-    fn check_to_be_unarchived_timeline_has_no_archived_parent(
-        timeline: &Arc<Timeline>,
-    ) -> Result<(), TimelineArchivalError> {
-        if let Some(ancestor_timeline) = timeline.ancestor_timeline() {
-            if ancestor_timeline.is_archived() == Some(true) {
-                return Err(TimelineArchivalError::HasArchivedParent(
-                    ancestor_timeline.timeline_id,
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Loads the specified (offloaded) timeline from S3 and attaches it as a loaded timeline
-    ///
-    /// Counterpart to [`offload_timeline`].
-    pub(crate) async fn apply_timeline_archival_config(
-        self: &Arc<Self>,
-        timeline_id: TimelineId,
-        new_state: TimelineArchivalState,
-        ctx: RequestContext,
-    ) -> Result<(), TimelineArchivalError> {
-        info!("setting timeline archival config");
-        let _ = ctx;
-        // yb-mode never produces offloaded timelines (the preload path
-        // populates `timelines_offloaded` from a manifest we no longer
-        // write), so the only valid case here is an in-memory timeline.
-        let timeline = {
-            let timelines = self.timelines.lock().unwrap();
-            let timeline = timelines
-                .get(&timeline_id)
-                .ok_or(TimelineArchivalError::NotFound)?;
-            match new_state {
-                TimelineArchivalState::Unarchived => {
-                    Self::check_to_be_unarchived_timeline_has_no_archived_parent(timeline)?
-                }
-                TimelineArchivalState::Archived => {
-                    Self::check_to_be_archived_has_no_unarchived_children(timeline_id, &timelines)?
-                }
-            }
-            Arc::clone(timeline)
-        };
-
-        // Third part: persist the new archival state. yb-mode keeps
-        // it in `remote_state.archived` only — there's no
-        // index_part.json to upload, so the RTC schedule + the
-        // wait_completion that used to gate this RPC are both gone.
-        // Future restarts re-derive `archived` from
-        // pageserver.timeline_state (TODO once we wire that column).
-        timeline.remote_state.archived.store(
-            matches!(new_state, TimelineArchivalState::Archived),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        Ok(())
-    }
-
     #[allow(dead_code)]
     pub(crate) fn tenant_shard_id(&self) -> TenantId {
         self.id
@@ -1464,254 +1205,7 @@ impl TenantShard {
         self.timelines.lock().unwrap().keys().cloned().collect()
     }
 
-    /// This is used by tests & import-from-basebackup.
-    ///
-    /// The returned [`UninitializedTimeline`] contains no data nor metadata and it is in
-    /// a state that will fail [`TenantShard::load_remote_timeline`] because `disk_consistent_lsn=Lsn(0)`.
-    ///
-    /// The caller is responsible for getting the timeline into a state that will be accepted
-    /// by [`TenantShard::load_remote_timeline`] / [`TenantShard::attach`].
-    /// Then they may call [`UninitializedTimeline::finish_creation`] to add the timeline
-    /// to the [`TenantShard::timelines`].
-    ///
-    /// Tests should use `TenantShard::create_test_timeline` to set up the minimum required metadata keys.
-    pub(crate) async fn create_empty_timeline(
-        self: &Arc<Self>,
-        new_timeline_id: TimelineId,
-        initdb_lsn: Lsn,
-        pg_version: PgMajorVersion,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<(UninitializedTimeline, RequestContext)> {
-        anyhow::ensure!(
-            self.is_active(),
-            "Cannot create empty timelines on inactive tenant"
-        );
-
-        // Protect against concurrent attempts to use this TimelineId
-        let create_guard = match self
-            .start_creating_timeline(new_timeline_id, CreateTimelineIdempotency::FailWithConflict)
-            .await?
-        {
-            StartCreatingTimelineResult::CreateGuard(guard) => guard,
-            StartCreatingTimelineResult::Idempotent(_) => {
-                unreachable!("FailWithConflict implies we get an error instead")
-            }
-        };
-
-        let new_metadata = TimelineMetadata::new(
-            // Initialize disk_consistent LSN to 0, The caller must import some data to
-            // make it valid, before calling finish_creation()
-            Lsn(0),
-            None,
-            None,
-            Lsn(0),
-            initdb_lsn,
-            initdb_lsn,
-            pg_version,
-        );
-        self.prepare_new_timeline(
-            new_timeline_id,
-            &new_metadata,
-            create_guard,
-            initdb_lsn,
-            None,
-            None,
-            None,
-            ctx,
-        )
-        .await
-    }
-
-    /// Helper for unit tests to create an empty timeline.
-    ///
-    /// The timeline is has state value `Active` but its background loops are not running.
-    // This makes the various functions which anyhow::ensure! for Active state work in tests.
-    // Our current tests don't need the background loops.
-    #[cfg(test)]
-    pub async fn create_test_timeline(
-        self: &Arc<Self>,
-        new_timeline_id: TimelineId,
-        initdb_lsn: Lsn,
-        pg_version: PgMajorVersion,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<Arc<Timeline>> {
-        let (uninit_tl, ctx) = self
-            .create_empty_timeline(new_timeline_id, initdb_lsn, pg_version, ctx)
-            .await?;
-        let tline = uninit_tl.raw_timeline().expect("we just created it");
-        assert_eq!(tline.get_last_record_lsn(), Lsn(0));
-
-        // Setup minimum keys required for the timeline to be usable.
-        let mut modification = tline.begin_modification(initdb_lsn);
-        modification
-            .init_empty_test_timeline()
-            .context("init_empty_test_timeline")?;
-        modification
-            .commit(&ctx)
-            .await
-            .context("commit init_empty_test_timeline modification")?;
-
-        // Flush to disk so that uninit_tl's check for valid disk_consistent_lsn passes.
-        tline.maybe_spawn_flush_loop();
-        tline.freeze_and_flush().await.context("freeze_and_flush")?;
-
-        // yb-mode: `freeze_and_flush` already issued the YB INSERTs
-        // synchronously; nothing to wait on.
-
-        let tl = uninit_tl.finish_creation().await?;
-        // The non-test code would call tl.activate() here.
-        tl.set_state(TimelineState::Active);
-        Ok(tl)
-    }
-
     /// Helper for unit tests to create a timeline with some pre-loaded states.
-
-    /// Create a new timeline.
-    ///
-    /// Returns the new timeline ID and reference to its Timeline object.
-    ///
-    /// If the caller specified the timeline ID to use (`new_timeline_id`), and timeline with
-    /// the same timeline ID already exists, returns CreateTimelineError::AlreadyExists.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn create_timeline(
-        self: &Arc<TenantShard>,
-        params: CreateTimelineParams,
-        ctx: &RequestContext,
-    ) -> Result<Arc<Timeline>, CreateTimelineError> {
-        if !self.is_active() {
-            if matches!(self.current_state(), TenantState::Stopping { .. }) {
-                return Err(CreateTimelineError::ShuttingDown);
-            } else {
-                return Err(CreateTimelineError::Other(anyhow::anyhow!(
-                    "Cannot create timelines on inactive tenant"
-                )));
-            }
-        }
-
-        let _gate = self
-            .gate
-            .enter()
-            .map_err(|_| CreateTimelineError::ShuttingDown)?;
-
-        let result: CreateTimelineResult = match params {
-            CreateTimelineParams::Bootstrap(CreateTimelineParamsBootstrap {
-                new_timeline_id,
-                existing_initdb_timeline_id,
-                pg_version,
-            }) => {
-                self.bootstrap_timeline(
-                    new_timeline_id,
-                    pg_version,
-                    existing_initdb_timeline_id,
-                    ctx,
-                )
-                .await?
-            }
-            CreateTimelineParams::Branch(CreateTimelineParamsBranch {
-                new_timeline_id,
-                ancestor_timeline_id,
-                mut ancestor_start_lsn,
-            }) => {
-                let ancestor_timeline = self
-                    .get_timeline(ancestor_timeline_id, false)
-                    .context("Cannot branch off the timeline that's not present in pageserver")?;
-
-                // instead of waiting around, just deny the request because ancestor is not yet
-                // ready for other purposes either.
-                if !ancestor_timeline.is_active() {
-                    return Err(CreateTimelineError::AncestorNotActive);
-                }
-
-                if ancestor_timeline.is_archived() == Some(true) {
-                    info!("tried to branch archived timeline");
-                    return Err(CreateTimelineError::AncestorArchived);
-                }
-
-                if let Some(lsn) = ancestor_start_lsn.as_mut() {
-                    *lsn = lsn.align();
-
-                    let ancestor_ancestor_lsn = ancestor_timeline.get_ancestor_lsn();
-                    if ancestor_ancestor_lsn > *lsn {
-                        // can we safely just branch from the ancestor instead?
-                        return Err(CreateTimelineError::AncestorLsn(anyhow::anyhow!(
-                            "invalid start lsn {} for ancestor timeline {}: less than timeline ancestor lsn {}",
-                            lsn,
-                            ancestor_timeline_id,
-                            ancestor_ancestor_lsn,
-                        )));
-                    }
-
-                    // Wait for the WAL to arrive and be processed on the parent branch up
-                    // to the requested branch point. The repository code itself doesn't
-                    // require it, but if we start to receive WAL on the new timeline,
-                    // decoding the new WAL might need to look up previous pages, relation
-                    // sizes etc. and that would get confused if the previous page versions
-                    // are not in the repository yet.
-                    ancestor_timeline
-                        .wait_lsn(
-                            *lsn,
-                            timeline::WaitLsnWaiter::Tenant,
-                            timeline::WaitLsnTimeout::Default,
-                            ctx,
-                        )
-                        .await
-                        .map_err(|e| match e {
-                            e @ (WaitLsnError::Timeout(_) | WaitLsnError::BadState { .. }) => {
-                                CreateTimelineError::AncestorLsn(anyhow::anyhow!(e))
-                            }
-                            WaitLsnError::Shutdown => CreateTimelineError::ShuttingDown,
-                        })?;
-                }
-
-                self.branch_timeline(&ancestor_timeline, new_timeline_id, ancestor_start_lsn, ctx)
-                    .await?
-            }
-        };
-
-        // At this point we have dropped our guard on [`Self::timelines_creating`], and
-        // the timeline is visible in [`Self::timelines`], but it is _not_ durable yet.  We must
-        // not send a success to the caller until it is.  The same applies to idempotent retries.
-        //
-        // TODO: the timeline is already visible in [`Self::timelines`]; a caller could incorrectly
-        // assume that, because they can see the timeline via API, that the creation is done and
-        // that it is durable. Ideally, we would keep the timeline hidden (in [`Self::timelines_creating`])
-        // until it is durable, e.g., by extending the time we hold the creation guard. This also
-        // interacts with UninitializedTimeline and is generally a bit tricky.
-        //
-        // To re-emphasize: the only correct way to create a timeline is to repeat calling the
-        // creation API until it returns success. Only then is durability guaranteed.
-        // yb-mode: creation is synchronous (the timeline_state row is
-        // upserted by `UninitializedTimeline::finish_creation` before
-        // the lock is released). Nothing to wait on.
-        info!(creation_result=%result.discriminant(), "timeline durable");
-
-        // The creating task is responsible for activating the timeline.
-        // We do this after `wait_completion()` so that we don't spin up tasks that start
-        // doing stuff before the IndexPart is durable in S3, which is done by the previous section.
-        let activated_timeline = match result {
-            CreateTimelineResult::Created(timeline) => {
-                timeline.activate(self.clone(), None, &ctx.with_scope_timeline(&timeline));
-                timeline
-            }
-            CreateTimelineResult::Idempotent(timeline) => {
-                info!(
-                    "request was deemed idempotent, activation will be done by the creating task"
-                );
-                timeline
-            }
-        };
-
-        Ok(activated_timeline)
-    }
-
-    pub(crate) async fn delete_timeline(
-        self: Arc<Self>,
-        timeline_id: TimelineId,
-    ) -> Result<(), DeleteTimelineError> {
-        DeleteTimelineFlow::run(&self, timeline_id).await?;
-
-        Ok(())
-    }
 
     /// perform one garbage collection iteration, removing old data files from disk.
     /// this function is periodically called by gc task.
@@ -1810,10 +1304,6 @@ impl TenantShard {
 
     pub fn generation(&self) -> Generation {
         self.generation
-    }
-
-    pub(crate) fn wal_redo_manager_status(&self) -> Option<WalRedoManagerStatus> {
-        self.walredo_mgr.as_ref().and_then(|mgr| mgr.status())
     }
 
     /// Changes tenant status to active, unless shutdown was already requested.
@@ -2084,64 +1574,6 @@ impl TenantShard {
         Ok(())
     }
 
-    /// Method for tenant::mgr to transition us into Broken state in case of a late failure in
-    /// `remove_tenant_from_memory`
-    ///
-    /// This function waits for the tenant to become active if it isn't already, before transitioning it into Stopping state.
-    ///
-    /// In tests, we also use this to set tenants to Broken state on purpose.
-    pub(crate) async fn set_broken(&self, reason: String) {
-        let mut rx = self.state.subscribe();
-
-        // The load & attach routines own the tenant state until it has reached `Active`.
-        // So, wait until it's done.
-        rx.wait_for(|state| match state {
-            TenantState::Activating(_) | TenantState::Attaching => {
-                info!(
-                    "waiting for {} to turn Active|Broken|Stopping",
-                    <&'static str>::from(state)
-                );
-                false
-            }
-            TenantState::Active | TenantState::Broken { .. } | TenantState::Stopping { .. } => true,
-        })
-        .await
-        .expect("cannot drop self.state while on a &self method");
-
-        // we now know we're done activating, let's see whether this task is the winner to transition into Broken
-        self.set_broken_no_wait(reason)
-    }
-
-    pub(crate) fn set_broken_no_wait(&self, reason: impl Display) {
-        let reason = reason.to_string();
-        self.state.send_modify(|current_state| {
-            match *current_state {
-                TenantState::Activating(_) | TenantState::Attaching => {
-                    unreachable!("we ensured above that we're done with activation, and, there is no re-activation")
-                }
-                TenantState::Active => {
-                    if cfg!(feature = "testing") {
-                        warn!("Changing Active tenant to Broken state, reason: {}", reason);
-                        *current_state = TenantState::broken_from_reason(reason);
-                    } else {
-                        unreachable!("not allowed to call set_broken on Active tenants in non-testing builds")
-                    }
-                }
-                TenantState::Broken { .. } => {
-                    warn!("Tenant is already in Broken state");
-                }
-                // This is the only "expected" path, any other path is a bug.
-                TenantState::Stopping { .. } => {
-                    warn!(
-                        "Marking Stopping tenant as Broken state, reason: {}",
-                        reason
-                    );
-                    *current_state = TenantState::broken_from_reason(reason);
-                }
-           }
-        });
-    }
-
     pub fn subscribe_for_state_updates(&self) -> watch::Receiver<TenantState> {
         self.state.subscribe()
     }
@@ -2198,47 +1630,11 @@ impl TenantShard {
         }
     }
 
-    /// For API access: generate a `LocationConfig` equivalent to the one
-    /// that would be used to create this attachment. Not for hot paths.
-    pub(crate) fn get_location_conf(&self) -> models::LocationConfig {
-        models::LocationConfig {
-            generation: self.generation.into(),
-        }
-    }
-
     #[allow(dead_code)]
     pub(crate) fn get_shard_identity(&self) -> ShardIdentity {
         self.shard_identity
     }
 
-    pub(crate) fn get_shard_stripe_size(&self) -> ShardStripeSize {
-        DEFAULT_STRIPE_SIZE
-    }
-
-    pub(crate) fn get_sizes(&self) -> TopTenantShardItem {
-        let mut result = TopTenantShardItem {
-            id: self.id,
-            resident_size: 0,
-            physical_size: 0,
-            max_logical_size: 0,
-            max_logical_size_per_shard: 0,
-        };
-
-        for timeline in self.timelines.lock().unwrap().values() {
-            result.resident_size += timeline.metrics.resident_physical_size_gauge.get();
-            // yb-mode: remote physical size is always 0 (no S3
-            // layer files).
-            result.max_logical_size = std::cmp::max(
-                result.max_logical_size,
-                timeline.metrics.current_logical_size_gauge.get(),
-            );
-        }
-
-        // yb-mode: always single-shard.
-        result.max_logical_size_per_shard = result.max_logical_size;
-
-        result
-    }
 }
 
 /// Given a Vec of timelines and their ancestors (timeline_id, ancestor_id),
@@ -2842,152 +2238,6 @@ impl TenantShard {
         Ok(gc_timelines)
     }
 
-    /// Branch an existing timeline.
-    async fn branch_timeline(
-        self: &Arc<Self>,
-        src_timeline: &Arc<Timeline>,
-        dst_id: TimelineId,
-        start_lsn: Option<Lsn>,
-        ctx: &RequestContext,
-    ) -> Result<CreateTimelineResult, CreateTimelineError> {
-        self.branch_timeline_impl(src_timeline, dst_id, start_lsn, ctx)
-            .await
-    }
-
-    async fn branch_timeline_impl(
-        self: &Arc<Self>,
-        src_timeline: &Arc<Timeline>,
-        dst_id: TimelineId,
-        start_lsn: Option<Lsn>,
-        ctx: &RequestContext,
-    ) -> Result<CreateTimelineResult, CreateTimelineError> {
-        let src_id = src_timeline.timeline_id;
-
-        // We will validate our ancestor LSN in this function.  Acquire the GC lock so that
-        // this check cannot race with GC, and the ancestor LSN is guaranteed to remain
-        // valid while we are creating the branch.
-        let _gc_cs = self.gc_cs.lock().await;
-
-        // If no start LSN is specified, we branch the new timeline from the source timeline's last record LSN
-        let start_lsn = start_lsn.unwrap_or_else(|| {
-            let lsn = src_timeline.get_last_record_lsn();
-            info!("branching timeline {dst_id} from timeline {src_id} at last record LSN: {lsn}");
-            lsn
-        });
-
-        // we finally have determined the ancestor_start_lsn, so we can get claim exclusivity now
-        let timeline_create_guard = match self
-            .start_creating_timeline(
-                dst_id,
-                CreateTimelineIdempotency::Branch {
-                    ancestor_timeline_id: src_timeline.timeline_id,
-                    ancestor_start_lsn: start_lsn,
-                },
-            )
-            .await?
-        {
-            StartCreatingTimelineResult::CreateGuard(guard) => guard,
-            StartCreatingTimelineResult::Idempotent(timeline) => {
-                return Ok(CreateTimelineResult::Idempotent(timeline));
-            }
-        };
-
-        // Ensure that `start_lsn` is valid, i.e. the LSN is within the PITR
-        // horizon on the source timeline
-        //
-        // We check it against both the planned GC cutoff stored in 'gc_info',
-        // and the 'latest_gc_cutoff' of the last GC that was performed.  The
-        // planned GC cutoff in 'gc_info' is normally larger than
-        // 'applied_gc_cutoff_lsn', but beware of corner cases like if you just
-        // changed the GC settings for the tenant to make the PITR window
-        // larger, but some of the data was already removed by an earlier GC
-        // iteration.
-
-        // check against last actual 'latest_gc_cutoff' first
-        let applied_gc_cutoff_lsn = src_timeline.get_applied_gc_cutoff_lsn();
-        {
-            let gc_info = src_timeline.gc_info.read().unwrap();
-            let planned_cutoff = gc_info.min_cutoff();
-            if gc_info.lsn_covered_by_lease(start_lsn) {
-                tracing::info!(
-                    "skipping comparison of {start_lsn} with gc cutoff {} and planned gc cutoff {planned_cutoff} due to lsn lease",
-                    *applied_gc_cutoff_lsn
-                );
-            } else {
-                src_timeline
-                    .check_lsn_is_in_scope(start_lsn, &applied_gc_cutoff_lsn)
-                    .context(format!(
-                        "invalid branch start lsn: less than latest GC cutoff {}",
-                        *applied_gc_cutoff_lsn,
-                    ))
-                    .map_err(CreateTimelineError::AncestorLsn)?;
-
-                // and then the planned GC cutoff
-                if start_lsn < planned_cutoff {
-                    return Err(CreateTimelineError::AncestorLsn(anyhow::anyhow!(
-                        "invalid branch start lsn: less than planned GC cutoff {planned_cutoff}"
-                    )));
-                }
-            }
-        }
-
-        //
-        // The branch point is valid, and we are still holding the 'gc_cs' lock
-        // so that GC cannot advance the GC cutoff until we are finished.
-        // Proceed with the branch creation.
-        //
-
-        // Determine prev-LSN for the new timeline. We can only determine it if
-        // the timeline was branched at the current end of the source timeline.
-        let RecordLsn {
-            last: src_last,
-            prev: src_prev,
-        } = src_timeline.get_last_record_rlsn();
-        let dst_prev = if src_last == start_lsn {
-            Some(src_prev)
-        } else {
-            None
-        };
-
-        // Create the metadata file, noting the ancestor of the new timeline.
-        // There is initially no data in it, but all the read-calls know to look
-        // into the ancestor.
-        let metadata = TimelineMetadata::new(
-            start_lsn,
-            dst_prev,
-            Some(src_id),
-            start_lsn,
-            *src_timeline.applied_gc_cutoff_lsn.read(), // FIXME: should we hold onto this guard longer?
-            src_timeline.initdb_lsn,
-            src_timeline.pg_version,
-        );
-
-        let (rel_size_v2_status, rel_size_migrated_at) = src_timeline.get_rel_size_v2_status();
-        let (uninitialized_timeline, _timeline_ctx) = self
-            .prepare_new_timeline(
-                dst_id,
-                &metadata,
-                timeline_create_guard,
-                start_lsn + 1,
-                Some(Arc::clone(src_timeline)),
-                Some(rel_size_v2_status),
-                rel_size_migrated_at,
-                ctx,
-            )
-            .await?;
-
-        let new_timeline = uninitialized_timeline.finish_creation().await?;
-
-        // yb-mode: the metadata lives in `pageserver.timeline_state`,
-        // not in an S3 `index_part.json`. `finish_creation` already
-        // upserted the row; nothing to upload here.
-        let _ = metadata;
-
-        // Callers are responsible to wait for uploads to complete and for activating the timeline.
-
-        Ok(CreateTimelineResult::Created(new_timeline))
-    }
-
     /// Get exclusive access to the timeline ID for creation.
     ///
     /// Timeline-creating code paths must use this function before making changes
@@ -3023,12 +2273,6 @@ impl TenantShard {
                     debug!("timeline already exists");
 
                     match (existing, &arg) {
-                        // FailWithConflict => no idempotency check
-                        (CreateTimelineIdempotency::FailWithConflict, _)
-                        | (_, CreateTimelineIdempotency::FailWithConflict) => {
-                            warn!("timeline already exists, failing request");
-                            return Err(CreateTimelineError::Conflict);
-                        }
                         // Idempotent <=> CreateTimelineIdempotency is identical
                         (x, y) if x == y => {
                             info!(

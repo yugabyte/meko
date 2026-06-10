@@ -22,10 +22,7 @@ use crate::{
         BASEBACKUP_CACHE_READ, BASEBACKUP_CACHE_SIZE,
     },
     task_mgr::TaskKind,
-    tenant::{
-        Timeline,
-        mgr::{TenantManager, TenantSlot},
-    },
+    tenant::{Timeline, mgr::TenantManager},
 };
 
 pub struct BasebackupPrepareRequest {
@@ -310,10 +307,7 @@ impl BackgroundTask {
         // Leave only up-to-date entries.
         let entries_old = self.c.entries.lock().unwrap().clone();
         let mut entries_new = HashMap::new();
-        for (tenant_shard_id, tenant_slot) in self.tenant_manager.list() {
-            let TenantSlot::Attached(tenant) = tenant_slot else {
-                continue;
-            };
+        for (tenant_shard_id, tenant) in self.tenant_manager.list() {
             let tenant_id = tenant_shard_id;
 
             for timeline in tenant.list_timelines() {

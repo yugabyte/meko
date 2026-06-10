@@ -20,14 +20,12 @@ use pageserver_api::config::{
     DEFAULT_GRPC_LISTEN_PORT, DEFAULT_HTTP_LISTEN_PORT, TimelineInitConfig,
 };
 use pageserver_api::controller_api::NodeRegisterRequest;
-use pageserver_api::models::{self, TenantInfo, TimelineInfo};
+use pageserver_api::models::{self, TimelineInfo};
 use pageserver_client::mgmt_api;
 use postgres_backend::AuthType;
 use postgres_connection::{PgConnectionConfig, parse_host_port};
-use safekeeper_api::PgMajorVersion;
 use utils::auth::{Claims, Scope};
 use utils::id::{NodeId, TenantId, TimelineId};
-use utils::lsn::Lsn;
 
 use crate::background_process;
 use crate::local_env::{LocalEnv, YbLightLocalInitPageserverConf, PageServerConf};
@@ -501,9 +499,6 @@ impl PageServerNode {
         self.http_client.status().await
     }
 
-    pub async fn tenant_list(&self) -> mgmt_api::Result<Vec<TenantInfo>> {
-        self.http_client.list_tenants().await
-    }
     pub fn parse_config(mut settings: HashMap<&str, &str>) -> anyhow::Result<models::TenantConfig> {
         let result = models::TenantConfig {
             gc_horizon: settings
@@ -584,19 +579,6 @@ impl PageServerNode {
         }
     }
 
-    pub async fn tenant_config(
-        &self,
-        tenant_id: TenantId,
-        settings: HashMap<&str, &str>,
-    ) -> anyhow::Result<()> {
-        let config = Self::parse_config(settings)?;
-        self.http_client
-            .set_tenant_config(&models::TenantConfigRequest { tenant_id, config })
-            .await?;
-
-        Ok(())
-    }
-
     pub async fn timeline_list(
         &self,
         tenant_shard_id: &TenantId,
@@ -604,60 +586,6 @@ impl PageServerNode {
         Ok(self.http_client.list_timelines(*tenant_shard_id).await?)
     }
 
-    /// Import a basebackup prepared using either:
-    /// a) `pg_basebackup -F tar`, or
-    /// b) The `fullbackup` pageserver endpoint
-    ///
-    /// # Arguments
-    /// * `tenant_id` - tenant to import into. Created if not exists
-    /// * `timeline_id` - id to assign to imported timeline
-    /// * `base` - (start lsn of basebackup, path to `base.tar` file)
-    /// * `pg_wal` - if there's any wal to import: (end lsn, path to `pg_wal.tar`)
-    pub async fn timeline_import(
-        &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-        base: (Lsn, PathBuf),
-        pg_wal: Option<(Lsn, PathBuf)>,
-        pg_version: PgMajorVersion,
-    ) -> anyhow::Result<()> {
-        // Init base reader
-        let (start_lsn, base_tarfile_path) = base;
-        let base_tarfile = tokio::fs::File::open(base_tarfile_path).await?;
-        let base_tarfile =
-            mgmt_api::ReqwestBody::wrap_stream(tokio_util::io::ReaderStream::new(base_tarfile));
-
-        // Init wal reader if necessary
-        let (end_lsn, wal_reader) = if let Some((end_lsn, wal_tarfile_path)) = pg_wal {
-            let wal_tarfile = tokio::fs::File::open(wal_tarfile_path).await?;
-            let wal_reader =
-                mgmt_api::ReqwestBody::wrap_stream(tokio_util::io::ReaderStream::new(wal_tarfile));
-            (end_lsn, Some(wal_reader))
-        } else {
-            (start_lsn, None)
-        };
-
-        // Import base
-        self.http_client
-            .import_basebackup(
-                tenant_id,
-                timeline_id,
-                start_lsn,
-                end_lsn,
-                pg_version,
-                base_tarfile,
-            )
-            .await?;
-
-        // Import wal if necessary
-        if let Some(wal_reader) = wal_reader {
-            self.http_client
-                .import_wal(tenant_id, timeline_id, start_lsn, end_lsn, wal_reader)
-                .await?;
-        }
-
-        Ok(())
-    }
     pub async fn timeline_info(
         &self,
         tenant_shard_id: TenantId,

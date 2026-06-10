@@ -41,10 +41,10 @@ use pageserver_api::config::{
 use pageserver_api::controller_api::{NodeAvailabilityWrapper, PlacementPolicy};
 use pageserver_api::models::{TenantConfigRequest, TimelineCreateRequest, TimelineInfo};
 use postgres_backend::AuthType;
-use safekeeper_api::membership::{SafekeeperGeneration, SafekeeperId};
+use safekeeper_api::membership::SafekeeperGeneration;
 use safekeeper_api::{
     DEFAULT_HTTP_LISTEN_PORT as DEFAULT_SAFEKEEPER_HTTP_PORT,
-    DEFAULT_PG_LISTEN_PORT as DEFAULT_SAFEKEEPER_PG_PORT, PgMajorVersion, PgVersionId,
+    DEFAULT_PG_LISTEN_PORT as DEFAULT_SAFEKEEPER_PG_PORT, PgMajorVersion,
 };
 use tokio::task::JoinSet;
 use utils::auth::{Claims, Scope};
@@ -1065,11 +1065,16 @@ fn get_default_pageserver(env: &local_env::LocalEnv) -> PageServerNode {
 }
 
 async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> anyhow::Result<()> {
-    let pageserver = get_default_pageserver(env);
     match subcmd {
         TenantCmd::List => {
-            for t in pageserver.tenant_list().await? {
-                println!("{} {:?}", t.id, t.state);
+            for ps_conf in &env.pageservers {
+                let ps = PageServerNode::from_env(env, ps_conf);
+                match ps.read_timeline_identity()? {
+                    Some((tenant_id, timeline_id)) => {
+                        println!("{tenant_id} (timeline {timeline_id}, pageserver {})", ps_conf.id)
+                    }
+                    None => println!("(pageserver {}: no tenant assigned)", ps_conf.id),
+                }
             }
         }
         TenantCmd::Import(args) => {
@@ -1239,67 +1244,11 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                  pageserver — per-endpoint pageserver support is the next step."
             );
         }
-        // TODO: rename to import-basebackup-plus-wal
-        TimelineCmd::Import(args) => {
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
-            let timeline_id = args.timeline_id;
-            let branch_name = &args.branch_name;
-
-            // Parse base inputs
-            let base = (args.base_lsn, args.base_tarfile.clone());
-
-            // Parse pg_wal inputs
-            let wal_tarfile = args.wal_tarfile.clone();
-            let end_lsn = args.end_lsn;
-            // TODO validate both or none are provided
-            let pg_wal = end_lsn.zip(wal_tarfile);
-
-            println!("Importing timeline into pageserver ...");
-            pageserver
-                .timeline_import(tenant_id, timeline_id, base, pg_wal, args.pg_version)
-                .await?;
-            if env.storage_controller.timelines_onto_safekeepers {
-                println!("Creating timeline on safekeeper ...");
-                let timeline_info = pageserver
-                    .timeline_info(
-                        TenantId::unsharded(tenant_id),
-                        timeline_id,
-                        pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
-                    )
-                    .await?;
-                let default_sk = SafekeeperNode::from_env(env, env.safekeepers.first().unwrap());
-                let default_host = default_sk
-                    .conf
-                    .listen_addr
-                    .clone()
-                    .unwrap_or_else(|| "localhost".to_string());
-                let mconf = safekeeper_api::membership::Configuration {
-                    generation: SafekeeperGeneration::new(1),
-                    members: safekeeper_api::membership::MemberSet {
-                        m: vec![SafekeeperId {
-                            host: default_host,
-                            id: default_sk.conf.id,
-                            pg_port: default_sk.conf.pg_port,
-                        }],
-                    },
-                    new_members: None,
-                };
-                let pg_version = PgVersionId::from(args.pg_version);
-                let req = safekeeper_api::models::TimelineCreateRequest {
-                    tenant_id,
-                    timeline_id,
-                    mconf,
-                    pg_version,
-                    system_id: None,
-                    wal_seg_size: None,
-                    start_lsn: timeline_info.last_record_lsn,
-                    commit_lsn: None,
-                };
-                default_sk.create_timeline(&req).await?;
-            }
-            env.register_branch_mapping(branch_name.to_string(), tenant_id, timeline_id)
-                .await?;
-            println!("Done");
+        TimelineCmd::Import(_) => {
+            anyhow::bail!(
+                "`timeline import` is not supported: the pageserver no longer exposes the \
+                 basebackup/WAL import API. Bootstrap a fresh timeline with `tenant create`."
+            );
         }
         TimelineCmd::Branch(_) => {
             anyhow::bail!(

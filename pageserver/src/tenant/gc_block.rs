@@ -55,79 +55,6 @@ impl GcBlock {
         }
     }
 
-    /// Describe the current gc blocking reasons.
-    ///
-    /// TODO: make this json serializable.
-    pub(crate) fn summary(&self) -> Option<BlockingReasons> {
-        let g = self.reasons.lock().unwrap();
-
-        BlockingReasons::summarize(&g)
-    }
-
-    /// Start blocking gc for this one timeline for the given reason.
-    ///
-    /// This is not a guard based API but instead it mimics set API. The returned future will not
-    /// resolve until an existing gc round has completed.
-    ///
-    /// Returns true if this block was new, false if gc was already blocked for this reason.
-    ///
-    /// Cancellation safe: cancelling after first poll will keep the reason to block gc, but will
-    /// keep the gc blocking reason.
-    pub(crate) async fn insert(
-        &self,
-        timeline: &super::Timeline,
-        reason: GcBlockingReason,
-    ) -> anyhow::Result<bool> {
-        let added = {
-            let mut g = self.reasons.lock().unwrap();
-            let set = g.entry(timeline.timeline_id).or_default();
-            set.insert(reason)
-        };
-
-        // ensure that any ongoing gc iteration has completed
-        drop(self.blocking.lock().await);
-
-        Ok(added)
-    }
-
-    /// Remove blocking gc for this one timeline and the given reason.
-    pub(crate) async fn remove(
-        &self,
-        timeline: &super::Timeline,
-        reason: GcBlockingReason,
-    ) -> anyhow::Result<()> {
-        use std::collections::hash_map::Entry;
-
-        super::span::debug_assert_current_span_has_tenant_and_timeline_id();
-
-        let _ = timeline;
-
-        let remaining_blocks = {
-            let mut g = self.reasons.lock().unwrap();
-            match g.entry(timeline.timeline_id) {
-                Entry::Occupied(mut oe) => {
-                    let set = oe.get_mut();
-                    set.remove(reason);
-                    if set.is_empty() {
-                        oe.remove();
-                    }
-                }
-                Entry::Vacant(_) => {}
-            }
-            g.len()
-        };
-
-        // no need to synchronize with gc iteration again
-
-        if remaining_blocks > 0 {
-            tracing::info!(remaining_blocks, removed=?reason, "gc blocking removed, but gc remains blocked");
-        } else {
-            tracing::info!("gc is now unblocked for the tenant");
-        }
-
-        Ok(())
-    }
-
     pub(crate) fn before_delete(&self, timeline_id: &super::TimelineId) {
         let unblocked = {
             let mut g = self.reasons.lock().unwrap();
@@ -194,17 +121,4 @@ impl BlockingReasons {
         }
     }
 
-    fn summarize(g: &std::sync::MutexGuard<'_, Storage>) -> Option<Self> {
-        if g.is_empty() {
-            None
-        } else {
-            let reasons = g
-                .values()
-                .fold(enumset::EnumSet::empty(), |acc, next| acc.union(*next));
-            Some(BlockingReasons {
-                timelines: g.len(),
-                reasons,
-            })
-        }
-    }
 }

@@ -542,12 +542,6 @@ pub enum GetLogicalSizePriority {
     Background,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub(crate) struct MarkInvisibleRequest {
-    #[serde(default)]
-    pub is_visible: Option<bool>,
-}
-
 impl std::fmt::Debug for Timeline {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "Timeline<{}>", self.timeline_id)
@@ -658,15 +652,12 @@ impl From<GetReadyAncestorError> for PageReconstructError {
 }
 
 pub(crate) enum WaitLsnTimeout {
-    Custom(Duration),
     // Use the [`PageServerConf::wait_lsn_timeout`] default
     Default,
 }
 
 pub(crate) enum WaitLsnWaiter {
-    Tenant,
     PageService,
-    HttpEndpoint,
     BaseBackupCache,
 }
 
@@ -695,11 +686,6 @@ impl Timeline {
         self.ancestor_timeline
             .as_ref()
             .map(|ancestor| ancestor.timeline_id)
-    }
-
-    /// Get the ancestor timeline
-    pub(crate) fn ancestor_timeline(&self) -> Option<&Arc<Timeline>> {
-        self.ancestor_timeline.as_ref()
     }
 
     /// Get the bytes written since the PITR cutoff on this branch, and
@@ -1233,10 +1219,7 @@ impl Timeline {
                 TaskKind::WalReceiverManager
                 | TaskKind::WalReceiverConnectionHandler
                 | TaskKind::WalReceiverConnectionPoller => match who_is_waiting {
-                    WaitLsnWaiter::Tenant
-                    | WaitLsnWaiter::PageService
-                    | WaitLsnWaiter::HttpEndpoint
-                    | WaitLsnWaiter::BaseBackupCache => unreachable!(
+                    WaitLsnWaiter::PageService | WaitLsnWaiter::BaseBackupCache => unreachable!(
                         "tenant or page_service context are not expected to have task kind {:?}",
                         ctx.task_kind()
                     ),
@@ -1246,7 +1229,6 @@ impl Timeline {
         }
 
         let timeout = match timeout {
-            WaitLsnTimeout::Custom(t) => t,
             WaitLsnTimeout::Default => self.conf.wait_lsn_timeout,
         };
 
@@ -2753,13 +2735,6 @@ impl Timeline {
         }
     }
 
-    pub(crate) async fn preserve_initdb_archive(&self) -> anyhow::Result<()> {
-        // yb-mode: initdb archive lives in `endpoint_storage`, not
-        // in the dead layer-file remote path. The admin endpoint
-        // stays so callers don't 404, but the operation is a no-op.
-        Ok(())
-    }
-
     /// Wait until the background initial logical size calculation is complete, or
     /// this Timeline is shut down.  Calling this function will cause the initial
     /// logical size calculation to skip waiting for the background jobs barrier.
@@ -3065,21 +3040,6 @@ impl Timeline {
         ShardIndex::unsharded()
     }
 
-    /// Persistently blocks gc for `Manual` reason.
-    ///
-    /// Returns true if no such block existed before, false otherwise.
-    pub(crate) async fn block_gc(&self, tenant: &super::TenantShard) -> anyhow::Result<bool> {
-        use crate::tenant::gc_block::GcBlockingReason;
-        assert_eq!(self.tenant_id, tenant.id);
-        tenant.gc_block.insert(self, GcBlockingReason::Manual).await
-    }
-
-    /// Persistently unblocks gc for `Manual` reason.
-    pub(crate) async fn unblock_gc(&self, tenant: &super::TenantShard) -> anyhow::Result<()> {
-        use crate::tenant::gc_block::GcBlockingReason;
-        assert_eq!(self.tenant_id, tenant.id);
-        tenant.gc_block.remove(self, GcBlockingReason::Manual).await
-    }
 }
 
 /// yb-mode placeholder. The original Neon TimelineWriter tracked the

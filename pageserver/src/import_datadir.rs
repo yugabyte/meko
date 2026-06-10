@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use bytes::Bytes;
 use camino::Utf8Path;
-use futures::StreamExt;
 use pageserver_api::key::rel_block_to_key;
 use pageserver_api::reltag::{RelTag, SlruKind};
 use postgres_ffi::relfile_utils::*;
@@ -17,7 +16,6 @@ use postgres_ffi::{
     pg_constants,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio_tar::Archive;
 use tracing::*;
 use utils::lsn::Lsn;
 use wal_decoder::models::InterpretedWalRecord;
@@ -345,157 +343,6 @@ async fn import_wal(
         info!("reached end of WAL at {}", last_lsn);
     } else {
         info!("no WAL to import at {}", last_lsn);
-    }
-
-    Ok(())
-}
-
-pub async fn import_basebackup_from_tar(
-    tline: &Timeline,
-    reader: &mut (impl AsyncRead + Send + Sync + Unpin),
-    base_lsn: Lsn,
-    ctx: &RequestContext,
-) -> Result<()> {
-    info!("importing base at {base_lsn}");
-    let mut modification = tline.begin_modification_for_import(base_lsn);
-    modification.init_empty()?;
-
-    let mut pg_control: Option<ControlFileData> = None;
-
-    // Import base
-    let mut entries = Archive::new(reader).entries()?;
-    while let Some(base_tar_entry) = entries.next().await {
-        let mut entry = base_tar_entry?;
-        let header = entry.header();
-        let len = header.entry_size()? as usize;
-        let file_path = header.path()?.into_owned();
-
-        match header.entry_type() {
-            tokio_tar::EntryType::Regular => {
-                if let Some(res) =
-                    import_file(&mut modification, file_path.as_ref(), &mut entry, len, ctx).await?
-                {
-                    // We found the pg_control file.
-                    pg_control = Some(res);
-                }
-                modification.flush(ctx).await?;
-            }
-            tokio_tar::EntryType::Directory => {
-                debug!("directory {:?}", file_path);
-            }
-            _ => {
-                bail!(
-                    "entry {} in backup tar archive is of unexpected type: {:?}",
-                    file_path.display(),
-                    header.entry_type()
-                );
-            }
-        }
-    }
-
-    // sanity check: ensure that pg_control is loaded
-    let _pg_control = pg_control.context("pg_control file not found")?;
-
-    modification.commit(ctx).await?;
-    Ok(())
-}
-
-pub async fn import_wal_from_tar(
-    tline: &Timeline,
-    reader: &mut (impl AsyncRead + Send + Sync + Unpin),
-    start_lsn: Lsn,
-    end_lsn: Lsn,
-    ctx: &RequestContext,
-) -> Result<()> {
-    // Set up walingest mutable state
-    let mut waldecoder = WalStreamDecoder::new(start_lsn, tline.pg_version);
-    let mut segno = start_lsn.segment_number(WAL_SEGMENT_SIZE);
-    let mut offset = start_lsn.segment_offset(WAL_SEGMENT_SIZE);
-    let mut last_lsn = start_lsn;
-    let mut walingest = WalIngest::new(tline, start_lsn, ctx).await?;
-    let shard = vec![*tline.get_shard_identity()];
-
-    // Ingest wal until end_lsn
-    info!("importing wal until {}", end_lsn);
-    let mut pg_wal_tar = Archive::new(reader);
-    let mut pg_wal_entries = pg_wal_tar.entries()?;
-    while last_lsn <= end_lsn {
-        let bytes = {
-            let mut entry = pg_wal_entries
-                .next()
-                .await
-                .ok_or_else(|| anyhow::anyhow!("expected more wal"))??;
-            let header = entry.header();
-            let file_path = header.path()?.into_owned();
-
-            match header.entry_type() {
-                tokio_tar::EntryType::Regular => {
-                    // FIXME: assume postgresql tli 1 for now
-                    let expected_filename = XLogFileName(1, segno, WAL_SEGMENT_SIZE);
-                    let file_name = file_path
-                        .file_name()
-                        .expect("missing wal filename")
-                        .to_string_lossy();
-                    ensure!(expected_filename == file_name);
-
-                    debug!("processing wal file {:?}", file_path);
-                    read_all_bytes(&mut entry).await?
-                }
-                tokio_tar::EntryType::Directory => {
-                    debug!("directory {:?}", file_path);
-                    continue;
-                }
-                _ => {
-                    bail!(
-                        "entry {} in WAL tar archive is of unexpected type: {:?}",
-                        file_path.display(),
-                        header.entry_type()
-                    );
-                }
-            }
-        };
-
-        waldecoder.feed_bytes(&bytes[offset..]);
-
-        let mut modification = tline.begin_modification_for_import(last_lsn);
-        while last_lsn <= end_lsn {
-            if let Some((lsn, recdata)) = waldecoder.poll_decode()? {
-                let interpreted = InterpretedWalRecord::from_bytes_filtered(
-                    recdata,
-                    &shard,
-                    lsn,
-                    tline.pg_version,
-                )?
-                .remove(tline.get_shard_identity())
-                .unwrap();
-
-                walingest
-                    .ingest_record(interpreted, &mut modification, ctx)
-                    .await?;
-                modification.commit(ctx).await?;
-                last_lsn = lsn;
-
-                debug!("imported record at {} (end {})", lsn, end_lsn);
-            }
-        }
-
-        debug!("imported records up to {}", last_lsn);
-        segno += 1;
-        offset = 0;
-    }
-
-    if last_lsn != start_lsn {
-        info!("reached end of WAL at {}", last_lsn);
-    } else {
-        info!("there was no WAL to import at {}", last_lsn);
-    }
-
-    // Log any extra unused files
-    while let Some(e) = pg_wal_entries.next().await {
-        let entry = e?;
-        let header = entry.header();
-        let file_path = header.path()?.into_owned();
-        info!("skipping {:?}", file_path);
     }
 
     Ok(())

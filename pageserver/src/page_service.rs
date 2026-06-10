@@ -16,8 +16,7 @@ use anyhow::{Context as _, bail};
 use bytes::{Buf as _, BufMut as _, BytesMut};
 use chrono::Utc;
 use futures::future::BoxFuture;
-use futures::stream::FuturesUnordered;
-use futures::{FutureExt, Stream, StreamExt as _};
+use futures::{FutureExt, Stream};
 use itertools::Itertools;
 use jsonwebtoken::TokenData;
 use once_cell::sync::OnceCell;
@@ -36,7 +35,7 @@ use pageserver_api::pagestream_api::{
 };
 use pageserver_api::reltag::SlruKind;
 use pageserver_page_api::proto;
-use pageserver_page_api::{self as page_api, GetPageSplitter};
+use pageserver_page_api::{self as page_api};
 use postgres_backend::{
     AuthType, PostgresBackend, PostgresBackendReader, QueryError, is_expected_io_error,
 };
@@ -75,9 +74,7 @@ use crate::metrics::{
 use crate::pgdatadir_mapping::{LsnRange, Version};
 use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
 use crate::task_mgr::{self, COMPUTE_REQUEST_RUNTIME, TaskKind};
-use crate::tenant::mgr::{
-    GetActiveTenantError, GetTenantError, ShardResolveResult, ShardSelector, TenantManager,
-};
+use crate::tenant::mgr::{GetActiveTenantError, GetTenantError, ShardSelector, TenantManager};
 use crate::tenant::timeline::handle::{Handle, HandleUpgradeError, WeakHandle};
 use crate::tenant::timeline::{self, WaitLsnError, WaitLsnTimeout, WaitLsnWaiter};
 use crate::tenant::{GetTimelineError, PageReconstructError, Timeline};
@@ -532,35 +529,26 @@ impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrappe
         let timeout = ACTIVE_TENANT_TIMEOUT;
         let wait_start = Instant::now();
         let deadline = wait_start + timeout;
-        let tenant_shard = loop {
-            let resolved = self
-                .tenant_manager
-                .resolve_attached_shard(tenant_id, shard_selector);
-            match resolved {
-                ShardResolveResult::Found(tenant_shard) => break tenant_shard,
-                ShardResolveResult::NotFound => {
-                    MISROUTED_PAGESTREAM_REQUESTS.inc();
-                    return Err(GetActiveTimelineError::Tenant(
-                        GetActiveTenantError::NotFound(GetTenantError::NotFound(*tenant_id)),
-                    ));
-                }
-                ShardResolveResult::InProgress(barrier) => {
-                    // We can't authoritatively answer right now: wait for InProgress state
-                    // to end, then try again
-                    tokio::select! {
-                        _  = barrier.wait() => {
-                            // The barrier completed: proceed around the loop to try looking up again
-                        },
-                        _ = tokio::time::sleep(deadline.duration_since(Instant::now())) => {
-                            return Err(GetActiveTimelineError::Tenant(GetActiveTenantError::WaitForActiveTimeout {
-                                latest_state: None,
-                                wait_time: timeout,
-                            }));
-                        }
-                    }
-                }
-            };
-        };
+
+        // Single-timeline pageserver: every request must target the
+        // configured identity; anything else is a misrouted compute.
+        let identity = self.tenant_manager.timeline_identity();
+        if *tenant_id != identity.tenant_id || timeline_id != identity.timeline_id {
+            MISROUTED_PAGESTREAM_REQUESTS.inc();
+            tracing::warn!(
+                "request for {tenant_id}/{timeline_id} but this pageserver serves {}/{}",
+                identity.tenant_id,
+                identity.timeline_id,
+            );
+            return Err(GetActiveTimelineError::Tenant(
+                GetActiveTenantError::NotFound(GetTenantError::NotFound(*tenant_id)),
+            ));
+        }
+        let _ = shard_selector;
+        let tenant_shard = self
+            .tenant_manager
+            .get_attached_tenant_shard(*tenant_id)
+            .map_err(|e| GetActiveTimelineError::Tenant(GetActiveTenantError::NotFound(e)))?;
 
         tracing::debug!("Waiting for tenant to enter active state...");
         tenant_shard
@@ -3440,12 +3428,6 @@ impl GrpcPageServiceHandler {
 
     /// Acquires a timeline handle for the given request, which must be for shard zero. Most
     /// metadata requests are only valid on shard zero.
-    ///
-    /// NB: during an ongoing shard split, the compute will keep talking to the parent shard until
-    /// the split is committed, but the parent shard may have been removed in the meanwhile. In that
-    /// case, we reroute the request to the new child shard. See [`Self::maybe_split_get_page`].
-    ///
-    /// TODO: revamp the split protocol to avoid this child routing.
     async fn get_request_timeline_shard_zero(
         &self,
         req: &tonic::Request<impl Any>,
@@ -3462,26 +3444,10 @@ impl GrpcPageServiceHandler {
             )));
         }
 
-        // TODO: untangle acquisition from TenantManagerWrapper::resolve() and Cache::get(), to
-        // avoid the unnecessary overhead.
-        let mut handles = TimelineHandles::new(self.tenant_manager.clone());
-        match handles
+        TimelineHandles::new(self.tenant_manager.clone())
             .get(tenant_id, timeline_id, ShardSelector::Known(shard_index))
             .await
-        {
-            Ok(timeline) => Ok(timeline),
-            Err(err) => {
-                // We may be in the middle of a shard split. Try to find a child shard 0.
-                if let Ok(timeline) = handles
-                    .get(tenant_id, timeline_id, ShardSelector::Zero)
-                    .await
-                    && timeline.get_shard_index().shard_count > shard_index.shard_count
-                {
-                    return Ok(timeline);
-                }
-                Err(err.into())
-            }
-        }
+            .map_err(Into::into)
     }
 
     /// Starts a SmgrOpTimer at received_at, throttles the request, and records execution start.
@@ -3617,80 +3583,6 @@ impl GrpcPageServiceHandler {
         Ok(resp)
     }
 
-    /// Processes a GetPage request when there is a potential shard split in progress. We have to
-    /// reroute the request to any local child shards, and split batch requests that straddle
-    /// multiple child shards.
-    ///
-    /// Parent shards are split and removed incrementally (there may be many parent shards when
-    /// splitting an already-sharded tenant), but the compute is only notified once the overall
-    /// split commits, which can take several minutes. In the meanwhile, the compute will be sending
-    /// requests to the parent shards.
-    ///
-    /// TODO: add test infrastructure to provoke this situation frequently and for long periods of
-    /// time, to properly exercise it.
-    ///
-    /// TODO: revamp the split protocol to avoid this, e.g.:
-    /// * Keep the parent shard until the split commits and the compute is notified.
-    /// * Notify the compute about each subsplit.
-    /// * Return an error that updates the compute's shard map.
-    #[instrument(skip_all)]
-    #[allow(clippy::too_many_arguments)]
-    async fn maybe_split_get_page(
-        ctx: &RequestContext,
-        handles: &mut TimelineHandles,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-        parent: ShardIndex,
-        req: page_api::GetPageRequest,
-        received_at: Instant,
-    ) -> Result<page_api::GetPageResponse, tonic::Status> {
-        // Check the first page to see if we have any child shards at all. Otherwise, the compute is
-        // just talking to the wrong Pageserver. If the parent has been split, the shard now owning
-        // the page must have a higher shard count.
-        let timeline = handles
-            .get(
-                tenant_id,
-                timeline_id,
-                ShardSelector::Page(rel_block_to_key(req.rel, req.block_numbers[0])),
-            )
-            .await?;
-
-        let shard_id = timeline.get_shard_identity();
-        if shard_id.count <= parent.shard_count {
-            return Err(HandleUpgradeError::ShutDown.into()); // emulate original error
-        }
-
-        // Fast path: the request fits in a single shard.
-        if let Some(shard_index) =
-            GetPageSplitter::for_single_shard(&req, shard_id.count, Some(shard_id.stripe_size))?
-        {
-            // We got the shard ID from the first page, so these must be equal.
-            assert_eq!(shard_index.shard_number, shard_id.number);
-            assert_eq!(shard_index.shard_count, shard_id.count);
-            return Self::get_page(ctx, timeline, req, received_at).await;
-        }
-
-        // The request spans multiple shards; split it and dispatch parallel requests. All pages
-        // were originally in the parent shard, and during a split all children are local, so we
-        // expect to find local shards for all pages.
-        let mut splitter = GetPageSplitter::split(req, shard_id.count, Some(shard_id.stripe_size))?;
-
-        let mut shard_requests = FuturesUnordered::new();
-        for (shard_index, shard_req) in splitter.drain_requests() {
-            let timeline = handles
-                .get(tenant_id, timeline_id, ShardSelector::Known(shard_index))
-                .await?;
-            let future = Self::get_page(ctx, timeline, shard_req, received_at)
-                .map(move |result| result.map(|resp| (shard_index, resp)));
-            shard_requests.push(future);
-        }
-
-        while let Some((shard_index, shard_response)) = shard_requests.next().await.transpose()? {
-            splitter.add_response(shard_index, shard_response)?;
-        }
-
-        Ok(splitter.collect_response()?)
-    }
 }
 
 /// Implements the gRPC page service.
@@ -3869,11 +3761,6 @@ impl proto::PageService for GrpcPageServiceHandler {
         req: tonic::Request<tonic::Streaming<proto::GetPageRequest>>,
     ) -> Result<tonic::Response<Self::GetPagesStream>, tonic::Status> {
         // Extract the timeline from the request and check that it exists.
-        //
-        // NB: during shard splits, the compute may still send requests to the parent shard. We'll
-        // reroute requests to the child shards below, but we also detect the common cases here
-        // where either the shard exists or no shards exist at all. If we have a child shard, we
-        // can't acquire a weak handle because we don't know which child shard to use yet.
         let TenantTimelineId {
             tenant_id,
             timeline_id,
@@ -3881,17 +3768,11 @@ impl proto::PageService for GrpcPageServiceHandler {
         let shard_index = *extract::<ShardIndex>(&req);
 
         let mut handles = TimelineHandles::new(self.tenant_manager.clone());
-        let timeline = match handles
+        let timeline = handles
             .get(tenant_id, timeline_id, ShardSelector::Known(shard_index))
             .await
-        {
-            // The timeline shard exists. Keep a weak handle to reuse for each request.
-            Ok(timeline) => Some(timeline.downgrade()),
-            // The shard doesn't exist, but a child shard does. We'll reroute requests later.
-            Err(_) if self.tenant_manager.has_child_shard(tenant_id, shard_index) => None,
-            // Failed to fetch the timeline, and no child shard exists. Error out.
-            Err(err) => return Err(err.into()),
-        };
+            .map_err(|err| tonic::Status::from(err))?
+            .downgrade();
 
         // Construct the GetPageRequest stream handler.
         let span = Span::current();
@@ -3900,6 +3781,10 @@ impl proto::PageService for GrpcPageServiceHandler {
         let mut reqs = req.into_inner();
 
         let resps = async_stream::try_stream! {
+            // Keep the handle cache alive for the stream's lifetime:
+            // dropping it shuts down the WeakHandle we upgrade per
+            // request.
+            let _handles = handles;
             loop {
                 // Wait for the next client request.
                 //
@@ -3922,28 +3807,10 @@ impl proto::PageService for GrpcPageServiceHandler {
                 // Process the request, using a closure to capture errors.
                 let process_request = async || {
                     let req = page_api::GetPageRequest::try_from(req)?;
-
-                    // Fast path: use the pre-acquired timeline handle.
-                    if let Some(Ok(timeline)) = timeline.as_ref().map(|t| t.upgrade()) {
-                        return Self::get_page(&ctx, timeline, req, received_at)
-                            .instrument(span.clone()) // propagate request span
-                            .await
-                    }
-
-                    // The timeline handle is stale. During shard splits, the compute may still be
-                    // sending requests to the parent shard. Try to re-route requests to the child
-                    // shards, and split any batch requests that straddle multiple child shards.
-                    Self::maybe_split_get_page(
-                        &ctx,
-                        &mut handles,
-                        tenant_id,
-                        timeline_id,
-                        shard_index,
-                        req,
-                        received_at,
-                    )
-                    .instrument(span.clone()) // propagate request span
-                    .await
+                    let timeline = timeline.upgrade()?;
+                    Self::get_page(&ctx, timeline, req, received_at)
+                        .instrument(span.clone()) // propagate request span
+                        .await
                 };
 
                 // Return the response. Convert per-request errors to GetPageResponses if

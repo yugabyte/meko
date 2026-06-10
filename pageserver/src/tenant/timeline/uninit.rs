@@ -8,12 +8,9 @@ use camino::Utf8PathBuf;
 use tracing::{error, info, info_span};
 use utils::fs_ext;
 use utils::id::TimelineId;
-use utils::lsn::Lsn;
 use utils::sync::gate::GateGuard;
 
 use super::Timeline;
-use crate::context::RequestContext;
-use crate::import_datadir;
 use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
 use crate::tenant::{CreateTimelineError, CreateTimelineIdempotency, TenantShard};
 
@@ -178,36 +175,6 @@ impl<'t> UninitializedTimeline<'t> {
                 Ok(new_timeline)
             }
         }
-    }
-
-    /// Prepares timeline data by loading it from the basebackup archive.
-    pub(crate) async fn import_basebackup_from_tar(
-        mut self,
-        tenant: Arc<TenantShard>,
-        copyin_read: &mut (impl tokio::io::AsyncRead + Send + Sync + Unpin),
-        base_lsn: Lsn,
-        ctx: &RequestContext,
-    ) -> anyhow::Result<Arc<Timeline>> {
-        self.write(|raw_timeline| async move {
-            import_datadir::import_basebackup_from_tar(&raw_timeline, copyin_read, base_lsn, ctx)
-                .await
-                .context("Failed to import basebackup")
-                .map_err(CreateTimelineError::Other)?;
-
-            fail::fail_point!("before-checkpoint-new-timeline", |_| {
-                Err(CreateTimelineError::Other(anyhow::anyhow!(
-                    "failpoint before-checkpoint-new-timeline"
-                )))
-            });
-
-            Ok(())
-        })
-        .await?;
-
-        // All the data has been imported. Insert the Timeline into the tenant's timelines map
-        let tl = self.finish_creation().await?;
-        tl.activate(tenant, None, ctx);
-        Ok(tl)
     }
 
     pub(crate) fn raw_timeline(&self) -> anyhow::Result<&Arc<Timeline>> {
