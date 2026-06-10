@@ -101,3 +101,4 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 23 | [Flaky: SK kill-9 recovery hits "YB WAL hole"](23_sk-kill9-wal-hole-flake.md) | ✅ done | high | safekeeper |
 | 24 | [Early-window CLOG SLRU deltas never persist](24_early-clog-slru-deltas-lost.md) | ✅ done | highest | yb-pageserver |
 | 25 | [Validate the output of `.sql` e2e tests](25_e2e-sql-output-validation.md) | ✅ done | medium | yb-pageserver |
+| 26 | [PS + SK under the endpoint folder](26_ps-sk-under-endpoint-dir.md) | ⏳ pending | medium | yb_light_local |
