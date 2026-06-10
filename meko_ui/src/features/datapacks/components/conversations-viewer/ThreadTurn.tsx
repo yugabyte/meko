@@ -27,15 +27,9 @@ export type ThreadTurnProps = {
    *  the drawer opens — used for the memoryId deep-link flow so the user
    *  can spot where in the thread their target memory was extracted. */
   onOpenTraceWithMemoryShimmer?: () => void;
-  /** Opens the trace drawer focused on a specific span — fired by
-   *  "View Trace" on a Decision Trace step. */
-  onViewTraceSpan?: (spanId: string) => void;
   isShimmering?: boolean;
   datapackName: string;
   datapackId?: string;
-  /** Email of the conversation's author — rendered in place of the raw
-   *  `user_id` UUID in Decision Trace PARAMS. */
-  userEmail?: string;
   conversationId: string;
   /** Required to build the deep-link footer / "Open in Langfuse" anchors
    *  inside the per-turn Decision Trace card. Empty string is treated
@@ -49,11 +43,9 @@ export function ThreadTurn({
   now,
   onOpenTrace,
   onOpenTraceWithMemoryShimmer,
-  onViewTraceSpan,
   isShimmering = false,
   datapackName,
   datapackId,
-  userEmail,
   conversationId,
   langfuseProjectId,
 }: ThreadTurnProps) {
@@ -98,19 +90,10 @@ export function ThreadTurn({
         <div className="min-w-0 flex-1">
           <div className="mb-1 font-mono text-[10px] text-muted-foreground">{relTime}</div>
 
-          {/* datapackName/datapackId are passed so a `datapack_id` PARAMS
-              row renders as the datapack name. enableConversationLink is
-              intentionally OFF: this view already IS the conversation, so
-              deep-linking a step's conversation_id back to the same page
-              is redundant (that link is WorkbenchLM-only). */}
           <DecisionTrace
             message={message}
             conversationId={conversationId}
             langfuseProjectId={langfuseProjectId}
-            datapackName={datapackName}
-            datapackId={datapackId}
-            userEmail={userEmail}
-            onViewTrace={onViewTraceSpan}
           />
 
           <div className="relative overflow-hidden rounded-2xl">

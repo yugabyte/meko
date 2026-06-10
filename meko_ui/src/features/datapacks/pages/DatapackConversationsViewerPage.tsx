@@ -79,9 +79,6 @@ export default function DatapackConversationsViewerPage({
    *  Owned at the page level so the drawer survives thread re-fetches
    *  and conversation switches reset it cleanly. */
   const [traceMessageId, setTraceMessageId] = useState<string | null>(null);
-  /** Span to focus in the drawer (from "View Trace" on a Decision Trace
-   *  step). Cleared when the drawer is opened via other entry points. */
-  const [traceFocusSpanId, setTraceFocusSpanId] = useState<string | undefined>(undefined);
   /** When true, the TraceDrawer shimmers its memories panel to draw
    *  the user's eye after opening via the memory hover card. */
   const [shimmerMemories, setShimmerMemories] = useState(false);
@@ -98,7 +95,6 @@ export default function DatapackConversationsViewerPage({
   // trace data from shimmering while the new thread loads.
   useEffect(() => {
     setTraceMessageId(null);
-    setTraceFocusSpanId(undefined);
   }, [conversationId]);
 
   const handleSelect = useCallback(
@@ -154,18 +150,10 @@ export default function DatapackConversationsViewerPage({
                 datapackId={datapackId}
                 conversationId={conversationId}
                 userEmail={selectedEmail}
-                onOpenTrace={(messageId) => {
-                  setTraceFocusSpanId(undefined);
-                  setTraceMessageId(messageId);
-                }}
+                onOpenTrace={(messageId) => setTraceMessageId(messageId)}
                 onOpenTraceWithMemoryShimmer={(messageId) => {
-                  setTraceFocusSpanId(undefined);
                   setTraceMessageId(messageId);
                   setShimmerMemories(true);
-                }}
-                onViewTraceSpan={(messageId, spanId) => {
-                  setTraceFocusSpanId(spanId);
-                  setTraceMessageId(messageId);
                 }}
               />
             ) : (
@@ -184,14 +172,10 @@ export default function DatapackConversationsViewerPage({
         datapackId={datapackId}
         conversationId={conversationId ?? ""}
         messageId={traceMessageId}
-        onClose={() => {
-          setTraceMessageId(null);
-          setTraceFocusSpanId(undefined);
-        }}
+        onClose={() => setTraceMessageId(null)}
         shimmerMemories={shimmerMemories}
         onShimmerMemoriesDone={() => setShimmerMemories(false)}
         highlightMemoryId={targetMemoryId || undefined}
-        focusSpanId={traceFocusSpanId}
       />
     </div>
   );

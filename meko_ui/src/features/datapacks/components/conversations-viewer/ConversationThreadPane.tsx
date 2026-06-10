@@ -51,9 +51,6 @@ type Props = {
    *  bubble — used by the memoryId deep-link flow so the user can spot
    *  which turn produced their target memory. */
   onOpenTraceWithMemoryShimmer?: (messageId: string) => void;
-  /** Opens the trace drawer for `messageId` and focuses `spanId` — fired
-   *  by "View Trace" on a Decision Trace step. */
-  onViewTraceSpan?: (messageId: string, spanId: string) => void;
 };
 
 export function ConversationThreadPane({
@@ -63,7 +60,6 @@ export function ConversationThreadPane({
   userEmail,
   onOpenTrace,
   onOpenTraceWithMemoryShimmer,
-  onViewTraceSpan,
 }: Props) {
   const [detail, setDetail] = useState<DatapackConversationDetail | null>(null);
   const [langfuseProjectId, setLangfuseProjectId] = useState<string>("");
@@ -304,15 +300,9 @@ export function ConversationThreadPane({
                   ? () => onOpenTraceWithMemoryShimmer(m.message_id)
                   : undefined
               }
-              onViewTraceSpan={
-                onViewTraceSpan
-                  ? (spanId) => onViewTraceSpan(m.message_id, spanId)
-                  : undefined
-              }
               isShimmering={shimmeringMessageId === m.message_id}
               datapackName={datapackName}
               datapackId={datapackId}
-              userEmail={userEmail}
               conversationId={conversationId}
               langfuseProjectId={langfuseProjectId}
             />

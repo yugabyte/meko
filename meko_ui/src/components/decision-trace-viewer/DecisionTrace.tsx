@@ -39,20 +39,6 @@ export type DecisionTraceProps = {
   message: DatapackThreadMessage;
   conversationId: string;
   langfuseProjectId?: string;
-  /** Datapack context used to deep-link a step's `conversation_id` param
-   *  to the conversation viewer (new tab). Optional: when absent the id
-   *  renders as plain text. */
-  datapackName?: string;
-  datapackId?: string;
-  /** When set, a `user_id` PARAMS row renders as this email. */
-  userEmail?: string;
-  /** Enables the `conversation_id` PARAMS deep-link (WorkbenchLM only;
-   *  redundant inside the conversation viewer). */
-  enableConversationLink?: boolean;
-  /** When provided, each step's footer shows a "View Trace" button that
-   *  opens the internal trace drawer focused on that step's span (instead
-   *  of the external "Open in Langfuse" link). */
-  onViewTrace?: (spanId: string) => void;
   /** Initial expanded state. Defaults to collapsed. Set true when the
    *  card is mounted as a result of the user already having clicked to
    *  expand (e.g. WorkbenchLM's lazy live-trace fetch) so the content
@@ -64,11 +50,6 @@ export function DecisionTrace({
   message,
   conversationId,
   langfuseProjectId,
-  datapackName,
-  datapackId,
-  userEmail,
-  enableConversationLink,
-  onViewTrace,
   defaultExpanded = false,
 }: DecisionTraceProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -182,13 +163,6 @@ export function DecisionTrace({
             taglineFallback={preprocessTagline(phases.preprocess, memoryHits, kbHits)}
             conversationId={conversationId}
             langfuseProjectId={langfuseProjectId}
-            datapackName={datapackName}
-            datapackId={datapackId}
-            userEmail={userEmail}
-            enableConversationLink={enableConversationLink}
-            onViewTrace={onViewTrace}
-            memoryHits={memoryHits}
-            kbHits={kbHits}
           />
 
           <PhaseAccordion
@@ -200,11 +174,6 @@ export function DecisionTrace({
             taglineFallback={planTagline(planSteps, hasReasoning)}
             conversationId={conversationId}
             langfuseProjectId={langfuseProjectId}
-            datapackName={datapackName}
-            datapackId={datapackId}
-            userEmail={userEmail}
-            enableConversationLink={enableConversationLink}
-            onViewTrace={onViewTrace}
             hasContentOverride={hasReasoning || hasPlan}
           >
             <PlanContent
@@ -224,11 +193,6 @@ export function DecisionTrace({
             taglineFallback={executeTagline(phases.execute, message.memories_extracted ?? 0)}
             conversationId={conversationId}
             langfuseProjectId={langfuseProjectId}
-            datapackName={datapackName}
-            datapackId={datapackId}
-            userEmail={userEmail}
-            enableConversationLink={enableConversationLink}
-            onViewTrace={onViewTrace}
           />
         </div>
       ) : null}
