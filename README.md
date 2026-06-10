@@ -205,6 +205,18 @@ cargo yb_light endpoint create main
 cargo yb_light endpoint start main
 ```
 
+`cargo yb_light` rebuilds-then-runs the debug binary. Once it's built,
+the repo-root wrapper scripts skip cargo's build check and exec the
+binary directly — handy for fast, repeated invocations:
+
+```sh
+./yb_light_local init             # -> target/debug/yb_light_local
+./yb_light_local_release start    # -> target/release/yb_light_local
+```
+
+Both pass all arguments straight through and resolve the repo root
+from their own location, so they work from any working directory.
+
 The pageserver expects to find a YB cluster reachable from the host;
 configure host/port/user/dbname/sslmode in `config.toml` under the
 `remote_storage` and `wal_yb_config` sections. `host` accepts a single
