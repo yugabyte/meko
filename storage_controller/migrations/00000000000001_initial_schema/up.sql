@@ -23,8 +23,8 @@ CREATE TABLE storage_controller.tenants (
     generation             INTEGER,
     generation_pageserver  BIGINT,
     placement_policy       VARCHAR NOT NULL,
-    -- JSON-encoded TenantConfig; opaque to the database.
-    config                 TEXT NOT NULL,
+    -- JSON-encoded TenantConfig, stored as JSONB.
+    config                 JSONB NOT NULL,
     scheduling_policy      VARCHAR NOT NULL DEFAULT '"Active"',
     PRIMARY KEY (tenant_id)
 );
@@ -95,6 +95,21 @@ CREATE TABLE storage_controller.timeline_imports (
     timeline_id    VARCHAR NOT NULL,
     shard_statuses JSONB NOT NULL,
     PRIMARY KEY (tenant_id, timeline_id)
+);
+
+-- Durable registry of compute endpoints managed by yb_light_local.
+--
+-- Replaces the old per-endpoint `.yb_light/endpoints/<id>/endpoint.json`
+-- folder layout: yb_light_local now creates/lists/deletes endpoints through
+-- the storage controller's `/control/v1/endpoint` API, which is backed by
+-- this table. `spec` holds the `EndpointConf` as JSONB; the controller never
+-- interprets it (it round-trips through yb_light_local's serde model).
+CREATE TABLE storage_controller.endpoints (
+    endpoint_id  VARCHAR NOT NULL,
+    tenant_id    VARCHAR NOT NULL,
+    timeline_id  VARCHAR NOT NULL,
+    spec         JSONB NOT NULL,
+    PRIMARY KEY (endpoint_id)
 );
 
 -- =====================================================================

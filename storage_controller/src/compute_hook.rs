@@ -372,8 +372,9 @@ impl ComputeHook {
                 return Ok(());
             }
         };
-        let cplane =
-            ComputeControlPlane::load(env.clone()).expect("Error loading compute control plane");
+        let cplane = ComputeControlPlane::load(env.clone())
+            .await
+            .expect("Error loading compute control plane");
 
         M::notify_local(&env, &cplane, req).await
     }

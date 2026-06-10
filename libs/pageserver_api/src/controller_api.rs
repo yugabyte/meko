@@ -45,6 +45,23 @@ pub struct TenantCreateResponse {
     pub shards: Vec<TenantCreateResponseShard>,
 }
 
+/// A compute endpoint record persisted by the storage controller on behalf of
+/// `yb_light_local`. yb-light keeps no per-endpoint folder anymore: the durable
+/// registry of compute endpoints lives in the `storage_controller.endpoints`
+/// table, and `yb_light_local` drives it through the `/control/v1/endpoint` API.
+///
+/// `spec` is an opaque JSON object (a serialized
+/// `control_plane::endpoint::EndpointConf`), stored in a JSONB column. The
+/// storage controller never parses it, so the endpoint config schema can
+/// evolve without touching the controller.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ComputeEndpoint {
+    pub endpoint_id: String,
+    pub tenant_id: String,
+    pub timeline_id: String,
+    pub spec: serde_json::Value,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NodeRegisterRequest {
     pub node_id: NodeId,

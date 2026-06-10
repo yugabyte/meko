@@ -14,6 +14,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    endpoints (endpoint_id) {
+        endpoint_id -> Varchar,
+        tenant_id -> Varchar,
+        timeline_id -> Varchar,
+        spec -> Jsonb,
+    }
+}
+
+diesel::table! {
     metadata_health (tenant_id) {
         tenant_id -> Varchar,
         healthy -> Bool,
@@ -56,7 +65,7 @@ diesel::table! {
         generation -> Nullable<Int4>,
         generation_pageserver -> Nullable<Int8>,
         placement_policy -> Varchar,
-        config -> Text,
+        config -> Jsonb,
         scheduling_policy -> Varchar,
     }
 }
@@ -86,6 +95,7 @@ diesel::table! {
 
 diesel::allow_tables_to_appear_in_same_query!(
     controllers,
+    endpoints,
     metadata_health,
     nodes,
     safekeepers,

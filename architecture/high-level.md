@@ -80,10 +80,11 @@ key the pageserver/safekeeper use. In YB the path is split across the
 | Pageserver tenant manifest | YB `yb_storage.blobs` | `pageserver-yb/tenants/<id>/tenant-manifest-<gen>.json` |
 | Safekeeper control file | YB `safekeeper.timeline_state` schema | one row per timeline, typed columns |
 | Safekeeper live WAL | YB `yb_storage.wals` | `((tenant_id, timeline_id) HASH, segno, chunk_offset)` |
-| Storage controller relational state | YB `yb_storage` DB, `storage_controller` schema | 7 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
+| Storage controller relational state | YB `yb_storage` DB, `storage_controller` schema | 8 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
+| Compute endpoint registry | YB `yb_storage` DB, `storage_controller.endpoints` | one row per endpoint: endpoint_id, tenant_id, timeline_id + opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `endpoint.json` folder |
 | Pageserver local layer cache | local FS | `.yb_light/pageserver_*/tenants/.../timelines/.../<layer>` |
 | Safekeeper local FS | local FS | `.yb_light/safekeepers/sk*/` — only logs + pidfile (no WAL, no control file, no id) |
-| Compute `pgdata` | local FS | `.yb_light/endpoints/main/pgdata/` (catalogs + ephemeral WAL pre-ship buffer) |
+| Compute `pgdata` + runtime | local FS | `.yb_light/endpoints/main/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on start, removed on destroy |
 
 ## What did *not* change from upstream Neon
 
@@ -91,7 +92,10 @@ These subsystems run unmodified upstream Neon code in yb-light:
 
 - The Postgres compute itself (`pg_install/v17/bin/postgres` with Neon smgr
   patches from `vendor/postgres-v17`).
-- `compute_ctl` and the compute spec / endpoint lifecycle.
+- `compute_ctl` and the compute spec. (The endpoint *registry* — what
+  `yb_light_local` persists per endpoint — moved out of `endpoint.json` folders
+  into the `storage_controller.endpoints` table; `compute_ctl` itself is
+  unchanged.)
 - The pageserver's `RemoteStorage` *trait* — we added `YbStore` as the
   primary backend (with `Unreliable` retained for tests); the upstream
   S3, Azure, GCS, and LocalFs variants have been removed, and yb-pageserver

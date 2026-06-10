@@ -22,7 +22,7 @@ use http_utils::error::ApiError;
 use hyper::Uri;
 use itertools::Itertools;
 use pageserver_api::controller_api::{
-    MetadataHealthRecord, MetadataHealthUpdateRequest, NodeAvailability,
+    ComputeEndpoint, MetadataHealthRecord, MetadataHealthUpdateRequest, NodeAvailability,
     NodeRegisterRequest, NodeSchedulingPolicy, NodeShard, NodeShardResponse, PlacementPolicy,
     ShardSchedulingPolicy,
     SkSchedulingPolicy, TenantCreateRequest, TenantCreateResponse, TenantCreateResponseShard,
@@ -1783,7 +1783,7 @@ impl Service {
                 generation: attach_req.generation_override.or(Some(0)),
                 generation_pageserver: None,
                 placement_policy: serde_json::to_string(&PlacementPolicy::Attached(0)).unwrap(),
-                config: serde_json::to_string(&config).unwrap(),
+                config: serde_json::to_value(&config).unwrap(),
                 scheduling_policy: serde_json::to_string(&ShardSchedulingPolicy::default())
                     .unwrap(),
             };
@@ -2380,7 +2380,7 @@ impl Service {
                 // incrementing the generation the first time we attach to a pageserver.
                 generation_pageserver: None,
                 placement_policy: serde_json::to_string(&placement_policy).unwrap(),
-                config: serde_json::to_string(&create_req.config).unwrap(),
+                config: serde_json::to_value(&create_req.config).unwrap(),
                 scheduling_policy: serde_json::to_string(&ShardSchedulingPolicy::default())
                     .unwrap(),
             })
@@ -5933,9 +5933,9 @@ impl Service {
         // definition, we will do an encode/decode cycle to ensure any legacy fields are dropped and any new
         // fields are added, before doing a comparison.
         for tsp in &mut persistent_shards {
-            let config: TenantConfig = serde_json::from_str(&tsp.config)
+            let config: TenantConfig = serde_json::from_value(tsp.config.clone())
                 .map_err(|e| ApiError::InternalServerError(e.into()))?;
-            tsp.config = serde_json::to_string(&config).expect("Encoding config is infallible");
+            tsp.config = serde_json::to_value(&config).expect("Encoding config is infallible");
         }
 
         if persistent_shards != expect_shards {
@@ -6343,6 +6343,31 @@ impl Service {
         };
 
         Ok(nodes)
+    }
+
+    /// Persist (create or replace) a compute endpoint record on behalf of
+    /// `yb_light_local`. The controller only stores the record; it does not
+    /// interpret the endpoint `spec`.
+    pub(crate) async fn endpoint_create(&self, req: ComputeEndpoint) -> Result<(), ApiError> {
+        self.persistence.insert_endpoint(req.into()).await?;
+        Ok(())
+    }
+
+    /// Return all persisted compute endpoint records.
+    pub(crate) async fn endpoint_list(&self) -> Result<Vec<ComputeEndpoint>, ApiError> {
+        Ok(self
+            .persistence
+            .list_endpoints()
+            .await?
+            .into_iter()
+            .map(ComputeEndpoint::from)
+            .collect())
+    }
+
+    /// Delete a persisted compute endpoint record. Idempotent.
+    pub(crate) async fn endpoint_delete(&self, endpoint_id: &str) -> Result<(), ApiError> {
+        self.persistence.delete_endpoint(endpoint_id).await?;
+        Ok(())
     }
 
     pub(crate) async fn tombstone_list(&self) -> Result<Vec<Node>, ApiError> {

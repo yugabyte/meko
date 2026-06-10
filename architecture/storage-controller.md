@@ -19,7 +19,7 @@ fresh-schema apply of the collapsed Diesel migration, not a
 ## What it persists
 
 A single collapsed migration (`storage_controller/migrations/00000000000001_initial_schema/up.sql`)
-creates the 7 storage_controller tables below plus the pageserver, safekeeper,
+creates the 8 storage_controller tables below plus the pageserver, safekeeper,
 and public schemas (blobs / wals / blob_namespace, pageserver.pages /
 slru_pages / meta / tenant_config / timeline_state, safekeeper.timeline_state)
 in the same `yb_storage` DB.
@@ -33,6 +33,7 @@ in the same `yb_storage` DB.
 | `metadata_health` | Per-shard health markers (last successful scrub timestamps) |
 | `timeline_imports` | In-progress imports (e.g., from pg_dump) |
 | `controllers` | Multi-controller leader election rows (only one controller is leader at a time) |
+| `endpoints` | Compute endpoints managed by `yb_light_local`: endpoint_id, tenant_id, timeline_id, and the opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `.yb_light/endpoints/<id>/endpoint.json` folder registry; driven by the `/control/v1/endpoint` API. |
 
 The controller also writes to `pageserver.tenant_config` (in the same DB,
 created by the same collapsed migration) on tenant create / config update
@@ -74,7 +75,8 @@ The safekeeper reconciler path is no longer upstream-parity:
 The controller exposes an HTTP API on `--listen` for:
 
 - Pageservers and safekeepers to "upcall" (re-attach, register, post heartbeat).
-- `yb_light_local` / external operators to manage tenants and shards.
+- `yb_light_local` / external operators to manage tenants, shards, and
+  compute endpoints (`/control/v1/endpoint`).
 - The compute to look up its current pageserver address.
 
 ### Code layout

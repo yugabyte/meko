@@ -1719,7 +1719,7 @@ impl TenantShard {
             policy: serde_json::from_str(&tsp.placement_policy).unwrap(),
             intent,
             observed: ObservedState::new(),
-            config: serde_json::from_str(&tsp.config).unwrap(),
+            config: serde_json::from_value(tsp.config).unwrap(),
             reconciler: None,
             splitting: SplitState::default(),
             // Filled in during [`Service::startup_reconcile`]
@@ -1741,7 +1741,7 @@ impl TenantShard {
             generation: self.generation.map(|g| g.into().unwrap_or(0) as i32),
             generation_pageserver: self.intent.get_attached().map(|n| n.0 as i64),
             placement_policy: serde_json::to_string(&self.policy).unwrap(),
-            config: serde_json::to_string(&self.config).unwrap(),
+            config: serde_json::to_value(&self.config).unwrap(),
             scheduling_policy: serde_json::to_string(&self.scheduling_policy).unwrap(),
         }
     }

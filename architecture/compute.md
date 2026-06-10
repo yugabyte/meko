@@ -56,7 +56,12 @@ None of this changes between upstream Neon and yb-light.
 ### Endpoint lifecycle
 
 Endpoints are managed via `yb_light_local endpoint create|start|stop|reconfigure`.
-The endpoint's `pgdata` directory holds:
+The durable registry of endpoints lives in the storage controller's `endpoints`
+table (column `spec` holds the serialized `EndpointConf`), not on local disk;
+`yb_light_local` drives it through the `/control/v1/endpoint` API. The local
+`.yb_light/endpoints/<id>/` directory is only runtime working state
+(`config.json`, logs, the pidfile, and `pgdata`), created on `start` and removed
+on `destroy`. The endpoint's `pgdata` directory holds:
 
 - `postgresql.conf`, `pg_hba.conf`, `pg_ident.conf` — generated from spec.
 - `PG_VERSION`, `global/pg_control`, system catalog files — pulled from

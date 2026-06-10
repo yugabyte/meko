@@ -1,14 +1,13 @@
 //! Code to manage compute endpoints
 //!
-//! In the local test environment, the data for each endpoint is stored in
-//!
-//! ```text
-//!   .yb_light/endpoints/<endpoint id>
-//! ```
-//!
-//! Some basic information about the endpoint, like the tenant and timeline IDs,
-//! are stored in the `endpoint.json` file. The `endpoint.json` file is created
-//! when the endpoint is created, and doesn't change afterwards.
+//! The durable registry of compute endpoints lives in the
+//! `storage_controller.endpoints` table, not on the local filesystem. Each
+//! endpoint's config (the [`EndpointConf`] struct) is serialized to JSON and
+//! stored as the `spec` column of one row, keyed by endpoint id.
+//! `yb_light_local` creates / lists / deletes endpoints by calling the storage
+//! controller's `/control/v1/endpoint` API (see
+//! [`crate::storage_controller::StorageController::endpoint_create`] and
+//! friends); the controller is the single source of truth.
 //!
 //! The endpoint is managed by the `compute_ctl` binary. When an endpoint is
 //! started, we launch `compute_ctl` It synchronizes the safekeepers, downloads
@@ -16,20 +15,21 @@
 //! finally launches the PostgreSQL process. It watches the PostgreSQL process
 //! until it exits.
 //!
-//! When an endpoint is created, a `postgresql.conf` file is also created in
-//! the endpoint's directory. The file can be modified before starting PostgreSQL.
-//! However, the `postgresql.conf` file in the endpoint directory is not used directly
-//! by PostgreSQL. It is passed to `compute_ctl`, and `compute_ctl` writes another
-//! copy of it in the data directory.
+//! A live endpoint still needs a local working directory to hold runtime
+//! artifacts of its `compute_ctl` / `postgres` processes. This directory is
+//! created lazily on `start` (not at create time) and removed on `destroy`; it
+//! is *not* the registry — losing it does not lose the endpoint, only its
+//! current process state. The `postgresql.conf` passed to `compute_ctl` is
+//! regenerated in memory from [`EndpointConf`] on each start, so it is never
+//! persisted on its own.
 //!
-//! Directory contents:
+//! Working-directory contents:
 //!
 //! ```text
 //! .yb_light/endpoints/main/
 //!     compute.log               - log output of `compute_ctl` and `postgres`
-//!     endpoint.json             - serialized `EndpointConf` struct
-//!     postgresql.conf           - postgresql settings
-//!     config.json                 - passed to `compute_ctl`
+//!     config.json               - passed to `compute_ctl`
+//!     compute_ctl.pid           - pid of the `compute_ctl` process
 //!     pgdata/
 //!         postgresql.conf       - copy of postgresql.conf created by `compute_ctl`
 //!         neon.signal
@@ -82,10 +82,12 @@ use utils::id::{NodeId, TenantId, TimelineId};
 use utils::id::{ShardCount, ShardIndex, ShardNumber};
 
 use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT as DEFAULT_PAGESERVER_GRPC_PORT;
+use pageserver_api::controller_api::ComputeEndpoint;
 use postgres_connection::parse_host_port;
 
 use crate::local_env::LocalEnv;
 use crate::postgresql_conf::PostgresConf;
+use crate::storage_controller::StorageController;
 
 // contents of a endpoint.json file
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
@@ -127,27 +129,21 @@ pub struct ComputeControlPlane {
 }
 
 impl ComputeControlPlane {
-    // Load current endpoints from the endpoints/ subdirectories
-    pub fn load(env: LocalEnv) -> Result<ComputeControlPlane> {
+    /// Load the current set of endpoints from the storage controller's
+    /// `endpoints` table (via its HTTP API). Replaces the previous scan of the
+    /// `.yb_light/endpoints/` directory.
+    pub async fn load(env: LocalEnv) -> Result<ComputeControlPlane> {
+        let records = StorageController::from_env(&env)
+            .endpoint_list()
+            .await
+            .context("listing endpoints from storage controller")?;
+
         let mut endpoints = BTreeMap::default();
-        for endpoint_dir in std::fs::read_dir(env.endpoints_path())
-            .with_context(|| format!("failed to list {}", env.endpoints_path().display()))?
-        {
-            let ep_res = Endpoint::from_dir_entry(endpoint_dir?, &env);
-            let ep = match ep_res {
-                Ok(ep) => ep,
-                Err(e) => match e.downcast::<std::io::Error>() {
-                    Ok(e) => {
-                        // A parallel task could delete an endpoint while we have just scanned the directory
-                        if e.kind() == std::io::ErrorKind::NotFound {
-                            continue;
-                        } else {
-                            Err(e)?
-                        }
-                    }
-                    Err(e) => Err(e)?,
-                },
-            };
+        for record in records {
+            let endpoint_id = record.endpoint_id.clone();
+            let conf: EndpointConf = serde_json::from_value(record.spec)
+                .with_context(|| format!("deserializing spec for endpoint {endpoint_id}"))?;
+            let ep = Endpoint::from_conf(conf, &env);
             endpoints.insert(ep.endpoint_id.clone(), Arc::new(ep));
         }
 
@@ -199,7 +195,7 @@ impl ComputeControlPlane {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn new_endpoint(
+    pub async fn new_endpoint(
         &mut self,
         endpoint_id: &str,
         tenant_id: TenantId,
@@ -224,22 +220,16 @@ impl ComputeControlPlane {
             jwks: Self::create_jwks_from_pem(&self.env.read_public_key()?)?,
             tls: None::<TlsConfig>,
         };
-        let ep = Arc::new(Endpoint {
-            endpoint_id: endpoint_id.to_owned(),
-            pg_address: SocketAddr::new(IpAddr::from(Ipv4Addr::LOCALHOST), pg_port),
-            external_http_address: SocketAddr::new(
-                IpAddr::from(Ipv4Addr::UNSPECIFIED),
-                external_http_port,
-            ),
-            internal_http_address: SocketAddr::new(
-                IpAddr::from(Ipv4Addr::LOCALHOST),
-                internal_http_port,
-            ),
-            env: self.env.clone(),
+        let conf = EndpointConf {
+            endpoint_id: endpoint_id.to_string(),
+            tenant_id,
             timeline_id,
             mode,
-            tenant_id,
+            external_http_port,
+            internal_http_port,
+            pg_port,
             pg_version,
+            grpc,
             // We don't setup roles and databases in the spec locally, so we don't need to
             // do catalog updates. Catalog updates also include check availability
             // data creation. Yet, we have tests that check that size and db dump
@@ -248,47 +238,30 @@ impl ComputeControlPlane {
             // we also skip catalog updates in the cloud.
             skip_pg_catalog_updates,
             drop_subscriptions_before_start,
-            grpc,
             reconfigure_concurrency: 1,
             features: vec![],
             cluster: None,
-            compute_ctl_config: compute_ctl_config.clone(),
-            privileged_role_name: privileged_role_name.clone(),
-            shared_buffers: shared_buffers.clone(),
-            lfc_size: lfc_size.clone(),
-            pg_settings: pg_settings.clone(),
-        });
+            compute_ctl_config,
+            privileged_role_name,
+            shared_buffers,
+            lfc_size,
+            pg_settings,
+        };
 
-        ep.create_endpoint_dir()?;
-        std::fs::write(
-            ep.endpoint_path().join("endpoint.json"),
-            serde_json::to_string_pretty(&EndpointConf {
+        // Persist the endpoint in the storage controller's `endpoints` table.
+        // The whole `EndpointConf` rides along as an opaque JSONB `spec`.
+        let spec = serde_json::to_value(&conf).context("serializing endpoint config")?;
+        StorageController::from_env(&self.env)
+            .endpoint_create(ComputeEndpoint {
                 endpoint_id: endpoint_id.to_string(),
-                tenant_id,
-                timeline_id,
-                mode,
-                external_http_port,
-                internal_http_port,
-                pg_port,
-                pg_version,
-                grpc,
-                skip_pg_catalog_updates,
-                drop_subscriptions_before_start,
-                reconfigure_concurrency: 1,
-                features: vec![],
-                cluster: None,
-                compute_ctl_config,
-                privileged_role_name,
-                shared_buffers,
-                lfc_size,
-                pg_settings,
-            })?,
-        )?;
-        std::fs::write(
-            ep.endpoint_path().join("postgresql.conf"),
-            ep.setup_pg_conf()?.to_string(),
-        )?;
+                tenant_id: tenant_id.to_string(),
+                timeline_id: timeline_id.to_string(),
+                spec,
+            })
+            .await
+            .context("creating endpoint in storage controller")?;
 
+        let ep = Arc::new(Endpoint::from_conf(conf, &self.env));
         self.endpoints
             .insert(ep.endpoint_id.clone(), Arc::clone(&ep));
 
@@ -435,25 +408,13 @@ pub struct EndpointStartArgs {
 }
 
 impl Endpoint {
-    fn from_dir_entry(entry: std::fs::DirEntry, env: &LocalEnv) -> Result<Endpoint> {
-        if !entry.file_type()?.is_dir() {
-            anyhow::bail!(
-                "Endpoint::from_dir_entry failed: '{}' is not a directory",
-                entry.path().display()
-            );
-        }
+    /// Build an in-memory [`Endpoint`] from its persisted [`EndpointConf`]
+    /// (loaded from the storage controller's `endpoints` table). Pure: derives
+    /// the listen addresses from the persisted ports and touches no files.
+    fn from_conf(conf: EndpointConf, env: &LocalEnv) -> Endpoint {
+        debug!("deserialized endpoint conf: {:?}", conf);
 
-        // parse data directory name
-        let fname = entry.file_name();
-        let endpoint_id = fname.to_str().unwrap().to_string();
-
-        // Read the endpoint.json file
-        let conf: EndpointConf =
-            serde_json::from_slice(&std::fs::read(entry.path().join("endpoint.json"))?)?;
-
-        debug!("serialized endpoint conf: {:?}", conf);
-
-        Ok(Endpoint {
+        Endpoint {
             pg_address: SocketAddr::new(IpAddr::from(Ipv4Addr::LOCALHOST), conf.pg_port),
             external_http_address: SocketAddr::new(
                 IpAddr::from(Ipv4Addr::UNSPECIFIED),
@@ -463,7 +424,7 @@ impl Endpoint {
                 IpAddr::from(Ipv4Addr::LOCALHOST),
                 conf.internal_http_port,
             ),
-            endpoint_id,
+            endpoint_id: conf.endpoint_id,
             env: env.clone(),
             timeline_id: conf.timeline_id,
             mode: conf.mode,
@@ -480,7 +441,7 @@ impl Endpoint {
             shared_buffers: conf.shared_buffers,
             lfc_size: conf.lfc_size,
             pg_settings: conf.pg_settings,
-        })
+        }
     }
 
     fn create_endpoint_dir(&self) -> Result<()> {
@@ -720,19 +681,14 @@ impl Endpoint {
     }
 
     fn read_postgresql_conf(&self) -> Result<String> {
-        // Slurp the endpoints/<endpoint id>/postgresql.conf file into
-        // memory. We will include it in the spec file that we pass to
-        // `compute_ctl`, and `compute_ctl` will write it to the postgresql.conf
-        // in the data directory.
-        let postgresql_conf_path = self.endpoint_path().join("postgresql.conf");
-        match std::fs::read(&postgresql_conf_path) {
-            Ok(content) => Ok(String::from_utf8(content)?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("".to_string()),
-            Err(e) => Err(anyhow::Error::new(e).context(format!(
-                "failed to read config file in {}",
-                postgresql_conf_path.to_str().unwrap()
-            ))),
-        }
+        // Regenerate the postgresql.conf from the endpoint config. It used to
+        // be written to `endpoints/<id>/postgresql.conf` at create time and
+        // slurped back here, but the endpoint config now lives in the storage
+        // controller's `endpoints` table, so we build it in memory from the
+        // same deterministic `setup_pg_conf` inputs. We include it in the spec
+        // we pass to `compute_ctl`, which writes it to the postgresql.conf in
+        // the data directory.
+        Ok(self.setup_pg_conf()?.to_string())
     }
 
     /// Map safekeepers ids to the actual connection strings.
@@ -771,6 +727,11 @@ impl Endpoint {
         if self.status() == EndpointStatus::Running {
             anyhow::bail!("The endpoint is already running");
         }
+
+        // The endpoint registry lives in the storage controller's table, so the
+        // local working directory is no longer created at create time — make
+        // sure it exists before we write config.json / logs / the pidfile.
+        self.create_endpoint_dir()?;
 
         let postgresql_conf = self.read_postgresql_conf()?;
 
@@ -1242,7 +1203,17 @@ impl Endpoint {
                 "Destroying postgres data directory '{}'",
                 self.pgdata().to_str().unwrap()
             );
-            std::fs::remove_dir_all(self.endpoint_path())?;
+            // Remove the local working directory if it exists. Unlike before,
+            // this is just runtime state — the endpoint's durable record is the
+            // row we delete below, not this directory.
+            if self.endpoint_path().exists() {
+                std::fs::remove_dir_all(self.endpoint_path())?;
+            }
+            // Drop the endpoint from the storage controller's `endpoints` table.
+            StorageController::from_env(&self.env)
+                .endpoint_delete(&self.endpoint_id)
+                .await
+                .context("deleting endpoint from storage controller")?;
         }
         Ok(response)
     }

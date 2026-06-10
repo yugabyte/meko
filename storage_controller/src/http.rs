@@ -18,7 +18,7 @@ use hyper::header::CONTENT_TYPE;
 use hyper::{Body, Request, Response, StatusCode, Uri};
 use metrics::{BuildInfo, NeonMetrics};
 use pageserver_api::controller_api::{
-    MetadataHealthListOutdatedRequest, MetadataHealthListOutdatedResponse,
+    ComputeEndpoint, MetadataHealthListOutdatedRequest, MetadataHealthListOutdatedResponse,
     MetadataHealthListUnhealthyResponse, MetadataHealthUpdateRequest, MetadataHealthUpdateResponse,
     NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, SafekeeperSchedulingPolicyRequest,
     SetTimelineBranchNameRequest, TenantCreateRequest,
@@ -954,6 +954,56 @@ async fn handle_node_list(req: Request<Body>) -> Result<Response<Body>, ApiError
     let api_nodes = nodes.into_iter().map(|n| n.describe()).collect::<Vec<_>>();
 
     json_response(StatusCode::OK, api_nodes)
+}
+
+/// Compute-endpoint registry, used by `yb_light_local` in place of the old
+/// per-endpoint folder layout. These handlers just persist/return records; the
+/// controller never interprets the endpoint `spec`.
+async fn handle_endpoint_create(req: Request<Body>) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+
+    let mut req = match maybe_forward(req).await {
+        ForwardOutcome::Forwarded(res) => {
+            return res;
+        }
+        ForwardOutcome::NotForwarded(req) => req,
+    };
+
+    let create_req = json_request::<ComputeEndpoint>(&mut req).await?;
+    let state = get_state(&req);
+    state.service.endpoint_create(create_req).await?;
+    json_response(StatusCode::OK, ())
+}
+
+async fn handle_endpoint_list(req: Request<Body>) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+
+    let req = match maybe_forward(req).await {
+        ForwardOutcome::Forwarded(res) => {
+            return res;
+        }
+        ForwardOutcome::NotForwarded(req) => req,
+    };
+
+    let state = get_state(&req);
+    let endpoints = state.service.endpoint_list().await?;
+    json_response(StatusCode::OK, endpoints)
+}
+
+async fn handle_endpoint_delete(req: Request<Body>) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+
+    let req = match maybe_forward(req).await {
+        ForwardOutcome::Forwarded(res) => {
+            return res;
+        }
+        ForwardOutcome::NotForwarded(req) => req,
+    };
+
+    let endpoint_id: String = parse_request_param(&req, "endpoint_id")?;
+    let state = get_state(&req);
+    state.service.endpoint_delete(&endpoint_id).await?;
+    json_response(StatusCode::OK, ())
 }
 
 async fn handle_node_drop(req: Request<Body>) -> Result<Response<Body>, ApiError> {
@@ -2281,6 +2331,24 @@ pub fn make_router(
         })
         .get("/control/v1/node", |r| {
             named_request_span(r, handle_node_list, RequestName("control_v1_node"))
+        })
+        // Compute-endpoint registry (used by yb_light_local instead of folders)
+        .post("/control/v1/endpoint", |r| {
+            named_request_span(
+                r,
+                handle_endpoint_create,
+                RequestName("control_v1_endpoint"),
+            )
+        })
+        .get("/control/v1/endpoint", |r| {
+            named_request_span(r, handle_endpoint_list, RequestName("control_v1_endpoint"))
+        })
+        .delete("/control/v1/endpoint/:endpoint_id", |r| {
+            named_request_span(
+                r,
+                handle_endpoint_delete,
+                RequestName("control_v1_endpoint_delete"),
+            )
         })
         .put("/control/v1/node/:node_id/config", |r| {
             named_request_span(

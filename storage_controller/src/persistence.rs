@@ -19,7 +19,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use pageserver_api::controller_api::{
-    MetadataHealthRecord, NodeLifecycle, NodeSchedulingPolicy, PlacementPolicy,
+    ComputeEndpoint, MetadataHealthRecord, NodeLifecycle, NodeSchedulingPolicy, PlacementPolicy,
     SafekeeperDescribeResponse, ShardSchedulingPolicy, SkSchedulingPolicy,
 };
 use pageserver_api::models::{ShardConfigError, ShardCount, ShardIdentity, ShardNumber};
@@ -134,6 +134,9 @@ pub(crate) enum DatabaseOperation {
     DeleteTimelineImport,
     ListTimelineImports,
     IsTenantImportingTimeline,
+    InsertEndpoint,
+    ListEndpoints,
+    DeleteEndpoint,
 }
 
 pub(crate) type DatabaseResult<T> = Result<T, DatabaseError>;
@@ -386,6 +389,68 @@ impl Persistence {
         tracing::info!("list_nodes: loaded {} nodes", result.len());
 
         Ok(result)
+    }
+
+    /// Insert (or replace) a compute endpoint record. `yb_light_local` calls
+    /// this when an endpoint is created; the `spec` blob is stored verbatim.
+    /// Upsert semantics mirror the old folder layout, where re-creating an
+    /// endpoint with the same id overwrote `endpoint.json`.
+    pub(crate) async fn insert_endpoint(
+        &self,
+        endpoint: EndpointPersistence,
+    ) -> DatabaseResult<()> {
+        use crate::schema::endpoints::dsl::*;
+
+        let endpoint = &endpoint;
+        self.with_measured_conn(DatabaseOperation::InsertEndpoint, move |conn| {
+            Box::pin(async move {
+                diesel::insert_into(endpoints)
+                    .values(endpoint)
+                    .on_conflict(endpoint_id)
+                    .do_update()
+                    .set((
+                        tenant_id.eq(&endpoint.tenant_id),
+                        timeline_id.eq(&endpoint.timeline_id),
+                        spec.eq(&endpoint.spec),
+                    ))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Load the full set of compute endpoints. `yb_light_local` uses this to
+    /// rebuild its in-memory `ComputeControlPlane` (replacing the old
+    /// `read_dir(endpoints/)` scan).
+    pub(crate) async fn list_endpoints(&self) -> DatabaseResult<Vec<EndpointPersistence>> {
+        use crate::schema::endpoints::dsl::*;
+
+        let result: Vec<EndpointPersistence> = self
+            .with_measured_conn(DatabaseOperation::ListEndpoints, move |conn| {
+                Box::pin(async move { Ok(endpoints.load::<EndpointPersistence>(conn).await?) })
+            })
+            .await?;
+
+        Ok(result)
+    }
+
+    /// Delete a compute endpoint record. Idempotent: deleting a missing
+    /// endpoint is not an error (mirrors `remove_dir_all` of an already-gone
+    /// folder).
+    pub(crate) async fn delete_endpoint(&self, ep_id: &str) -> DatabaseResult<()> {
+        use crate::schema::endpoints::dsl::*;
+
+        self.with_measured_conn(DatabaseOperation::DeleteEndpoint, move |conn| {
+            Box::pin(async move {
+                diesel::delete(endpoints.filter(endpoint_id.eq(ep_id)))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
     }
 
     pub(crate) async fn list_tombstones(&self) -> DatabaseResult<Vec<NodePersistence>> {
@@ -885,7 +950,7 @@ impl Persistence {
                 struct ShardUpdate {
                     generation: Option<i32>,
                     placement_policy: Option<String>,
-                    config: Option<String>,
+                    config: Option<serde_json::Value>,
                     scheduling_policy: Option<String>,
                     generation_pageserver: Option<Option<i64>>,
                 }
@@ -897,7 +962,7 @@ impl Persistence {
                         .map(|p| serde_json::to_string(&p).unwrap()),
                     config: input_config
                         .as_ref()
-                        .map(|c| serde_json::to_string(&c).unwrap()),
+                        .map(|c| serde_json::to_value(c).unwrap()),
                     scheduling_policy: input_scheduling_policy
                         .map(|p| serde_json::to_string(&p).unwrap()),
                     generation_pageserver: input_generation_pageserver,
@@ -1901,8 +1966,11 @@ fn log_postgres_connstr_info(config_str: &str) -> anyhow::Result<()> {
 }
 
 /// Parts of [`crate::tenant_shard::TenantShard`] that are stored durably
+///
+/// No `Eq`: `config` is a `serde_json::Value` (JSONB column), which is only
+/// `PartialEq`.
 #[derive(
-    QueryableByName, Queryable, Selectable, Insertable, Serialize, Deserialize, Clone, Eq, PartialEq,
+    QueryableByName, Queryable, Selectable, Insertable, Serialize, Deserialize, Clone, PartialEq,
 )]
 #[diesel(table_name = crate::schema::tenants)]
 pub(crate) struct TenantShardPersistence {
@@ -1922,8 +1990,10 @@ pub(crate) struct TenantShardPersistence {
 
     #[serde(default)]
     pub(crate) placement_policy: String,
+    /// JSON-encoded `TenantConfig`, stored in a JSONB column. Opaque to the
+    /// controller's relational logic — encoded/decoded by `TenantShard`.
     #[serde(default)]
-    pub(crate) config: String,
+    pub(crate) config: serde_json::Value,
     #[serde(default)]
     pub(crate) scheduling_policy: String,
 }
@@ -2007,6 +2077,42 @@ impl From<MetadataHealthPersistence> for MetadataHealthRecord {
 pub(crate) struct ControllerPersistence {
     pub(crate) address: String,
     pub(crate) started_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A row of the `endpoints` table: the durable record of a compute endpoint
+/// managed by `yb_light_local`. `spec` is the `EndpointConf` as JSONB, opaque
+/// to the controller. Converts to/from the wire type [`ComputeEndpoint`].
+///
+/// No `Eq`: `serde_json::Value` is only `PartialEq` (it can hold floats).
+#[derive(Queryable, Selectable, Insertable, PartialEq, Debug, Clone)]
+#[diesel(table_name = crate::schema::endpoints)]
+pub(crate) struct EndpointPersistence {
+    pub(crate) endpoint_id: String,
+    pub(crate) tenant_id: String,
+    pub(crate) timeline_id: String,
+    pub(crate) spec: serde_json::Value,
+}
+
+impl From<ComputeEndpoint> for EndpointPersistence {
+    fn from(e: ComputeEndpoint) -> Self {
+        EndpointPersistence {
+            endpoint_id: e.endpoint_id,
+            tenant_id: e.tenant_id,
+            timeline_id: e.timeline_id,
+            spec: e.spec,
+        }
+    }
+}
+
+impl From<EndpointPersistence> for ComputeEndpoint {
+    fn from(e: EndpointPersistence) -> Self {
+        ComputeEndpoint {
+            endpoint_id: e.endpoint_id,
+            tenant_id: e.tenant_id,
+            timeline_id: e.timeline_id,
+            spec: e.spec,
+        }
+    }
 }
 
 // What we store in the database

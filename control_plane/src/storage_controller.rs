@@ -19,7 +19,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use hyper0::Uri;
 use nix::unistd::Pid;
 use pageserver_api::controller_api::{
-    NodeConfigureRequest, NodeDescribeResponse, NodeRegisterRequest,
+    ComputeEndpoint, NodeConfigureRequest, NodeDescribeResponse, NodeRegisterRequest,
     SafekeeperSchedulingPolicyRequest, SetTimelineBranchNameRequest, SkSchedulingPolicy,
     TenantCreateRequest, TenantCreateResponse, TenantLocateResponse, TimelineBranchName,
 };
@@ -1223,6 +1223,37 @@ impl StorageController {
         self.dispatch::<(), _>(
             Method::GET,
             "control/v1/timeline_branch_names".to_string(),
+            None,
+        )
+        .await
+    }
+
+    /// Persist a compute endpoint record. Backs `ComputeControlPlane::new_endpoint`,
+    /// replacing the old `endpoint.json` file write.
+    #[instrument(skip(self, req), fields(endpoint_id = %req.endpoint_id))]
+    pub async fn endpoint_create(&self, req: ComputeEndpoint) -> anyhow::Result<()> {
+        self.dispatch::<_, ()>(Method::POST, "control/v1/endpoint".to_string(), Some(req))
+            .await
+    }
+
+    /// List all persisted compute endpoint records. Backs
+    /// `ComputeControlPlane::load`, replacing the old `read_dir(endpoints/)` scan.
+    pub async fn endpoint_list(&self) -> anyhow::Result<Vec<ComputeEndpoint>> {
+        self.dispatch::<(), Vec<ComputeEndpoint>>(
+            Method::GET,
+            "control/v1/endpoint".to_string(),
+            None,
+        )
+        .await
+    }
+
+    /// Delete a persisted compute endpoint record. Backs the `destroy` path of
+    /// `Endpoint::stop`, replacing the old `remove_dir_all(endpoint dir)`.
+    #[instrument(skip(self))]
+    pub async fn endpoint_delete(&self, endpoint_id: &str) -> anyhow::Result<()> {
+        self.dispatch::<(), ()>(
+            Method::DELETE,
+            format!("control/v1/endpoint/{endpoint_id}"),
             None,
         )
         .await

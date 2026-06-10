@@ -1361,7 +1361,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
 }
 
 async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Result<()> {
-    let mut cplane = ComputeControlPlane::load(env.clone())?;
+    let mut cplane = ComputeControlPlane::load(env.clone()).await?;
 
     match subcmd {
         EndpointCmd::List(args) => {
@@ -1479,7 +1479,8 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
                 args.shared_buffers.clone(),
                 args.lfc_size.clone(),
                 args.pg_settings.clone(),
-            )?;
+            )
+            .await?;
         }
         EndpointCmd::Start(args) => {
             let endpoint_id = &args.endpoint_id;
@@ -2096,7 +2097,7 @@ async fn try_stop_all(env: &local_env::LocalEnv, immediate: bool) {
         EndpointTerminateMode::Fast
     };
     // Stop all endpoints
-    match ComputeControlPlane::load(env.clone()) {
+    match ComputeControlPlane::load(env.clone()).await {
         Ok(cplane) => {
             for (_k, node) in cplane.endpoints {
                 if let Err(e) = node.stop(mode, false).await {

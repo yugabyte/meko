@@ -19,6 +19,7 @@ DROP TABLE IF EXISTS public.blobs;
 DROP TYPE IF EXISTS public.blob_namespace;
 
 -- storage_controller.* tables.
+DROP TABLE IF EXISTS storage_controller.endpoints;
 DROP TABLE IF EXISTS storage_controller.timeline_imports;
 DROP TABLE IF EXISTS storage_controller.timelines;
 DROP TABLE IF EXISTS storage_controller.controllers;
