@@ -1,0 +1,25 @@
+Timing is on.
+DROP TABLE
+CREATE TABLE
+INSERT 0 500
+DO
+ count | sum
+-------+------
+   500 | 4000
+(1 row)
+
+ count
+-------
+   500
+(1 row)
+
+              digest
+----------------------------------
+ 147974e8e64ba1371edc7a3a33e2a742
+(1 row)
+
+ not_eight
+-----------
+         0
+(1 row)
+

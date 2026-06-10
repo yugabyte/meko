@@ -14,7 +14,10 @@
 #   *.sh   — runs after the prep step has ensured the cluster + a
 #            running endpoint named `main`. Exports $TID,
 #            $COMPUTE_PORT, $NEON, $YB_LIGHT_REPO_DIR, $YB_DBNAME.
-#   *.sql  — psql workload against the same shared cluster.
+#   *.sql  — psql workload against the same shared cluster. Its
+#            normalised stdout is diffed against a sibling `<name>.out`
+#            golden capture (see `run_sql_workload`); regenerate goldens
+#            with `E2E_REGEN_EXPECTED=1`.
 #
 # After every test the pageserver log is scanned for corruption
 # markers; the first hit aborts the run.
@@ -200,16 +203,38 @@ run_sh_test() {
     echo "  ok  ($(( t1 - t0 ))s)"
 }
 
+# Normalise psql stdout for golden-output diffing: drop the `Time:`
+# lines emitted by `\timing on` (the only intra-run nondeterminism left
+# once the workloads themselves assert through deterministic
+# projections) and any libpq client/server version-mismatch warnings.
+# Result sets and command tags (INSERT 0 N, UPDATE N, …) are kept —
+# they carry signal. Trailing whitespace is stripped so editor drift in
+# the checked-in `.expected` never trips the diff.
+normalize_psql_output() {
+    sed -E \
+        -e '/^Time: [0-9.]+ ms/d' \
+        -e '/^(WARNING|NOTICE): .*(server|libpq|protocol) version/d' \
+        -e 's/[[:space:]]+$//'
+}
+
 run_sql_workload() {
     local sql=$1
     local rel=${sql#$REPO/}
+    # Golden capture lives next to the workload as `<name>.out`
+    # (pg_regress convention); the run's own captured output goes to a
+    # `.actual` scratch file under YB_LIGHT_REPO_DIR.
+    local expected=${sql%.sql}.out
     step "workload: $rel"
     local before_lines after_lines
     before_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo 0)
+    local out_raw=$YB_LIGHT_REPO_DIR/$(basename "${sql%.sql}").actual
     local t0 t1
     t0=$(date +%s)
+    # Capture stdout for the output diff; stderr still flows to the run
+    # log (and `ON_ERROR_STOP=1` + `set -e` still abort on any SQL
+    # error, exactly as before).
     PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres \
-        -v ON_ERROR_STOP=1 -f "$sql"
+        -v ON_ERROR_STOP=1 -f "$sql" > "$out_raw"
     t1=$(date +%s)
     after_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo "$before_lines")
     local new_hits=0
@@ -221,7 +246,30 @@ run_sql_workload() {
         tail -n $((after_lines - before_lines)) "$LOG" | grep -E "$MARKERS" | head -5
         exit 1
     fi
-    echo "  ok  ($(( t1 - t0 ))s, +$((after_lines - before_lines)) log lines)"
+
+    # Output-validation gate. Diff the normalised result sets against the
+    # checked-in golden capture; any divergence — wrong counts, a stale
+    # page version, a lost delta — fails the test. Regenerate goldens
+    # with `E2E_REGEN_EXPECTED=1 test/e2e/run.sh …` after an intentional
+    # workload change, then review the diff before committing.
+    local norm=$out_raw.norm
+    normalize_psql_output < "$out_raw" > "$norm"
+    if [[ ${E2E_REGEN_EXPECTED:-0} == 1 ]]; then
+        cp "$norm" "$expected"
+        echo "  ok  ($(( t1 - t0 ))s) — regenerated $(basename "$expected")"
+    elif [[ -f $expected ]]; then
+        if ! diff -u <(normalize_psql_output < "$expected") "$norm" > "$out_raw.diff"; then
+            echo "FAIL — output mismatch for $rel (vs $(basename "$expected")):"
+            head -40 "$out_raw.diff"
+            exit 1
+        fi
+        echo "  ok  ($(( t1 - t0 ))s, output matches, +$((after_lines - before_lines)) log lines)"
+    else
+        echo "FAIL — no golden output for $rel."
+        echo "  expected file missing: ${expected#$REPO/}"
+        echo "  generate it with: E2E_REGEN_EXPECTED=1 $0 $CATEGORY"
+        exit 1
+    fi
 }
 
 # Collect all test files (.sh and .sql, in lexical order) for each

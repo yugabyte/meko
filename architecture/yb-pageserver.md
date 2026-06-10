@@ -591,7 +591,10 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 > WAL truncation feedback loop, the image materialiser's
 > `read_chain_durable` cache-miss path, the basebackup-cache
 > invalidation on LSN advance, and the generation-fence shutdown.
-> Backfill is tracked alongside the relevant task files.
+> Backfill is tracked alongside the relevant task files. The `.sql`
+> e2e workloads now diff their result sets against checked-in
+> `.expected` goldens (task 25), so silently-wrong reads no longer
+> pass as long as no statement errors out.
 
 ## Code anchors
 

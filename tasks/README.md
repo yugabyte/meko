@@ -100,4 +100,4 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 22 | [Single-(tenant,timeline) pageserver](22_single-timeline-pageserver.md) | ✅ done | high | yb-pageserver |
 | 23 | [Flaky: SK kill-9 recovery hits "YB WAL hole"](23_sk-kill9-wal-hole-flake.md) | ✅ done | high | safekeeper |
 | 24 | [Early-window CLOG SLRU deltas never persist](24_early-clog-slru-deltas-lost.md) | ✅ done | highest | yb-pageserver |
-| 25 | [Validate the output of `.sql` e2e tests](25_e2e-sql-output-validation.md) | ⏳ pending | medium | yb-pageserver |
+| 25 | [Validate the output of `.sql` e2e tests](25_e2e-sql-output-validation.md) | ✅ done | medium | yb-pageserver |

@@ -1,8 +1,9 @@
 ---
-status: pending
+status: done
 severity: medium
 area: yb-pageserver
 opened: 2026-06-10
+closed: 2026-06-10
 ---
 
 # Validate the output of `.sql` e2e tests
@@ -50,3 +51,24 @@ pg_regress-style expected output:
 - Related: task 12 (e2e test infra), task 24 (a correctness hole the
   current `.sql` tests cannot catch precisely because output is
   unchecked).
+
+## Resolution
+
+`run_sql_workload` (`test/e2e/run.sh`) now captures psql stdout,
+normalises it (`normalize_psql_output`: drops `\timing` `Time:` lines,
+libpq version warnings, trailing whitespace), and diffs against a
+sibling `<name>.out` golden (pg_regress convention). A mismatch fails
+the test with the diff; a missing golden fails with a regen hint.
+`E2E_REGEN_EXPECTED=1` regenerates goldens. The corruption-marker scan
++ `ON_ERROR_STOP` are kept as additional gates.
+
+The four workloads were made deterministic so goldens are stable:
+`random()*1e6` → Knuth hash `((g::bigint*2654435761)%1000000)::int`
+(still scatters index keys → still drives btree splits), `TABLESAMPLE
+SYSTEM (n)` → fixed `id % k = 0` slice. Each gained count/sum/checksum
+verification footers (ordered `string_agg` md5 digests for the small
+tables) before and after the churn phase. Goldens checked in:
+`{fast/smoke,fast/update-churn,slow/btree-splits,slow/full-workload}.out`.
+
+Verified: `test/e2e/run.sh all` regenerates and then (without regen)
+diffs clean — "output matches" on all four workloads.

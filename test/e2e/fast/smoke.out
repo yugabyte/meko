@@ -1,0 +1,31 @@
+Timing is on.
+DROP TABLE
+CREATE TABLE
+INSERT 0 1000
+CREATE INDEX
+ count
+-------
+   112
+(1 row)
+
+ count
+-------
+   101
+(1 row)
+
+UPDATE 50
+ count
+-------
+    50
+(1 row)
+
+  n   | id_sum
+------+--------
+ 1000 | 500500
+(1 row)
+
+              digest
+----------------------------------
+ 3a0c434a95ee54ae312a7ead9308ed79
+(1 row)
+

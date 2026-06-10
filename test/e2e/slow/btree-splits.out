@@ -1,0 +1,41 @@
+Timing is on.
+DROP TABLE
+CREATE TABLE
+INSERT 0 200000
+CREATE INDEX
+   n    |   val_sum   | payload_bytes
+--------+-------------+---------------
+ 200000 | 99999100000 |      25600000
+(1 row)
+
+            val_digest
+----------------------------------
+ 7793145b127778b4a3e836f32e3f0f75
+(1 row)
+
+UPDATE 20000
+   n    |   val_sum
+--------+-------------
+ 200000 | 99999120000
+(1 row)
+
+ bumped
+--------
+  20000
+(1 row)
+
+            val_digest
+----------------------------------
+ a523c0c2c5f9b001d70b7dd855ef292c
+(1 row)
+
+ count
+-------
+    20
+(1 row)
+
+ count
+-------
+   101
+(1 row)
+
