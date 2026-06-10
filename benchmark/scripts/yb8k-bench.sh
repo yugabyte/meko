@@ -23,7 +23,7 @@ CHUNK=1000000
 
 TENANT=3c2e69b50b2df934e5f85a9699716e91
 TIMELINE=d91b99d6de69060d19df6fe59c61c84d
-export NEON_YB_PASSWORD='Yugabyte!1'
+export YB_STORAGE_PASSWORD='Yugabyte!1'
 
 # YB backing store (for page-store size probe)
 YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v17/bin/psql

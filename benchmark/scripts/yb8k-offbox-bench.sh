@@ -25,7 +25,7 @@ CHUNK=1000000
 # Fresh off-box tenant/timeline (created this session).
 TENANT=afc00b5312231630aff5716f816605f3
 TIMELINE=2122174f0982dc6fccf90d509850ca53
-export NEON_YB_PASSWORD='Yugabyte!1'
+export YB_STORAGE_PASSWORD='Yugabyte!1'
 
 # Off-box pageserver HTTP (lives on THIS box).
 PS_HTTP=172.151.20.28:9988

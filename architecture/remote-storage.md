@@ -321,7 +321,7 @@ flow through the `RemoteStorage` trait. See [`safekeeper.md`](safekeeper.md).
 With TLS against a YBA-managed universe:
 
 ```toml
-{host = 'yb-host', port = 5433, user = 'yugabyte', password_env = 'NEON_YB_PASSWORD', dbname = 'yb_storage', table_name = 'blobs', prefix = 'pageserver-yb/', sslmode = 'require'}
+{host = 'yb-host', port = 5433, user = 'yugabyte', password_env = 'YB_STORAGE_PASSWORD', dbname = 'yb_storage', table_name = 'blobs', prefix = 'pageserver-yb/', sslmode = 'require'}
 ```
 
 ## Smoke test

@@ -24,7 +24,7 @@ TIMELINE=86bda9db8ad069904cd33e619872c8a0
 PS_API=http://172.151.20.28:9988
 PS_DIR=/mnt/ps/pageserver_1
 PS_BIN=/home/ec2-user/yb-neon-bundle/bin/pageserver
-export NEON_YB_PASSWORD='Yugabyte!1'
+export YB_STORAGE_PASSWORD='Yugabyte!1'
 
 TS=$(date -u +%Y%m%d-%H%M)
 OUT="$HERE/results/${TS}-ybLight-BLK-${LABEL}"

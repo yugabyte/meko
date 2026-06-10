@@ -12,7 +12,7 @@ export SC_BASE=http://<sc-host>:<sc-port>             # storage_controller
 export SK_HOST=...        export SK_PG_PORT=...        # safekeeper PG listen
 export COMPUTE_HOST=...   export COMPUTE_PORT=...      # neon compute
 export YB_HOST=...  export YB_PORT=...  export YB_DB=...   # YugabyteDB backing store
-export NEON_YB_PASSWORD=...                            # YB password, used by PS/SK/endpoint-storage
+export YB_STORAGE_PASSWORD=...                            # YB password, used by PS/SK/endpoint-storage
 export PSQL=<path-to>/psql
 ```
 Component config locations vary by deployment but typically:
@@ -81,7 +81,7 @@ that's expected, not a failure.
 A freshly created backing DB has no `storage_controller` schema, and the SC's `search_path` points
 at it. Create it before starting the SC:
 ```bash
-PGPASSWORD="$NEON_YB_PASSWORD" $PSQL \
+PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
   "host=$YB_HOST port=$YB_PORT user=yugabyte dbname=$YB_DB sslmode=require" \
   -c "CREATE SCHEMA IF NOT EXISTS storage_controller;"
 ```
@@ -98,7 +98,7 @@ old start script to a new build without checking `--help`.
 A client opened a **non-TLS** connection to YugabyteDB, which requires TLS. Seen when the
 endpoint_storage `YbStore` config derived `sslmode:None`. Fix the relevant config to force TLS and
 supply the password env, e.g. in `.yb_light/endpoint_storage/endpoint_storage.json` add
-`"sslmode":"require"` and `"password_env":"NEON_YB_PASSWORD"`. Any component talking to YB
+`"sslmode":"require"` and `"password_env":"YB_STORAGE_PASSWORD"`. Any component talking to YB
 (`pageserver.toml remote_storage`, safekeeper `--remote-storage`, SC `--database-url`) must specify
 `sslmode=require`/`sslmode="require"`.
 

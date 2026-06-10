@@ -27,7 +27,7 @@ export SC_BASE=http://<sc-host>:<sc-port>
 
 # --- YugabyteDB backing store ---
 export YB_HOST=...; export YB_PORT=...; export YB_DB=...
-export NEON_YB_PASSWORD=...    # YB password (also used by PS/SK)
+export YB_STORAGE_PASSWORD=...    # YB password (also used by PS/SK)
 
 # --- psql + a ready-made compute conn string ---
 export PSQL=<path-to>/psql                     # the bundle's psql, or system psql

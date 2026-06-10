@@ -284,7 +284,7 @@ fn fill_remote_storage_secrets_vars(cmd: &mut Command) -> &mut Command {
     // Lane E removed the cloud-storage backends (S3, Azure, GCS) and
     // their SDK dependencies. LocalFs was then dropped as well; the only
     // remaining remote_storage backend is YbStore, whose credentials
-    // flow through NEON_YB_PASSWORD via fill_env_vars_prefixed_neon below.
+    // flow through YB_STORAGE_PASSWORD via fill_env_vars_prefixed_neon below.
     cmd
 }
 
