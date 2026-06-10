@@ -191,6 +191,14 @@ are part of the same change, not separate concerns, so don't enumerate them in
 the subject. Call out a companion in the body only if it's large or load-bearing
 (e.g. a substantial doc rewrite or a new test suite).
 
+When the commit is work on a task from `tasks/`, the subject must name the
+task: append `(task <id>)` — or `(task <id>, stage X)` for staged work — using
+the task's `<id>` from its filename / the `tasks/README.md` index. Examples
+from history: `Strip multi-tenant/multi-timeline machinery from the pageserver
+(task 22, stage C)`, `840e56aae … (task 19)`. This is what lets `git log
+--oneline` be cross-referenced against the task index without opening each
+commit.
+
 ## When you genuinely don't need to update
 
 Skip a companion only when you can name **which** rule applies — not just "feels

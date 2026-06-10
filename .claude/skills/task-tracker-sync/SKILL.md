@@ -106,9 +106,10 @@ travel in one commit. Don't ship `status: done` in one commit and
 the README update in another — the gap is when search/agent context
 sees inconsistent state.
 
-Naming: if the task is the primary subject of the commit, the
-subject line can name it ("close task 9"). If the task closeout is a
-side-effect of bigger work, fold it into that commit's message body.
+Naming: when the commit is work on a `tasks/` task, the subject line
+names it — `(task <id>)` appended, per the commit-sync skill. If the
+task closeout is a side-effect of bigger work, the task id still goes
+in that commit's subject; details fold into the body.
 
 ## When NOT to fire
 
