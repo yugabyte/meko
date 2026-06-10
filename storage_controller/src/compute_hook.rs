@@ -139,8 +139,8 @@ pub(crate) enum NotifyError {
     #[error("Non-retryable error {0}")]
     Fatal(StatusCode),
 
-    #[error("neon_local error: {0}")]
-    NeonLocal(anyhow::Error),
+    #[error("yb_light_local error: {0}")]
+    YbLightLocal(anyhow::Error),
 }
 
 enum MaybeSendResult<R, K> {
@@ -290,7 +290,7 @@ impl ApiMethod for ComputeHookTenant {
                 endpoint
                     .reconfigure_pageservers(&pageserver_conninfo)
                     .await
-                    .map_err(NotifyError::NeonLocal)?;
+                    .map_err(NotifyError::YbLightLocal)?;
             }
         }
 
@@ -310,8 +310,8 @@ pub(super) struct ComputeHook {
     // large numbers of tenants (e.g. when failing over after a node failure)
     api_concurrency: tokio::sync::Semaphore,
 
-    // This lock is only used in testing enviroments, to serialize calls into neon_local
-    neon_local_lock: tokio::sync::Mutex<()>,
+    // This lock is only used in testing enviroments, to serialize calls into yb_light_local
+    yb_light_local_lock: tokio::sync::Mutex<()>,
 
     // We share a client across all notifications to enable connection re-use etc when
     // sending large numbers of notifications
@@ -347,28 +347,28 @@ impl ComputeHook {
             tenants: Default::default(),
             config,
             authorization_header,
-            neon_local_lock: Default::default(),
+            yb_light_local_lock: Default::default(),
             api_concurrency: tokio::sync::Semaphore::new(API_CONCURRENCY),
             client,
         })
     }
 
-    /// For test environments: use neon_local's LocalEnv to update compute
+    /// For test environments: use yb_light_local's LocalEnv to update compute
     async fn do_notify_local<M: ApiMethod>(&self, req: &M::Request) -> Result<(), NotifyError> {
-        // neon_local updates are not safe to call concurrently, use a lock to serialize
+        // yb_light_local updates are not safe to call concurrently, use a lock to serialize
         // all calls to this function
-        let _locked = self.neon_local_lock.lock().await;
+        let _locked = self.yb_light_local_lock.lock().await;
 
-        let Some(repo_dir) = self.config.neon_local_repo_dir.as_deref() else {
+        let Some(repo_dir) = self.config.yb_light_local_repo_dir.as_deref() else {
             tracing::warn!(
-                "neon_local_repo_dir not set, likely a bug in neon_local; skipping compute update"
+                "yb_light_local_repo_dir not set, likely a bug in yb_light_local; skipping compute update"
             );
             return Ok(());
         };
         let env = match LocalEnv::load_config(repo_dir) {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!("Couldn't load neon_local config, skipping compute update ({e})");
+                tracing::warn!("Couldn't load yb_light_local config, skipping compute update ({e})");
                 return Ok(());
             }
         };
@@ -580,11 +580,11 @@ impl ComputeHook {
                     // discovers the need to reconfigure and will eventually update its configuration once
                     // we update the pageserver mappings. In fact, it is important that we continue with
                     // reconcliation to make sure we update the pageserver mappings to unblock the compute node.
-                    tracing::info!("neon_local notification hook failed: {e}");
+                    tracing::info!("yb_light_local notification hook failed: {e}");
                     tracing::info!("Notification failed likely due to compute node self-reconfiguration, will retry.");
                     Ok(())
                 } else {
-                    tracing::error!("neon_local notification hook failed: {e}");
+                    tracing::error!("yb_light_local notification hook failed: {e}");
                     Err(NotifyError::Fatal(StatusCode::INTERNAL_SERVER_ERROR))
                 }
             }) {
@@ -593,7 +593,7 @@ impl ComputeHook {
                 // Compute node rejected our request but it is already self-reconfiguring. Ok to proceed.
                 Err(Ok(_)) => Ok(()),
                 // Fail the reconciliation attempt in all other cases. Recall that this whole code path involving
-                // neon_local is for testing only. In production we always retry failed reconcliations so we
+                // yb_light_local is for testing only. In production we always retry failed reconcliations so we
                 // don't have any deadends here.
                 Err(Err(e)) => Err(e),
             }

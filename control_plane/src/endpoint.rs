@@ -503,7 +503,7 @@ impl Endpoint {
         // room for Postgres to operate. Everything smaller might be not enough for Postgres
         // under load, and can cause errors like 'no unpinned buffers available', see
         // <https://github.com/neondatabase/neon/issues/9956>.
-        // Override via the `--shared-buffers` flag on `neon_local endpoint create` (or by
+        // Override via the `--shared-buffers` flag on `yb_light_local endpoint create` (or by
         // editing endpoint.json) — e.g. `32GB` on benchmarking hosts.
         conf.append(
             "shared_buffers",
@@ -893,7 +893,7 @@ impl Endpoint {
                 endpoint_storage_token: Some(args.endpoint_storage_token),
                 autoprewarm: args.autoprewarm,
                 offload_lfc_interval_seconds: args.offload_lfc_interval_seconds,
-                suspend_timeout_seconds: -1, // Only used in neon_local.
+                suspend_timeout_seconds: -1, // Only used in yb_light_local.
                 databricks_settings: None,
             };
 
@@ -1058,7 +1058,7 @@ impl Endpoint {
             tokio::time::sleep(ATTEMPT_INTERVAL).await;
         }
 
-        // disarm the scopeguard, let the child outlive this function (and neon_local invoction)
+        // disarm the scopeguard, let the child outlive this function (and yb_light_local invoction)
         drop(scopeguard::ScopeGuard::into_inner(child));
 
         Ok(())

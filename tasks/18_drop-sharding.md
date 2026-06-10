@@ -88,7 +88,7 @@ machinery whose only function in this fork is to drag a 4-byte
 6. Audit `pageserver.timeline_state` / `pageserver.pages` /
    `pageserver.meta` schemas — none should carry a shard column,
    but verify.
-7. Update / delete shard-related tests, fixtures, and `neon_local`
+7. Update / delete shard-related tests, fixtures, and `yb_light_local`
    CLI flags.
 
 ## Notes

@@ -1878,7 +1878,7 @@ def test_storage_controller_re_attach(neon_env_builder: NeonEnvBuilder):
 
     # We could pre-empty this by configuring the node to Offline, but it's preferable to test
     # the realistic path we would take when a node restarts uncleanly.
-    # The delay here will be ~NEON_LOCAL_MAX_UNAVAILABLE_INTERVAL in neon_local
+    # The delay here will be ~NEON_LOCAL_MAX_UNAVAILABLE_INTERVAL in yb_light_local
     wait_until(failed_over)
 
     reconciles_before_restart = env.storage_controller.get_metric_value(
@@ -4606,7 +4606,7 @@ def test_storage_controller_graceful_migration(neon_env_builder: NeonEnvBuilder,
 
     env = neon_env_builder.init_start()
 
-    # Enable secondary location (neon_local disables by default)
+    # Enable secondary location (yb_light_local disables by default)
     env.storage_controller.tenant_policy_update(env.initial_tenant, {"placement": {"Attached": 1}})
     env.storage_controller.reconcile_until_idle()
 

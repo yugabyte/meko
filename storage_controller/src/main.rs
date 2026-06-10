@@ -130,11 +130,11 @@ struct Cli {
     #[arg(long)]
     address_for_peers: Option<Uri>,
 
-    /// `neon_local` sets this to the path of the neon_local repo dir.
+    /// `yb_light_local` sets this to the path of the yb_light_local repo dir.
     /// Only relevant for testing.
     // TODO: make `cfg(feature = "testing")`
     #[arg(long)]
-    neon_local_repo_dir: Option<PathBuf>,
+    yb_light_local_repo_dir: Option<PathBuf>,
 
     /// Chaos testing: exercise tenant migrations
     #[arg(long)]
@@ -348,7 +348,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         StrictMode::Strict if args.control_plane_url.is_none() => {
             // Production systems should always have a control plane URL set, to prevent falling
-            // back to trying to use neon_local.
+            // back to trying to use yb_light_local.
             anyhow::bail!(
                 "`--control-plane-url` is not set: this is only permitted in `--dev` mode"
             );
@@ -399,7 +399,7 @@ async fn async_main() -> anyhow::Result<()> {
             .priority_reconciler_concurrency
             .unwrap_or(PRIORITY_RECONCILER_CONCURRENCY_DEFAULT),
         tenant_rate_limit: args.tenant_rate_limit,
-        neon_local_repo_dir: args.neon_local_repo_dir,
+        yb_light_local_repo_dir: args.yb_light_local_repo_dir,
         max_secondary_lag_bytes: args.max_secondary_lag_bytes,
         heartbeat_interval: args
             .heartbeat_interval

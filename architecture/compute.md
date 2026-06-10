@@ -55,7 +55,7 @@ None of this changes between upstream Neon and yb-light.
 
 ### Endpoint lifecycle
 
-Endpoints are managed via `neon_local endpoint create|start|stop|reconfigure`.
+Endpoints are managed via `yb_light_local endpoint create|start|stop|reconfigure`.
 The endpoint's `pgdata` directory holds:
 
 - `postgresql.conf`, `pg_hba.conf`, `pg_ident.conf` — generated from spec.

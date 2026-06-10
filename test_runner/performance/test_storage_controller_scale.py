@@ -80,7 +80,7 @@ def test_storage_controller_many_tenants(
 
     neon_env_builder.num_pageservers = 6
     neon_env_builder.storage_controller_config = {
-        # Default neon_local uses a small timeout: use a longer one to tolerate longer pageserver restarts.
+        # Default yb_light_local uses a small timeout: use a longer one to tolerate longer pageserver restarts.
         # TODO: tune this down as restarts get faster (https://github.com/neondatabase/neon/pull/7553), to
         # guard against regressions in restart time.
         "max_offline": "30s",
@@ -230,8 +230,8 @@ def test_storage_controller_many_tenants(
             else:
                 shard_count = 1
 
-            # We will create tenants directly via API, not via neon_local, to avoid any false
-            # serialization of operations in neon_local (it e.g. loads/saves a config file on each call)
+            # We will create tenants directly via API, not via yb_light_local, to avoid any false
+            # serialization of operations in yb_light_local (it e.g. loads/saves a config file on each call)
             f = executor.submit(
                 env.storage_controller.tenant_create,
                 tenant_id,

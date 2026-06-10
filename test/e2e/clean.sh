@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # Tear down any e2e cluster state from a previous run so the next
-# `neon_local init + start` is a clean slate:
+# `yb_light_local init + start` is a clean slate:
 #
 # - Kill any neon-stack processes still running locally
 #   (yb-pageserver, safekeeper, storage_broker, endpoint_storage,
-#   storage_controller, neon_local, compute_ctl).
+#   storage_controller, yb_light_local, compute_ctl).
 # - Kill any leftover compute postgres processes anchored under
 #   NEON_REPO_DIR (compute_ctl spawns postgres as a child; if a prior
 #   test's `endpoint stop` hung on pg_ctl, the postgres process can
@@ -31,7 +31,7 @@ YB_DBNAME=${YB_DBNAME:-yb_storage}
 step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 
 step "Stop any running pageserver/neon processes"
-pkill -9 -f "yb-pageserver|safekeeper|storage_broker|endpoint_storag|storage_controller|neon_local|compute_ctl" 2>/dev/null || true
+pkill -9 -f "yb-pageserver|safekeeper|storage_broker|endpoint_storag|storage_controller|yb_light_local|compute_ctl" 2>/dev/null || true
 # Compute postgres survives a hung pg_ctl shutdown. It runs as
 # `postgres -D <NEON_REPO_DIR>/endpoints/<id>/pgdata`, so anchor the
 # pattern on the repo dir to avoid hitting the YugabyteDB postgres.

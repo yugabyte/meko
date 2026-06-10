@@ -2014,14 +2014,14 @@ mod tests {
 
     /// All tests run against the production `pageserver.*` schema
     /// (created by storage_controller's diesel migration on a
-    /// real `neon_local`-style cluster). Per-test isolation comes
+    /// real `yb_light_local`-style cluster). Per-test isolation comes
     /// from `rand_tenant()` / `rand_timeline()` — every test writes
     /// to a distinct `(tenant_id, timeline_id)` namespace, so
     /// concurrent tests don't observe each other's data and rows
     /// from prior runs are harmless.
     ///
     /// Requires the YB cluster to have the diesel migration applied
-    /// (e.g. `neon_local init && neon_local start` once). The tests
+    /// (e.g. `yb_light_local init && yb_light_local start` once). The tests
     /// don't create the schema themselves; that's the migration's
     /// job and there's only one source of truth for it.
     static SHARED_STORE: tokio::sync::OnceCell<PageStore> = tokio::sync::OnceCell::const_new();
@@ -2037,7 +2037,7 @@ mod tests {
                 };
                 PageStore::connect(cfg, "page_store_test", true)
                     .await
-                    .expect("connect to local YB; run `neon_local init && start` first to migrate the schema")
+                    .expect("connect to local YB; run `yb_light_local init && start` first to migrate the schema")
             })
             .await
             .clone();

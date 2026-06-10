@@ -74,14 +74,14 @@ The safekeeper reconciler path is no longer upstream-parity:
 The controller exposes an HTTP API on `--listen` for:
 
 - Pageservers and safekeepers to "upcall" (re-attach, register, post heartbeat).
-- `neon_local` / external operators to manage tenants and shards.
+- `yb_light_local` / external operators to manage tenants and shards.
 - The compute to look up its current pageserver address.
 
 ### Code layout
 
 - `storage_controller/src/` — the controller binary.
 - `storage_controller/migrations/` — Diesel SQL migrations.
-- `control_plane/src/storage_controller.rs` — the dev wrapper (`neon_local`)
+- `control_plane/src/storage_controller.rs` — the dev wrapper (`yb_light_local`)
   that starts the controller and (in upstream Neon) initdb's a local PG
   for it.
 
@@ -89,7 +89,7 @@ The controller exposes an HTTP API on `--listen` for:
 
 ### 1. Use YugabyteDB instead of a local Postgres v16
 
-Upstream Neon (and `neon_local` in particular) launches a local Postgres
+Upstream Neon (and `yb_light_local` in particular) launches a local Postgres
 v16 server alongside the controller and uses it as the controller's DB.
 yb-light replaces this with the same YB cluster that holds everything else.
 
@@ -128,14 +128,14 @@ YSQL frontend is Postgres-protocol-compatible.
 (none)
 ```
 
-`neon_local` looks at `storage_controller.database_url` in `.neon/config`:
+`yb_light_local` looks at `storage_controller.database_url` in `.neon/config`:
 when it's set (e.g. to a YugabyteDB URL — local or remote), the wrapper
 **skips the entire local-Postgres bootstrap** (`initdb`, `pg_ctl start`,
 the startup-script transaction) and passes the URL straight through to
-the controller as `--database-url`. `neon_local stop` likewise skips
+the controller as `--database-url`. `yb_light_local stop` likewise skips
 `pg_ctl stop`. No `storage_controller_db/` directory is created.
 
-Before pointing the controller at the URL, neon_local **connects to
+Before pointing the controller at the URL, yb_light_local **connects to
 YB's `yugabyte` admin database** on the same host with the same
 credentials and provisions the one DB yb-light needs:
 
@@ -149,9 +149,9 @@ credentials and provisions the one DB yb-light needs:
   [`yugabyte.md`](yugabyte.md) for the blob/WAL schemas.
 
 The step is idempotent. A fresh YB cluster needs no operator DDL beyond
-`CREATE DATABASE yb_storage`, which neon_local issues.
+`CREATE DATABASE yb_storage`, which yb_light_local issues.
 
-Set it via the init TOML (`neon_local init --config <file>`):
+Set it via the init TOML (`yb_light_local init --config <file>`):
 
 ```toml
 [storage_controller]
@@ -167,7 +167,7 @@ libs must exist locally — but no Postgres *server* runs.
 
 ### TLS-aware admin connections
 
-The neon_local wrapper's auto-provisioning connections (`create_database`
+The yb_light_local wrapper's auto-provisioning connections (`create_database`
 on the `yugabyte` admin DB, `ensure_yb_storage_schema` on `yb_storage`)
 are routed through a small `connect_external` helper in
 `control_plane/src/storage_controller.rs` that inspects the parsed
@@ -198,7 +198,7 @@ storage_controller \
     --address-for-peers        http://127.0.0.1:1244/ \
     --listen                   127.0.0.1:1244 \
     --use-local-compute-notifications \
-    --neon-local-repo-dir      <workdir> \
+    --yb-light-local-repo-dir      <workdir> \
     --timelines-onto-safekeepers \
     --timeline-safekeeper-count 1
 ```

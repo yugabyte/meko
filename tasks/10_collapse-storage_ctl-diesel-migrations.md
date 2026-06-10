@@ -15,7 +15,7 @@ closed: 2026-06-02
 schema (10 tables + 1 index + 1 FK + the two diesel helper
 functions). The 24 historical per-step migrations were deleted.
 
-Measured impact: fresh `neon_local init + start` against an empty
+Measured impact: fresh `yb_light_local init + start` against an empty
 `yb_storage` went from ~3 min (12 dots of `pageserver has not started
 yet, continuing to wait` during the 25-step replay) to **16s**
 end-to-end on the same dev box.
@@ -64,7 +64,7 @@ weight — replay history nobody will ever traverse.
 
 ## Notes
 
-- Cuts ~50–60 s off every fresh `neon_local start` against YB and
+- Cuts ~50–60 s off every fresh `yb_light_local start` against YB and
   removes most of the surface area for the
   `ensure_yb_storage_schema` sibling-wedge documented in
   `1_phase-4k-storage_ctl-startup-wedge.md`.

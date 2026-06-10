@@ -257,8 +257,8 @@ def test_forward_compatibility(
     neon_env_builder.num_safekeepers = 3
 
     # Use previous version's production binaries (pageserver, safekeeper, pg_distrib_dir, etc.).
-    # But always use the current version's neon_local binary.
-    # This is because we want to test the compatibility of the data format, not the compatibility of the neon_local CLI.
+    # But always use the current version's yb_light_local binary.
+    # This is because we want to test the compatibility of the data format, not the compatibility of the yb_light_local CLI.
     assert neon_env_builder.compatibility_neon_binpath is not None, (
         "the environment variable COMPATIBILITY_NEON_BIN is required"
     )

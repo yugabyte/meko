@@ -27,10 +27,10 @@ use crate::safekeeper::SafekeeperNode;
 pub const DEFAULT_PG_VERSION: u32 = 17;
 
 //
-// This data structures represents neon_local CLI config
+// This data structures represents yb_light_local CLI config
 //
 // It is deserialized from the .neon/config file, or the config file passed
-// to 'neon_local init --config=<path>' option. See control_plane/simple.conf for
+// to 'yb_light_local init --config=<path>' option. See control_plane/simple.conf for
 // an example.
 //
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -52,7 +52,7 @@ pub struct LocalEnv {
     // Path to pageserver binary.
     pub neon_distrib_dir: PathBuf,
 
-    // Default tenant ID to use with the 'neon_local' command line utility, when
+    // Default tenant ID to use with the 'yb_light_local' command line utility, when
     // --tenant_id is not explicitly specified.
     pub default_tenant_id: Option<TenantId>,
 
@@ -61,7 +61,7 @@ pub struct LocalEnv {
     /// Path to environment's public key
     pub public_key_path: PathBuf,
 
-    // Configuration for the storage controller (1 per neon_local environment)
+    // Configuration for the storage controller (1 per yb_light_local environment)
     pub storage_controller: NeonStorageControllerConf,
 
     /// This Vec must always contain at least one pageserver
@@ -122,17 +122,17 @@ where
     ))
 }
 
-/// The description of the neon_local env to be initialized by `neon_local init --config`.
+/// The description of the yb_light_local env to be initialized by `yb_light_local init --config`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NeonLocalInitConf {
+pub struct YbLightLocalInitConf {
     // TODO: do we need this? Seems unused
     pub pg_distrib_dir: Option<PathBuf>,
     // TODO: do we need this? Seems unused
     pub neon_distrib_dir: Option<PathBuf>,
     pub default_tenant_id: TenantId,
     pub storage_controller: Option<NeonStorageControllerConf>,
-    pub pageservers: Vec<NeonLocalInitPageserverConf>,
+    pub pageservers: Vec<YbLightLocalInitPageserverConf>,
     pub safekeepers: Vec<SafekeeperConf>,
     pub endpoint_storage: EndpointStorageConf,
     pub control_plane_api: Option<Url>,
@@ -146,20 +146,20 @@ pub struct NeonLocalInitConf {
 pub struct EndpointStorageConf {
     pub listen_addr: SocketAddr,
     /// If `Some`, written verbatim as the `storage_kind` block of
-    /// `endpoint_storage.json`. Otherwise neon_local derives a default
+    /// `endpoint_storage.json`. Otherwise yb_light_local derives a default
     /// `YbStore` config from `storage_controller.database_url`,
     /// colocating endpoint_storage with the pageserver in the same
     /// `yb_storage.public.blobs` table. Value must be a JSON object
     /// including the `type` discriminator, e.g.
     /// `{"type": "YbStore", "host": "...", "user": "...", ...}`. Mirrors
-    /// the way [`NeonLocalInitPageserverConf::remote_storage`] feeds the
-    /// pageserver's TOML inline table — opaque to neon_local, parsed
+    /// the way [`YbLightLocalInitPageserverConf::remote_storage`] feeds the
+    /// pageserver's TOML inline table — opaque to yb_light_local, parsed
     /// by `TypedRemoteStorageKind` in the target service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_storage_json: Option<String>,
 }
 
-/// A part of storage controller's config the neon_local knows about.
+/// A part of storage controller's config the yb_light_local knows about.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 #[serde(default)]
 pub struct NeonStorageControllerConf {
@@ -173,7 +173,7 @@ pub struct NeonStorageControllerConf {
     pub start_as_candidate: bool,
 
     /// Database connection string for the storage controller's persistence
-    /// layer. When `Some`, neon_local skips the local Postgres bootstrap
+    /// layer. When `Some`, yb_light_local skips the local Postgres bootstrap
     /// (initdb / pg_ctl / createdb / startup-script tx) and passes this URL
     /// straight through to the storage controller as `--database-url`. This
     /// is how yb-neon points the controller at YugabyteDB; it's also useful
@@ -255,7 +255,7 @@ impl Default for EndpointStorageConf {
     }
 }
 
-// neon_local needs to know this subset of pageserver configuration.
+// yb_light_local needs to know this subset of pageserver configuration.
 // For legacy reasons, this information is duplicated from `pageserver.toml` into `.neon/config`.
 // It can get stale if `pageserver.toml` is changed.
 // TODO(christian): don't store this at all in `.neon/config`, always load it from `pageserver.toml`
@@ -289,11 +289,11 @@ impl Default for PageServerConf {
     }
 }
 
-/// The toml that can be passed to `neon_local init --config`.
+/// The toml that can be passed to `yb_light_local init --config`.
 /// This is a subset of the `pageserver.toml` configuration.
 // TODO(christian): use pageserver_api::config::ConfigToml (PR #7656)
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-pub struct NeonLocalInitPageserverConf {
+pub struct YbLightLocalInitPageserverConf {
     pub id: NodeId,
     pub listen_pg_addr: String,
     pub listen_http_addr: String,
@@ -316,9 +316,9 @@ pub struct NeonLocalInitPageserverConf {
     pub other: HashMap<String, toml::Value>,
 }
 
-impl From<&NeonLocalInitPageserverConf> for PageServerConf {
-    fn from(conf: &NeonLocalInitPageserverConf) -> Self {
-        let NeonLocalInitPageserverConf {
+impl From<&YbLightLocalInitPageserverConf> for PageServerConf {
+    fn from(conf: &YbLightLocalInitPageserverConf) -> Self {
+        let YbLightLocalInitPageserverConf {
             id,
             listen_pg_addr,
             listen_http_addr,
@@ -453,10 +453,10 @@ impl LocalEnv {
 
     pub fn storage_controller_bin(&self) -> PathBuf {
         // Irrespective of configuration, storage controller binary is always
-        // run from the same location as neon_local.  This means that for compatibility
+        // run from the same location as yb_light_local.  This means that for compatibility
         // tests that run old pageserver/safekeeper, they still run latest storage controller.
-        let neon_local_bin_dir = env::current_exe().unwrap().parent().unwrap().to_owned();
-        neon_local_bin_dir.join("storage_controller")
+        let yb_light_local_bin_dir = env::current_exe().unwrap().parent().unwrap().to_owned();
+        yb_light_local_bin_dir.join("storage_controller")
     }
 
     pub fn safekeeper_bin(&self) -> PathBuf {
@@ -627,7 +627,7 @@ impl LocalEnv {
     pub fn load_config(repopath: &Path) -> anyhow::Result<Self> {
         if !repopath.exists() {
             bail!(
-                "Neon config is not found in {}. You need to run 'neon_local init' first",
+                "Neon config is not found in {}. You need to run 'yb_light_local init' first",
                 repopath.to_str().unwrap()
             );
         }
@@ -834,8 +834,8 @@ impl LocalEnv {
         Ok(pem)
     }
 
-    /// Materialize the [`NeonLocalInitConf`] to disk. Called during [`neon_local init`].
-    pub fn init(conf: NeonLocalInitConf, force: &InitForceMode) -> anyhow::Result<()> {
+    /// Materialize the [`YbLightLocalInitConf`] to disk. Called during [`yb_light_local init`].
+    pub fn init(conf: YbLightLocalInitConf, force: &InitForceMode) -> anyhow::Result<()> {
         let base_path = base_path();
         assert_ne!(base_path, Path::new(""));
         let base_path = &base_path;
@@ -876,7 +876,7 @@ impl LocalEnv {
             fs::create_dir(base_path)?;
         }
 
-        let NeonLocalInitConf {
+        let YbLightLocalInitConf {
             pg_distrib_dir,
             neon_distrib_dir,
             default_tenant_id,

@@ -2623,7 +2623,7 @@ LIMIT 100",
         }
         info!("parse shared_preload_libraries from provided postgresql.conf");
 
-        // that is used in neon_local and python tests
+        // that is used in yb_light_local and python tests
         if let Some(conf) = &spec.cluster.postgresql_conf {
             let conf_lines = conf.split('\n').collect::<Vec<&str>>();
             let mut shared_preload_libraries_line = "";

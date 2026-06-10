@@ -157,7 +157,7 @@ def test_pgdata_import_smoke(
 
     idempotency = ImportPgdataIdemptencyKey.random()
     log.info(f"idempotency key {idempotency}")
-    # TODO: teach neon_local CLI about the idempotency & 429 error so we can run inside the loop
+    # TODO: teach yb_light_local CLI about the idempotency & 429 error so we can run inside the loop
     # and check for 429
 
     import_branch_name = "imported"
@@ -810,7 +810,7 @@ def test_fast_import_with_pageserver_ingest(
 
     idempotency = ImportPgdataIdemptencyKey.random()
     log.info(f"idempotency key {idempotency}")
-    # TODO: teach neon_local CLI about the idempotency & 429 error so we can run inside the loop
+    # TODO: teach yb_light_local CLI about the idempotency & 429 error so we can run inside the loop
     # and check for 429
 
     import_branch_name = "imported"

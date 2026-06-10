@@ -33,7 +33,7 @@ frontmatter `status` (or move to `tasks/archive/` once truly cold).
   hypothesis**, **Repro**, **Fix sketch / Plan**, **Notes / links**
   (commits, log lines, PR refs).
 - Cross-link to other files with
-  `[see 4.k](4.k_neon-local-start-wedge.md)`.
+  `[see 4.k](4.k_yb-light-local-start-wedge.md)`.
 - One issue per file; correlations go in **Notes**.
 
 ## Areas
@@ -47,10 +47,10 @@ Use one of these in the `area:` frontmatter field:
 - `storage_ctl` — storage_controller binary, schema bootstrap.
 - `page_service / compute` — pageserver ↔ compute wire protocol,
   libpagestore, communicator.
-- `neon_local` — local-dev orchestrator; CLI + child-process
+- `yb_light_local` — local-dev orchestrator; CLI + child-process
   management.
 
-Multi-area tasks: `area: storage_ctl / neon_local` is fine.
+Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 
 ## Index
 
@@ -78,7 +78,7 @@ Multi-area tasks: `area: storage_ctl / neon_local` is fine.
 | 4.h | [Dedicated YSQL connection](4.h_dedicated-ysql-connection.md) | ✅ done | medium | yb-pageserver |
 | 4.i | [Hybrid materialiser threshold](4.i_hybrid-materialiser-threshold.md) | ✅ done | medium | yb-pageserver |
 | 4.j | [Microbench threshold tuning](4.j_microbench-threshold-tuning.md) | ⏳ pending | medium | yb-pageserver |
-| 4.k | [`neon_local start` wedge](4.k_neon-local-start-wedge.md) | ✅ done | high | storage_ctl / neon_local |
+| 4.k | [`yb_light_local start` wedge](4.k_yb-light-local-start-wedge.md) | ✅ done | high | storage_ctl / yb_light_local |
 | 4.l | [`s3_upload_limit_bytes` config](4.l_s3-upload-limit-config.md) | ✅ done | medium | yb-pageserver |
 | 4.m | [YB write concurrency + read collapse](4.m_yb-write-concurrency-read-collapse.md) | ✅ done | medium | yb-pageserver |
 | 5 | [Pageserver restart from timeline_state](5_pageserver-restart-from-timeline-state.md) | ✅ done | medium | yb-pageserver |

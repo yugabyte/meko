@@ -54,7 +54,7 @@ Code anchors:
   gating.
 - `storage_controller/src/persistence.rs` — `establish_connection_rustls`,
   AcceptAll TLS verifier.
-- `control_plane/src/storage_controller.rs` — neon_local wrapper:
+- `control_plane/src/storage_controller.rs` — yb_light_local wrapper:
   external-DB path, `ensure_external_database`, YB schema
   auto-provisioning.
 - `control_plane/src/local_env.rs` — TOML config types
@@ -97,7 +97,7 @@ Code anchors:
   On `dev-server-hsunder` the system `protoc` is 3.5.0; release builds
   use `PROTOC=/opt/yb-build/thirdparty/.../installed/uninstrumented/bin/protoc`
   (3.21+). Debug builds tend to work via cached proto output.
-- `cargo build -p control_plane --bin neon_local` is the fastest "did I
+- `cargo build -p control_plane --bin yb_light_local` is the fastest "did I
   break the wrapper" check.
 
 ## Live dev cluster cheat-sheet
@@ -107,21 +107,21 @@ Code anchors:
 handoff doc.)
 
 - The dev YB lives at `127.0.0.1:5433`.
-- Topology spawns from `neon_local init --config <file>` then
-  `neon_local start`. All durable state goes to YB; local FS only holds
+- Topology spawns from `yb_light_local init --config <file>` then
+  `yb_light_local start`. All durable state goes to YB; local FS only holds
   logs, pidfiles, and the compute's ephemeral `pgdata`.
 - See [`architecture/high-level.md`](architecture/high-level.md) §
   "Topology in our current dev cluster" for ports / commands.
 
 ## Outstanding work / known sharp edges
 
-- `neon_local start` spawns SC + SK + PS via `JoinSet` with no ordering
+- `yb_light_local start` spawns SC + SK + PS via `JoinSet` with no ordering
   guarantee — SK can race SC and try to open `yb_storage` before SC
   creates it. Workaround: pre-provision YB once by hand; structural fix
   is to make `StorageController::provision_external_database()` a
   synchronous pre-step before the `JoinSet` block.
 - The bundle build doesn't yet ship `libssl.so.1.1` / `libcrypto.so.1.1`
-  / `libicu*.so.60` alongside `pg_install/v17/lib/`, and `neon_local`
+  / `libicu*.so.60` alongside `pg_install/v17/lib/`, and `yb_light_local`
   strips `LD_LIBRARY_PATH` from child processes. Both are fixable; see
   the bundle handoff doc.
 - `endpoint create --pg-setting NAME=VALUE` is the escape hatch for

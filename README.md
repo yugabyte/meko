@@ -16,7 +16,7 @@ but is no longer one in any meaningful sense. The layer-file storage
 engine, the disk-backed page cache, the in-process LFC pretense of
 "local cache", the secondary-tenant warm replicas, and most of the
 S3 / GCS / Azure remote-storage machinery have all been removed. What
-remains is the shape of the original control plane (`neon_local`,
+remains is the shape of the original control plane (`yb_light_local`,
 `storage_controller`, `safekeeper`, `pageserver` binary layout, the
 patched Postgres compute) wrapped around an entirely different storage
 substrate. The "pageserver" is now a thin row-store gateway between
@@ -26,7 +26,7 @@ the Postgres compute and YugabyteDB.
 
 **Kept (the shell):**
 - The compute / pageserver / safekeeper / storage_controller separation.
-- The `neon_local` developer experience: `init`, `start`, `tenant create`,
+- The `yb_light_local` developer experience: `init`, `start`, `tenant create`,
   `endpoint create`, `endpoint start`, timelines as forks.
 - The patched Postgres tree with the `neon` smgr extension wiring page
   reads and WAL writes through the gateway.
@@ -194,15 +194,15 @@ ybLight is **not** a hosted service. To run it you bring your own
 YugabyteDB cluster (any deployment — local single-node, YBA-managed
 multi-region, YBM) and point a pageserver + safekeeper at it.
 
-The bundled developer workflow uses `neon_local`:
+The bundled developer workflow uses `yb_light_local`:
 
 ```sh
 make -j`nproc` -s             # build patched PG + Rust binaries
-cargo neon init               # writes .neon repo dir against config.toml
-cargo neon start              # storage_broker, safekeeper, pageserver
-cargo neon tenant create --set-default
-cargo neon endpoint create main
-cargo neon endpoint start main
+cargo yb_light init               # writes .neon repo dir against config.toml
+cargo yb_light start              # storage_broker, safekeeper, pageserver
+cargo yb_light tenant create --set-default
+cargo yb_light endpoint create main
+cargo yb_light endpoint start main
 ```
 
 The pageserver expects to find a YB cluster reachable from the host;
@@ -227,15 +227,15 @@ forks at a given LSN, served by the same pageserver out of the same
 YB rows:
 
 ```sh
-cargo neon timeline branch --branch-name migration_check
-cargo neon endpoint create migration_check --branch-name migration_check
-cargo neon endpoint start migration_check
+cargo yb_light timeline branch --branch-name migration_check
+cargo yb_light endpoint create migration_check --branch-name migration_check
+cargo yb_light endpoint start migration_check
 ```
 
 
 ## Service endpoints
 
-Default HTTP endpoints for a `neon_local` dev cluster (all bind
+Default HTTP endpoints for a `yb_light_local` dev cluster (all bind
 `127.0.0.1`).
 
 | Service | HTTP API | Other ports |
@@ -253,7 +253,7 @@ Notes:
   API (`/upcall/v1/`); its REST API lives at `/control/v1` and `/v1` on
   the same port.
 - `compute_ctl` exposes a per-endpoint HTTP control port assigned at
-  `endpoint create` time (see `cargo neon endpoint` output).
+  `endpoint create` time (see `cargo yb_light endpoint` output).
 
 
 ## Building from source
@@ -304,7 +304,7 @@ yb-light-bundle/
   bin/
     yb-pageserver
     safekeeper
-    neon_local
+    yb_light_local
     compute_ctl
     endpoint_storage
     storage_broker
@@ -314,7 +314,7 @@ yb-light-bundle/
   start.sh / stop.sh
 ```
 
-`bin/yb-pageserver` is the binary name `neon_local` launches; it lives
+`bin/yb-pageserver` is the binary name `yb_light_local` launches; it lives
 under `neon_distrib_dir` (set in `~/.neon/config`).
 
 ## Tests
@@ -334,7 +334,7 @@ DEFAULT_PG_VERSION=17 BUILD_TYPE=release ./scripts/pytest
 
 End-to-end shell tests under [`test/e2e/`](test/e2e/) exercise full
 boot, write, restart, and corruption-marker scans against a real
-`neon_local` cluster + YB. The most useful ones:
+`yb_light_local` cluster + YB. The most useful ones:
 
 - `test/e2e/run.sh [fast|slow|all]` — runs SQL workloads from
   `fast/` and `slow/` and scans `pageserver.log` for corruption
@@ -395,7 +395,7 @@ tools/yb-dump-pages --tenant <hex> --timeline <hex> \
                     --blknum 0 --limit 3 --raw
 ```
 
-Both default to a local `neon_local` cluster (`127.0.0.1:5433`,
+Both default to a local `yb_light_local` cluster (`127.0.0.1:5433`,
 `yugabyte`/`yb_storage`) and accept `--host`/`--port`/`--user`/
 `--db-name`/`--password-env` overrides for remote clusters.
 

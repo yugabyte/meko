@@ -23,7 +23,7 @@ holds and what the in-process buffer believes.
 
 Those seams aren't exercised in any unit test. They're only
 exercised by a real workload running end-to-end against a real
-neon_local + real YB. So before you claim a fix in that bug class
+yb_light_local + real YB. So before you claim a fix in that bug class
 works, you must run it end-to-end.
 
 ## When to fire
@@ -58,13 +58,13 @@ re-fires the bug under a customer workload is much larger.
 
 ## What "ran e2e" actually means
 
-The bar is: a full neon_local cluster came up, executed a workload
+The bar is: a full yb_light_local cluster came up, executed a workload
 that crossed the seams the fix is meant to harden, and reported
 zero corruption markers on shutdown.
 
 The repo's entry point is `test/e2e/run.sh`. It already does:
 
-- Brings up a single neon_local cluster against an ephemeral YB.
+- Brings up a single yb_light_local cluster against an ephemeral YB.
 - Iterates the requested category (`fast` / `slow` / `all`).
 - Scans the pageserver log for corruption markers after every test.
   First hit aborts the run.

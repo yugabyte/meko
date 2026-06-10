@@ -898,7 +898,7 @@ def test_sk_auth(neon_env_builder: NeonEnvBuilder):
 
     # Now test that auth on http/pg can be enabled separately.
 
-    # By default, neon_local enables auth on all services if auth is configured,
+    # By default, yb_light_local enables auth on all services if auth is configured,
     # so http must require the token.
     sk_http_cli_noauth = sk.http_client(gen_sk_wide_token=False)
     sk_http_cli_auth = sk.http_client(auth_token=env.auth_keys.generate_tenant_token(tenant_id))

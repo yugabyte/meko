@@ -200,7 +200,7 @@ def test_compute_create_drop_dbs_and_roles(neon_simple_env: NeonEnv):
     """
     env = neon_simple_env
 
-    # Create and start endpoint so that neon_local put all the generated
+    # Create and start endpoint so that yb_light_local put all the generated
     # stuff into the spec.json file.
     endpoint = env.endpoints.create_start("main")
 
@@ -284,7 +284,7 @@ def test_dropdb_with_subscription(neon_simple_env: NeonEnv):
     """
     env = neon_simple_env
 
-    # Create and start endpoint so that neon_local put all the generated
+    # Create and start endpoint so that yb_light_local put all the generated
     # stuff into the spec.json file.
     endpoint = env.endpoints.create_start("main")
 

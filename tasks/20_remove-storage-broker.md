@@ -33,7 +33,7 @@ because the SK→PS WAL stream is long-lived. The broker was dead weight.
   last_log_term)` capture).
 - `storage_broker/` crate deleted entirely (lib + binary + benches +
   proto definitions).
-- `neon_local`'s `StorageBroker` subcommand, `NeonBroker` LocalEnv
+- `yb_light_local`'s `StorageBroker` subcommand, `NeonBroker` LocalEnv
   field, `[broker]` TOML section, and broker process management
   removed.
 - `control_plane/src/pageserver.rs` now emits

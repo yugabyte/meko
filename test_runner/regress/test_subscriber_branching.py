@@ -250,7 +250,7 @@ def test_multiple_subscription_branching(neon_simple_env: NeonEnv):
 
     NUMBER_OF_DBS = 5
 
-    # Create and start endpoint so that neon_local put all the generated
+    # Create and start endpoint so that yb_light_local put all the generated
     # stuff into the config.json file.
     endpoint = env.endpoints.create_start(
         "main",

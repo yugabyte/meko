@@ -26,7 +26,7 @@ JWT tokens are signed using a private key.
 Compute/pageserver/safekeeper use the private key's public counterpart to validate JWT tokens.
 These components should not have access to the private key and may only get tokens from their configuration or external clients. 
 
-The key pair is generated once for an installation of compute/pageserver/safekeeper, e.g. by `neon_local init`.
+The key pair is generated once for an installation of compute/pageserver/safekeeper, e.g. by `yb_light_local init`.
 There is currently no way to rotate the key without bringing down all components.
 
 ### Best practices
@@ -75,7 +75,7 @@ Currently also used for connection from any pageserver to any safekeeper.
 "admin": Provides access to the control plane and admin APIs of the storage controller.
 
 ### CLI
-CLI generates a key pair during call to `neon_local init` with the following commands:
+CLI generates a key pair during call to `yb_light_local init` with the following commands:
 
 ```bash
 openssl genpkey -algorithm ed25519 -out auth_private_key.pem

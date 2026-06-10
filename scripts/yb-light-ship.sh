@@ -43,8 +43,8 @@ echo ">>> Staging bundle at ${BUNDLE}"
 rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/lib" "${BUNDLE}/tools"
 
-# Binaries actually launched by neon_local (see local_env.rs).
-for bin in yb-pageserver neon_local safekeeper storage_controller compute_ctl endpoint_storage; do
+# Binaries actually launched by yb_light_local (see local_env.rs).
+for bin in yb-pageserver yb_light_local safekeeper storage_controller compute_ctl endpoint_storage; do
     cp -v "target/release/${bin}" "${BUNDLE}/${bin}"
 done
 
@@ -78,7 +78,7 @@ Build date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 Commit:     $(git rev-parse HEAD)
 Subject:    $(git log -1 --pretty=%s)
 
-neon_local launches yb-pageserver (see local_env.rs::pageserver_bin).
+yb_light_local launches yb-pageserver (see local_env.rs::pageserver_bin).
 TXT
 
 echo

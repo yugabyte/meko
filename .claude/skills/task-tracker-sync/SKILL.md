@@ -40,7 +40,7 @@ Open the affected file. Confirm:
 ---
 status: pending|in_progress|blocked|done|deferred
 severity: highest|high|medium|low
-area: yb-pageserver|safekeeper|storage_ctl|page_service / compute|neon_local|...
+area: yb-pageserver|safekeeper|storage_ctl|page_service / compute|yb_light_local|...
 opened: YYYY-MM-DD
 closed: YYYY-MM-DD     # only when status=done or deferred
 ---

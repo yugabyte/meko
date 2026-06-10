@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from fixtures.common_types import TenantId, TimelineId
 
-# neon_local doesn't handle creating/modifying endpoints concurrently, so we use a mutex
+# yb_light_local doesn't handle creating/modifying endpoints concurrently, so we use a mutex
 # to ensure we don't do that: this enables running lots of Workloads in parallel safely.
 ENDPOINT_LOCK = threading.Lock()
 

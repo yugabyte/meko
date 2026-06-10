@@ -216,7 +216,7 @@ def test_sharding_split_compaction(
     }
 
     neon_env_builder.storage_controller_config = {
-        # Default neon_local uses a small timeout: use a longer one to tolerate longer pageserver restarts.
+        # Default yb_light_local uses a small timeout: use a longer one to tolerate longer pageserver restarts.
         "max_offline": "30s",
         "max_warming_up": "300s",
     }
@@ -392,7 +392,7 @@ def test_sharding_split_offloading(neon_env_builder: NeonEnvBuilder):
     }
 
     neon_env_builder.storage_controller_config = {
-        # Default neon_local uses a small timeout: use a longer one to tolerate longer pageserver restarts.
+        # Default yb_light_local uses a small timeout: use a longer one to tolerate longer pageserver restarts.
         "max_offline": "30s",
         "max_warming_up": "300s",
     }

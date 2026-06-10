@@ -54,7 +54,7 @@ from fixtures.compute_migrations import NUM_COMPUTE_MIGRATIONS
 from fixtures.endpoint.http import ComputeClaimsScope, EndpointHttpClient
 from fixtures.log_helper import log
 from fixtures.metrics import Metrics, MetricsGetter, parse_metrics
-from fixtures.neon_cli import NeonLocalCli, Pagectl
+from fixtures.neon_cli import YbLightLocalCli, Pagectl
 from fixtures.pageserver.allowed_errors import (
     DEFAULT_PAGESERVER_ALLOWED_ERRORS,
     DEFAULT_STORAGE_CONTROLLER_ALLOWED_ERRORS,
@@ -476,7 +476,7 @@ class NeonEnvBuilder:
         self.env: NeonEnv | None = None
         self.keep_remote_storage_contents: bool = True
         self.neon_binpath = neon_binpath
-        self.neon_local_binpath = neon_binpath
+        self.yb_light_local_binpath = neon_binpath
         self.pg_distrib_dir = pg_distrib_dir
         self.pg_version = pg_version
         self.preserve_database_files = preserve_database_files
@@ -500,7 +500,7 @@ class NeonEnvBuilder:
         # and force storage controller to use https for safekeeper api.
         self.use_https_safekeeper_api: bool = False
         # Flag to use https listener in storage controller, generate local ssl certs,
-        # and force pageservers and neon_local to use https for storage controller api.
+        # and force pageservers and yb_light_local to use https for storage controller api.
         self.use_https_storage_controller_api: bool = False
         # Flag to use https listener in storage broker, generate local ssl certs,
         # and force pageservers and safekeepers to use https for storage broker api.
@@ -724,7 +724,7 @@ class NeonEnvBuilder:
         shutil.copytree(storcon_db_from_dir, storcon_db_to_dir, ignore=ignore_postgres_log)
         assert not (storcon_db_to_dir / "postgres.log").exists()
 
-        # NB: neon_local rewrites postgresql.conf on each start based on neon_local config. No need to patch it.
+        # NB: yb_light_local rewrites postgresql.conf on each start based on yb_light_local config. No need to patch it.
         # However, in this new NeonEnv, the pageservers and safekeepers listen on different ports, and the storage
         # controller will currently reject re-attach requests from them because the NodeMetadata isn't identical.
         # So, from_repo_dir patches up the storcon database.
@@ -759,9 +759,9 @@ class NeonEnvBuilder:
     def _mix_versions(self):
         assert self.version_combination is not None, "version combination must be set"
 
-        # Always use a newer version of `neon_local`
-        (self.mixdir / "neon_local").hardlink_to(self.neon_binpath / "neon_local")
-        self.neon_local_binpath = self.mixdir
+        # Always use a newer version of `yb_light_local`
+        (self.mixdir / "yb_light_local").hardlink_to(self.neon_binpath / "yb_light_local")
+        self.yb_light_local_binpath = self.mixdir
 
         for component, paths in COMPONENT_BINARIES.items():
             directory = (
@@ -1071,7 +1071,7 @@ class NeonEnv:
 
     initial_tenant - tenant ID of the initial tenant created in the repository
 
-    neon_cli - can be used to run the 'neon_local' CLI tool
+    neon_cli - can be used to run the 'yb_light_local' CLI tool
 
     create_tenant() - initializes a new tenant and an initial empty timeline on it,
         returns the tenant and timeline id
@@ -1101,10 +1101,10 @@ class NeonEnv:
         self.pg_version = config.pg_version
         # Binary path for pageserver, safekeeper, etc
         self.neon_binpath = config.neon_binpath
-        # Binary path for neon_local test-specific binaries
-        self.neon_local_binpath = config.neon_local_binpath
-        if self.neon_local_binpath is None:
-            self.neon_local_binpath = self.neon_binpath
+        # Binary path for yb_light_local test-specific binaries
+        self.yb_light_local_binpath = config.yb_light_local_binpath
+        if self.yb_light_local_binpath is None:
+            self.yb_light_local_binpath = self.neon_binpath
         self.pg_distrib_dir = config.pg_distrib_dir
         self.endpoint_counter = 0
         self.storage_controller_config = config.storage_controller_config
@@ -1121,12 +1121,12 @@ class NeonEnv:
             self.repo_dir.joinpath("rootCA.crt") if self.use_local_tls else None
         )
 
-        neon_local_env_vars = {}
+        yb_light_local_env_vars = {}
         if self.rust_log_override is not None:
-            neon_local_env_vars["RUST_LOG"] = self.rust_log_override
-        self.neon_cli = NeonLocalCli(
-            extra_env=neon_local_env_vars,
-            binpath=self.neon_local_binpath,
+            yb_light_local_env_vars["RUST_LOG"] = self.rust_log_override
+        self.neon_cli = YbLightLocalCli(
+            extra_env=yb_light_local_env_vars,
+            binpath=self.yb_light_local_binpath,
             repo_dir=self.repo_dir,
             pg_distrib_dir=self.pg_distrib_dir,
         )
@@ -1188,7 +1188,7 @@ class NeonEnv:
         else:
             self.pageserver_import_config = config.pageserver_import_config
 
-        # Create the neon_local's `NeonLocalInitConf`
+        # Create the yb_light_local's `YbLightLocalInitConf`
         cfg: dict[str, Any] = {
             "default_tenant_id": str(self.initial_tenant),
             "broker": {},
@@ -4997,7 +4997,7 @@ class Endpoint(PgProtocol, LogUtils):
         Update the endpoint.json file taking into account nested keys.
         Distinct method from respec() to do not break existing functionality.
         NOTE: This method also updates the config.json file, not endpoint.json.
-        We need it because neon_local also writes to config.json, so intended
+        We need it because yb_light_local also writes to config.json, so intended
         use-case is i) start endpoint with some config, ii) respec_deep(),
         iii) call reconfigure() to apply the changes.
         """
@@ -6397,7 +6397,7 @@ def last_flush_lsn_upload(
 
 def parse_project_git_version_output(s: str) -> str:
     """
-    Parses the git commit hash out of the --version output supported at least by neon_local.
+    Parses the git commit hash out of the --version output supported at least by yb_light_local.
 
     The information is generated by utils::project_git_version!
     """

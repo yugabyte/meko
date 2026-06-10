@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# End-to-end test runner. Brings up one neon_local cluster against an
+# End-to-end test runner. Brings up one yb_light_local cluster against an
 # ephemeral YB database, then iterates over every test in each
 # requested category.
 #
@@ -82,9 +82,9 @@ RUN_LOG=$RUN_LOG_DIR/run_$RUN_ID.log
 exec > >(tee -a "$RUN_LOG") 2>&1
 echo "Logging run to $RUN_LOG"
 
-NEON=${NEON:-$REPO/target/debug/neon_local}
+NEON=${NEON:-$REPO/target/debug/yb_light_local}
 export NEON
-[[ -x $NEON ]] || { echo "neon_local binary not found at $NEON; run 'cargo build --bin neon_local'"; exit 1; }
+[[ -x $NEON ]] || { echo "yb_light_local binary not found at $NEON; run 'cargo build --bin yb_light_local'"; exit 1; }
 
 step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 
@@ -114,7 +114,7 @@ is_running() {
 setup_cluster() {
     "$REPO/test/e2e/clean.sh"
 
-    step "neon_local init + start (db=$YB_DBNAME)"
+    step "yb_light_local init + start (db=$YB_DBNAME)"
     "$NEON" init --config "$INIT_TOML"
     "$NEON" start
 

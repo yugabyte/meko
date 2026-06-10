@@ -245,7 +245,7 @@ def test_binaries_version_parses(neon_binpath: Path):
     """
 
     binaries = [
-        "neon_local",
+        "yb_light_local",
         "pageserver",
         "safekeeper",
         "proxy",

@@ -104,7 +104,7 @@ def test_pageserver_multiple_keys(neon_env_builder: NeonEnvBuilder):
     pageserver_http_client_old.reload_auth_validation_keys()
 
     # This test is to ensure that the pageserver supports multiple keys.
-    # The neon_local tool generates one key pair at a hardcoded path by default.
+    # The yb_light_local tool generates one key pair at a hardcoded path by default.
     # As a preparation for our test, move the public key of the key pair into a
     # directory at the same location as the hardcoded path by:
     # 1. moving the file at `configured_pub_key_path` to a temporary location

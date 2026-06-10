@@ -65,7 +65,7 @@ def test_ingest_insert_bulk(
             f"max_replication_flush_lag = {'10GB' if backpressure else '0'}",
             # use shared_buffers size like in production for 8 CU compute
             f"shared_buffers={shared_buffers_for_max_cu(8.0)}",
-            # NB: neon_local defaults to 15MB, which is too slow -- production uses 500MB.
+            # NB: yb_light_local defaults to 15MB, which is too slow -- production uses 500MB.
             f"max_replication_write_lag = {'500MB' if backpressure else '0'}",
         ],
     )

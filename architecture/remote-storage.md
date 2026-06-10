@@ -243,7 +243,7 @@ that talks to YB over the Postgres wire (this crate's `YbStore`, the
 safekeeper's `YbWalStorage`, the pageserver's `PageStore`). It was
 extracted from `remote_storage` into its own crate in commit `f399c049e`
 and is re-exported from `remote_storage::lib.rs:23` for compatibility.
-neon_local's `ensure_external_database` does **not** go through
+yb_light_local's `ensure_external_database` does **not** go through
 `YsqlClient` — it issues raw one-shot `tokio_postgres::Config::connect`
 calls (`control_plane/src/storage_controller.rs:320-350`).
 

@@ -119,7 +119,7 @@ RUN  --mount=type=secret,uid=1000,id=SUBZERO_ACCESS_TOKEN \
       --bin storage_controller  \
       --bin proxy  \
       --bin endpoint_storage \
-      --bin neon_local \
+      --bin yb_light_local \
       --bin storage_scrubber \
       --locked --release \
     && mold -run make -j $(nproc) -s neon-pg-ext
@@ -162,7 +162,7 @@ COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_broker 
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_controller  /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/proxy               /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/endpoint_storage    /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/neon_local          /usr/local/bin
+COPY --from=build --chown=neon:neon /home/nonroot/target/release/yb_light_local          /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_scrubber    /usr/local/bin
 COPY --from=build /home/nonroot/pg_install/v14 /usr/local/v14/
 COPY --from=build /home/nonroot/pg_install/v15 /usr/local/v15/

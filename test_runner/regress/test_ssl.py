@@ -198,7 +198,7 @@ def test_server_and_cert_metrics(neon_env_builder: NeonEnvBuilder):
         ps_client.get_metric_value("tls_certs_expiration_time_seconds") or 0
     )
     now = datetime.now()
-    # neon_local generates certs valid for 100 years.
+    # yb_light_local generates certs valid for 100 years.
     # Compare with +-1 year to not care about leap years.
     assert now + timedelta(days=365 * 99) < expiration_time < now + timedelta(days=365 * 101)
 

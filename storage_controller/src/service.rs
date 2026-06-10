@@ -371,7 +371,7 @@ pub struct Config {
     /// Prefix for storage API endpoints of the control plane. We use this prefix to compute
     /// URLs that we use to send pageserver and safekeeper attachment locations.
     /// If this is None, the compute hook will assume it is running in a test environment
-    /// and try to invoke neon_local instead.
+    /// and try to invoke yb_light_local instead.
     pub control_plane_url: Option<String>,
 
     /// Grace period within which a pageserver does not respond to heartbeats, but is still
@@ -395,7 +395,7 @@ pub struct Config {
     pub tenant_rate_limit: NonZeroU32,
 
     // TODO: make this cfg(feature  = "testing")
-    pub neon_local_repo_dir: Option<PathBuf>,
+    pub yb_light_local_repo_dir: Option<PathBuf>,
 
     // Maximum acceptable download lag for the secondary location
     // while draining a node. If the secondary location is lagging

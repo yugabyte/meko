@@ -1,9 +1,9 @@
 //!
-//! `neon_local` is an executable that can be used to create a local
+//! `yb_light_local` is an executable that can be used to create a local
 //! Neon environment, for testing purposes. The local environment is
 //! quite different from the cloud environment with Kubernetes, but it
 //! easier to work with locally. The python tests in `test_runner`
-//! rely on `neon_local` to set up the environment for each test.
+//! rely on `yb_light_local` to set up the environment for each test.
 //!
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
@@ -24,7 +24,7 @@ use control_plane::endpoint::{
 use control_plane::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage};
 use control_plane::local_env;
 use control_plane::local_env::{
-    EndpointStorageConf, InitForceMode, LocalEnv, NeonLocalInitConf, NeonLocalInitPageserverConf,
+    EndpointStorageConf, InitForceMode, LocalEnv, YbLightLocalInitConf, YbLightLocalInitPageserverConf,
     NeonStorageControllerConf, SafekeeperConf,
 };
 use control_plane::pageserver::PageServerNode;
@@ -95,11 +95,11 @@ fn default_storage_controller_database_url() -> String {
 #[command(version = GIT_VERSION, name = "Neon CLI")]
 struct Cli {
     #[command(subcommand)]
-    command: NeonLocalCmd,
+    command: YbLightLocalCmd,
 }
 
 #[derive(clap::Subcommand)]
-enum NeonLocalCmd {
+enum YbLightLocalCmd {
     Init(InitCmdArgs),
 
     #[command(subcommand)]
@@ -148,7 +148,7 @@ struct StartCmdArgs {
     // take ~60-90s end-to-end. The previous 10s default fired before
     // migrations finished and the pageserver's first call to
     // storage_ctl saw "relation storage_controller.timelines does not
-    // exist". See tasks/4.k_neon-local-start-wedge.md.
+    // exist". See tasks/4.k_yb-light-local-start-wedge.md.
     #[clap(long = "start-timeout", default_value = "120s")]
     timeout: humantime::Duration,
 }
@@ -719,7 +719,7 @@ struct EndpointGenerateJwtCmdArgs {
     scope: Option<ComputeClaimsScope>,
 }
 
-/// Manage neon_local branch name mappings.
+/// Manage yb_light_local branch name mappings.
 #[derive(clap::Subcommand)]
 enum MappingsCmd {
     Map(MappingsMapCmdArgs),
@@ -751,7 +751,7 @@ struct TimelineTreeEl {
     pub children: BTreeSet<TimelineId>,
 }
 
-/// A flock-based guard over the neon_local repository directory
+/// A flock-based guard over the yb_light_local repository directory
 struct RepoLock {
     _file: Flock<File>,
 }
@@ -761,7 +761,7 @@ impl RepoLock {
         let path = local_env::base_path();
         let repo_dir = File::open(&path).with_context(|| {
             format!(
-                "no neon_local repo at {} \u{2014} run `neon_local init` first",
+                "no yb_light_local repo at {} \u{2014} run `yb_light_local init` first",
                 path.display()
             )
         })?;
@@ -772,7 +772,7 @@ impl RepoLock {
     }
 }
 
-// Main entry point for the 'neon_local' CLI utility
+// Main entry point for the 'yb_light_local' CLI utility
 //
 // This utility helps to manage neon installation. That includes following:
 //   * Management of local postgres installations running on top of the
@@ -783,7 +783,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Check for 'neon init' command first.
-    let (subcommand_result, _lock) = if let NeonLocalCmd::Init(args) = cli.command {
+    let (subcommand_result, _lock) = if let YbLightLocalCmd::Init(args) = cli.command {
         (handle_init(&args).map(|env| Some(Cow::Owned(env))), None)
     } else {
         // This tool uses a collection of simple files to store its state, and consequently
@@ -801,21 +801,21 @@ fn main() -> Result<()> {
             .unwrap();
 
         let subcommand_result = match cli.command {
-            NeonLocalCmd::Init(_) => unreachable!("init was handled earlier already"),
-            NeonLocalCmd::Start(args) => rt.block_on(handle_start_all(&args, env)),
-            NeonLocalCmd::Stop(args) => rt.block_on(handle_stop_all(&args, env)),
-            NeonLocalCmd::Tenant(subcmd) => rt.block_on(handle_tenant(&subcmd, env)),
-            NeonLocalCmd::Timeline(subcmd) => rt.block_on(handle_timeline(&subcmd, env)),
-            NeonLocalCmd::Pageserver(subcmd) => rt.block_on(handle_pageserver(&subcmd, env)),
-            NeonLocalCmd::StorageController(subcmd) => {
+            YbLightLocalCmd::Init(_) => unreachable!("init was handled earlier already"),
+            YbLightLocalCmd::Start(args) => rt.block_on(handle_start_all(&args, env)),
+            YbLightLocalCmd::Stop(args) => rt.block_on(handle_stop_all(&args, env)),
+            YbLightLocalCmd::Tenant(subcmd) => rt.block_on(handle_tenant(&subcmd, env)),
+            YbLightLocalCmd::Timeline(subcmd) => rt.block_on(handle_timeline(&subcmd, env)),
+            YbLightLocalCmd::Pageserver(subcmd) => rt.block_on(handle_pageserver(&subcmd, env)),
+            YbLightLocalCmd::StorageController(subcmd) => {
                 rt.block_on(handle_storage_controller(&subcmd, env))
             }
-            NeonLocalCmd::Safekeeper(subcmd) => rt.block_on(handle_safekeeper(&subcmd, env)),
-            NeonLocalCmd::EndpointStorage(subcmd) => {
+            YbLightLocalCmd::Safekeeper(subcmd) => rt.block_on(handle_safekeeper(&subcmd, env)),
+            YbLightLocalCmd::EndpointStorage(subcmd) => {
                 rt.block_on(handle_endpoint_storage(&subcmd, env))
             }
-            NeonLocalCmd::Endpoint(subcmd) => rt.block_on(handle_endpoint(&subcmd, env)),
-            NeonLocalCmd::Mappings(subcmd) => rt.block_on(handle_mappings(&subcmd, env)),
+            YbLightLocalCmd::Endpoint(subcmd) => rt.block_on(handle_endpoint(&subcmd, env)),
+            YbLightLocalCmd::Mappings(subcmd) => rt.block_on(handle_mappings(&subcmd, env)),
         };
 
         let subcommand_result = if &original_env != env {
@@ -983,7 +983,7 @@ fn get_tenant_shard_id(
 
 fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
     // Create the in-memory `LocalEnv` that we'd normally load from disk in `load_config`.
-    let init_conf: NeonLocalInitConf = if let Some(config_path) = &args.config {
+    let init_conf: YbLightLocalInitConf = if let Some(config_path) = &args.config {
         // User (likely the Python test suite) provided a description of the environment.
         if args.num_pageservers.is_some() {
             bail!(
@@ -1000,7 +1000,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
         toml_edit::de::from_str(&contents)?
     } else {
         // User (likely interactive) did not provide a description of the environment, give them the default
-        NeonLocalInitConf {
+        YbLightLocalInitConf {
             control_plane_api: Some(DEFAULT_PAGESERVER_CONTROL_PLANE_API.parse().unwrap()),
             safekeepers: vec![SafekeeperConf {
                 id: DEFAULT_SAFEKEEPER_ID,
@@ -1016,7 +1016,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                     let pg_port = DEFAULT_PAGESERVER_PG_PORT + i;
                     let http_port = DEFAULT_PAGESERVER_HTTP_PORT + i;
                     let grpc_port = DEFAULT_PAGESERVER_GRPC_PORT + i;
-                    NeonLocalInitPageserverConf {
+                    YbLightLocalInitPageserverConf {
                         id: pageserver_id,
                         listen_pg_addr: format!("127.0.0.1:{pg_port}"),
                         listen_http_addr: format!("127.0.0.1:{http_port}"),
@@ -1052,7 +1052,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
     };
 
     LocalEnv::init(init_conf, &args.force)
-        .context("materialize initial neon_local environment on disk")?;
+        .context("materialize initial yb_light_local environment on disk")?;
     Ok(LocalEnv::load_config(&local_env::base_path())
         .expect("freshly written config should be loadable"))
 }

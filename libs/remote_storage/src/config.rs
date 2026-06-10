@@ -112,13 +112,13 @@ pub struct YbStoreConfig {
     /// password is sent (suitable for trust-auth dev clusters).
     pub password_env: Option<String>,
     /// Database name to connect to. Defaults to `yb_storage` — the shared
-    /// DB that neon_local provisions for pageserver/safekeeper/storage_controller
+    /// DB that yb_light_local provisions for pageserver/safekeeper/storage_controller
     /// to colocate `blobs`, `wals`, and the `storage_controller` schema.
     /// Override per-component if you need a different layout.
     #[serde(default = "default_yb_dbname")]
     pub dbname: String,
     /// Name of the table that holds the objects. Defaults to `blobs` —
-    /// the table neon_local provisions in `yb_storage.public`.
+    /// the table yb_light_local provisions in `yb_storage.public`.
     #[serde(default = "default_yb_table_name")]
     pub table_name: String,
     /// Optional "subfolder" prefix that's prepended to every key, allowing

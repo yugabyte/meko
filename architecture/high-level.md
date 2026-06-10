@@ -126,8 +126,8 @@ yugabyted                       :7100 (master), :5433 (ysql)
 
 yb-light binaries (target/debug/)
   storage_controller --database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage --listen 127.0.0.1:<port>
-  yb-pageserver   (config from on-disk pageserver.toml; neon_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
-  safekeeper --id 1 --wal-yb-config <YbStore TOML>   (neon_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
+  yb-pageserver   (config from on-disk pageserver.toml; yb_light_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
+  safekeeper --id 1 --wal-yb-config <YbStore TOML>   (yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
   endpoint_storage   :9983
   compute_ctl --pgdata .neon-yb/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
     +-- postgres (v17.5 + Neon patches)  :55440

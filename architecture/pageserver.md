@@ -357,7 +357,7 @@ remote_storage = {
 }
 ```
 
-`neon_local init` accepts a top-level config with this `remote_storage`
+`yb_light_local init` accepts a top-level config with this `remote_storage`
 inline table; the generated `pageserver.toml` carries it through.
 
 `YbStore` is the only `RemoteStorage` backend in yb-light; LocalFs, S3,

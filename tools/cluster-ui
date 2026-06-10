@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Standalone diagnostic UI for a local `neon_local` yb-light cluster.
+# Standalone diagnostic UI for a local `yb_light_local` yb-light cluster.
 #
 # Serves a single web page that shows, at a glance:
 #   - service health (storage controller, pageservers, safekeepers,
@@ -77,9 +77,9 @@ def _norm_id(v):
 
 
 def parse_branch_mappings(cfg_text):
-    """Parse neon_local branch aliases from [branch_name_mappings] in .neon/config.
+    """Parse yb_light_local branch aliases from [branch_name_mappings] in .neon/config.
 
-    neon_local stores human-readable names (e.g. 'main') mapped to
+    yb_light_local stores human-readable names (e.g. 'main') mapped to
     (tenant_id, timeline_id) pairs. The pageserver/safekeeper APIs only
     expose the hex timeline ids — branch names live here on disk.
     """
@@ -251,7 +251,7 @@ def collect(repo_dir):
                      "url": es, "up": es_err is None, "detail": es_err})
 
     # Compute endpoints. compute_ctl's external HTTP /status requires a JWT,
-    # so a plain GET 400s; mirror neon_local's own status() and treat the
+    # so a plain GET 400s; mirror yb_light_local's own status() and treat the
     # endpoint as up when its Postgres pg_port accepts a TCP connection.
     # /metrics on the external http port is unauthenticated, so use it as a
     # secondary "compute_ctl is alive" signal.
@@ -516,7 +516,7 @@ function renderSafekeepers(sks, branchNames) {
 }
 
 function renderEndpoints(eps, branchNames) {
-  if (!eps.length) { $("endpoints").innerHTML = `<div class="empty">no endpoints created (cargo neon endpoint create &lt;name&gt;)</div>`; return; }
+  if (!eps.length) { $("endpoints").innerHTML = `<div class="empty">no endpoints created (cargo yb_light endpoint create &lt;name&gt;)</div>`; return; }
   const rows = eps.map(ep => {
     let cls = 'bad', label = 'stopped';
     if (ep.running) { cls = 'ok'; label = 'running'; }

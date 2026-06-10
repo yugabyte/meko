@@ -49,7 +49,7 @@ run the following commands from the top of the neon.git checkout
     # for interactive use
     export NEON_REPO_DIR="$NEON_REPO_DIR"
     cargo build_testing --release
-    ./target/release/neon_local init --force empty-dir-ok
+    ./target/release/yb_light_local init --force empty-dir-ok
 EOF
 
 

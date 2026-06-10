@@ -69,7 +69,7 @@ def test_sharding_autosplit(neon_env_builder: NeonEnvBuilder, pg_bin: PgBin):
 
     env.storage_controller.allowed_errors.extend(
         [
-            # The neon_local functionality for updating computes is flaky for unknown reasons
+            # The yb_light_local functionality for updating computes is flaky for unknown reasons
             ".*Local notification hook failed.*",
             ".*Marking shard.*for notification retry.*",
             ".*Failed to notify compute.*",

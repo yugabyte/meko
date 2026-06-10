@@ -27,7 +27,7 @@ use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 
 use crate::background_process;
-use crate::local_env::{LocalEnv, NeonLocalInitPageserverConf, PageServerConf};
+use crate::local_env::{LocalEnv, YbLightLocalInitPageserverConf, PageServerConf};
 
 //
 // Control routines for pageserver.
@@ -86,12 +86,12 @@ impl PageServerNode {
 
     fn pageserver_init_make_toml(
         &self,
-        conf: NeonLocalInitPageserverConf,
+        conf: YbLightLocalInitPageserverConf,
     ) -> anyhow::Result<toml_edit::DocumentMut> {
         assert_eq!(
             &PageServerConf::from(&conf),
             &self.conf,
-            "during neon_local init, we derive the runtime state of ps conf (self.conf) from the --config flag fully"
+            "during yb_light_local init, we derive the runtime state of ps conf (self.conf) from the --config flag fully"
         );
 
         // TODO(christian): instead of what we do here, create a pageserver_api::config::ConfigToml (PR #7656)
@@ -139,7 +139,7 @@ impl PageServerNode {
         } else if !conf.other.contains_key("remote_storage") {
             anyhow::bail!(
                 "pageserver remote_storage must be configured (LocalFs was removed; \
-                 set NeonLocalInitPageserverConf::remote_storage to a YbStore inline table)"
+                 set YbLightLocalInitPageserverConf::remote_storage to a YbStore inline table)"
             );
         }
 
@@ -182,7 +182,7 @@ impl PageServerNode {
     }
 
     /// Initializes a pageserver node by creating its config with the overrides provided.
-    pub fn initialize(&self, conf: NeonLocalInitPageserverConf) -> anyhow::Result<()> {
+    pub fn initialize(&self, conf: YbLightLocalInitPageserverConf) -> anyhow::Result<()> {
         self.pageserver_init(conf)
             .with_context(|| format!("Failed to run init for pageserver node {}", self.conf.id))
     }
@@ -203,7 +203,7 @@ impl PageServerNode {
         self.start_node(retry_timeout).await
     }
 
-    fn pageserver_init(&self, conf: NeonLocalInitPageserverConf) -> anyhow::Result<()> {
+    fn pageserver_init(&self, conf: YbLightLocalInitPageserverConf) -> anyhow::Result<()> {
         let datadir = self.repo_path();
         let node_id = self.conf.id;
         println!(

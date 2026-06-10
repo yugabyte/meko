@@ -137,7 +137,7 @@ where
         match process_started(pid, pid_file_to_check, &process_status_check).await {
             Ok(true) => {
                 println!("\n{process_name} started and passed status check, pid: {pid}");
-                // leak the child process, it'll outlive this neon_local invocation
+                // leak the child process, it'll outlive this yb_light_local invocation
                 drop(scopeguard::ScopeGuard::into_inner(spawned_process));
                 return Ok(());
             }

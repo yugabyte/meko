@@ -235,7 +235,7 @@ fn opt_pathbuf_parser(s: &str) -> Result<Utf8PathBuf, String> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     // We want to allow multiple occurences of the same arg (taking the last) so
-    // that neon_local could generate command with defaults + overrides without
+    // that yb_light_local could generate command with defaults + overrides without
     // getting 'argument cannot be used multiple times' error. This seems to be
     // impossible with pure Derive API, so convert struct to Command, modify it,
     // parse arguments, and then fill the struct back.

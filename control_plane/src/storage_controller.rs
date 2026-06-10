@@ -259,7 +259,7 @@ impl StorageController {
     ///
     /// This function is equivalent to the `diesel setup` command in the diesel CLI.  We implement
     /// the same steps by hand to avoid imposing a dependency on installing diesel-cli for developers
-    /// who just want to run `cargo neon_local` without knowing about diesel.
+    /// who just want to run `cargo yb_light_local` without knowing about diesel.
     ///
     /// Returns the database url
     pub async fn setup_database(&self, postgres_port: u16) -> anyhow::Result<String> {
@@ -306,7 +306,7 @@ impl StorageController {
     }
 
     /// Provision the external (YugabyteDB) cluster before the rest of
-    /// neon_local starts: ensure both the `storage_controller` database
+    /// yb_light_local starts: ensure both the `storage_controller` database
     /// (Diesel migrations populate the tables) and the `yb_storage`
     /// database with its `blob_namespace` type + `blobs` / `wals` tables
     /// (operator schema that pageserver+safekeeper `YbStore` writes to)
@@ -470,10 +470,10 @@ impl StorageController {
     /// has the pageserver/safekeeper schema in place. Callers must run
     /// this **before** spawning pageserver / safekeeper / endpoint_storage
     /// since those bind to `yb_storage` immediately on start. Without
-    /// this barrier, a fresh `neon_local start` races storage_controller's
+    /// this barrier, a fresh `yb_light_local start` races storage_controller's
     /// own database provisioning against the pageserver's first connect
     /// and the pageserver crashes with `database "yb_storage" does not
-    /// exist`. See `tasks/4.k_neon-local-start-wedge.md`.
+    /// exist`. See `tasks/4.k_yb-light-local-start-wedge.md`.
     pub async fn prepare_database_if_external(&self) -> anyhow::Result<()> {
         if let Some(url) = self.config.database_url.clone() {
             self.ensure_external_database(&url).await?;
@@ -797,7 +797,7 @@ impl StorageController {
         }
 
         args.push(format!(
-            "--neon-local-repo-dir={}",
+            "--yb-light-local-repo-dir={}",
             self.env.base_data_dir.display()
         ));
 
@@ -809,7 +809,7 @@ impl StorageController {
             args.push("--timelines-onto-safekeepers".to_string());
         }
 
-        // neon_local is used in test environments where we often have less than 3 safekeepers.
+        // yb_light_local is used in test environments where we often have less than 3 safekeepers.
         if self.config.timeline_safekeeper_count.is_some() || self.env.safekeepers.len() < 3 {
             let sk_cnt = self
                 .config
@@ -887,7 +887,7 @@ impl StorageController {
             }
         }
 
-        // When pointed at an external database (e.g. YugabyteDB), neon_local
+        // When pointed at an external database (e.g. YugabyteDB), yb_light_local
         // never started a local Postgres, so there's nothing to stop here.
         if self.config.database_url.is_some() {
             return Ok(());

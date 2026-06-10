@@ -17,7 +17,7 @@ export PSQL=<path-to>/psql
 ```
 Component config locations vary by deployment but typically:
 `pageserver.toml` + `identity.toml` in the PS data dir; the safekeeper/SC/endpoint-storage start
-scripts; the neon_local repo dir (`.neon/config`, `.neon/endpoint_storage/`, `.neon/endpoints/<ep>/`).
+scripts; the yb_light_local repo dir (`.neon/config`, `.neon/endpoint_storage/`, `.neon/endpoints/<ep>/`).
 
 ---
 
@@ -30,7 +30,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 3. **endpoint_storage** (if used) → checkpoint: process up, no TLS errors in its log.
 4. **pageserver** → checkpoint: `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
 5. **Register PS + SK with the SC** (see "Manual registration" — they may not auto-register).
-6. **Create tenant/timeline** (via neon_local or SC API).
+6. **Create tenant/timeline** (via yb_light_local or SC API).
 7. **Create + start the compute endpoint** → checkpoint: `psql … 'SELECT 1'`.
 
 ---
@@ -38,21 +38,21 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 ## Symptom index
 | Symptom / error text | Cause | Section |
 |---|---|---|
-| `neon_local init` panics / serde error on the config TOML | init config schema mismatch | **A** |
+| `yb_light_local init` panics / serde error on the config TOML | init config schema mismatch | **A** |
 | SC: `Migration error: no schema has been selected to create in` | backing DB missing the schema | **B** |
 | SK: `unexpected argument '--<flag>'` | flag removed/renamed in this build | **C** |
 | endpoint_storage / PS: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
-| Compute postmaster dies with `EADDRINUSE` on its own port | neon_local port collision | **H** |
+| Compute postmaster dies with `EADDRINUSE` on its own port | yb_light_local port collision | **H** |
 | Fresh `cloud_admin` can't auth over socket / password rejected | role needs socket-trust password set | **I** |
 | PS can't find the safekeeper (broker-less builds) | missing `safekeeper_pg_addr` | **J** |
 
 ---
 
-## A. `neon_local init` config schema / serde errors
-`neon_local init --config <file>` is strict about its TOML. Common cascade of failures, each fixed
+## A. `yb_light_local init` config schema / serde errors
+`yb_light_local init --config <file>` is strict about its TOML. Common cascade of failures, each fixed
 by adding the missing/retyped key:
 - `remote_storage` under `[[pageservers]]` must be a **string-encoded inline table**, not a native
   TOML map — i.e. `remote_storage='{host="…", port=…, …}'` (quoted string), not `remote_storage={…}`.
@@ -129,7 +129,7 @@ export LD_LIBRARY_PATH=/tmp/psqllibs:$LD_LIBRARY_PATH
 Do this on whichever box you run that psql from. Many bundles ship a psql that doesn't need it.
 
 ## H. Compute postmaster dies with phantom EADDRINUSE
-neon_local can set the endpoint's `internal_http_port` **equal to** its `pg_port`; `compute_ctl`
+yb_light_local can set the endpoint's `internal_http_port` **equal to** its `pg_port`; `compute_ctl`
 then binds `*:pg_port` and the postmaster fails to bind the same port (looks like a phantom
 `EADDRINUSE`). Fix: ensure the endpoint's `internal_http_port` ≠ `pg_port` (edit the endpoint spec /
 `.neon` config), then restart the endpoint.

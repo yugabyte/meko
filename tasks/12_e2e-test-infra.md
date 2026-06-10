@@ -20,12 +20,12 @@ through INSERT_UPPER (page split + downlink insertion).
 We need a one-command local harness so every corruption-class fix
 gets exercised against the real failure mode before AWS time is
 burned. Right now the dev-box bring-up alone takes 5–10 min of
-manual steps (see [`4.k`](4.k_neon-local-start-wedge.md)).
+manual steps (see [`4.k`](4.k_yb-light-local-start-wedge.md)).
 
 ## Goals
 
 - **One command from clean repo to verdict.** `./scripts/e2e.sh`
-  (name TBD) starts a YB cluster, brings up `neon_local`, creates
+  (name TBD) starts a YB cluster, brings up `yb_light_local`, creates
   a tenant + timeline, starts a compute endpoint, runs the
   corruption-repro workload, scans the PS log for the corruption
   markers, and exits non-zero with a one-line verdict if any fired.
@@ -42,7 +42,7 @@ manual steps (see [`4.k`](4.k_neon-local-start-wedge.md)).
 ## Shape
 
 - `scripts/e2e.sh`: orchestrates the steps below. Bash, no python
-  deps; uses `psql` / `target/release/neon_local` / `curl`.
+  deps; uses `psql` / `target/release/yb_light_local` / `curl`.
 - `test/repro/workload.sql`: the canonical write-heavy workload
   (CREATE TABLE big_table + 2M-row INSERT + secondary index +
   UPDATE×N + range SELECTs). Already exists at

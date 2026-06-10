@@ -15,7 +15,7 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | `safekeeper` | `timeline_state` | yugabyte | controller migrations |
 | `storage_controller` | 7 Diesel-managed tables (`tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `timeline_imports`) | yugabyte | controller migrations |
 
-`neon_local` only `CREATE DATABASE`s `yb_storage`
+`yb_light_local` only `CREATE DATABASE`s `yb_storage`
 (`control_plane/src/storage_controller.rs::ensure_external_database`);
 every schema, ENUM, and table — across `public`, `pageserver`,
 `safekeeper`, and `storage_controller` — is created by the storage
@@ -186,7 +186,7 @@ ORDER BY segno;
 Holds the page store that replaces the upstream layer-file machinery
 with row-per-version storage; see
 [`yb-pageserver.md`](yb-pageserver.md) for the design. Provisioned
-alongside `public.blobs` / `public.wals` by `neon_local` on first
+alongside `public.blobs` / `public.wals` by `yb_light_local` on first
 start.
 
 ### `pageserver.pages`
@@ -408,7 +408,7 @@ the signal that something is wrong upstream of the client.
 
 The authoritative provisioning DDL is a single Diesel migration:
 [`storage_controller/migrations/00000000000001_initial_schema/up.sql`](../storage_controller/migrations/00000000000001_initial_schema/up.sql).
-`neon_local` only `CREATE DATABASE`s `yb_storage` (see
+`yb_light_local` only `CREATE DATABASE`s `yb_storage` (see
 `control_plane/src/storage_controller.rs::ensure_external_database`);
 the controller binary applies the migration on first start, which
 creates every schema, ENUM, and table in one shot. Listed here for
