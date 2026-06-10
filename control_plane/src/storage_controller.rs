@@ -594,7 +594,7 @@ impl StorageController {
             //   the storage controller we don't want a slow local disk to interfere with that.
             //
             // NB: it's important that we rewrite this file on each start command so we propagate changes
-            // from `LocalEnv`'s config file (`.neon/config`).
+            // from `LocalEnv`'s config file (`.yb_light/config`).
             tokio::fs::write(
                 &pg_data_path.join("postgresql.conf"),
                 format!("port = {postgres_port}\nfsync=off\n"),

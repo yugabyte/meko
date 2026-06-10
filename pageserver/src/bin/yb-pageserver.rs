@@ -97,7 +97,7 @@ fn main() -> anyhow::Result<()> {
     let workdir = arg_matches
         .get_one::<String>("workdir")
         .map(Utf8Path::new)
-        .unwrap_or_else(|| Utf8Path::new(".neon"));
+        .unwrap_or_else(|| Utf8Path::new(".yb_light"));
     let workdir = workdir
         .canonicalize_utf8()
         .with_context(|| format!("Error opening workdir '{workdir}'"))?;

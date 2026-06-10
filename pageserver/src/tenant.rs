@@ -5,7 +5,7 @@
 //! the correct layer for the get/put call, walking back the timeline branching
 //! history as needed.
 //!
-//! The files are stored in the .neon/tenants/<tenant_id>/timelines/<timeline_id>
+//! The files are stored in the .yb_light/tenants/<tenant_id>/timelines/<timeline_id>
 //! directory. See docs/pageserver-storage.md for how the files are managed.
 //! In addition to the layer files, there is a metadata file in the same
 //! directory that contains information about the timeline, in particular its
@@ -97,7 +97,7 @@ pub use crate::tenant::timeline::WalReceiverInfo;
 /// The "tenants" part of `tenants/<tenant>/timelines...`
 pub const TENANTS_SEGMENT_NAME: &str = "tenants";
 
-/// Parts of the `.neon/tenants/<tenant_id>/timelines/<timeline_id>` directory prefix.
+/// Parts of the `.yb_light/tenants/<tenant_id>/timelines/<timeline_id>` directory prefix.
 pub const TIMELINES_SEGMENT_NAME: &str = "timelines";
 
 /// References to shared objects that are passed into each tenant, such

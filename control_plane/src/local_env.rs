@@ -29,7 +29,7 @@ pub const DEFAULT_PG_VERSION: u32 = 17;
 //
 // This data structures represents yb_light_local CLI config
 //
-// It is deserialized from the .neon/config file, or the config file passed
+// It is deserialized from the .yb_light/config file, or the config file passed
 // to 'yb_light_local init --config=<path>' option. See control_plane/simple.conf for
 // an example.
 //
@@ -40,7 +40,7 @@ pub struct LocalEnv {
     //
     // This is not stored in the config file. Rather, this is the path where the
     // config file itself is. It is read from the NEON_REPO_DIR env variable which
-    // must be an absolute path. If the env var is not set, $PWD/.neon is used.
+    // must be an absolute path. If the env var is not set, $PWD/.yb_light is used.
     pub base_data_dir: PathBuf,
 
     // Path to postgres distribution. It's expected that "bin", "include",
@@ -66,7 +66,7 @@ pub struct LocalEnv {
 
     /// This Vec must always contain at least one pageserver
     /// Populdated by [`Self::load_config`] from the individual `pageserver.toml`s.
-    /// NB: not used anymore except for informing users that they need to change their `.neon/config`.
+    /// NB: not used anymore except for informing users that they need to change their `.yb_light/config`.
     pub pageservers: Vec<PageServerConf>,
 
     pub safekeepers: Vec<SafekeeperConf>,
@@ -86,7 +86,7 @@ pub struct LocalEnv {
     pub use_local_tls: bool,
 }
 
-/// On-disk state stored in `.neon/config`.
+/// On-disk state stored in `.yb_light/config`.
 #[derive(PartialEq, Eq, Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OnDiskConfig {
@@ -118,7 +118,7 @@ where
 {
     Err(serde::de::Error::custom(
         "The 'pageservers' field is no longer used; pageserver.toml is now authoritative; \
-         Please remove the `pageservers` from your .neon/config.",
+         Please remove the `pageservers` from your .yb_light/config.",
     ))
 }
 
@@ -256,9 +256,9 @@ impl Default for EndpointStorageConf {
 }
 
 // yb_light_local needs to know this subset of pageserver configuration.
-// For legacy reasons, this information is duplicated from `pageserver.toml` into `.neon/config`.
+// For legacy reasons, this information is duplicated from `pageserver.toml` into `.yb_light/config`.
 // It can get stale if `pageserver.toml` is changed.
-// TODO(christian): don't store this at all in `.neon/config`, always load it from `pageserver.toml`
+// TODO(christian): don't store this at all in `.yb_light/config`, always load it from `pageserver.toml`
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct PageServerConf {
@@ -859,7 +859,7 @@ impl LocalEnv {
                     println!("removing all contents of '{}'", base_path.display());
                     // instead of directly calling `remove_dir_all`, we keep the original dir but removing
                     // all contents inside. This helps if the developer symbol links another directory (i.e.,
-                    // S3 local SSD) to the `.neon` base directory.
+                    // S3 local SSD) to the `.yb_light` base directory.
                     for entry in std::fs::read_dir(base_path)? {
                         let entry = entry?;
                         let path = entry.path();
@@ -987,7 +987,7 @@ pub fn base_path() -> PathBuf {
                 // technically this can fail but it's quite unlikeley
                 .expect("determine current directory");
             let pwd_abs = pwd.canonicalize().expect("canonicalize current directory");
-            pwd_abs.join(".neon")
+            pwd_abs.join(".yb_light")
         }
     };
     assert!(path.is_absolute());

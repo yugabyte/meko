@@ -174,21 +174,21 @@ COPY --from=build /home/nonroot/pg_install/v17 /usr/local/v17/
 # old scripts working for now, create the tarball.
 RUN tar -C /usr/local -cvzf /data/postgres_install.tar.gz v14 v15 v16 v17
 
-# By default, pageserver uses `.neon/` working directory in WORKDIR, so create one and fill it with the dummy config.
+# By default, pageserver uses `.yb_light/` working directory in WORKDIR, so create one and fill it with the dummy config.
 # Now, when `docker run ... pageserver` is run, it can start without errors, yet will have some default dummy values.
-RUN mkdir -p /data/.neon/ && \
-  echo "id=1234" > "/data/.neon/identity.toml" && \
+RUN mkdir -p /data/.yb_light/ && \
+  echo "id=1234" > "/data/.yb_light/identity.toml" && \
   echo "broker_endpoint='http://storage_broker:50051'\n" \
        "pg_distrib_dir='/usr/local/'\n" \
        "listen_pg_addr='0.0.0.0:6400'\n" \
        "listen_http_addr='0.0.0.0:9898'\n" \
        "availability_zone='local'\n" \
-  > /data/.neon/pageserver.toml && \
-  chown -R neon:neon /data/.neon
+  > /data/.yb_light/pageserver.toml && \
+  chown -R neon:neon /data/.yb_light
 
 VOLUME ["/data"]
 USER neon
 EXPOSE 6400
 EXPOSE 9898
 
-CMD ["/usr/local/bin/pageserver", "-D", "/data/.neon"]
+CMD ["/usr/local/bin/pageserver", "-D", "/data/.yb_light"]

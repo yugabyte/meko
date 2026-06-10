@@ -9,7 +9,7 @@
 #   - tenants + their timelines (with the load-bearing LSNs:
 #     last_record_lsn, disk_consistent_lsn, remote_consistent_lsn, ...)
 #   - safekeepers + their timelines (commit/flush LSNs)
-#   - compute endpoints (from .neon/endpoints/*/endpoint.json) and
+#   - compute endpoints (from .yb_light/endpoints/*/endpoint.json) and
 #     whether their compute_ctl is responding
 #
 # It runs its own tiny aggregating web server, so the browser only ever
@@ -18,9 +18,9 @@
 # and merges the results into /api/data (JSON), which the page polls.
 #
 # Usage:
-#   tools/cluster-ui                 # serve on 127.0.0.1:9000, repo .neon
+#   tools/cluster-ui                 # serve on 127.0.0.1:9000, repo .yb_light
 #   tools/cluster-ui --port 9001
-#   tools/cluster-ui --repo-dir /path/to/.neon
+#   tools/cluster-ui --repo-dir /path/to/.yb_light
 #   tools/cluster-ui --once          # print the aggregated JSON and exit
 #
 # Stdlib only; works on Python 3.8+. No build step, no dependencies.
@@ -68,7 +68,7 @@ def http_get_json(url):
 
 
 # --------------------------------------------------------------------------
-# Discovery: learn service addresses from the .neon repo dir.
+# Discovery: learn service addresses from the .yb_light repo dir.
 # --------------------------------------------------------------------------
 
 def _norm_id(v):
@@ -77,7 +77,7 @@ def _norm_id(v):
 
 
 def parse_branch_mappings(cfg_text):
-    """Parse yb_light_local branch aliases from [branch_name_mappings] in .neon/config.
+    """Parse yb_light_local branch aliases from [branch_name_mappings] in .yb_light/config.
 
     yb_light_local stores human-readable names (e.g. 'main') mapped to
     (tenant_id, timeline_id) pairs. The pageserver/safekeeper APIs only
@@ -99,7 +99,7 @@ def parse_branch_mappings(cfg_text):
 
 
 def discover(repo_dir):
-    """Inspect the .neon repo dir and return a topology dict."""
+    """Inspect the .yb_light repo dir and return a topology dict."""
     cfg_path = os.path.join(repo_dir, "config")
     cfg_text = ""
     try:
@@ -137,7 +137,7 @@ def discover(repo_dir):
         if hm:
             pageservers.append({"id": node_id, "http": f"http://{hm.group(1)}"})
 
-    # Safekeepers: parse the [[safekeepers]] blocks from .neon/config.
+    # Safekeepers: parse the [[safekeepers]] blocks from .yb_light/config.
     safekeepers = []
     for block in cfg_text.split("[[safekeepers]]")[1:]:
         # Stop at the next top-level table header.
@@ -568,7 +568,7 @@ load(); tick();
 
 
 class Handler(BaseHTTPRequestHandler):
-    repo_dir = ".neon"
+    repo_dir = ".yb_light"
 
     def _send(self, code, body, ctype):
         self.send_response(code)
@@ -597,8 +597,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description="Standalone yb-light cluster UI")
-    ap.add_argument("--repo-dir", default=os.environ.get("NEON_REPO_DIR", ".neon"),
-                    help="path to the .neon repo dir (default: .neon)")
+    ap.add_argument("--repo-dir", default=os.environ.get("NEON_REPO_DIR", ".yb_light"),
+                    help="path to the .yb_light repo dir (default: .yb_light)")
     ap.add_argument("--host", default="127.0.0.1")
     # 9099 by default: 9000 is YugabyteDB's tserver web UI, 7000 the master UI.
     ap.add_argument("--port", type=int, default=9099)

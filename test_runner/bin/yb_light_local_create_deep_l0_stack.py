@@ -5,7 +5,7 @@ in your running yb_light_local setup.
 Use this bash setup to reset your yb_light_local environment.
 The last line of this bash snippet will run this file here.
 ```
- export NEON_REPO_DIR=$PWD/.neon
+ export NEON_REPO_DIR=$PWD/.yb_light
  export NEON_BIN_DIR=$PWD/target/release
  $NEON_BIN_DIR/yb_light_local stop
  rm -rf $NEON_REPO_DIR

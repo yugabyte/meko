@@ -81,9 +81,9 @@ key the pageserver/safekeeper use. In YB the path is split across the
 | Safekeeper control file | YB `safekeeper.timeline_state` schema | one row per timeline, typed columns |
 | Safekeeper live WAL | YB `yb_storage.wals` | `((tenant_id, timeline_id) HASH, segno, chunk_offset)` |
 | Storage controller relational state | YB `yb_storage` DB, `storage_controller` schema | 7 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
-| Pageserver local layer cache | local FS | `.neon-yb/pageserver_*/tenants/.../timelines/.../<layer>` |
-| Safekeeper local FS | local FS | `.neon-yb/safekeepers/sk*/` — only logs + pidfile (no WAL, no control file, no id) |
-| Compute `pgdata` | local FS | `.neon-yb/endpoints/main/pgdata/` (catalogs + ephemeral WAL pre-ship buffer) |
+| Pageserver local layer cache | local FS | `.yb_light/pageserver_*/tenants/.../timelines/.../<layer>` |
+| Safekeeper local FS | local FS | `.yb_light/safekeepers/sk*/` — only logs + pidfile (no WAL, no control file, no id) |
+| Compute `pgdata` | local FS | `.yb_light/endpoints/main/pgdata/` (catalogs + ephemeral WAL pre-ship buffer) |
 
 ## What did *not* change from upstream Neon
 
@@ -129,7 +129,7 @@ yb-light binaries (target/debug/)
   yb-pageserver   (config from on-disk pageserver.toml; yb_light_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
   safekeeper --id 1 --wal-yb-config <YbStore TOML>   (yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
   endpoint_storage   :9983
-  compute_ctl --pgdata .neon-yb/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
+  compute_ctl --pgdata .yb_light/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
     +-- postgres (v17.5 + Neon patches)  :55440
 ```
 

@@ -17,7 +17,7 @@ export PSQL=<path-to>/psql
 ```
 Component config locations vary by deployment but typically:
 `pageserver.toml` + `identity.toml` in the PS data dir; the safekeeper/SC/endpoint-storage start
-scripts; the yb_light_local repo dir (`.neon/config`, `.neon/endpoint_storage/`, `.neon/endpoints/<ep>/`).
+scripts; the yb_light_local repo dir (`.yb_light/config`, `.yb_light/endpoint_storage/`, `.yb_light/endpoints/<ep>/`).
 
 ---
 
@@ -63,7 +63,7 @@ by adding the missing/retyped key:
   `postgresql://…` URL (not `host:port`).
 
 Fix by adding each missing key and re-running init. After a successful init, the generated
-`.neon/config` may **drop the `[[pageservers]]` stanza** when the PS is off-box / self-registering —
+`.yb_light/config` may **drop the `[[pageservers]]` stanza** when the PS is off-box / self-registering —
 that's expected, not a failure.
 
 ## B. SC migration: "no schema has been selected to create in"
@@ -86,7 +86,7 @@ old start script to a new build without checking `--help`.
 ## D. "no pg_hba.conf entry … no encryption" (TLS to YB)
 A client opened a **non-TLS** connection to YugabyteDB, which requires TLS. Seen when the
 endpoint_storage `YbStore` config derived `sslmode:None`. Fix the relevant config to force TLS and
-supply the password env, e.g. in `.neon/endpoint_storage/endpoint_storage.json` add
+supply the password env, e.g. in `.yb_light/endpoint_storage/endpoint_storage.json` add
 `"sslmode":"require"` and `"password_env":"NEON_YB_PASSWORD"`. Any component talking to YB
 (`pageserver.toml remote_storage`, safekeeper `--remote-storage`, SC `--database-url`) must specify
 `sslmode=require`/`sslmode="require"`.
@@ -132,7 +132,7 @@ Do this on whichever box you run that psql from. Many bundles ship a psql that d
 yb_light_local can set the endpoint's `internal_http_port` **equal to** its `pg_port`; `compute_ctl`
 then binds `*:pg_port` and the postmaster fails to bind the same port (looks like a phantom
 `EADDRINUSE`). Fix: ensure the endpoint's `internal_http_port` ≠ `pg_port` (edit the endpoint spec /
-`.neon` config), then restart the endpoint.
+`.yb_light` config), then restart the endpoint.
 
 ## I. Fresh `cloud_admin` can't authenticate
 A newly created compute role may have no usable password for socket/`trust` auth. Set one so local

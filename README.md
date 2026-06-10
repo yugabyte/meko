@@ -198,7 +198,7 @@ The bundled developer workflow uses `yb_light_local`:
 
 ```sh
 make -j`nproc` -s             # build patched PG + Rust binaries
-cargo yb_light init               # writes .neon repo dir against config.toml
+cargo yb_light init               # writes .yb_light repo dir against config.toml
 cargo yb_light start              # storage_broker, safekeeper, pageserver
 cargo yb_light tenant create --set-default
 cargo yb_light endpoint create main
@@ -315,7 +315,7 @@ yb-light-bundle/
 ```
 
 `bin/yb-pageserver` is the binary name `yb_light_local` launches; it lives
-under `neon_distrib_dir` (set in `~/.neon/config`).
+under `neon_distrib_dir` (set in `~/.yb_light/config`).
 
 ## Tests
 
@@ -431,7 +431,7 @@ out of the box.
 ```sh
 make clean      # remove build artefacts
 make distclean  # everything from build + configure
-rm -rf .neon    # local dev cluster state (destroys local data)
+rm -rf .yb_light    # local dev cluster state (destroys local data)
 ```
 
 ## Documentation

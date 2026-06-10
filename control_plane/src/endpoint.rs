@@ -3,7 +3,7 @@
 //! In the local test environment, the data for each endpoint is stored in
 //!
 //! ```text
-//!   .neon/endpoints/<endpoint id>
+//!   .yb_light/endpoints/<endpoint id>
 //! ```
 //!
 //! Some basic information about the endpoint, like the tenant and timeline IDs,
@@ -25,7 +25,7 @@
 //! Directory contents:
 //!
 //! ```text
-//! .neon/endpoints/main/
+//! .yb_light/endpoints/main/
 //!     compute.log               - log output of `compute_ctl` and `postgres`
 //!     endpoint.json             - serialized `EndpointConf` struct
 //!     postgresql.conf           - postgresql settings
@@ -536,7 +536,7 @@ impl Endpoint {
         // When local TLS is off (the default), tell walproposer not to attempt a
         // TLS handshake against the safekeeper. The GUC is prepended verbatim to
         // the libpq conninfo walproposer builds per-safekeeper.
-        // Flip `use_local_tls = true` in .neon/config to re-enable.
+        // Flip `use_local_tls = true` in .yb_light/config to re-enable.
         if !self.env.use_local_tls {
             conf.append("neon.safekeeper_conninfo_options", "sslmode=disable");
         }

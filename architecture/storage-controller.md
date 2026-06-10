@@ -128,7 +128,7 @@ YSQL frontend is Postgres-protocol-compatible.
 (none)
 ```
 
-`yb_light_local` looks at `storage_controller.database_url` in `.neon/config`:
+`yb_light_local` looks at `storage_controller.database_url` in `.yb_light/config`:
 when it's set (e.g. to a YugabyteDB URL — local or remote), the wrapper
 **skips the entire local-Postgres bootstrap** (`initdb`, `pg_ctl start`,
 the startup-script transaction) and passes the URL straight through to

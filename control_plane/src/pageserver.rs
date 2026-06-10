@@ -3,7 +3,7 @@
 //! In the local test environment, the data for each pageserver is stored in
 //!
 //! ```text
-//!   .neon/pageserver_<pageserver_id>
+//!   .yb_light/pageserver_<pageserver_id>
 //! ```
 //!
 use std::collections::HashMap;
