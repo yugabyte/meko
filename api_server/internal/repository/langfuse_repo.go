@@ -226,6 +226,14 @@ type TraceSpan struct {
 	// for memory-related spans (name ILIKE '%memor%') to keep payloads
 	// small. The UI uses it to surface extracted memory text.
 	Output string `json:"output,omitempty"`
+	// Input is the actual statement executed by a DB span — the SQL for
+	// `Execute Query (...)` (vector) spans and the Cypher for
+	// `Execute Cypher Query (...)` (graph) spans. Extracted from the
+	// langfuse observation `input` (mem0 wraps each cursor call with
+	// @observe, which records the function args). Only the statement text
+	// is surfaced — bind params (which include huge embedding vectors)
+	// are deliberately dropped. Empty for non-DB spans.
+	Input string `json:"input,omitempty"`
 	// MemoryItems is a per-memory expansion for memory spans. Each item maps one
 	// extracted memory text to persisted-memory metadata and graph/vector counts.
 	MemoryItems []TraceMemoryItem `json:"memory_items,omitempty"`
@@ -1879,8 +1887,11 @@ WHERE  project_id = $1
   AND  name ILIKE '%memory add%'
   AND  output::text IS NOT NULL
   AND  output::text <> ''
+  -- Count any add whose results carry memory events (ADD or UPDATE).
+  -- We intentionally do NOT also require graph relations
+  -- (added_entities): an update to an existing memory has no new
+  -- relations but is still a meaningful memory operation to surface.
   AND  output::text NOT LIKE '%"results": []%'
-  AND  output::text NOT LIKE '%"added_entities": []%'
 GROUP  BY trace_id`
 
 	rows, err := r.langfuseDB.Query(q, projectID, pq.Array(stripped))
@@ -1952,7 +1963,7 @@ WITH bookmarks AS (
     SELECT bm_time, prev_bm_time, is_last FROM bookmarks WHERE msg_id = $3
 ), windowed AS (
     SELECT o.id, o.parent_observation_id, o.name, o.type, o.start_time, o.end_time,
-           o.provided_model_name, o.usage_details, o.total_cost, o.output
+           o.provided_model_name, o.usage_details, o.total_cost, o.output, o.input
     FROM   clickhouse.observations o, bounds b
     WHERE  o.project_id = $1 AND o.trace_id = $2 AND o.is_deleted = false
       AND  ((o.start_time <= b.bm_time AND (b.prev_bm_time IS NULL OR o.start_time > b.prev_bm_time))
@@ -1966,10 +1977,61 @@ SELECT o.id, COALESCE(o.parent_observation_id, ''), o.name, o.type::text AS type
        COALESCE(o.provided_model_name, '') AS model,
        CASE WHEN o.usage_details::text = '{}' THEN '' ELSE o.usage_details::text END AS usage,
        COALESCE(o.total_cost::text, '') AS total_cost,
+       -- Attach the memory output whenever results carry events (ADD or
+       -- UPDATE). We do NOT also require added_entities (new graph
+       -- relations): an update to an existing memory has none but should
+       -- still show its memory card in the trace.
        CASE WHEN (o.type = 'TOOL' AND o.name ILIKE '%memory add%'
-                  AND o.output::text NOT LIKE '%"results": []%'
-                  AND o.output::text NOT LIKE '%"added_entities": []%')
-            THEN COALESCE(o.output::text, '') ELSE '' END AS output
+                  AND o.output::text NOT LIKE '%"results": []%')
+            THEN COALESCE(o.output::text, '') ELSE '' END AS output,
+       -- Statement text for DB-execution spans. mem0 / meko-mcp-server
+       -- trace each cursor call via @observe, which records the function
+       -- args as input: {"args": [<cursor>, "<SQL>", [params]], ...} for
+       -- vector and {"args": ["<Cypher>", {params}], ...} for graph. Pull
+       -- the first string element (the statement); never the params
+       -- (embedding vectors are megabytes). Guard on a leading '{' so a
+       -- non-JSON input never aborts the whole query via a failed ::jsonb
+       -- cast.
+       --
+       -- The set of DB-execution span names is fixed and small, so we
+       -- match them exactly rather than with ILIKE. Each name is the
+       -- @observe(name=...) declared at the cited source location:
+       --   meko-mem0/mem0/vector_stores/pgvector.py
+       --     - "Execute Query (yugabytedb / vector)"             (:97)
+       --     - "Execute Query Many (yugabytedb / vector)"        (:106)
+       --     - "Execute Query Values (yugabytedb / vector)"      (:112)
+       --   meko-mem0/mem0/memory/mage_memory.py
+       --     - "Execute Query (mage / graph)"                    (:224)
+       --     - "Execute Cypher Query (mage / graph)"             (:328)
+       --     - "Execute Cypher With Tenant Filter (mage / graph)"(:417)
+       --   meko-mem0/mem0/memory/apache_age_memory.py
+       --     - "Execute Query (yugabytedb / graph)"              (:224)
+       --     - "Execute Cypher Query (yugabytedb / graph)"       (:328)
+       --     - "Execute Cypher With Tenant Filter (yugabytedb / graph)" (:417)
+       --   meko-mcp-server/src/tools.py
+       --     - "Execute Query (yugabytedb)"                      (:207)
+       CASE WHEN o.name IN (
+                    'Execute Query (yugabytedb / vector)',
+                    'Execute Query Many (yugabytedb / vector)',
+                    'Execute Query Values (yugabytedb / vector)',
+                    'Execute Query (mage / graph)',
+                    'Execute Cypher Query (mage / graph)',
+                    'Execute Cypher With Tenant Filter (mage / graph)',
+                    'Execute Query (yugabytedb / graph)',
+                    'Execute Cypher Query (yugabytedb / graph)',
+                    'Execute Cypher With Tenant Filter (yugabytedb / graph)',
+                    'Execute Query (yugabytedb)'
+                  )
+                  AND o.input IS NOT NULL AND left(o.input::text, 1) = '{'
+            THEN COALESCE((
+                   SELECT value #>> '{}'
+                   FROM   jsonb_array_elements((o.input::text)::jsonb -> 'args')
+                            WITH ORDINALITY AS t(value, ord)
+                   WHERE  jsonb_typeof(value) = 'string'
+                   ORDER  BY ord
+                   LIMIT  1
+                 ), '')
+            ELSE '' END AS input
 FROM   windowed o, root r
 ORDER  BY o.start_time ASC`
 
@@ -1997,6 +2059,7 @@ ORDER  BY o.start_time ASC`
 			&span.Usage,
 			&span.TotalCost,
 			&span.Output,
+			&span.Input,
 		); err != nil {
 			return nil, fmt.Errorf("langfuse db: scan trace span: %w", err)
 		}

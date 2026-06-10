@@ -191,6 +191,7 @@ export function PromotedMemoryCard({
                       datapackName,
                       conversationId,
                       CONVERSATION_SOURCE.collectiveMemorySummary,
+                      { memoryId: memory.id },
                     )}
                     title={`Open conversation ${conversationId}`}
                     className="inline-flex items-center gap-1.5 text-sky-700 dark:text-sky-300 hover:underline"

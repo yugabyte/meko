@@ -45,6 +45,9 @@ export function LiveDecisionTrace({ datapackName, datapackId, conversationId, me
         message={trace}
         conversationId={conversationId}
         langfuseProjectId={data?.langfuse_project_id}
+        datapackName={datapackName}
+        datapackId={datapackId}
+        enableConversationLink
         defaultExpanded
       />
     );
