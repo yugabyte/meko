@@ -1,8 +1,9 @@
 ---
-status: pending
+status: done
 severity: high
 area: safekeeper
 opened: 2026-06-10
+closed: 2026-06-10
 ---
 
 # Flaky: SK kill-9 recovery hits "YB WAL hole" at the PS resume LSN
@@ -44,3 +45,32 @@ in the SK WAL store + truncation feedback loop, which
 Repro attempt: loop `test/e2e/run.sh slow` (or just the
 restart-wal-replay script) — the window is the SK chunk-flush cadence
 vs. the `-m immediate` kill.
+
+## Root cause (neither hypothesis above)
+
+The cold-cache reader couldn't serve a **mid-chunk** start position.
+`fetch_chunks_from_yb` (`safekeeper/src/yb_wal_storage.rs`) queried
+`chunk_offset >= pos` and `start_fetch` kept the first row only when
+`chunk_offset == pos`. After a `-m immediate` kill the in-memory cache
+is empty, so the first read goes straight to YB. The PS resumes at its
+`consistent_lsn` — an arbitrary record-end LSN — which can land in the
+**middle** of a durable chunk. The warm cache resolves sub-chunk
+positions via its `range(..=pos)` walk; the empty cache can't, and the
+forward-only SELECT returned the *next* chunk (offset > pos), which the
+exact-match filter rejected → bogus "YB WAL hole" → walreceiver died →
+the compute's basebackup deadlocked waiting on `last_record_lsn`. The
+`chunk_end=0/1778000 > start=0/1758600` detail is the covering chunk
+that ends above and begins below the resume LSN. (`flush_lsn` is
+already capped at `durable_lsn` and `truncate_wal` refuses to advance
+past it, ruling out the ack-ahead and truncation hypotheses.)
+
+## Fix
+
+`fetch_chunks_from_yb` now reverse-seeks the covering chunk
+(`chunk_offset <= pos ORDER BY chunk_offset DESC LIMIT 1`) and prepends
+it when it spans `pos`, but only when the forward query's first row
+isn't already exactly at `pos` — the steady-state boundary-aligned path
+stays one round trip. `start_fetch`'s filter relaxed to
+`chunk_offset <= pos && pos < end_offset`; `poll_read` already serves a
+covering chunk that starts before `pos`. Verified: `test/e2e/run.sh
+slow` (`restart-wal-replay.sh`) passes the kill-9 + 10 s-gap sequence.

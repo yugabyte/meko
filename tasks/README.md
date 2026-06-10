@@ -98,6 +98,6 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 20 | [Remove storage broker](20_remove-storage-broker.md) | ✅ done | medium | safekeeper |
 | 21 | [Drop `commit_lsn` / `peer_horizon_lsn` from wire](21_drop-commit-lsn-peer-horizon-from-wire.md) | ✅ done | low | safekeeper |
 | 22 | [Single-(tenant,timeline) pageserver](22_single-timeline-pageserver.md) | ✅ done | high | yb-pageserver |
-| 23 | [Flaky: SK kill-9 recovery hits "YB WAL hole"](23_sk-kill9-wal-hole-flake.md) | ⏳ pending | high | safekeeper |
+| 23 | [Flaky: SK kill-9 recovery hits "YB WAL hole"](23_sk-kill9-wal-hole-flake.md) | ✅ done | high | safekeeper |
 | 24 | [Early-window CLOG SLRU deltas never persist](24_early-clog-slru-deltas-lost.md) | ⏳ pending | highest | yb-pageserver |
 | 25 | [Validate the output of `.sql` e2e tests](25_e2e-sql-output-validation.md) | ⏳ pending | medium | yb-pageserver |

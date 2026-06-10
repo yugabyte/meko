@@ -1063,14 +1063,17 @@ impl YbSegmentReader {
                             guard.insert(segno, c.chunk_offset, c.data.clone());
                         }
                     }
-                    // First row's chunk_offset == pos by construction
-                    // (see `fetch_chunks_from_yb` contract). Treat any
-                    // row whose chunk_offset > pos as a real WAL hole
-                    // and propagate `None` so the reader surfaces it.
+                    // `fetch_chunks_from_yb` returns the covering chunk
+                    // first — its `chunk_offset` is `<= pos` (exactly
+                    // `pos` on the boundary-aligned hot path, below it on
+                    // a cold mid-chunk resume). Accept it only when it
+                    // actually spans `pos`; a first row that starts past
+                    // `pos`, or whose range ends at/before it, is a real
+                    // WAL hole and propagates as `None`.
                     let covering = fetched
                         .into_iter()
                         .next()
-                        .filter(|c| c.chunk_offset == pos);
+                        .filter(|c| c.chunk_offset <= pos && pos < c.end_offset);
                     Ok(covering)
                 }
                 Err(e) => Err(e),
@@ -1178,13 +1181,26 @@ impl AsyncRead for YbSegmentReader {
 const FETCH_FORWARD_CHUNKS: usize = 64;
 const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Fetch chunks starting at `(segno, byte_offset)` from
-/// `yb_storage.wals`, in a single SELECT.
+/// Fetch the chunk covering `(segno, byte_offset)` plus a forward
+/// prefetch window from `yb_storage.wals`.
 ///
-/// `byte_offset` must equal an existing `chunk_offset` (it always does
-/// — the WAL sender consumes whole chunks and only re-enters this
-/// path at chunk boundaries; the cache lookup that runs before us
-/// already covers any sub-chunk position via its `range(..=)` walk).
+/// The common case is `byte_offset` exactly equal to an existing
+/// `chunk_offset`: the WAL sender consumes whole chunks and re-enters
+/// this path at chunk boundaries, and the warm `WalCache` lookup that
+/// runs before us already resolves any sub-chunk position via its
+/// `range(..=)` walk. Then the forward SELECT's first row is the
+/// covering chunk and a single round trip suffices.
+///
+/// A cold reader created right after a safekeeper restart is the
+/// exception: its first read starts at the pageserver's resume LSN
+/// (its `consistent_lsn`), an arbitrary record-end offset that can
+/// land in the MIDDLE of a durable chunk, and the cache is empty. The
+/// forward SELECT (`chunk_offset >= byte_offset`) then misses the
+/// covering chunk, so when the first forward row doesn't start exactly
+/// at `byte_offset` we issue one extra reverse-seek for the chunk that
+/// starts at or before it and prepend it when it covers — otherwise a
+/// legitimate mid-chunk resume would surface as a bogus "WAL hole".
+///
 /// The first returned row is the covering chunk; the rest populate the
 /// `WalCache` so the WAL sender's forward-sequential reads hit RAM.
 /// One YB round trip per ~`FETCH_FORWARD_CHUNKS` chunks instead of the
@@ -1232,6 +1248,49 @@ async fn fetch_chunks_from_yb(
             end_offset: end,
             data: Arc::new(data),
         });
+    }
+
+    // Cold-reader mid-chunk resume: the forward SELECT only sees
+    // chunks at or after `byte_offset`, so if its first row doesn't
+    // begin exactly at `byte_offset` the covering chunk (if any) starts
+    // below it and was missed. Reverse-seek for the highest chunk at or
+    // before `byte_offset` and prepend it when it actually spans the
+    // position. Skipped on the steady-state boundary-aligned path
+    // (first row == byte_offset), so the hot path stays one round trip.
+    if out.first().map(|c| c.chunk_offset) != Some(byte_offset) {
+        let cov_sql = format!(
+            "SELECT chunk_offset, chunk_size, data FROM {} \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
+               AND chunk_offset <= $4 \
+             ORDER BY chunk_offset DESC \
+             LIMIT 1",
+            quote_ident(table)
+        );
+        let cov_params: [&(dyn ToSql + Sync); 4] =
+            [&tenant_id, &timeline_id, &segno_i, &lo_i];
+        let cov_rows = client
+            .query(&cov_sql, &cov_params)
+            .await
+            .context("YB WAL fetch_chunks_from_yb covering")?;
+        if let Some(row) = cov_rows.into_iter().next() {
+            let chunk_offset: i64 = row.get("chunk_offset");
+            let chunk_size: i32 = row.get("chunk_size");
+            let data: Vec<u8> = row.get("data");
+            let end = (chunk_offset as u64) + (chunk_size as u64);
+            // Only prepend when it truly covers `byte_offset`; a chunk
+            // that ends at or before the position leaves a real hole.
+            if end > byte_offset {
+                total_bytes += chunk_size as u64;
+                out.insert(
+                    0,
+                    CurrentChunk {
+                        chunk_offset: chunk_offset as u64,
+                        end_offset: end,
+                        data: Arc::new(data),
+                    },
+                );
+            }
+        }
     }
 
     crate::metrics::WAL_CACHE_YB_FETCH_SECONDS.observe(elapsed.as_secs_f64());
