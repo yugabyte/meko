@@ -51,7 +51,7 @@ use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::models::RelSizeMigration;
 use pageserver_api::reltag::SlruKind;
 
-use crate::tenant::metadata::Lineage;
+use crate::page_server::metadata::Lineage;
 use remote_storage::{YbStoreConfig, YsqlClient};
 // We talk to YugabyteDB through the YB smart-driver fork of
 // tokio-postgres; alias it so the type names below (`tokio_postgres::Row`,
@@ -1540,59 +1540,6 @@ impl PageStore {
     /// this one isn't, because at creation the row by definition
     /// doesn't exist yet (or — race — exists in a state we shouldn't
     /// touch).
-    /// Load the JSONB-serialised `TenantConfig` for a tenant from
-    /// `pageserver.tenant_config`. storage_controller is the sole
-    /// writer; the pageserver re-reads on every PUT location_config
-    /// notification and at startup.
-    ///
-    /// Returns `Ok(None)` if no row exists yet (storage_controller
-    /// hasn't written one, e.g. a freshly-created tenant). Callers
-    /// should fall back to the default `TenantConfig` in that case.
-    pub async fn load_tenant_config(
-        &self,
-        tenant: TenantId,
-    ) -> Result<Option<pageserver_api::models::TenantConfig>> {
-        let sql = format!(
-            "SELECT config FROM \"{}\".tenant_config WHERE tenant_id = $1",
-            self.schema
-        );
-        let row_opt = self
-            .ysql_client
-            .query_opt(&sql, &[&tenant.to_string()])
-            .await
-            .context("load_tenant_config")?;
-        let Some(row) = row_opt else { return Ok(None) };
-        let json: serde_json::Value = row.get(0);
-        let cfg: pageserver_api::models::TenantConfig =
-            serde_json::from_value(json).context("decode TenantConfig JSON")?;
-        Ok(Some(cfg))
-    }
-
-    /// Upsert the JSONB-serialised `TenantConfig` for a tenant.
-    /// Only storage_controller should call this on the write path
-    /// (tenant create + config update). Exposed on `PageStore` so the
-    /// storage_controller integration test harness can use it
-    /// directly without going through Diesel.
-    pub async fn save_tenant_config(
-        &self,
-        tenant: TenantId,
-        config: &pageserver_api::models::TenantConfig,
-    ) -> Result<()> {
-        let sql = format!(
-            "INSERT INTO \"{}\".tenant_config (tenant_id, config) \
-             VALUES ($1, $2::jsonb) \
-             ON CONFLICT (tenant_id) DO UPDATE \
-               SET config = EXCLUDED.config, updated_at = NOW()",
-            self.schema
-        );
-        let json = serde_json::to_string(config).context("encode TenantConfig JSON")?;
-        self.ysql_client
-            .execute(&sql, &[&tenant.to_string(), &json])
-            .await
-            .context("save_tenant_config")?;
-        Ok(())
-    }
-
     pub async fn insert_timeline_at_creation(&self, row: &TimelineRow) -> Result<()> {
         let sql = format!(
             "INSERT INTO \"{}\".timeline_state \

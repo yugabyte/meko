@@ -11,7 +11,7 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | Schema | Tables | Owner | Provisioned by |
 |---|---|---|---|
 | `public` | `blobs`, `wals`, `blob_namespace` ENUM | yugabyte | controller migrations |
-| `pageserver` | `pages`, `slru_pages`, `meta`, `tenant_config`, `timeline_state` | yugabyte | controller migrations |
+| `pageserver` | `pages`, `slru_pages`, `meta`, `timeline_state` | yugabyte | controller migrations |
 | `safekeeper` | `timeline_state` | yugabyte | controller migrations |
 | `storage_controller` | 7 Diesel-managed tables (`tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `timeline_imports`) | yugabyte | controller migrations |
 
@@ -423,10 +423,9 @@ by hand.
 | `pageserver` | `pages` | Relation pages, one row per (block, LSN); PK `((tenant, timeline, spc, db, rel, fork) HASH, blknum, lsn DESC, is_image)`. |
 | `pageserver` | `slru_pages` | SLRU blocks (pg_xact, pg_multixact_*); same shape as `pages`, keyed by `(kind, segno)`. |
 | `pageserver` | `meta` | Metadata blobs (relsize sentinels, dir listings, aux, two-phase, repl origins); full-overwrite semantics. |
-| `pageserver` | `tenant_config` | Per-tenant `TenantConfig` (GC horizon, PITR, …); authoritative copy, controller-written. |
 | `pageserver` | `timeline_state` | Per-timeline state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`. |
 | `safekeeper` | `timeline_state` | Per-timeline safekeeper control file (replaces upstream's local-FS `safekeeper.control` blob). |
-| `storage_controller` | 7 tables | `tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `timeline_imports`. |
+| `storage_controller` | 7 tables | `tenants`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `timeline_imports`, `endpoints`. |
 
 See `up.sql` for the exact column lists, PK ordering, and FK
 relationships.

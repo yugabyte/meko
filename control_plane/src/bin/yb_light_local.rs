@@ -37,7 +37,7 @@ use pageserver_api::config::{
     DEFAULT_PG_LISTEN_PORT as DEFAULT_PAGESERVER_PG_PORT,
 };
 use pageserver_api::controller_api::{NodeAvailabilityWrapper, PlacementPolicy};
-use pageserver_api::models::{TenantConfigRequest, TimelineCreateRequest, TimelineInfo};
+use pageserver_api::models::{TimelineCreateRequest, TimelineInfo};
 use postgres_backend::AuthType;
 use safekeeper_api::membership::{SafekeeperGeneration, SafekeeperId};
 use safekeeper_api::{
@@ -1226,10 +1226,13 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
             }
         }
         TenantCmd::Create(args) => {
-            let tenant_conf: HashMap<_, _> =
-                args.config.iter().flat_map(|c| c.split_once(':')).collect();
-
-            let tenant_conf = PageServerNode::parse_config(tenant_conf)?;
+            // Effective tenant config is the [tenant_config] section of
+            // pageserver.toml; there is no per-tenant override store.
+            anyhow::ensure!(
+                args.config.is_empty(),
+                "per-tenant config overrides are not supported: set [tenant_config] in \
+                 pageserver.toml instead"
+            );
 
             // If tenant ID was not specified, generate one
             let tenant_id = args.tenant_id.unwrap_or_else(TenantId::generate);
@@ -1249,20 +1252,12 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
                 }),
             )?;
 
-            // Register the node + tenant with the storage controller
-            // up front so the tenant config below has a row to land on.
+            // Register the node + tenant with the storage controller.
             pageserver
                 .register_and_attach()
                 .await
                 .context("register tenant with storage controller")?;
             let storage_controller = StorageController::from_env(env);
-            storage_controller
-                .set_tenant_config(&TenantConfigRequest {
-                    tenant_id,
-                    config: tenant_conf,
-                })
-                .await
-                .context("set tenant config")?;
 
             pageserver
                 .start(&std::time::Duration::from_secs(60))
@@ -1306,20 +1301,11 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
             println!("Setting tenant {} as a default one", args.tenant_id);
             env.default_tenant_id = Some(args.tenant_id);
         }
-        TenantCmd::Config(args) => {
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
-            let tenant_conf: HashMap<_, _> =
-                args.config.iter().flat_map(|c| c.split_once(':')).collect();
-            let config = PageServerNode::parse_config(tenant_conf)?;
-
-            let req = TenantConfigRequest { tenant_id, config };
-
-            let storage_controller = StorageController::from_env(env);
-            storage_controller
-                .set_tenant_config(&req)
-                .await
-                .with_context(|| format!("Tenant config failed for tenant with id {tenant_id}"))?;
-            println!("tenant {tenant_id} successfully configured via storcon");
+        TenantCmd::Config(_) => {
+            anyhow::bail!(
+                "per-tenant config overrides are not supported: the effective config is the \
+                 [tenant_config] section of the pageserver's pageserver.toml"
+            );
         }
     }
     Ok(())

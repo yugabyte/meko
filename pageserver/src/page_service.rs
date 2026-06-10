@@ -10,7 +10,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime};
-use std::{io, str};
+use std::str;
 
 use anyhow::{Context as _, bail};
 use bytes::{Buf as _, BufMut as _, BytesMut};
@@ -25,7 +25,7 @@ use pageserver_api::config::{
     PageServiceProtocolPipelinedBatchingStrategy, PageServiceProtocolPipelinedExecutionStrategy,
 };
 use pageserver_api::key::rel_block_to_key;
-use pageserver_api::models::{PageTraceEvent, TenantState};
+use pageserver_api::models::PageTraceEvent;
 use pageserver_api::pagestream_api::{
     self, PagestreamBeMessage, PagestreamDbSizeRequest, PagestreamDbSizeResponse,
     PagestreamErrorResponse, PagestreamExistsRequest, PagestreamExistsResponse,
@@ -74,18 +74,11 @@ use crate::metrics::{
 use crate::pgdatadir_mapping::{LsnRange, Version};
 use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
 use crate::task_mgr::{self, COMPUTE_REQUEST_RUNTIME, TaskKind};
-use crate::tenant::mgr::{GetActiveTenantError, GetTenantError, ShardSelector, TenantManager};
-use crate::tenant::timeline::handle::{Handle, HandleUpgradeError, WeakHandle};
-use crate::tenant::timeline::{self, WaitLsnError, WaitLsnTimeout, WaitLsnWaiter};
-use crate::tenant::{GetTimelineError, PageReconstructError, Timeline};
+use crate::page_server::mgr::{GetTenantError, ShardSelector, TenantManager};
+use crate::page_server::timeline::handle::{Handle, HandleUpgradeError, WeakHandle};
+use crate::page_server::timeline::{self, WaitLsnError, WaitLsnTimeout, WaitLsnWaiter};
+use crate::page_server::{GetTimelineError, PageReconstructError, Timeline};
 use crate::{CancellableTask, PERF_TRACE_TARGET, timed_after_cancellation};
-
-/// How long we may wait for a [`crate::tenant::mgr::TenantSlot::InProgress`]` and/or a [`crate::tenant::TenantShard`] which
-/// is not yet in state [`TenantState::Active`].
-///
-/// NB: this is a different value than [`crate::http::routes::ACTIVE_TENANT_TIMEOUT`].
-/// reduced timeout and we will retry in Cache::get().
-const ACTIVE_TENANT_TIMEOUT: Duration = Duration::from_millis(5000);
 
 /// Threshold at which to log slow GetPage requests.
 const LOG_SLOW_GETPAGE_THRESHOLD: Duration = Duration::from_secs(30);
@@ -460,9 +453,7 @@ impl TimelineHandles {
         shard_selector: ShardSelector,
     ) -> Result<Handle<TenantManagerTypes>, GetActiveTimelineError> {
         if *self.wrapper.tenant_id.get_or_init(|| tenant_id) != tenant_id {
-            return Err(GetActiveTimelineError::Tenant(
-                GetActiveTenantError::SwitchedTenant,
-            ));
+            return Err(GetActiveTimelineError::SwitchedTenant);
         }
         self.handles
             .get(timeline_id, shard_selector, &self.wrapper)
@@ -526,9 +517,6 @@ impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrappe
         shard_selector: ShardSelector,
     ) -> Result<TenantManagerCacheItem, GetActiveTimelineError> {
         let tenant_id = self.tenant_id.get().expect("we set this in get()");
-        let timeout = ACTIVE_TENANT_TIMEOUT;
-        let wait_start = Instant::now();
-        let deadline = wait_start + timeout;
 
         // Single-timeline pageserver: every request must target the
         // configured identity; anything else is a misrouted compute.
@@ -540,20 +528,14 @@ impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrappe
                 identity.tenant_id,
                 identity.timeline_id,
             );
-            return Err(GetActiveTimelineError::Tenant(
-                GetActiveTenantError::NotFound(GetTenantError::NotFound(*tenant_id)),
-            ));
+            return Err(GetActiveTimelineError::Tenant(GetTenantError::NotFound(
+                *tenant_id,
+            )));
         }
         let _ = shard_selector;
         let tenant_shard = self
             .tenant_manager
             .get_attached_tenant_shard(*tenant_id)
-            .map_err(|e| GetActiveTimelineError::Tenant(GetActiveTenantError::NotFound(e)))?;
-
-        tracing::debug!("Waiting for tenant to enter active state...");
-        tenant_shard
-            .wait_to_become_active(deadline.duration_since(Instant::now()))
-            .await
             .map_err(GetActiveTimelineError::Tenant)?;
 
         let timeline = tenant_shard
@@ -651,13 +633,12 @@ impl From<PageReconstructError> for PageStreamError {
 impl From<GetActiveTimelineError> for PageStreamError {
     fn from(value: GetActiveTimelineError) -> Self {
         match value {
-            GetActiveTimelineError::Tenant(GetActiveTenantError::Cancelled)
-            | GetActiveTimelineError::Tenant(GetActiveTenantError::WillNotBecomeActive(
-                TenantState::Stopping { .. },
-            ))
-            | GetActiveTimelineError::Timeline(GetTimelineError::ShuttingDown) => Self::Shutdown,
+            GetActiveTimelineError::Timeline(GetTimelineError::ShuttingDown) => Self::Shutdown,
             GetActiveTimelineError::Tenant(e) => Self::NotFound(format!("{e}").into()),
             GetActiveTimelineError::Timeline(e) => Self::NotFound(format!("{e}").into()),
+            e @ GetActiveTimelineError::SwitchedTenant => {
+                Self::Reconnect(format!("{e}").into())
+            }
         }
     }
 }
@@ -1135,7 +1116,7 @@ impl PageServerHandler {
                     Err(e) => {
                         let span = mkspan!();
                         match e {
-                            GetActiveTimelineError::Tenant(GetActiveTenantError::NotFound(_)) => {
+                            GetActiveTimelineError::Tenant(GetTenantError::NotFound(_)) => {
                                 // We already know this tenant exists in general, because we resolved it at
                                 // start of connection.  Getting a NotFound here indicates that the shard containing
                                 // the requested page is not present on this node: the client's knowledge of shard->pageserver
@@ -2201,7 +2182,7 @@ impl PageServerHandler {
             timeline
                 .wait_lsn(
                     not_modified_since,
-                    crate::tenant::timeline::WaitLsnWaiter::PageService,
+                    crate::page_server::timeline::WaitLsnWaiter::PageService,
                     timeline::WaitLsnTimeout::Default,
                     ctx,
                 )
@@ -2489,7 +2470,7 @@ impl PageServerHandler {
             if let Err(e) = timeline
                 .wait_lsn(
                     max_effective_lsn,
-                    crate::tenant::timeline::WaitLsnWaiter::PageService,
+                    crate::page_server::timeline::WaitLsnWaiter::PageService,
                     timeline::WaitLsnTimeout::Default,
                     &ctx,
                 )
@@ -2675,8 +2656,8 @@ impl PageServerHandler {
             timeline
                 .wait_lsn(
                     lsn,
-                    crate::tenant::timeline::WaitLsnWaiter::PageService,
-                    crate::tenant::timeline::WaitLsnTimeout::Default,
+                    crate::page_server::timeline::WaitLsnWaiter::PageService,
+                    crate::page_server::timeline::WaitLsnTimeout::Default,
                     &ctx,
                 )
                 .await?;
@@ -4168,27 +4149,34 @@ fn extract_from<T: Send + Sync + 'static>(ext: &http::Extensions) -> &T {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GetActiveTimelineError {
     #[error(transparent)]
-    Tenant(GetActiveTenantError),
+    Tenant(GetTenantError),
     #[error(transparent)]
     Timeline(#[from] GetTimelineError),
+    #[error("reconnect to switch tenant id")]
+    SwitchedTenant,
 }
 
 impl From<GetActiveTimelineError> for QueryError {
     fn from(e: GetActiveTimelineError) -> Self {
         match e {
-            GetActiveTimelineError::Tenant(GetActiveTenantError::Cancelled) => QueryError::Shutdown,
-            GetActiveTimelineError::Tenant(e) => e.into(),
+            GetActiveTimelineError::Tenant(e) => QueryError::NotFound(format!("{e}").into()),
+            GetActiveTimelineError::Timeline(GetTimelineError::ShuttingDown) => {
+                QueryError::Shutdown
+            }
             GetActiveTimelineError::Timeline(e) => QueryError::NotFound(format!("{e}").into()),
+            e @ GetActiveTimelineError::SwitchedTenant => QueryError::Other(anyhow::anyhow!(e)),
         }
     }
 }
 
 impl From<GetActiveTimelineError> for tonic::Status {
     fn from(err: GetActiveTimelineError) -> Self {
+        use tonic::Code;
         let message = err.to_string();
         let code = match err {
-            GetActiveTimelineError::Tenant(err) => tonic::Status::from(err).code(),
+            GetActiveTimelineError::Tenant(GetTenantError::NotFound(_)) => Code::NotFound,
             GetActiveTimelineError::Timeline(err) => tonic::Status::from(err).code(),
+            GetActiveTimelineError::SwitchedTenant => Code::Unavailable,
         };
         tonic::Status::new(code, message)
     }
@@ -4206,36 +4194,7 @@ impl From<GetTimelineError> for tonic::Status {
     }
 }
 
-impl From<GetActiveTenantError> for QueryError {
-    fn from(e: GetActiveTenantError) -> Self {
-        match e {
-            GetActiveTenantError::WaitForActiveTimeout { .. } => QueryError::Disconnected(
-                ConnectionError::Io(io::Error::new(io::ErrorKind::TimedOut, e.to_string())),
-            ),
-            GetActiveTenantError::Cancelled
-            | GetActiveTenantError::WillNotBecomeActive(TenantState::Stopping { .. }) => {
-                QueryError::Shutdown
-            }
-            e @ GetActiveTenantError::NotFound(_) => QueryError::NotFound(format!("{e}").into()),
-            e => QueryError::Other(anyhow::anyhow!(e)),
-        }
-    }
-}
 
-impl From<GetActiveTenantError> for tonic::Status {
-    fn from(err: GetActiveTenantError) -> Self {
-        use tonic::Code;
-        let code = match &err {
-            GetActiveTenantError::Broken(_) => Code::Internal,
-            GetActiveTenantError::Cancelled => Code::Unavailable,
-            GetActiveTenantError::NotFound(_) => Code::NotFound,
-            GetActiveTenantError::SwitchedTenant => Code::Unavailable,
-            GetActiveTenantError::WaitForActiveTimeout { .. } => Code::Unavailable,
-            GetActiveTenantError::WillNotBecomeActive(_) => Code::Unavailable,
-        };
-        tonic::Status::new(code, err.to_string())
-    }
-}
 
 impl From<HandleUpgradeError> for QueryError {
     fn from(e: HandleUpgradeError) -> Self {

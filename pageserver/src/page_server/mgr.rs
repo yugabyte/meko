@@ -1,11 +1,11 @@
 //! The single-tenant holder: this pageserver process serves exactly one
 //! (tenant, timeline) for its entire lifetime, identified by the
 //! `tenant_id` / `timeline_id` / `generation` baked into `pageserver.toml`
-//! by the launcher.
+//! by the launcher. The tenant is opened synchronously at startup, before
+//! any listener accepts traffic.
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use http_utils::error::ApiError;
@@ -19,18 +19,16 @@ use tracing::*;
 use utils::crashsafe::path_with_suffix_extension;
 use utils::generation::Generation;
 use utils::id::{TenantId, TimelineId};
-use utils::completion;
 
-use super::{GlobalShutDown, TenantSharedResources};
+use super::TenantSharedResources;
 use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};
-use crate::http::routes::ACTIVE_TENANT_TIMEOUT;
 use crate::metrics::TENANT;
 use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind};
-use crate::tenant::timeline::ShutdownMode;
-use crate::tenant::{AttachedTenantConf, GcError, GcResult, SpawnMode, TenantShard, TenantState};
+use crate::page_server::timeline::ShutdownMode;
+use crate::page_server::{AttachedTenantConf, GcError, GcResult, PageServer};
 use crate::virtual_file::MaybeFatalIo;
-use crate::{InitializationOrder, TEMP_FILE_SUFFIX};
+use crate::TEMP_FILE_SUFFIX;
 
 /// When resolving a TenantId to a shard, we may be looking for the 0th
 /// shard, or we might be looking for whichever shard holds a particular page.
@@ -44,17 +42,6 @@ pub(crate) enum ShardSelector {
     Page(#[allow(dead_code)] Key),
     /// The shard ID is known: pick the given shard
     Known(#[allow(dead_code)] ShardIndex),
-}
-
-/// The one tenant this process serves.
-enum TenantsState {
-    /// [`init_tenant_mgr`] is not done yet.
-    Initializing,
-    /// The configured tenant is attached.
-    Open(Arc<TenantShard>),
-    /// The pageserver has entered shutdown mode via [`TenantManager::shutdown`].
-    /// The tenant remains accessible (e.g. to the management API) until process exit.
-    ShuttingDown(Arc<TenantShard>),
 }
 
 /// Precursor to deletion of a tenant dir: we do a fast rename to a tmp path, and then
@@ -148,16 +135,14 @@ impl BackgroundPurges {
     }
 }
 
-/// Holds the single [`TenantShard`] this pageserver process serves.
+/// Holds the single [`PageServer`] this pageserver process serves,
+/// fully opened and active by the time the manager is constructed.
 pub struct TenantManager {
     conf: &'static PageServerConf,
-    tenant: std::sync::RwLock<TenantsState>,
-    resources: TenantSharedResources,
+    tenant: Arc<PageServer>,
 
-    // Long-running operations that happen outside of a [`TenantShard`] lifetime should respect this token.
+    // Long-running operations that happen outside of a [`PageServer`] lifetime should respect this token.
     cancel: CancellationToken,
-
-    background_purges: BackgroundPurges,
 }
 
 /// Sweep the local `tenants/` directory for entries that don't correspond to the
@@ -215,34 +200,16 @@ async fn purge_stale_tenant_dirs(
     }
 }
 
-/// Initialize repositories at `Initializing` state.
-pub fn init(
+/// Open the configured tenant synchronously: preload + attach
+/// (open-existing or create-if-missing per `[timeline_init]`) + activate.
+/// Returns the fully-active manager; failure is fatal to startup.
+pub async fn init_tenant_mgr(
     conf: &'static PageServerConf,
     background_purges: BackgroundPurges,
     resources: TenantSharedResources,
     cancel: CancellationToken,
-) -> TenantManager {
-    TenantManager {
-        conf,
-        tenant: std::sync::RwLock::new(TenantsState::Initializing),
-        resources,
-        cancel,
-        background_purges,
-    }
-}
-
-/// Spawn the configured tenant: it opens (or creates, per `[timeline_init]`)
-/// its single timeline in a background attach task and becomes Active.
-#[instrument(skip_all)]
-pub async fn init_tenant_mgr(
-    tenant_manager: Arc<TenantManager>,
-    init_order: InitializationOrder,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<TenantManager> {
     let ctx = RequestContext::todo_child(TaskKind::Startup, DownloadBehavior::Warn);
-
-    let conf = tenant_manager.conf;
-    let resources = &tenant_manager.resources;
-    let background_purges = &tenant_manager.background_purges;
 
     // Single-timeline pageserver: the identity baked into
     // pageserver.toml by the launcher is the sole source of truth for
@@ -257,12 +224,11 @@ pub async fn init_tenant_mgr(
     };
     let attached = HashMap::from([(identity.tenant_id, identity.generation)]);
 
-    purge_stale_tenant_dirs(conf, &attached, background_purges).await;
+    purge_stale_tenant_dirs(conf, &attached, &background_purges).await;
 
     TENANT.startup_scheduled.inc();
 
     let (tenant_shard_id, generation) = (identity.tenant_id, identity.generation);
-    let tenant_dir_path = conf.tenant_path(&tenant_shard_id);
     let timelines_path = conf.timelines_path(&tenant_shard_id);
     // tenant/timelines dir is just a cache (initdb.tar.zst, basebackup_cache).
     // Doesn't need crash-safe sync.
@@ -271,82 +237,26 @@ pub async fn init_tenant_mgr(
         .fatal_err("create timelines/ dir");
 
     let shard_identity = pageserver_api::models::ShardIdentity::unsharded();
-    // Task 17.c: TenantConfig lives in `pageserver.tenant_config` (YB).
-    // storage_controller is the sole writer; we re-read on every start.
-    // Missing row → defaults (tenant created before migration, or in flight).
-    let tenant_conf = match resources
-        .fpu_page_store
-        .load_tenant_config(tenant_shard_id)
-        .await
-    {
-        Ok(Some(yb_conf)) => yb_conf,
-        Ok(None) => {
-            tracing::info!(
-                tenant_id = %tenant_shard_id,
-                "no pageserver.tenant_config row, using default tenant_conf"
-            );
-            pageserver_api::models::TenantConfig::default()
-        }
-        Err(e) => {
-            tracing::warn!(
-                tenant_id = %tenant_shard_id,
-                error = %e,
-                "failed to load tenant_config from YB, using default tenant_conf"
-            );
-            pageserver_api::models::TenantConfig::default()
-        }
-    };
+    let tenant_conf = pageserver_api::models::TenantConfig::default();
 
-    let tenant = tenant_spawn(
-        conf,
-        tenant_shard_id,
-        &tenant_dir_path,
-        resources.clone(),
-        AttachedTenantConf::new(conf, tenant_conf, generation),
-        shard_identity,
-        Some(init_order),
-        SpawnMode::Eager,
-        &ctx,
-    )
-    .expect("global shutdown during init_tenant_mgr cannot happen");
-
-    info!(tenant_id = %tenant_shard_id, "tenant spawned at startup");
-
-    let mut state = tenant_manager.tenant.write().unwrap();
-    *state = TenantsState::Open(tenant);
-
-    Ok(())
-}
-
-/// Wrapper for TenantShard::spawn that checks invariants before running
-#[allow(clippy::too_many_arguments)]
-fn tenant_spawn(
-    conf: &'static PageServerConf,
-    tenant_shard_id: TenantId,
-    tenant_path: &Utf8Path,
-    resources: TenantSharedResources,
-    location_conf: AttachedTenantConf,
-    shard_identity: pageserver_api::models::ShardIdentity,
-    init_order: Option<InitializationOrder>,
-    mode: SpawnMode,
-    ctx: &RequestContext,
-) -> Result<Arc<TenantShard>, GlobalShutDown> {
-    // Caller is responsible for ensuring tenant_path exists. Assertions that do
-    // synchronous I/O are limited to debug mode to avoid impacting prod runtime
-    // performance.
-    assert!(!crate::is_temporary(tenant_path));
-    debug_assert!(tenant_path.is_dir());
-
-    TenantShard::spawn(
+    let tenant = PageServer::open(
         conf,
         tenant_shard_id,
         resources,
-        location_conf,
+        AttachedTenantConf::new(conf, tenant_conf, generation),
         shard_identity,
-        init_order,
-        mode,
-        ctx,
+        &ctx,
     )
+    .await?;
+    TENANT.startup_complete.inc();
+
+    info!(tenant_id = %tenant_shard_id, "tenant opened at startup");
+
+    Ok(TenantManager {
+        conf,
+        tenant,
+        cancel,
+    })
 }
 
 impl TenantManager {
@@ -359,78 +269,43 @@ impl TenantManager {
     }
 
     /// Gets the attached tenant, erroring if `tenant_shard_id` doesn't match the
-    /// configured identity or startup hasn't reached the Open state yet.
-    ///
-    /// The returned TenantShard is not guaranteed to be active: check its status after
-    /// obtaining it, or use [`TenantShard::wait_to_become_active`] before doing I/O on it.
+    /// configured identity. The tenant is open and active for the whole process
+    /// lifetime (it transitions its timeline to Stopping during shutdown).
     pub(crate) fn get_attached_tenant_shard(
         &self,
         tenant_shard_id: TenantId,
-    ) -> Result<Arc<TenantShard>, GetTenantError> {
+    ) -> Result<Arc<PageServer>, GetTenantError> {
         if tenant_shard_id != self.timeline_identity().tenant_id {
             return Err(GetTenantError::NotFound(tenant_shard_id));
         }
-        match &*self.tenant.read().unwrap() {
-            TenantsState::Initializing => Err(GetTenantError::NotActive(tenant_shard_id)),
-            TenantsState::Open(tenant) | TenantsState::ShuttingDown(tenant) => {
-                Ok(Arc::clone(tenant))
-            }
-        }
+        Ok(Arc::clone(&self.tenant))
     }
 
-    /// The attached tenant, if startup has completed.
-    pub(crate) fn list(&self) -> Vec<(TenantId, Arc<TenantShard>)> {
-        match &*self.tenant.read().unwrap() {
-            TenantsState::Initializing => Vec::new(),
-            TenantsState::Open(tenant) | TenantsState::ShuttingDown(tenant) => {
-                vec![(tenant.tenant_shard_id(), Arc::clone(tenant))]
-            }
-        }
+    /// The attached tenant.
+    pub(crate) fn list(&self) -> Vec<(TenantId, Arc<PageServer>)> {
+        vec![(self.tenant.tenant_shard_id(), Arc::clone(&self.tenant))]
     }
 
     /// Shut down the tenant. This runs as part of pageserver shutdown.
     ///
-    /// NB: the tenant stays accessible (ShuttingDown state) until process exit, so
-    /// the management API keeps answering rather than 404ing mid-shutdown.
+    /// NB: the tenant stays accessible until process exit, so the management
+    /// API keeps answering rather than 404ing mid-shutdown.
     #[instrument(skip_all)]
     pub(crate) async fn shutdown(&self) {
         self.cancel.cancel();
 
-        let tenant = {
-            let mut state = self.tenant.write().unwrap();
-            match std::mem::replace(&mut *state, TenantsState::Initializing) {
-                TenantsState::Initializing => {
-                    info!("no tenant attached yet");
-                    return;
-                }
-                TenantsState::Open(tenant) | TenantsState::ShuttingDown(tenant) => {
-                    *state = TenantsState::ShuttingDown(Arc::clone(&tenant));
-                    tenant
-                }
-            }
-        };
-
-        let (_guard, shutdown_progress) = completion::channel();
-        if let Err(other_progress) = tenant
-            .shutdown(shutdown_progress, ShutdownMode::FreezeAndFlush)
+        let tenant = Arc::clone(&self.tenant);
+        tenant
+            .shutdown(ShutdownMode::FreezeAndFlush)
             .instrument(info_span!("shutdown", tenant_id = %tenant.tenant_shard_id()))
-            .await
-        {
-            // join another shutdown in progress
-            other_progress.wait().await;
-        }
+            .await;
         info!("tenant successfully stopped");
     }
 
     /// This pageserver's contribution to utilization metrics: the number of bytes
-    /// of local disk space the tenant wants, and the shard count (0 or 1).
-    pub(crate) fn calculate_utilization(&self) -> Result<(u64, u32), TenantMapListError> {
-        match &*self.tenant.read().unwrap() {
-            TenantsState::Initializing => Err(TenantMapListError::Initializing),
-            TenantsState::Open(tenant) | TenantsState::ShuttingDown(tenant) => {
-                Ok((tenant.local_storage_wanted(), 1))
-            }
-        }
+    /// of local disk space the tenant wants, and the shard count (always 1).
+    pub(crate) fn calculate_utilization(&self) -> (u64, u32) {
+        (self.tenant.local_storage_wanted(), 1)
     }
 
     #[instrument(skip_all, fields(tenant_id=%tenant_shard_id, %timeline_id))]
@@ -449,8 +324,6 @@ impl TenantManager {
         let gc_horizon = gc_req.gc_horizon.unwrap_or_else(|| tenant.get_gc_horizon());
         // Use tenant's pitr setting
         let pitr = tenant.get_pitr_interval();
-
-        tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
         let ctx: RequestContext =
             ctx.detached_child(TaskKind::GarbageCollector, DownloadBehavior::Download);
@@ -480,49 +353,4 @@ impl TenantManager {
 pub(crate) enum GetTenantError {
     #[error("Tenant {0} not found")]
     NotFound(TenantId),
-
-    #[error("Tenant {0} not found")]
-    ShardNotFound(TenantId),
-
-    #[error("Tenant {0} is not active")]
-    NotActive(TenantId),
-}
-
-#[derive(thiserror::Error, Debug)]
-pub(crate) enum GetActiveTenantError {
-    /// The tenant is in a non-Active state
-    #[error(
-        "Timed out waiting {wait_time:?} for tenant active state. Latest state: {latest_state:?}"
-    )]
-    WaitForActiveTimeout {
-        latest_state: Option<TenantState>,
-        wait_time: Duration,
-    },
-
-    /// The tenant is absent
-    #[error(transparent)]
-    NotFound(#[from] GetTenantError),
-
-    /// Cancellation token fired while we were waiting
-    #[error("cancelled")]
-    Cancelled,
-
-    /// Tenant exists, but is in a state that cannot become active (e.g. Stopping, Broken)
-    #[error("will not become active.  Current state: {0}")]
-    WillNotBecomeActive(TenantState),
-
-    /// Broken is logically a subset of WillNotBecomeActive, but a distinct error is useful as
-    /// WillNotBecomeActive is a permitted error under some circumstances, whereas broken should
-    /// never happen.
-    #[error("Tenant is broken: {0}")]
-    Broken(String),
-
-    #[error("reconnect to switch tenant id")]
-    SwitchedTenant,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum TenantMapListError {
-    #[error("tenant map is still initiailizing")]
-    Initializing,
 }

@@ -55,23 +55,6 @@ impl GcBlock {
         }
     }
 
-    pub(crate) fn before_delete(&self, timeline_id: &super::TimelineId) {
-        let unblocked = {
-            let mut g = self.reasons.lock().unwrap();
-            if g.is_empty() {
-                return;
-            }
-
-            g.remove(timeline_id);
-
-            BlockingReasons::clean_and_summarize(g).is_none()
-        };
-
-        if unblocked {
-            tracing::info!("gc is now unblocked following deletion");
-        }
-    }
-
     /// Initialize with the non-deleted timelines of this tenant.
     pub(crate) fn set_scanned(&self, scanned: Storage) {
         let mut g = self.reasons.lock().unwrap();

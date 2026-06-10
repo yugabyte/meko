@@ -118,14 +118,11 @@ pub(crate) enum DatabaseOperation {
     UpdateTenantShard,
     DeleteTenant,
     UpdateTenantConfig,
-    SaveTenantConfigYb,
     UpdateMetadataHealth,
     ListMetadataHealth,
     ListMetadataHealthUnhealthy,
     ListMetadataHealthOutdated,
     ListSafekeepers,
-    GetLeader,
-    UpdateLeader,
     InsertTimeline,
     UpdateTimeline,
     GetTimeline,
@@ -771,9 +768,9 @@ impl Persistence {
         Ok(result)
     }
 
-    /// Reconciler calls this immediately before attaching to a new pageserver, to acquire a unique, monotonically
-    /// advancing generation number.  We also store the NodeId for which the generation was issued, so that in
-    /// [`Self::re_attach`] we can do a bulk UPDATE on the generations for that node.
+    /// Called (via the attach_hook API) immediately before attaching to a new pageserver, to acquire a unique,
+    /// monotonically advancing generation number.  We also store the NodeId for which the generation was issued,
+    /// so that in [`Self::re_attach`] we can do a bulk UPDATE on the generations for that node.
     pub(crate) async fn increment_generation(
         &self,
         tenant_shard_id: TenantId,
@@ -978,44 +975,6 @@ impl Persistence {
         Ok(())
     }
 
-    /// Upsert the tenant's `TenantConfig` into the YB-side
-    /// `pageserver.tenant_config` table. This is the per-tenant
-    /// authoritative copy that every attaching pageserver re-reads
-    /// from on PUT location_config + at startup (task 17.c).
-    ///
-    /// Uses `diesel::sql_query` rather than the storage_controller's
-    /// schema-scoped query DSL because the target table lives in the
-    /// `pageserver` schema, not `storage_controller`. The connection
-    /// pool's search_path is set to `storage_controller`; we
-    /// schema-qualify the table explicitly.
-    pub(crate) async fn save_tenant_config(
-        &self,
-        tenant_id: TenantId,
-        config: &TenantConfig,
-    ) -> DatabaseResult<()> {
-        let tenant_id_str = tenant_id.to_string();
-        let config_json =
-            serde_json::to_string(config).expect("TenantConfig is always JSON-serialisable");
-        self.with_measured_conn(DatabaseOperation::SaveTenantConfigYb, move |conn| {
-            let tenant_id_str = tenant_id_str.clone();
-            let config_json = config_json.clone();
-            Box::pin(async move {
-                diesel::sql_query(
-                    "INSERT INTO pageserver.tenant_config (tenant_id, config) \
-                     VALUES ($1, $2::jsonb) \
-                     ON CONFLICT (tenant_id) DO UPDATE \
-                       SET config = EXCLUDED.config, updated_at = NOW()",
-                )
-                .bind::<diesel::sql_types::Text, _>(tenant_id_str)
-                .bind::<diesel::sql_types::Text, _>(config_json)
-                .execute(conn)
-                .await?;
-                Ok(())
-            })
-        })
-        .await
-    }
-
     pub(crate) async fn detach(&self, tenant_shard_id: TenantId) -> anyhow::Result<()> {
         use crate::schema::tenants::dsl::*;
         self.with_measured_conn(DatabaseOperation::Detach, move |conn| {
@@ -1135,77 +1094,6 @@ impl Persistence {
             })
         })
         .await
-    }
-
-    /// Get the current entry from the `leader` table if one exists.
-    /// It is an error for the table to contain more than one entry.
-    pub(crate) async fn get_leader(&self) -> DatabaseResult<Option<ControllerPersistence>> {
-        let mut leader: Vec<ControllerPersistence> = self
-            .with_measured_conn(DatabaseOperation::GetLeader, move |conn| {
-                Box::pin(async move {
-                    Ok(crate::schema::controllers::table
-                        .load::<ControllerPersistence>(conn)
-                        .await?)
-                })
-            })
-            .await?;
-
-        if leader.len() > 1 {
-            return Err(DatabaseError::Logical(format!(
-                "More than one entry present in the leader table: {leader:?}"
-            )));
-        }
-
-        Ok(leader.pop())
-    }
-
-    /// Update the new leader with compare-exchange semantics. If `prev` does not
-    /// match the current leader entry, then the update is treated as a failure.
-    /// When `prev` is not specified, the update is forced.
-    pub(crate) async fn update_leader(
-        &self,
-        prev: Option<ControllerPersistence>,
-        new: ControllerPersistence,
-    ) -> DatabaseResult<()> {
-        use crate::schema::controllers::dsl::*;
-
-        let updated = self
-            .with_measured_conn(DatabaseOperation::UpdateLeader, move |conn| {
-                let prev = prev.clone();
-                let new = new.clone();
-                Box::pin(async move {
-                    let updated = match &prev {
-                        Some(prev) => {
-                            diesel::update(controllers)
-                                .filter(address.eq(prev.address.clone()))
-                                .filter(started_at.eq(prev.started_at))
-                                .set((
-                                    address.eq(new.address.clone()),
-                                    started_at.eq(new.started_at),
-                                ))
-                                .execute(conn)
-                                .await?
-                        }
-                        None => {
-                            diesel::insert_into(controllers)
-                                .values(new.clone())
-                                .execute(conn)
-                                .await?
-                        }
-                    };
-
-                    Ok(updated)
-                })
-            })
-            .await?;
-
-        if updated == 0 {
-            return Err(DatabaseError::Logical(
-                "Leader table update failed".to_string(),
-            ));
-        }
-
-        Ok(())
     }
 
     /// At startup, populate the list of nodes which our shards may be placed on
@@ -2068,15 +1956,6 @@ impl From<MetadataHealthPersistence> for MetadataHealthRecord {
             last_scrubbed_at: value.last_scrubbed_at,
         }
     }
-}
-
-#[derive(
-    Serialize, Deserialize, Queryable, Selectable, Insertable, Eq, PartialEq, Debug, Clone,
-)]
-#[diesel(table_name = crate::schema::controllers)]
-pub(crate) struct ControllerPersistence {
-    pub(crate) address: String,
-    pub(crate) started_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// A row of the `endpoints` table: the durable record of a compute endpoint

@@ -2,9 +2,8 @@ use std::time::Duration;
 
 use pageserver_api::models::detach_ancestor::AncestorDetached;
 use pageserver_api::models::{
-    DetachBehavior, LocationConfig, LocationConfigListResponse, LsnLease, PageserverUtilization,
-    SecondaryProgress, TenantScanRemoteStorageResponse, TenantWaitLsnRequest,
-    TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineInfo, TopTenantShardsRequest,
+    DetachBehavior, LsnLease, PageserverUtilization, TenantScanRemoteStorageResponse,
+    TimelineArchivalConfigRequest, TimelineInfo, TopTenantShardsRequest,
     TopTenantShardsResponse,
 };
 use pageserver_client::BlockUnblock;
@@ -137,91 +136,6 @@ impl PageserverClient {
         )
     }
 
-    pub(crate) async fn tenant_secondary_download(
-        &self,
-        tenant_id: TenantId,
-        wait: Option<std::time::Duration>,
-    ) -> Result<(StatusCode, SecondaryProgress)> {
-        measured_request!(
-            "tenant_secondary_download",
-            crate::metrics::Method::Post,
-            &self.node_id_label,
-            self.inner.tenant_secondary_download(tenant_id, wait).await
-        )
-    }
-
-    pub(crate) async fn tenant_secondary_status(
-        &self,
-        tenant_shard_id: TenantId,
-    ) -> Result<SecondaryProgress> {
-        measured_request!(
-            "tenant_secondary_status",
-            crate::metrics::Method::Get,
-            &self.node_id_label,
-            self.inner.tenant_secondary_status(tenant_shard_id).await
-        )
-    }
-
-    pub(crate) async fn tenant_heatmap_upload(&self, tenant_id: TenantId) -> Result<()> {
-        measured_request!(
-            "tenant_heatmap_upload",
-            crate::metrics::Method::Post,
-            &self.node_id_label,
-            self.inner.tenant_heatmap_upload(tenant_id).await
-        )
-    }
-
-    pub(crate) async fn location_config(
-        &self,
-        tenant_shard_id: TenantId,
-        config: LocationConfig,
-        flush_ms: Option<std::time::Duration>,
-        lazy: bool,
-    ) -> Result<()> {
-        measured_request!(
-            "location_config",
-            crate::metrics::Method::Put,
-            &self.node_id_label,
-            self.inner
-                .location_config(tenant_shard_id, config, flush_ms, lazy)
-                .await
-        )
-    }
-
-    pub(crate) async fn list_location_config(&self) -> Result<LocationConfigListResponse> {
-        measured_request!(
-            "location_configs",
-            crate::metrics::Method::Get,
-            &self.node_id_label,
-            self.inner.list_location_config().await
-        )
-    }
-
-    pub(crate) async fn get_location_config(
-        &self,
-        tenant_shard_id: TenantId,
-    ) -> Result<Option<LocationConfig>> {
-        measured_request!(
-            "location_config",
-            crate::metrics::Method::Get,
-            &self.node_id_label,
-            self.inner.get_location_config(tenant_shard_id).await
-        )
-    }
-
-    pub(crate) async fn timeline_create(
-        &self,
-        tenant_shard_id: TenantId,
-        req: &TimelineCreateRequest,
-    ) -> Result<TimelineInfo> {
-        measured_request!(
-            "timeline",
-            crate::metrics::Method::Post,
-            &self.node_id_label,
-            self.inner.timeline_create(tenant_shard_id, req).await
-        )
-    }
-
     pub(crate) async fn timeline_delete(
         &self,
         tenant_shard_id: TenantId,
@@ -266,18 +180,6 @@ impl PageserverClient {
             self.inner
                 .timeline_detail(tenant_shard_id, timeline_id)
                 .await
-        )
-    }
-
-    pub(crate) async fn timeline_list(
-        &self,
-        tenant_shard_id: &TenantId,
-    ) -> Result<Vec<TimelineInfo>> {
-        measured_request!(
-            "timelines",
-            crate::metrics::Method::Get,
-            &self.node_id_label,
-            self.inner.timeline_list(tenant_shard_id).await
         )
     }
 
@@ -331,28 +233,6 @@ impl PageserverClient {
         )
     }
 
-    pub(crate) async fn timeline_download_heatmap_layers(
-        &self,
-        tenant_shard_id: TenantId,
-        timeline_id: TimelineId,
-        concurrency: Option<usize>,
-        recurse: bool,
-    ) -> Result<()> {
-        measured_request!(
-            "download_heatmap_layers",
-            crate::metrics::Method::Post,
-            &self.node_id_label,
-            self.inner
-                .timeline_download_heatmap_layers(
-                    tenant_shard_id,
-                    timeline_id,
-                    concurrency,
-                    recurse
-                )
-                .await
-        )
-    }
-
     pub(crate) async fn get_utilization(&self) -> Result<PageserverUtilization> {
         measured_request!(
             "utilization",
@@ -372,19 +252,6 @@ impl PageserverClient {
             crate::metrics::Method::Post,
             &self.node_id_label,
             self.inner.top_tenant_shards(request).await
-        )
-    }
-
-    pub(crate) async fn wait_lsn(
-        &self,
-        tenant_shard_id: TenantId,
-        request: TenantWaitLsnRequest,
-    ) -> Result<StatusCode> {
-        measured_request!(
-            "wait_lsn",
-            crate::metrics::Method::Post,
-            &self.node_id_label,
-            self.inner.wait_lsn(tenant_shard_id, request).await
         )
     }
 

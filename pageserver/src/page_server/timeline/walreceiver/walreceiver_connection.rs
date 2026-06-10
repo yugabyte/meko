@@ -39,7 +39,7 @@ use crate::context::RequestContext;
 use crate::metrics::{LIVE_CONNECTIONS, WAL_INGEST, WALRECEIVER_STARTED_CONNECTIONS};
 use crate::pgdatadir_mapping::DatadirModification;
 use crate::task_mgr::{TaskKind, WALRECEIVER_RUNTIME};
-use crate::tenant::{
+use crate::page_server::{
     Timeline, WalReceiverInfo, debug_assert_current_span_has_tenant_and_timeline_id,
 };
 use crate::walingest::WalIngest;
@@ -578,7 +578,7 @@ pub(super) async fn handle_walreceiver_connection(
             // Regular standby_status_update fields are put into this message.
             let current_timeline_size = timeline
                 .get_current_logical_size(
-                    crate::tenant::timeline::GetLogicalSizePriority::User,
+                    crate::page_server::timeline::GetLogicalSizePriority::User,
                     &ctx,
                 )
                 // FIXME: https://github.com/neondatabase/neon/issues/5963

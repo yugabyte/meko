@@ -1,30 +1,25 @@
 use std::num::NonZeroU32;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use camino::Utf8PathBuf;
 
-use clap::{ArgAction, Parser};
+use clap::Parser;
 use futures::future::OptionFuture;
 use http_utils::tls_certs::ReloadingCertificateResolver;
-use hyper0::Uri;
 use metrics::BuildInfo;
 use metrics::launch_timestamp::LaunchTimestamp;
 use reqwest::Certificate;
 use storage_controller::http::make_router;
 use storage_controller::metrics::preinitialize_metrics;
 use storage_controller::persistence::Persistence;
-use storage_controller::service::chaos_injector::ChaosInjector;
 use storage_controller::service::{
-    Config, HEARTBEAT_INTERVAL_DEFAULT, LONG_RECONCILE_THRESHOLD_DEFAULT,
-    MAX_OFFLINE_INTERVAL_DEFAULT, MAX_WARMING_UP_INTERVAL_DEFAULT,
-    PRIORITY_RECONCILER_CONCURRENCY_DEFAULT, RECONCILER_CONCURRENCY_DEFAULT, Service,
+    Config, HEARTBEAT_INTERVAL_DEFAULT, MAX_OFFLINE_INTERVAL_DEFAULT,
+    MAX_WARMING_UP_INTERVAL_DEFAULT, Service,
 };
 use tokio::signal::unix::SignalKind;
 use tokio_util::sync::CancellationToken;
-use tracing::Instrument;
 use utils::auth::{JwtAuth, SwappableJwtAuth};
 use utils::logging::{self, LogFormat};
 use utils::{project_build_tag, project_git_version, tcp_listener};
@@ -83,9 +78,6 @@ struct Cli {
     #[arg(long)]
     control_plane_jwt_token: Option<String>,
 
-    #[arg(long)]
-    peer_jwt_token: Option<String>,
-
     /// URL to control plane storage API prefix
     #[arg(long)]
     control_plane_url: Option<String>,
@@ -107,14 +99,6 @@ struct Cli {
     #[arg(long)]
     max_warming_up_interval: Option<humantime::Duration>,
 
-    /// Maximum number of normal-priority reconcilers that may run in parallel
-    #[arg(long)]
-    reconciler_concurrency: Option<usize>,
-
-    /// Maximum number of high-priority reconcilers that may run in parallel
-    #[arg(long)]
-    priority_reconciler_concurrency: Option<usize>,
-
     /// Tenant API rate limit, as requests per second per tenant.
     #[arg(long, default_value = "10")]
     tenant_rate_limit: NonZeroU32,
@@ -123,38 +107,9 @@ struct Cli {
     #[arg(long, default_value = "5s")]
     db_connect_timeout: humantime::Duration,
 
-    #[arg(long, default_value = "false")]
-    start_as_candidate: bool,
-
-    // TODO: make this mandatory once the helm chart gets updated
-    #[arg(long)]
-    address_for_peers: Option<Uri>,
-
-    /// `yb_light_local` sets this to the path of the yb_light_local repo dir.
-    /// Only relevant for testing.
-    // TODO: make `cfg(feature = "testing")`
-    #[arg(long)]
-    yb_light_local_repo_dir: Option<PathBuf>,
-
-    /// Chaos testing: exercise tenant migrations
-    #[arg(long)]
-    chaos_interval: Option<humantime::Duration>,
-
-    /// Chaos testing: exercise an immediate exit
-    #[arg(long)]
-    chaos_exit_crontab: Option<cron::Schedule>,
-
-    /// Maximum acceptable lag for the secondary location while draining
-    /// a pageserver
-    #[arg(long)]
-    max_secondary_lag_bytes: Option<u64>,
-
     /// Period with which to send heartbeats to registered nodes
     #[arg(long)]
     heartbeat_interval: Option<humantime::Duration>,
-
-    #[arg(long)]
-    long_reconcile_threshold: Option<humantime::Duration>,
 
     /// Flag to use https for requests to pageserver API.
     #[arg(long, default_value = "false")]
@@ -181,22 +136,11 @@ struct Cli {
     #[arg(long)]
     ssl_ca_file: Option<Utf8PathBuf>,
 
-    /// Neon local specific flag. When set, ignore [`Cli::control_plane_url`] and deliver
-    /// the compute notification directly (instead of via control plane).
-    #[arg(long, default_value = "false")]
-    use_local_compute_notifications: bool,
-
     /// Number of safekeepers to choose for a timeline when creating it.
     /// Safekeepers will be choosen from different availability zones.
     /// This option exists primarily for testing purposes.
     #[arg(long, default_value = "3", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     timeline_safekeeper_count: usize,
-
-    /// When set, actively checks and initiates heatmap downloads/uploads during reconciliation.
-    /// This speed up migrations by avoiding the default wait for the heatmap download interval.
-    /// Primarily useful for testing to reduce test execution time.
-    #[arg(long, default_value = "false", action=ArgAction::Set)]
-    kick_secondary_downloads: bool,
 }
 
 enum StrictMode {
@@ -223,7 +167,6 @@ struct Secrets {
     pageserver_jwt_token: Option<String>,
     safekeeper_jwt_token: Option<String>,
     control_plane_jwt_token: Option<String>,
-    peer_jwt_token: Option<String>,
 }
 
 impl Secrets {
@@ -231,7 +174,6 @@ impl Secrets {
     const PAGESERVER_JWT_TOKEN_ENV: &'static str = "PAGESERVER_JWT_TOKEN";
     const SAFEKEEPER_JWT_TOKEN_ENV: &'static str = "SAFEKEEPER_JWT_TOKEN";
     const CONTROL_PLANE_JWT_TOKEN_ENV: &'static str = "CONTROL_PLANE_JWT_TOKEN";
-    const PEER_JWT_TOKEN_ENV: &'static str = "PEER_JWT_TOKEN";
     const PUBLIC_KEY_ENV: &'static str = "PUBLIC_KEY";
 
     /// Load secrets from, in order of preference:
@@ -265,7 +207,6 @@ impl Secrets {
                 &args.control_plane_jwt_token,
                 Self::CONTROL_PLANE_JWT_TOKEN_ENV,
             ),
-            peer_jwt_token: Self::load_secret(&args.peer_jwt_token, Self::PEER_JWT_TOKEN_ENV),
         };
 
         Ok(this)
@@ -353,9 +294,6 @@ async fn async_main() -> anyhow::Result<()> {
                 "`--control-plane-url` is not set: this is only permitted in `--dev` mode"
             );
         }
-        StrictMode::Strict if args.use_local_compute_notifications => {
-            anyhow::bail!("`--use-local-compute-notifications` is only permitted in `--dev` mode");
-        }
         StrictMode::Strict if args.timeline_safekeeper_count < 3 => {
             anyhow::bail!(
                 "Running with less than 3 safekeepers per timeline is only permitted in `--dev` mode"
@@ -382,7 +320,6 @@ async fn async_main() -> anyhow::Result<()> {
         pageserver_jwt_token: secrets.pageserver_jwt_token,
         safekeeper_jwt_token: secrets.safekeeper_jwt_token,
         control_plane_jwt_token: secrets.control_plane_jwt_token,
-        peer_jwt_token: secrets.peer_jwt_token,
         control_plane_url: args.control_plane_url,
         max_offline_interval: args
             .max_offline_interval
@@ -392,32 +329,16 @@ async fn async_main() -> anyhow::Result<()> {
             .max_warming_up_interval
             .map(humantime::Duration::into)
             .unwrap_or(MAX_WARMING_UP_INTERVAL_DEFAULT),
-        reconciler_concurrency: args
-            .reconciler_concurrency
-            .unwrap_or(RECONCILER_CONCURRENCY_DEFAULT),
-        priority_reconciler_concurrency: args
-            .priority_reconciler_concurrency
-            .unwrap_or(PRIORITY_RECONCILER_CONCURRENCY_DEFAULT),
         tenant_rate_limit: args.tenant_rate_limit,
-        yb_light_local_repo_dir: args.yb_light_local_repo_dir,
-        max_secondary_lag_bytes: args.max_secondary_lag_bytes,
         heartbeat_interval: args
             .heartbeat_interval
             .map(humantime::Duration::into)
             .unwrap_or(HEARTBEAT_INTERVAL_DEFAULT),
-        long_reconcile_threshold: args
-            .long_reconcile_threshold
-            .map(humantime::Duration::into)
-            .unwrap_or(LONG_RECONCILE_THRESHOLD_DEFAULT),
-        address_for_peers: args.address_for_peers,
-        start_as_candidate: args.start_as_candidate,
         use_https_pageserver_api: args.use_https_pageserver_api,
         use_https_safekeeper_api: args.use_https_safekeeper_api,
         ssl_ca_certs,
         timelines_onto_safekeepers: args.timelines_onto_safekeepers,
-        use_local_compute_notifications: args.use_local_compute_notifications,
         timeline_safekeeper_count: args.timeline_safekeeper_count,
-        kick_secondary_downloads: args.kick_secondary_downloads,
     };
 
     // Validate that we can connect to the database
@@ -480,24 +401,6 @@ async fn async_main() -> anyhow::Result<()> {
     }
     .into();
 
-    let chaos_task = args.chaos_interval.map(|interval| {
-        let service = service.clone();
-        let cancel = CancellationToken::new();
-        let cancel_bg = cancel.clone();
-        let chaos_exit_crontab = args.chaos_exit_crontab;
-        (
-            tokio::task::spawn(
-                async move {
-                    let mut chaos_injector =
-                        ChaosInjector::new(service, interval.into(), chaos_exit_crontab);
-                    chaos_injector.run(cancel_bg).await
-                }
-                .instrument(tracing::info_span!("chaos_injector")),
-            ),
-            cancel,
-        )
-    });
-
     // Wait until we receive a signal
     let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())?;
     let mut sigquit = tokio::signal::unix::signal(SignalKind::quit())?;
@@ -537,12 +440,6 @@ async fn async_main() -> anyhow::Result<()> {
         Ok(Some(Err(e))) => tracing::error!("Error joining HTTPS server task: {e}"),
         Ok(None) => {} // HTTPS is disabled.
         Err(_) => tracing::warn!("Timed out joining HTTPS server task"),
-    }
-
-    // If we were injecting chaos, stop that so that we're not calling into Service while it shuts down
-    if let Some((chaos_jh, chaos_cancel)) = chaos_task {
-        chaos_cancel.cancel();
-        chaos_jh.await.ok();
     }
 
     service.shutdown().await;

@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::Context;
 use camino::{Utf8Path, Utf8PathBuf};
 use metrics::core::{AtomicU64, GenericCounter};
-use pageserver_api::{config::BasebackupCacheConfig, models::TenantState};
+use pageserver_api::config::BasebackupCacheConfig;
 use tokio::{
     io::{AsyncWriteExt, BufWriter},
     sync::mpsc::{Receiver, Sender, error::TrySendError},
@@ -22,7 +22,7 @@ use crate::{
         BASEBACKUP_CACHE_READ, BASEBACKUP_CACHE_SIZE,
     },
     task_mgr::TaskKind,
-    tenant::{Timeline, mgr::TenantManager},
+    page_server::{Timeline, mgr::TenantManager},
 };
 
 pub struct BasebackupPrepareRequest {
@@ -577,15 +577,6 @@ impl BackgroundTask {
             .tenant_manager
             .get_attached_tenant_shard(tenant_shard_id)?;
 
-        let tenant_state = tenant.current_state();
-        if tenant_state != TenantState::Active {
-            anyhow::bail!(
-                "Tenant {} is not active, current state: {:?}",
-                tenant_shard_id,
-                tenant_state
-            )
-        }
-
         let timeline = tenant.get_timeline(timeline_id, true)?;
 
         let last_record_lsn = timeline.get_last_record_lsn();
@@ -656,8 +647,8 @@ impl BackgroundTask {
         timeline
             .wait_lsn(
                 req_lsn,
-                crate::tenant::timeline::WaitLsnWaiter::BaseBackupCache,
-                crate::tenant::timeline::WaitLsnTimeout::Default,
+                crate::page_server::timeline::WaitLsnWaiter::BaseBackupCache,
+                crate::page_server::timeline::WaitLsnTimeout::Default,
                 &ctx,
             )
             .await?;

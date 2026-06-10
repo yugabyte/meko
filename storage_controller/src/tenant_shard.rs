@@ -1,55 +1,20 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
 
-use futures::future::{self, Either};
-use itertools::Itertools;
 use pageserver_api::controller_api::{PlacementPolicy, ShardSchedulingPolicy};
 use pageserver_api::models::ShardIdentity;
 use pageserver_api::models::{LocationConfig, TenantConfig};
 use serde::{Deserialize, Serialize};
-use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, instrument};
+use tracing::instrument;
 use utils::generation::Generation;
-use utils::id::ShardCount;
 use utils::id::{NodeId, TenantId};
-use utils::seqwait::{SeqWait, SeqWaitError};
-use utils::sync::gate::GateGuard;
 
-use crate::compute_hook::ComputeHook;
-use crate::metrics::{
-    self, ReconcileCompleteLabelGroup, ReconcileLongRunningLabelGroup, ReconcileOutcome,
-};
-use crate::node::Node;
+use crate::metrics;
 use crate::persistence::split_state::SplitState;
-use crate::persistence::{Persistence, TenantShardPersistence};
-use crate::reconciler::{
-    ReconcileError, ReconcileUnits, Reconciler, ReconcilerConfig, TargetState,
-    attached_location_conf, secondary_location_conf,
-};
+use crate::persistence::TenantShardPersistence;
 use crate::scheduler::{
-    AffinityScore, AttachedShardTag, NodeSchedulingScore, NodeSecondarySchedulingScore,
-    RefCountUpdate, ScheduleContext, ScheduleError, Scheduler, SecondaryShardTag, ShardTag,
+    AttachedShardTag, RefCountUpdate, ScheduleContext, ScheduleError, Scheduler, SecondaryShardTag,
 };
-use crate::service::ReconcileResultRequest;
 use crate::timeline_import::TimelineImportState;
-use crate::{Sequence, service};
-
-/// Serialization helper
-fn read_last_error<S, T>(v: &std::sync::Mutex<Option<T>>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::ser::Serializer,
-    T: std::fmt::Display,
-{
-    serializer.collect_str(
-        &v.lock()
-            .unwrap()
-            .as_ref()
-            .map(|e| format!("{e}"))
-            .unwrap_or("".to_string()),
-    )
-}
 
 /// In-memory state for a particular tenant shard.
 ///
@@ -61,16 +26,11 @@ pub(crate) struct TenantShard {
 
     pub(crate) shard: ShardIdentity,
 
-    // Runtime only: sequence used to coordinate when updating this object while
-    // with background reconcilers may be running.  A reconciler runs to a particular
-    // sequence.
-    pub(crate) sequence: Sequence,
-
     // Latest generation number: next time we attach, increment this
     // and use the incremented number when attaching.
     //
-    // None represents an incompletely onboarded tenant via the [`Service::location_config`]
-    // API, where this tenant may only run in PlacementPolicy::Secondary.
+    // None represents a tenant that has never been attached anywhere; such a
+    // tenant may only run in PlacementPolicy::Secondary.
     pub(crate) generation: Option<Generation>,
 
     // High level description of how the tenant should be set up.  Provided
@@ -82,75 +42,21 @@ pub(crate) struct TenantShard {
     pub(crate) intent: IntentState,
 
     // Low level description of how the tenant is configured on pageservers:
-    // if this does not match `Self::intent` then the tenant needs reconciliation
-    // with `Self::reconcile`.
+    // observed state from the outside world.
     pub(crate) observed: ObservedState,
 
     // Tenant configuration, passed through opaquely to the pageserver.  Identical
     // for all shards in a tenant.
     pub(crate) config: TenantConfig,
 
-    /// If a reconcile task is currently in flight, it may be joined here (it is
-    /// only safe to join if either the result has been received or the reconciler's
-    /// cancellation token has been fired)
-    #[serde(skip)]
-    pub(crate) reconciler: Option<ReconcilerHandle>,
-
     /// If a tenant is being split, then all shards with that TenantId will have a
-    /// SplitState set, this acts as a guard against other operations such as background
-    /// reconciliation, and timeline creation.
+    /// SplitState set, this acts as a guard against other operations such as
+    /// timeline creation.
     pub(crate) splitting: SplitState,
 
     /// Flag indicating whether the tenant has an in-progress timeline import.
     /// Used to disallow shard splits while an import is in progress.
     pub(crate) importing: TimelineImportState,
-
-    /// If a tenant was enqueued for later reconcile due to hitting concurrency limit, this flag
-    /// is set. This flag is cleared when the tenant is popped off the delay queue.
-    pub(crate) delayed_reconcile: bool,
-
-    /// Optionally wait for reconciliation to complete up to a particular
-    /// sequence number.
-    #[serde(skip)]
-    pub(crate) waiter: std::sync::Arc<SeqWait<Sequence, Sequence>>,
-
-    /// Indicates sequence number for which we have encountered an error reconciling.  If
-    /// this advances ahead of [`Self::waiter`] then a reconciliation error has occurred,
-    /// and callers should stop waiting for `waiter` and propagate the error.
-    #[serde(skip)]
-    pub(crate) error_waiter: std::sync::Arc<SeqWait<Sequence, Sequence>>,
-
-    /// The most recent error from a reconcile on this tenant.  This is a nested Arc
-    /// because:
-    ///  - ReconcileWaiters need to Arc-clone the overall object to read it later
-    ///  - ReconcileWaitError needs to use an `Arc<ReconcileError>` because we can construct
-    ///    many waiters for one shard, and the underlying error types are not Clone.
-    ///
-    /// TODO: generalize to an array of recent events
-    /// TOOD: use a ArcSwap instead of mutex for faster reads?
-    #[serde(serialize_with = "read_last_error")]
-    pub(crate) last_error: std::sync::Arc<std::sync::Mutex<Option<Arc<ReconcileError>>>>,
-
-    /// Amount of consecutive [`crate::service::Service::reconcile_all`] iterations that have been
-    /// scheduled a reconciliation for this shard.
-    ///
-    /// If this reaches `MAX_CONSECUTIVE_RECONCILES`, the shard is considered "stuck" and will be
-    /// ignored when deciding whether optimizations can run. This includes both successful and failed
-    /// reconciliations.
-    ///
-    /// Incremented in [`crate::service::Service::process_result`], and reset to 0 when
-    /// [`crate::service::Service::reconcile_all`] determines no reconciliation is needed for this shard.
-    pub(crate) consecutive_reconciles_count: usize,
-
-    /// If we have a pending compute notification that for some reason we weren't able to send,
-    /// set this to true. If this is set, calls to [`Self::get_reconcile_needed`] will return Yes
-    /// and trigger a Reconciler run.  This is the mechanism by which compute notifications are included in the scope
-    /// of state that we publish externally in an eventually consistent way.
-    pub(crate) pending_compute_notification: bool,
-
-    /// To do a graceful migration, set this field to the destination pageserver, and optimization
-    /// functions will consider this node the best location and react appropriately.
-    preferred_node: Option<NodeId>,
 
     // Support/debug tool: if something is going wrong or flapping with scheduling, this may
     // be set to a non-active state to avoid making changes while the issue is fixed.
@@ -245,13 +151,6 @@ impl IntentState {
         }
     }
 
-    /// Remove the last secondary node from the list of secondaries
-    pub(crate) fn pop_secondary(&mut self, scheduler: &mut Scheduler) {
-        if let Some(node_id) = self.secondary.pop() {
-            scheduler.update_node_ref_counts(node_id, RefCountUpdate::RemoveSecondary);
-        }
-    }
-
     pub(crate) fn clear(&mut self, scheduler: &mut Scheduler) {
         if let Some(old_attached) = self.attached.take() {
             scheduler.update_node_ref_counts(old_attached, RefCountUpdate::Detach);
@@ -330,161 +229,6 @@ pub(crate) struct ObservedStateLocation {
     pub(crate) conf: Option<LocationConfig>,
 }
 
-pub(crate) struct ReconcilerWaiter {
-    // For observability purposes, remember the ID of the shard we're
-    // waiting for.
-    pub(crate) tenant_shard_id: TenantId,
-
-    seq_wait: std::sync::Arc<SeqWait<Sequence, Sequence>>,
-    error_seq_wait: std::sync::Arc<SeqWait<Sequence, Sequence>>,
-    error: std::sync::Arc<std::sync::Mutex<Option<Arc<ReconcileError>>>>,
-    seq: Sequence,
-}
-
-pub(crate) enum ReconcilerStatus {
-    Done,
-    Failed,
-    InProgress,
-}
-
-#[derive(thiserror::Error, Debug)]
-pub(crate) enum ReconcileWaitError {
-    #[error("Timeout waiting for shard {0}")]
-    Timeout(TenantId),
-    #[error("shutting down")]
-    Shutdown,
-    #[error("Reconcile error on shard {0}: {1}")]
-    Failed(TenantId, Arc<ReconcileError>),
-}
-
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub(crate) struct ReplaceSecondary {
-    old_node_id: NodeId,
-    new_node_id: NodeId,
-}
-
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub(crate) struct MigrateAttachment {
-    pub(crate) old_attached_node_id: NodeId,
-    pub(crate) new_attached_node_id: NodeId,
-}
-
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub(crate) enum ScheduleOptimizationAction {
-    // Replace one of our secondary locations with a different node
-    ReplaceSecondary(ReplaceSecondary),
-    // Migrate attachment to an existing secondary location
-    MigrateAttachment(MigrateAttachment),
-    // Create a secondary location, with the intent of later migrating to it
-    CreateSecondary(NodeId),
-    // Remove a secondary location that we previously created to facilitate a migration
-    RemoveSecondary(NodeId),
-}
-
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub(crate) struct ScheduleOptimization {
-    // What was the reconcile sequence when we generated this optimization?  The optimization
-    // should only be applied if the shard's sequence is still at this value, in case other changes
-    // happened between planning the optimization and applying it.
-    sequence: Sequence,
-
-    pub(crate) action: ScheduleOptimizationAction,
-}
-
-impl ReconcilerWaiter {
-    pub(crate) async fn wait_timeout(&self, timeout: Duration) -> Result<(), ReconcileWaitError> {
-        tokio::select! {
-            result = self.seq_wait.wait_for_timeout(self.seq, timeout)=> {
-                result.map_err(|e| match e {
-                    SeqWaitError::Timeout => ReconcileWaitError::Timeout(self.tenant_shard_id),
-                    SeqWaitError::Shutdown => ReconcileWaitError::Shutdown
-                })?;
-            },
-            result = self.error_seq_wait.wait_for(self.seq) => {
-                result.map_err(|e| match e {
-                    SeqWaitError::Shutdown => ReconcileWaitError::Shutdown,
-                    SeqWaitError::Timeout => unreachable!()
-                })?;
-
-                return Err(ReconcileWaitError::Failed(self.tenant_shard_id,
-                    self.error.lock().unwrap().clone().expect("If error_seq_wait was advanced error was set").clone()))
-            }
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn get_status(&self) -> ReconcilerStatus {
-        if self.seq_wait.would_wait_for(self.seq).is_ok() {
-            ReconcilerStatus::Done
-        } else if self.error_seq_wait.would_wait_for(self.seq).is_ok() {
-            ReconcilerStatus::Failed
-        } else {
-            ReconcilerStatus::InProgress
-        }
-    }
-}
-
-/// Having spawned a reconciler task, the tenant shard's state will carry enough
-/// information to optionally cancel & await it later.
-pub(crate) struct ReconcilerHandle {
-    sequence: Sequence,
-    handle: JoinHandle<()>,
-    cancel: CancellationToken,
-}
-
-pub(crate) enum ReconcileNeeded {
-    /// shard either doesn't need reconciliation, or is forbidden from spawning a reconciler
-    /// in its current state (e.g. shard split in progress, or ShardSchedulingPolicy forbids it)
-    No,
-    /// shard has a reconciler running, and its intent hasn't changed since that one was
-    /// spawned: wait for the existing reconciler rather than spawning a new one.
-    WaitExisting(ReconcilerWaiter),
-    /// shard needs reconciliation: call into [`TenantShard::spawn_reconciler`]
-    Yes(ReconcileReason),
-}
-
-#[derive(Debug)]
-pub(crate) enum ReconcileReason {
-    ActiveNodesDirty,
-    UnknownLocation,
-    PendingComputeNotification,
-}
-
-/// Pending modification to the observed state of a tenant shard.
-/// Produced by [`Reconciler::observed_deltas`] and applied in [`crate::service::Service::process_result`].
-pub(crate) enum ObservedStateDelta {
-    Upsert(Box<(NodeId, ObservedStateLocation)>),
-    Delete(NodeId),
-}
-
-impl ObservedStateDelta {
-    pub(crate) fn node_id(&self) -> &NodeId {
-        match self {
-            Self::Upsert(up) => &up.0,
-            Self::Delete(nid) => nid,
-        }
-    }
-}
-
-/// When a reconcile task completes, it sends this result object
-/// to be applied to the primary TenantShard.
-pub(crate) struct ReconcileResult {
-    pub(crate) sequence: Sequence,
-    /// On errors, `observed` should be treated as an incompleted description
-    /// of state (i.e. any nodes present in the result should override nodes
-    /// present in the parent tenant state, but any unmentioned nodes should
-    /// not be removed from parent tenant state)
-    pub(crate) result: Result<(), ReconcileError>,
-
-    pub(crate) tenant_shard_id: TenantId,
-    pub(crate) generation: Option<Generation>,
-    pub(crate) observed_deltas: Vec<ObservedStateDelta>,
-
-    /// Set [`TenantShard::pending_compute_notification`] from this flag
-    pub(crate) pending_compute_notification: bool,
-}
-
 impl ObservedState {
     pub(crate) fn new() -> Self {
         Self {
@@ -492,9 +236,6 @@ impl ObservedState {
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.locations.is_empty()
-    }
 }
 
 impl TenantShard {
@@ -516,90 +257,43 @@ impl TenantShard {
             shard,
             observed: ObservedState::default(),
             config: TenantConfig::default(),
-            reconciler: None,
             splitting: SplitState::Idle,
             importing: TimelineImportState::Idle,
-            sequence: Sequence(1),
-            delayed_reconcile: false,
-            waiter: Arc::new(SeqWait::new(Sequence(0))),
-            error_waiter: Arc::new(SeqWait::new(Sequence(0))),
-            last_error: Arc::default(),
-            consecutive_reconciles_count: 0,
-            pending_compute_notification: false,
             scheduling_policy: ShardSchedulingPolicy::default(),
-            preferred_node: None,
         }
-    }
-
-    /// For use on startup when learning state from pageservers: generate my [`IntentState`] from my
-    /// [`ObservedState`], even if it violates my [`PlacementPolicy`].  Call [`Self::schedule`] next,
-    /// to get an intent state that complies with placement policy.  The overall goal is to do scheduling
-    /// in a way that makes use of any configured locations that already exist in the outside world.
-    pub(crate) fn intent_from_observed(&mut self, scheduler: &mut Scheduler) {
-        // Choose an attached location by filtering observed locations, and then sorting to get the highest
-        // generation
-        let mut attached_locs = self
-            .observed
-            .locations
-            .iter()
-            .filter_map(|(node_id, l)| {
-                l.conf
-                    .as_ref()
-                    .filter(|conf| conf.generation.is_some())
-                    .map(|conf| (node_id, conf.generation))
-            })
-            .collect::<Vec<_>>();
-
-        attached_locs.sort_by_key(|i| i.1);
-        if let Some((node_id, _gen)) = attached_locs.into_iter().next_back() {
-            self.intent.set_attached(scheduler, Some(*node_id));
-        }
-
-        // All remaining observed locations generate secondary intents.  This includes None
-        // observations, as these may well have some local content on disk that is usable (this
-        // is an edge case that might occur if we restarted during a migration or other change)
-        //
-        // We may leave intent.attached empty if we didn't find any attached locations: [`Self::schedule`]
-        // will take care of promoting one of these secondaries to be attached.
-        self.observed.locations.keys().for_each(|node_id| {
-            if Some(*node_id) != self.intent.attached {
-                self.intent.push_secondary(scheduler, *node_id);
-            }
-        });
     }
 
     /// Part of [`Self::schedule`] that is used to choose exactly one node to act as the
     /// attached pageserver for a shard.
     ///
-    /// Returns whether we modified it, and the NodeId selected.
+    /// Returns the NodeId selected.
     fn schedule_attached(
         &mut self,
         scheduler: &mut Scheduler,
         context: &ScheduleContext,
-    ) -> Result<(bool, NodeId), ScheduleError> {
+    ) -> Result<NodeId, ScheduleError> {
         // No work to do if we already have an attached tenant
         if let Some(node_id) = self.intent.attached {
-            return Ok((false, node_id));
+            return Ok(node_id);
         }
 
         if let Some(promote_secondary) = self.preferred_secondary(scheduler) {
             // Promote a secondary
             tracing::debug!("Promoted secondary {} to attached", promote_secondary);
             self.intent.promote_attached(scheduler, promote_secondary);
-            Ok((true, promote_secondary))
+            Ok(promote_secondary)
         } else {
             // Pick a fresh node: either we had no secondaries or none were schedulable
             let node_id =
                 scheduler.schedule_shard::<AttachedShardTag>(&self.intent.secondary, context)?;
             tracing::debug!("Selected {} as attached", node_id);
             self.intent.set_attached(scheduler, Some(node_id));
-            Ok((true, node_id))
+            Ok(node_id)
         }
     }
 
     #[instrument(skip_all, fields(
         tenant_id=%self.tenant_shard_id,
-        sequence=%self.sequence
     ))]
     pub(crate) fn schedule(
         &mut self,
@@ -635,18 +329,12 @@ impl TenantShard {
             }
         }
 
-        // Build the set of pageservers already in use by this tenant, to avoid scheduling
-        // more work on the same pageservers we're already using.
-        let mut modified = false;
-
         // Add/remove nodes to fulfil policy
         use PlacementPolicy::*;
         match self.policy {
             Attached(secondary_count) => {
                 // Should have exactly one attached, and at least N secondaries
-                let (modified_attached, attached_node_id) =
-                    self.schedule_attached(scheduler, context)?;
-                modified |= modified_attached;
+                let attached_node_id = self.schedule_attached(scheduler, context)?;
 
                 let mut used_pageservers = vec![attached_node_id];
                 while self.intent.secondary.len() < secondary_count {
@@ -654,15 +342,12 @@ impl TenantShard {
                         .schedule_shard::<SecondaryShardTag>(&used_pageservers, context)?;
                     self.intent.push_secondary(scheduler, node_id);
                     used_pageservers.push(node_id);
-                    modified = true;
                 }
             }
             Secondary => {
                 if let Some(node_id) = self.intent.get_attached() {
                     // Populate secondary by demoting the attached node
                     self.intent.demote_attached(scheduler, *node_id);
-
-                    modified = true;
                 } else if self.intent.secondary.is_empty() {
                     // Populate secondary by scheduling a fresh node.
                     //
@@ -671,534 +356,23 @@ impl TenantShard {
                     // the tenant to be ready to warm up and run fast.
                     let node_id = scheduler.schedule_shard::<AttachedShardTag>(&[], context)?;
                     self.intent.push_secondary(scheduler, node_id);
-                    modified = true;
                 }
                 while self.intent.secondary.len() > 1 {
                     // If we have multiple secondaries (e.g. when transitioning from Attached to
                     // Secondary and having just demoted our attached location), drop the extras.
                     let secondary_to_remove = self.intent.get_secondary().last().copied().unwrap();
                     self.intent.remove_secondary(scheduler, secondary_to_remove);
-                    modified = true;
                 }
             }
             Detached => {
                 // Never add locations in this mode
                 if self.intent.get_attached().is_some() || !self.intent.get_secondary().is_empty() {
                     self.intent.clear(scheduler);
-                    modified = true;
                 }
             }
-        }
-
-        if modified {
-            self.sequence.0 += 1;
         }
 
         Ok(())
-    }
-
-    /// Reschedule this tenant shard to one of its secondary locations. Returns a scheduling error
-    /// if the swap is not possible and leaves the intent state in its original state.
-    ///
-    /// Arguments:
-    /// `promote_to`: an optional secondary location of this tenant shard. If set to None, we ask
-    /// the scheduler to recommend a node
-    pub(crate) fn reschedule_to_secondary(
-        &mut self,
-        promote_to: Option<NodeId>,
-        scheduler: &mut Scheduler,
-    ) -> Result<(), ScheduleError> {
-        let promote_to = match promote_to {
-            Some(node) => node,
-            None => match self.preferred_secondary(scheduler) {
-                Some(node) => node,
-                None => {
-                    return Err(ScheduleError::ImpossibleConstraint);
-                }
-            },
-        };
-
-        assert!(self.intent.get_secondary().contains(&promote_to));
-
-        if let Some(node) = self.intent.get_attached() {
-            let demoted = self.intent.demote_attached(scheduler, *node);
-            if !demoted {
-                return Err(ScheduleError::ImpossibleConstraint);
-            }
-        }
-
-        self.intent.promote_attached(scheduler, promote_to);
-
-        // Increment the sequence number for the edge case where a
-        // reconciler is already running to avoid waiting on the
-        // current reconcile instead of spawning a new one.
-        self.sequence = self.sequence.next();
-
-        Ok(())
-    }
-
-    /// Returns None if the current location's score is unavailable, i.e. cannot draw a conclusion
-    fn is_better_location<T: ShardTag>(
-        &self,
-        scheduler: &mut Scheduler,
-        schedule_context: &ScheduleContext,
-        current: NodeId,
-        candidate: NodeId,
-    ) -> Option<bool> {
-        let Some(candidate_score) =
-            scheduler.compute_node_score::<T::Score>(candidate, schedule_context)
-        else {
-            // The candidate node is unavailable for scheduling or otherwise couldn't get a score
-            return None;
-        };
-
-        // If the candidate is our preferred node, then it is better than the current location, as long
-        // as it is online -- the online check is part of the score calculation we did above, so it's
-        // important that this check comes after that one.
-        if let Some(preferred) = self.preferred_node.as_ref() {
-            if preferred == &candidate {
-                return Some(true);
-            }
-        }
-
-        match scheduler.compute_node_score::<T::Score>(current, schedule_context) {
-            Some(current_score) => {
-                // Ignore utilization components when comparing scores: we don't want to migrate
-                // because of transient load variations, it risks making the system thrash, and
-                // migrating for utilization requires a separate high level view of the system to
-                // e.g. prioritize moving larger or smaller tenants, rather than arbitrarily
-                // moving things around in the order that we hit this function.
-                let candidate_score = candidate_score.for_optimization();
-                let current_score = current_score.for_optimization();
-
-                if candidate_score < current_score {
-                    tracing::info!(
-                        "Found a lower scoring location! {candidate} is better than {current} ({candidate_score:?} is better than {current_score:?})"
-                    );
-                    Some(true)
-                } else {
-                    // The candidate node is no better than our current location, so don't migrate
-                    tracing::debug!(
-                        "Candidate node {candidate} is no better than our current location {current} (candidate {candidate_score:?} vs current {current_score:?})",
-                    );
-                    Some(false)
-                }
-            }
-            None => {
-                // The current node is unavailable for scheduling, so we can't make any sensible
-                // decisions about optimisation.  This should be a transient state -- if the node
-                // is offline then it will get evacuated, if is blocked by a scheduling mode
-                // then we will respect that mode by doing nothing.
-                tracing::debug!("Current node {current} is unavailable for scheduling");
-                None
-            }
-        }
-    }
-
-    pub(crate) fn find_better_location<T: ShardTag>(
-        &self,
-        scheduler: &mut Scheduler,
-        schedule_context: &ScheduleContext,
-        current: NodeId,
-        hard_exclude: &[NodeId],
-    ) -> Option<NodeId> {
-        // If we have a migration hint, then that is our better location
-        if let Some(hint) = self.preferred_node.as_ref() {
-            if hint == &current {
-                return None;
-            }
-
-            return Some(*hint);
-        }
-
-        // Look for a lower-scoring location to attach to
-        let Ok(candidate_node) = scheduler.schedule_shard::<T>(hard_exclude, schedule_context)
-        else {
-            // A scheduling error means we have no possible candidate replacements
-            tracing::debug!("No candidate node found");
-            return None;
-        };
-
-        if candidate_node == current {
-            // We're already at the best possible location, so don't migrate
-            tracing::debug!("Candidate node {candidate_node} is already in use");
-            return None;
-        }
-
-        self.is_better_location::<T>(scheduler, schedule_context, current, candidate_node)
-            .and_then(|better| if better { Some(candidate_node) } else { None })
-    }
-
-    /// This function is an optimization, used to avoid doing large numbers of scheduling operations
-    /// when looking for optimizations.  This function uses knowledge of how scores work to do some
-    /// fast checks for whether it may to be possible to improve a score.
-    ///
-    /// If we return true, it only means that optimization _might_ be possible, not that it necessarily is.  If we
-    /// return no, it definitely means that calling [`Self::optimize_attachment`] or [`Self::optimize_secondary`] would do no
-    /// work.
-    pub(crate) fn maybe_optimizable(&self, schedule_context: &ScheduleContext) -> bool {
-        // Tenant with preferred node: check if it is not already at the preferred node
-        if let Some(preferred) = self.preferred_node.as_ref() {
-            if Some(preferred) != self.intent.get_attached().as_ref() {
-                return true;
-            }
-        }
-
-        // Sharded tenant: check if any locations have a nonzero affinity score
-        if self.shard.count >= ShardCount(1) {
-            let schedule_context = schedule_context.project_detach(self);
-            for node in self.intent.all_pageservers() {
-                if let Some(af) = schedule_context.nodes.get(&node) {
-                    if *af > AffinityScore(0) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Does the tenant have excess secondaries?
-        if self.intent.get_secondary().len() > self.policy.want_secondaries() {
-            return true;
-        }
-
-        // Fall through: no optimizations possible
-        false
-    }
-
-    /// Optimize attachments: if a shard has a secondary location that is preferable to
-    /// its primary location based on soft constraints, switch that secondary location
-    /// to be attached.
-    ///
-    /// `schedule_context` should have been populated with all shards in the tenant, including
-    /// the one we're trying to optimize (this function will subtract its own contribution before making scoring decisions)
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id))]
-    pub(crate) fn optimize_attachment(
-        &self,
-        scheduler: &mut Scheduler,
-        schedule_context: &ScheduleContext,
-    ) -> Option<ScheduleOptimization> {
-        let attached = (*self.intent.get_attached())?;
-
-        let schedule_context = schedule_context.project_detach(self);
-
-        // If we already have a secondary that is higher-scoring than out current location,
-        // then simply migrate to it.
-        for secondary in self.intent.get_secondary() {
-            if let Some(true) = self.is_better_location::<AttachedShardTag>(
-                scheduler,
-                &schedule_context,
-                attached,
-                *secondary,
-            ) {
-                return Some(ScheduleOptimization {
-                    sequence: self.sequence,
-                    action: ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-                        old_attached_node_id: attached,
-                        new_attached_node_id: *secondary,
-                    }),
-                });
-            }
-        }
-
-        // Given that none of our current secondaries is a better location than our current
-        // attached location (checked above), we may trim any secondaries that are not needed
-        // for the placement policy.
-        if self.intent.get_secondary().len() > self.policy.want_secondaries() {
-            // This code path cleans up extra secondaries after migrating, and/or
-            // trims extra secondaries after a PlacementPolicy::Attached(N) was
-            // modified to decrease N.
-
-            let secondary_scores = self
-                .intent
-                .get_secondary()
-                .iter()
-                .map(|node_id| {
-                    (
-                        *node_id,
-                        scheduler.compute_node_score::<NodeSecondarySchedulingScore>(
-                            *node_id,
-                            &schedule_context,
-                        ),
-                    )
-                })
-                .collect::<HashMap<_, _>>();
-
-            if secondary_scores.iter().any(|score| score.1.is_none()) {
-                // Trivial case: if we only have one secondary, drop that one
-                if self.intent.get_secondary().len() == 1 {
-                    return Some(ScheduleOptimization {
-                        sequence: self.sequence,
-                        action: ScheduleOptimizationAction::RemoveSecondary(
-                            *self.intent.get_secondary().first().unwrap(),
-                        ),
-                    });
-                }
-
-                // Try to find a "good" secondary to keep, without relying on scores (one or more nodes is in a state
-                // where its score can't be calculated), and drop the others.  This enables us to make progress in
-                // most cases, even if some nodes are offline or have scheduling=pause set.
-
-                debug_assert!(self.intent.attached.is_some()); // We should not make it here unless attached
-                if let Some(retain_secondary) = self.intent.get_secondary().iter().find(|n| {
-                    secondary_scores
-                        .get(n)
-                        .expect("Built from same list of nodes")
-                        .is_some()
-                }) {
-                    // Great, we found one to retain.  Pick some other to drop.
-                    if let Some(victim) = self
-                        .intent
-                        .get_secondary()
-                        .iter()
-                        .find(|n| n != &retain_secondary)
-                    {
-                        return Some(ScheduleOptimization {
-                            sequence: self.sequence,
-                            action: ScheduleOptimizationAction::RemoveSecondary(*victim),
-                        });
-                    }
-                }
-
-                // Fall through: we didn't identify one to remove.  This ought to be rare.
-                tracing::warn!(
-                    "Keeping extra secondaries: can't determine which of {:?} to remove (some nodes offline?)",
-                    self.intent.get_secondary()
-                );
-            } else {
-                let victim = secondary_scores
-                    .iter()
-                    .max_by_key(|score| score.1.unwrap())
-                    .unwrap()
-                    .0;
-                return Some(ScheduleOptimization {
-                    sequence: self.sequence,
-                    action: ScheduleOptimizationAction::RemoveSecondary(*victim),
-                });
-            }
-        }
-
-        let replacement = self.find_better_location::<AttachedShardTag>(
-            scheduler,
-            &schedule_context,
-            attached,
-            &[], // Don't exclude secondaries: our preferred attachment location may be a secondary
-        );
-
-        // We have found a candidate and confirmed that its score is preferable
-        // to our current location. See if we have a secondary location at that node already: if not,
-        // then create one.
-        if let Some(replacement) = replacement {
-            if !self.intent.get_secondary().contains(&replacement) {
-                Some(ScheduleOptimization {
-                    sequence: self.sequence,
-                    action: ScheduleOptimizationAction::CreateSecondary(replacement),
-                })
-            } else {
-                // We already have a secondary at the preferred location, let's try migrating to it.  Our caller
-                // will check the warmth of the destination before deciding whether to really execute this.
-                Some(ScheduleOptimization {
-                    sequence: self.sequence,
-                    action: ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-                        old_attached_node_id: attached,
-                        new_attached_node_id: replacement,
-                    }),
-                })
-            }
-        } else {
-            // We didn't find somewhere we'd rather be, and we don't have any excess secondaries
-            // to clean up: no action required.
-            None
-        }
-    }
-
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id))]
-    pub(crate) fn optimize_secondary(
-        &self,
-        scheduler: &mut Scheduler,
-        schedule_context: &ScheduleContext,
-    ) -> Option<ScheduleOptimization> {
-        if self.intent.get_secondary().len() > self.policy.want_secondaries() {
-            // We have extra secondaries, perhaps to facilitate a migration of the attached location:
-            // do nothing, it is up to [`Self::optimize_attachment`] to clean them up.  When that's done,
-            // and we are called again, we will proceed.
-            tracing::debug!("Too many secondaries: skipping");
-            return None;
-        }
-
-        let schedule_context = schedule_context.project_detach(self);
-
-        for secondary in self.intent.get_secondary() {
-            // Make sure we don't try to migrate a secondary to our attached location: this case happens
-            // easily in environments without multiple AZs.
-            let mut exclude = match self.intent.attached {
-                Some(attached) => vec![attached],
-                None => vec![],
-            };
-
-            // Exclude all other secondaries from the scheduling process to avoid replacing
-            // one existing secondary with another existing secondary.
-            for another_secondary in self.intent.secondary.iter() {
-                if another_secondary != secondary {
-                    exclude.push(*another_secondary);
-                }
-            }
-
-            let replacement = match &self.policy {
-                PlacementPolicy::Attached(_) => {
-                    // Secondaries for an attached shard should be scheduled using `SecondaryShardTag`
-                    // to avoid placing them in the preferred AZ.
-                    self.find_better_location::<SecondaryShardTag>(
-                        scheduler,
-                        &schedule_context,
-                        *secondary,
-                        &exclude,
-                    )
-                }
-                PlacementPolicy::Secondary => {
-                    // In secondary-only mode, we want our secondary locations in the preferred AZ,
-                    // so that they're ready to take over as an attached location when we transition
-                    // into PlacementPolicy::Attached.
-                    self.find_better_location::<AttachedShardTag>(
-                        scheduler,
-                        &schedule_context,
-                        *secondary,
-                        &exclude,
-                    )
-                }
-                PlacementPolicy::Detached => None,
-            };
-
-            assert!(replacement != Some(*secondary));
-            if let Some(replacement) = replacement {
-                // We have found a candidate and confirmed that its score is preferable
-                // to our current location. See if we have a secondary location in the preferred location already: if not,
-                // then create one.
-                return Some(ScheduleOptimization {
-                    sequence: self.sequence,
-                    action: ScheduleOptimizationAction::ReplaceSecondary(ReplaceSecondary {
-                        old_node_id: *secondary,
-                        new_node_id: replacement,
-                    }),
-                });
-            }
-        }
-
-        None
-    }
-
-    /// Start or abort a graceful migration of this shard to another pageserver. This works on top of the
-    /// other optimisation functions, to bias them to move to the destination node.
-    pub(crate) fn set_preferred_node(&mut self, node: Option<NodeId>) {
-        if let Some(hint) = self.preferred_node.as_ref() {
-            if Some(hint) != node.as_ref() {
-                // This is legal but a bit surprising: we expect that administrators wouldn't usually
-                // change their mind about where to migrate something.
-                tracing::warn!(
-                    "Changing migration destination from {hint} to {node:?} (current intent {:?})",
-                    self.intent
-                );
-            }
-        }
-
-        self.preferred_node = node;
-    }
-
-    pub(crate) fn get_preferred_node(&self) -> Option<NodeId> {
-        self.preferred_node
-    }
-
-    /// Return true if the optimization was really applied: it will not be applied if the optimization's
-    /// sequence is behind this tenant shard's or if the intent state proposed by the optimization
-    /// is not compatible with the current intent state. The later may happen when the background
-    /// reconcile loops runs concurrently with HTTP driven optimisations.
-    pub(crate) fn apply_optimization(
-        &mut self,
-        scheduler: &mut Scheduler,
-        optimization: ScheduleOptimization,
-    ) -> bool {
-        if optimization.sequence != self.sequence {
-            return false;
-        }
-
-        if !self.validate_optimization(&optimization) {
-            tracing::info!(
-                "Skipping optimization for {} because it does not match current intent: {:?}",
-                self.tenant_shard_id,
-                optimization,
-            );
-            return false;
-        }
-
-        metrics::METRICS_REGISTRY
-            .metrics_group
-            .storage_controller_schedule_optimization
-            .inc();
-
-        match optimization.action {
-            ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-                old_attached_node_id,
-                new_attached_node_id,
-            }) => {
-                self.intent.demote_attached(scheduler, old_attached_node_id);
-                self.intent
-                    .promote_attached(scheduler, new_attached_node_id);
-
-                if let Some(hint) = self.preferred_node.as_ref() {
-                    if hint == &new_attached_node_id {
-                        // The migration target is not a long term pin: once we are done with the migration, clear it.
-                        tracing::info!("Graceful migration to {hint} complete");
-                        self.preferred_node = None;
-                    }
-                }
-            }
-            ScheduleOptimizationAction::ReplaceSecondary(ReplaceSecondary {
-                old_node_id,
-                new_node_id,
-            }) => {
-                self.intent.remove_secondary(scheduler, old_node_id);
-                self.intent.push_secondary(scheduler, new_node_id);
-            }
-            ScheduleOptimizationAction::CreateSecondary(new_node_id) => {
-                self.intent.push_secondary(scheduler, new_node_id);
-            }
-            ScheduleOptimizationAction::RemoveSecondary(old_secondary) => {
-                self.intent.remove_secondary(scheduler, old_secondary);
-            }
-        }
-
-        true
-    }
-
-    /// Check that the desired modifications to the intent state are compatible with the current
-    /// intent state. Note that the lock is not held between planning optimizations and applying
-    /// them so any valid state transition of the intent state may have occurred.
-    fn validate_optimization(&self, optimization: &ScheduleOptimization) -> bool {
-        match optimization.action {
-            ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-                old_attached_node_id,
-                new_attached_node_id,
-            }) => {
-                self.intent.attached == Some(old_attached_node_id)
-                    && self.intent.secondary.contains(&new_attached_node_id)
-            }
-            ScheduleOptimizationAction::ReplaceSecondary(ReplaceSecondary {
-                old_node_id: _,
-                new_node_id,
-            }) => {
-                // It's legal to remove a secondary that is not present in the intent state
-                !self.intent.secondary.contains(&new_node_id)
-                    // Ensure the secondary hasn't already been promoted to attached by a concurrent
-                    // optimization/migration.
-                    && self.intent.attached != Some(new_node_id)
-            }
-            ScheduleOptimizationAction::CreateSecondary(new_node_id) => {
-                !self.intent.secondary.contains(&new_node_id)
-            }
-            ScheduleOptimizationAction::RemoveSecondary(_) => {
-                // It's legal to remove a secondary that is not present in the intent state
-                true
-            }
-        }
     }
 
     /// When a shard has several secondary locations, we need to pick one in situations where
@@ -1212,449 +386,6 @@ impl TenantShard {
         let mut candidates = scheduler.filter_usable_nodes(&self.intent.secondary);
         candidates.sort();
         candidates.first().copied()
-    }
-
-    /// Query whether the tenant's observed state for attached node matches its intent state, and if so,
-    /// yield the node ID.  This is appropriate for emitting compute hook notifications: we are checking that
-    /// the node in question is not only where we intend to attach, but that the tenant is indeed already attached there.
-    ///
-    /// Reconciliation may still be needed for other aspects of state such as secondaries (see [`Self::dirty`]): this
-    /// funciton should not be used to decide whether to reconcile.
-    pub(crate) fn stably_attached(&self) -> Option<NodeId> {
-        // We have an intent to attach for this node
-        let attach_intent = self.intent.attached?;
-        // We have an observed state for this node
-        let location = self.observed.locations.get(&attach_intent)?;
-        // Our observed state is not None, i.e. not in flux
-        let location_config = location.conf.as_ref()?;
-
-        // Check if our intent and observed state agree that this node is in an attached state.
-        if location_config.generation.is_some() {
-            Some(attach_intent)
-        } else {
-            None
-        }
-    }
-
-    fn dirty(&self, nodes: &Arc<HashMap<NodeId, Node>>) -> bool {
-        let mut dirty_nodes = HashSet::new();
-
-        if let Some(node_id) = self.intent.attached {
-            // Maybe panic: it is a severe bug if we try to attach while generation is null.
-            let generation = self
-                .generation
-                .expect("Attempted to enter attached state without a generation");
-
-            let wanted_conf = attached_location_conf(
-                generation,
-                &self.shard,
-                &self.config,
-                &self.policy,
-                self.intent.get_secondary().len(),
-            );
-            match self.observed.locations.get(&node_id) {
-                Some(conf) if conf.conf.as_ref() == Some(&wanted_conf) => {}
-                Some(_) | None => {
-                    dirty_nodes.insert(node_id);
-                }
-            }
-        }
-
-        for node_id in &self.intent.secondary {
-            let wanted_conf = secondary_location_conf(&self.shard, &self.config);
-            match self.observed.locations.get(node_id) {
-                Some(conf) if conf.conf.as_ref() == Some(&wanted_conf) => {}
-                Some(_) | None => {
-                    dirty_nodes.insert(*node_id);
-                }
-            }
-        }
-
-        for node_id in self.observed.locations.keys() {
-            if self.intent.attached != Some(*node_id) && !self.intent.secondary.contains(node_id) {
-                // We have observed state that isn't part of our intent: need to clean it up.
-                dirty_nodes.insert(*node_id);
-            }
-        }
-
-        dirty_nodes.retain(|node_id| {
-            nodes
-                .get(node_id)
-                .map(|n| n.is_available())
-                .unwrap_or(false)
-        });
-
-        !dirty_nodes.is_empty()
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id))]
-    pub(crate) fn get_reconcile_needed(
-        &mut self,
-        pageservers: &Arc<HashMap<NodeId, Node>>,
-    ) -> ReconcileNeeded {
-        // If there are any ambiguous observed states, and the nodes they refer to are available,
-        // we should reconcile to clean them up.
-        let mut dirty_observed = false;
-        for (node_id, observed_loc) in &self.observed.locations {
-            let node = pageservers
-                .get(node_id)
-                .expect("Nodes may not be removed while referenced");
-            if observed_loc.conf.is_none() && node.is_available() {
-                dirty_observed = true;
-                break;
-            }
-        }
-
-        let active_nodes_dirty = self.dirty(pageservers);
-
-        let reconcile_needed = match (
-            active_nodes_dirty,
-            dirty_observed,
-            self.pending_compute_notification,
-        ) {
-            (true, _, _) => ReconcileNeeded::Yes(ReconcileReason::ActiveNodesDirty),
-            (_, true, _) => ReconcileNeeded::Yes(ReconcileReason::UnknownLocation),
-            (_, _, true) => ReconcileNeeded::Yes(ReconcileReason::PendingComputeNotification),
-            _ => ReconcileNeeded::No,
-        };
-
-        if matches!(reconcile_needed, ReconcileNeeded::No) {
-            tracing::debug!("Not dirty, no reconciliation needed.");
-            return ReconcileNeeded::No;
-        }
-
-        // If we are currently splitting, then never start a reconciler task: the splitting logic
-        // requires that shards are not interfered with while it runs. Do this check here rather than
-        // up top, so that we only log this message if we would otherwise have done a reconciliation.
-        if !matches!(self.splitting, SplitState::Idle) {
-            tracing::info!("Refusing to reconcile, splitting in progress");
-            return ReconcileNeeded::No;
-        }
-
-        // Reconcile already in flight for the current sequence?
-        if let Some(handle) = &self.reconciler {
-            if handle.sequence == self.sequence {
-                tracing::info!(
-                    "Reconciliation already in progress for sequence {:?}",
-                    self.sequence,
-                );
-                return ReconcileNeeded::WaitExisting(ReconcilerWaiter {
-                    tenant_shard_id: self.tenant_shard_id,
-                    seq_wait: self.waiter.clone(),
-                    error_seq_wait: self.error_waiter.clone(),
-                    error: self.last_error.clone(),
-                    seq: self.sequence,
-                });
-            }
-        }
-
-        // Pre-checks done: finally check whether we may actually do the work
-        match self.scheduling_policy {
-            ShardSchedulingPolicy::Active
-            | ShardSchedulingPolicy::Essential
-            | ShardSchedulingPolicy::Pause => {}
-            ShardSchedulingPolicy::Stop => {
-                // We only reach this point if there is work to do and we're going to skip
-                // doing it: warn it obvious why this tenant isn't doing what it ought to.
-                tracing::warn!("Skipping reconcile for policy {:?}", self.scheduling_policy);
-                return ReconcileNeeded::No;
-            }
-        }
-
-        reconcile_needed
-    }
-
-    /// Ensure the sequence number is set to a value where waiting for this value will make us wait
-    /// for the next reconcile: i.e. it is ahead of all completed or running reconcilers.
-    ///
-    /// Constructing a ReconcilerWaiter with the resulting sequence number gives the property
-    /// that the waiter will not complete until some future Reconciler is constructed and run.
-    fn ensure_sequence_ahead(&mut self) {
-        // Find the highest sequence for which a Reconciler has previously run or is currently
-        // running
-        let max_seen = std::cmp::max(
-            self.reconciler
-                .as_ref()
-                .map(|r| r.sequence)
-                .unwrap_or(Sequence(0)),
-            std::cmp::max(self.waiter.load(), self.error_waiter.load()),
-        );
-
-        if self.sequence <= max_seen {
-            self.sequence = max_seen.next();
-        }
-    }
-
-    /// Create a waiter that will wait for some future Reconciler that hasn't been spawned yet.
-    ///
-    /// This is appropriate when you can't spawn a reconciler (e.g. due to resource limits), but
-    /// you would like to wait on the next reconciler that gets spawned in the background.
-    pub(crate) fn future_reconcile_waiter(&mut self) -> ReconcilerWaiter {
-        self.ensure_sequence_ahead();
-
-        ReconcilerWaiter {
-            tenant_shard_id: self.tenant_shard_id,
-            seq_wait: self.waiter.clone(),
-            error_seq_wait: self.error_waiter.clone(),
-            error: self.last_error.clone(),
-            seq: self.sequence,
-        }
-    }
-
-    async fn reconcile(
-        sequence: Sequence,
-        mut reconciler: Reconciler,
-        must_notify: bool,
-    ) -> ReconcileResult {
-        // Attempt to make observed state match intent state
-        let result = reconciler.reconcile().await;
-
-        // If we know we had a pending compute notification from some previous action, send a notification irrespective
-        // of whether the above reconcile() did any work.  It has to be Ok() though, because otherwise we might be
-        // sending a notification of a location that isn't really attached.
-        if result.is_ok() && must_notify {
-            // If this fails we will send the need to retry in [`ReconcileResult::pending_compute_notification`]
-            reconciler.compute_notify().await.ok();
-        } else if must_notify {
-            // Carry this flag so that the reconciler's result will indicate that it still needs to retry
-            // the compute hook notification eventually.
-            reconciler.compute_notify_failure = true;
-        }
-
-        // Update result counter
-        let outcome_label = match &result {
-            Ok(_) => {
-                if reconciler.compute_notify_failure {
-                    ReconcileOutcome::SuccessNoNotify
-                } else {
-                    ReconcileOutcome::Success
-                }
-            }
-            Err(ReconcileError::Cancel) => ReconcileOutcome::Cancel,
-            Err(_) => ReconcileOutcome::Error,
-        };
-
-        metrics::METRICS_REGISTRY
-            .metrics_group
-            .storage_controller_reconcile_complete
-            .inc(ReconcileCompleteLabelGroup {
-                status: outcome_label,
-            });
-
-        // Constructing result implicitly drops Reconciler, freeing any ReconcileUnits before the Service might
-        // try and schedule more work in response to our result.
-        ReconcileResult {
-            sequence,
-            result,
-            tenant_shard_id: reconciler.tenant_shard_id,
-            generation: reconciler.generation,
-            observed_deltas: reconciler.observed_deltas(),
-            pending_compute_notification: reconciler.compute_notify_failure,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(tenant_id=%self.tenant_shard_id))]
-    pub(crate) fn spawn_reconciler(
-        &mut self,
-        reason: ReconcileReason,
-        result_tx: &tokio::sync::mpsc::UnboundedSender<ReconcileResultRequest>,
-        pageservers: &Arc<HashMap<NodeId, Node>>,
-        compute_hook: &Arc<ComputeHook>,
-        reconciler_config: ReconcilerConfig,
-        service_config: &service::Config,
-        persistence: &Arc<Persistence>,
-        units: ReconcileUnits,
-        gate_guard: GateGuard,
-        cancel: &CancellationToken,
-        http_client: reqwest::Client,
-    ) -> Option<ReconcilerWaiter> {
-        // Reconcile in flight for a stale sequence?  Our sequence's task will wait for it before
-        // doing our sequence's work.
-        let old_handle = self.reconciler.take();
-
-        // Build list of nodes from which the reconciler should detach
-        let mut detach = Vec::new();
-        for node_id in self.observed.locations.keys() {
-            if self.intent.get_attached() != &Some(*node_id)
-                && !self.intent.secondary.contains(node_id)
-            {
-                detach.push(
-                    pageservers
-                        .get(node_id)
-                        .expect("Intent references non-existent pageserver")
-                        .clone(),
-                )
-            }
-        }
-
-        // Advance the sequence before spawning a reconciler, so that sequence waiters
-        // can distinguish between before+after the reconcile completes.
-        self.ensure_sequence_ahead();
-
-        let reconciler_cancel = cancel.child_token();
-        let reconciler_intent = TargetState::from_intent(pageservers, &self.intent);
-        let reconciler = Reconciler {
-            tenant_shard_id: self.tenant_shard_id,
-            shard: self.shard,
-            placement_policy: self.policy.clone(),
-            generation: self.generation,
-            intent: reconciler_intent,
-            detach,
-            reconciler_config,
-            config: self.config.clone(),
-            observed: self.observed.clone(),
-            original_observed: self.observed.clone(),
-            compute_hook: compute_hook.clone(),
-            service_config: service_config.clone(),
-            _gate_guard: gate_guard,
-            _resource_units: units,
-            cancel: reconciler_cancel.clone(),
-            persistence: persistence.clone(),
-            compute_notify_failure: false,
-            http_client,
-        };
-
-        let reconcile_seq = self.sequence;
-        let long_reconcile_threshold = service_config.long_reconcile_threshold;
-
-        tracing::info!(seq=%reconcile_seq, "Spawning Reconciler ({reason:?})");
-        let must_notify = self.pending_compute_notification;
-        let reconciler_span = tracing::info_span!(parent: None, "reconciler", seq=%reconcile_seq,
-                                                        tenant_id=%reconciler.tenant_shard_id);
-        metrics::METRICS_REGISTRY
-            .metrics_group
-            .storage_controller_reconcile_spawn
-            .inc();
-        let result_tx = result_tx.clone();
-        let join_handle = tokio::task::spawn(
-            async move {
-                // Wait for any previous reconcile task to complete before we start
-                if let Some(old_handle) = old_handle {
-                    old_handle.cancel.cancel();
-                    if let Err(e) = old_handle.handle.await {
-                        // We can't do much with this other than log it: the task is done, so
-                        // we may proceed with our work.
-                        tracing::error!("Unexpected join error waiting for reconcile task: {e}");
-                    }
-                }
-
-                // Early check for cancellation before doing any work
-                // TODO: wrap all remote API operations in cancellation check
-                // as well.
-                if reconciler.cancel.is_cancelled() {
-                    metrics::METRICS_REGISTRY
-                        .metrics_group
-                        .storage_controller_reconcile_complete
-                        .inc(ReconcileCompleteLabelGroup {
-                            status: ReconcileOutcome::Cancel,
-                        });
-                    return;
-                }
-
-                let (tenant_id_label, shard_number_label, sequence_label) = {
-                    (
-                        reconciler.tenant_shard_id.to_string(),
-                        "0".to_string(),
-                        reconcile_seq.to_string(),
-                    )
-                };
-
-                let label_group = ReconcileLongRunningLabelGroup {
-                    tenant_id: &tenant_id_label,
-                    shard_number: &shard_number_label,
-                    sequence: &sequence_label,
-                };
-
-                let reconcile_fut = Self::reconcile(reconcile_seq, reconciler, must_notify);
-                let long_reconcile_fut = {
-                    let label_group = label_group.clone();
-                    async move {
-                        tokio::time::sleep(long_reconcile_threshold).await;
-
-                        tracing::warn!("Reconcile passed the long running threshold of {long_reconcile_threshold:?}");
-
-                        metrics::METRICS_REGISTRY
-                            .metrics_group
-                            .storage_controller_reconcile_long_running
-                            .inc(label_group);
-                    }
-                };
-
-                let reconcile_fut = std::pin::pin!(reconcile_fut);
-                let long_reconcile_fut = std::pin::pin!(long_reconcile_fut);
-
-                let (was_long, result) =
-                    match future::select(reconcile_fut, long_reconcile_fut).await {
-                        Either::Left((reconcile_result, _)) => (false, reconcile_result),
-                        Either::Right((_, reconcile_fut)) => (true, reconcile_fut.await),
-                    };
-
-                if was_long {
-                    let id = metrics::METRICS_REGISTRY
-                        .metrics_group
-                        .storage_controller_reconcile_long_running
-                        .with_labels(label_group);
-                    metrics::METRICS_REGISTRY
-                        .metrics_group
-                        .storage_controller_reconcile_long_running
-                        .remove_metric(id);
-                }
-
-                result_tx
-                    .send(ReconcileResultRequest::ReconcileResult(result))
-                    .ok();
-            }
-            .instrument(reconciler_span),
-        );
-
-        self.reconciler = Some(ReconcilerHandle {
-            sequence: self.sequence,
-            handle: join_handle,
-            cancel: reconciler_cancel,
-        });
-
-        Some(ReconcilerWaiter {
-            tenant_shard_id: self.tenant_shard_id,
-            seq_wait: self.waiter.clone(),
-            error_seq_wait: self.error_waiter.clone(),
-            error: self.last_error.clone(),
-            seq: self.sequence,
-        })
-    }
-
-    pub(crate) fn cancel_reconciler(&self) {
-        if let Some(handle) = self.reconciler.as_ref() {
-            handle.cancel.cancel()
-        }
-    }
-
-    /// Get a waiter for any reconciliation in flight, but do not start reconciliation
-    /// if it is not already running
-    pub(crate) fn get_waiter(&self) -> Option<ReconcilerWaiter> {
-        if self.reconciler.is_some() {
-            Some(ReconcilerWaiter {
-                tenant_shard_id: self.tenant_shard_id,
-                seq_wait: self.waiter.clone(),
-                error_seq_wait: self.error_waiter.clone(),
-                error: self.last_error.clone(),
-                seq: self.sequence,
-            })
-        } else {
-            None
-        }
-    }
-
-    /// Called when a ReconcileResult has been emitted and the service is updating
-    /// our state: if the result is from a sequence >= my ReconcileHandle, then drop
-    /// the handle to indicate there is no longer a reconciliation in progress.
-    pub(crate) fn reconcile_complete(&mut self, sequence: Sequence) {
-        if let Some(reconcile_handle) = &self.reconciler {
-            if reconcile_handle.sequence <= sequence {
-                self.reconciler = None;
-            }
-        }
     }
 
     /// If we had any state at all referring to this node ID, drop it.  Does not
@@ -1677,10 +408,6 @@ impl TenantShard {
 
         debug_assert!(!self.intent.all_pageservers().contains(&node_id));
 
-        if self.preferred_node == Some(node_id) {
-            self.preferred_node = None;
-        }
-
         intent_modified
     }
 
@@ -1690,13 +417,6 @@ impl TenantShard {
 
     pub(crate) fn get_scheduling_policy(&self) -> ShardSchedulingPolicy {
         self.scheduling_policy
-    }
-
-    pub(crate) fn set_last_error(&mut self, sequence: Sequence, error: ReconcileError) {
-        // Ordering: always set last_error before advancing sequence, so that sequence
-        // waiters are guaranteed to see a Some value when they see an error.
-        *(self.last_error.lock().unwrap()) = Some(Arc::new(error));
-        self.error_waiter.advance(sequence);
     }
 
     pub(crate) fn from_persistent(
@@ -1714,24 +434,15 @@ impl TenantShard {
         Ok(Self {
             tenant_shard_id,
             shard: shard_identity,
-            sequence: Sequence::initial(),
             generation: tsp.generation.map(|g| Generation::new(g as u32)),
             policy: serde_json::from_str(&tsp.placement_policy).unwrap(),
             intent,
             observed: ObservedState::new(),
             config: serde_json::from_value(tsp.config).unwrap(),
-            reconciler: None,
             splitting: SplitState::default(),
             // Filled in during [`Service::startup_reconcile`]
             importing: TimelineImportState::Idle,
-            waiter: Arc::new(SeqWait::new(Sequence::initial())),
-            error_waiter: Arc::new(SeqWait::new(Sequence::initial())),
-            last_error: Arc::default(),
-            consecutive_reconciles_count: 0,
-            pending_compute_notification: false,
-            delayed_reconcile: false,
             scheduling_policy: serde_json::from_str(&tsp.scheduling_policy).unwrap(),
-            preferred_node: None,
         })
     }
 
@@ -1743,83 +454,6 @@ impl TenantShard {
             placement_policy: serde_json::to_string(&self.policy).unwrap(),
             config: serde_json::to_value(&self.config).unwrap(),
             scheduling_policy: serde_json::to_string(&self.scheduling_policy).unwrap(),
-        }
-    }
-
-    /// Returns all the nodes to which this tenant shard is attached according to the
-    /// observed state and the generations. Return vector is sorted from latest generation
-    /// to earliest.
-    pub(crate) fn attached_locations(&self) -> Vec<(NodeId, Generation)> {
-        self.observed
-            .locations
-            .iter()
-            .filter_map(|(node_id, observed)| {
-                let conf = observed.conf.as_ref()?;
-                conf.generation.map(|gen_| (*node_id, gen_))
-            })
-            .sorted_by(|(_lhs_node_id, lhs_gen), (_rhs_node_id, rhs_gen)| {
-                lhs_gen.cmp(rhs_gen).reverse()
-            })
-            .map(|(node_id, gen_)| (node_id, Generation::new(gen_)))
-            .collect()
-    }
-
-    /// Update the observed state of the tenant by applying incremental deltas
-    ///
-    /// Deltas are generated by reconcilers via [`Reconciler::observed_deltas`].
-    /// They are then filtered in [`crate::service::Service::process_result`].
-    pub(crate) fn apply_observed_deltas(
-        &mut self,
-        deltas: impl Iterator<Item = ObservedStateDelta>,
-    ) {
-        for delta in deltas {
-            match delta {
-                ObservedStateDelta::Upsert(ups) => {
-                    let (node_id, loc) = *ups;
-
-                    // If the generation of the observed location in the delta is lagging
-                    // behind the current one, then we have a race condition and cannot
-                    // be certain about the true observed state. Set the observed state
-                    // to None in order to reflect this.
-                    let crnt_gen = self
-                        .observed
-                        .locations
-                        .get(&node_id)
-                        .and_then(|loc| loc.conf.as_ref())
-                        .and_then(|conf| conf.generation);
-                    let new_gen = loc.conf.as_ref().and_then(|conf| conf.generation);
-                    match (crnt_gen, new_gen) {
-                        (Some(crnt), Some(new)) if crnt_gen > new_gen => {
-                            tracing::warn!(
-                                "Skipping observed state update {}: {:?} and using None due to stale generation ({} > {})",
-                                node_id,
-                                loc,
-                                crnt,
-                                new
-                            );
-
-                            self.observed
-                                .locations
-                                .insert(node_id, ObservedStateLocation { conf: None });
-
-                            continue;
-                        }
-                        _ => {}
-                    }
-
-                    if let Some(conf) = &loc.conf {
-                        tracing::info!("Updating observed location {}: {:?}", node_id, conf);
-                    } else {
-                        tracing::info!("Setting observed location {} to None", node_id,)
-                    }
-
-                    self.observed.locations.insert(node_id, loc);
-                }
-                ObservedStateDelta::Delete(node_id) => {
-                    tracing::info!("Deleting observed location {}", node_id);
-                    self.observed.locations.remove(&node_id);
-                }
-            }
         }
     }
 
@@ -1836,9 +470,6 @@ impl Drop for TenantShard {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
     use pageserver_api::controller_api::NodeAvailability;
     use utils::id::TenantId;
 
@@ -1847,23 +478,6 @@ pub(crate) mod tests {
 
     fn make_test_tenant_shard(policy: PlacementPolicy) -> TenantShard {
         TenantShard::new(TenantId::generate(), ShardIdentity::unsharded(), policy)
-    }
-
-    pub(crate) fn make_test_tenant(policy: PlacementPolicy) -> Vec<TenantShard> {
-        make_test_tenant_with_id(TenantId::generate(), policy)
-    }
-
-    /// yb-mode: every tenant is single-shard.
-    pub(crate) fn make_test_tenant_with_id(
-        tenant_id: TenantId,
-        policy: PlacementPolicy,
-    ) -> Vec<TenantShard> {
-        let tenant_shard_id = TenantId::unsharded(tenant_id);
-        vec![TenantShard::new(
-            tenant_shard_id,
-            ShardIdentity::unsharded(),
-            policy,
-        )]
     }
 
     /// Test the scheduling behaviors used when a tenant configured for HA is subject
@@ -1923,44 +537,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn intent_from_observed() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(3);
-        let mut scheduler = Scheduler::new(nodes.values());
-
-        let mut tenant_shard = make_test_tenant_shard(PlacementPolicy::Attached(1));
-
-        tenant_shard.observed.locations.insert(
-            NodeId(3),
-            ObservedStateLocation {
-                conf: Some(LocationConfig {
-                    generation: Some(2),
-                }),
-            },
-        );
-
-        tenant_shard.observed.locations.insert(
-            NodeId(2),
-            ObservedStateLocation {
-                conf: Some(LocationConfig {
-                    generation: Some(1),
-                }),
-            },
-        );
-
-        tenant_shard.intent_from_observed(&mut scheduler);
-
-        // The highest generationed attached location gets used as attached
-        assert_eq!(tenant_shard.intent.attached, Some(NodeId(3)));
-        // Other locations get used as secondary
-        assert_eq!(tenant_shard.intent.secondary, vec![NodeId(2)]);
-
-        scheduler.consistency_check(nodes.values(), [&tenant_shard].into_iter())?;
-
-        tenant_shard.intent.clear(&mut scheduler);
-        Ok(())
-    }
-
-    #[test]
     fn scheduling_mode() -> anyhow::Result<()> {
         let nodes = make_test_nodes(3);
         let mut scheduler = Scheduler::new(nodes.values());
@@ -1986,650 +562,6 @@ pub(crate) mod tests {
         assert!(!tenant_shard.intent.all_pageservers().is_empty());
 
         tenant_shard.intent.clear(&mut scheduler);
-        Ok(())
-    }
-
-    #[test]
-    /// Simple case: when two shards are crammed onto two nodes and a third node is free, the
-    /// optimizer balances by creating a secondary on the free node, as a stepping stone toward
-    /// migrating the attachment there.
-    fn optimize_attachment_simple() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(3);
-        let mut scheduler = Scheduler::new(nodes.values());
-
-        let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        let mut shard_b = make_test_tenant_shard(PlacementPolicy::Attached(1));
-
-        // Initially: both shards are attached/secondary on nodes 1 and 2, leaving node 3 free.
-        shard_a.intent.set_attached(&mut scheduler, Some(NodeId(2)));
-        shard_a.intent.push_secondary(&mut scheduler, NodeId(1));
-        shard_b.intent.set_attached(&mut scheduler, Some(NodeId(1)));
-        shard_b.intent.push_secondary(&mut scheduler, NodeId(2));
-
-        fn make_schedule_context(shard_a: &TenantShard, shard_b: &TenantShard) -> ScheduleContext {
-            let mut schedule_context = ScheduleContext::default();
-            schedule_context.avoid(&shard_a.intent.all_pageservers());
-            schedule_context.avoid(&shard_b.intent.all_pageservers());
-            schedule_context
-        }
-
-        let schedule_context = make_schedule_context(&shard_a, &shard_b);
-        let optimization_a = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::CreateSecondary(NodeId(3))
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization_a.unwrap());
-
-        // // Either shard should recognize that it has the option to switch to a secondary location where there
-        // // would be no other shards from the same tenant, and request to do so.
-        // assert_eq!(
-        //     optimization_a_prepare,
-        //     Some(ScheduleOptimization {
-        //         sequence: shard_a.sequence,
-        //         action: ScheduleOptimizationAction::CreateSecondary(NodeId(2))
-        //     })
-        // );
-        // shard_a.apply_optimization(&mut scheduler, optimization_a_prepare.unwrap());
-
-        // let schedule_context = make_schedule_context(&shard_a, &shard_b);
-        // let optimization_a_migrate = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        // assert_eq!(
-        //     optimization_a_migrate,
-        //     Some(ScheduleOptimization {
-        //         sequence: shard_a.sequence,
-        //         action: ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-        //             old_attached_node_id: NodeId(1),
-        //             new_attached_node_id: NodeId(2)
-        //         })
-        //     })
-        // );
-        // shard_a.apply_optimization(&mut scheduler, optimization_a_migrate.unwrap());
-
-        // let schedule_context = make_schedule_context(&shard_a, &shard_b);
-        // let optimization_a_cleanup = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        // assert_eq!(
-        //     optimization_a_cleanup,
-        //     Some(ScheduleOptimization {
-        //         sequence: shard_a.sequence,
-        //         action: ScheduleOptimizationAction::RemoveSecondary(NodeId(1))
-        //     })
-        // );
-        // shard_a.apply_optimization(&mut scheduler, optimization_a_cleanup.unwrap());
-
-        // // Shard B should not be moved anywhere, since the pressure on node 1 was relieved by moving shard A
-        // let schedule_context = make_schedule_context(&shard_a, &shard_b);
-        // assert_eq!(shard_b.optimize_attachment(&mut scheduler, &schedule_context), None);
-
-        shard_a.intent.clear(&mut scheduler);
-        shard_b.intent.clear(&mut scheduler);
-
-        Ok(())
-    }
-
-    #[test]
-    /// Complicated case: moving attachment to somewhere better where we do not have a secondary
-    /// already, creating one as needed.
-    fn optimize_attachment_multistep() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(3);
-        let mut scheduler = Scheduler::new(nodes.values());
-
-        let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        let mut shard_b = make_test_tenant_shard(PlacementPolicy::Attached(1));
-
-        // Both shards are initially attached and have a secondary on a different node.
-        shard_a.intent.set_attached(&mut scheduler, Some(NodeId(2)));
-        shard_a.intent.push_secondary(&mut scheduler, NodeId(3));
-        shard_b.intent.set_attached(&mut scheduler, Some(NodeId(3)));
-        shard_b.intent.push_secondary(&mut scheduler, NodeId(2));
-
-        fn make_schedule_context(shard_a: &TenantShard, shard_b: &TenantShard) -> ScheduleContext {
-            let mut schedule_context = ScheduleContext::default();
-            schedule_context.avoid(&shard_a.intent.all_pageservers());
-            schedule_context.avoid(&shard_b.intent.all_pageservers());
-            schedule_context
-        }
-
-        let schedule_context = make_schedule_context(&shard_a, &shard_b);
-        let optimization_a_prepare = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_prepare,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::CreateSecondary(NodeId(1))
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization_a_prepare.unwrap());
-
-        let schedule_context = make_schedule_context(&shard_a, &shard_b);
-        let optimization_a_migrate = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_migrate,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-                    old_attached_node_id: NodeId(2),
-                    new_attached_node_id: NodeId(1)
-                })
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization_a_migrate.unwrap());
-
-        let schedule_context = make_schedule_context(&shard_a, &shard_b);
-        let optimization_a_cleanup = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_cleanup,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::RemoveSecondary(NodeId(3))
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization_a_cleanup.unwrap());
-
-        // // Shard B should not be moved anywhere, since the pressure on node 1 was relieved by moving shard A
-        // let schedule_context = make_schedule_context(&shard_a, &shard_b);
-        // assert_eq!(shard_b.optimize_attachment(&mut scheduler, &schedule_context), None);
-
-        shard_a.intent.clear(&mut scheduler);
-        shard_b.intent.clear(&mut scheduler);
-
-        Ok(())
-    }
-
-    #[test]
-    /// How the optimisation code handles a shard with a preferred node set; this is an example
-    /// of the multi-step migration, but driven by a different input.
-    fn optimize_attachment_multi_preferred_node() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(4);
-        let mut scheduler = Scheduler::new(nodes.values());
-
-        let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-
-        // Initially attached in a stable location
-        shard_a.intent.set_attached(&mut scheduler, Some(NodeId(1)));
-        shard_a.intent.push_secondary(&mut scheduler, NodeId(3));
-
-        // Set the preferred node to node 2, an equally high scoring node to its current location
-        shard_a.preferred_node = Some(NodeId(2));
-
-        fn make_schedule_context(shard_a: &TenantShard) -> ScheduleContext {
-            let mut schedule_context = ScheduleContext::default();
-            schedule_context.avoid(&shard_a.intent.all_pageservers());
-            schedule_context
-        }
-
-        let schedule_context = make_schedule_context(&shard_a);
-        let optimization_a_prepare = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_prepare,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::CreateSecondary(NodeId(2))
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization_a_prepare.unwrap());
-
-        // The first step of the optimisation should not have cleared the preferred node
-        assert_eq!(shard_a.preferred_node, Some(NodeId(2)));
-
-        let schedule_context = make_schedule_context(&shard_a);
-        let optimization_a_migrate = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_migrate,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-                    old_attached_node_id: NodeId(1),
-                    new_attached_node_id: NodeId(2)
-                })
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization_a_migrate.unwrap());
-
-        // The cutover step of the optimisation should have cleared the preferred node
-        assert_eq!(shard_a.preferred_node, None);
-
-        let schedule_context = make_schedule_context(&shard_a);
-        let optimization_a_cleanup = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_cleanup,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::RemoveSecondary(NodeId(3))
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization_a_cleanup.unwrap());
-
-        shard_a.intent.clear(&mut scheduler);
-
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "yb-mode: single-shard tenants, multi-shard affinity logic doesn't apply"]
-    /// Check that multi-step migration works when moving to somewhere that is only better by
-    /// 1 AffinityScore -- this ensures that we don't have a bug like the intermediate secondary
-    /// counting toward the affinity score such that it prevents the rest of the migration from happening.
-    fn optimize_attachment_marginal() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(2);
-        let mut scheduler = Scheduler::new(nodes.values());
-
-        // Multi-sharded tenant, we will craft a situation where affinity
-        // scores differ only slightly
-        let mut shards = make_test_tenant(PlacementPolicy::Attached(0));
-
-        // 1 attached on node 1
-        shards[0]
-            .intent
-            .set_attached(&mut scheduler, Some(NodeId(1)));
-        // 3 attached on node 2
-        shards[1]
-            .intent
-            .set_attached(&mut scheduler, Some(NodeId(2)));
-        shards[2]
-            .intent
-            .set_attached(&mut scheduler, Some(NodeId(2)));
-        shards[3]
-            .intent
-            .set_attached(&mut scheduler, Some(NodeId(2)));
-
-        // The scheduler should figure out that we need to:
-        // - Create a secondary for shard 3 on node 1
-        // - Migrate shard 3 to node 1
-        // - Remove shard 3's location on node 2
-
-        fn make_schedule_context(shards: &Vec<TenantShard>) -> ScheduleContext {
-            let mut schedule_context = ScheduleContext::default();
-            for shard in shards {
-                schedule_context.avoid(&shard.intent.all_pageservers());
-            }
-            schedule_context
-        }
-
-        let schedule_context = make_schedule_context(&shards);
-        let optimization_a_prepare =
-            shards[1].optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_prepare,
-            Some(ScheduleOptimization {
-                sequence: shards[1].sequence,
-                action: ScheduleOptimizationAction::CreateSecondary(NodeId(1))
-            })
-        );
-        shards[1].apply_optimization(&mut scheduler, optimization_a_prepare.unwrap());
-
-        let schedule_context = make_schedule_context(&shards);
-        let optimization_a_migrate =
-            shards[1].optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_migrate,
-            Some(ScheduleOptimization {
-                sequence: shards[1].sequence,
-                action: ScheduleOptimizationAction::MigrateAttachment(MigrateAttachment {
-                    old_attached_node_id: NodeId(2),
-                    new_attached_node_id: NodeId(1)
-                })
-            })
-        );
-        shards[1].apply_optimization(&mut scheduler, optimization_a_migrate.unwrap());
-
-        let schedule_context = make_schedule_context(&shards);
-        let optimization_a_cleanup =
-            shards[1].optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization_a_cleanup,
-            Some(ScheduleOptimization {
-                sequence: shards[1].sequence,
-                action: ScheduleOptimizationAction::RemoveSecondary(NodeId(2))
-            })
-        );
-        shards[1].apply_optimization(&mut scheduler, optimization_a_cleanup.unwrap());
-
-        // Everything should be stable now
-        let schedule_context = make_schedule_context(&shards);
-        assert_eq!(
-            shards[0].optimize_attachment(&mut scheduler, &schedule_context),
-            None
-        );
-        assert_eq!(
-            shards[1].optimize_attachment(&mut scheduler, &schedule_context),
-            None
-        );
-        assert_eq!(
-            shards[2].optimize_attachment(&mut scheduler, &schedule_context),
-            None
-        );
-        assert_eq!(
-            shards[3].optimize_attachment(&mut scheduler, &schedule_context),
-            None
-        );
-
-        for mut shard in shards {
-            shard.intent.clear(&mut scheduler);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn optimize_secondary() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(4);
-        let mut scheduler = Scheduler::new(nodes.values());
-
-        let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        let mut shard_b = make_test_tenant_shard(PlacementPolicy::Attached(1));
-
-        // Initially: both nodes attached on shard 1, and both have secondary locations
-        // on different nodes.
-        shard_a.intent.set_attached(&mut scheduler, Some(NodeId(1)));
-        shard_a.intent.push_secondary(&mut scheduler, NodeId(3));
-        shard_b.intent.set_attached(&mut scheduler, Some(NodeId(2)));
-        shard_b.intent.push_secondary(&mut scheduler, NodeId(3));
-
-        let mut schedule_context = ScheduleContext::default();
-        schedule_context.avoid(&shard_a.intent.all_pageservers());
-        schedule_context.avoid(&shard_b.intent.all_pageservers());
-
-        let optimization_a = shard_a.optimize_secondary(&mut scheduler, &schedule_context);
-
-        // Since there is a node with no locations available, the node with two locations for the
-        // same tenant should generate an optimization to move one away
-        assert_eq!(
-            optimization_a,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::ReplaceSecondary(ReplaceSecondary {
-                    old_node_id: NodeId(3),
-                    new_node_id: NodeId(4)
-                })
-            })
-        );
-
-        shard_a.apply_optimization(&mut scheduler, optimization_a.unwrap());
-        assert_eq!(shard_a.intent.get_attached(), &Some(NodeId(1)));
-        assert_eq!(shard_a.intent.get_secondary(), &vec![NodeId(4)]);
-
-        shard_a.intent.clear(&mut scheduler);
-        shard_b.intent.clear(&mut scheduler);
-
-        Ok(())
-    }
-
-    /// Test how the optimisation code behaves with an extra secondary
-    #[test]
-    fn optimize_removes_secondary() -> anyhow::Result<()> {
-        let mut nodes = make_test_nodes(4);
-        let mut scheduler = Scheduler::new(nodes.values());
-
-        let mut schedule_context = ScheduleContext::default();
-
-        let mut shard_a = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        shard_a
-            .schedule(&mut scheduler, &mut schedule_context)
-            .unwrap();
-
-        // Attached on node 1, secondary on node 2
-        assert_eq!(shard_a.intent.get_attached(), &Some(NodeId(1)));
-        assert_eq!(shard_a.intent.get_secondary(), &vec![NodeId(2)]);
-
-        // Initially optimiser is idle
-        assert_eq!(
-            shard_a.optimize_attachment(&mut scheduler, &schedule_context),
-            None
-        );
-        assert_eq!(
-            shard_a.optimize_secondary(&mut scheduler, &schedule_context),
-            None
-        );
-
-        // A spare secondary in the home AZ: it should be removed -- this is the situation when we're midway through a graceful migration, after cutting over
-        // to our new location
-        shard_a.intent.push_secondary(&mut scheduler, NodeId(3));
-        let optimization = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::RemoveSecondary(NodeId(3))
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization.unwrap());
-
-        // A spare secondary in the non-home AZ, and one of them is offline
-        shard_a.intent.push_secondary(&mut scheduler, NodeId(4));
-        nodes
-            .get_mut(&NodeId(4))
-            .unwrap()
-            .set_availability(NodeAvailability::Offline);
-        scheduler.node_upsert(nodes.get(&NodeId(4)).unwrap());
-        let optimization = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::RemoveSecondary(NodeId(4))
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization.unwrap());
-
-        // A spare secondary when should have none
-        shard_a.policy = PlacementPolicy::Attached(0);
-        let optimization = shard_a.optimize_attachment(&mut scheduler, &schedule_context);
-        assert_eq!(
-            optimization,
-            Some(ScheduleOptimization {
-                sequence: shard_a.sequence,
-                action: ScheduleOptimizationAction::RemoveSecondary(NodeId(2))
-            })
-        );
-        shard_a.apply_optimization(&mut scheduler, optimization.unwrap());
-        assert_eq!(shard_a.intent.get_attached(), &Some(NodeId(1)));
-        assert_eq!(shard_a.intent.get_secondary(), &vec![]);
-
-        // Check that in secondary mode, we preserve the secondary in the preferred AZ
-        let mut schedule_context = ScheduleContext::default(); // Fresh context, we're about to call schedule()
-        shard_a.policy = PlacementPolicy::Secondary;
-        shard_a
-            .schedule(&mut scheduler, &mut schedule_context)
-            .unwrap();
-        assert_eq!(shard_a.intent.get_attached(), &None);
-        assert_eq!(shard_a.intent.get_secondary(), &vec![NodeId(1)]);
-        assert_eq!(
-            shard_a.optimize_attachment(&mut scheduler, &schedule_context),
-            None
-        );
-        assert_eq!(
-            shard_a.optimize_secondary(&mut scheduler, &schedule_context),
-            None
-        );
-
-        shard_a.intent.clear(&mut scheduler);
-
-        Ok(())
-    }
-
-    // Optimize til quiescent: this emulates what Service::optimize_all does, when
-    // called repeatedly in the background.
-    // Returns the applied optimizations
-    fn optimize_til_idle(
-        scheduler: &mut Scheduler,
-        shards: &mut [TenantShard],
-    ) -> Vec<ScheduleOptimization> {
-        let mut loop_n = 0;
-        let mut optimizations = Vec::default();
-        loop {
-            let mut schedule_context = ScheduleContext::default();
-            let mut any_changed = false;
-
-            for shard in shards.iter() {
-                schedule_context.avoid(&shard.intent.all_pageservers());
-            }
-
-            for shard in shards.iter_mut() {
-                let optimization = shard.optimize_attachment(scheduler, &schedule_context);
-                tracing::info!(
-                    "optimize_attachment({})={:?}",
-                    shard.tenant_shard_id,
-                    optimization
-                );
-                if let Some(optimization) = optimization {
-                    // Check that maybe_optimizable wouldn't have wrongly claimed this optimization didn't exist
-                    assert!(shard.maybe_optimizable(&schedule_context));
-                    optimizations.push(optimization.clone());
-                    shard.apply_optimization(scheduler, optimization);
-                    any_changed = true;
-                    break;
-                }
-
-                let optimization = shard.optimize_secondary(scheduler, &schedule_context);
-                tracing::info!(
-                    "optimize_secondary({})={:?}",
-                    shard.tenant_shard_id,
-                    optimization
-                );
-                if let Some(optimization) = optimization {
-                    // Check that maybe_optimizable wouldn't have wrongly claimed this optimization didn't exist
-                    assert!(shard.maybe_optimizable(&schedule_context));
-
-                    optimizations.push(optimization.clone());
-                    shard.apply_optimization(scheduler, optimization);
-                    any_changed = true;
-                    break;
-                }
-            }
-
-            if !any_changed {
-                break;
-            }
-
-            // Assert no infinite loop
-            loop_n += 1;
-            assert!(loop_n < 1000);
-        }
-
-        optimizations
-    }
-
-    /// Test the balancing behavior of shard scheduling: that it achieves a balance, and
-    /// that it converges.
-    #[test]
-    #[ignore = "yb-mode: single-shard tenants, multi-shard balancing logic doesn't apply"]
-    fn optimize_add_nodes() -> anyhow::Result<()> {
-        let nodes = make_test_nodes(9);
-
-        // Only show the scheduler six nodes to start with
-        let mut scheduler = Scheduler::new([].iter());
-        for i in 1..=6 {
-            scheduler.node_upsert(nodes.get(&NodeId(i)).unwrap());
-        }
-
-        let mut shards = make_test_tenant(PlacementPolicy::Attached(1));
-        let mut schedule_context = ScheduleContext::default();
-        for shard in &mut shards {
-            assert!(
-                shard
-                    .schedule(&mut scheduler, &mut schedule_context)
-                    .is_ok()
-            );
-        }
-
-        // Initial: attached locations land in the tenant's home AZ.
-        assert_eq!(scheduler.get_node_shard_count(NodeId(1)), 2);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(1)), 2);
-        assert_eq!(scheduler.get_node_shard_count(NodeId(2)), 2);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(2)), 2);
-
-        // Initial: secondary locations in a remote AZ
-        assert_eq!(scheduler.get_node_shard_count(NodeId(3)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(3)), 0);
-        assert_eq!(scheduler.get_node_shard_count(NodeId(4)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(4)), 0);
-        assert_eq!(scheduler.get_node_shard_count(NodeId(5)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(5)), 0);
-        assert_eq!(scheduler.get_node_shard_count(NodeId(6)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(6)), 0);
-
-        // Add another three nodes: we should see the shards spread out when their optimize
-        // methods are called
-        scheduler.node_upsert(nodes.get(&NodeId(7)).unwrap());
-        scheduler.node_upsert(nodes.get(&NodeId(8)).unwrap());
-        scheduler.node_upsert(nodes.get(&NodeId(9)).unwrap());
-        optimize_til_idle(&mut scheduler, &mut shards);
-
-        // We expect one attached location was moved to the new node in the tenant's home AZ
-        assert_eq!(scheduler.get_node_shard_count(NodeId(7)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(7)), 1);
-        // The original node has one less attached shard
-        assert_eq!(scheduler.get_node_shard_count(NodeId(1)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(1)), 1);
-
-        // One of the original nodes still has two attachments, since there are an odd number of nodes
-        assert_eq!(scheduler.get_node_shard_count(NodeId(2)), 2);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(2)), 2);
-
-        // None of our secondaries moved, since we already had enough nodes for those to be
-        // scheduled perfectly
-        assert_eq!(scheduler.get_node_shard_count(NodeId(3)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(3)), 0);
-        assert_eq!(scheduler.get_node_shard_count(NodeId(4)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(4)), 0);
-        assert_eq!(scheduler.get_node_shard_count(NodeId(5)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(5)), 0);
-        assert_eq!(scheduler.get_node_shard_count(NodeId(6)), 1);
-        assert_eq!(scheduler.get_node_attached_shard_count(NodeId(6)), 0);
-
-        for shard in shards.iter_mut() {
-            shard.intent.clear(&mut scheduler);
-        }
-
-        Ok(())
-    }
-
-    /// Test that initial shard scheduling is optimal. By optimal we mean
-    /// that the optimizer cannot find a way to improve it.
-    ///
-    /// This test is an example of the scheduling issue described in
-    /// https://github.com/neondatabase/neon/issues/8969
-    #[test]
-    #[ignore = "yb-mode: single-shard tenants, multi-shard scheduling optimality doesn't apply"]
-    fn initial_scheduling_is_optimal() -> anyhow::Result<()> {
-        use itertools::Itertools;
-
-        let nodes = make_test_nodes(2);
-
-        let mut scheduler = Scheduler::new([].iter());
-        scheduler.node_upsert(nodes.get(&NodeId(1)).unwrap());
-        scheduler.node_upsert(nodes.get(&NodeId(2)).unwrap());
-
-        let mut a = make_test_tenant(PlacementPolicy::Attached(1));
-        let a_context = Rc::new(RefCell::new(ScheduleContext::default()));
-
-        let mut b = make_test_tenant(PlacementPolicy::Attached(1));
-        let b_context = Rc::new(RefCell::new(ScheduleContext::default()));
-
-        let a_shards_with_context = a.iter_mut().map(|shard| (shard, a_context.clone()));
-        let b_shards_with_context = b.iter_mut().map(|shard| (shard, b_context.clone()));
-
-        let schedule_order = a_shards_with_context.interleave(b_shards_with_context);
-
-        for (shard, context) in schedule_order {
-            let context = &mut *context.borrow_mut();
-            shard.schedule(&mut scheduler, context).unwrap();
-        }
-
-        let applied_to_a = optimize_til_idle(&mut scheduler, &mut a);
-        assert_eq!(applied_to_a, vec![]);
-
-        let applied_to_b = optimize_til_idle(&mut scheduler, &mut b);
-        assert_eq!(applied_to_b, vec![]);
-
-        for shard in a.iter_mut().chain(b.iter_mut()) {
-            shard.intent.clear(&mut scheduler);
-        }
-
         Ok(())
     }
 

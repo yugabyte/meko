@@ -31,7 +31,12 @@ mode       = "bootstrap"      # or "branch" + ancestor_timeline_id + ancestor_ls
 pg_version = 17
 ```
 
-Startup is **open-or-create**:
+Startup is **open-or-create**, and runs SYNCHRONOUSLY in `main()`
+before the HTTP/libpq/gRPC listeners start: a connecting compute
+either gets ECONNREFUSED (process still opening; client retry covers
+it) or talks to a fully-active timeline. There is no tenant state
+machine and no in-protocol wait-for-active. Failure to open is fatal
+to the process.
 
 - Row exists in `pageserver.timeline_state` → open it (restarts are
   trivially idempotent; `[timeline_init]` is ignored). A row with
@@ -69,9 +74,10 @@ query string / gRPC metadata) are validated against the configured
 identity and rejected as misrouted on mismatch.
 
 Consequences elsewhere:
-- storage_ctl's reconciler is a no-op in yb-mode
-  (`maybe_configured_reconcile_shard` returns `None`): there is no
-  location_config to converge — attachment is decided at spawn time.
+- storage_ctl's pageserver reconciler/migration machinery is deleted
+  wholesale (see [`storage-controller.md`](storage-controller.md)):
+  there is no location_config to converge — attachment is decided at
+  spawn time.
 - storage_ctl's timeline-create no longer POSTs to the pageserver; it
   **observes** (polls `timeline_detail` until `Active`, generous
   timeout for debug-build initdb), then runs the safekeeper leg with
@@ -169,11 +175,12 @@ storage-controller handshake are unchanged.
 
 ## Schema
 
-Five tables live in the `pageserver` schema inside `yb_storage`:
+Four tables live in the `pageserver` schema inside `yb_storage`:
 `pages` (relation pages), `slru_pages` (SLRU blocks), `meta`
 (everything else — relsize sentinels, dir listings, aux files,
-two-phase commit, repl origins), `tenant_config` (per-tenant
-`TenantConfig` JSON), and `timeline_state` (per-timeline state row).
+two-phase commit, repl origins), and `timeline_state` (per-timeline
+state row). Per-tenant config is NOT in YB: the effective config is
+the `[tenant_config]` section of `pageserver.toml`.
 DDL is owned by the diesel migration at
 `storage_controller/migrations/00000000000001_initial_schema/up.sql`
 (lines 163-250). See [`yugabyte.md`](yugabyte.md) for the full DDL.
@@ -547,9 +554,9 @@ name + every delete is gen-checked" machinery into one column.
   shape: a tenant-level "recover to timestamp T" command resolves
   T → LSN via the existing `find_lsn_for_timestamp` helper (still
   intact), then creates a fresh timeline branched at that LSN. Branch
-  creation is already wired in yb-mode (see `tenant.rs::branch_timeline`
-  and the `ancestor_timeline_id` / `ancestor_lsn` columns on
-  `pageserver.timeline_state`). What's missing is the operator-facing
+  creation is already wired in yb-mode (`timeline branch` provisions a
+  pageserver+safekeeper pair; see the `ancestor_timeline_id` /
+  `ancestor_lsn` columns on `pageserver.timeline_state`). What's missing is the operator-facing
   command + the GC story for the source timeline's `pageserver.pages`
   rows that the branch depends on. **Planned phase, not yet
   numbered.**
@@ -566,7 +573,7 @@ where they differ from upstream:
 | First WARN log on stalled response | `neon.pageserver_response_log_timeout` (`libpagestore.c:87`) | **10 s** | Cosmetic; request keeps waiting. |
 | Disconnect + reconnect on stalled response | `neon.pageserver_response_disconnect_timeout` (`libpagestore.c:95`) | **30 s** *(was 150 s upstream)* | Lowered in yb-light: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
 | Reconnect attempts before erroring back to compute | `max_reconnect_attempts` (`libpagestore.c:83`) | **60** (1 s backoff each) | Combined with the disconnect timeout, a hard-down pageserver surfaces to the compute query in ~30 s + 60 × 1 s ≈ ~90 s. |
-| Pageserver-side tenant-activate wait for an inbound getpage | `ACTIVE_TENANT_TIMEOUT` (`pageserver/src/page_service.rs:91`) | **5 s** | If the tenant isn't `Active` within 5 s of the getpage arriving, the pageserver replies retry-able rather than hanging. |
+| Pageserver-side activation wait | none | — | The timeline is opened synchronously before listeners start; until then, computes get ECONNREFUSED and retry via the reconnect loop above. |
 
 Pageserver doesn't apply an idle/recv timeout to inbound compute
 libpq connections (the keepalive constants in `page_service.rs` are
@@ -593,15 +600,15 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 - `pageserver/src/page_writer.rs` — `PageWriter` buffered write path;
   pure passthrough (no walredo at write time); `read_chain` /
   `scan_range` blend in-RAM buffer + PageStore.
-- `pageserver/src/tenant/timeline.rs` — `get_vectored_via_page_writer`
+- `pageserver/src/page_server/timeline.rs` — `get_vectored_via_page_writer`
   drives the row-store read path; `chain_to_value_reconstruct_state`
   converts a chain into walredo inputs.
 - `storage_controller/migrations/00000000000001_initial_schema/up.sql`
   — diesel-managed DDL for the `pageserver` schema (`pages`,
-  `slru_pages`, `meta`, `tenant_config`, `timeline_state`) and the
+  `slru_pages`, `meta`, `timeline_state`) and the
   rest of `yb_storage` (task 10). Replaces the earlier
   `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
   bootstrap, which has been removed.
 - `architecture/yugabyte.md` — full DDL reference for
   `pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`,
-  `pageserver.tenant_config`, and `pageserver.timeline_state`.
+  and `pageserver.timeline_state`.

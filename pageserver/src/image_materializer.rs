@@ -39,7 +39,7 @@ use wal_decoder::models::record::NeonWalRecord;
 
 use crate::page_store::{PageRow, PageStore};
 use crate::page_writer::{MaterializeJob, PageWriter};
-use crate::tenant::WalRedoManager;
+use crate::page_server::WalRedoManager;
 use crate::walredo::RedoAttemptType;
 
 /// Drain up to this many queued `MaterializeJob`s per worker iteration
@@ -610,7 +610,7 @@ impl ImageMaterializer {
 
 /// Turn an LSN-descending chain (oldest at `chain.last()`) into the
 /// `(base_img, records)` pair `WalRedoManager::request_redo` expects.
-/// Mirrors `tenant::timeline::chain_to_value_reconstruct_state` but
+/// Mirrors `page_server::timeline::chain_to_value_reconstruct_state` but
 /// returns the tuple directly so we don't pull in the read-path's
 /// `ValueReconstructState` (which lives in `storage_layer`, slated for
 /// removal in Phase 4d).

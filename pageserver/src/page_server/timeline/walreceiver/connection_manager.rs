@@ -19,7 +19,7 @@ use super::{TaskEvent, TaskHandle, TaskStateUpdate, WalReceiverConf};
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{WALRECEIVER_ACTIVE_MANAGERS, WALRECEIVER_SWITCHES};
 use crate::task_mgr::TaskKind;
-use crate::tenant::{Timeline, debug_assert_current_span_has_tenant_and_timeline_id};
+use crate::page_server::{Timeline, debug_assert_current_span_has_tenant_and_timeline_id};
 
 pub(crate) struct Cancelled;
 

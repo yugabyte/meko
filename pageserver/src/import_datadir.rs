@@ -24,7 +24,7 @@ use walkdir::WalkDir;
 use crate::context::RequestContext;
 use crate::metrics::WAL_INGEST;
 use crate::pgdatadir_mapping::*;
-use crate::tenant::Timeline;
+use crate::page_server::Timeline;
 use crate::walingest::{WalIngest, WalIngestErrorKind};
 
 // Returns checkpoint LSN from controlfile

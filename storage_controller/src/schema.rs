@@ -7,13 +7,6 @@ pub mod sql_types {
 }
 
 diesel::table! {
-    controllers (address, started_at) {
-        address -> Varchar,
-        started_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     endpoints (endpoint_id) {
         endpoint_id -> Varchar,
         tenant_id -> Varchar,
@@ -94,7 +87,6 @@ diesel::table! {
 }
 
 diesel::allow_tables_to_appear_in_same_query!(
-    controllers,
     endpoints,
     metadata_health,
     nodes,

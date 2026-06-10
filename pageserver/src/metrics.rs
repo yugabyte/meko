@@ -31,8 +31,8 @@ use crate::config;
 use crate::config::PageServerConf;
 use crate::pgdatadir_mapping::DatadirModificationStats;
 use crate::task_mgr::TaskKind;
-use crate::tenant::tasks::BackgroundLoopKind;
-use crate::tenant::throttle::ThrottleResult;
+use crate::page_server::tasks::BackgroundLoopKind;
+use crate::page_server::throttle::ThrottleResult;
 
 /// Prometheus histogram buckets (in seconds) for operations in the critical
 /// path. In other words, operations that directly affect that latency of user
@@ -843,15 +843,6 @@ static DIRECTORY_ENTRIES_COUNT: Lazy<UIntGaugeVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-pub(crate) static TENANT_STATE_METRIC: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_tenant_states_count",
-        "Count of tenants per state",
-        &["state"]
-    )
-    .expect("Failed to register pageserver_tenant_states_count metric")
-});
-
 pub(crate) static TIMELINE_STATE_METRIC: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_timeline_states_count",
@@ -859,19 +850,6 @@ pub(crate) static TIMELINE_STATE_METRIC: Lazy<UIntGaugeVec> = Lazy::new(|| {
         &["state"]
     )
     .expect("Failed to register pageserver_timeline_states_count metric")
-});
-
-/// A set of broken tenants.
-///
-/// These are expected to be so rare that a set is fine. Set as in a new timeseries per each broken
-/// tenant.
-pub(crate) static BROKEN_TENANTS_SET: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_broken_tenants_count",
-        "Set of broken tenants",
-        &["tenant_id"]
-    )
-    .expect("Failed to register pageserver_tenant_states_count metric")
 });
 
 static EVICTIONS_WITH_LOW_RESIDENCE_DURATION: Lazy<IntCounterVec> = Lazy::new(|| {
@@ -912,15 +890,13 @@ pub static STARTUP_IS_LOADING: Lazy<UIntGauge> = Lazy::new(|| {
     .expect("Failed to register pageserver_startup_is_loading")
 });
 
-/// Metrics related to the lifecycle of a [`crate::tenant::TenantShard`] object: things
+/// Metrics related to the lifecycle of a [`crate::page_server::PageServer`] object: things
 /// like how long it took to load.
 ///
 /// Note that these are process-global metrics, _not_ per-tenant metrics.  Per-tenant
 /// metrics are rather expensive, and usually fine grained stuff makes more sense
 /// at a timeline level than tenant level.
 pub(crate) struct TenantMetrics {
-    /// How long did tenants take to go from construction to active state?
-    pub(crate) activation: Histogram,
     pub(crate) preload: Histogram,
     pub(crate) attach: Histogram,
 
@@ -931,12 +907,6 @@ pub(crate) struct TenantMetrics {
 
 pub(crate) static TENANT: Lazy<TenantMetrics> = Lazy::new(|| {
     TenantMetrics {
-    activation: register_histogram!(
-        "pageserver_tenant_activation_seconds",
-        "Time taken by tenants to activate, in seconds",
-        CRITICAL_OP_BUCKETS.into()
-    )
-    .expect("Failed to register metric"),
     preload: register_histogram!(
         "pageserver_tenant_preload_seconds",
         "Time taken by tenants to load remote metadata on startup/attach, in seconds",
@@ -2795,8 +2765,6 @@ impl TimelineMetrics {
 
 pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantId) {
     tenant_throttling::remove_tenant_metrics(tenant_shard_id);
-
-    // we leave the BROKEN_TENANTS_SET entry if any
 }
 
 /// Maintain a per timeline gauge in addition to the global gauge.
@@ -3567,12 +3535,6 @@ pub fn preinitialize_metrics(
 
     // Tenant stats
     Lazy::force(&TENANT);
-
-    for state_name in pageserver_api::models::TenantState::VARIANTS {
-        // initialize the metric for all gauges, otherwise the time series might seemingly show
-        // values from last restart.
-        TENANT_STATE_METRIC.with_label_values(&[state_name]).set(0);
-    }
 
     // countervecs
     [

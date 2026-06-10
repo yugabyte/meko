@@ -1,4 +1,3 @@
-pub mod delete;
 pub(crate) mod handle;
 pub(crate) mod logical_size;
 pub(crate) mod remote_state;
@@ -42,10 +41,9 @@ use utils::postgres_client::PostgresClientProtocol;
 use utils::seqwait::SeqWait;
 use utils::simple_rcu::{Rcu, RcuReadGuard};
 use utils::sync::gate::{Gate, GateGuard};
-use utils::{completion, critical_timeline, pausable_failpoint};
+use utils::{critical_timeline, pausable_failpoint};
 use wal_decoder::serialized_batch::SerializedValueBatch;
 
-use self::delete::DeleteTimelineFlow;
 use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
 use super::{AttachedTenantConf, GcError, debug_assert_current_span_has_tenant_and_timeline_id};
@@ -60,18 +58,18 @@ use crate::pgdatadir_mapping::{
     CalculateLogicalSizeError, DirectoryKind, LsnForTimestamp, MetricsUpdate,
 };
 use crate::task_mgr::TaskKind;
-use crate::tenant::gc_result::GcResult;
-use crate::tenant::metadata::TimelineMetadata;
-use crate::tenant::storage_layer::ValueReconstructState;
-use crate::tenant::tasks::BackgroundLoopKind;
-use crate::tenant::timeline::logical_size::CurrentLogicalSize;
+use crate::page_server::gc_result::GcResult;
+use crate::page_server::metadata::TimelineMetadata;
+use crate::page_server::storage_layer::ValueReconstructState;
+use crate::page_server::tasks::BackgroundLoopKind;
+use crate::page_server::timeline::logical_size::CurrentLogicalSize;
 use crate::walingest::WalLagCooldown;
 use crate::walredo::RedoAttemptType;
 use crate::{task_mgr, walredo};
 
 /// The outward-facing resources required to build a Timeline
 pub struct TimelineResources {
-    pub pagestream_throttle: Arc<crate::tenant::throttle::Throttle>,
+    pub pagestream_throttle: Arc<crate::page_server::throttle::Throttle>,
     pub pagestream_throttle_metrics: Arc<crate::metrics::tenant_throttling::Pagestream>,
     pub basebackup_cache: Arc<BasebackupCache>,
     /// Compute-reads `PageStore` (see
@@ -99,7 +97,7 @@ pub struct Timeline {
     /// The generation of the tenant that instantiated us: this is used for safety when writing remote objects.
     /// Never changes for the lifetime of this [`Timeline`] object.
     ///
-    /// This duplicates the generation stored in LocationConf, but that structure is mutable:
+    /// This duplicates the generation in AttachedTenantConf, but that structure is mutable:
     /// this copy enforces the invariant that generatio doesn't change during a Tenant's lifetime.
     pub(crate) generation: Generation,
 
@@ -227,10 +225,6 @@ pub struct Timeline {
 
     state: watch::Sender<TimelineState>,
 
-    /// Prevent two tasks from deleting the timeline at the same time. If held, the
-    /// timeline is being deleted. If 'true', the timeline has already been deleted.
-    pub delete_progress: TimelineDeleteProgress,
-
     /// Gate to prevent shutdown completing while I/O is still happening to this timeline's data
     pub(crate) gate: Gate,
 
@@ -240,12 +234,6 @@ pub struct Timeline {
 
     /// Make sure we only have one running compaction at a time in tests.
     ///
-    /// Must only be taken in two places:
-    /// - [`Timeline::compact`] (this file)
-    /// - [`delete::delete_local_timeline_directory`]
-    ///
-    /// Timeline deletion will acquire both compaction and gc locks in whatever order.
-    compaction_lock: tokio::sync::Mutex<()>,
 
     /// If true, the pageserver has likely detected data corruption in the timeline.
     /// We need to feed this information back to the Safekeeper and postgres for them to take the
@@ -254,15 +242,9 @@ pub struct Timeline {
 
     /// Make sure we only have one running gc at a time.
     ///
-    /// Must only be taken in two places:
-    /// - [`Timeline::gc`] (this file)
-    /// - [`delete::delete_local_timeline_directory`]
-    ///
-    /// Timeline deletion will acquire both compaction and gc locks in whatever order.
-    gc_lock: tokio::sync::Mutex<()>,
 
-    /// Cloned from [`super::TenantShard::pagestream_throttle`] on construction.
-    pub(crate) pagestream_throttle: Arc<crate::tenant::throttle::Throttle>,
+    /// Cloned from [`super::PageServer::pagestream_throttle`] on construction.
+    pub(crate) pagestream_throttle: Arc<crate::page_server::throttle::Throttle>,
 
     /// Size estimator for aux file v2
     pub(crate) aux_file_size_estimator: AuxFileSizeEstimator,
@@ -271,8 +253,8 @@ pub struct Timeline {
 
     pub(crate) attach_wal_lag_cooldown: Arc<OnceLock<WalLagCooldown>>,
 
-    /// Cf. [`crate::tenant::CreateTimelineIdempotency`].
-    pub(crate) create_idempotency: crate::tenant::CreateTimelineIdempotency,
+    /// Cf. [`crate::page_server::CreateTimelineIdempotency`].
+    pub(crate) create_idempotency: crate::page_server::CreateTimelineIdempotency,
 
     /// If Some, collects GetPage metadata for an ongoing PageTrace.
     pub(crate) page_trace: ArcSwapOption<Sender<PageTraceEvent>>,
@@ -288,7 +270,6 @@ pub struct Timeline {
     pub(crate) db_rel_count: ArcSwapOption<(usize, usize)>,
 }
 
-pub type TimelineDeleteProgress = Arc<tokio::sync::Mutex<DeleteTimelineFlow>>;
 
 pub struct WalReceiverInfo {
     pub wal_source_connconf: PgConnectionConfig,
@@ -1485,8 +1466,7 @@ impl Timeline {
 
     pub(crate) fn activate(
         self: &Arc<Self>,
-        parent: Arc<crate::tenant::TenantShard>,
-        background_jobs_can_start: Option<&completion::Barrier>,
+        parent: Arc<crate::page_server::PageServer>,
         ctx: &RequestContext,
     ) {
         self.spawn_initial_logical_size_computation_task(ctx);
@@ -1494,7 +1474,7 @@ impl Timeline {
         self.set_state(TimelineState::Active);
         // Per-timeline eviction task deleted in Phase 4d.2 — no layer
         // files to evict in the YB row-store world.
-        let _ = (parent, background_jobs_can_start);
+        let _ = parent;
     }
 
     /// After this function returns, there are no timeline-scoped tasks are left running.
@@ -1663,20 +1643,6 @@ impl Timeline {
                 self.state.send_replace(new_state);
             }
         }
-    }
-
-    pub(crate) fn set_broken(&self, reason: String) {
-        let backtrace_str: String = format!("{}", std::backtrace::Backtrace::force_capture());
-        let broken_state = TimelineState::Broken {
-            reason,
-            backtrace: backtrace_str,
-        };
-        self.set_state(broken_state);
-
-        // Although the Broken state is not equivalent to shutdown() (shutdown will be called
-        // later when this tenant is detach or the process shuts down), firing the cancellation token
-        // here avoids the need for other tasks to watch for the Broken state explicitly.
-        self.cancel.cancel();
     }
 
     pub(crate) fn current_state(&self) -> TimelineState {
@@ -1864,17 +1830,6 @@ impl Timeline {
         (status.unwrap_or(RelSizeMigration::Legacy), migrated_at)
     }
 
-    pub(super) fn tenant_conf_updated(&self, new_conf: &AttachedTenantConf) {
-        // NB: Most tenant conf options are read by background loops, so,
-        // changes will automatically be picked up.
-        let mut rel_size_cache = self.rel_size_snapshot_cache.lock().unwrap();
-        if let Some(new_capacity) = new_conf.tenant_conf.relsize_snapshot_cache_capacity {
-            if new_capacity != rel_size_cache.capacity() {
-                rel_size_cache.set_capacity(new_capacity);
-            }
-        }
-    }
-
     /// Open a Timeline handle.
     ///
     /// Loads the metadata for the timeline into memory, but not the layer map.
@@ -1893,7 +1848,7 @@ impl Timeline {
         pg_version: PgMajorVersion,
         state: TimelineState,
         attach_wal_lag_cooldown: Arc<OnceLock<WalLagCooldown>>,
-        create_idempotency: crate::tenant::CreateTimelineIdempotency,
+        create_idempotency: crate::page_server::CreateTimelineIdempotency,
         rel_size_v2_status: Option<RelSizeMigration>,
         rel_size_migrated_at: Option<Lsn>,
         cancel: CancellationToken,
@@ -2081,14 +2036,11 @@ impl Timeline {
 
                 state,
 
-                delete_progress: TimelineDeleteProgress::default(),
 
                 cancel,
                 gate: Gate::default(),
 
-                compaction_lock: tokio::sync::Mutex::default(),
                 corruption_detected: AtomicBool::default(),
-                gc_lock: tokio::sync::Mutex::default(),
 
                 standby_horizon: AtomicLsn::new(0),
 
@@ -3181,8 +3133,8 @@ fn slru_key_bytes(row: &crate::page_store::SlruPageRow) -> bytes::Bytes {
 ///   reverses to ascending internally before applying.
 fn chain_to_value_reconstruct_state(
     chain: &[std::sync::Arc<crate::page_store::PageRow>],
-) -> anyhow::Result<crate::tenant::storage_layer::ValueReconstructState> {
-    use crate::tenant::storage_layer::ValueReconstructState;
+) -> anyhow::Result<crate::page_server::storage_layer::ValueReconstructState> {
+    use crate::page_server::storage_layer::ValueReconstructState;
     use utils::bin_ser::BeSer;
     use wal_decoder::models::record::NeonWalRecord;
 

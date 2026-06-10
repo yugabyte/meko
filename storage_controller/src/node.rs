@@ -169,8 +169,7 @@ impl Node {
             ToActive => {
                 // Give the node a new cancellation token, effectively resetting it to un-cancelled.  Any
                 // users of previously-cloned copies of the node will still see the old cancellation
-                // state.  For example, Reconcilers in flight will have to complete and be spawned
-                // again to realize that the node has become available.
+                // state.
                 self.cancel = CancellationToken::new();
             }
             ToOffline | ToWarmingUpFromActive => {

@@ -97,7 +97,7 @@ use tracing::warn;
 use crate::{
     metrics::{StorageIoSizeMetrics, TimelineMetrics},
     task_mgr::TaskKind,
-    tenant::Timeline,
+    page_server::Timeline,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -155,7 +155,7 @@ impl Scope {
         }
     }
     pub(crate) fn new_page_service_pagestream(
-        timeline_handle: &crate::tenant::timeline::handle::Handle<
+        timeline_handle: &crate::page_server::timeline::handle::Handle<
             crate::page_service::TenantManagerTypes,
         >,
     ) -> Self {
@@ -384,7 +384,7 @@ impl RequestContext {
 
     pub(crate) fn with_scope_page_service_pagestream(
         &self,
-        timeline_handle: &crate::tenant::timeline::handle::Handle<
+        timeline_handle: &crate::page_server::timeline::handle::Handle<
             crate::page_service::TenantManagerTypes,
         >,
     ) -> Self {

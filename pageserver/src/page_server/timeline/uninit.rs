@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::fs;
 use std::future::Future;
 use std::sync::Arc;
@@ -12,17 +11,17 @@ use utils::sync::gate::GateGuard;
 
 use super::Timeline;
 use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
-use crate::tenant::{CreateTimelineError, CreateTimelineIdempotency, TenantShard};
+use crate::page_server::{CreateTimelineError, CreateTimelineIdempotency, PageServer};
 
 /// A timeline with some of its files on disk, being initialized.
 /// This struct ensures the atomicity of the timeline init: it's either properly created and inserted into pageserver's memory, or
 /// its local files are removed.  If we crash while this class exists, then the timeline's local
-/// state is cleaned up during [`TenantShard::clean_up_timelines`], because the timeline's content isn't in remote storage.
+/// state is cleaned up during [`PageServer::clean_up_timelines`], because the timeline's content isn't in remote storage.
 ///
 /// The caller is responsible for proper timeline data filling before the final init.
 #[must_use]
 pub struct UninitializedTimeline<'t> {
-    pub(crate) owning_tenant: &'t TenantShard,
+    pub(crate) owning_tenant: &'t PageServer,
     timeline_id: TimelineId,
     raw_timeline: Option<(Arc<Timeline>, TimelineCreateGuard)>,
     /// Whether we spawned the inner Timeline's tasks such that we must later shut it down
@@ -32,7 +31,7 @@ pub struct UninitializedTimeline<'t> {
 
 impl<'t> UninitializedTimeline<'t> {
     pub(crate) fn new(
-        owning_tenant: &'t TenantShard,
+        owning_tenant: &'t PageServer,
         timeline_id: TimelineId,
         raw_timeline: Option<(Arc<Timeline>, TimelineCreateGuard)>,
     ) -> Self {
@@ -151,30 +150,28 @@ impl<'t> UninitializedTimeline<'t> {
             }
         }
 
-        let mut timelines = self.owning_tenant.timelines.lock().unwrap();
-        match timelines.entry(timeline_id) {
-            Entry::Occupied(_) => {
-                // Unexpected, bug in the caller.  Tenant is responsible for preventing concurrent creation of the same timeline.
-                //
-                // We do not call Self::abort here.  Because we don't cleanly shut down our Timeline, [`Self::drop`] should
-                // skip trying to delete the timeline directory too.
-                anyhow::bail!(
-                    "Found freshly initialized timeline {tenant_shard_id}/{timeline_id} in the tenant map"
-                )
-            }
-            Entry::Vacant(v) => {
-                // after taking here should be no fallible operations, because the drop guard will not
-                // cleanup after and would block for example the tenant deletion
-                let (new_timeline, _create_guard) =
-                    self.raw_timeline.take().expect("already checked");
+        // After this point there should be no fallible operations, because the drop guard
+        // will not clean up after them.
+        let (new_timeline, _create_guard) = self.raw_timeline.take().expect("already checked");
 
-                v.insert(Arc::clone(&new_timeline));
-
-                new_timeline.maybe_spawn_flush_loop();
-
-                Ok(new_timeline)
-            }
+        if self
+            .owning_tenant
+            .timeline
+            .set(Arc::clone(&new_timeline))
+            .is_err()
+        {
+            // Unexpected, bug in the caller.  Tenant is responsible for preventing concurrent creation of the same timeline.
+            //
+            // We do not call Self::abort here.  Because we don't cleanly shut down our Timeline, [`Self::drop`] should
+            // skip trying to delete the timeline directory too.
+            anyhow::bail!(
+                "Found freshly initialized timeline {tenant_shard_id}/{timeline_id} in the tenant slot"
+            )
         }
+
+        new_timeline.maybe_spawn_flush_loop();
+
+        Ok(new_timeline)
     }
 
     pub(crate) fn raw_timeline(&self) -> anyhow::Result<&Arc<Timeline>> {
@@ -220,17 +217,17 @@ pub(crate) fn cleanup_timeline_directory(create_guard: TimelineCreateGuard) {
             error!("Failed to clean up uninitialized timeline directory {timeline_path:?}: {e:?}")
         }
     }
-    // Having cleaned up, we can release this TimelineId in `[TenantShard::timelines_creating]` to allow other
+    // Having cleaned up, we can release this TimelineId in `[PageServer::timelines_creating]` to allow other
     // timeline creation attempts under this TimelineId to proceed
     drop(create_guard);
 }
 
 /// A guard for timeline creations in process: as long as this object exists, the timeline ID
-/// is kept in `[TenantShard::timelines_creating]` to exclude concurrent attempts to create the same timeline.
+/// is kept in `[PageServer::timelines_creating]` to exclude concurrent attempts to create the same timeline.
 #[must_use]
 pub(crate) struct TimelineCreateGuard {
     pub(crate) _tenant_gate_guard: GateGuard,
-    pub(crate) owning_tenant: Arc<TenantShard>,
+    pub(crate) owning_tenant: Arc<PageServer>,
     pub(crate) timeline_id: TimelineId,
     pub(crate) timeline_path: Utf8PathBuf,
     pub(crate) idempotency: CreateTimelineIdempotency,
@@ -256,7 +253,7 @@ pub(crate) enum TimelineExclusionError {
 
 impl TimelineCreateGuard {
     pub(crate) fn new(
-        owning_tenant: &Arc<TenantShard>,
+        owning_tenant: &Arc<PageServer>,
         timeline_id: TimelineId,
         timeline_path: Utf8PathBuf,
         idempotency: CreateTimelineIdempotency,
@@ -267,13 +264,16 @@ impl TimelineCreateGuard {
             .enter()
             .map_err(|_| TimelineExclusionError::ShuttingDown)?;
 
-        let timelines = owning_tenant.timelines.lock().unwrap();
         let mut creating_timelines: std::sync::MutexGuard<
             '_,
             std::collections::HashSet<TimelineId>,
         > = owning_tenant.timelines_creating.lock().unwrap();
 
-        if let Some(existing) = timelines.get(&timeline_id) {
+        if let Some(existing) = owning_tenant
+            .timeline
+            .get()
+            .filter(|tl| tl.timeline_id == timeline_id)
+        {
             return Err(TimelineExclusionError::AlreadyExists {
                 existing: existing.clone(),
                 arg: idempotency,
@@ -284,7 +284,6 @@ impl TimelineCreateGuard {
         }
         creating_timelines.insert(timeline_id);
         drop(creating_timelines);
-        drop(timelines);
         Ok(Self {
             _tenant_gate_guard,
             owning_tenant: Arc::clone(owning_tenant),

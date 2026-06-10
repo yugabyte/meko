@@ -34,8 +34,8 @@ use utils::lsn::Lsn;
 
 use crate::context::RequestContext;
 use crate::pgdatadir_mapping::Version;
-use crate::tenant::timeline::{GetVectoredError, VersionedKeySpaceQuery};
-use crate::tenant::{PageReconstructError, Timeline};
+use crate::page_server::timeline::{GetVectoredError, VersionedKeySpaceQuery};
+use crate::page_server::{PageReconstructError, Timeline};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BasebackupError {

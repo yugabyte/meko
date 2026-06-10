@@ -52,7 +52,7 @@ flowchart LR
 ### `applied_lsn` — eager, in-memory
 
 **Where:** `Timeline.applied_lsn: AtomicLsn`
-(`pageserver/src/tenant/timeline.rs`).
+(`pageserver/src/page_server/timeline.rs`).
 
 **Meaning:** End of the last WAL record the walreceiver has put into the
 `PageWriter` buffer — i.e., the in-RAM ingest frontier. NOT a durability
@@ -82,7 +82,7 @@ state — all must read `consistent_lsn` instead.
 ### `last_record_lsn` — eager, in-memory (with `prev` pairing)
 
 **Where:** `Timeline.last_record_lsn: SeqWait<RecordLsn, Lsn>`
-(`pageserver/src/tenant/timeline.rs`).
+(`pageserver/src/page_server/timeline.rs`).
 
 **Meaning:** End of the last fully ingested WAL record (`RecordLsn.last`).
 `RecordLsn.prev` is the end of the record before that. Same eagerness
@@ -429,17 +429,17 @@ persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
 
 ## Code anchors
 
-- `pageserver/src/tenant/timeline.rs` — `last_record_lsn`, `applied_lsn`,
+- `pageserver/src/page_server/timeline.rs` — `last_record_lsn`, `applied_lsn`,
   `get_consistent_lsn`, `applied_gc_cutoff_lsn`, `finish_write`,
   `get_vectored_via_page_writer`.
-- `pageserver/src/tenant/timeline/remote_state.rs` — `consistent_lsn`
+- `pageserver/src/page_server/timeline/remote_state.rs` — `consistent_lsn`
   slot owned by `TimelineRemoteState`.
 - `pageserver/src/page_writer.rs` — flush, `consistent_lsn_observed` /
   `consistent_lsn_watermark`, `publish_consistent_lsn`,
   `force_upsert_consistent_lsn_if_advanced`, `record_lsn_history`.
 - `pageserver/src/page_store.rs` — `advance_consistent_lsn`,
   `insert_timeline_at_creation`, `update_timeline_state` (unused).
-- `pageserver/src/tenant/timeline/walreceiver/walreceiver_connection.rs` —
+- `pageserver/src/page_server/timeline/walreceiver/walreceiver_connection.rs` —
   ingest, feedback, resume startpoint (both read `get_consistent_lsn`).
 - `pageserver/src/pgdatadir_mapping.rs` — `DatadirModification::commit`.
 - `safekeeper/src/send_wal.rs` — `update_remote_consistent_lsn` (truncation).

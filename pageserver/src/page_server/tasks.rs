@@ -2,7 +2,7 @@
 
 use std::cmp::max;
 use std::future::Future;
-use std::ops::{ControlFlow, RangeInclusive};
+use std::ops::RangeInclusive;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,14 +19,13 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::backoff::exponential_backoff_duration;
-use utils::completion::Barrier;
 use utils::pausable_failpoint;
 
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{self, BackgroundLoopSemaphoreMetricsRecorder, TENANT_TASK_EVENTS};
 use crate::task_mgr::{self, BACKGROUND_RUNTIME, TOKIO_WORKER_THREADS, TaskKind};
-use crate::tenant::throttle::Stats;
-use crate::tenant::{TenantShard, TenantState};
+use crate::page_server::throttle::Stats;
+use crate::page_server::PageServer;
 
 /// Semaphore limiting concurrent background tasks (across all tenants).
 ///
@@ -117,7 +116,7 @@ pub(crate) async fn acquire_concurrency_permit(
 /// and image-layer / L0→L1 work has nothing to do against
 /// `pageserver.pages`. A background image materialiser (Phase 3e) will
 /// replace this loop once we need it.
-pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barrier>) {
+pub fn start_background_loops(tenant: &Arc<PageServer>) {
     let tenant_id = tenant.id;
 
     task_mgr::spawn(
@@ -128,13 +127,8 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
         &format!("garbage collector for tenant {tenant_id}"),
         {
             let tenant = Arc::clone(tenant);
-            let can_start = can_start.cloned();
             async move {
                 let cancel = task_mgr::shutdown_token(); // NB: must be in async context
-                tokio::select! {
-                    _ = cancel.cancelled() => return Ok(()),
-                    _ = Barrier::maybe_wait(can_start) => {}
-                };
                 TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
                 defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
                 gc_loop(tenant, cancel)
@@ -153,13 +147,8 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
         &format!("housekeeping for tenant {tenant_id}"),
         {
             let tenant = Arc::clone(tenant);
-            let can_start = can_start.cloned();
             async move {
                 let cancel = task_mgr::shutdown_token(); // NB: must be in async context
-                tokio::select! {
-                    _ = cancel.cancelled() => return Ok(()),
-                    _ = Barrier::maybe_wait(can_start) => {}
-                };
                 TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
                 defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
                 tenant_housekeeping_loop(tenant, cancel)
@@ -172,7 +161,7 @@ pub fn start_background_loops(tenant: &Arc<TenantShard>, can_start: Option<&Barr
 }
 
 /// GC task's main loop.
-async fn gc_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
+async fn gc_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
     const MAX_BACKOFF_SECS: f64 = 300.0;
     let mut error_run = 0; // consecutive errors
 
@@ -182,7 +171,7 @@ async fn gc_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
     let mut first = true;
 
     loop {
-        if wait_for_active_tenant(&tenant, &cancel).await.is_break() {
+        if cancel.is_cancelled() {
             return;
         }
 
@@ -223,7 +212,7 @@ async fn gc_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
                     error_run = 0;
                     sleep_duration = period;
                 }
-                Err(crate::tenant::GcError::TenantCancelled) => {
+                Err(crate::page_server::GcError::TenantCancelled) => {
                     return;
                 }
                 Err(e) => {
@@ -231,7 +220,7 @@ async fn gc_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
                     let wait_duration =
                         exponential_backoff_duration(error_run, 1.0, MAX_BACKOFF_SECS);
 
-                    if matches!(e, crate::tenant::GcError::TimelineCancelled) {
+                    if matches!(e, crate::page_server::GcError::TimelineCancelled) {
                         // Timeline was cancelled during gc. We might either be in an event
                         // that affects the entire tenant (tenant deletion, pageserver shutdown),
                         // or in one that affects the timeline only (timeline deletion).
@@ -256,10 +245,10 @@ async fn gc_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
 }
 
 /// Tenant housekeeping's main loop.
-async fn tenant_housekeeping_loop(tenant: Arc<TenantShard>, cancel: CancellationToken) {
+async fn tenant_housekeeping_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
     let mut last_throttle_flag_reset_at = Instant::now();
     loop {
-        if wait_for_active_tenant(&tenant, &cancel).await.is_break() {
+        if cancel.is_cancelled() {
             return;
         }
 
@@ -304,28 +293,6 @@ async fn tenant_housekeeping_loop(tenant: Arc<TenantShard>, cancel: Cancellation
                 "shard was throttled in the last n_seconds"
             );
         });
-    }
-}
-
-/// Waits until the tenant becomes active, or returns `ControlFlow::Break()` to shut down.
-async fn wait_for_active_tenant(
-    tenant: &Arc<TenantShard>,
-    cancel: &CancellationToken,
-) -> ControlFlow<()> {
-    if tenant.current_state() == TenantState::Active {
-        return ControlFlow::Continue(());
-    }
-
-    let mut update_rx = tenant.subscribe_for_state_updates();
-    tokio::select! {
-        result = update_rx.wait_for(|s| s == &TenantState::Active) => {
-            if result.is_err() {
-                return ControlFlow::Break(());
-            }
-            debug!("Tenant state changed to active, continuing the task loop");
-            ControlFlow::Continue(())
-        },
-        _ = cancel.cancelled() => ControlFlow::Break(()),
     }
 }
 

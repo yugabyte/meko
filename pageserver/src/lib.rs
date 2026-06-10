@@ -26,7 +26,7 @@ pub mod page_writer;
 pub mod pgdatadir_mapping;
 pub mod span;
 pub mod task_mgr;
-pub mod tenant;
+pub mod page_server;
 pub mod unified_pages;
 pub mod utilization;
 pub mod virtual_file;
@@ -35,7 +35,7 @@ pub mod walredo;
 
 use camino::Utf8Path;
 use postgres_ffi::PgMajorVersion;
-use tenant::mgr::{BackgroundPurges, TenantManager};
+use page_server::mgr::{BackgroundPurges, TenantManager};
 use tracing::{info, info_span};
 
 /// Current storage format version
@@ -124,7 +124,7 @@ pub async fn shutdown_pageserver(
                 info!("cancellation requested");
                 return;
             }
-            let managers = tenant::WALREDO_MANAGERS
+            let managers = page_server::WALREDO_MANAGERS
                 .lock()
                 .unwrap()
                 // prevents new walredo managers from being inserted
@@ -262,25 +262,6 @@ pub fn is_temporary(path: &Utf8Path) -> bool {
         Some(name) => name.ends_with(TEMP_FILE_SUFFIX),
         None => false,
     }
-}
-
-/// During pageserver startup, we need to order operations not to exhaust tokio worker threads by
-/// blocking.
-///
-/// The instances of this value exist only during startup, otherwise `None` is provided, meaning no
-/// delaying is needed.
-#[derive(Clone)]
-pub struct InitializationOrder {
-    /// Each initial tenant load task carries this until it is done loading timelines from remote storage
-    pub initial_tenant_load_remote: Option<utils::completion::Completion>,
-
-    /// Each initial tenant load task carries this until completion.
-    pub initial_tenant_load: Option<utils::completion::Completion>,
-
-    /// Barrier for when we can start any background jobs.
-    ///
-    /// This can be broken up later on, but right now there is just one class of a background job.
-    pub background_jobs_can_start: utils::completion::Barrier,
 }
 
 /// Time the future with a warning when it exceeds a threshold.

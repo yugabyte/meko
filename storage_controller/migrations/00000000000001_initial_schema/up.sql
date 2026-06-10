@@ -70,13 +70,6 @@ CREATE TABLE storage_controller.metadata_health (
         ON DELETE CASCADE
 );
 
--- Storage-controller leader-election bookkeeping.
-CREATE TABLE storage_controller.controllers (
-    address    VARCHAR NOT NULL,
-    started_at TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (address, started_at)
-);
-
 -- Per-timeline safekeeper set + generation tracking.
 CREATE TABLE storage_controller.timelines (
     tenant_id                   VARCHAR NOT NULL,
@@ -210,20 +203,6 @@ CREATE TABLE pageserver.meta (
     lsn          BIGINT   NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
-);
-
--- Per-tenant `TenantConfig` (pan-cluster tunables: GC horizon, PITR
--- interval, walreceiver timeouts, …). Authoritative copy lives here;
--- storage_controller writes on tenant create / config update and
--- notifies the pageserver via PUT location_config. The pageserver
--- re-reads from this table on every notification + on startup. No
--- separate per-pageserver-location storage of this struct — every
--- pageserver attaching the tenant sees identical config.
-CREATE TABLE pageserver.tenant_config (
-    tenant_id     TEXT        NOT NULL,
-    config        JSONB       NOT NULL,
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY ((tenant_id) HASH)
 );
 
 -- Per-timeline state row — replaces upstream Neon's local

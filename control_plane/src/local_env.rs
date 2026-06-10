@@ -170,7 +170,6 @@ pub struct NeonStorageControllerConf {
     #[serde(with = "humantime_serde")]
     pub max_warming_up: Duration,
 
-    pub start_as_candidate: bool,
 
     /// Database connection string for the storage controller's persistence
     /// layer. When `Some`, yb_light_local skips the local Postgres bootstrap
@@ -181,19 +180,8 @@ pub struct NeonStorageControllerConf {
     /// Example: `postgresql://yugabyte@127.0.0.1:5433/storage_controller`.
     pub database_url: Option<String>,
 
-    /// Thresholds for auto-splitting a tenant into shards.
-    pub split_threshold: Option<u64>,
-    pub max_split_shards: Option<u8>,
-    pub initial_split_threshold: Option<u64>,
-    pub initial_split_shards: Option<u8>,
-
-    pub max_secondary_lag_bytes: Option<u64>,
-
     #[serde(with = "humantime_serde")]
     pub heartbeat_interval: Duration,
-
-    #[serde(with = "humantime_serde")]
-    pub long_reconcile_threshold: Option<Duration>,
 
     pub use_https_pageserver_api: bool,
 
@@ -204,11 +192,6 @@ pub struct NeonStorageControllerConf {
     pub use_local_compute_notifications: bool,
 
     pub timeline_safekeeper_count: Option<usize>,
-
-    pub kick_secondary_downloads: Option<bool>,
-
-    #[serde(with = "humantime_serde")]
-    pub shard_split_request_timeout: Option<Duration>,
 }
 
 impl NeonStorageControllerConf {
@@ -226,22 +209,13 @@ impl Default for NeonStorageControllerConf {
         Self {
             max_offline: Self::DEFAULT_MAX_OFFLINE_INTERVAL,
             max_warming_up: Self::DEFAULT_MAX_WARMING_UP_INTERVAL,
-            start_as_candidate: false,
             database_url: None,
-            split_threshold: None,
-            max_split_shards: None,
-            initial_split_threshold: None,
-            initial_split_shards: None,
-            max_secondary_lag_bytes: None,
             heartbeat_interval: Self::DEFAULT_HEARTBEAT_INTERVAL,
-            long_reconcile_threshold: None,
             use_https_pageserver_api: false,
             timelines_onto_safekeepers: true,
             use_https_safekeeper_api: false,
             use_local_compute_notifications: true,
             timeline_safekeeper_count: None,
-            kick_secondary_downloads: None,
-            shard_split_request_timeout: None,
         }
     }
 }

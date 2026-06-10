@@ -1,5 +1,5 @@
 ---
-status: in_progress
+status: done
 severity: high
 area: yb-pageserver
 opened: 2026-06-09
@@ -104,20 +104,38 @@ multi-tenant/multi-timeline machinery. Design + stage breakdown in
   (post-cap own images) — such branches are poisoned and must be
   recreated; only branches created with the fix are sound.
 
-## Remaining (cosmetic, future)
+## Landed (final dissolution — e2e fast+slow green)
 
-- timelines `HashMap` → single `Arc<Timeline>` field +
-  `TenantShard` → `PageServer` rename + synchronous open-before-
-  listeners startup (drops `TenantState` machine and the in-protocol
-  active-waits).
-- TenantConfig collapse (drop `pageserver.tenant_config` read path;
-  effective config = toml), dead ConfigToml fields
-  (`concurrent_tenant_warmup`, …).
+- Synchronous open-before-listeners: the timeline is opened (or
+  created) in `main()` before any listener starts; computes get
+  ECONNREFUSED until then. The `TenantState` machine, all
+  wait-for-active paths (`wait_to_become_active`,
+  `ACTIVE_TENANT_TIMEOUT`, handle-cache retry), `InitializationOrder`
+  barriers, and `DeleteTimelineFlow` remnants are deleted.
+- timelines `HashMap` → single `OnceLock<Arc<Timeline>>`; GC /
+  housekeeping / flush / shutdown simplified to the one timeline.
+- TenantConfig collapse: effective config = the `[tenant_config]`
+  section of pageserver.toml. The `pageserver.tenant_config` YB table
+  (read + write paths and DDL), `LocationConf`, and the dead ConfigToml
+  knobs (`concurrent_tenant_warmup`,
+  `concurrent_tenant_size_logical_size_queries`,
+  `ConfigurableSemaphore`) are deleted. `yb_light_local tenant
+  create -c` / `tenant config` now error.
+- `TenantShard` → `PageServer`; `tenant.rs` → `page_server.rs`,
+  `tenant/` → `page_server/`.
+- storage_ctl slimming (−8.4 K lines): `reconciler.rs`,
+  `compute_hook.rs`, `chaos_injector.rs`, `tenant_shard_iterator.rs`,
+  `operation_utils.rs`, `leadership.rs`, `peer_client.rs`,
+  `background_node_operations.rs` deleted wholesale, plus the
+  background reconcile loop, schedule optimiser, node
+  drain/fill/delete ops, tenant-shard migrate APIs, multi-controller
+  leadership (election, step-down, request forwarding, `controllers`
+  table), waiter machinery, and the tenant_config HTTP surface. Kept:
+  scheduler (initial placement only), heartbeater, attach-hook,
+  timeline poll-observe + SK leg, endpoints/branch APIs, upcalls.
 
 ## Deferred (future tasks)
 
 - GC ancestor-pin enforcement: ancestor pruning must respect
   `min(child.ancestor_lsn)` — an ancestor row at `lsn ≤ cap` may be a
   branch's only anchor source (noted in `7_gc.md`).
-- storage_ctl slimming (delete reconciler/migration machinery
-  wholesale).

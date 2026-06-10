@@ -15,11 +15,8 @@ use measured::metric::histogram;
 use measured::{FixedCardinalityLabel, MetricGroup};
 use metrics::NeonMetrics;
 use once_cell::sync::Lazy;
-use strum::IntoEnumIterator;
 
 use crate::persistence::{DatabaseError, DatabaseOperation};
-use crate::service::LeadershipStatus;
-
 pub(crate) static METRICS_REGISTRY: Lazy<StorageControllerMetrics> =
     Lazy::new(StorageControllerMetrics::default);
 
@@ -35,9 +32,6 @@ pub(crate) struct StorageControllerMetrics {
 #[derive(measured::MetricGroup)]
 #[metric(new())]
 pub(crate) struct StorageControllerMetricGroup {
-    /// Count of how many times we spawn a reconcile task
-    pub(crate) storage_controller_reconcile_spawn: measured::Counter,
-
     /// Size of the in-memory map of tenant shards
     pub(crate) storage_controller_tenant_shards: measured::Gauge,
 
@@ -53,24 +47,11 @@ pub(crate) struct StorageControllerMetricGroup {
     /// Count of how many safekeeper nodes from in-memory map have https configured
     pub(crate) storage_controller_https_safekeeper_nodes: measured::Gauge,
 
-    /// Reconciler tasks completed, broken down by success/failure/cancelled
-    pub(crate) storage_controller_reconcile_complete:
-        measured::CounterVec<ReconcileCompleteLabelGroupSet>,
-
-    /// Count of how many times we make an optimization change to a tenant's scheduling
-    pub(crate) storage_controller_schedule_optimization: measured::Counter,
-
     /// How many shard locations (secondary or attached) on each node
     pub(crate) storage_controller_node_shards: measured::GaugeVec<NodeLabelGroupSet>,
 
     /// How many _attached_ shard locations on each node
     pub(crate) storage_controller_node_attached_shards: measured::GaugeVec<NodeLabelGroupSet>,
-
-    /// How many shards would like to reconcile but were blocked by concurrency limits
-    pub(crate) storage_controller_pending_reconciles: measured::Gauge,
-
-    /// How many shards are stuck and will be ignored when considering to run optimizations
-    pub(crate) storage_controller_stuck_reconciles: measured::Gauge,
 
     /// HTTP request status counters for handled requests
     pub(crate) storage_controller_http_request_status:
@@ -130,20 +111,6 @@ pub(crate) struct StorageControllerMetricGroup {
     pub(crate) storage_controller_database_query_latency:
         measured::HistogramVec<DatabaseQueryLatencyLabelGroupSet, 5>,
 
-    pub(crate) storage_controller_leadership_status: measured::GaugeVec<LeadershipStatusGroupSet>,
-
-    /// Indicator of stucked (long-running) reconciles, broken down by tenant, shard and sequence.
-    /// The metric is automatically removed once the reconciliation completes.
-    pub(crate) storage_controller_reconcile_long_running:
-        measured::CounterVec<ReconcileLongRunningLabelGroupSet>,
-
-    /// `config_watcher` reconciliation runs completed, broken down by success/failure.
-    pub(crate) storage_controller_config_watcher_complete:
-        measured::CounterVec<ConfigWatcherCompleteLabelGroupSet>,
-
-    /// Long waits for node state changes during drain and fill.
-    pub(crate) storage_controller_drain_and_fill_long_waits: measured::Counter,
-
     /// Set to 1 if we detect any page server pods with pending node pool rotation annotations.
     /// Requires manual reset after oncall investigation.
     pub(crate) storage_controller_ps_node_pool_rotation_pending: measured::Gauge,
@@ -174,17 +141,8 @@ impl StorageControllerMetrics {
 
 impl Default for StorageControllerMetrics {
     fn default() -> Self {
-        let mut metrics_group = StorageControllerMetricGroup::new();
-        metrics_group
-            .storage_controller_reconcile_complete
-            .init_all_dense();
-
-        metrics_group
-            .storage_controller_config_watcher_complete
-            .init_all_dense();
-
         Self {
-            metrics_group,
+            metrics_group: StorageControllerMetricGroup::new(),
             encoder: Mutex::new(measured::text::BufferedTextEncoder::new()),
         }
     }
@@ -195,12 +153,6 @@ impl Default for StorageControllerMetrics {
 pub(crate) struct NodeLabelGroup<'a> {
     #[label(dynamic_with = lasso::ThreadedRodeo, default)]
     pub(crate) node_id: &'a str,
-}
-
-#[derive(measured::LabelGroup)]
-#[label(set = ReconcileCompleteLabelGroupSet)]
-pub(crate) struct ReconcileCompleteLabelGroup {
-    pub(crate) status: ReconcileOutcome,
 }
 
 #[derive(measured::LabelGroup)]
@@ -253,23 +205,6 @@ pub(crate) struct DatabaseQueryLatencyLabelGroup {
     pub(crate) operation: DatabaseOperation,
 }
 
-#[derive(measured::LabelGroup)]
-#[label(set = LeadershipStatusGroupSet)]
-pub(crate) struct LeadershipStatusGroup {
-    pub(crate) status: LeadershipStatus,
-}
-
-#[derive(measured::LabelGroup, Clone)]
-#[label(set = ReconcileLongRunningLabelGroupSet)]
-pub(crate) struct ReconcileLongRunningLabelGroup<'a> {
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) tenant_id: &'a str,
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) shard_number: &'a str,
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) sequence: &'a str,
-}
-
 #[derive(measured::LabelGroup, Clone)]
 #[label(set = StorageScrubberLabelGroupSet)]
 pub(crate) struct StorageScrubberLabelGroup<'a> {
@@ -290,29 +225,6 @@ pub(crate) enum StorageScrubberOutcome {
     PSOrphan,
     SKOk,
     SKError,
-}
-
-#[derive(measured::LabelGroup)]
-#[label(set = ConfigWatcherCompleteLabelGroupSet)]
-pub(crate) struct ConfigWatcherCompleteLabelGroup {
-    // Reuse the ReconcileOutcome from the SC's reconciliation metrics.
-    pub(crate) status: ReconcileOutcome,
-}
-
-#[derive(FixedCardinalityLabel, Clone, Copy)]
-pub(crate) enum ReconcileOutcome {
-    // Successfully reconciled everything.
-    #[label(rename = "ok")]
-    Success,
-    // Used by tenant-shard reconciler only. Reconciled pageserver state successfully,
-    // but failed to delivery the compute notificiation. This error is typically transient
-    // but if its occurance keeps increasing, it should be investigated.
-    #[label(rename = "ok_no_notify")]
-    SuccessNoNotify,
-    // We failed to reconcile some state and the reconcilation will be retried.
-    Error,
-    // Reconciliation was cancelled.
-    Cancel,
 }
 
 #[derive(FixedCardinalityLabel, Copy, Clone)]
@@ -384,17 +296,3 @@ impl DatabaseError {
     }
 }
 
-/// Update the leadership status metric gauges to reflect the requested status
-pub(crate) fn update_leadership_status(status: LeadershipStatus) {
-    let status_metric = &METRICS_REGISTRY
-        .metrics_group
-        .storage_controller_leadership_status;
-
-    for s in LeadershipStatus::iter() {
-        if s == status {
-            status_metric.set(LeadershipStatusGroup { status: s }, 1);
-        } else {
-            status_metric.set(LeadershipStatusGroup { status: s }, 0);
-        }
-    }
-}

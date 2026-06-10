@@ -7,7 +7,6 @@ use std::env::{VarError, var};
 use std::io::Read;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use camino::Utf8Path;
@@ -21,7 +20,7 @@ use pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
 use pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
 use pageserver::page_service::GrpcPageServiceHandler;
 use pageserver::task_mgr::{BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME};
-use pageserver::tenant::{TenantSharedResources, mgr};
+use pageserver::page_server::{TenantSharedResources, mgr};
 use pageserver::{
     CancellableTask, HttpEndpointListener, HttpsEndpointListener, MetricsCollectionTask, http,
     page_service, task_mgr, virtual_file,
@@ -276,40 +275,6 @@ fn initialize_config(
     Ok((conf, ignored))
 }
 
-struct WaitForPhaseResult<F: std::future::Future + Unpin> {
-    timeout_remaining: Duration,
-    skipped: Option<F>,
-}
-
-/// During startup, we apply a timeout to our waits for readiness, to avoid
-/// stalling the whole service if one Tenant experiences some problem.  Each
-/// phase may consume some of the timeout: this function returns the updated
-/// timeout for use in the next call.
-async fn wait_for_phase<F>(phase: &str, mut fut: F, timeout: Duration) -> WaitForPhaseResult<F>
-where
-    F: std::future::Future + Unpin,
-{
-    let initial_t = Instant::now();
-    let skipped = match tokio::time::timeout(timeout, &mut fut).await {
-        Ok(_) => None,
-        Err(_) => {
-            tracing::info!(
-                timeout_millis = timeout.as_millis(),
-                %phase,
-                "Startup phase timed out, proceeding anyway"
-            );
-            Some(fut)
-        }
-    };
-
-    WaitForPhaseResult {
-        timeout_remaining: timeout
-            .checked_sub(Instant::now().duration_since(initial_t))
-            .unwrap_or(Duration::ZERO),
-        skipped,
-    }
-}
-
 fn startup_checkpoint(started_at: Instant, phase: &str, human_phase: &str) {
     let elapsed = started_at.elapsed();
     let secs = elapsed.as_secs_f64();
@@ -505,36 +470,16 @@ fn start_pageserver(
     startup_checkpoint(started_startup_at, "initial", "Starting loading tenants");
     STARTUP_IS_LOADING.set(1);
 
-    // Startup staging or optimizing:
-    //
-    // We want to minimize downtime for `page_service` connections, and trying not to overload
-    // BACKGROUND_RUNTIME by doing initial compactions and initial logical sizes at the same time.
-    //
-    // init_done_rx will notify when all initial load operations have completed.
-    //
-    // background_jobs_can_start (same name used to hold off background jobs from starting at
-    // consumer side) will be dropped once we can start the background jobs. Currently it is behind
-    // completing all initial logical size calculations (init_logical_size_done_rx) and a timeout
-    // (background_task_maximum_delay).
-    let (init_remote_done_tx, init_remote_done_rx) = utils::completion::channel();
-    let (init_done_tx, init_done_rx) = utils::completion::channel();
-
-    let (background_jobs_can_start, background_jobs_barrier) = utils::completion::channel();
-
-    let order = pageserver::InitializationOrder {
-        initial_tenant_load_remote: Some(init_done_tx),
-        initial_tenant_load: Some(init_remote_done_tx),
-        background_jobs_can_start: background_jobs_barrier.clone(),
-    };
-
-    // Scan the local 'tenants/' directory and start loading the tenants
     let (basebackup_cache, basebackup_prepare_receiver) = BasebackupCache::new(
         conf.basebackup_cache_dir(),
         conf.basebackup_cache_config.clone(),
     );
     let background_purges = mgr::BackgroundPurges::default();
 
-    let tenant_manager = mgr::init(
+    // Open the configured (tenant, timeline) SYNCHRONOUSLY, before any
+    // listener accepts traffic. Computes get ECONNREFUSED until the
+    // timeline is open and active; failure to open is fatal.
+    let tenant_manager = Arc::new(BACKGROUND_RUNTIME.block_on(mgr::init_tenant_mgr(
         conf,
         background_purges.clone(),
         TenantSharedResources {
@@ -544,9 +489,14 @@ fn start_pageserver(
             fpu_page_store: fpu_page_store.clone(),
         },
         shutdown_pageserver.clone(),
+    ))?);
+    STARTUP_IS_LOADING.set(0);
+    startup_checkpoint(
+        started_startup_at,
+        "initial_tenant_load",
+        "Initial load completed",
     );
-    let tenant_manager = Arc::new(tenant_manager);
-    BACKGROUND_RUNTIME.block_on(mgr::init_tenant_mgr(tenant_manager.clone(), order))?;
+    startup_checkpoint(started_startup_at, "complete", "Startup complete");
 
     basebackup_cache.spawn_background_task(
         BACKGROUND_RUNTIME.handle(),
@@ -554,86 +504,6 @@ fn start_pageserver(
         Arc::clone(&tenant_manager),
         shutdown_pageserver.child_token(),
     );
-
-    BACKGROUND_RUNTIME.spawn({
-        let shutdown_pageserver = shutdown_pageserver.clone();
-        let drive_init = async move {
-            // NOTE: unlike many futures in pageserver, this one is cancellation-safe
-            let guard = scopeguard::guard_on_success((), |_| {
-                tracing::info!("Cancelled before initial load completed")
-            });
-
-            let timeout = conf.background_task_maximum_delay;
-
-            let init_remote_done = std::pin::pin!(async {
-                init_remote_done_rx.wait().await;
-                startup_checkpoint(
-                    started_startup_at,
-                    "initial_tenant_load_remote",
-                    "Remote part of initial load completed",
-                );
-            });
-
-            let WaitForPhaseResult {
-                timeout_remaining: timeout,
-                skipped: init_remote_skipped,
-            } = wait_for_phase("initial_tenant_load_remote", init_remote_done, timeout).await;
-
-            let init_load_done = std::pin::pin!(async {
-                init_done_rx.wait().await;
-                startup_checkpoint(
-                    started_startup_at,
-                    "initial_tenant_load",
-                    "Initial load completed",
-                );
-                STARTUP_IS_LOADING.set(0);
-            });
-
-            let WaitForPhaseResult {
-                timeout_remaining: _timeout,
-                skipped: init_load_skipped,
-            } = wait_for_phase("initial_tenant_load", init_load_done, timeout).await;
-
-            // initial logical sizes can now start, as they were waiting on init_done_rx.
-
-            scopeguard::ScopeGuard::into_inner(guard);
-
-            // allow background jobs to start: we either completed prior stages, or they reached timeout
-            // and were skipped.  It is important that we do not let them block background jobs indefinitely,
-            // because things like consumption metrics for billing are blocked by this barrier.
-            drop(background_jobs_can_start);
-            startup_checkpoint(
-                started_startup_at,
-                "background_jobs_can_start",
-                "Starting background jobs",
-            );
-
-            // We are done. If we skipped any phases due to timeout, run them to completion here so that
-            // they will eventually update their startup_checkpoint, and so that we do not declare the
-            // 'complete' stage until all the other stages are really done.
-            let guard = scopeguard::guard_on_success((), |_| {
-                tracing::info!("Cancelled before waiting for skipped phases done")
-            });
-            if let Some(f) = init_remote_skipped {
-                f.await;
-            }
-            if let Some(f) = init_load_skipped {
-                f.await;
-            }
-            scopeguard::ScopeGuard::into_inner(guard);
-
-            startup_checkpoint(started_startup_at, "complete", "Startup complete");
-        };
-
-        async move {
-            let mut drive_init = std::pin::pin!(drive_init);
-            // just race these tasks
-            tokio::select! {
-                _ = shutdown_pageserver.cancelled() => {},
-                _ = &mut drive_init => {},
-            }
-        }
-    });
 
     // Disk-usage eviction is gone (Phase 4d.2). yb-pageserver has no
     // local layer files to evict — all storage is in YB.
@@ -700,17 +570,11 @@ fn start_pageserver(
         let cancel = shutdown_pageserver.child_token();
         let task = crate::BACKGROUND_RUNTIME.spawn({
             let cancel = cancel.clone();
-            let background_jobs_barrier = background_jobs_barrier.clone();
             async move {
                 if conf.force_metric_collection_on_scrape {
                     return;
                 }
 
-                // first wait until background jobs are cleared to launch.
-                tokio::select! {
-                    _ = cancel.cancelled() => { return; },
-                    _ = background_jobs_barrier.wait() => {}
-                };
                 let mut interval = tokio::time::interval(METRICS_COLLECTION_INTERVAL);
                 loop {
                     tokio::select! {

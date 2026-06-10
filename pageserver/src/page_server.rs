@@ -12,8 +12,7 @@
 //! parent timeline, and the last LSN that has been written to disk.
 //!
 
-use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
 use std::sync::{Arc, Mutex, Weak};
@@ -22,9 +21,6 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::Context;
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
-use itertools::Itertools as _;
 use once_cell::sync::Lazy;
 pub use pageserver_api::models::TenantState;
 use pageserver_api::models::RelSizeMigration;
@@ -33,18 +29,15 @@ use pageserver_api::models::TimelineState;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
 use tokio::io::BufReader;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::crashsafe::path_with_suffix_extension;
 use utils::sync::gate::{Gate, GateGuard};
-use utils::timeout::{TimeoutCancellableError, timeout_cancellable};
-use utils::try_rcu::ArcSwapExt;
 use utils::zstd::{create_zst_tarball, extract_zst_tarball};
-use utils::{backoff, completion, failpoint_support, fs_ext, pausable_failpoint};
+use utils::{backoff, failpoint_support, fs_ext, pausable_failpoint};
 
 use self::metadata::TimelineMetadata;
-use self::mgr::{GetActiveTenantError, GetTenantError};
 use self::timeline::uninit::{TimelineCreateGuard, TimelineExclusionError, UninitializedTimeline};
 use self::timeline::{GcCutoffs, TimelineResources};
 use crate::basebackup_cache::BasebackupCache;
@@ -53,18 +46,17 @@ use crate::context;
 use crate::context::RequestContextBuilder;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{
-    BROKEN_TENANTS_SET, CONCURRENT_INITDBS, INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME,
-    TENANT, TENANT_STATE_METRIC, remove_tenant_metrics,
+    CONCURRENT_INITDBS, INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME,
+    TENANT, remove_tenant_metrics,
 };
 use crate::task_mgr::TaskKind;
-use crate::tenant::gc_result::GcResult;
+use crate::page_server::gc_result::GcResult;
 use initdb_storage::{INITDB_PATH, remote_initdb_archive_path};
 
-use crate::tenant::timeline::delete::DeleteTimelineFlow;
-use crate::tenant::timeline::uninit::cleanup_timeline_directory;
+use crate::page_server::timeline::uninit::cleanup_timeline_directory;
 use crate::walingest::WalLagCooldown;
 use crate::walredo::{PostgresRedoManager, RedoAttemptType};
-use crate::{InitializationOrder, TEMP_FILE_SUFFIX, import_datadir, span, task_mgr, walredo};
+use crate::{TEMP_FILE_SUFFIX, import_datadir, span, task_mgr, walredo};
 
 static INIT_DB_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(8));
 use utils::crashsafe;
@@ -75,7 +67,6 @@ use utils::lsn::Lsn;
 pub mod metadata;
 pub mod storage_layer;
 
-pub mod config;
 pub mod mgr;
 pub mod tasks;
 
@@ -89,7 +80,7 @@ pub(crate) use timeline::{PageReconstructError, Timeline};
 
 pub(crate) use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
 // re-export for use in walreceiver
-pub use crate::tenant::timeline::WalReceiverInfo;
+pub use crate::page_server::timeline::WalReceiverInfo;
 
 /// The "tenants" part of `tenants/<tenant>/timelines...`
 pub const TENANTS_SEGMENT_NAME: &str = "tenants";
@@ -116,9 +107,8 @@ pub struct TenantSharedResources {
     pub fpu_page_store: Arc<crate::page_store::PageStore>,
 }
 
-/// A [`TenantShard`] is really an _attached_ tenant.  The configuration
-/// for an attached tenant is a subset of the [`LocationConf`], represented
-/// in this struct.
+/// The tenant's effective configuration: the `[tenant_config]` section
+/// of pageserver.toml plus the launcher-assigned generation.
 #[derive(Clone)]
 pub(super) struct AttachedTenantConf {
     tenant_conf: pageserver_api::models::TenantConfig,
@@ -141,7 +131,7 @@ impl AttachedTenantConf {
         // to renew when we run GC for the first time after attaching.
         let lsn_lease_deadline = Some(
             tokio::time::Instant::now()
-                + TenantShard::get_lsn_lease_length_impl(conf, &tenant_conf),
+                + PageServer::get_lsn_lease_length_impl(conf, &tenant_conf),
         );
 
         Self {
@@ -198,26 +188,11 @@ fn synth_timeline_metadata_from_row(
     ))
 }
 
-/// How to spawn the tenant. Single-timeline pageservers always attach
-/// eagerly: the launcher's storage_controller polls for Active right
-/// after spawn, and there is only one timeline to warm up.
-pub(crate) enum SpawnMode {
-    /// Activate as soon as possible
-    Eager,
-}
-
-///
-/// Tenant consists of multiple timelines. Keep them in a hash table.
-///
-pub struct TenantShard {
+/// The single-timeline pageserver: one process, one (tenant, timeline),
+/// opened synchronously at startup before any listener accepts traffic.
+pub struct PageServer {
     // Global pageserver config parameters
     pub conf: &'static PageServerConf,
-
-    /// The value creation timestamp, used to measure activation delay, see:
-    /// <https://github.com/neondatabase/neon/issues/4025>
-    constructed_at: Instant,
-
-    state: watch::Sender<TenantState>,
 
     // Overridden tenant-specific config parameters.
     // We keep pageserver_api::models::TenantConfig sturct here to preserve the information
@@ -230,26 +205,20 @@ pub struct TenantShard {
     // The detailed sharding information, beyond the number/count in id
     shard_identity: ShardIdentity,
 
-    /// The remote storage generation, used to protect S3 objects from split-brain.
-    /// Does not change over the lifetime of the [`TenantShard`] object.
-    ///
-    /// This duplicates the generation stored in LocationConf, but that structure is mutable:
-    /// this copy enforces the invariant that generatio doesn't change during a Tenant's lifetime.
+    /// The launcher-assigned generation, used to fence YB writes against
+    /// stale pageservers. Does not change over the lifetime of the process.
     generation: Generation,
 
-    timelines: Mutex<HashMap<TimelineId, Arc<Timeline>>>,
+    /// THE timeline this process serves. Set exactly once during startup
+    /// (open-existing or create-if-missing), before listeners start.
+    timeline: std::sync::OnceLock<Arc<Timeline>>,
 
-    /// During timeline creation, we first insert the TimelineId to the
-    /// creating map, then `timelines`, then remove it from the creating map.
-    /// **Lock order**: if acquiring both, acquire `timelines` before `timelines_creating`.
+    /// Guards the bootstrap-time timeline creation (crash-retry runs it
+    /// again on the same id). Held as a set for the `TimelineCreateGuard`
+    /// release-on-drop protocol.
     timelines_creating: std::sync::Mutex<HashSet<TimelineId>>,
 
     // This mutex prevents creation of new timelines during GC.
-    // Adding yet another mutex (in addition to `timelines`) is needed because holding
-    // `timelines` mutex during all GC iteration
-    // may block for a long time `get_timeline`, `get_timelines_state`,... and other operations
-    // with timelines, which in turn may cause dropping replication connection, expiration of wait_for_lsn
-    // timeout...
     gc_cs: tokio::sync::Mutex<()>,
     walredo_mgr: Option<Arc<WalRedoManager>>,
 
@@ -259,11 +228,6 @@ pub struct TenantShard {
     /// A channel to send async requests to prepare a basebackup for the basebackup cache.
     basebackup_cache: Arc<BasebackupCache>,
 
-    /// If the tenant is in Activating state, notify this to encourage it
-    /// to proceed to Active as soon as possible, rather than waiting for lazy
-    /// background warmup.
-    pub(crate) activate_now_sem: tokio::sync::Semaphore,
-
     /// Time it took for the tenant to activate. Zero if not active yet.
     attach_wal_lag_cooldown: Arc<std::sync::OnceLock<WalLagCooldown>>,
 
@@ -271,12 +235,12 @@ pub struct TenantShard {
     // Timelines' cancellation token.
     pub(crate) cancel: CancellationToken,
 
-    // Users of the TenantShard such as the page service must take this Gate to avoid
-    // trying to use a TenantShard which is shutting down.
+    // Users of the PageServer such as the page service must take this Gate to avoid
+    // trying to use a PageServer which is shutting down.
     pub(crate) gate: Gate,
 
     /// Throttle applied at the top of [`Timeline::get`].
-    /// All [`TenantShard::timelines`] of a given [`TenantShard`] instance share the same [`throttle::Throttle`] instance.
+    /// All [`PageServer::timelines`] of a given [`PageServer`] instance share the same [`throttle::Throttle`] instance.
     pub(crate) pagestream_throttle: Arc<throttle::Throttle>,
 
     pub(crate) pagestream_throttle_metrics: Arc<crate::metrics::tenant_throttling::Pagestream>,
@@ -295,9 +259,9 @@ pub struct TenantShard {
     /// `TenantSharedResources::fpu_page_store`).
     pub(crate) fpu_page_store: Arc<crate::page_store::PageStore>,
 }
-impl std::fmt::Debug for TenantShard {
+impl std::fmt::Debug for PageServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.id, self.current_state())
+        write!(f, "{}", self.id)
     }
 }
 
@@ -413,51 +377,7 @@ pub enum LoadLocalTimelineError {
     ResumeDeletion(#[source] anyhow::Error),
 }
 
-#[derive(thiserror::Error)]
-pub enum DeleteTimelineError {
-    #[error("NotFound")]
-    NotFound,
-
-    #[error("HasChildren")]
-    HasChildren(Vec<TimelineId>),
-
-    #[error("Timeline deletion is already in progress")]
-    AlreadyInProgress(Arc<tokio::sync::Mutex<DeleteTimelineFlow>>),
-
-    #[error("Cancelled")]
-    Cancelled,
-
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-
-impl Debug for DeleteTimelineError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound => write!(f, "NotFound"),
-            Self::HasChildren(c) => f.debug_tuple("HasChildren").field(c).finish(),
-            Self::AlreadyInProgress(_) => f.debug_tuple("AlreadyInProgress").finish(),
-            Self::Cancelled => f.debug_tuple("Cancelled").finish(),
-            Self::Other(e) => f.debug_tuple("Other").field(e).finish(),
-        }
-    }
-}
-
-pub enum SetStoppingError {
-    AlreadyStopping(completion::Barrier),
-    Broken,
-}
-
-impl Debug for SetStoppingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AlreadyStopping(_) => f.debug_tuple("AlreadyStopping").finish(),
-            Self::Broken => write!(f, "Broken"),
-        }
-    }
-}
-
-/// What is used to determine idempotency of a [`TenantShard::create_timeline`] call in  [`TenantShard::start_creating_timeline`] in  [`TenantShard::start_creating_timeline`].
+/// What is used to determine idempotency of a [`PageServer::create_timeline`] call in  [`PageServer::start_creating_timeline`] in  [`PageServer::start_creating_timeline`].
 ///
 /// Each [`Timeline`] object holds [`Self`] as an immutable property in [`Timeline::create_idempotency`].
 ///
@@ -487,7 +407,7 @@ pub(crate) enum CreateTimelineIdempotency {
     },
 }
 
-/// What is returned by [`TenantShard::start_creating_timeline`].
+/// What is returned by [`PageServer::start_creating_timeline`].
 #[must_use]
 enum StartCreatingTimelineResult {
     CreateGuard(TimelineCreateGuard),
@@ -498,7 +418,7 @@ enum TimelineInitAndSyncResult {
     ReadyToActivate,
 }
 
-/// What is returned by [`TenantShard::create_timeline`].
+/// What is returned by [`PageServer::create_timeline`].
 enum CreateTimelineResult {
     Created(Arc<Timeline>),
     Idempotent(Arc<Timeline>),
@@ -550,10 +470,6 @@ pub(crate) enum GcError {
     #[error("timeline shutting down")]
     TimelineCancelled,
 
-    // The tenant is in a state inelegible to run GC
-    #[error("not active")]
-    NotActive,
-
     // An error reading while calculating GC cutoffs
     #[error(transparent)]
     GcCutoffs(PageReconstructError),
@@ -572,7 +488,7 @@ impl From<PageReconstructError> for GcError {
     }
 }
 
-impl TenantShard {
+impl PageServer {
     /// Yet another helper for timeline initialization.
     ///
     /// - Initializes the Timeline struct and inserts it into the tenant's hash map
@@ -660,21 +576,13 @@ impl TenantShard {
 
         let _ = cause;
 
-        {
-            let mut timelines_accessor = self.timelines.lock().unwrap();
-            match timelines_accessor.entry(timeline_id) {
-                // We should never try and load the same timeline twice during startup
-                Entry::Occupied(_) => {
-                    unreachable!(
-                        "Timeline {tenant_id}/{timeline_id} already exists in the tenant map"
-                    );
-                }
-                Entry::Vacant(v) => {
-                    v.insert(Arc::clone(&timeline));
-                    timeline.maybe_spawn_flush_loop();
-                }
-            }
-        }
+        // We should never try and load the same timeline twice during startup
+        self.timeline
+            .set(Arc::clone(&timeline))
+            .unwrap_or_else(|_| {
+                unreachable!("Timeline {tenant_id}/{timeline_id} already exists in the tenant slot")
+            });
+        timeline.maybe_spawn_flush_loop();
 
         // yb-pageserver: page data lives in pageserver.pages /
         // slru_pages / meta, never in layer files. A timeline with
@@ -684,28 +592,21 @@ impl TenantShard {
         Ok(TimelineInitAndSyncResult::ReadyToActivate)
     }
 
-    /// Attach a tenant that's available in cloud storage.
-    ///
-    /// This returns quickly, after just creating the in-memory object
-    /// Tenant struct and launching a background task to download
-    /// the remote index files.  On return, the tenant is most likely still in
-    /// Attaching state, and it will become Active once the background task
-    /// finishes. You can use wait_until_active() to wait for the task to
-    /// complete.
-    ///
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn spawn(
+    /// Open the configured (tenant, timeline) synchronously: preload the
+    /// timeline_state row, attach (open-existing or create-if-missing per
+    /// `[timeline_init]`), and activate. Called from startup BEFORE any
+    /// listener accepts traffic; failure is fatal to the process.
+    pub(crate) async fn open(
         conf: &'static PageServerConf,
         tenant_shard_id: TenantId,
         resources: TenantSharedResources,
         attached_conf: AttachedTenantConf,
         shard_identity: ShardIdentity,
-        init_order: Option<InitializationOrder>,
-        mode: SpawnMode,
         ctx: &RequestContext,
-    ) -> Result<Arc<TenantShard>, GlobalShutDown> {
+    ) -> anyhow::Result<Arc<PageServer>> {
         let wal_redo_manager =
-            WalRedoManager::new(PostgresRedoManager::new(conf, tenant_shard_id))?;
+            WalRedoManager::new(PostgresRedoManager::new(conf, tenant_shard_id))
+                .map_err(|GlobalShutDown| anyhow::anyhow!("pageserver is shutting down"))?;
 
         let TenantSharedResources {
             remote_storage,
@@ -716,8 +617,7 @@ impl TenantShard {
 
         let generation = attached_conf.generation;
 
-        let tenant = Arc::new(TenantShard::new(
-            TenantState::Attaching,
+        let tenant = Arc::new(PageServer::new(
             conf,
             attached_conf,
             shard_identity,
@@ -729,118 +629,36 @@ impl TenantShard {
             fpu_page_store,
         ));
 
-        // The attach task will carry a GateGuard, so that shutdown() reliably waits for it to drop out if
-        // we shut down while attaching.
-        let attach_gate_guard = tenant
-            .gate
-            .enter()
-            .expect("We just created the TenantShard: nothing else can have shut it down yet");
-
-        // Do all the hard work in the background
-        let tenant_clone = Arc::clone(&tenant);
         let ctx = ctx.detached_child(TaskKind::Attach, DownloadBehavior::Warn);
-        task_mgr::spawn(
-            &tokio::runtime::Handle::current(),
-            TaskKind::Attach,
-            tenant_shard_id,
-            None,
-            "attach tenant",
-            async move {
+        let tenant_clone = Arc::clone(&tenant);
+        async move {
+            info!("Opening tenant");
 
-                info!("Attaching tenant");
+            let preload = {
+                let _preload_timer = TENANT.preload.start_timer();
+                tenant_clone
+                    .preload(&remote_storage, tenant_clone.cancel.clone())
+                    .await?
+            };
 
-                let _gate_guard = attach_gate_guard;
-
-                // Is this tenant being spawned as part of process startup?
-                let starting_up = init_order.is_some();
-                scopeguard::defer! {
-                    if starting_up {
-                        TENANT.startup_complete.inc();
-                    }
-                }
-
-                fn make_broken_or_stopping(t: &TenantShard, err: anyhow::Error) {
-                    t.state.send_modify(|state| match state {
-                        // TODO: the old code alluded to DeleteTenantFlow sometimes setting
-                        // TenantState::Stopping before we get here, but this may be outdated.
-                        // Let's find out with a testing assertion. If this doesn't fire, and the
-                        // logs don't show this happening in production, remove the Stopping cases.
-                        TenantState::Stopping{..} if cfg!(any(test, feature = "testing")) => {
-                            panic!("unexpected TenantState::Stopping during attach")
-                        }
-                        // If the tenant is cancelled, assume the error was caused by cancellation.
-                        TenantState::Attaching if t.cancel.is_cancelled() => {
-                            info!("attach cancelled, setting tenant state to Stopping: {err}");
-                            // NB: progress None tells `set_stopping` that attach has cancelled.
-                            *state = TenantState::Stopping { progress: None };
-                        }
-                        // According to the old code, DeleteTenantFlow may already have set this to
-                        // Stopping. Retain its progress.
-                        // TODO: there is no DeleteTenantFlow. Is this still needed? See above.
-                        TenantState::Stopping { progress } if t.cancel.is_cancelled() => {
-                            assert!(progress.is_some(), "concurrent attach cancellation");
-                            info!("attach cancelled, already Stopping: {err}");
-                        }
-                        // Mark the tenant as broken.
-                        TenantState::Attaching | TenantState::Stopping { .. } => {
-                            error!("attach failed, setting tenant state to Broken (was {state}): {err:?}");
-                            *state = TenantState::broken_from_reason(err.to_string())
-                        }
-                        // The attach task owns the tenant state until activated.
-                        state => panic!("invalid tenant state {state} during attach: {err:?}"),
-                    });
-                }
-
-                let mut init_order = init_order;
-                // take the completion because initial tenant loading will complete when all of
-                // these tasks complete.
-                let _completion = init_order
-                    .as_mut()
-                    .and_then(|x| x.initial_tenant_load.take());
-                let remote_load_completion = init_order
-                    .as_mut()
-                    .and_then(|x| x.initial_tenant_load_remote.take());
-
-                let SpawnMode::Eager = mode;
-                let preload = {
-                    let _preload_timer = TENANT.preload.start_timer();
-                    let res = tenant_clone
-                        .preload(&remote_storage, task_mgr::shutdown_token())
-                        .await;
-                    match res {
-                        Ok(p) => Some(p),
-                        Err(e) => {
-                            make_broken_or_stopping(&tenant_clone, anyhow::anyhow!(e));
-                            return Ok(());
-                        }
-                    }
-                };
-
-                // Remote preload is complete.
-                drop(remote_load_completion);
-
-
-                // We will time the duration of the attach phase unless this is a creation (attach will do no work)
-                let attach_start = std::time::Instant::now();
-                let attached = {
-                    let _attach_timer = Some(TENANT.attach.start_timer());
-                    tenant_clone.attach(preload, &ctx).await
-                };
-                let attach_duration = attach_start.elapsed();
-                _ = tenant_clone.attach_wal_lag_cooldown.set(WalLagCooldown::new(attach_start, attach_duration));
-
-                match attached {
-                    Ok(()) => {
-                        info!("attach finished, activating");
-                        tenant_clone.activate(None, &ctx);
-                    }
-                    Err(e) => make_broken_or_stopping(&tenant_clone, anyhow::anyhow!(e)),
-                }
-
-                Ok(())
+            let attach_start = std::time::Instant::now();
+            {
+                let _attach_timer = Some(TENANT.attach.start_timer());
+                tenant_clone.attach(Some(preload), &ctx).await?;
             }
-            .instrument(tracing::info_span!(parent: None, "attach", tenant_id=%tenant_shard_id, gen=?generation)),
-        );
+            let attach_duration = attach_start.elapsed();
+            _ = tenant_clone
+                .attach_wal_lag_cooldown
+                .set(WalLagCooldown::new(attach_start, attach_duration));
+
+            info!("attach finished, activating");
+            tenant_clone.activate(&ctx);
+            anyhow::Ok(())
+        }
+        .instrument(
+            tracing::info_span!(parent: None, "attach", tenant_id=%tenant_shard_id, gen=?generation),
+        )
+        .await?;
         Ok(tenant)
     }
 
@@ -917,7 +735,7 @@ impl TenantShard {
     /// No background tasks are started as part of this routine.
     ///
     async fn attach(
-        self: &Arc<TenantShard>,
+        self: &Arc<PageServer>,
         preload: Option<TenantPreload>,
         ctx: &RequestContext,
     ) -> anyhow::Result<()> {
@@ -1013,7 +831,7 @@ impl TenantShard {
                         .map_err(|e| anyhow::anyhow!("bootstrap configured timeline: {e}"))?;
                     // finish_creation inserted the timeline into
                     // self.timelines and wrote the timeline_state row;
-                    // activation happens in TenantShard::activate.
+                    // activation happens in PageServer::activate.
                     let (CreateTimelineResult::Created(t)
                     | CreateTimelineResult::Idempotent(t)) = result;
                     bootstrapped_timeline = Some(t.timeline_id);
@@ -1101,17 +919,10 @@ impl TenantShard {
             // activation happens later, on Tenant::activate
         }
 
-        // At this point we've initialized all timelines and are tracking them.
-        // Now compute the layer visibility for all (not offloaded) timelines.
-        let compute_visiblity_for = {
-            let timelines_accessor = self.timelines.lock().unwrap();
-            // Before activation, populate each Timeline's GcInfo with information about its children
-            self.initialize_gc_info(&timelines_accessor, None);
-            timelines_accessor.values().cloned().collect::<Vec<_>>()
-        };
-
-        // update_layer_visibility removed in phase 4d.2.
-        let _ = compute_visiblity_for;
+        // Before activation, seed the timeline's GcInfo. Branch children
+        // live in other processes, so there are no in-process branchpoints
+        // to track; cross-process ancestor pins are GC future work (task 7).
+        self.initialize_gc_info();
 
         // Resume-deletion path is dead in yb-mode: synth never produces
         // `MaybeDeletedIndexPart::Deleted`, so there's nothing to
@@ -1162,28 +973,20 @@ impl TenantShard {
         info!("loading timeline {}", timeline_id);
 
         // Single-timeline pageserver: a branch's ancestor is served by
-        // a DIFFERENT pageserver process and is never hosted here. The
-        // in-process Arc link is therefore best-effort (present only in
-        // multi-timeline test setups); reads below the branch point go
-        // through lineage-aware PageStore reads instead.
-        let ancestor = remote_metadata
-            .ancestor_timeline()
-            .and_then(|ancestor_id| self.timelines.lock().unwrap().get(&ancestor_id).cloned());
-
-        self.timeline_init_and_sync(
-            timeline_id,
-            resources,
-            remote_metadata,
-            ancestor,
-            cause,
-            ctx,
-        )
-        .await
+        // a DIFFERENT pageserver process and is never hosted here; reads
+        // below the branch point go through lineage-aware PageStore reads.
+        self.timeline_init_and_sync(timeline_id, resources, remote_metadata, None, cause, ctx)
+            .await
     }
 
     #[allow(dead_code)]
     pub(crate) fn tenant_shard_id(&self) -> TenantId {
         self.id
+    }
+
+    /// The timeline this process serves, if startup has set it.
+    pub(crate) fn timeline(&self) -> Option<Arc<Timeline>> {
+        self.timeline.get().cloned()
     }
 
     /// Get Timeline handle for given Neon timeline ID.
@@ -1193,9 +996,10 @@ impl TenantShard {
         timeline_id: TimelineId,
         active_only: bool,
     ) -> Result<Arc<Timeline>, GetTimelineError> {
-        let timelines_accessor = self.timelines.lock().unwrap();
-        let timeline = timelines_accessor
-            .get(&timeline_id)
+        let timeline = self
+            .timeline
+            .get()
+            .filter(|tl| tl.timeline_id == timeline_id)
             .ok_or(GetTimelineError::NotFound {
                 tenant_id: self.id,
                 timeline_id,
@@ -1215,16 +1019,15 @@ impl TenantShard {
     /// Lists timelines the tenant contains.
     /// It's up to callers to omit certain timelines that are not considered ready for use.
     pub fn list_timelines(&self) -> Vec<Arc<Timeline>> {
-        self.timelines
-            .lock()
-            .unwrap()
-            .values()
-            .map(Arc::clone)
-            .collect()
+        self.timeline().into_iter().collect()
     }
 
     pub fn list_timeline_ids(&self) -> Vec<TimelineId> {
-        self.timelines.lock().unwrap().keys().cloned().collect()
+        self.timeline
+            .get()
+            .map(|tl| tl.timeline_id)
+            .into_iter()
+            .collect()
     }
 
     /// Helper for unit tests to create a timeline with some pre-loaded states.
@@ -1251,13 +1054,8 @@ impl TenantShard {
         ctx: &RequestContext,
     ) -> Result<GcResult, GcError> {
         // Don't start doing work during shutdown
-        if let TenantState::Stopping { .. } = self.current_state() {
+        if self.cancel.is_cancelled() {
             return Ok(GcResult::default());
-        }
-
-        // there is a global allowed_error for this
-        if !self.is_active() {
-            return Err(GcError::NotActive);
         }
 
         if self
@@ -1285,15 +1083,7 @@ impl TenantShard {
     async fn housekeeping(&self) {
         // Freeze ephemeral layers on idle timelines so they don't sit
         // open indefinitely.
-        let timelines = self
-            .timelines
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|tli| tli.is_active())
-            .cloned()
-            .collect_vec();
-        for timeline in timelines {
+        if let Some(timeline) = self.timeline().filter(|tl| tl.is_active()) {
             let span =
                 info_span!("maybe_freeze_ephemeral_layer", timeline_id = %timeline.timeline_id);
             timeline
@@ -1309,202 +1099,49 @@ impl TenantShard {
         }
     }
 
-    pub fn timeline_has_no_attached_children(&self, timeline_id: TimelineId) -> bool {
-        let timelines = self.timelines.lock().unwrap();
-        !timelines
-            .iter()
-            .any(|(_id, tl)| tl.get_ancestor_timeline_id() == Some(timeline_id))
-    }
-
-    pub fn current_state(&self) -> TenantState {
-        self.state.borrow().clone()
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.current_state() == TenantState::Active
-    }
-
     pub fn generation(&self) -> Generation {
         self.generation
     }
 
-    /// Changes tenant status to active, unless shutdown was already requested.
-    ///
-    /// `background_jobs_can_start` is an optional barrier set to a value during pageserver startup
-    /// to delay background jobs. Background jobs can be started right away when None is given.
-    fn activate(
-        self: &Arc<Self>,
-        background_jobs_can_start: Option<&completion::Barrier>,
-        ctx: &RequestContext,
-    ) {
+    /// Activate the opened timeline: launch its walreceiver and the
+    /// tenant background loops. Runs synchronously at the end of startup,
+    /// before listeners accept traffic.
+    fn activate(self: &Arc<Self>, ctx: &RequestContext) {
         span::debug_assert_current_span_has_tenant_id();
 
-        let mut activating = false;
-        self.state.send_modify(|current_state| {
-            use pageserver_api::models::ActivatingFrom;
-            match &*current_state {
-                TenantState::Activating(_) | TenantState::Active | TenantState::Broken { .. } | TenantState::Stopping { .. } => {
-                    panic!("caller is responsible for calling activate() only on Loading / Attaching tenants, got {current_state:?}");
-                }
-                TenantState::Attaching => {
-                    *current_state = TenantState::Activating(ActivatingFrom::Attaching);
-                }
-            }
-            debug!(tenant_id = %self.id, "Activating tenant");
-            activating = true;
-            // Continue outside the closure. We need to grab timelines.lock()
-            // and we plan to turn it into a tokio::sync::Mutex in a future patch.
-        });
+        // Spawn gc and housekeeping loops. The loops will shut themselves
+        // down when they notice that the tenant is shutting down.
+        tasks::start_background_loops(self);
 
-        if activating {
-            let timelines_accessor = self.timelines.lock().unwrap();
-            let timelines_to_activate = timelines_accessor
-                .values()
-                .filter(|timeline| !(timeline.is_broken() || timeline.is_stopping()));
-
-            // Spawn gc and compaction loops. The loops will shut themselves
-            // down when they notice that the tenant is inactive.
-            tasks::start_background_loops(self, background_jobs_can_start);
-
-            let mut activated_timelines = 0;
-
-            for timeline in timelines_to_activate {
-                timeline.activate(
-                    self.clone(),
-                    background_jobs_can_start,
-                    &ctx.with_scope_timeline(timeline),
-                );
-                activated_timelines += 1;
-            }
-
-            self.state.send_modify(move |current_state| {
-                assert!(
-                    matches!(current_state, TenantState::Activating(_)),
-                    "set_stopping and set_broken wait for us to leave Activating state",
-                );
-                *current_state = TenantState::Active;
-
-                let elapsed = self.constructed_at.elapsed();
-                let total_timelines = timelines_accessor.len();
-
-                // log a lot of stuff, because some tenants sometimes suffer from user-visible
-                // times to activate. see https://github.com/neondatabase/neon/issues/4025
-                info!(
-                    since_creation_millis = elapsed.as_millis(),
-                    tenant_id = %self.id,
-                    activated_timelines,
-                    total_timelines,
-                    post_state = <&'static str>::from(&*current_state),
-                    "activation attempt finished"
-                );
-
-                TENANT.activation.observe(elapsed.as_secs_f64());
-            });
-        }
+        let timeline = self
+            .timeline()
+            .expect("activate runs after attach has set the timeline");
+        timeline.activate(self.clone(), &ctx.with_scope_timeline(&timeline));
+        info!(tenant_id = %self.id, "tenant active");
     }
 
     /// Shutdown the tenant and join all of the spawned tasks.
     ///
-    /// The method caters for all use-cases:
-    /// - pageserver shutdown (freeze_and_flush == true)
-    /// - detach + ignore (freeze_and_flush == false)
-    ///
-    /// This will attempt to shutdown even if tenant is broken.
-    ///
-    /// `shutdown_progress` is a [`completion::Barrier`] for the shutdown initiated by this call.
-    /// If the tenant is already shutting down, we return a clone of the first shutdown call's
-    /// `Barrier` as an `Err`. This not-first caller can use the returned barrier to join with
-    /// the ongoing shutdown.
-    async fn shutdown(
-        &self,
-        shutdown_progress: completion::Barrier,
-        shutdown_mode: timeline::ShutdownMode,
-    ) -> Result<(), completion::Barrier> {
+    /// Setting the timeline to Stopping locks out new requests, signals
+    /// cancellation to the WAL receiver (joined below, so no new data
+    /// arrives before the final flush) and the background loops.
+    async fn shutdown(&self, shutdown_mode: timeline::ShutdownMode) {
         span::debug_assert_current_span_has_tenant_id();
 
-        // Set tenant (and its timlines) to Stoppping state.
-        //
-        // Since we can only transition into Stopping state after activation is complete,
-        // run it in a JoinSet so all tenants have a chance to stop before we get SIGKILLed.
-        //
-        // Transitioning tenants to Stopping state has a couple of non-obvious side effects:
-        // 1. Lock out any new requests to the tenants.
-        // 2. Signal cancellation to WAL receivers (we wait on it below).
-        // 3. Signal cancellation for other tenant background loops.
-        // 4. ???
-        //
-        // The waiting for the cancellation is not done uniformly.
-        // We certainly wait for WAL receivers to shut down.
-        // That is necessary so that no new data comes in before the freeze_and_flush.
-        // But the tenant background loops are joined-on in our caller.
-        // It's mesed up.
-        // we just ignore the failure to stop
+        if let Some(timeline) = self.timeline().filter(|tl| !tl.is_broken()) {
+            timeline.set_state(TimelineState::Stopping);
 
-        // If we're still attaching, fire the cancellation token early to drop out: this
-        // will prevent us flushing, but ensures timely shutdown if some I/O during attach
-        // is very slow.
-        let shutdown_mode = if matches!(self.current_state(), TenantState::Attaching) {
-            self.cancel.cancel();
-
-            // Having fired our cancellation token, do not try and flush timelines: their cancellation tokens
-            // are children of ours, so their flush loops will have shut down already
-            timeline::ShutdownMode::Hard
-        } else {
-            shutdown_mode
-        };
-
-        match self.set_stopping(shutdown_progress).await {
-            Ok(()) => {}
-            Err(SetStoppingError::Broken) => {
-                // assume that this is acceptable
-            }
-            Err(SetStoppingError::AlreadyStopping(other)) => {
-                // give caller the option to wait for this this shutdown
-                info!("Tenant::shutdown: AlreadyStopping");
-                return Err(other);
-            }
-        };
-
-        let mut js = tokio::task::JoinSet::new();
-        {
-            let timelines = self.timelines.lock().unwrap();
-            timelines.values().for_each(|timeline| {
-                let timeline = Arc::clone(timeline);
-                let timeline_id = timeline.timeline_id;
-                let span = tracing::info_span!("timeline_shutdown", %timeline_id, ?shutdown_mode);
-                js.spawn(async move { timeline.shutdown(shutdown_mode).instrument(span).await });
-            });
-        }
-        // test_long_timeline_create_then_tenant_delete is leaning on this message
-        tracing::info!("Waiting for timelines...");
-        while let Some(res) = js.join_next().await {
-            match res {
-                Ok(()) => {}
-                Err(je) if je.is_cancelled() => unreachable!("no cancelling used"),
-                Err(je) if je.is_panic() => {
-                    // The panic itself was logged by the runtime's
-                    // panic hook; count it so a flatline alert catches
-                    // task deaths even if the log line was missed.
-                    crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["tenant_task_panic"])
-                        .inc();
-                }
-                Err(je) => {
-                    crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["tenant_task_panic"])
-                        .inc();
-                    tracing::error!("TENANT TASK ENDED WITH UNEXPECTED JoinError: {je:?}");
-                }
-            }
+            let timeline_id = timeline.timeline_id;
+            let span = tracing::info_span!("timeline_shutdown", %timeline_id, ?shutdown_mode);
+            timeline.shutdown(shutdown_mode).instrument(span).await;
         }
 
-        // We cancel the Tenant's cancellation token _after_ the timelines have all shut down.  This permits
-        // them to continue to do work during their shutdown methods, e.g. flushing data.
+        // We cancel the Tenant's cancellation token _after_ the timeline has shut down.  This permits
+        // it to continue to do work during its shutdown method, e.g. flushing data.
         tracing::debug!("Cancelling CancellationToken");
         self.cancel.cancel();
 
-        // shutdown all tenant and timeline tasks: gc, compaction, page service
-        // No new tasks will be started for this tenant because it's in `Stopping` state.
+        // shutdown all tenant and timeline tasks: gc, housekeeping, page service
         //
         // this will additionally shutdown and await all timeline tasks.
         tracing::debug!("Waiting for tasks...");
@@ -1518,138 +1155,6 @@ impl TenantShard {
         self.gate.close().await;
 
         remove_tenant_metrics(&self.id);
-
-        Ok(())
-    }
-
-    /// Change tenant status to Stopping, to mark that it is being shut down.
-    ///
-    /// This function waits for the tenant to become active if it isn't already, before transitioning it into Stopping state.
-    ///
-    /// This function is not cancel-safe!
-    async fn set_stopping(&self, progress: completion::Barrier) -> Result<(), SetStoppingError> {
-        let mut rx = self.state.subscribe();
-
-        // cannot stop before we're done activating, so wait out until we're done activating
-        rx.wait_for(|state| match state {
-            TenantState::Activating(_) | TenantState::Attaching => {
-                info!("waiting for {state} to turn Active|Broken|Stopping");
-                false
-            }
-            TenantState::Active | TenantState::Broken { .. } | TenantState::Stopping { .. } => true,
-        })
-        .await
-        .expect("cannot drop self.state while on a &self method");
-
-        // we now know we're done activating, let's see whether this task is the winner to transition into Stopping
-        let mut err = None;
-        let stopping = self.state.send_if_modified(|current_state| match current_state {
-            TenantState::Activating(_) | TenantState::Attaching => {
-                unreachable!("we ensured above that we're done with activation, and, there is no re-activation")
-            }
-            TenantState::Active => {
-                // FIXME: due to time-of-check vs time-of-use issues, it can happen that new timelines
-                // are created after the transition to Stopping. That's harmless, as the Timelines
-                // won't be accessible to anyone afterwards, because the Tenant is in Stopping state.
-                *current_state = TenantState::Stopping { progress: Some(progress) };
-                // Continue stopping outside the closure. We need to grab timelines.lock()
-                // and we plan to turn it into a tokio::sync::Mutex in a future patch.
-                true
-            }
-            TenantState::Stopping { progress: None } => {
-                // An attach was cancelled, and the attach transitioned the tenant from Attaching to
-                // Stopping(None) to let us know it exited. Register our progress and continue.
-                *current_state = TenantState::Stopping { progress: Some(progress) };
-                true
-            }
-            TenantState::Broken { reason, .. } => {
-                info!(
-                    "Cannot set tenant to Stopping state, it is in Broken state due to: {reason}"
-                );
-                err = Some(SetStoppingError::Broken);
-                false
-            }
-            TenantState::Stopping { progress: Some(progress) } => {
-                info!("Tenant is already in Stopping state");
-                err = Some(SetStoppingError::AlreadyStopping(progress.clone()));
-                false
-            }
-        });
-        match (stopping, err) {
-            (true, None) => {} // continue
-            (false, Some(err)) => return Err(err),
-            (true, Some(_)) => unreachable!(
-                "send_if_modified closure must error out if not transitioning to Stopping"
-            ),
-            (false, None) => unreachable!(
-                "send_if_modified closure must return true if transitioning to Stopping"
-            ),
-        }
-
-        let timelines_accessor = self.timelines.lock().unwrap();
-        let not_broken_timelines = timelines_accessor
-            .values()
-            .filter(|timeline| !timeline.is_broken());
-        for timeline in not_broken_timelines {
-            timeline.set_state(TimelineState::Stopping);
-        }
-        Ok(())
-    }
-
-    pub fn subscribe_for_state_updates(&self) -> watch::Receiver<TenantState> {
-        self.state.subscribe()
-    }
-
-    /// The activate_now semaphore is initialized with zero units.  As soon as
-    /// we add a unit, waiters will be able to acquire a unit and proceed.
-    pub(crate) fn activate_now(&self) {
-        self.activate_now_sem.add_permits(1);
-    }
-
-    pub(crate) async fn wait_to_become_active(
-        &self,
-        timeout: Duration,
-    ) -> Result<(), GetActiveTenantError> {
-        let mut receiver = self.state.subscribe();
-        loop {
-            let current_state = receiver.borrow_and_update().clone();
-            match current_state {
-                TenantState::Attaching | TenantState::Activating(_) => {
-                    // in these states, there's a chance that we can reach ::Active
-                    self.activate_now();
-                    match timeout_cancellable(timeout, &self.cancel, receiver.changed()).await {
-                        Ok(r) => {
-                            r.map_err(
-                            |_e: tokio::sync::watch::error::RecvError|
-                                // Tenant existed but was dropped: report it as non-existent
-                                GetActiveTenantError::NotFound(GetTenantError::ShardNotFound(self.id))
-                        )?
-                        }
-                        Err(TimeoutCancellableError::Cancelled) => {
-                            return Err(GetActiveTenantError::Cancelled);
-                        }
-                        Err(TimeoutCancellableError::Timeout) => {
-                            return Err(GetActiveTenantError::WaitForActiveTimeout {
-                                latest_state: Some(self.current_state()),
-                                wait_time: timeout,
-                            });
-                        }
-                    }
-                }
-                TenantState::Active => {
-                    return Ok(());
-                }
-                TenantState::Broken { reason, .. } => {
-                    // This is fatal, and reported distinctly from the general case of "will never be active" because
-                    // it's logically a 500 to external API users (broken is always a bug).
-                    return Err(GetActiveTenantError::Broken(reason));
-                }
-                TenantState::Stopping { .. } => {
-                    // There's no chance the tenant can transition back into ::Active
-                    return Err(GetActiveTenantError::WillNotBecomeActive(current_state));
-                }
-            }
-        }
     }
 
     #[allow(dead_code)]
@@ -1659,7 +1164,7 @@ impl TenantShard {
 
 }
 
-impl TenantShard {
+impl PageServer {
     pub fn tenant_specific_overrides(&self) -> pageserver_api::models::TenantConfig {
         self.tenant_conf.load().tenant_conf.clone()
     }
@@ -1710,58 +1215,6 @@ impl TenantShard {
             .unwrap_or(conf.default_tenant_conf.lsn_lease_length)
     }
 
-    pub fn update_tenant_config<
-        F: Fn(
-            pageserver_api::models::TenantConfig,
-        ) -> anyhow::Result<pageserver_api::models::TenantConfig>,
-    >(
-        &self,
-        update: F,
-    ) -> anyhow::Result<pageserver_api::models::TenantConfig> {
-        // Use read-copy-update in order to avoid overwriting the location config
-        // state if this races with [`TenantShard::set_new_location_config`]. Note that
-        // this race is not possible if both request types come from the storage
-        // controller (as they should!) because an exclusive op lock is required
-        // on the storage controller side.
-
-        self.tenant_conf
-            .try_rcu(|attached_conf| -> Result<_, anyhow::Error> {
-                Ok(Arc::new(AttachedTenantConf {
-                    tenant_conf: update(attached_conf.tenant_conf.clone())?,
-                    generation: attached_conf.generation,
-                    lsn_lease_deadline: attached_conf.lsn_lease_deadline,
-                }))
-            })?;
-
-        let updated = self.tenant_conf.load();
-
-        self.tenant_conf_updated(&updated.tenant_conf);
-        // Don't hold self.timelines.lock() during the notifies.
-        // There's no risk of deadlock right now, but there could be if we consolidate
-        // mutexes in struct Timeline in the future.
-        let timelines = self.list_timelines();
-        for timeline in timelines {
-            timeline.tenant_conf_updated(&updated);
-        }
-
-        Ok(updated.tenant_conf.clone())
-    }
-
-    pub(crate) fn set_new_location_config(&self, new_conf: AttachedTenantConf) {
-        let new_tenant_conf = new_conf.tenant_conf.clone();
-
-        self.tenant_conf.store(Arc::new(new_conf.clone()));
-
-        self.tenant_conf_updated(&new_tenant_conf);
-        // Don't hold self.timelines.lock() during the notifies.
-        // There's no risk of deadlock right now, but there could be if we consolidate
-        // mutexes in struct Timeline in the future.
-        let timelines = self.list_timelines();
-        for timeline in timelines {
-            timeline.tenant_conf_updated(&new_conf);
-        }
-    }
-
     fn get_pagestream_throttle_config(
         psconf: &'static PageServerConf,
         overrides: &pageserver_api::models::TenantConfig,
@@ -1770,11 +1223,6 @@ impl TenantShard {
             .timeline_get_throttle
             .clone()
             .unwrap_or(psconf.default_tenant_conf.timeline_get_throttle.clone())
-    }
-
-    pub(crate) fn tenant_conf_updated(&self, new_conf: &pageserver_api::models::TenantConfig) {
-        let conf = Self::get_pagestream_throttle_config(self.conf, new_conf);
-        self.pagestream_throttle.reconfigure(conf)
     }
 
     /// Helper function to create a new Timeline struct.
@@ -1841,14 +1289,13 @@ impl TenantShard {
         Ok((timeline, timeline_ctx))
     }
 
-    /// [`TenantShard::shutdown`] must be called before dropping the returned [`TenantShard`] object
+    /// [`PageServer::shutdown`] must be called before dropping the returned [`PageServer`] object
     /// to ensure proper cleanup of background tasks and metrics.
     //
     // Allow too_many_arguments because a constructor's argument list naturally grows with the
     // number of attributes in the struct: breaking these out into a builder wouldn't be helpful.
     #[allow(clippy::too_many_arguments)]
     fn new(
-        state: TenantState,
         conf: &'static PageServerConf,
         attached_conf: AttachedTenantConf,
         shard_identity: ShardIdentity,
@@ -1858,83 +1305,24 @@ impl TenantShard {
         basebackup_cache: Arc<BasebackupCache>,
         compute_page_store: Arc<crate::page_store::PageStore>,
         fpu_page_store: Arc<crate::page_store::PageStore>,
-    ) -> TenantShard {
+    ) -> PageServer {
         assert!(!attached_conf.generation.is_none());
 
-        let (state, mut rx) = watch::channel(state);
-
-        tokio::spawn(async move {
-            // reflect tenant state in metrics:
-            // - global per tenant state: TENANT_STATE_METRIC
-            // - "set" of broken tenants: BROKEN_TENANTS_SET
-            //
-            // set of broken tenants should not have zero counts so that it remains accessible for
-            // alerting.
-
-            let tid = id.to_string();
-            let set_key = &[tid.as_str()][..];
-
-            fn inspect_state(state: &TenantState) -> ([&'static str; 1], bool) {
-                ([state.into()], matches!(state, TenantState::Broken { .. }))
-            }
-
-            let mut tuple = inspect_state(&rx.borrow_and_update());
-
-            let is_broken = tuple.1;
-            let mut counted_broken = if is_broken {
-                // add the id to the set right away, there should not be any updates on the channel
-                // after before tenant is removed, if ever
-                BROKEN_TENANTS_SET.with_label_values(set_key).set(1);
-                true
-            } else {
-                false
-            };
-
-            loop {
-                let labels = &tuple.0;
-                let current = TENANT_STATE_METRIC.with_label_values(labels);
-                current.inc();
-
-                if rx.changed().await.is_err() {
-                    // tenant has been dropped
-                    current.dec();
-                    drop(BROKEN_TENANTS_SET.remove_label_values(set_key));
-                    break;
-                }
-
-                current.dec();
-                tuple = inspect_state(&rx.borrow_and_update());
-
-                let is_broken = tuple.1;
-                if is_broken && !counted_broken {
-                    counted_broken = true;
-                    // insert the tenant_id (back) into the set while avoiding needless counter
-                    // access
-                    BROKEN_TENANTS_SET.with_label_values(set_key).set(1);
-                }
-            }
-        });
-
-        TenantShard {
+        PageServer {
             id,
             shard_identity,
             generation: attached_conf.generation,
             conf,
-            // using now here is good enough approximation to catch tenants with really long
-            // activation times.
-            constructed_at: Instant::now(),
-            timelines: Mutex::new(HashMap::new()),
+            timeline: std::sync::OnceLock::new(),
             timelines_creating: Mutex::new(HashSet::new()),
             gc_cs: tokio::sync::Mutex::new(()),
             walredo_mgr,
             remote_storage,
-            state,
-            activate_now_sem: tokio::sync::Semaphore::new(0),
             attach_wal_lag_cooldown: Arc::new(std::sync::OnceLock::new()),
             cancel: CancellationToken::default(),
             gate: Gate::default(),
             pagestream_throttle: Arc::new(throttle::Throttle::new(
-                TenantShard::get_pagestream_throttle_config(conf, &attached_conf.tenant_conf),
+                PageServer::get_pagestream_throttle_config(conf, &attached_conf.tenant_conf),
             )),
             pagestream_throttle_metrics: Arc::new(
                 crate::metrics::tenant_throttling::Pagestream::new(&id),
@@ -1998,11 +1386,11 @@ impl TenantShard {
 
         // Perform GC for each timeline.
         //
-        // Note that we don't hold the `TenantShard::gc_cs` lock here because we don't want to delay the
+        // Note that we don't hold the `PageServer::gc_cs` lock here because we don't want to delay the
         // branch creation task, which requires the GC lock. A GC iteration can run concurrently
         // with branch creation.
         //
-        // See comments in [`TenantShard::branch_timeline`] for more information about why branch
+        // See comments in [`PageServer::branch_timeline`] for more information about why branch
         // creation task can run concurrently with timeline's GC iteration.
         for timeline in gc_timelines {
             if cancel.is_cancelled() {
@@ -2030,51 +1418,17 @@ impl TenantShard {
         Ok(totals)
     }
 
-    /// Refreshes the Timeline::gc_info for all timelines, returning the
-    /// Populate all Timelines' `GcInfo` with information about their children.  We do not set the
-    /// PITR cutoffs here, because that requires I/O: this is done later, before GC, by [`Self::refresh_gc_info_internal`]
-    ///
-    /// Subsequently, parent-child relationships are updated incrementally inside [`Timeline::new`] and [`Timeline::drop`].
-    fn initialize_gc_info(
-        &self,
-        timelines: &std::sync::MutexGuard<HashMap<TimelineId, Arc<Timeline>>>,
-        restrict_to_timeline: Option<TimelineId>,
-    ) {
-        if restrict_to_timeline.is_none() {
-            // This function must be called before activation: after activation timeline create/delete operations
-            // might happen, and this function is not safe to run concurrently with those.
-            assert!(!self.is_active());
-        }
-
-        // Scan all timelines. For each timeline, remember the timeline ID and
-        // the branch point where it was created.
-        let mut all_branchpoints: BTreeMap<TimelineId, Vec<(Lsn, TimelineId)>> = BTreeMap::new();
-        timelines.iter().for_each(|(timeline_id, timeline_entry)| {
-            if let Some(ancestor_timeline_id) = &timeline_entry.get_ancestor_timeline_id() {
-                let ancestor_children = all_branchpoints.entry(*ancestor_timeline_id).or_default();
-                ancestor_children.push((timeline_entry.get_ancestor_lsn(), *timeline_id));
-            }
-        });
-
-        // The number of bytes we always keep, irrespective of PITR: this is a constant across timelines
+    /// Seeds the timeline's `GcInfo`. Branch children live in other
+    /// processes, so there are no in-process branchpoints; cross-process
+    /// ancestor pins are GC future work (task 7). The PITR cutoff is set
+    /// later, before GC, by [`Self::refresh_gc_info_internal`].
+    fn initialize_gc_info(&self) {
         let horizon = self.get_gc_horizon();
 
-        // Populate each timeline's GcInfo with information about its child branches
-        let timelines_to_write = if let Some(timeline_id) = restrict_to_timeline {
-            itertools::Either::Left(timelines.get(&timeline_id).into_iter())
-        } else {
-            itertools::Either::Right(timelines.values())
-        };
-        for timeline in timelines_to_write {
-            let mut branchpoints: Vec<(Lsn, TimelineId)> = all_branchpoints
-                .remove(&timeline.timeline_id)
-                .unwrap_or_default();
-
-            branchpoints.sort_by_key(|b| b.0);
-
+        if let Some(timeline) = self.timeline() {
             let mut target = timeline.gc_info.write().unwrap();
 
-            target.retain_lsns = branchpoints;
+            target.retain_lsns = Vec::new();
 
             let space_cutoff = timeline
                 .get_last_record_lsn()
@@ -2099,15 +1453,12 @@ impl TenantShard {
         // before taking the gc_cs lock, do the heavier weight finding of gc_cutoff points for
         // currently visible timelines.
         let timelines = self
-            .timelines
-            .lock()
-            .unwrap()
-            .values()
+            .timeline()
             .filter(|tl| match target_timeline_id.as_ref() {
                 Some(target) => &tl.timeline_id == target,
                 None => true,
             })
-            .cloned()
+            .into_iter()
             .collect::<Vec<_>>();
 
         if target_timeline_id.is_some() && timelines.is_empty() {
@@ -2134,7 +1485,7 @@ impl TenantShard {
             assert!(old.is_none());
         }
 
-        if !self.is_active() || self.cancel.is_cancelled() {
+        if self.cancel.is_cancelled() {
             return Err(GcError::TenantCancelled);
         }
 
@@ -2600,8 +1951,6 @@ impl TenantShard {
     /// still bounded by tenant/timeline shutdown.
     #[tracing::instrument(skip_all)]
     pub(crate) async fn flush_remote(&self) -> anyhow::Result<()> {
-        let timelines = self.timelines.lock().unwrap().clone();
-
         async fn flush_timeline(_gate: GateGuard, timeline: Arc<Timeline>) -> anyhow::Result<()> {
             tracing::info!(timeline_id=%timeline.timeline_id, "Flushing...");
             timeline.freeze_and_flush().await?;
@@ -2610,62 +1959,36 @@ impl TenantShard {
             Ok(())
         }
 
-        // We do not use a JoinSet for these tasks, because we don't want them to be
-        // aborted when this function's future is cancelled: they should stay alive
-        // holding their GateGuard until they complete, to ensure their I/Os complete
-        // before Timeline shutdown completes.
-        let mut results = FuturesUnordered::new();
-
-        for (_timeline_id, timeline) in timelines {
-            // Run each timeline's flush in a task holding the timeline's gate: this
-            // means that if this function's future is cancelled, the Timeline shutdown
-            // will still wait for any I/O in here to complete.
-            let Ok(gate) = timeline.gate.enter() else {
-                continue;
-            };
-            let jh = tokio::task::spawn(async move { flush_timeline(gate, timeline).await });
-            results.push(jh);
-        }
-
-        while let Some(r) = results.next().await {
-            if let Err(e) = r {
-                if !e.is_cancelled() && !e.is_panic() {
-                    tracing::error!("unexpected join error: {e:?}");
-                }
+        let Some(timeline) = self.timeline() else {
+            return Ok(());
+        };
+        // Run the flush in a task holding the timeline's gate: this
+        // means that if this function's future is cancelled, the Timeline shutdown
+        // will still wait for any I/O in here to complete.
+        let Ok(gate) = timeline.gate.enter() else {
+            return Ok(());
+        };
+        let jh = tokio::task::spawn(async move { flush_timeline(gate, timeline).await });
+        if let Err(e) = jh.await {
+            if !e.is_cancelled() && !e.is_panic() {
+                tracing::error!("unexpected join error: {e:?}");
             }
         }
 
         Ok(())
     }
 
-    /// How much local storage would this tenant like to have?  It can cope with
-    /// less than this (via eviction and on-demand downloads), but this function enables
-    /// the TenantShard to advertise how much storage it would prefer to have to provide fast I/O
-    /// by keeping important things on local disk.
-    ///
-    /// This is a heuristic, not a guarantee: tenants that are long-idle will actually use less
-    /// than they report here, due to layer eviction.  Tenants with many active branches may
-    /// actually use more than they report here.
+    /// How much local disk space the timeline wants (initdb tarballs and
+    /// basebackup cache only in yb-mode — page data lives in YB).
     pub(crate) fn local_storage_wanted(&self) -> u64 {
-        let timelines = self.timelines.lock().unwrap();
-
-        // Heuristic: we use the max() of the timelines' visible sizes, rather than the sum.  This
-        // reflects the observation that on tenants with multiple large branches, typically only one
-        // of them is used actively enough to occupy space on disk.
-        timelines
-            .values()
+        self.timeline()
             .map(|t| t.metrics.visible_physical_size_gauge.get())
-            .max()
             .unwrap_or(0)
     }
 
-    /// Return the visible size of all timelines in this tenant.
+    /// Return the visible size of the timeline.
     pub(crate) fn get_visible_size(&self) -> u64 {
-        let timelines = self.timelines.lock().unwrap();
-        timelines
-            .values()
-            .map(|t| t.metrics.visible_physical_size_gauge.get())
-            .sum()
+        self.local_storage_wanted()
     }
 }
 

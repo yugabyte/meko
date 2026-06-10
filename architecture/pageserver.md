@@ -275,8 +275,9 @@ trait contract is documented in [`remote-storage.md`](remote-storage.md).
 
 ### Code layout
 
-- `pageserver/src/tenant/` — tenant + timeline machinery.
-- `pageserver/src/tenant/timeline/walreceiver/` — WAL ingest.
+- `pageserver/src/page_server/` — tenant + timeline machinery
+  (the `PageServer` struct, one open timeline per process).
+- `pageserver/src/page_server/timeline/walreceiver/` — WAL ingest.
 - `pageserver/src/page_store.rs` — YB-backed row store for page data.
 - `pageserver/src/page_writer.rs` — buffered write path; routes records
   to `PageStore` and serves blended reads from the in-RAM buffer +

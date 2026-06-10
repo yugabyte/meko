@@ -21,7 +21,7 @@ use humantime::format_rfc3339;
 use hyper::{Body, Request, Response, StatusCode, Uri, header};
 use metrics::launch_timestamp::LaunchTimestamp;
 use pageserver_api::models::{
-    LsnLease, LsnLeaseRequest, StatusResponse, TenantState, TimelineGcRequest, TimelineInfo,
+    LsnLease, LsnLeaseRequest, StatusResponse, TimelineGcRequest, TimelineInfo,
 };
 use remote_storage::GenericRemoteStorage;
 use tokio_util::sync::CancellationToken;
@@ -34,21 +34,10 @@ use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::pgdatadir_mapping::LsnForTimestamp;
 use crate::task_mgr::TaskKind;
-use crate::tenant::mgr::{GetActiveTenantError, GetTenantError, TenantManager};
-use crate::tenant::timeline::Timeline;
-use crate::tenant::{GetTimelineError, PageReconstructError};
-use crate::tenant;
-
-// For APIs that require an Active tenant, how long should we block waiting for that state?
-// This is not functionally necessary (clients will retry), but avoids generating a lot of
-// failed API calls while tenants are activating.
-#[cfg(not(feature = "testing"))]
-pub(crate) const ACTIVE_TENANT_TIMEOUT: Duration = Duration::from_millis(5000);
-
-// Tests run on slow/oversubscribed nodes, and may need to wait much longer for tenants to
-// finish attaching, if calls to remote storage are slow.
-#[cfg(feature = "testing")]
-pub(crate) const ACTIVE_TENANT_TIMEOUT: Duration = Duration::from_millis(30000);
+use crate::page_server::mgr::{GetTenantError, TenantManager};
+use crate::page_server::timeline::Timeline;
+use crate::page_server::{GetTimelineError, PageReconstructError};
+use crate::page_server;
 
 pub struct State {
     conf: &'static PageServerConf,
@@ -122,16 +111,6 @@ impl From<GetTenantError> for ApiError {
     fn from(tse: GetTenantError) -> ApiError {
         match tse {
             GetTenantError::NotFound(tid) => ApiError::NotFound(anyhow!("tenant {tid}").into()),
-            GetTenantError::ShardNotFound(tid) => {
-                ApiError::NotFound(anyhow!("tenant {tid}").into())
-            }
-            GetTenantError::NotActive(_) => {
-                // Why is this not `ApiError::NotFound`?
-                // Because we must be careful to never return 404 for a tenant if it does
-                // in fact exist locally. If we did, the caller could draw the conclusion
-                // that it can attach the tenant to another PS and we'd be in split-brain.
-                ApiError::ResourceUnavailable("Tenant not yet active".into())
-            }
         }
     }
 }
@@ -143,46 +122,6 @@ impl From<GetTimelineError> for ApiError {
     }
 }
 
-impl From<GetActiveTenantError> for ApiError {
-    fn from(e: GetActiveTenantError) -> ApiError {
-        match e {
-            GetActiveTenantError::Broken(reason) => {
-                ApiError::InternalServerError(anyhow!("tenant is broken: {}", reason))
-            }
-            GetActiveTenantError::WillNotBecomeActive(TenantState::Stopping { .. }) => {
-                ApiError::ShuttingDown
-            }
-            GetActiveTenantError::WillNotBecomeActive(_) => ApiError::Conflict(format!("{e}")),
-            GetActiveTenantError::Cancelled => ApiError::ShuttingDown,
-            GetActiveTenantError::NotFound(gte) => gte.into(),
-            GetActiveTenantError::WaitForActiveTimeout { .. } => {
-                ApiError::ResourceUnavailable(format!("{e}").into())
-            }
-            GetActiveTenantError::SwitchedTenant => {
-                // in our HTTP handlers, this error doesn't happen
-                // TODO: separate error types
-                ApiError::ResourceUnavailable("switched tenant".into())
-            }
-        }
-    }
-}
-
-impl From<crate::tenant::DeleteTimelineError> for ApiError {
-    fn from(value: crate::tenant::DeleteTimelineError) -> Self {
-        use crate::tenant::DeleteTimelineError::*;
-        match value {
-            NotFound => ApiError::NotFound(anyhow::anyhow!("timeline not found").into()),
-            HasChildren(children) => ApiError::PreconditionFailed(
-                format!("Cannot delete timeline which has child timelines: {children:?}")
-                    .into_boxed_str(),
-            ),
-            a @ AlreadyInProgress(_) => ApiError::Conflict(a.to_string()),
-            Cancelled => ApiError::ResourceUnavailable("shutting down".into()),
-            Other(e) => ApiError::InternalServerError(e),
-        }
-    }
-}
-
 // Helper function to construct a TimelineInfo struct for a timeline
 async fn build_timeline_info(
     timeline: &Arc<Timeline>,
@@ -191,7 +130,7 @@ async fn build_timeline_info(
     include_image_consistent_lsn: bool,
     ctx: &RequestContext,
 ) -> anyhow::Result<TimelineInfo> {
-    crate::tenant::debug_assert_current_span_has_tenant_and_timeline_id();
+    crate::page_server::debug_assert_current_span_has_tenant_and_timeline_id();
 
     if force_await_initial_logical_size {
         timeline.clone().await_initial_logical_size().await
@@ -200,7 +139,7 @@ async fn build_timeline_info(
     let mut info = build_timeline_info_common(
         timeline,
         ctx,
-        tenant::timeline::GetLogicalSizePriority::Background,
+        page_server::timeline::GetLogicalSizePriority::Background,
     )
     .await?;
     if include_non_incremental_logical_size {
@@ -222,9 +161,9 @@ async fn build_timeline_info(
 async fn build_timeline_info_common(
     timeline: &Arc<Timeline>,
     ctx: &RequestContext,
-    logical_size_task_priority: tenant::timeline::GetLogicalSizePriority,
+    logical_size_task_priority: page_server::timeline::GetLogicalSizePriority,
 ) -> anyhow::Result<TimelineInfo> {
-    crate::tenant::debug_assert_current_span_has_tenant_and_timeline_id();
+    crate::page_server::debug_assert_current_span_has_tenant_and_timeline_id();
     let initdb_lsn = timeline.initdb_lsn;
     let last_record_lsn = timeline.get_last_record_lsn();
     let (wal_source_connstr, last_received_msg_lsn, last_received_msg_ts) = {
@@ -293,8 +232,8 @@ async fn build_timeline_info_common(
         applied_gc_cutoff_lsn: *timeline.get_applied_gc_cutoff_lsn(),
         current_logical_size: current_logical_size.size_dont_care_about_accuracy(),
         current_logical_size_is_accurate: match current_logical_size.accuracy() {
-            tenant::timeline::logical_size::Accuracy::Approximate => false,
-            tenant::timeline::logical_size::Accuracy::Exact => true,
+            page_server::timeline::logical_size::Accuracy::Approximate => false,
+            page_server::timeline::logical_size::Accuracy::Exact => true,
         },
         directory_entries_counts: timeline.get_directory_metrics().to_vec(),
         current_physical_size,
@@ -378,8 +317,6 @@ async fn timeline_list_handler(
     let response_data = async {
         let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
 
-        tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
-
         let timelines = tenant.list_timelines();
 
         let mut response_data = Vec::with_capacity(timelines.len());
@@ -427,8 +364,6 @@ async fn timeline_detail_handler(
 
     let timeline_info = async {
         let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
-
-        tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
         let timeline = tenant.get_timeline(timeline_id, false)?;
         let ctx = &ctx.with_scope_timeline(&timeline);
@@ -652,7 +587,7 @@ async fn timeline_checkpoint_handler(
             timeline.freeze().await.and(Ok(()))
         }
         .map_err(|e| match e {
-            tenant::timeline::FlushLayerError::Cancelled => ApiError::ShuttingDown,
+            page_server::timeline::FlushLayerError::Cancelled => ApiError::ShuttingDown,
             other => ApiError::InternalServerError(other.into()),
         })?;
         // Compaction removed in phase 4d.2 (compaction.rs deletion).
@@ -683,8 +618,6 @@ async fn active_timeline_of_active_tenant(
     timeline_id: TimelineId,
 ) -> Result<Arc<Timeline>, ApiError> {
     let tenant = tenant_manager.get_attached_tenant_shard(tenant_id)?;
-
-    tenant.wait_to_become_active(ACTIVE_TENANT_TIMEOUT).await?;
 
     Ok(tenant.get_timeline(timeline_id, true)?)
 }

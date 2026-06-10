@@ -207,10 +207,6 @@ pub struct ConfigToml {
     pub safekeeper_pg_addr: Option<String>,
     #[serde_as(as = "serde_with::DisplayFromStr")]
     pub log_format: LogFormat,
-    /// `None` → scaled default (`8 × scale_factor`, floored at 1).
-    /// `Some(n)` → honour the explicit value verbatim.
-    pub concurrent_tenant_warmup: Option<NonZeroUsize>,
-    pub concurrent_tenant_size_logical_size_queries: NonZeroUsize,
     #[serde(with = "humantime_serde")]
     pub synthetic_size_calculation_interval: Duration,
     pub disk_usage_based_eviction: DiskUsageEvictionTaskConfig,
@@ -730,9 +726,7 @@ pub mod defaults {
 
     pub const DEFAULT_LOG_FORMAT: &str = "plain";
 
-    pub const DEFAULT_CONCURRENT_TENANT_WARMUP: usize = 8;
 
-    pub const DEFAULT_CONCURRENT_TENANT_SIZE_LOGICAL_SIZE_QUERIES: usize = 1;
 
     pub const DEFAULT_SYNTHETIC_SIZE_CALCULATION_INTERVAL: &str = "10 min";
     pub const DEFAULT_BACKGROUND_TASK_MAXIMUM_DELAY: &str = "10s";
@@ -796,11 +790,6 @@ impl Default for ConfigToml {
             safekeeper_pg_addr: None,
             log_format: (LogFormat::from_str(DEFAULT_LOG_FORMAT).unwrap()),
 
-            concurrent_tenant_warmup: None,
-            concurrent_tenant_size_logical_size_queries: NonZeroUsize::new(
-                DEFAULT_CONCURRENT_TENANT_SIZE_LOGICAL_SIZE_QUERIES,
-            )
-            .unwrap(),
             synthetic_size_calculation_interval: (humantime::parse_duration(
                 DEFAULT_SYNTHETIC_SIZE_CALCULATION_INTERVAL,
             )

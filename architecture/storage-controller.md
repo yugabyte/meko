@@ -19,9 +19,9 @@ fresh-schema apply of the collapsed Diesel migration, not a
 ## What it persists
 
 A single collapsed migration (`storage_controller/migrations/00000000000001_initial_schema/up.sql`)
-creates the 8 storage_controller tables below plus the pageserver, safekeeper,
+creates the storage_controller tables below plus the pageserver, safekeeper,
 and public schemas (blobs / wals / blob_namespace, pageserver.pages /
-slru_pages / meta / tenant_config / timeline_state, safekeeper.timeline_state)
+slru_pages / meta / timeline_state, safekeeper.timeline_state)
 in the same `yb_storage` DB.
 
 | Table | What it tracks |
@@ -32,13 +32,7 @@ in the same `yb_storage` DB.
 | `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name |
 | `metadata_health` | Per-shard health markers (last successful scrub timestamps) |
 | `timeline_imports` | In-progress imports (e.g., from pg_dump) |
-| `controllers` | Multi-controller leader election rows (only one controller is leader at a time) |
 | `endpoints` | Compute endpoints managed by `yb_light_local`: endpoint_id, tenant_id, timeline_id, and the opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `.yb_light/endpoints/<id>/endpoint.json` folder registry; driven by the `/control/v1/endpoint` API. |
-
-The controller also writes to `pageserver.tenant_config` (in the same DB,
-created by the same collapsed migration) on tenant create / config update
-— task 17 moved `TenantConfig` out of pageserver-local state into YB, so
-this is now the authoritative per-tenant config table the SC owns.
 
 ### What it does
 
@@ -61,11 +55,15 @@ this is now the authoritative per-tenant config table the SC owns.
 
 The pageserver-facing control path is launcher-managed (task 22):
 
-- **Pageserver reconciler is a no-op**: `maybe_configured_reconcile_shard`
-  returns `None` in yb-mode. Pageserver attachment is decided at spawn
-  time by the launcher (identity + generation in `pageserver.toml`),
-  and the pageserver-side `location_config` / timeline-create APIs the
-  reconciler would drive are going away. There is nothing to converge.
+- **Pageserver reconciler deleted wholesale** (task 22): the
+  `Reconciler`, background reconcile loop, schedule optimiser, node
+  drain/fill/delete operations, tenant-shard migration APIs,
+  multi-controller leadership (leader election, step-down,
+  request forwarding) and the chaos injector are all gone — about
+  8,400 lines. Pageserver attachment is decided at spawn time by the
+  launcher (identity + generation in `pageserver.toml`); there is
+  nothing to converge. The scheduler survives only to pick the intent
+  node at tenant create; the heartbeater survives for liveness.
 - **No pageserver re-attach**: the pageserver no longer calls
   `/upcall/v1/re-attach` (its `controller_upcall_client` is deleted).
   Node registration + generation bumps arrive via the launcher
@@ -99,9 +97,10 @@ The controller exposes an HTTP API on `--listen` for:
   (`/control/v1/node`) and bump generations (`/debug/v1/attach-hook`)
   before each pageserver spawn.
 - `yb_light_local` / external operators to manage tenants, timelines,
-  and compute endpoints (`/control/v1/endpoint`).
-- The compute to look up its current pageserver address
-  (`tenant_locate`).
+  and compute endpoints (`/control/v1/endpoint`). Endpoints resolve
+  their pageserver/safekeepers from per-timeline config in
+  `.yb_light/config` + `pageserver.toml`, not from the controller
+  (`tenant_locate` survives as a debug API only).
 - Legacy upcall handlers (re-attach / validate) remain but the yb
   pageserver no longer calls them.
 

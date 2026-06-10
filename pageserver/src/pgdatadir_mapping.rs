@@ -40,7 +40,7 @@ use wal_decoder::models::record::NeonWalRecord;
 use wal_decoder::models::value::Value;
 use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
-use super::tenant::{PageReconstructError, Timeline};
+use super::page_server::{PageReconstructError, Timeline};
 use crate::aux_file;
 use crate::context::{PerfInstrumentFutureExt, RequestContext, RequestContextBuilder};
 use crate::keyspace::{KeySpace, KeySpaceAccum};
@@ -50,7 +50,7 @@ use crate::metrics::{
     RELSIZE_SNAPSHOT_CACHE_MISSES,
 };
 use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
-use crate::tenant::timeline::{GetVectoredError, VersionedKeySpaceQuery};
+use crate::page_server::timeline::{GetVectoredError, VersionedKeySpaceQuery};
 
 /// Max delta records appended to the AUX_FILES_KEY (for aux v1). The write path will write a full image once this threshold is reached.
 pub const MAX_AUX_FILE_DELTAS: usize = 1024;
@@ -1286,7 +1286,7 @@ impl Timeline {
                 // Originally, the replorigin code uses `Lsn::INVALID` to represent a tombstone. However, as it part of
                 // the sparse keyspace and the sparse keyspace uses an empty image to universally represent a tombstone,
                 // we also need to consider that. Such tombstones might be written on the detach ancestor code path to
-                // avoid the value going into the child branch. (See [`crate::tenant::timeline::detach_ancestor::generate_tombstone_image_layer`] for more details.)
+                // avoid the value going into the child branch. (See [`crate::page_server::timeline::detach_ancestor::generate_tombstone_image_layer`] for more details.)
                 continue;
             }
             let origin_id = k.field6 as RepOriginId;

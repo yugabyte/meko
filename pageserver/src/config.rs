@@ -28,7 +28,7 @@ use utils::generation::Generation;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::{LogFormat, SecretString};
 
-use crate::tenant::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
+use crate::page_server::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
 
 /// Global state of pageserver.
 ///
@@ -141,20 +141,6 @@ pub struct PageServerConf {
     pub safekeeper_pg_addr: Option<String>,
 
     pub log_format: LogFormat,
-
-    /// Number of tenants which will be concurrently loaded from remote storage proactively on startup or attach.
-    ///
-    /// A lower value implicitly deprioritizes loading such tenants, vs. other work in the system.
-    pub concurrent_tenant_warmup: ConfigurableSemaphore,
-
-    /// Number of concurrent [`TenantShard::gather_size_inputs`](crate::tenant::TenantShard::gather_size_inputs) allowed.
-    pub concurrent_tenant_size_logical_size_queries: ConfigurableSemaphore,
-    /// Limit of concurrent [`TenantShard::gather_size_inputs`] issued by module `eviction_task`.
-    /// The number of permits is the same as `concurrent_tenant_size_logical_size_queries`.
-    /// See the comment in `eviction_task` for details.
-    ///
-    /// [`TenantShard::gather_size_inputs`]: crate::tenant::TenantShard::gather_size_inputs
-    pub eviction_task_immitated_concurrent_logical_size_queries: ConfigurableSemaphore,
 
     pub synthetic_size_calculation_interval: Duration,
 
@@ -397,8 +383,6 @@ impl PageServerConf {
             timeline_offloading,
             ephemeral_bytes_per_memory_kb,
             l0_flush: _,
-            concurrent_tenant_warmup,
-            concurrent_tenant_size_logical_size_queries,
             tenant_config,
             no_sync,
             page_service_pipelining,
@@ -439,13 +423,6 @@ impl PageServerConf {
         }
 
         let yb_page_writer = yb_page_writer.resolve(scale_factor);
-        let concurrent_tenant_warmup = concurrent_tenant_warmup.unwrap_or_else(|| {
-            let scaled = pageserver_api::config::scale_count(
-                pageserver_api::config::defaults::DEFAULT_CONCURRENT_TENANT_WARMUP,
-                scale_factor,
-            );
-            NonZeroUsize::new(scaled).expect("scale_count clamps to >= 1")
-        });
         let walredo_pool_size =
             NonZeroUsize::new(pageserver_api::config::scale_count(2, scale_factor))
                 .expect("scale_count clamps to >= 1");
@@ -515,14 +492,6 @@ impl PageServerConf {
             control_plane_api_token: control_plane_api_token.map(SecretString::from),
             id,
             default_tenant_conf: tenant_config,
-            concurrent_tenant_warmup: ConfigurableSemaphore::new(concurrent_tenant_warmup),
-            concurrent_tenant_size_logical_size_queries: ConfigurableSemaphore::new(
-                concurrent_tenant_size_logical_size_queries,
-            ),
-            eviction_task_immitated_concurrent_logical_size_queries: ConfigurableSemaphore::new(
-                // re-use `concurrent_tenant_size_logical_size_queries`
-                concurrent_tenant_size_logical_size_queries,
-            ),
             no_sync: no_sync.unwrap_or(false),
             enable_read_path_debugging: enable_read_path_debugging.unwrap_or(false),
             validate_wal_contiguity: validate_wal_contiguity.unwrap_or(false),
@@ -636,54 +605,6 @@ impl PageServerConf {
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct PageserverIdentity {
     pub id: NodeId,
-}
-
-/// Configurable semaphore permits setting.
-///
-/// Does not allow semaphore permits to be zero, because at runtime initially zero permits and empty
-/// semaphore cannot be distinguished, leading any feature using these to await forever (or until
-/// new permits are added).
-#[derive(Debug, Clone)]
-pub struct ConfigurableSemaphore {
-    initial_permits: NonZeroUsize,
-    inner: std::sync::Arc<tokio::sync::Semaphore>,
-}
-
-impl ConfigurableSemaphore {
-    /// Initializse using a non-zero amount of permits.
-    ///
-    /// Require a non-zero initial permits, because using permits == 0 is a crude way to disable a
-    /// feature such as [`TenantShard::gather_size_inputs`]. Otherwise any semaphore using future will
-    /// behave like [`futures::future::pending`], just waiting until new permits are added.
-    ///
-    /// [`TenantShard::gather_size_inputs`]: crate::tenant::TenantShard::gather_size_inputs
-    pub fn new(initial_permits: NonZeroUsize) -> Self {
-        ConfigurableSemaphore {
-            initial_permits,
-            inner: std::sync::Arc::new(tokio::sync::Semaphore::new(initial_permits.get())),
-        }
-    }
-
-    /// Returns the configured amount of permits.
-    pub fn initial_permits(&self) -> NonZeroUsize {
-        self.initial_permits
-    }
-}
-
-impl PartialEq for ConfigurableSemaphore {
-    fn eq(&self, other: &Self) -> bool {
-        // the number of permits can be increased at runtime, so we cannot really fulfill the
-        // PartialEq value equality otherwise
-        self.initial_permits == other.initial_permits
-    }
-}
-
-impl Eq for ConfigurableSemaphore {}
-
-impl ConfigurableSemaphore {
-    pub fn inner(&self) -> &std::sync::Arc<tokio::sync::Semaphore> {
-        &self.inner
-    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! A cache for [`crate::tenant::mgr`]+`Tenant::get_timeline`+`Timeline::gate.enter()`.
+//! A cache for [`crate::page_server::mgr`]+`Tenant::get_timeline`+`Timeline::gate.enter()`.
 //!
 //! # Motivation
 //!
@@ -217,7 +217,6 @@ use std::collections::hash_map;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
-use std::time::Duration;
 
 use pageserver_api::models::ShardIdentity;
 use tracing::{instrument, trace};
@@ -225,8 +224,8 @@ use utils::id::TimelineId;
 use utils::id::{ShardIndex, ShardNumber};
 
 use crate::page_service::GetActiveTimelineError;
-use crate::tenant::GetTimelineError;
-use crate::tenant::mgr::{GetActiveTenantError, ShardSelector};
+use crate::page_server::GetTimelineError;
+use crate::page_server::mgr::ShardSelector;
 
 pub(crate) trait Types: Sized {
     type TenantManager: TenantManager<Self> + Sized;
@@ -304,7 +303,7 @@ impl<T: Types> Default for PerTimelineState<T> {
     }
 }
 
-/// Abstract view of [`crate::tenant::mgr`], for testability.
+/// Abstract view of [`crate::page_server::mgr`], for testability.
 pub(crate) trait TenantManager<T: Types> {
     /// Invoked by [`Cache::get`] to resolve a [`ShardTimelineId`] to a [`Types::Timeline`].
     async fn resolve(
@@ -331,6 +330,8 @@ enum RoutingResult<T: Types> {
 
 impl<T: Types> Cache<T> {
     /// A wrapper of do_get to resolve the tenant shard for a get page request.
+    /// The timeline is open before listeners start, so there is no
+    /// wait-for-active retry: resolution either succeeds or fails fast.
     #[instrument(level = "trace", skip_all)]
     pub(crate) async fn get(
         &mut self,
@@ -338,37 +339,8 @@ impl<T: Types> Cache<T> {
         shard_selector: ShardSelector,
         tenant_manager: &T::TenantManager,
     ) -> Result<Handle<T>, GetActiveTimelineError> {
-        const GET_MAX_RETRIES: usize = 10;
-        const RETRY_BACKOFF: Duration = Duration::from_millis(100);
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            match self
-                .do_get(timeline_id, shard_selector, tenant_manager)
-                .await
-            {
-                Ok(handle) => return Ok(handle),
-                Err(
-                    e @ GetActiveTimelineError::Tenant(GetActiveTenantError::WaitForActiveTimeout {
-                        ..
-                    }),
-                ) => {
-                    // Retry on tenant manager error to handle tenant split more gracefully
-                    if attempt < GET_MAX_RETRIES {
-                        tokio::time::sleep(RETRY_BACKOFF).await;
-                        continue;
-                    } else {
-                        tracing::info!(
-                            "Failed to resolve tenant shard after {} attempts: {:?}",
-                            GET_MAX_RETRIES,
-                            e
-                        );
-                        return Err(e);
-                    }
-                }
-                Err(err) => return Err(err),
-            }
-        }
+        self.do_get(timeline_id, shard_selector, tenant_manager)
+            .await
     }
 
     /// See module-level comment for details.

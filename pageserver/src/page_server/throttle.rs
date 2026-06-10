@@ -84,10 +84,6 @@ impl Throttle {
             rate_limiter: Arc::new(rate_limiter),
         }
     }
-    pub fn reconfigure(&self, config: Config) {
-        self.inner.store(Arc::new(Self::new_inner(config)));
-    }
-
     /// The [`Throttle`] keeps an internal flag that is true if there was ever any actual throttling.
     /// This method allows retrieving & resetting that flag.
     /// Useful for periodic reporting.

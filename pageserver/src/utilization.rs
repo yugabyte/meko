@@ -11,7 +11,7 @@ use utils::serde_percent::Percent;
 
 use crate::config::PageServerConf;
 use crate::metrics::NODE_UTILIZATION_SCORE;
-use crate::tenant::mgr::TenantManager;
+use crate::page_server::mgr::TenantManager;
 
 pub(crate) fn regenerate(
     conf: &PageServerConf,
@@ -42,7 +42,7 @@ pub(crate) fn regenerate(
     let captured_at = std::time::SystemTime::now();
 
     // Calculate aggregate utilization from tenants on this pageserver
-    let (disk_wanted_bytes, shard_count) = tenant_manager.calculate_utilization()?;
+    let (disk_wanted_bytes, shard_count) = tenant_manager.calculate_utilization();
 
     // Fetch the fraction of disk space which may be used
     let disk_usable_pct = if conf.disk_usage_based_eviction.enabled {

@@ -2,12 +2,10 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 use http_utils::error::ApiError;
-use itertools::Itertools;
 use pageserver_api::models::PageserverUtilization;
 use serde::Serialize;
 use utils::id::NodeId;
 
-use crate::metrics::NodeLabelGroup;
 use crate::node::Node;
 use crate::tenant_shard::TenantShard;
 
@@ -50,11 +48,6 @@ pub(crate) trait NodeSchedulingScore: Debug + Ord + Copy + Sized {
         node: &mut SchedulerNode,
         context: &ScheduleContext,
     ) -> Option<Self>;
-
-    /// Return a score that drops any components based on node utilization: this is useful
-    /// for finding scores for scheduling optimisation, when we want to avoid rescheduling
-    /// shards due to e.g. disk usage, to avoid flapping.
-    fn for_optimization(&self) -> Self;
 
     fn is_overloaded(&self) -> bool;
     fn node_id(&self) -> NodeId;
@@ -116,19 +109,6 @@ impl NodeSchedulingScore for NodeAttachmentSchedulingScore {
         })
     }
 
-    /// For use in scheduling optimisation, where we only want to consider the aspects
-    /// of the score that can only be resolved by moving things (such as inter-shard affinity
-    /// and AZ affinity), and ignore aspects that reflect the total utilization of a node (which
-    /// can fluctuate for other reasons)
-    fn for_optimization(&self) -> Self {
-        Self {
-            utilization_score: 0,
-            total_attached_shard_count: 0,
-            node_id: NodeId(0),
-            ..*self
-        }
-    }
-
     fn is_overloaded(&self) -> bool {
         PageserverUtilization::is_overloaded(self.utilization_score)
     }
@@ -178,15 +158,6 @@ impl NodeSchedulingScore for NodeSecondarySchedulingScore {
             total_shard_count: node.shard_count,
             node_id: *node_id,
         })
-    }
-
-    fn for_optimization(&self) -> Self {
-        Self {
-            utilization_score: 0,
-            total_shard_count: 0,
-            node_id: NodeId(0),
-            ..*self
-        }
     }
 
     fn is_overloaded(&self) -> bool {
@@ -239,10 +210,6 @@ impl AffinityScore {
     pub(crate) fn inc(&mut self) {
         self.0 += 1;
     }
-
-    pub(crate) fn dec(&mut self) {
-        self.0 -= 1;
-    }
 }
 
 impl std::ops::Add for AffinityScore {
@@ -253,38 +220,15 @@ impl std::ops::Add for AffinityScore {
     }
 }
 
-/// Hint for whether this is a sincere attempt to schedule, or a speculative
-/// check for where we _would_ schedule (done during optimization)
-#[derive(Debug, Clone)]
-pub(crate) enum ScheduleMode {
-    Normal,
-    Speculative,
-}
-
-impl Default for ScheduleMode {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
 // For carrying state between multiple calls to [`TenantShard::schedule`], e.g. when calling
 // it for many shards in the same tenant.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ScheduleContext {
     /// Sparse map of nodes: omitting a node implicitly makes its affinity [`AffinityScore::FREE`]
     pub(crate) nodes: HashMap<NodeId, AffinityScore>,
-
-    pub(crate) mode: ScheduleMode,
 }
 
 impl ScheduleContext {
-    pub(crate) fn new(mode: ScheduleMode) -> Self {
-        Self {
-            nodes: HashMap::new(),
-            mode,
-        }
-    }
-
     /// Input is a list of nodes we would like to avoid using again within this context.  The more
     /// times a node is passed into this call, the less inclined we are to use it.
     pub(crate) fn avoid(&mut self, nodes: &[NodeId]) {
@@ -294,32 +238,6 @@ impl ScheduleContext {
         }
     }
 
-    /// Remove `shard`'s contributions to this context.  This is useful when considering scheduling
-    /// this shard afresh, where we don't want it to e.g. experience anti-affinity to its current location.
-    pub(crate) fn project_detach(&self, shard: &TenantShard) -> Self {
-        let mut new_context = self.clone();
-
-        if let Some(attached) = shard.intent.get_attached() {
-            if let Some(score) = new_context.nodes.get_mut(attached) {
-                score.dec();
-            }
-        }
-
-        for secondary in shard.intent.get_secondary() {
-            if let Some(score) = new_context.nodes.get_mut(secondary) {
-                score.dec();
-            }
-        }
-
-        new_context
-    }
-
-    /// For test, track the sum of AffinityScore values, which is effectively how many
-    /// attached or secondary locations have been registered with this context.
-    #[cfg(test)]
-    pub(crate) fn location_count(&self) -> usize {
-        self.nodes.values().map(|i| i.0).sum()
-    }
 }
 
 pub(crate) enum RefCountUpdate {
@@ -487,40 +405,6 @@ impl Scheduler {
         }
     }
 
-    // Check if the number of shards attached to a given node is lagging below
-    // the cluster average. If that's the case, the node should be filled.
-    pub(crate) fn compute_fill_requirement(&self, node_id: NodeId) -> usize {
-        let Some(node) = self.nodes.get(&node_id) else {
-            debug_assert!(false);
-            tracing::error!("Scheduler missing node {node_id}");
-            return 0;
-        };
-        assert!(!self.nodes.is_empty());
-        let expected_attached_shards_per_node = self.expected_attached_shard_count();
-
-        for (node_id, node) in self.nodes.iter() {
-            tracing::trace!(%node_id, "attached_shard_count={} shard_count={} expected={}", node.attached_shard_count, node.shard_count, expected_attached_shards_per_node);
-        }
-
-        expected_attached_shards_per_node.saturating_sub(node.attached_shard_count)
-    }
-
-    pub(crate) fn expected_attached_shard_count(&self) -> usize {
-        let total_attached_shards: usize =
-            self.nodes.values().map(|n| n.attached_shard_count).sum();
-
-        assert!(!self.nodes.is_empty());
-        total_attached_shards / self.nodes.len()
-    }
-
-    pub(crate) fn nodes_by_attached_shard_count(&self) -> Vec<(NodeId, usize)> {
-        self.nodes
-            .iter()
-            .map(|(node_id, stats)| (*node_id, stats.attached_shard_count))
-            .sorted_by(|lhs, rhs| Ord::cmp(&lhs.1, &rhs.1).reverse())
-            .collect()
-    }
-
     pub(crate) fn node_upsert(&mut self, node: &Node) {
         use std::collections::hash_map::Entry::*;
         match self.nodes.entry(node.get_id()) {
@@ -552,21 +436,6 @@ impl Scheduler {
         if self.nodes.remove(&node_id).is_none() {
             tracing::warn!(node_id=%node_id, "Removed non-existent node from scheduler");
         }
-    }
-
-    /// Calculate a single node's score, used in optimizer logic to compare specific
-    /// nodes' scores.
-    pub(crate) fn compute_node_score<Score>(
-        &mut self,
-        node_id: NodeId,
-        context: &ScheduleContext,
-    ) -> Option<Score>
-    where
-        Score: NodeSchedulingScore,
-    {
-        self.nodes
-            .get_mut(&node_id)
-            .and_then(|node| Score::generate(&node_id, node, context))
     }
 
     /// Compute a schedulling score for each node that the scheduler knows of
@@ -632,20 +501,15 @@ impl Scheduler {
 
         if scores.is_empty() {
             // After applying constraints, no pageservers were left.
-            if !matches!(context.mode, ScheduleMode::Speculative) {
-                // If this was not a speculative attempt, log details to understand why we couldn't
-                // schedule: this may help an engineer understand if some nodes are marked offline
-                // in a way that's preventing progress.
+            // Log details to understand why we couldn't schedule: this may help an engineer
+            // understand if some nodes are marked offline in a way that's preventing progress.
+            tracing::info!("Scheduling failure, while excluding {hard_exclude:?}, node states:");
+            for (node_id, node) in &self.nodes {
                 tracing::info!(
-                    "Scheduling failure, while excluding {hard_exclude:?}, node states:"
+                    "Node {node_id}: may_schedule={} shards={}",
+                    !matches!(node.may_schedule, MaySchedule::No),
+                    node.shard_count
                 );
-                for (node_id, node) in &self.nodes {
-                    tracing::info!(
-                        "Node {node_id}: may_schedule={} shards={}",
-                        !matches!(node.may_schedule, MaySchedule::No),
-                        node.shard_count
-                    );
-                }
             }
             return Err(ScheduleError::ImpossibleConstraint);
         }
@@ -653,12 +517,10 @@ impl Scheduler {
         // Lowest score wins
         let node_id = scores.first().unwrap().node_id();
 
-        if !matches!(context.mode, ScheduleMode::Speculative) {
-            tracing::info!(
-                "scheduler selected node {node_id} (elegible nodes {:?}, hard exclude: {hard_exclude:?}, soft exclude: {context:?})",
-                scores.iter().map(|i| i.node_id().0).collect::<Vec<_>>(),
-            );
-        }
+        tracing::info!(
+            "scheduler selected node {node_id} (elegible nodes {:?}, hard exclude: {hard_exclude:?}, soft exclude: {context:?})",
+            scores.iter().map(|i| i.node_id().0).collect::<Vec<_>>(),
+        );
 
         // Note that we do not update shard count here to reflect the scheduling: that
         // is IntentState's job when the scheduled location is used.
@@ -702,26 +564,6 @@ impl Scheduler {
         self.nodes.get(&node_id).unwrap().attached_shard_count
     }
 
-    /// Some metrics that we only calculate periodically: this is simpler than
-    /// rigorously updating them on every change.
-    pub(crate) fn update_metrics(&self) {
-        for (node_id, node) in &self.nodes {
-            let node_id_str = format!("{node_id}");
-            let label_group = NodeLabelGroup {
-                node_id: &node_id_str,
-            };
-
-            crate::metrics::METRICS_REGISTRY
-                .metrics_group
-                .storage_controller_node_shards
-                .set(label_group.clone(), node.shard_count as i64);
-
-            crate::metrics::METRICS_REGISTRY
-                .metrics_group
-                .storage_controller_node_attached_shards
-                .set(label_group.clone(), node.attached_shard_count as i64);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -766,10 +608,7 @@ pub(crate) mod test_utils {
 #[cfg(test)]
 mod tests {
     use pageserver_api::controller_api::NodeAvailability;
-    use pageserver_api::models::ShardIdentity;
     use pageserver_api::models::utilization::test_utilization;
-    use utils::id::TenantId;
-    use utils::id::{ShardCount, ShardNumber, ShardStripeSize};
 
     use super::*;
     use crate::tenant_shard::IntentState;

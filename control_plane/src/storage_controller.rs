@@ -16,15 +16,14 @@ use crate::local_env::{LocalEnv, NeonStorageControllerConf};
 // with the Config / Client / Error types this file uses below. The
 // rest of control_plane keeps using the Neon fork's `tokio_postgres`.
 use camino::{Utf8Path, Utf8PathBuf};
-use hyper0::Uri;
 use nix::unistd::Pid;
 use pageserver_api::controller_api::{
     ComputeEndpoint, NodeConfigureRequest, NodeDescribeResponse, NodeRegisterRequest,
     SafekeeperSchedulingPolicyRequest, SetTimelineBranchNameRequest, SkSchedulingPolicy,
-    TenantCreateRequest, TenantCreateResponse, TenantLocateResponse, TimelineBranchName,
+    TenantCreateRequest, TenantCreateResponse, TimelineBranchName,
 };
 use pageserver_api::models::{
-    TenantConfig, TenantConfigRequest, TimelineCreateRequest, TimelineInfo,
+    TenantConfig, TimelineCreateRequest, TimelineInfo,
 };
 use pageserver_client::mgmt_api::ResponseErrorMessageExt;
 use pem::Pem;
@@ -684,13 +683,6 @@ impl StorageController {
         }
 
         let addr = format!("{host}:{listen_port}");
-        let address_for_peers = Uri::builder()
-            .scheme(scheme)
-            .authority(addr.clone())
-            .path_and_query("")
-            .build()
-            .unwrap();
-
         let mut args = vec![
             "--dev",
             "--database-url",
@@ -701,8 +693,6 @@ impl StorageController {
             &humantime::Duration::from(self.config.max_warming_up).to_string(),
             "--heartbeat-interval",
             &humantime::Duration::from(self.config.heartbeat_interval).to_string(),
-            "--address-for-peers",
-            &address_for_peers.to_string(),
         ]
         .into_iter()
         .map(|s| s.to_string())
@@ -716,24 +706,12 @@ impl StorageController {
             }
         }
 
-        if self.config.start_as_candidate {
-            args.push("--start-as-candidate".to_string());
-        }
-
         if self.config.use_https_pageserver_api {
             args.push("--use-https-pageserver-api".to_string());
         }
 
         if self.config.use_https_safekeeper_api {
             args.push("--use-https-safekeeper-api".to_string());
-        }
-
-        if self.config.use_local_compute_notifications {
-            args.push("--use-local-compute-notifications".to_string());
-        }
-
-        if let Some(value) = self.config.kick_secondary_downloads {
-            args.push(format!("--kick-secondary-downloads={value}"));
         }
 
         if let Some(ssl_ca_file) = self.env.ssl_ca_cert_path() {
@@ -745,11 +723,6 @@ impl StorageController {
             let jwt_token =
                 encode_from_key_file(&claims, private_key).expect("failed to generate jwt token");
             args.push(format!("--jwt-token={jwt_token}"));
-
-            let peer_claims = Claims::new(None, Scope::Admin);
-            let peer_jwt_token = encode_from_key_file(&peer_claims, private_key)
-                .expect("failed to generate jwt token");
-            args.push(format!("--peer-jwt-token={peer_jwt_token}"));
 
             let claims = Claims::new(None, Scope::SafekeeperData);
             let jwt_token =
@@ -764,40 +737,6 @@ impl StorageController {
         if let Some(control_plane_hooks_api) = &self.env.control_plane_hooks_api {
             args.push(format!("--control-plane-url={control_plane_hooks_api}"));
         }
-
-        if let Some(split_threshold) = self.config.split_threshold.as_ref() {
-            args.push(format!("--split-threshold={split_threshold}"))
-        }
-
-        if let Some(max_split_shards) = self.config.max_split_shards.as_ref() {
-            args.push(format!("--max-split-shards={max_split_shards}"))
-        }
-
-        if let Some(initial_split_threshold) = self.config.initial_split_threshold.as_ref() {
-            args.push(format!(
-                "--initial-split-threshold={initial_split_threshold}"
-            ))
-        }
-
-        if let Some(initial_split_shards) = self.config.initial_split_shards.as_ref() {
-            args.push(format!("--initial-split-shards={initial_split_shards}"))
-        }
-
-        if let Some(lag) = self.config.max_secondary_lag_bytes.as_ref() {
-            args.push(format!("--max-secondary-lag-bytes={lag}"))
-        }
-
-        if let Some(threshold) = self.config.long_reconcile_threshold {
-            args.push(format!(
-                "--long-reconcile-threshold={}",
-                humantime::Duration::from(threshold)
-            ))
-        }
-
-        args.push(format!(
-            "--yb-light-local-repo-dir={}",
-            self.env.base_data_dir.display()
-        ));
 
         if self.env.safekeepers.iter().any(|sk| sk.auth_enabled) && self.private_key.is_none() {
             anyhow::bail!("Safekeeper set up for auth but no private key specified");
@@ -815,13 +754,6 @@ impl StorageController {
                 .unwrap_or(self.env.safekeepers.len());
 
             args.push(format!("--timeline-safekeeper-count={sk_cnt}"));
-        }
-
-        if let Some(duration) = self.config.shard_split_request_timeout {
-            args.push(format!(
-                "--shard-split-request-timeout={}",
-                humantime::Duration::from(duration)
-            ));
         }
 
         let envs = vec![
@@ -1145,16 +1077,6 @@ impl StorageController {
         .await
     }
 
-    #[instrument(skip(self))]
-    pub async fn tenant_locate(&self, tenant_id: TenantId) -> anyhow::Result<TenantLocateResponse> {
-        self.dispatch::<(), _>(
-            Method::GET,
-            format!("debug/v1/tenant/{tenant_id}/locate"),
-            None,
-        )
-        .await
-    }
-
     #[instrument(skip_all, fields(node_id=%req.node_id))]
     pub async fn node_register(&self, req: NodeRegisterRequest) -> anyhow::Result<()> {
         self.dispatch::<_, ()>(Method::POST, "control/v1/node".to_string(), Some(req))
@@ -1198,11 +1120,6 @@ impl StorageController {
             Some(req),
         )
         .await
-    }
-
-    pub async fn set_tenant_config(&self, req: &TenantConfigRequest) -> anyhow::Result<()> {
-        self.dispatch(Method::PUT, "v1/tenant/config".to_string(), Some(req))
-            .await
     }
 
     /// Register a launcher-created timeline (branch) in the storage
