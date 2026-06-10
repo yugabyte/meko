@@ -1,8 +1,9 @@
 ---
-status: pending
+status: done
 severity: highest
 area: yb-pageserver
 opened: 2026-06-10
+closed: 2026-06-10
 ---
 
 # Early-window CLOG (SLRU) deltas never persist to `pageserver.slru_pages`
@@ -42,8 +43,9 @@ exposed: `relation does not exist` for tables created in the window
 
 Repro: `tenant create` → `endpoint start` → create table + insert +
 checkpoint → `timeline branch` → endpoint on branch → table invisible.
-`test/e2e/fast/branch-endpoint.sh` works around it with
-`VACUUM FREEZE` on the seed table (remove that when this is fixed).
+`test/e2e/fast/branch-endpoint.sh` is the regression check (it seeds
+without `VACUUM FREEZE`, so the branch reads the seed xids' CLOG from
+the pageserver).
 
 ## Where to look
 
@@ -59,3 +61,31 @@ checkpoint → `timeline branch` → endpoint on branch → table invisible.
   failed: no timeline row … called before timeline_create wrote the
   row` — a flush in that window may drain aux buffers whose rows are
   then never re-sent.
+
+## Root cause
+
+`PageWriter::flush()` (`pageserver/src/page_writer.rs`) had no
+serialization. The periodic flusher (`spawn_flusher`) and every
+`freeze_and_flush` caller — checkpoint, basebackup, bootstrap
+import-finish, HTTP, shutdown — call `pw.flush()` from independent
+tasks. `flush()` snapshots the aux (SLRU + meta) buffer in one critical
+section and drains it **by count** (`drain(0..slru_count)`) in a later
+one. When two flushes overlap, the second's `slru_count` was computed
+against a buffer the first already drained, so its `drain` removes
+fresh, never-written rows → silent loss. Rel-page rows are immune
+because they drain by entry **identity** (`mark_flushed(&rel_snapshot)`)
+— exactly the "rel persists, SLRU lost" asymmetry. Overlap spikes at
+startup (the import-finish `freeze_and_flush` and the compute's initial
+checkpoint race the periodic flusher), so only the first window loses
+deltas; later commits flush serially and persist. SLRU is the visible
+victim because SLRU rows are append-only — lost meta rows get masked by
+later full-overwrite rows.
+
+## Fix
+
+Added `flush_serialize: tokio::sync::Mutex<()>`; `flush()` holds it
+across the whole flush so snapshot + count-based drain are atomic w.r.t.
+other flushes. `put()` never takes it (ingest is not serialized against
+flush). Verified: `test/e2e/fast/branch-endpoint.sh` passes with the
+`VACUUM FREEZE` workaround removed — a fresh branch now reads the seed
+xids' CLOG correctly instead of seeing them aborted.

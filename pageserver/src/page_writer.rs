@@ -182,10 +182,12 @@ pub struct PageWriter {
     /// on a single `RwLock<WriterState>`).
     pages: crate::unified_pages::UnifiedPages,
     /// Aux (non-rel) flush buffers + the "any unflushed work?"
-    /// timestamp. Touched only by put/flush — both serial from the
-    /// walreceiver and periodic flusher — plus the rare meta/SLRU
-    /// reads that blend buffered with persisted. Hot path doesn't
-    /// touch this.
+    /// timestamp. Touched by put/flush plus the rare meta/SLRU reads
+    /// that blend buffered with persisted. Hot path doesn't touch
+    /// this. The flush side drains by COUNT (`drain(0..slru_count)`)
+    /// in a critical section separate from the snapshot, so it is
+    /// only sound when at most one `flush()` runs at a time — see
+    /// `flush_serialize`.
     aux: PlMutex<AuxBuffers>,
     /// Total rows ever appended to the buffer (rel + slru + meta).
     /// Reported in `WriterStats`; not load-bearing.
@@ -265,6 +267,21 @@ pub struct PageWriter {
     /// partial-YB-view can never feed walredo a chain with a hole
     /// — see `read_chain_durable` for the use site.
     flush_horizon_lsn: std::sync::atomic::AtomicU64,
+    /// Serializes the whole of `flush()`. The periodic flusher
+    /// (`spawn_flusher`) and every `freeze_and_flush` caller
+    /// (checkpoints, basebackup, bootstrap import-finish, HTTP, the
+    /// shutdown drain) all invoke `flush()` from independent tasks.
+    /// `flush()` snapshots the aux buffer in one critical section and
+    /// drains it by count (`drain(0..slru_count)`) in a later one; if
+    /// two flushes overlap, the second's count was computed against a
+    /// buffer the first already drained, so its `drain` removes fresh
+    /// rows that were never written to YB — a silent SLRU/meta loss.
+    /// (Rel rows are immune: they drain by entry identity via
+    /// `mark_flushed`, not by count.) Holding this across the entire
+    /// flush makes snapshot+drain atomic with respect to other
+    /// flushes. `put()` never takes it, so ingest is not serialized
+    /// against flush.
+    flush_serialize: tokio::sync::Mutex<()>,
 }
 
 /// Non-rel flush buffers, kept under a small `parking_lot::Mutex`.
@@ -328,6 +345,7 @@ impl PageWriter {
             flush_completed: tokio::sync::Notify::new(),
             backpressure_waits: std::sync::atomic::AtomicU64::new(0),
             flush_horizon_lsn: std::sync::atomic::AtomicU64::new(0),
+            flush_serialize: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -988,6 +1006,11 @@ impl PageWriter {
     /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
     /// the buffer is empty. Resets the policy timer.
     pub async fn flush(&self) -> Result<()> {
+        // Exclusive across all flushers: the aux-buffer snapshot and
+        // the later count-based `drain(0..slru_count)` must see the
+        // same buffer, or an overlapping flush silently drops fresh
+        // SLRU/meta rows. See the `flush_serialize` field doc.
+        let _flush_guard = self.flush_serialize.lock().await;
         // Snapshot. UnifiedPages snapshots the unflushed prefix
         // without removing it (rows stay visible to concurrent reads
         // during the YB round-trip — critical for walreceiver's RMW

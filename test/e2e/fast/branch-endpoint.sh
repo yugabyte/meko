@@ -25,17 +25,13 @@ psql_main()   { PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT"   -U cloud_admi
 psql_branch() { PGPASSWORD= psql -h 127.0.0.1 -p "$BRANCH_PG_PORT" -U cloud_admin postgres -v ON_ERROR_STOP=1 -qtA "$@"; }
 
 step "Seed pre-branch data on main"
-# VACUUM FREEZE works around task 24 (early-window CLOG deltas are
-# lost in the pageserver, so a fresh branch compute would see the
-# seed transactions as aborted). Frozen tuples are visible without
-# CLOG; the heap pages are still served to the branch via lineage
-# reads, which is what this test exercises. Remove the FREEZE once
-# task 24 is fixed.
+# The branch compute reads these seed transactions' CLOG (SLRU) state
+# straight from the pageserver, so the run also covers early-window
+# CLOG-delta persistence.
 psql_main <<'SQL'
 DROP TABLE IF EXISTS branch_seed;
 CREATE TABLE branch_seed (id INT PRIMARY KEY, val TEXT NOT NULL);
 INSERT INTO branch_seed SELECT g, 'pre-branch-' || g FROM generate_series(1, 1000) g;
-VACUUM (FREEZE, DISABLE_PAGE_SKIPPING) branch_seed;
 CHECKPOINT;
 SQL
 PRE_COUNT=$(psql_main -c "SELECT count(*) FROM branch_seed")
