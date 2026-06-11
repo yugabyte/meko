@@ -37,7 +37,7 @@ use pageserver_api::config::{
     DEFAULT_PG_LISTEN_PORT as DEFAULT_PAGESERVER_PG_PORT,
 };
 use pageserver_api::controller_api::{NodeAvailabilityWrapper, PlacementPolicy};
-use pageserver_api::models::{TimelineCreateRequest, TimelineInfo};
+use pageserver_api::models::TimelineInfo;
 use postgres_backend::AuthType;
 use safekeeper_api::membership::{SafekeeperGeneration, SafekeeperId};
 use safekeeper_api::{
@@ -1538,7 +1538,7 @@ async fn provision_bootstrap(
     let init_conf = pageserver_init_conf_for(env, &ps_conf)?;
     let pageserver = PageServerNode::from_env(env, &ps_conf);
     pageserver
-        .initialize(init_conf)
+        .initialize(init_conf, &format!("127.0.0.1:{}", sk_conf.pg_port))
         .context("initialize main pageserver")?;
     pageserver.set_timeline_identity(
         tenant_id,
@@ -1555,21 +1555,85 @@ async fn provision_bootstrap(
         .await
         .context("start main pageserver")?;
 
-    // The storage controller waits for the pageserver-side bootstrap to
-    // complete (it polls timeline_detail), then creates the timeline on
-    // the safekeeper.
-    storage_controller
-        .tenant_timeline_create(
+    // Bootstrap's start LSN isn't known until the pageserver has run
+    // initdb; wait for the timeline to come up Active and read it back.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let start_lsn = loop {
+        match pageserver
+            .timeline_info(
+                TenantId::unsharded(tenant_id),
+                timeline_id,
+                pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
+            )
+            .await
+        {
+            Ok(info) if matches!(info.state, pageserver_api::models::TimelineState::Active) => {
+                break info.last_record_lsn;
+            }
+            Ok(_) | Err(_) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            Ok(info) => {
+                anyhow::bail!(
+                    "bootstrap timeline did not become Active in time (state: {:?})",
+                    info.state
+                );
+            }
+            Err(e) => {
+                return Err(e.context("bootstrap timeline did not become Active in time"));
+            }
+        }
+    };
+
+    // Create the timeline on its co-located safekeeper with an explicit
+    // single-member configuration, pinning placement to this pair. The
+    // storage controller's global safekeeper scheduler would otherwise
+    // pick any registered safekeeper — wrong in the co-located topology
+    // once more than one pair exists (the compute talks to its own
+    // safekeeper). Mirrors `provision_branch`.
+    let sk_host = sk_conf
+        .listen_addr
+        .clone()
+        .unwrap_or_else(|| "localhost".to_string());
+    let mconf = safekeeper_api::membership::Configuration {
+        generation: SafekeeperGeneration::new(1),
+        members: safekeeper_api::membership::MemberSet {
+            m: vec![SafekeeperId {
+                host: sk_host,
+                id: sk_conf.id,
+                pg_port: sk_conf.get_compute_port(),
+            }],
+        },
+        new_members: None,
+    };
+    safekeeper
+        .create_timeline(&safekeeper_api::models::TimelineCreateRequest {
             tenant_id,
-            TimelineCreateRequest {
-                new_timeline_id: timeline_id,
-                mode: pageserver_api::models::TimelineCreateRequestMode::Bootstrap {
-                    existing_initdb_timeline_id: None,
-                    pg_version: Some(pg_version),
-                },
+            timeline_id,
+            mconf,
+            pg_version: PgVersionId::from(pg_version),
+            system_id: None,
+            wal_seg_size: None,
+            start_lsn,
+            commit_lsn: None,
+        })
+        .await
+        .context("create bootstrap timeline on safekeeper")?;
+
+    // Record the launcher-created timeline in the storage controller with
+    // an explicit sk_set pinning the co-located safekeeper (so the
+    // pageserver streams from it too, and the row reflects real placement).
+    storage_controller
+        .timeline_register(
+            tenant_id,
+            timeline_id,
+            pageserver_api::controller_api::TimelineRegisterRequest {
+                start_lsn,
+                sk_set: vec![sk_conf.id],
             },
         )
-        .await?;
+        .await
+        .context("register bootstrap timeline with storage controller")?;
 
     env.pageservers.push(ps_conf);
     Ok(())

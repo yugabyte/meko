@@ -89,6 +89,7 @@ impl PageServerNode {
     fn pageserver_init_make_toml(
         &self,
         conf: YbLightLocalInitPageserverConf,
+        safekeeper_pg_addr: &str,
     ) -> anyhow::Result<toml_edit::DocumentMut> {
         // `data_dir` is a runtime-only field (where the toml lives), not
         // derived from the init conf, so exclude it from the equality check.
@@ -107,16 +108,13 @@ impl PageServerNode {
             self.env.pg_distrib_dir_raw().display()
         );
 
-        let safekeeper_pg_addr_param = self
-            .env
-            .safekeepers
-            .first()
-            .map(|sk| format!("safekeeper_pg_addr='127.0.0.1:{}'", sk.pg_port));
+        // The pageserver streams WAL from the safekeeper co-located with
+        // its timeline (caller-supplied), not `env.safekeepers.first()` —
+        // in the co-located topology the global-first safekeeper belongs to
+        // a different timeline's pair once more than one pair exists.
+        let safekeeper_pg_addr_param = format!("safekeeper_pg_addr='{safekeeper_pg_addr}'");
 
-        let mut overrides = vec![pg_distrib_dir_param];
-        if let Some(p) = safekeeper_pg_addr_param {
-            overrides.push(p);
-        }
+        let mut overrides = vec![pg_distrib_dir_param, safekeeper_pg_addr_param];
 
         overrides.push(format!(
             "control_plane_api='{}'",
@@ -187,8 +185,14 @@ impl PageServerNode {
     }
 
     /// Initializes a pageserver node by creating its config with the overrides provided.
-    pub fn initialize(&self, conf: YbLightLocalInitPageserverConf) -> anyhow::Result<()> {
-        self.pageserver_init(conf)
+    /// `safekeeper_pg_addr` is the `host:port` of the safekeeper co-located with this
+    /// pageserver's timeline, baked into `pageserver.toml` as the WAL source.
+    pub fn initialize(
+        &self,
+        conf: YbLightLocalInitPageserverConf,
+        safekeeper_pg_addr: &str,
+    ) -> anyhow::Result<()> {
+        self.pageserver_init(conf, safekeeper_pg_addr)
             .with_context(|| format!("Failed to run init for pageserver node {}", self.conf.id))
     }
 
@@ -417,7 +421,11 @@ impl PageServerNode {
         Ok(Some(generation))
     }
 
-    fn pageserver_init(&self, conf: YbLightLocalInitPageserverConf) -> anyhow::Result<()> {
+    fn pageserver_init(
+        &self,
+        conf: YbLightLocalInitPageserverConf,
+        safekeeper_pg_addr: &str,
+    ) -> anyhow::Result<()> {
         let datadir = self.repo_path();
         let node_id = self.conf.id;
         println!(
@@ -429,7 +437,7 @@ impl PageServerNode {
         io::stdout().flush()?;
 
         let config = self
-            .pageserver_init_make_toml(conf)
+            .pageserver_init_make_toml(conf, safekeeper_pg_addr)
             .context("make pageserver toml")?;
         let config_file_path = datadir.join("pageserver.toml");
         let mut config_file = std::fs::OpenOptions::new()
