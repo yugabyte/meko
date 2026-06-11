@@ -1287,6 +1287,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "e2e_tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "workspace_hack",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

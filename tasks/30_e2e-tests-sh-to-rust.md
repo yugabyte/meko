@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 severity: medium
 area: yb-pageserver
 opened: 2026-06-10
@@ -7,144 +7,88 @@ opened: 2026-06-10
 
 # Convert the e2e suite from shell scripts to Rust
 
-## Motivation
+## Outcome
 
-The e2e suite (`test/e2e/run.sh` + the `fast/`/`slow/` test scripts) is
-all Bash today. It works, but the assertion style is the weak point: every
-check is a `[[ $X == $Y ]] || fail "..."` against a string captured from
-`psql -qtA`, and the cluster lifecycle (`yb_light_local` CLI calls, pidfile
-polling, log-marker scans) is hand-rolled shell. That buys us:
+Done. The e2e suite is now a Rust harness — the `e2e_tests` crate at
+`test/e2e/` (path-only workspace member, `publish = false`). The shell
+assertion style is gone: scenario checks run through typed
+`tokio-postgres` queries and `reqwest` HTTP calls instead of
+`[[ $X == $Y ]]` against `psql -qtA` strings. Coverage is a faithful
+1:1 port — same scenarios, same `.sql`/`.out` goldens, same
+corruption-marker gate, same shared-cluster model.
 
-- **Fragile assertions.** Comparisons are stringly-typed; a stray space or
-  a locale change in `psql` output silently changes a comparison. No typed
-  values, no structured diffs beyond the `.sql`/`.out` golden path.
-- **Poor failure ergonomics.** A failing `[[ ]]` prints one `fail` line;
-  there's no backtrace, no captured query, no automatic context. Debugging
-  means re-running with `bash -x`.
-- **Duplicated boilerplate.** Each script re-declares `step`/`fail`,
-  re-derives `$REPO`, re-defines `psql_main`/`psql_at` connection helpers
-  with the same `PGPASSWORD= … -U cloud_admin -v ON_ERROR_STOP=1 -qtA`
-  incantation (see `fast/branch-ancestor.sh`, `fast/multi-timeline.sh`).
-- **No reuse of the code under test.** `yb_light_local` is driven as an
-  opaque subprocess, parsing tenant ids out of `awk '/successfully
-  created/{print $2}'` instead of calling the `control_plane` library that
-  already produces them.
+`test/e2e/run.sh` is now a thin wrapper (`cargo build` + exec the
+binary) so the documented `test/e2e/run.sh fast|slow|all` UX and the
+`e2e-before-corruption-claim` skill's command keep working unchanged.
 
-We're a Rust shop with a Cargo workspace already in place; the test harness
-should be Rust too.
+## What landed
 
-## Goal
+- **Driver binary, not `cargo test`.** The shared-cluster + fixed-order
+  + gate-after-each + fast-then-slow-on-one-cluster model can't be
+  expressed with the parallel/unordered default test harness, so the
+  crate is a `[[bin]]` parsing `fast|slow|all` exactly like the old
+  `run.sh`. `test/e2e/run.sh` wraps it.
+- **Subprocess for cluster ops, typed clients for assertions.**
+  `yb_light_local` is still driven as a subprocess (it owns process
+  supervision + pidfiles); only the assertions moved to typed clients.
+- **`Cluster` fixture** (`src/cluster.rs`) owns the lifecycle the old
+  `run.sh` hand-rolled: ephemeral-db setup, the derived init TOML
+  (kept outside `repo_dir` since `clean.sh` wipes it), `init`/`start`,
+  the shared tenant + `main` endpoint, `prep_for_next_test` recycle,
+  the corruption-marker log gate, and a `Drop` that runs `clean.sh` on
+  success / leaves the cluster up for postmortem on failure.
+- **PASS reporting is the runner's job.** Scenarios just assert and
+  return `Ok(())`; `run_scenario`/`run_sql` print the uniform
+  `PASS — <name>  (<n>s)`.
+- **Filesystem auto-registration — zero edits to add a test.** The
+  build script (`test/e2e/build.rs`) scans `src/scenarios/{fast,slow}/`
+  and generates the `pub mod` declarations + the `fast()`/`slow()`
+  registries; `.sql` workloads are globbed at runtime from
+  `test/e2e/{fast,slow}/`. Adding a test is just dropping a file: a
+  `<name>.rs` (with `pub async fn run(&Cluster)`) into the right
+  scenario subdir, or a `<name>.sql`/`<name>.out` pair into the
+  category dir. The subdir is the category; the file stem is the test
+  name.
+- **Single-test selection.** `test/e2e/run.sh <name>` (or a substring)
+  runs just that test against the shared cluster — e.g.
+  `test/e2e/run.sh branch_ancestor` or `… smoke`.
+- **`.sql` goldens kept verbatim.** The `.sql`/`.out` files stay under
+  `test/e2e/{fast,slow}/`; the Rust runner execs `psql -f`, normalizes
+  (the same `Time:`/version-warning strip), and diffs (`E2E_REGEN_EXPECTED=1`
+  still regenerates).
 
-Port the e2e suite to a Rust integration-test harness that preserves
-**exactly** the current coverage and the one-command UX, while replacing
-stringly-typed shell assertions with typed Rust ones and real connection
-clients.
+## Scenarios ported (coverage parity)
 
-Non-goal: changing *what* the tests check. This is a faithful port — same
-scenarios, same golden `.sql`/`.out` validation, same corruption-marker
-gate, same shared-cluster-across-tests model. Behavior changes belong in
-their own tasks.
+Fast scenarios (`src/scenarios/fast/`): `branch_ancestor`,
+`branch_endpoint`, `going_away`, `layout`, `multi_timeline`,
+`restart_correctness`, `restart_wal_replay_yb`; fast goldens `smoke`,
+`update-churn`. Slow scenario (`src/scenarios/slow/`):
+`restart_wal_replay`; slow goldens `btree-splits`, `full-workload`. The
+eight `*.sh` scripts were deleted; the `.sql`/`.out` goldens and
+`clean.sh` were kept. Test name = source file stem; run one with
+`test/e2e/run.sh <name>`.
 
-## What exists today (the port target)
+## Verification
 
-`test/e2e/run.sh` (318 lines) is the orchestrator:
+Against real YugabyteDB (2026-06-10), on the final auto-discovered
+harness:
 
-- **Cluster lifecycle:** `setup_cluster` (clean → `yb_light_local init` →
-  `start` → one shared tenant + `main` endpoint), `prep_for_next_test`
-  (restart any component the prior test left down, recycle the compute),
-  `clean.sh` teardown via an EXIT trap. Ephemeral YB db per run
-  (`yb_storage_e2e_$$_$RANDOM`), per-run init TOML derived from
-  `/tmp/neon-init.toml` with the dbname swapped.
-- **Two test kinds:**
-  - `*.sh` scripts — drive `$YB_LIGHT` (the `yb_light_local` bin) + `psql`,
-    assert inline. Current fast set: `branch-ancestor`, `branch-endpoint`,
-    `going-away`, `layout`, `multi-timeline`, `restart-correctness`,
-    `restart-wal-replay-yb`. Slow: `restart-wal-replay`.
-  - `*.sql` workloads — run via `psql -f`, normalize stdout
-    (`normalize_psql_output`), diff against a checked-in `<name>.out`
-    golden; `E2E_REGEN_EXPECTED=1` regenerates. Current set: fast
-    `smoke`, `update-churn`; slow `btree-splits`, `full-workload`.
-- **Corruption gate:** after every test, scan the new tail of
-  `pageserver.log` for `MARKERS` (`MATERIALIZER REDO ERROR|ABORT|PANIC|early
-  eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH
-  ROUNDTRIP`); first hit aborts. Final verdict also checks the
-  `pageserver_yb_correctness_errors_total` metric is 0.
+- `test/e2e/run.sh fast` — all 7 scenarios + `smoke`/`update-churn`
+  goldens green, corruption gate clean.
+- `test/e2e/run.sh slow` — `restart_wal_replay` (n advanced 5225 across
+  the WAL gap) + `btree-splits` + `full-workload` (678s) green.
+- Both end with `pageserver_yb_correctness_errors_total` verdict at 0.
+- `test/e2e/run.sh -n 3 smoke` — single-test selection + cumulative
+  tally verified (`3 passed, 0 failed`).
 
-All of that has to survive the port.
-
-## Plan / sketch
-
-1. **Harness crate.** Add a `test/e2e` (or `e2e_tests`) workspace member
-   with the harness in `src/` and one Rust test file per current scenario
-   under `tests/`. Reuse the workspace's existing deps — `tokio-postgres`
-   (replaces every `psql` invocation with a typed client), `reqwest` (the
-   metrics + storage-controller HTTP checks), and ideally the
-   `control_plane` crate's library API for cluster/tenant/endpoint
-   operations instead of shelling to the binary.
-
-2. **Cluster fixture.** A `Cluster` struct that owns the lifecycle
-   `run.sh` hand-rolls: ephemeral-db setup, `init`/`start`, the shared
-   tenant + `main` endpoint, `prep_for_next_test`-equivalent recycling, and
-   a `Drop` impl that runs the `clean.sh` teardown. Decide
-   shared-vs-per-test cluster:
-   - **Match today (shared cluster, sequential tests):** cheapest, but
-     Rust's default test harness runs tests in parallel threads — either
-     force `--test-threads=1`, or put all scenarios in a single `#[test]`
-     that drives them in sequence (mirrors the current single
-     `setup_cluster` + loop), or use a `OnceCell`/`Mutex` global fixture.
-   - **Per-test cluster:** cleaner isolation, parallelizable, but N× the
-     bring-up cost (5–10 min each per [task 12](12_e2e-test-infra.md)). Too
-     slow. Recommend keeping the shared-cluster model.
-
-3. **Typed assertions.** Replace `[[ $CNT == 2000 ]]` with
-   `assert_eq!(count, 2000, "...")` over values pulled through
-   `tokio-postgres` `query_one(...).get::<_, i64>(0)`. Whole-table
-   checksums (`md5(string_agg(...))`) stay SQL-side; the harness just
-   compares the returned strings.
-
-4. **Corruption-marker gate as a fixture guard.** Port the `MARKERS`
-   log-tail scan into a helper the fixture runs after each scenario (track
-   the PS log byte offset, scan only the new tail, fail on first hit). Keep
-   the marker list in one place.
-
-5. **Golden `.sql`/`.out` workloads.** Two options:
-   - Keep `.sql` + `.out` files and have a Rust runner execute + normalize
-     + diff them (smallest change; preserves `E2E_REGEN_EXPECTED`).
-   - Or fold each workload into a Rust test asserting on typed results.
-   The `.sql` ones are pure-SQL golden captures with deterministic
-   projections — keeping them as files (option 1) is the faithful port;
-   only the *driver* moves to Rust.
-
-6. **Entry point.** `cargo test -p e2e_tests` (or a thin `test/e2e/run.sh`
-   wrapper that calls it, to preserve the documented `test/e2e/run.sh
-   fast|slow|all` UX and the `e2e-before-corruption-claim` skill's
-   command). Map `fast`/`slow` to a feature flag, an env var, or test-name
-   filters.
-
-## Open questions
-
-- **Library vs subprocess for `yb_light_local`.** Calling `control_plane`
-  directly is cleaner and gives typed tenant/timeline ids, but the binary
-  also does process supervision (spawns PS/SK/compute, writes pidfiles).
-  May still need subprocess for `init`/`start`; decide per-command.
-- **Parallelism.** If we keep one shared cluster, the suite stays
-  sequential — fine, matches today. Worth a comment so nobody "speeds it
-  up" with `--test-threads` and corrupts the shared state.
-- **Where the crate lives.** `test/e2e` as a path-only workspace member
-  (not published) keeps the files where they are; the `.sql`/`.out`
-  goldens can stay in `test/e2e/{fast,slow}/`.
+`--release` is wired in the wrapper (builds `--release`, points
+`YB_LIGHT` at the release binary) but a full release e2e was not run —
+release builds are heavy and need the special `PROTOC` on this box (see
+AGENTS Build notes); the run path is identical to the verified debug
+path, only the profile + binary dir differ.
 
 ## Notes / links
 
-- Faithful port only — see the **Goal** non-goal. Coverage parity is the
-  acceptance bar: every scenario in `fast/` and `slow/` today must have a
-  Rust equivalent asserting the same things.
-- Relates to [task 12](12_e2e-test-infra.md) (the original e2e infra goal)
-  and [task 25](25_e2e-sql-output-validation.md) (the `.sql`/`.out` golden
-  validation this must preserve).
-- The `e2e-before-corruption-claim` skill points at `test/e2e/run.sh`;
-  keep that command working (wrapper or rename the skill in the same
-  change).
-- Verification: the ported suite must pass `test/e2e/run.sh fast`
-  (and `slow`) against real YugabyteDB with identical pass/fail behavior to
-  the shell version on the same builds.
+- Subsumes [task 12](12_e2e-test-infra.md) (the original one-command
+  e2e infra goal) and preserves the golden validation from
+  [task 25](25_e2e-sql-output-validation.md).

@@ -81,10 +81,11 @@ test/e2e/run.sh all
 ```
 
 If the change is specifically about a behavior covered by one of
-the scripts in `test/e2e/fast/` or `test/e2e/slow/`, that script
-alone may be sufficient — but run the whole suite anyway unless
-turnaround time is genuinely prohibitive. The whole point is to
-catch the bug you didn't anticipate.
+the scenarios in the Rust harness (`test/e2e/src/scenarios/`) or a
+`.sql` workload under `test/e2e/{fast,slow}/`, that one scenario may
+be sufficient — but run the whole suite anyway unless turnaround time
+is genuinely prohibitive. The whole point is to catch the bug you
+didn't anticipate.
 
 Memory anchor: the user's standing instruction in
 `run-e2e-before-claiming-fix.md` says "manual end-to-end workload

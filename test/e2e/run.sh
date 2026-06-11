@@ -1,340 +1,77 @@
 #!/usr/bin/env bash
 #
-# End-to-end test runner. Brings up one yb_light_local cluster against an
-# ephemeral YB database, then iterates over every test in each
-# requested category.
+# End-to-end test entry point. Thin wrapper over the Rust harness
+# (`e2e_tests` crate). The harness brings up one yb_light_local cluster
+# against an ephemeral YB database and runs every scenario in each
+# requested category, scanning the pageserver log for corruption
+# markers after each. See test/e2e/src/main.rs.
 #
-# All tests share a single cluster + tenant + endpoint to minimize
-# setup cost; between tests we re-up any cluster components the prior
-# test left stopped and recycle the compute endpoint so each test
-# starts from a clean compute state (fresh basebackup, fresh
-# walproposer). The tenant + timeline persist across tests, so test
-# scripts must use unique table names.
+# All scenarios share a single cluster + tenant + `main` endpoint; the
+# tenant + timeline persist across scenarios, so scenarios use unique
+# table names. The `.sql` workloads under fast/ and slow/ are diffed
+# against their checked-in `.out` goldens (regenerate with
+# E2E_REGEN_EXPECTED=1).
 #
-#   *.sh   — runs after the prep step has ensured the cluster + a
-#            running endpoint named `main`. Exports $TID,
-#            $COMPUTE_PORT, $YB_LIGHT, $YB_LIGHT_REPO_DIR, $YB_DBNAME.
-#   *.sql  — psql workload against the same shared cluster. Its
-#            normalised stdout is diffed against a sibling `<name>.out`
-#            golden capture (see `run_sql_workload`); regenerate goldens
-#            with `E2E_REGEN_EXPECTED=1`.
-#
-# After every test the pageserver log is scanned for corruption
-# markers; the first hit aborts the run.
-#
-# Usage:
-#   test/e2e/run.sh                # fast suite
-#   test/e2e/run.sh fast           # explicit
-#   test/e2e/run.sh slow           # slow only
-#   test/e2e/run.sh all            # fast then slow
-#
+# This script builds the harness + cluster binaries (incrementally — a
+# no-op when nothing changed) on every run, then execs the harness.
 set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: test/e2e/run.sh [options] [selection]
+
+Selection (default: fast):
+  fast            the fast suite
+  slow            the slow suite
+  all             fast then slow
+  <name>          one test by name (substring also matches), e.g.
+                  branch_ancestor, restart_wal_replay_yb, smoke
+
+Options:
+  -n <count>      repeat the selection <count> times and print a
+                  cumulative pass/fail count (run-all: failures are
+                  tallied, not fatal). Useful for flakiness hunting.
+  --release       build + run in release mode (default: debug, which is
+                  what the dev/e2e loop normally wants)
+  -h, --help      show this help
+
+Honoured env vars (passed through): E2E_REGEN_EXPECTED, TEST_DIR,
+YB_LIGHT_REPO_DIR, YB_DBNAME, YB_HOST, YB_PORT, COMPUTE_PORT, SOAK_SECS,
+PS_HTTP_TIMEOUT, ENDPOINT_START_TIMEOUT, YB_PS_VERIFY_WAL_ROUNDTRIP,
+YB_LIGHT.
+
+Examples:
+  test/e2e/run.sh                       # fast suite, debug
+  test/e2e/run.sh all                   # fast then slow
+  test/e2e/run.sh smoke                 # one golden workload
+  test/e2e/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, count
+  test/e2e/run.sh --release all         # full suite, release build
+EOF
+}
 
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
-CATEGORY=fast
+PROFILE=debug
+ARGS=()
 for arg in "$@"; do
     case "$arg" in
-        fast|slow|all) CATEGORY=$arg ;;
-        *) echo "usage: $0 [fast|slow|all]"; exit 2;;
+        -h|--help) usage; exit 0 ;;
+        --release) PROFILE=release ;;
+        *) ARGS+=("$arg") ;;  # forwarded to the harness (selection, -n, …)
     esac
 done
 
-TEST_DIR=${TEST_DIR:-$REPO/.e2e-tests}
-export TEST_DIR
-RUN_ID=$(date +%Y%m%d-%H%M%S)
-
-# Garbage-collect old runs. Failed runs leave their cluster dir + log
-# behind (see cleanup_on_exit) for postmortem; reap anything older than 7
-# days so they don't accumulate. Covers both `run_<id>/` dirs and
-# `run_<id>.log` files.
-if [[ -d $TEST_DIR ]]; then
-    find "$TEST_DIR" -maxdepth 1 -name 'run_*' -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+# Build the harness and the cluster binary it drives. Debug by default
+# (per project convention for the dev/e2e loop); --release for release
+# verification.
+if [[ $PROFILE == release ]]; then
+    cargo build --release --bin e2e_tests --bin yb_light_local
+    export YB_LIGHT=${YB_LIGHT:-$REPO/target/release/yb_light_local}
+    BIN=$REPO/target/release/e2e_tests
+else
+    cargo build --bin e2e_tests --bin yb_light_local
+    BIN=$REPO/target/debug/e2e_tests
 fi
 
-YB_LIGHT_REPO_DIR=${YB_LIGHT_REPO_DIR:-$TEST_DIR/run_$RUN_ID}
-export YB_LIGHT_REPO_DIR
-mkdir -p "$YB_LIGHT_REPO_DIR"
-export YB_PS_VERIFY_WAL_ROUNDTRIP=${YB_PS_VERIFY_WAL_ROUNDTRIP:-1}
-
-YB_HOST=${YB_HOST:-127.0.0.1}
-YB_PORT=${YB_PORT:-5433}
-COMPUTE_PORT=${COMPUTE_PORT:-55432}
-export COMPUTE_PORT
-
-# Ephemeral YB database for this run; dropped on exit so concurrent
-# runs (and the dev box's manually-managed yb_storage) don't collide.
-YB_DBNAME=${YB_DBNAME:-yb_storage_e2e_$$_$RANDOM}
-export YB_DBNAME
-
-# Per-run init TOML, derived from /tmp/neon-init.toml with the YB
-# dbname swapped to the ephemeral one in every place that references
-# it: SC's `database_url` and the inline-table `dbname` on the PS
-# `remote_storage` / SK `wal_yb_config` lines.
-INIT_TOML=/tmp/neon-init-e2e-$$.toml
-sed -E \
-    -e "s#/yb_storage\\b#/$YB_DBNAME#g" \
-    -e "s#user = 'yugabyte'#user = 'yugabyte', dbname = '$YB_DBNAME'#g" \
-    /tmp/neon-init.toml > "$INIT_TOML"
-
-cleanup_on_exit() {
-    local rc=$?
-    rm -f "$INIT_TOML"
-    # On failure, leave the cluster (processes + on-disk dir, which holds
-    # every component's logs) and the YB database in place so the failure
-    # can be diagnosed. Old failed runs are reaped by the 7-day GC at the
-    # top of the next run. On success, tear everything down as usual.
-    if (( rc != 0 )); then
-        echo
-        echo "run FAILED (exit $rc) — leaving cluster up for inspection:"
-        echo "  logs/dir: $YB_LIGHT_REPO_DIR"
-        echo "  run log:  $RUN_LOG"
-        echo "  YB db:    $YB_DBNAME"
-        echo "  tear down manually with: test/e2e/clean.sh  (after YB_LIGHT_REPO_DIR=$YB_LIGHT_REPO_DIR YB_DBNAME=$YB_DBNAME)"
-        return
-    fi
-    "$REPO/test/e2e/clean.sh" >/dev/null 2>&1 || true
-}
-trap cleanup_on_exit EXIT
-
-# Capture stdout+stderr to a per-run log. The log lives outside
-# YB_LIGHT_REPO_DIR because clean.sh wipes that dir at the start of every
-# run; siblings persist across runs and let you diff successive runs.
-RUN_LOG_DIR=${RUN_LOG_DIR:-${TEST_DIR}}
-mkdir -p "$RUN_LOG_DIR"
-RUN_LOG=$RUN_LOG_DIR/run_$RUN_ID.log
-exec > >(tee -a "$RUN_LOG") 2>&1
-echo "Logging run to $RUN_LOG"
-
-YB_LIGHT=${YB_LIGHT:-$REPO/target/debug/yb_light_local}
-export YB_LIGHT
-[[ -x $YB_LIGHT ]] || { echo "yb_light_local binary not found at $YB_LIGHT; run 'cargo build --bin yb_light_local'"; exit 1; }
-
-step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
-
-MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
-
-# Pidfile locations under YB_LIGHT_REPO_DIR. The main timeline's
-# pageserver + safekeeper are co-located under endpoints/main/.
-PS_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.pid
-SK_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/safekeeper/safekeeper.pid
-SC_PIDFILE=$YB_LIGHT_REPO_DIR/storage_controller_1/storage_controller.pid
-ES_PIDFILE=$YB_LIGHT_REPO_DIR/endpoint_storage/endpoint_storage.pid
-EP_COMPUTE_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/compute_ctl.pid
-EP_PG_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/pgdata/postmaster.pid
-
-LOG=$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log
-
-is_running() {
-    local pidfile=$1
-    [[ -f $pidfile ]] || return 1
-    local pid
-    pid=$(cat "$pidfile" 2>/dev/null) || return 1
-    [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null
-}
-
-# Bring the cluster up from scratch. Runs once at the start of the
-# suite: clean leftover state, init+start the stack, create one
-# tenant and one endpoint that every test will share. Exports $TID.
-setup_cluster() {
-    "$REPO/test/e2e/clean.sh"
-
-    step "yb_light_local init + start (db=$YB_DBNAME)"
-    "$YB_LIGHT" init --config "$INIT_TOML"
-    "$YB_LIGHT" start
-
-    step "tenant + endpoint"
-    TID=$("$YB_LIGHT" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
-    [[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
-    export TID
-    echo "tenant: $TID"
-    # Default port allocation picks pg=55432, ext_http=55433,
-    # int_http=55434 for the first endpoint — matches the
-    # $COMPUTE_PORT default. (If $COMPUTE_PORT was overridden, the
-    # caller is on their own.)
-    "$YB_LIGHT" endpoint create main --tenant-id "$TID" --branch-name main \
-        --pg-version 17 >/dev/null
-    "$YB_LIGHT" endpoint start main >/dev/null
-}
-
-# Restart any cluster component the prior test left stopped, then
-# recycle the compute endpoint. `endpoint stop` followed by
-# `endpoint start` kills the running postgres + compute_ctl, redoes
-# basebackup against the (possibly-reattached) pageserver, and
-# spawns a fresh walproposer — so the next test starts from a clean
-# compute state regardless of what the previous test did.
-#
-# Pidfiles are checked rather than blindly invoking `start`: the
-# start path doesn't no-op when a daemon is already running, it
-# tries to bind the port and fails.
-prep_for_next_test() {
-    if ! is_running "$SC_PIDFILE"; then
-        step "restart storage_controller (prior test left it down)"
-        "$YB_LIGHT" storage_controller start >/dev/null
-    fi
-    if ! is_running "$PS_PIDFILE"; then
-        step "restart pageserver (prior test left it down)"
-        "$YB_LIGHT" pageserver start >/dev/null
-    fi
-    if ! is_running "$SK_PIDFILE"; then
-        step "restart safekeeper (prior test left it down)"
-        "$YB_LIGHT" safekeeper start >/dev/null
-    fi
-    if ! is_running "$ES_PIDFILE"; then
-        step "restart endpoint_storage (prior test left it down)"
-        "$YB_LIGHT" endpoint_storage start >/dev/null
-    fi
-
-    # Always recycle the compute. `endpoint stop` is tolerant of the
-    # postgres / compute_ctl already being gone — pg_ctl returns
-    # cleanly when there's no postmaster.pid — so we don't need to
-    # gate on status here. We use `immediate` because some tests
-    # (restart-wal-replay-yb) leave the compute mid-flight talking
-    # to a pageserver that just churned through catch-up; a fast
-    # shutdown blocks on the next walproposer round-trip and adds
-    # 10+ s. The compute's WAL has already been verified by the
-    # test itself, so we don't need the clean checkpoint.
-    local t0 t1
-    t0=$(date +%s)
-    "$YB_LIGHT" endpoint stop main --mode immediate >/dev/null 2>&1 || true
-    "$YB_LIGHT" endpoint start main >/dev/null
-    t1=$(date +%s)
-    if (( t1 - t0 > 2 )); then echo "  (endpoint recycle: $((t1 - t0))s)"; fi
-}
-
-run_sh_test() {
-    local sh=$1
-    local rel=${sh#$REPO/}
-    step "script: $rel"
-    local before_lines after_lines
-    before_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo 0)
-    local t0 t1
-    t0=$(date +%s)
-    bash "$sh"
-    t1=$(date +%s)
-    after_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo "$before_lines")
-    local new_hits=0
-    if (( after_lines > before_lines )); then
-        new_hits=$(tail -n $((after_lines - before_lines)) "$LOG" | grep -cE "$MARKERS" || true)
-    fi
-    if (( new_hits > 0 )); then
-        echo "FAIL — $new_hits corruption marker(s) introduced by $rel"
-        tail -n $((after_lines - before_lines)) "$LOG" | grep -E "$MARKERS" | head -5
-        exit 1
-    fi
-    echo "  ok  ($(( t1 - t0 ))s)"
-}
-
-# Normalise psql stdout for golden-output diffing: drop the `Time:`
-# lines emitted by `\timing on` (the only intra-run nondeterminism left
-# once the workloads themselves assert through deterministic
-# projections) and any libpq client/server version-mismatch warnings.
-# Result sets and command tags (INSERT 0 N, UPDATE N, …) are kept —
-# they carry signal. Trailing whitespace is stripped so editor drift in
-# the checked-in `.expected` never trips the diff.
-normalize_psql_output() {
-    sed -E \
-        -e '/^Time: [0-9.]+ ms/d' \
-        -e '/^(WARNING|NOTICE): .*(server|libpq|protocol) version/d' \
-        -e 's/[[:space:]]+$//'
-}
-
-run_sql_workload() {
-    local sql=$1
-    local rel=${sql#$REPO/}
-    # Golden capture lives next to the workload as `<name>.out`
-    # (pg_regress convention); the run's own captured output goes to a
-    # `.actual` scratch file under YB_LIGHT_REPO_DIR.
-    local expected=${sql%.sql}.out
-    step "workload: $rel"
-    local before_lines after_lines
-    before_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo 0)
-    local out_raw=$YB_LIGHT_REPO_DIR/$(basename "${sql%.sql}").actual
-    local t0 t1
-    t0=$(date +%s)
-    # Capture stdout for the output diff; stderr still flows to the run
-    # log (and `ON_ERROR_STOP=1` + `set -e` still abort on any SQL
-    # error, exactly as before).
-    PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres \
-        -v ON_ERROR_STOP=1 -f "$sql" > "$out_raw"
-    t1=$(date +%s)
-    after_lines=$([[ -f $LOG ]] && wc -l < "$LOG" || echo "$before_lines")
-    local new_hits=0
-    if (( after_lines > before_lines )); then
-        new_hits=$(tail -n $((after_lines - before_lines)) "$LOG" | grep -cE "$MARKERS" || true)
-    fi
-    if (( new_hits > 0 )); then
-        echo "FAIL — $new_hits corruption marker(s) introduced by $rel"
-        tail -n $((after_lines - before_lines)) "$LOG" | grep -E "$MARKERS" | head -5
-        exit 1
-    fi
-
-    # Output-validation gate. Diff the normalised result sets against the
-    # checked-in golden capture; any divergence — wrong counts, a stale
-    # page version, a lost delta — fails the test. Regenerate goldens
-    # with `E2E_REGEN_EXPECTED=1 test/e2e/run.sh …` after an intentional
-    # workload change, then review the diff before committing.
-    local norm=$out_raw.norm
-    normalize_psql_output < "$out_raw" > "$norm"
-    if [[ ${E2E_REGEN_EXPECTED:-0} == 1 ]]; then
-        cp "$norm" "$expected"
-        echo "  ok  ($(( t1 - t0 ))s) — regenerated $(basename "$expected")"
-    elif [[ -f $expected ]]; then
-        if ! diff -u <(normalize_psql_output < "$expected") "$norm" > "$out_raw.diff"; then
-            echo "FAIL — output mismatch for $rel (vs $(basename "$expected")):"
-            head -40 "$out_raw.diff"
-            exit 1
-        fi
-        echo "  ok  ($(( t1 - t0 ))s, output matches, +$((after_lines - before_lines)) log lines)"
-    else
-        echo "FAIL — no golden output for $rel."
-        echo "  expected file missing: ${expected#$REPO/}"
-        echo "  generate it with: E2E_REGEN_EXPECTED=1 $0 $CATEGORY"
-        exit 1
-    fi
-}
-
-# Collect all test files (.sh and .sql, in lexical order) for each
-# requested category.
-collect_tests() {
-    local cat=$1
-    local dir=$REPO/test/e2e/$cat
-    [[ -d $dir ]] || return 0
-    shopt -s nullglob
-    local f
-    for f in "$dir"/*.sh "$dir"/*.sql; do
-        echo "$f"
-    done
-    shopt -u nullglob
-}
-
-categories=()
-case "$CATEGORY" in
-    fast) categories=(fast) ;;
-    slow) categories=(slow) ;;
-    all)  categories=(fast slow) ;;
-esac
-
-setup_cluster
-
-for cat in "${categories[@]}"; do
-    while IFS= read -r f; do
-        [[ -z $f ]] && continue
-        prep_for_next_test
-        case "$f" in
-            *.sh)  run_sh_test "$f" ;;
-            *.sql) run_sql_workload "$f" ;;
-        esac
-    done < <(collect_tests "$cat")
-done
-
-step "Final verdict"
-COUNTER=$(curl -sS http://127.0.0.1:9989/metrics 2>/dev/null \
-    | grep -E '^pageserver_yb_correctness_errors_total\{' || true)
-if [[ -n $COUNTER ]]; then
-    echo "FAIL — correctness counter non-zero:"
-    echo "$COUNTER"
-    exit 1
-fi
-echo "PASS — all workloads clean, counter at 0"
+exec "$BIN" ${ARGS[@]+"${ARGS[@]}"}

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 severity: high
 area: yb-pageserver
 opened: 2026-06-02
@@ -7,7 +7,26 @@ opened: 2026-06-02
 
 # End-to-end test infra for corruption-class fixes
 
-## Motivation
+## Resolution
+
+Done — subsumed by the e2e suite. The "one command from clean repo to
+verdict" goal is realized by `test/e2e/run.sh fast|slow|all`: it brings
+up a yb_light_local cluster against an ephemeral YB, runs the
+workloads, scans the pageserver log for corruption markers after each,
+and exits non-zero with a one-line verdict. The marker list, the
+write-heavy golden workloads (`btree-splits.sql`, `full-workload.sql`),
+and the `YB_PS_VERIFY_WAL_ROUNDTRIP=1` strict mode (on by default in
+the harness) all live there. The harness was ported from shell to Rust
+in [task 30](30_e2e-tests-sh-to-rust.md); the golden-output validation
+is [task 25](25_e2e-sql-output-validation.md). The
+`e2e-before-corruption-claim` skill is the operational rule that points
+at this harness.
+
+The remaining open questions below (local-vs-AWS timing reproduction,
+CI integration) were never load-bearing for this task and are out of
+scope; file them fresh if they bite again.
+
+## Motivation (original)
 
 Two builds (`2345eb514`, `f6f71bc96`) shipped to AWS on 2026-06-02
 claiming to address the Btree/INSERT_UPPER walredo PANIC. Both

@@ -344,24 +344,25 @@ CARGO_BUILD_FLAGS="--features=testing" make
 DEFAULT_PG_VERSION=17 BUILD_TYPE=release ./scripts/pytest
 ```
 
-End-to-end shell tests under [`test/e2e/`](test/e2e/) exercise full
-boot, write, restart, and corruption-marker scans against a real
-`yb_light_local` cluster + YB. The most useful ones:
+The end-to-end suite under [`test/e2e/`](test/e2e/) is a Rust harness
+that brings up a real `yb_light_local` cluster + YB and exercises full
+boot, write, branch, restart, and WAL-replay-catch-up paths, scanning
+`pageserver.log` for corruption markers after every test
+(see [`test/e2e/README.md`](test/e2e/README.md)):
 
-- `test/e2e/run.sh [fast|slow|all]` — runs SQL workloads from
-  `fast/` and `slow/` and scans `pageserver.log` for corruption
-  markers between workloads.
-- `test/e2e/restart-correctness.sh` — verifies `prev_record_lsn` is
-  persisted across pageserver restarts (regression check for an
-  earlier corruption-class incident).
-- `test/e2e/restart-wal-replay.sh` — file-backed control-file
-  variant of the WAL-replay-on-restart catch-up regression check.
-- `test/e2e/restart-wal-replay-yb.sh` — same regression check
-  against an AWS-style safekeeper config (YB-WAL,
-  `--control-file-backend=remote-storage`, `--no-sync`,
-  `--wal-cache-size-mib=512`). Reproduces the
-  `next_chunk_seq`/upsert-collision bug fixed in
-  `commit 606864811` if it ever regresses.
+```sh
+test/e2e/run.sh                 # fast suite
+test/e2e/run.sh all             # fast then slow
+test/e2e/run.sh smoke           # one test by name (substring matches)
+test/e2e/run.sh -n 20 <name>    # repeat N times, cumulative pass/fail
+test/e2e/run.sh --release all   # release build
+```
+
+Scenario tests live in `test/e2e/src/scenarios/{fast,slow}/` (typed
+`tokio-postgres`/`reqwest` assertions); golden `.sql` workloads live in
+`test/e2e/{fast,slow}/` and diff against checked-in `.out` captures.
+Both are auto-discovered — adding a test is just dropping a file. Run
+the suite before claiming any corruption-class fix.
 
 Many of the legacy Neon unit tests have been deleted along with the
 layer-file machinery they exercised — they tested code paths that no

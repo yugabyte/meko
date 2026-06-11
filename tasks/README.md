@@ -88,7 +88,7 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 9 | [Safekeeper Paxos removal](9_safekeeper-paxos-removal.md) | ✅ done | high | safekeeper |
 | 10 | [Collapse storage_ctl Diesel migrations](10_collapse-storage_ctl-diesel-migrations.md) | ✅ done | medium | storage_ctl |
 | 11 | [Reduce YB reads when cold pages are modified](11_reduce-yb-reads-cold-page-modify.md) | ⏳ pending | medium | yb-pageserver |
-| 12 | [End-to-end test infra](12_e2e-test-infra.md) | ⏳ pending | high | yb-pageserver |
+| 12 | [End-to-end test infra](12_e2e-test-infra.md) | ✅ done | high | yb-pageserver |
 | 14 | [Data-modeling review](14_data-modeling-review.md) | ⏳ pending | high | yb-pageserver |
 | 15 | [`pageserver.meta` read hotness](15_pageserver-meta-read-hotness.md) | ⏳ pending | high | yb-pageserver |
 | 16 | [Unwind dead RTC plumbing](16_rtc-dead-code-unwind.md) | ✅ done | medium | yb-pageserver |
@@ -105,4 +105,4 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 27 | [PS cache-walk regression (`scan_range` `cache_ms`)](27_ps-cache-walk-regression.md) | ⏳ pending | high | yb-pageserver |
 | 28 | ["Catch me if you can" walredo corruption](28_walredo-corruption-catch-me-if-you-can.md) | 🚧 in_progress | highest | yb-pageserver |
 | 29 | [Move pending-timeline init recipe into YB](29_pending-init-to-yb.md) | ✅ done | medium | storage_ctl / yb_light_local |
-| 30 | [Convert e2e suite from shell to Rust](30_e2e-tests-sh-to-rust.md) | ⏳ pending | medium | yb-pageserver |
+| 30 | [Convert e2e suite from shell to Rust](30_e2e-tests-sh-to-rust.md) | ✅ done | medium | yb-pageserver |
