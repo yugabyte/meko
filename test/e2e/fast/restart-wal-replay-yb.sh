@@ -8,7 +8,7 @@
 # backfill) on PS catch-up. Background:
 # findings-ps-wal-replay-restart-bug-2026-06-04.md.
 #
-# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR,
+# Run via test/e2e/run.sh — it provides $YB_LIGHT, $YB_LIGHT_REPO_DIR,
 # $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
@@ -68,13 +68,13 @@ n_before_stop=$(PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin 
 echo "n at PS-stop time: $n_before_stop"
 
 step "Stop pageserver (immediate)"
-"$NEON" pageserver stop -m immediate >/dev/null
+"$YB_LIGHT" pageserver stop -m immediate >/dev/null
 
 step "Soak ${SOAK_SECS}s — WAL flushes into yb_storage.wals via wal_yb_config"
 sleep "$SOAK_SECS"
 
 step "Stop safekeeper -m immediate"
-"$NEON" safekeeper stop -m immediate >/dev/null
+"$YB_LIGHT" safekeeper stop -m immediate >/dev/null
 
 step "Reap background loop"
 kill "$BG_PID" 2>/dev/null || true
@@ -82,10 +82,10 @@ wait "$BG_PID" 2>/dev/null || true
 BG_PID=
 
 step "Restart safekeeper (loads control file from remote storage / YB blobs)"
-"$NEON" safekeeper start >/dev/null
+"$YB_LIGHT" safekeeper start >/dev/null
 
 step "Restart pageserver"
-"$NEON" pageserver start
+"$YB_LIGHT" pageserver start
 
 sleep 2
 

@@ -8,7 +8,7 @@
 # compute waits up to pageserver_response_disconnect_timeout
 # (default 30 s) before tearing down the half-closed connection.
 #
-# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR,
+# Run via test/e2e/run.sh — it provides $YB_LIGHT, $YB_LIGHT_REPO_DIR,
 # $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
@@ -35,7 +35,7 @@ sleep 1
 
 step "Gracefully stop the pageserver"
 T0=$(date +%s.%N)
-"$NEON" pageserver stop >/dev/null
+"$YB_LIGHT" pageserver stop >/dev/null
 T1=$(date +%s.%N)
 STOP_SECS=$(awk "BEGIN {printf \"%.2f\", $T1 - $T0}")
 echo "  pageserver stop took ${STOP_SECS}s"

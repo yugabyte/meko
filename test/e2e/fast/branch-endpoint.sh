@@ -10,7 +10,7 @@
 #   2. post-branch writes — isolated from the ancestor in both
 #      directions.
 #
-# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR,
+# Run via test/e2e/run.sh — it provides $YB_LIGHT, $YB_LIGHT_REPO_DIR,
 # $COMPUTE_PORT, $TID and a fresh cluster + running `main` endpoint.
 
 set -euo pipefail
@@ -39,15 +39,15 @@ PRE_COUNT=$(psql_main -c "SELECT count(*) FROM branch_seed")
 [[ $PRE_COUNT == 1000 ]] || { echo "FAIL — seed count $PRE_COUNT != 1000"; exit 1; }
 
 step "Create branch b1 (records the branch point; PS/SK come up at endpoint create)"
-"$NEON" timeline branch --tenant-id "$TID" --branch-name b1
+"$YB_LIGHT" timeline branch --tenant-id "$TID" --branch-name b1
 
 step "Write post-branch data on main (must NOT be visible on b1)"
 psql_main -c "INSERT INTO branch_seed SELECT g, 'post-branch-main-' || g FROM generate_series(1001, 1100) g" >/dev/null
 
 step "Create + start endpoint on b1 (provisions pageserver 2 + safekeeper 2)"
-"$NEON" endpoint create ep_b1 --tenant-id "$TID" --branch-name b1 \
+"$YB_LIGHT" endpoint create ep_b1 --tenant-id "$TID" --branch-name b1 \
     --pg-version 17 --pg-port "$BRANCH_PG_PORT" >/dev/null
-"$NEON" endpoint start ep_b1 >/dev/null
+"$YB_LIGHT" endpoint start ep_b1 >/dev/null
 
 step "Branch sees pre-branch data via lineage reads"
 B1_PRE=$(psql_branch -c "SELECT count(*) FROM branch_seed WHERE val LIKE 'pre-branch-%'")
@@ -67,13 +67,13 @@ MAIN_TOTAL=$(psql_main -c "SELECT count(*) FROM branch_seed")
 [[ $MAIN_TOTAL == 1100 ]] || { echo "FAIL — main total $MAIN_TOTAL, want 1100"; exit 1; }
 
 step "Branch survives a pageserver restart (open-existing + lineage rebuild)"
-"$NEON" pageserver stop --id 2
-"$NEON" pageserver start --id 2 >/dev/null
+"$YB_LIGHT" pageserver stop --id 2
+"$YB_LIGHT" pageserver start --id 2 >/dev/null
 B1_AFTER_RESTART=$(psql_branch -c "SELECT count(*) FROM branch_seed")
 [[ $B1_AFTER_RESTART == 1100 ]] || { echo "FAIL — branch sees $B1_AFTER_RESTART rows after PS restart, want 1100 (1000 pre + 100 own)"; exit 1; }
 
 step "Cleanup: stop branch endpoint (branch PS/SK keep running; suite teardown stops them)"
-"$NEON" endpoint stop ep_b1 --mode immediate >/dev/null 2>&1 || true
+"$YB_LIGHT" endpoint stop ep_b1 --mode immediate >/dev/null 2>&1 || true
 
 step "Final verdict"
 echo "PASS — branch endpoint served lineage reads, isolated writes, and survived a restart"

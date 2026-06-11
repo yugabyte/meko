@@ -29,7 +29,7 @@
 #      this hangs (or basebackup fails with an LSN timeout); if fixed,
 #      the value of n reflects the writes done while the PS was down.
 #
-# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR,
+# Run via test/e2e/run.sh — it provides $YB_LIGHT, $YB_LIGHT_REPO_DIR,
 # $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
@@ -110,7 +110,7 @@ step "Stop pageserver (immediate — no GoingAway frame, simulates a kill -9 res
 # Immediate stop also leaves disk_consistent_lsn further behind, which
 # is closer to the production failure mode that originally triggered
 # this finding (a serving PS restarted with a large in-memory backlog).
-"$NEON" pageserver stop -m immediate >/dev/null
+"$YB_LIGHT" pageserver stop -m immediate >/dev/null
 
 step "Soak for ${SOAK_SECS}s with PS down — UPDATEs build a WAL gap on the SK"
 sleep "$SOAK_SECS"
@@ -126,7 +126,7 @@ ts_pre_sk_stop_lsn=$(PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_a
 echo "compute LSN before SK stop: $ts_pre_sk_stop_lsn"
 
 step "Stop safekeeper -m immediate (this will break the background loop's next commit)"
-"$NEON" safekeeper stop -m immediate >/dev/null
+"$YB_LIGHT" safekeeper stop -m immediate >/dev/null
 
 step "Reap the background loop (it should be wedged on SK)"
 kill "$BG_PID" 2>/dev/null || true
@@ -134,8 +134,8 @@ wait "$BG_PID" 2>/dev/null || true
 BG_PID=
 
 step "Restart safekeeper, then pageserver"
-"$NEON" safekeeper start >/dev/null
-"$NEON" pageserver start
+"$YB_LIGHT" safekeeper start >/dev/null
+"$YB_LIGHT" pageserver start
 
 # Give the PS a moment to open the walreceiver to the SK. The bug
 # manifests within ~5 ms of the first connect; a fix lands in
@@ -153,9 +153,9 @@ step "Restart compute endpoint (forces basebackup from PS)"
 # graceful `pg_ctl -m fast` shutdown tries to flush WAL through that
 # connection and hangs. We're about to re-bootstrap via basebackup
 # anyway, so a clean shutdown adds nothing.
-"$NEON" endpoint stop main --mode immediate >/dev/null
+"$YB_LIGHT" endpoint stop main --mode immediate >/dev/null
 ENDPOINT_START_TIMEOUT=${ENDPOINT_START_TIMEOUT:-60}
-if ! timeout "$ENDPOINT_START_TIMEOUT" "$NEON" endpoint start main >/dev/null; then
+if ! timeout "$ENDPOINT_START_TIMEOUT" "$YB_LIGHT" endpoint start main >/dev/null; then
     echo "FAIL — endpoint failed to start within ${ENDPOINT_START_TIMEOUT}s"
     echo "  most likely the pageserver could not catch up to the safekeeper's WAL gap"
     echo "  (tail of pageserver log:)"

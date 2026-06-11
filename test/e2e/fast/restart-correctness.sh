@@ -16,7 +16,7 @@
 # historically led to corruption-class incidents (the original
 # motivation for this task).
 #
-# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR,
+# Run via test/e2e/run.sh — it provides $YB_LIGHT, $YB_LIGHT_REPO_DIR,
 # $COMPUTE_PORT, $TID and a fresh cluster + endpoint.
 
 set -euo pipefail
@@ -40,8 +40,8 @@ CHECKPOINT;
 SQL
 
 step "Stop endpoint, then pageserver (graceful — should force_upsert pending dc_lsn)"
-"$NEON" endpoint stop main >/dev/null
-"$NEON" pageserver stop >/dev/null
+"$YB_LIGHT" endpoint stop main >/dev/null
+"$YB_LIGHT" pageserver stop >/dev/null
 
 step "Confirm prev_record_lsn was persisted (non-NULL after PS shutdown)"
 PREV=$(PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d "$YB_DBNAME" \
@@ -53,10 +53,10 @@ fi
 echo "  prev_record_lsn persisted as: $PREV"
 
 step "Restart pageserver"
-"$NEON" pageserver start
+"$YB_LIGHT" pageserver start
 
 step "Restart endpoint and verify data is intact"
-"$NEON" endpoint start main >/dev/null
+"$YB_LIGHT" endpoint start main >/dev/null
 TOTAL=$(PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -At -c \
     "SELECT count(*) FROM restart_check")
 UPDATED=$(PGPASSWORD= psql -h 127.0.0.1 -p "$COMPUTE_PORT" -U cloud_admin postgres -At -c \

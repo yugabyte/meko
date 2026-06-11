@@ -13,7 +13,7 @@
 #
 #   *.sh   — runs after the prep step has ensured the cluster + a
 #            running endpoint named `main`. Exports $TID,
-#            $COMPUTE_PORT, $NEON, $YB_LIGHT_REPO_DIR, $YB_DBNAME.
+#            $COMPUTE_PORT, $YB_LIGHT, $YB_LIGHT_REPO_DIR, $YB_DBNAME.
 #   *.sql  — psql workload against the same shared cluster. Its
 #            normalised stdout is diffed against a sibling `<name>.out`
 #            golden capture (see `run_sql_workload`); regenerate goldens
@@ -45,6 +45,14 @@ TEST_DIR=${TEST_DIR:-$REPO/.e2e-tests}
 export TEST_DIR
 RUN_ID=$(date +%Y%m%d-%H%M%S)
 
+# Garbage-collect old runs. Failed runs leave their cluster dir + log
+# behind (see cleanup_on_exit) for postmortem; reap anything older than 7
+# days so they don't accumulate. Covers both `run_<id>/` dirs and
+# `run_<id>.log` files.
+if [[ -d $TEST_DIR ]]; then
+    find "$TEST_DIR" -maxdepth 1 -name 'run_*' -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+fi
+
 YB_LIGHT_REPO_DIR=${YB_LIGHT_REPO_DIR:-$TEST_DIR/run_$RUN_ID}
 export YB_LIGHT_REPO_DIR
 mkdir -p "$YB_LIGHT_REPO_DIR"
@@ -71,8 +79,22 @@ sed -E \
     /tmp/neon-init.toml > "$INIT_TOML"
 
 cleanup_on_exit() {
-    "$REPO/test/e2e/clean.sh" >/dev/null 2>&1 || true
+    local rc=$?
     rm -f "$INIT_TOML"
+    # On failure, leave the cluster (processes + on-disk dir, which holds
+    # every component's logs) and the YB database in place so the failure
+    # can be diagnosed. Old failed runs are reaped by the 7-day GC at the
+    # top of the next run. On success, tear everything down as usual.
+    if (( rc != 0 )); then
+        echo
+        echo "run FAILED (exit $rc) — leaving cluster up for inspection:"
+        echo "  logs/dir: $YB_LIGHT_REPO_DIR"
+        echo "  run log:  $RUN_LOG"
+        echo "  YB db:    $YB_DBNAME"
+        echo "  tear down manually with: test/e2e/clean.sh  (after YB_LIGHT_REPO_DIR=$YB_LIGHT_REPO_DIR YB_DBNAME=$YB_DBNAME)"
+        return
+    fi
+    "$REPO/test/e2e/clean.sh" >/dev/null 2>&1 || true
 }
 trap cleanup_on_exit EXIT
 
@@ -85,9 +107,9 @@ RUN_LOG=$RUN_LOG_DIR/run_$RUN_ID.log
 exec > >(tee -a "$RUN_LOG") 2>&1
 echo "Logging run to $RUN_LOG"
 
-NEON=${NEON:-$REPO/target/debug/yb_light_local}
-export NEON
-[[ -x $NEON ]] || { echo "yb_light_local binary not found at $NEON; run 'cargo build --bin yb_light_local'"; exit 1; }
+YB_LIGHT=${YB_LIGHT:-$REPO/target/debug/yb_light_local}
+export YB_LIGHT
+[[ -x $YB_LIGHT ]] || { echo "yb_light_local binary not found at $YB_LIGHT; run 'cargo build --bin yb_light_local'"; exit 1; }
 
 step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 
@@ -119,11 +141,11 @@ setup_cluster() {
     "$REPO/test/e2e/clean.sh"
 
     step "yb_light_local init + start (db=$YB_DBNAME)"
-    "$NEON" init --config "$INIT_TOML"
-    "$NEON" start
+    "$YB_LIGHT" init --config "$INIT_TOML"
+    "$YB_LIGHT" start
 
     step "tenant + endpoint"
-    TID=$("$NEON" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
+    TID=$("$YB_LIGHT" tenant create --pg-version 17 2>&1 | awk '/successfully created/{print $2}')
     [[ -n $TID ]] || { echo "tenant create failed"; exit 1; }
     export TID
     echo "tenant: $TID"
@@ -131,9 +153,9 @@ setup_cluster() {
     # int_http=55434 for the first endpoint — matches the
     # $COMPUTE_PORT default. (If $COMPUTE_PORT was overridden, the
     # caller is on their own.)
-    "$NEON" endpoint create main --tenant-id "$TID" --branch-name main \
+    "$YB_LIGHT" endpoint create main --tenant-id "$TID" --branch-name main \
         --pg-version 17 >/dev/null
-    "$NEON" endpoint start main >/dev/null
+    "$YB_LIGHT" endpoint start main >/dev/null
 }
 
 # Restart any cluster component the prior test left stopped, then
@@ -149,19 +171,19 @@ setup_cluster() {
 prep_for_next_test() {
     if ! is_running "$SC_PIDFILE"; then
         step "restart storage_controller (prior test left it down)"
-        "$NEON" storage_controller start >/dev/null
+        "$YB_LIGHT" storage_controller start >/dev/null
     fi
     if ! is_running "$PS_PIDFILE"; then
         step "restart pageserver (prior test left it down)"
-        "$NEON" pageserver start >/dev/null
+        "$YB_LIGHT" pageserver start >/dev/null
     fi
     if ! is_running "$SK_PIDFILE"; then
         step "restart safekeeper (prior test left it down)"
-        "$NEON" safekeeper start >/dev/null
+        "$YB_LIGHT" safekeeper start >/dev/null
     fi
     if ! is_running "$ES_PIDFILE"; then
         step "restart endpoint_storage (prior test left it down)"
-        "$NEON" endpoint_storage start >/dev/null
+        "$YB_LIGHT" endpoint_storage start >/dev/null
     fi
 
     # Always recycle the compute. `endpoint stop` is tolerant of the
@@ -175,8 +197,8 @@ prep_for_next_test() {
     # test itself, so we don't need the clean checkpoint.
     local t0 t1
     t0=$(date +%s)
-    "$NEON" endpoint stop main --mode immediate >/dev/null 2>&1 || true
-    "$NEON" endpoint start main >/dev/null
+    "$YB_LIGHT" endpoint stop main --mode immediate >/dev/null 2>&1 || true
+    "$YB_LIGHT" endpoint start main >/dev/null
     t1=$(date +%s)
     if (( t1 - t0 > 2 )); then echo "  (endpoint recycle: $((t1 - t0))s)"; fi
 }

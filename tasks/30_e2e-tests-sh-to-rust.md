@@ -56,7 +56,7 @@ their own tasks.
   (`yb_storage_e2e_$$_$RANDOM`), per-run init TOML derived from
   `/tmp/neon-init.toml` with the dbname swapped.
 - **Two test kinds:**
-  - `*.sh` scripts — drive `$NEON` (the `yb_light_local` bin) + `psql`,
+  - `*.sh` scripts — drive `$YB_LIGHT` (the `yb_light_local` bin) + `psql`,
     assert inline. Current fast set: `branch-ancestor`, `branch-endpoint`,
     `going-away`, `layout`, `multi-timeline`, `restart-correctness`,
     `restart-wal-replay-yb`. Slow: `restart-wal-replay`.

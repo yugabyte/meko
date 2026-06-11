@@ -10,7 +10,7 @@
 # the branch's pair appears under its endpoint and is torn down on
 # `endpoint stop --destroy` (the deprovision path).
 #
-# Run via test/e2e/run.sh — it provides $NEON, $YB_LIGHT_REPO_DIR, $TID.
+# Run via test/e2e/run.sh — it provides $YB_LIGHT, $YB_LIGHT_REPO_DIR, $TID.
 
 set -euo pipefail
 
@@ -43,12 +43,12 @@ shopt -u nullglob
 [[ ! -d $R/safekeepers ]] || fail "found legacy top-level safekeepers/ dir"
 
 step "branch $LAYOUT_BRANCH (no new on-disk dirs yet)"
-"$NEON" timeline branch --tenant-id "$TID" --branch-name "$LAYOUT_BRANCH"
+"$YB_LIGHT" timeline branch --tenant-id "$TID" --branch-name "$LAYOUT_BRANCH"
 [[ ! -e $R/endpoints/$LAYOUT_EP ]] \
     || fail "endpoints/$LAYOUT_EP should not exist before endpoint create"
 
 step "endpoint create $LAYOUT_EP provisions the branch's pair under its folder"
-"$NEON" endpoint create "$LAYOUT_EP" --tenant-id "$TID" \
+"$YB_LIGHT" endpoint create "$LAYOUT_EP" --tenant-id "$TID" \
     --branch-name "$LAYOUT_BRANCH" --pg-version 17 --pg-port "$LAYOUT_PG_PORT" >/dev/null
 [[ -f $R/endpoints/$LAYOUT_EP/pageserver/pageserver.toml ]] \
     || fail "missing endpoints/$LAYOUT_EP/pageserver/pageserver.toml"
@@ -63,7 +63,7 @@ br_id=$(grep -oE 'id *= *[0-9]+' "$R/endpoints/$LAYOUT_EP/pageserver/identity.to
 [[ $main_id != "$br_id" ]] || fail "branch pageserver id $br_id collides with main's"
 
 step "endpoint stop --destroy tears the pair down (deprovision)"
-"$NEON" endpoint stop "$LAYOUT_EP" --destroy >/dev/null
+"$YB_LIGHT" endpoint stop "$LAYOUT_EP" --destroy >/dev/null
 [[ ! -e $R/endpoints/$LAYOUT_EP ]] \
     || fail "endpoints/$LAYOUT_EP should be gone after --destroy"
 
