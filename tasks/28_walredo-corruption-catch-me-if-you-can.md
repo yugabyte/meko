@@ -29,7 +29,302 @@ release line, not this corruption); [task 23 — SK kill-9 WAL hole](23_sk-kill9
 
 # yb-neon walredo corruption — collected evidence
 
-Last updated: 2026-06-11 (run #6 in progress).
+Last updated: 2026-06-11 (night). Root cause found AND fixed for the
+zero-image shadowing (bug A): crash-replay rel-size cache pin → gap-fill
+writes zero-page images over live tail blocks (see "ROOT CAUSE FOUND").
+Fixes landed: unconditional cache advance (`rel_extend_plan`) + exclusive
+pre-record reads (`get_committed_before` / `Version::at(lsn-1)`); e2e
+regression `restart_relsize_zero_shadow` green 10/10 under SIGKILL.
+Still open: bug B (single-record loss when the checkpoint passes an
+unflushed row — reproduced once by the e2e scenario), a retry-healed
+transient walredo failure in the same family, and the W10 data-repair
+pass for existing zero-image landmines.
+
+## Update 2026-06-10 — two recorded hypotheses falsified by git
+
+Two load-bearing claims in this doc are wrong; verified by pure ancestry,
+no repro needed:
+
+1. **"The PS-side fix is in some commit between `b8aa3fac4` and `dde78d810`"
+   — FALSE.** That range is exactly three commits, none a PS logic fix:
+   `dde78d810` (SK lookback window), `79a39e206` (SK batched range-fetch),
+   `26718c7a4` (PS *env-gated trace* + an unconditional row-drop *detector*
+   that logs `CRITICAL` but changes no write behavior). There is no code fix.
+   The corruption "vanished" only because the newer build's materializer
+   drained the dangerous chains into stable image layers — the data state
+   changed, not the code. **The bug is therefore still latent in `main`:**
+   both `b8aa3fac4` and `dde78d810` are ancestors of HEAD and the suspect
+   code is unchanged at HEAD. The clean >3 h runs are a property of the
+   drained dataset, not evidence of a fix.
+
+2. **"`b8aa3fac4` Arc<PageRow> is the prime suspect for the crash" —
+   EXONERATED.** Crash 1 ran on `d9641d272` (committed 2026-06-07), which is
+   *older* than `b8aa3fac4` (2026-06-08) and does **not** contain the
+   Arc<PageRow> change (`git merge-base --is-ancestor b8aa3fac4 d9641d272` →
+   false). A change introduced after a crash cannot have caused it. The Arc
+   diff is also a mechanical `PageRow → Arc<PageRow>` wrap of read-only rows
+   (rows are immutable; `payload: Bytes` is already Arc-shared) — no
+   aliasing/mutation that could corrupt chain bytes. Arc may still own the
+   *cache_ms* regression (task 27); it does not own the corruption.
+
+**Refocus:** root cause is common to `d9641d272` *and* `b8aa3fac4` — the
+build-independent delta-chain assembly handing walredo a chain that decodes
+to a bad item offset (`invalid max offset number` / `failed to add new item`).
+Next: audit the chain merge/sort/dedup/truncate path (`PageWriter::read_chain`
++ `lookup_chain*` + `PageStore::read_chain`/`scan_range`) for an ordering or
+boundary error that survives across both builds, rather than bisecting the
+Arc commit.
+
+## Update 2026-06-11 — run #6 "repro" is a FALSE POSITIVE (env failure, not corruption)
+
+The saved crash log
+(`ps-stack.log.crash-20260611-072330-rel16414-blk4135568.gz`) is **not** the
+corruption. Every `apply_wal_records` failure in it is the walredo postgres
+child failing to *exec*:
+
+```
+wal-redo-postgres-stderr{pid=584906 ... pg_version=PG17}: received output
+  output=.../builds/2026-06-09-dde78d810/pg_install/v17/bin/postgres:
+  error while loading shared libraries: libicui18n.so.60:
+  cannot open shared object file: No such file or directory
+```
+
+All 9 walredo launch attempts died at load time → `write to walredo stdin:
+Broken pipe` / `read walredo stdout: early eof` → `ABORT: MATERIALIZER REDO
+ERROR` → correct fail-stop, wrong reason. No walredo PANIC anywhere in the
+log; the chain in the ABORT (`chain_len=6`, blk `3F1A90`=4135568) was never
+actually fed to a working redo process.
+
+Mechanism: `pageserver/src/walredo/process.rs` spawns walredo with
+`env_clear()` + `LD_LIBRARY_PATH=<pg_lib_dir>` (`pg_install/v17/lib`) only.
+The bundle ships `libssl/libcrypto/libicu*` in the bundle-top-level `lib/`
+(reachable by PS itself via neon_local's child-env allowlist) but
+`pg_install/v17/lib` had none of them. The `libssl.so.1.1`/`libcrypto.so.1.1`
+symlinks in `pg_install/v17/lib` were created **2026-06-11 07:02:08** — nine
+seconds before the 07:02:17 SIGABRT — i.e. mid-firefight, one missing lib at
+a time, and `libicu*` was the next one in line at 07:20.
+
+Consequences:
+
+- Today's SIGABRT series (06:58:20, 07:02:17, 07:20:25) is this env
+  crash-loop. The 04:22:34 and 05:31:43 cores predate the 07:02 symlinks, so
+  walredo could not have loaded then either (no system libicu60 on the box,
+  `pg_install` was switched to the new bundle's) — presumed same cause, but
+  their log text is gone (PS log truncates per restart). The 05:31 core is
+  fully present (32.5 M) if anyone wants certainty.
+- The earlier (06-10) clean 3 h runs must have run walredo from a different
+  `pg_distrib_dir` — this bundle's `pg_install/v17` could never exec postgres
+  before 07:02 today.
+- The trace instrumentation itself **works**: 151 K `write_trace stage="put"`
+  lines for rel 16414 in the 9 s the PS was up. Once the env is fixed, a real
+  repro will have full put-side coverage.
+
+Fix on the box (matches the [bundle-runtime-libs memory], do for every
+deployed bundle):
+
+```
+cd /home/ec2-user/yb-light/builds/2026-06-09-dde78d810
+ln -s $PWD/lib/libicudata.so.60 $PWD/lib/libicui18n.so.60 $PWD/lib/libicuuc.so.60 \
+      pg_install/v17/lib/
+```
+
+Durable fix: ship script should symlink/copy all runtime libs into
+`pg_install/*/lib/`, since walredo's `env_clear()` spawn only sees
+`pg_lib_dir`. Then re-run the repro recipe — run #6 has not actually tested
+anything yet.
+
+## Update 2026-06-11 (later) — ROOT CAUSE FOUND: replay-window zero-image shadowing
+
+Crash 4 (REAL, 07:41:17, log `ps-stack.log.crash-20260611-074120-recovered.gz`)
+finally preserved the full PANIC context:
+
+```
+PANIC:  neon_rm_redo: invalid lp
+CONTEXT: WAL redo at 29/764FB078 for neon/HOT_UPDATE:
+         old_xmax: 10375787, old_off: 35, ..., new_off: 58
+key=000000067F000040000000400700000000FE  (rel 16391 blk 254)
+chain_len=44  base_img_lsn=29/74ABCCA8  during legacy compaction (attach gen=0f)
+```
+
+Forensics were done directly against `pageserver.pages` in YB
+(decode scripts in `/tmp/claude/task28/` on the dev box: `decode_chain.py`,
+`lp35_history.py`, `window_decode.py`, `sim.py` — the last one replays
+stored deltas image-to-image with PG redo semantics and diffs line-pointer
+tables; generalize into `tools/` later).
+
+### Root cause A — rel-size cache pin during crash-replay → zero-image bursts
+
+The dominant mechanism, fully evidenced on rel 16414 (insert-only tail
+growth) blk 4135568 and neighbors:
+
+- Blk 4135568 has **6,269 images — every one an all-zero page — vs 69 real
+  deltas**. All zero images sit in `29/774F8738..29/78331088`, today's
+  crash-loop replay window. Neighboring tail blocks: 4135400 → 17,277 zero
+  images; 4135560 → 6,645; 4135600 → 4,400; 4135650 → 2,119 (monotonically
+  decreasing with block number). Low blocks (1M/2M/3M/4M) are clean (1–3
+  images).
+- Max zero-image LSN = `29/782E8040` for most blocks = the prior instance's
+  flush horizon; bursts stop exactly there.
+
+Mechanism (all in `pgdatadir_mapping.rs` / `walingest.rs`):
+
+1. yb-light flushes page rows to YB continuously, but the replay start
+   point (checkpoint) lags. After a crash, **WAL replay re-runs below YB's
+   durable horizon** — storage already contains rows (incl. `rel_size_to_key`
+   values) at LSNs the replay is about to re-visit. This anomaly cannot
+   happen in upstream Neon (layer files are a consistent snapshot at
+   `disk_consistent_lsn`); it is a yb-light-specific design gap.
+2. During replay, `put_rel_extend` reads the size key LSN-versioned
+   (`self.get(size_key)` at the record's LSN) and sees the *first pass's own
+   write* — `old_size == nblocks`, never less — so the
+   `if nblocks > old_size` guard makes it a permanent no-op and
+   **`set_cached_rel_size` is never called**.
+3. The rel-size *cache* (`rel_size_latest_cache`) therefore stays pinned at
+   the replay-start size. `handle_rel_extend` / `ingest_batch` →
+   `create_relation_if_required` keep getting the pinned value, treat every
+   record beyond it as an extension, and `find_gaps`/gap-fill writes
+   **`ZERO_PAGE` images for the entire [pinned_size, current_blk) range at
+   the current record's LSN — on every single record** (zero images for one
+   block land ~250 bytes of WAL apart, matching per-record cadence).
+4. The zero images land *above* the first pass's real deltas, shadowing
+   them: reads return an empty page (**silent data loss** — the data is
+   still in YB below the zero image, just unreachable), and any block with
+   non-`will_init` deltas above its last zero image PANICs walredo at the
+   next materialization/read: `invalid max offset number` /
+   `failed to add new item` / `invalid lp` — exactly crashes 1–4's shapes.
+5. Once replay passes the prior flush horizon, `put_rel_extend` fires
+   again, the cache unsticks, bursts stop — the corruption window closes
+   and only the landmines remain. Materializer activity then gradually
+   "drains" them → **"catch me if you can"**: why crashes cluster right
+   after load/attach/restart and vanish under an instrumented rebuild.
+
+Side effect: the millions of junk zero-image rows inflate the PageWriter
+delta map — likely a contributor to the task-27 `cache_ms` O(N) walk
+(4.5 M entries / 360 MB observed there).
+
+### Root cause B (secondary, suspected) — single-record loss across crashes
+
+Image-to-image lp simulation over full block histories found rare
+single-record losses *not* explained by zero images:
+
+- rel 16391 blk 254: a HOT_UPDATE placing a tuple at lp 35 in
+  `(29/6B946C38, 29/71DC5148)` is missing from the store — yet the stored
+  prune at `29/71DC5148` redirects `7 → 35` (proving the primary had it)
+  and crash 4's failing record updates *from* lp 35. 258 image intervals
+  checked, this is one of 2 inconsistencies; the other two known cases:
+  lp 37 (epoch 25, same block) and blk 300 lp 5 (epoch 27) — image
+  *contains* the missing record's effect, so the record reached the
+  materializer but never YB.
+- All cases sit near PS crash days (coredumps 06-06 .. 06-11). Suspected:
+  checkpoint/`last_record_lsn` persisted ahead of a lost pages flush, so
+  the final replay pass starts above the record's LSN and never re-puts it
+  (same family as tasks 23/24 flush-ordering bugs). Not yet proven —
+  needs the flush/checkpoint ordering audit.
+
+### Fix directions
+
+1. **Unpin the cache**: `put_rel_extend` must update
+   `set_cached_rel_size` even when `nblocks <= old_size` (cache
+   `max(old_size, nblocks)`), and/or gap-fill must compute `old_nblocks`
+   against the *latest* durable size, never an LSN-versioned read taken
+   mid-replay.
+2. **Make replay idempotent for gap-fill**: never write zero images for
+   blocks that already have rows at or below the current LSN (existence
+   check, or suppress gap-fill entirely while `lsn <= durable_horizon`).
+3. **Checkpoint ordering**: replay start must never exceed what the pages
+   flush durably covers (root cause B).
+4. **Data repair**: shadowed deltas still exist below the bogus zero
+   images. A repair pass can delete zero images that have older real rows
+   for the same key (a legit creation-time gap zero never does), restoring
+   reads. Needed before trusting this dataset again.
+
+### Update 2026-06-11 (evening) — fix A landed in tree; e2e scenario reproduces bug B in 30 s
+
+Fix A is implemented: `put_rel_extend` now always advances the rel-size
+cache via the pure helper `rel_extend_plan` (`pgdatadir_mapping.rs`),
+with unit tests pinning the contract
+(`rel_extend_replay_advances_cache_without_write`). New e2e scenario
+`test/e2e/src/scenarios/fast/restart_relsize_zero_shadow.rs`:
+insert-heavy extension for 7 s → `pageserver stop -m immediate` →
+restart → assert no all-zero image newer than its block's oldest row.
+
+First run of the scenario (fix A applied) **reproduced the production
+corruption locally in ~30 s**: attach materializer died with
+`PANIC: failed to add new item` (crash-1 signature) on the pkey-index
+block (db=5 rel=16391 blk=3). Forensics on the preserved run DB
+(`yb_storage_e2e_2641792_131610426`, run dir `run_1781190176_2641792`):
+
+- Replay restarted from checkpoint `0/25C7DE0`.
+- blk 3's btree-insert deltas arrive every ~0x70000 of WAL:
+  `…2449D48, 24B9E18, 2529F20, <MISSING ~2599F20>, 260A0A8…` —
+  **exactly one record lost, just below the checkpoint**. Its flush was
+  lost by the immediate stop while the checkpoint had already advanced
+  past it → replay never re-ingested it → chain hole → walredo PANIC.
+  **This is bug B, deterministically reproduced.**
+- The same lost window also dropped a size-key write: the first replay
+  extension record (same lsn `0/260A0A8`) re-zero-filled once, leaving
+  exactly one shadowing zero image (blk 39) — fix A removed the
+  thousand-image flood; this single burst is bug B residue, as
+  predicted in "Fix directions".
+
+Suspected bug-B mechanism (to verify next): `disk_consistent_lsn` is
+advanced to `max(lsn)` of the rows a flush happened to write, but
+durability requires the lsn below which *everything* (rel + slru + meta
+buffers) is flushed — a row at a lower lsn that missed the flush
+snapshot is silently passed over by the checkpoint and lost on crash.
+Fix B = compute the checkpoint as a true frontier (min over unflushed,
+across all three buffers), then re-run the scenario until clean.
+
+Note for the scenario: extend the zero-image assertion to all relnodes
+(the first run's assertion was scoped to the table and missed the
+index-block crash — the corruption-marker log scan caught it instead).
+
+### Update 2026-06-11 (night) — L-1 committed reads land; SIGKILL scenario 5/5 green
+
+The principled fix for bug A is in: ingest's "what was the relation
+like *before* this record" questions now read committed state strictly
+below the record's LSN (`DatadirModification::get_committed_before`;
+`create_relation_if_required` exists+size via `Version::at(lsn-1)` with
+explicit latest-cache seeding; `put_rel_extend` old-size read). On the
+first pass this is identical to the inclusive read; during replay it
+stops the record from seeing its own prior-pass effects, so replay
+re-takes first-pass decisions and gap-fill re-writes the same zeros at
+the same LSNs (idempotent upserts). The `rel_extend_plan` cache-advance
+stays as belt-and-braces (no longer load-bearing; the no-grow branch is
+still legitimately reachable from `import_datadir.rs:196`, so it must
+not assert).
+
+Scenario hardening: true SIGKILL via pidfile (`stop -m immediate` runs
+a shutdown flush that closes the replay window — both bugs need the
+kill-9 path), tenant-wide zero-image assertions, per-iteration PS log
+scan (the log accumulates across iterations; a whole-file scan
+re-reports old markers).
+
+Verdict matrix:
+
+| Build | Kill | Result |
+|---|---|---|
+| HEAD | immediate stop | pass (window closed by shutdown flush) |
+| HEAD | SIGKILL | FAIL — panic-loop `unified_pages.rs:441` + `pgdatadir_mapping.rs:467` |
+| fix A only | immediate stop | FAIL once — bug-B missing record (race) |
+| fix A + L-1 | SIGKILL ×5 + ×5 | **10/10 of 11 clean**; one iteration hit a *transient* `failed to add new item` walredo PANIC that healed on retry (no ABORT, data intact) |
+
+The transient is the remaining lead: a chain assembled while rows were
+only partially visible/durable — same family as the
+`lookup_chain_durable_if_complete saw an unflushed row` invariant and
+bug B. Next: the flush/checkpoint/visibility ordering audit in
+`page_writer.rs`/`unified_pages.rs`, using this scenario with `-n` as
+the repro harness.
+
+### Minor tooling notes
+
+- `tools/yb-dump-pages` displays rows in non-numeric LSN order: the
+  hex-rendered text is aliased `AS lsn`, so `ORDER BY lsn` binds to the
+  alias and sorts lexicographically. Confused the first half hour of
+  forensics. Filed as [task 32](32_yb-dump-pages-lsn-sort.md).
+- Delta payload format (for future tooling): 13-byte BE-bincode header
+  (`NeonWalRecord::Postgres` variant u32 + `will_init` u8 + len u64) +
+  raw `XLogRecord` bytes. Image payload = raw 8192-byte page.
 
 ## TL;DR
 
@@ -137,8 +432,9 @@ operations), not standard PostgreSQL btree. Different PANIC text but same
 "item-offset wrong" failure shape.
 
 `build_tag: 2026-06-08-b8aa3fac4` commit subject:
-**"pageserver: Arc<PageRow> through chain reads + flush"** ← prime suspect
-for both the crash and the post-crash cache_ms regression (see below).
+**"pageserver: Arc<PageRow> through chain reads + flush"** ← still suspected
+for the post-crash cache_ms regression (task 27), but **exonerated for the
+crash** — crash 1 predates this commit on `d9641d272` (see Update 2026-06-10).
 
 ## Crash 3 — `b8aa3fac4` @ 2026-06-10 13:34:55 UTC
 
@@ -297,9 +593,10 @@ flushing the dangerous chains into stable image layers.
 
 ## Open questions
 
-- Is the PS-side fix on `dde78d810` itself, or earlier on the branch? The
-  commit subject is SK-side ("drop the lookback window"); the corruption fix
-  must be in another commit between `b8aa3fac4` and `dde78d810`.
+- ~~Is the PS-side fix on `dde78d810` itself, or earlier on the branch?~~
+  ANSWERED (see Update 2026-06-10): there is **no** PS-side fix in
+  `b8aa3fac4..dde78d810`. The corruption is latent in `main`; the clean runs
+  reflect a drained dataset, not a code fix.
 - Are the four 2026-06-06 SIGABRTs on `582e7e4d8` / `93c8c29c6` the same root
   cause? File contents gone; only `coredumpctl info` metadata remains.
 - Is `cache_ms` blow-up from the Arc<PageRow> change a bug or a tuning issue?

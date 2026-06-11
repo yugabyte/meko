@@ -383,6 +383,26 @@ deltas on top of the image, double-applying them. `read_chain_durable`
 restricts the materialiser's inputs to data that survives crash +
 replay.
 
+**Replay reads pre-record state exclusively.** After a crash, WAL
+replay re-runs below YB's durable horizon: rows the first pass already
+upserted (including `rel_size_to_key` values, written *at the
+extending record's own LSN*) are visible to the replaying record. Any
+ingest decision that asks "what was the state *before* this record" —
+relation existence, relation size in
+`create_relation_if_required` / `put_rel_extend` — must therefore read
+committed state **strictly below** the record's LSN
+(`DatadirModification::get_committed_before`,
+`Version::at(lsn-1)`), while same-record pending writes stay visible
+through the modification's pending map and the rel-size cache. An
+inclusive read is identical on the first pass but makes replay see its
+own prior-pass effects and take different decisions — the task-28
+corruption: `put_rel_extend` no-opped, the rel-size cache pinned at
+the replay-start size, and the gap-fill zero-filled
+`[pinned_size, blkno)` on every record, stamping all-zero page images
+over live tail blocks. The regression test is
+`test/e2e/src/scenarios/fast/restart_relsize_zero_shadow.rs` (SIGKILL
++ replay + tenant-wide zero-image shadowing assertions).
+
 Default knobs (configurable via `pageserver.toml` under the
 `yb_page_writer` block):
 

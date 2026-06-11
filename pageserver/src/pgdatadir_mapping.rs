@@ -1633,20 +1633,35 @@ impl DatadirModification<'_> {
             .tline
             .get_cached_rel_size(&rel, Version::Modified(self))
         {
-            Ok(nblocks)
-        } else if !self
-            .tline
-            .get_rel_exists(rel, Version::Modified(self), ctx)
-            .await?
-        {
+            return Ok(nblocks);
+        }
+        // On cache miss, read the committed state STRICTLY BELOW the
+        // current record. This is "what did the relation look like
+        // before this record" — the question extension/creation
+        // decisions actually ask. An inclusive read is identical on
+        // the first pass, but during WAL replay below YB's durable
+        // horizon it sees this record's own effects from the previous
+        // pass and replays the wrong decision (skips the creation /
+        // re-extension and the gap-fill that must be re-applied
+        // idempotently — task 28).
+        //
+        // Same-modification writes from earlier records are not
+        // visible through `before`, but every rel-size-affecting put
+        // also updates the rel-size cache, so the cache check above
+        // covers them.
+        let before = Version::at(Lsn(self.lsn.0.saturating_sub(1)));
+        if !self.tline.get_rel_exists(rel, before, ctx).await? {
             // create it with 0 size initially, the logic below will extend it
             self.put_rel_creation(rel, 0, ctx).await?;
             Ok(0)
         } else {
-            Ok(self
-                .tline
-                .get_rel_size(rel, Version::Modified(self), ctx)
-                .await?)
+            let nblocks = self.tline.get_rel_size(rel, before, ctx).await?;
+            // `before` is not a latest-version read, so get_rel_size
+            // cached it (if at all) only in the snapshot cache. Seed
+            // the latest cache so ingest doesn't re-read YB per
+            // record; put_rel_extend overwrites it on growth.
+            self.tline.set_cached_rel_size(rel, self.lsn, nblocks);
+            Ok(nblocks)
         }
     }
 
@@ -2240,6 +2255,8 @@ impl DatadirModification<'_> {
 
     /// Extend relation
     /// If new size is smaller, do nothing.
+    ///
+    /// See [`rel_extend_plan`] for the persist/cache decision.
     pub async fn put_rel_extend(
         &mut self,
         rel: RelTag,
@@ -2248,20 +2265,21 @@ impl DatadirModification<'_> {
     ) -> Result<(), WalIngestError> {
         ensure_walingest!(rel.relnode != 0, RelationError::InvalidRelnode);
 
-        // Put size
+        // Put size. The committed read is strictly below the current
+        // record so a replayed extension re-takes the first pass's
+        // decision instead of seeing its own prior-pass write
+        // (see get_committed_before; task 28).
         let size_key = rel_size_to_key(rel);
-        let old_size = self.get(size_key, ctx).await?.get_u32_le();
+        let old_size = self.get_committed_before(size_key, ctx).await?.get_u32_le();
 
-        // only extend relation here. never decrease the size
-        if nblocks > old_size {
-            let buf = nblocks.to_le_bytes();
+        let plan = rel_extend_plan(old_size, nblocks);
+        if let Some(new_size) = plan.write_size {
+            let buf = new_size.to_le_bytes();
             self.put(size_key, Value::Image(Bytes::from(buf.to_vec())));
-
-            // Update relation size cache
-            self.tline.set_cached_rel_size(rel, self.lsn, nblocks);
-
-            self.pending_nblocks += nblocks as i64 - old_size as i64;
+            self.pending_nblocks += new_size as i64 - old_size as i64;
         }
+        self.tline
+            .set_cached_rel_size(rel, self.lsn, plan.cache_size);
         Ok(())
     }
 
@@ -2759,6 +2777,42 @@ impl DatadirModification<'_> {
         self.tline.get(key, lsn, ctx).await
     }
 
+    /// Like [`Self::get`], but the committed read is *strictly below*
+    /// the current record's LSN, while this modification's own pending
+    /// writes stay visible.
+    ///
+    /// Ingest decisions that ask "what was the state *before* this
+    /// record?" (relation size, existence) must use this instead of
+    /// `get`. An inclusive read gives the same answer on the first
+    /// pass — nothing committed at the record's own LSN yet — but
+    /// during WAL replay below YB's durable horizon it sees this very
+    /// record's effects from the previous pass, and replay then takes
+    /// different decisions than the first pass took (task 28: the
+    /// rel-size cache pin and the skipped gap-fill both came from
+    /// inclusive reads at the record LSN).
+    async fn get_committed_before(
+        &self,
+        key: Key,
+        ctx: &RequestContext,
+    ) -> Result<Bytes, PageReconstructError> {
+        if !Self::is_data_key(&key) {
+            if let Some(values) = self.pending_metadata_pages.get(&key.to_compact()) {
+                if let Some((_, _, value)) = values.last() {
+                    return if let Value::Image(img) = value {
+                        Ok(img.clone())
+                    } else {
+                        Err(PageReconstructError::Other(anyhow::anyhow!(
+                            "unexpected pending WAL record"
+                        )))
+                    };
+                }
+            }
+        }
+        self.tline
+            .get(key, Lsn(self.lsn.0.saturating_sub(1)), ctx)
+            .await
+    }
+
     /// Get a key from the sparse keyspace. Automatically converts the missing key error
     /// and the empty value into None.
     async fn sparse_get(
@@ -2834,6 +2888,34 @@ pub struct DatadirModificationStats {
     pub metadata_deltas: u64,
     pub data_images: u64,
     pub data_deltas: u64,
+}
+
+/// What `put_rel_extend` should do for a record that may extend a
+/// relation: `old_size` is the LSN-versioned size-key value at the
+/// record's LSN, `nblocks` the size implied by the record's block
+/// number.
+pub(crate) struct RelExtendPlan {
+    /// `Some(new_size)` when the size key must be rewritten (genuine
+    /// growth); `None` when storage already knows a size >= nblocks.
+    pub(crate) write_size: Option<BlockNumber>,
+    /// Value the rel-size cache must be advanced to — ALWAYS applied,
+    /// even when `write_size` is `None`.
+    pub(crate) cache_size: BlockNumber,
+}
+
+/// During WAL replay below YB's durable horizon, the first pass's own
+/// size-key writes are still visible, so `old_size >= nblocks` holds
+/// for every record and the write branch never fires. The cache must
+/// advance regardless: a cache pinned at the replay-start size makes
+/// every subsequent record look like an extension, and
+/// `handle_rel_extend` then re-zero-fills `[pinned_size, blkno)` on
+/// every record — shadowing live blocks with zero page images
+/// (task 28).
+pub(crate) fn rel_extend_plan(old_size: BlockNumber, nblocks: BlockNumber) -> RelExtendPlan {
+    RelExtendPlan {
+        write_size: (nblocks > old_size).then_some(nblocks),
+        cache_size: nblocks.max(old_size),
+    }
 }
 
 /// This struct facilitates accessing either a committed key from the timeline at a
@@ -2963,3 +3045,35 @@ impl DirectoryKind {
 }
 
 static ZERO_PAGE: Bytes = Bytes::from_static(&[0u8; BLCKSZ as usize]);
+
+#[cfg(test)]
+mod tests {
+    use super::rel_extend_plan;
+
+    /// Replay below the durable horizon: storage already knows a size
+    /// >= nblocks. No size-key rewrite, but the cache MUST advance to
+    /// the storage value — a cache left untouched here is the task-28
+    /// pin that re-zero-fills live blocks on every record.
+    #[test]
+    fn rel_extend_replay_advances_cache_without_write() {
+        let plan = rel_extend_plan(100, 61);
+        assert_eq!(plan.write_size, None);
+        assert_eq!(plan.cache_size, 100);
+    }
+
+    /// Normal forward growth: write the new size and cache it.
+    #[test]
+    fn rel_extend_growth_writes_and_caches() {
+        let plan = rel_extend_plan(60, 61);
+        assert_eq!(plan.write_size, Some(61));
+        assert_eq!(plan.cache_size, 61);
+    }
+
+    /// Same size: no write, cache confirmed at the current value.
+    #[test]
+    fn rel_extend_same_size_is_noop_write() {
+        let plan = rel_extend_plan(61, 61);
+        assert_eq!(plan.write_size, None);
+        assert_eq!(plan.cache_size, 61);
+    }
+}
