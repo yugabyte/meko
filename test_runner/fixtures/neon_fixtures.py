@@ -749,7 +749,7 @@ class NeonEnvBuilder:
 
         # Update the config with new neon + postgres path in case of compat test
         config["pg_distrib_dir"] = str(self.pg_distrib_dir)
-        config["neon_distrib_dir"] = str(self.neon_binpath)
+        config["yb_light_distrib_dir"] = str(self.neon_binpath)
 
         with (self.repo_dir / "config").open("w") as f:
             toml.dump(config, f)
@@ -1245,9 +1245,9 @@ class NeonEnv:
             )
 
         # Create config for pageserver
-        http_auth_type = "NeonJWT" if config.auth_enabled else "Trust"
-        pg_auth_type = "NeonJWT" if config.auth_enabled else "Trust"
-        grpc_auth_type = "NeonJWT" if config.auth_enabled else "Trust"
+        http_auth_type = "YbLightJWT" if config.auth_enabled else "Trust"
+        pg_auth_type = "YbLightJWT" if config.auth_enabled else "Trust"
+        grpc_auth_type = "YbLightJWT" if config.auth_enabled else "Trust"
         for ps_id in range(
             self.BASE_PAGESERVER_ID, self.BASE_PAGESERVER_ID + config.num_pageservers
         ):

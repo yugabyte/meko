@@ -71,7 +71,7 @@ impl PageServerNode {
                 {
                     match conf.http_auth_type {
                         AuthType::Trust => None,
-                        AuthType::NeonJWT => Some(
+                        AuthType::YbLightJWT => Some(
                             env.generate_auth_token(&Claims::new(None, Scope::PageServerApi))
                                 .unwrap(),
                         ),
@@ -125,7 +125,7 @@ impl PageServerNode {
 
         // Storage controller uses the same auth as pageserver: if JWT is enabled
         // for us, we will also need it to talk to them.
-        if matches!(conf.http_auth_type, AuthType::NeonJWT) {
+        if matches!(conf.http_auth_type, AuthType::YbLightJWT) {
             let jwt_token = self
                 .env
                 .generate_auth_token(&Claims::new(None, Scope::GenerationsApi))
@@ -149,7 +149,7 @@ impl PageServerNode {
         }
 
         if [conf.http_auth_type, conf.pg_auth_type, conf.grpc_auth_type]
-            .contains(&AuthType::NeonJWT)
+            .contains(&AuthType::YbLightJWT)
         {
             // Keys are generated in the toplevel repo dir, pageservers' workdirs
             // are one level below that, so refer to keys with ../

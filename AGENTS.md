@@ -58,7 +58,7 @@ Code anchors:
   external-DB path, `ensure_external_database`, YB schema
   auto-provisioning.
 - `control_plane/src/local_env.rs` — TOML config types
-  (`NeonStorageControllerConf::database_url`,
+  (`YbLightStorageControllerConf::database_url`,
   `SafekeeperConf::control_file_backend` / `wal_yb_config`).
 - `control_plane/src/safekeeper.rs` / `pageserver.rs` / `endpoint.rs` —
   per-service CLI assembly + per-component config.

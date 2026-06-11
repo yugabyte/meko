@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::background_process;
-use crate::local_env::{LocalEnv, NeonStorageControllerConf};
+use crate::local_env::{LocalEnv, YbLightStorageControllerConf};
 
 // The storage controller's metadata DB lives in YB; talk to it
 // through the YB smart-driver fork so `build_yb_rustls_connector`
@@ -45,7 +45,7 @@ pub struct StorageController {
     private_key: Option<Pem>,
     public_key: Option<Pem>,
     client: reqwest::Client,
-    config: NeonStorageControllerConf,
+    config: YbLightStorageControllerConf,
 
     // The listen port is learned when starting the storage controller,
     // hence the use of OnceLock to init it at the right time.
@@ -63,13 +63,13 @@ const STORAGE_CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG16
 // and wals are top-level tables in the same DB.
 const DB_NAME: &str = "yb_storage";
 
-pub struct NeonStorageControllerStartArgs {
+pub struct YbLightStorageControllerStartArgs {
     pub instance_id: u8,
     pub base_port: Option<u16>,
     pub start_timeout: humantime::Duration,
 }
 
-impl NeonStorageControllerStartArgs {
+impl YbLightStorageControllerStartArgs {
     pub fn with_default_instance_id(start_timeout: humantime::Duration) -> Self {
         Self {
             instance_id: 1,
@@ -79,12 +79,12 @@ impl NeonStorageControllerStartArgs {
     }
 }
 
-pub struct NeonStorageControllerStopArgs {
+pub struct YbLightStorageControllerStopArgs {
     pub instance_id: u8,
     pub immediate: bool,
 }
 
-impl NeonStorageControllerStopArgs {
+impl YbLightStorageControllerStopArgs {
     pub fn with_default_instance_id(immediate: bool) -> Self {
         Self {
             instance_id: 1,
@@ -131,7 +131,7 @@ impl StorageController {
             .unwrap_or(AuthType::Trust);
         let (private_key, public_key) = match http_auth_type {
             AuthType::Trust => (None, None),
-            AuthType::NeonJWT => {
+            AuthType::YbLightJWT => {
                 let private_key_path = env.get_private_key_path();
                 let private_key =
                     pem::parse(fs::read(private_key_path).expect("failed to read private key"))
@@ -482,7 +482,7 @@ impl StorageController {
         Ok(())
     }
 
-    pub async fn start(&self, start_args: NeonStorageControllerStartArgs) -> anyhow::Result<()> {
+    pub async fn start(&self, start_args: YbLightStorageControllerStartArgs) -> anyhow::Result<()> {
         let instance_dir = self.storage_controller_instance_dir(start_args.instance_id);
         if let Err(err) = tokio::fs::create_dir(&instance_dir).await {
             if err.kind() != std::io::ErrorKind::AlreadyExists {
@@ -502,7 +502,7 @@ impl StorageController {
         let scheme = listen_url.scheme();
         let host = listen_url.host_str().unwrap();
 
-        // If `database_url` is set in NeonStorageControllerConf, the operator
+        // If `database_url` is set in YbLightStorageControllerConf, the operator
         // is pointing the controller at an externally-managed Postgres (in
         // yb-neon: a YugabyteDB cluster). In that case we skip the local-PG
         // bootstrap entirely.
@@ -520,7 +520,7 @@ impl StorageController {
                 (base_port, port)
             }
             (Some(_), None) => {
-                anyhow::bail!("--base-port requires NeonStorageControllerConf::database_url");
+                anyhow::bail!("--base-port requires YbLightStorageControllerConf::database_url");
             }
             (None, _) => {
                 let port = listen_url.port().unwrap();
@@ -803,7 +803,7 @@ impl StorageController {
         Ok(())
     }
 
-    pub async fn stop(&self, stop_args: NeonStorageControllerStopArgs) -> anyhow::Result<()> {
+    pub async fn stop(&self, stop_args: YbLightStorageControllerStopArgs) -> anyhow::Result<()> {
         background_process::stop_process(
             stop_args.immediate,
             COMMAND,

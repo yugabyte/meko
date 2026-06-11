@@ -266,7 +266,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
         _pgb: &mut PostgresBackend<IO>,
         jwt_response: &[u8],
     ) -> Result<(), QueryError> {
-        // this unwrap is never triggered, because check_auth_jwt only called when auth_type is NeonJWT
+        // this unwrap is never triggered, because check_auth_jwt only called when auth_type is YbLightJWT
         // which requires auth to be present
         let (allowed_auth_scope, auth) = self
             .auth

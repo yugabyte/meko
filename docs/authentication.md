@@ -155,7 +155,7 @@ for the libpq connections from compute. The `http_auth_type` and
 have one of these values:
 
 * `Trust` removes all authentication.
-* `NeonJWT` enables JWT validation.
+* `YbLightJWT` enables JWT validation.
    Tokens are validated using the public key which lies in a PEM file
    specified in the `auth_validation_public_key_path` config.
 

@@ -49,7 +49,7 @@ pub struct LocalEnv {
     pub pg_distrib_dir: PathBuf,
 
     // Path to pageserver binary.
-    pub neon_distrib_dir: PathBuf,
+    pub yb_light_distrib_dir: PathBuf,
 
     // Default tenant ID to use with the 'yb_light_local' command line utility, when
     // --tenant_id is not explicitly specified.
@@ -61,7 +61,7 @@ pub struct LocalEnv {
     pub public_key_path: PathBuf,
 
     // Configuration for the storage controller (1 per yb_light_local environment)
-    pub storage_controller: NeonStorageControllerConf,
+    pub storage_controller: YbLightStorageControllerConf,
 
     /// The *provisioned* pageservers, discovered by [`Self::load_config`]
     /// from the `pageserver.toml` under each `endpoints/<name>/pageserver/`.
@@ -113,11 +113,11 @@ pub struct LocalEnv {
 #[serde(default, deny_unknown_fields)]
 pub struct OnDiskConfig {
     pub pg_distrib_dir: PathBuf,
-    pub neon_distrib_dir: PathBuf,
+    pub yb_light_distrib_dir: PathBuf,
     pub default_tenant_id: Option<TenantId>,
     pub private_key_path: PathBuf,
     pub public_key_path: PathBuf,
-    pub storage_controller: NeonStorageControllerConf,
+    pub storage_controller: YbLightStorageControllerConf,
     #[serde(
         skip_serializing,
         deserialize_with = "fail_if_pageservers_field_specified"
@@ -185,9 +185,9 @@ pub struct YbLightLocalInitConf {
     // TODO: do we need this? Seems unused
     pub pg_distrib_dir: Option<PathBuf>,
     // TODO: do we need this? Seems unused
-    pub neon_distrib_dir: Option<PathBuf>,
+    pub yb_light_distrib_dir: Option<PathBuf>,
     pub default_tenant_id: TenantId,
-    pub storage_controller: Option<NeonStorageControllerConf>,
+    pub storage_controller: Option<YbLightStorageControllerConf>,
     pub pageservers: Vec<YbLightLocalInitPageserverConf>,
     pub safekeepers: Vec<SafekeeperConf>,
     pub endpoint_storage: EndpointStorageConf,
@@ -218,7 +218,7 @@ pub struct EndpointStorageConf {
 /// A part of storage controller's config the yb_light_local knows about.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 #[serde(default)]
-pub struct NeonStorageControllerConf {
+pub struct YbLightStorageControllerConf {
     /// Heartbeat timeout before marking a node offline
     #[serde(with = "humantime_serde")]
     pub max_offline: Duration,
@@ -250,7 +250,7 @@ pub struct NeonStorageControllerConf {
     pub timeline_safekeeper_count: Option<usize>,
 }
 
-impl NeonStorageControllerConf {
+impl YbLightStorageControllerConf {
     // Use a shorter pageserver unavailability interval than the default to speed up tests.
     const DEFAULT_MAX_OFFLINE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -260,7 +260,7 @@ impl NeonStorageControllerConf {
     const DEFAULT_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
 }
 
-impl Default for NeonStorageControllerConf {
+impl Default for YbLightStorageControllerConf {
     fn default() -> Self {
         Self {
             max_offline: Self::DEFAULT_MAX_OFFLINE_INTERVAL,
@@ -530,13 +530,13 @@ impl LocalEnv {
     }
 
     pub fn endpoint_storage_bin(&self) -> PathBuf {
-        self.neon_distrib_dir.join("endpoint_storage")
+        self.yb_light_distrib_dir.join("endpoint_storage")
     }
 
     pub fn pageserver_bin(&self) -> PathBuf {
         // The pageserver binary is `yb-pageserver` (process names
         // carry the yb- prefix; folder + crate are bare `pageserver`).
-        self.neon_distrib_dir.join("yb-pageserver")
+        self.yb_light_distrib_dir.join("yb-pageserver")
     }
 
     pub fn storage_controller_bin(&self) -> PathBuf {
@@ -548,7 +548,7 @@ impl LocalEnv {
     }
 
     pub fn safekeeper_bin(&self) -> PathBuf {
-        self.neon_distrib_dir.join("safekeeper")
+        self.yb_light_distrib_dir.join("safekeeper")
     }
 
     pub fn endpoints_path(&self) -> PathBuf {
@@ -731,7 +731,7 @@ impl LocalEnv {
         let mut env = {
             let OnDiskConfig {
                 pg_distrib_dir,
-                neon_distrib_dir,
+                yb_light_distrib_dir,
                 default_tenant_id,
                 private_key_path,
                 public_key_path,
@@ -750,7 +750,7 @@ impl LocalEnv {
             LocalEnv {
                 base_data_dir: repopath.to_owned(),
                 pg_distrib_dir,
-                neon_distrib_dir,
+                yb_light_distrib_dir,
                 default_tenant_id,
                 private_key_path,
                 public_key_path,
@@ -872,7 +872,7 @@ impl LocalEnv {
             &self.base_data_dir,
             &OnDiskConfig {
                 pg_distrib_dir: self.pg_distrib_dir.clone(),
-                neon_distrib_dir: self.neon_distrib_dir.clone(),
+                yb_light_distrib_dir: self.yb_light_distrib_dir.clone(),
                 default_tenant_id: self.default_tenant_id,
                 private_key_path: self.private_key_path.clone(),
                 public_key_path: self.public_key_path.clone(),
@@ -984,7 +984,7 @@ impl LocalEnv {
 
         let YbLightLocalInitConf {
             pg_distrib_dir,
-            neon_distrib_dir,
+            yb_light_distrib_dir,
             default_tenant_id,
             storage_controller,
             pageservers,
@@ -1009,7 +1009,7 @@ impl LocalEnv {
         });
 
         // Find neon binaries.
-        let neon_distrib_dir = neon_distrib_dir
+        let yb_light_distrib_dir = yb_light_distrib_dir
             .unwrap_or_else(|| env::current_exe().unwrap().parent().unwrap().to_owned());
 
         // Generate keypair for JWT.
@@ -1036,7 +1036,7 @@ impl LocalEnv {
         let env = LocalEnv {
             base_data_dir: base_path.clone(),
             pg_distrib_dir,
-            neon_distrib_dir,
+            yb_light_distrib_dir,
             default_tenant_id: Some(default_tenant_id),
             private_key_path,
             public_key_path,
@@ -1214,11 +1214,11 @@ mod tests {
         LocalEnv {
             base_data_dir: base,
             pg_distrib_dir: PathBuf::from("/pg"),
-            neon_distrib_dir: PathBuf::from("/neon"),
+            yb_light_distrib_dir: PathBuf::from("/neon"),
             default_tenant_id: None,
             private_key_path: PathBuf::from("auth_private_key.pem"),
             public_key_path: PathBuf::from("auth_public_key.pem"),
-            storage_controller: NeonStorageControllerConf::default(),
+            storage_controller: YbLightStorageControllerConf::default(),
             pageservers: Vec::new(),
             safekeepers: Vec::new(),
             pageserver_templates: Vec::new(),

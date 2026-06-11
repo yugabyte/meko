@@ -1,6 +1,6 @@
 //!
 //! `yb_light_local` is an executable that can be used to create a local
-//! Neon environment, for testing purposes. The local environment is
+//! ybLight environment, for testing purposes. The local environment is
 //! quite different from the cloud environment with Kubernetes, but it
 //! easier to work with locally. The python tests in `test_runner`
 //! rely on `yb_light_local` to set up the environment for each test.
@@ -23,12 +23,12 @@ use control_plane::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointSto
 use control_plane::local_env;
 use control_plane::local_env::{
     EndpointStorageConf, InitForceMode, LocalEnv, PageServerConf, YbLightLocalInitConf,
-    YbLightLocalInitPageserverConf, NeonStorageControllerConf, SafekeeperConf,
+    YbLightLocalInitPageserverConf, YbLightStorageControllerConf, SafekeeperConf,
 };
 use control_plane::pageserver::PageServerNode;
 use control_plane::safekeeper::SafekeeperNode;
 use control_plane::storage_controller::{
-    NeonStorageControllerStartArgs, NeonStorageControllerStopArgs, StorageController,
+    YbLightStorageControllerStartArgs, YbLightStorageControllerStopArgs, StorageController,
 };
 use nix::fcntl::{Flock, FlockArg};
 use pageserver_api::config::{
@@ -83,9 +83,9 @@ fn default_storage_controller_database_url() -> String {
     format!("postgresql://{DEFAULT_YB_USER}@{DEFAULT_YB_HOST}:{DEFAULT_YB_PORT}/{DEFAULT_YB_DBNAME}")
 }
 
-/// Neon CLI.
+/// ybLight CLI.
 #[derive(clap::Parser)]
-#[command(version = GIT_VERSION, name = "Neon CLI")]
+#[command(version = GIT_VERSION, name = "ybLight CLI")]
 struct Cli {
     #[command(subcommand)]
     command: YbLightLocalCmd,
@@ -117,7 +117,7 @@ enum YbLightLocalCmd {
     Stop(StopCmdArgs),
 }
 
-/// Initialize a new Neon repository, preparing configs for services to start with.
+/// Initialize a new ybLight repository, preparing configs for services to start with.
 #[derive(clap::Args)]
 struct InitCmdArgs {
     /// How many pageservers to create (default 1).
@@ -738,7 +738,7 @@ struct MappingsMapCmdArgs {
 struct TimelineTreeEl {
     /// `TimelineInfo` received from the `pageserver` via the `timeline_list` http API call.
     pub info: TimelineInfo,
-    /// Name, recovered from neon config mappings
+    /// Name, recovered from ybLight config mappings
     pub name: Option<String>,
     /// Holds all direct children of this timeline referenced using `timeline_id`.
     pub children: BTreeSet<TimelineId>,
@@ -767,7 +767,7 @@ impl RepoLock {
 
 // Main entry point for the 'yb_light_local' CLI utility
 //
-// This utility helps to manage neon installation. That includes following:
+// This utility helps to manage ybLight installation. That includes following:
 //   * Management of local postgres installations running on top of the
 //     pageserver.
 //   * Providing CLI api to the pageserver
@@ -775,7 +775,7 @@ impl RepoLock {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Check for 'neon init' command first.
+    // Check for 'ybLight init' command first.
     let (subcommand_result, _lock) = if let YbLightLocalCmd::Init(args) = cli.command {
         (handle_init(&args).map(|env| Some(Cow::Owned(env))), None)
     } else {
@@ -1032,9 +1032,9 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 remote_storage_json: None,
             },
             pg_distrib_dir: None,
-            neon_distrib_dir: None,
+            yb_light_distrib_dir: None,
             default_tenant_id: TenantId::from_array(std::array::from_fn(|_| 0)),
-            storage_controller: Some(NeonStorageControllerConf {
+            storage_controller: Some(YbLightStorageControllerConf {
                 // Provision the storage_controller + yb_storage DBs in YB.
                 database_url: Some(default_storage_controller_database_url()),
                 ..Default::default()
@@ -1924,7 +1924,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             pageserver_conninfo.prefer_protocol = prefer_protocol;
 
             let ps_conf = env.get_pageserver_conf(DEFAULT_PAGESERVER_ID)?;
-            let auth_token = if matches!(ps_conf.pg_auth_type, AuthType::NeonJWT) {
+            let auth_token = if matches!(ps_conf.pg_auth_type, AuthType::YbLightJWT) {
                 let claims = Claims::new(Some(endpoint.tenant_id), Scope::Tenant);
 
                 Some(env.generate_auth_token(&claims)?)
@@ -2168,7 +2168,7 @@ async fn handle_storage_controller(
     let svc = StorageController::from_env(env);
     match subcmd {
         StorageControllerCmd::Start(args) => {
-            let start_args = NeonStorageControllerStartArgs {
+            let start_args = YbLightStorageControllerStartArgs {
                 instance_id: args.instance_id,
                 base_port: args.base_port,
                 start_timeout: args.start_timeout,
@@ -2181,7 +2181,7 @@ async fn handle_storage_controller(
         }
 
         StorageControllerCmd::Stop(args) => {
-            let stop_args = NeonStorageControllerStopArgs {
+            let stop_args = YbLightStorageControllerStopArgs {
                 instance_id: args.instance_id,
                 immediate: match args.stop_mode {
                     StopMode::Fast => false,
@@ -2257,7 +2257,7 @@ async fn handle_endpoint_storage(
     let storage = EndpointStorage::from_env(env);
 
     // In tests like test_forward_compatibility or test_graceful_cluster_restart
-    // old neon binaries (without endpoint_storage) are present
+    // old ybLight binaries (without endpoint_storage) are present
     if !storage.bin.exists() {
         eprintln!(
             "{} binary not found. Ignore if this is a compatibility test",
@@ -2293,7 +2293,7 @@ async fn handle_start_all(
 ) -> anyhow::Result<()> {
     // FIXME: this was called "retry_timeout", is it right?
     let Err(errors) = handle_start_all_impl(env, args.timeout).await else {
-        neon_start_status_check(env, args.timeout.as_ref())
+        yb_light_start_status_check(env, args.timeout.as_ref())
             .await
             .context("status check after successful startup of all services")?;
         return Ok(());
@@ -2340,7 +2340,7 @@ async fn handle_start_all_impl(
     // can connect to yb_storage, so this phase has to complete
     // before the next one starts.
     if let Err(e) = StorageController::from_env(env)
-        .start(NeonStorageControllerStartArgs::with_default_instance_id(
+        .start(YbLightStorageControllerStartArgs::with_default_instance_id(
             retry_timeout,
         ))
         .await
@@ -2418,7 +2418,7 @@ async fn handle_start_all_impl(
     Ok(())
 }
 
-async fn neon_start_status_check(
+async fn yb_light_start_status_check(
     env: &local_env::LocalEnv,
     retry_timeout: &Duration,
 ) -> anyhow::Result<()> {
@@ -2430,11 +2430,11 @@ async fn neon_start_status_check(
     let retries = retry_timeout.as_millis() / RETRY_INTERVAL.as_millis();
     let notice_after_retries = retry_timeout.as_millis() / NOTICE_AFTER_RETRIES.as_millis();
 
-    println!("\nRunning neon status check");
+    println!("\nRunning ybLight status check");
 
     for retry in 0..retries {
         if retry == notice_after_retries {
-            println!("\nNeon status check has not passed yet, continuing to wait")
+            println!("\nybLight status check has not passed yet, continuing to wait")
         }
 
         let mut passed = true;
@@ -2481,14 +2481,14 @@ async fn neon_start_status_check(
         }
 
         if passed {
-            println!("\nNeon started and passed status check");
+            println!("\nybLight started and passed status check");
             return Ok(());
         }
 
         tokio::time::sleep(RETRY_INTERVAL).await;
     }
 
-    anyhow::bail!("\nNeon passed status check")
+    anyhow::bail!("\nybLight passed status check")
 }
 
 async fn handle_stop_all(args: &StopCmdArgs, env: &local_env::LocalEnv) -> Result<()> {
@@ -2549,7 +2549,7 @@ async fn try_stop_all(env: &local_env::LocalEnv, immediate: bool) {
         .expect("Must inspect data dir");
     for (instance_id, _instance_dir_path) in storcon_instances {
         let storage_controller = StorageController::from_env(env);
-        let stop_args = NeonStorageControllerStopArgs {
+        let stop_args = YbLightStorageControllerStopArgs {
             instance_id,
             immediate,
         };
@@ -2597,11 +2597,11 @@ mod tests {
         LocalEnv {
             base_data_dir: PathBuf::from("/tmp/repo"),
             pg_distrib_dir: PathBuf::from("/pg"),
-            neon_distrib_dir: PathBuf::from("/neon"),
+            yb_light_distrib_dir: PathBuf::from("/yb_light"),
             default_tenant_id: None,
             private_key_path: PathBuf::from("k"),
             public_key_path: PathBuf::from("k.pub"),
-            storage_controller: NeonStorageControllerConf::default(),
+            storage_controller: YbLightStorageControllerConf::default(),
             pageservers: Vec::new(),
             safekeepers: Vec::new(),
             pageserver_templates: vec![ps_template()],

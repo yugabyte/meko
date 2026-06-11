@@ -327,7 +327,7 @@ yb-light-bundle/
 ```
 
 `bin/yb-pageserver` is the binary name `yb_light_local` launches; it lives
-under `neon_distrib_dir` (set in `~/.yb_light/config`).
+under `yb_light_distrib_dir` (set in `~/.yb_light/config`).
 
 ## Tests
 
