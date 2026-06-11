@@ -106,3 +106,6 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 28 | ["Catch me if you can" walredo corruption](28_walredo-corruption-catch-me-if-you-can.md) | 🚧 in_progress | highest | yb-pageserver |
 | 29 | [Move pending-timeline init recipe into YB](29_pending-init-to-yb.md) | ✅ done | medium | storage_ctl / yb_light_local |
 | 30 | [Convert e2e suite from shell to Rust](30_e2e-tests-sh-to-rust.md) | ✅ done | medium | yb-pageserver |
+| 31 | [Bundle runtime libs for the walredo child](31_bundle-libs-for-walredo-child.md) | ⏳ pending | high | yb_light_local |
+| 32 | [`yb-dump-pages` LSN sort uses rendered text](32_yb-dump-pages-lsn-sort.md) | ⏳ pending | medium | yb-pageserver |
+| 33 | [SK interpreted reader wedges on decode error](33_sk-interpreted-reader-decode-wedge.md) | ⏳ pending | high | safekeeper |
