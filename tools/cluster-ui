@@ -9,8 +9,12 @@
 #   - tenants + their timelines (with the load-bearing LSNs:
 #     last_record_lsn, disk_consistent_lsn, remote_consistent_lsn, ...)
 #   - safekeepers + their timelines (commit/flush LSNs)
-#   - compute endpoints (from .yb_light/endpoints/*/endpoint.json) and
+#   - compute endpoints (from the storage_controller.endpoints table) and
 #     whether their compute_ctl is responding
+#
+# Topology (pageservers, safekeepers, endpoints, branch names) is read
+# from the storage_controller schema in yb_storage via psql, not from the
+# local repo layout; only the service URLs come from .yb_light/config.
 #
 # It runs its own tiny aggregating web server, so the browser only ever
 # talks to this one origin — no CORS headers are needed on the storage
@@ -30,6 +34,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import urllib.request
 import urllib.error
@@ -37,6 +42,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 HTTP_TIMEOUT = 2.0  # seconds; the cluster is local, keep the UI snappy
+
+# Where the storage controller's relational state lives: the
+# `storage_controller` schema of the `yb_storage` database (see
+# architecture/high-level.md). Topology — pageservers, safekeepers,
+# compute endpoints, branch names — is read straight from here rather
+# than from the on-disk repo layout, so the tool keeps working as the
+# local folder layout evolves and even when run away from the repo.
+DEFAULT_DATABASE_URL = "postgresql://yugabyte@127.0.0.1:5433/yb_storage"
+SC_SCHEMA = "storage_controller"
+_DB_FIELD_SEP = "\x1f"  # ASCII unit separator — won't appear in our values
 
 
 def tcp_alive(host, port, timeout=0.5):
@@ -67,8 +82,38 @@ def http_get_json(url):
         return (None, str(e))
 
 
+def query_db(database_url, sql):
+    """Run a read-only query against `database_url` via psql.
+
+    Returns (rows, error_string) where rows is a list of field lists. Shells
+    out to psql (no third-party driver needed); PGPASSWORD is sourced from
+    $YB_STORAGE_PASSWORD when set.
+    """
+    env = dict(os.environ)
+    pw = os.environ.get("YB_STORAGE_PASSWORD")
+    if pw is not None:
+        env["PGPASSWORD"] = pw
+    try:
+        proc = subprocess.run(
+            ["psql", database_url, "-tAq", "-F", _DB_FIELD_SEP, "-c", sql],
+            capture_output=True, text=True, env=env, timeout=5,
+        )
+    except FileNotFoundError:
+        return (None, "psql not found on PATH")
+    except subprocess.TimeoutExpired:
+        return (None, "psql query timed out")
+    except Exception as e:  # noqa: BLE001
+        return (None, str(e))
+    if proc.returncode != 0:
+        # psql prints a harmless libpq version warning to stderr even on
+        # success; only surface stderr when the command actually failed.
+        return (None, (proc.stderr.strip() or f"psql exit {proc.returncode}"))
+    rows = [line.split(_DB_FIELD_SEP) for line in proc.stdout.splitlines() if line]
+    return (rows, None)
+
+
 # --------------------------------------------------------------------------
-# Discovery: learn service addresses from the .yb_light repo dir.
+# Discovery: service URLs from the repo config; topology from yb_storage.
 # --------------------------------------------------------------------------
 
 def _norm_id(v):
@@ -76,37 +121,23 @@ def _norm_id(v):
     return (v or "").replace("-", "").lower()
 
 
-def parse_branch_mappings(cfg_text):
-    """Parse yb_light_local branch aliases from [branch_name_mappings] in .yb_light/config.
+def discover(repo_dir, database_url=None):
+    """Build a topology dict.
 
-    yb_light_local stores human-readable names (e.g. 'main') mapped to
-    (tenant_id, timeline_id) pairs. The pageserver/safekeeper APIs only
-    expose the hex timeline ids — branch names live here on disk.
+    Service *endpoints* (storage-controller HTTP, endpoint-storage HTTP, the
+    database URL) come from the repo `config` when it's available, else from
+    the dev-cluster defaults. The cluster *topology* — pageservers,
+    safekeepers, compute endpoints, branch names — is read from the
+    `storage_controller` schema in `yb_storage`, not from the on-disk repo
+    layout, so it survives layout changes and works away from the repo.
     """
-    out = {}
-    m = re.search(r'\[branch_name_mappings\](.*?)(?=\n\[|\Z)', cfg_text, re.DOTALL)
-    if not m:
-        return out
-    block = m.group(1)
-    for branch, body in re.findall(
-            r'^([A-Za-z0-9_-]+)\s*=\s*(\[[\s\S]*?\])\s*$', block, re.MULTILINE):
-        for tenant, timeline in re.findall(
-                r'\[\s*"?([0-9a-fA-F-]+)"?\s*,\s*"?([0-9a-fA-F-]+)"?\s*\]',
-                body):
-            key = f"{_norm_id(tenant)}/{_norm_id(timeline)}"
-            out[key] = branch
-    return out
-
-
-def discover(repo_dir):
-    """Inspect the .yb_light repo dir and return a topology dict."""
-    cfg_path = os.path.join(repo_dir, "config")
     cfg_text = ""
-    try:
-        with open(cfg_path, "r") as f:
-            cfg_text = f.read()
-    except OSError:
-        pass
+    if repo_dir:
+        try:
+            with open(os.path.join(repo_dir, "config"), "r") as f:
+                cfg_text = f.read()
+        except OSError:
+            pass
 
     # Storage controller URL is the host:port of control_plane_api.
     sc_url = "http://127.0.0.1:1234"
@@ -116,40 +147,6 @@ def discover(repo_dir):
         if u.scheme and u.netloc:
             sc_url = f"{u.scheme}://{u.netloc}"
 
-    # Pageservers: read each pageserver_*/pageserver.toml directly so we can
-    # query tenants/timelines even if the storage controller is down.
-    pageservers = []
-    for name in sorted(os.listdir(repo_dir)) if os.path.isdir(repo_dir) else []:
-        if not name.startswith("pageserver_"):
-            continue
-        toml = os.path.join(repo_dir, name, "pageserver.toml")
-        try:
-            with open(toml, "r") as f:
-                t = f.read()
-        except OSError:
-            continue
-        hm = re.search(r'listen_http_addr\s*=\s*"([^"]+)"', t)
-        # The node id isn't in pageserver.toml; it's the dir suffix
-        # (pageserver_<id>), with `id = N` in the toml as a fallback.
-        im = re.search(r'^\s*id\s*=\s*(\d+)', t, re.MULTILINE)
-        dm = re.search(r'pageserver_(\d+)$', name)
-        node_id = int(dm.group(1)) if dm else (int(im.group(1)) if im else None)
-        if hm:
-            pageservers.append({"id": node_id, "http": f"http://{hm.group(1)}"})
-
-    # Safekeepers: parse the [[safekeepers]] blocks from .yb_light/config.
-    safekeepers = []
-    for block in cfg_text.split("[[safekeepers]]")[1:]:
-        # Stop at the next top-level table header.
-        block = block.split("\n[", 1)[0]
-        idm = re.search(r'\bid\s*=\s*(\d+)', block)
-        hm = re.search(r'\bhttp_port\s*=\s*(\d+)', block)
-        if hm:
-            safekeepers.append({"id": int(idm.group(1)) if idm else None,
-                                "http": f"http://127.0.0.1:{hm.group(1)}"})
-    if not safekeepers:
-        safekeepers.append({"id": 1, "http": "http://127.0.0.1:7676"})
-
     # Endpoint storage listen_addr.
     es_url = "http://127.0.0.1:9993"
     em = re.search(r'\[endpoint_storage\][^\[]*?listen_addr\s*=\s*"([^"]+)"',
@@ -157,26 +154,57 @@ def discover(repo_dir):
     if em:
         es_url = f"http://{em.group(1)}"
 
-    # Compute endpoints from disk.
-    endpoints = []
-    ep_dir = os.path.join(repo_dir, "endpoints")
-    if os.path.isdir(ep_dir):
-        for name in sorted(os.listdir(ep_dir)):
-            j = os.path.join(ep_dir, name, "endpoint.json")
-            try:
-                with open(j, "r") as f:
-                    endpoints.append(json.load(f))
-            except OSError:
-                continue
-            except json.JSONDecodeError:
-                continue
+    # Database URL: explicit flag wins, else the controller's database_url
+    # from the repo config, else the dev default.
+    if not database_url:
+        dm = re.search(r'database_url\s*=\s*"([^"]+)"', cfg_text)
+        database_url = dm.group(1) if dm else DEFAULT_DATABASE_URL
 
-    branch_names = parse_branch_mappings(cfg_text)
+    db_error = None
+
+    def _query(sql):
+        nonlocal db_error
+        rows, err = query_db(database_url, sql)
+        if err and db_error is None:
+            db_error = err
+        return rows or []
+
+    # Pageservers: the nodes registered with the storage controller.
+    pageservers = []
+    for r in _query(f"SELECT node_id, listen_http_addr, listen_http_port "
+                    f"FROM {SC_SCHEMA}.nodes ORDER BY node_id"):
+        if len(r) >= 3:
+            pageservers.append({"id": int(r[0]), "http": f"http://{r[1]}:{r[2]}"})
+
+    # Safekeepers.
+    safekeepers = []
+    for r in _query(f"SELECT id, host, http_port FROM {SC_SCHEMA}.safekeepers "
+                    f"ORDER BY id"):
+        if len(r) >= 3:
+            safekeepers.append({"id": int(r[0]), "http": f"http://{r[1]}:{r[2]}"})
+
+    # Compute endpoints: the opaque EndpointConf rides along as the spec JSONB.
+    endpoints = []
+    for r in _query(f"SELECT spec FROM {SC_SCHEMA}.endpoints"):
+        try:
+            endpoints.append(json.loads(r[0]))
+        except (json.JSONDecodeError, IndexError):
+            continue
+
+    # Branch names: each live timeline carries its human-readable alias.
+    branch_names = {}
+    for r in _query(f"SELECT tenant_id, timeline_id, branch_name "
+                    f"FROM {SC_SCHEMA}.timelines "
+                    f"WHERE branch_name IS NOT NULL AND deleted_at IS NULL"):
+        if len(r) >= 3 and r[2]:
+            branch_names[f"{_norm_id(r[0])}/{_norm_id(r[1])}"] = r[2]
 
     return {
-        "repo_dir": os.path.abspath(repo_dir),
+        "repo_dir": os.path.abspath(repo_dir) if repo_dir else None,
+        "database_url": database_url,
+        "db_error": db_error,
         "storage_controller": sc_url,
-        "pageservers": pageservers or [{"id": 1, "http": "http://127.0.0.1:9898"}],
+        "pageservers": pageservers,
         "safekeepers": safekeepers,
         "endpoint_storage": es_url,
         "endpoints": endpoints,
@@ -188,8 +216,8 @@ def discover(repo_dir):
 # Aggregation: hit the live APIs and merge.
 # --------------------------------------------------------------------------
 
-def collect(repo_dir):
-    topo = discover(repo_dir)
+def collect(repo_dir, database_url=None):
+    topo = discover(repo_dir, database_url)
     services = []
 
     # Storage controller.
@@ -569,6 +597,7 @@ load(); tick();
 
 class Handler(BaseHTTPRequestHandler):
     repo_dir = ".yb_light"
+    database_url = None
 
     def _send(self, code, body, ctype):
         self.send_response(code)
@@ -582,7 +611,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif self.path.startswith("/api/data"):
             try:
-                data = collect(self.repo_dir)
+                data = collect(self.repo_dir, self.database_url)
                 body = json.dumps(data).encode("utf-8")
                 self._send(200, body, "application/json")
             except Exception as e:  # noqa: BLE001
@@ -598,7 +627,12 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description="Standalone yb-light cluster UI")
     ap.add_argument("--repo-dir", default=os.environ.get("YB_LIGHT_REPO_DIR", ".yb_light"),
-                    help="path to the .yb_light repo dir (default: .yb_light)")
+                    help="path to the .yb_light repo dir, for service URLs "
+                         "(optional — topology is read from the database)")
+    ap.add_argument("--database-url",
+                    default=os.environ.get("YB_STORAGE_DATABASE_URL"),
+                    help="storage_controller database (default: the repo config's "
+                         f"database_url, else {DEFAULT_DATABASE_URL})")
     ap.add_argument("--host", default="127.0.0.1")
     # 9099 by default: 9000 is YugabyteDB's tserver web UI, 7000 the master UI.
     ap.add_argument("--port", type=int, default=9099)
@@ -606,16 +640,20 @@ def main():
                     help="print aggregated JSON once and exit")
     args = ap.parse_args()
 
-    if not os.path.isdir(args.repo_dir):
-        print(f"repo dir {args.repo_dir!r} not found; pass --repo-dir", file=sys.stderr)
-        sys.exit(1)
+    # The repo dir is optional now (topology comes from the database); only
+    # warn if a non-default one was asked for but doesn't exist.
+    repo_dir = args.repo_dir if os.path.isdir(args.repo_dir) else None
+    if repo_dir is None and args.repo_dir != ".yb_light":
+        print(f"repo dir {args.repo_dir!r} not found; using defaults for "
+              f"service URLs", file=sys.stderr)
 
     if args.once:
-        json.dump(collect(args.repo_dir), sys.stdout, indent=2)
+        json.dump(collect(repo_dir, args.database_url), sys.stdout, indent=2)
         print()
         return
 
-    Handler.repo_dir = args.repo_dir
+    Handler.repo_dir = repo_dir
+    Handler.database_url = args.database_url
     try:
         httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     except OSError as e:
