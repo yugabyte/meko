@@ -1,11 +1,47 @@
 ---
-status: pending
+status: done
 severity: medium
 area: yb_light_local
 opened: 2026-06-10
 ---
 
 # Co-locate pageserver + safekeeper under the endpoint folder
+
+## Landed
+
+PS+SK now live under `endpoints/<name>/{pageserver,safekeeper}`; the
+old top-level `pageserver_<id>/` and `safekeepers/sk<id>/` dirs are gone.
+Provisioning moved to `endpoint create`: `tenant create` and `timeline
+branch` only record a `PendingTimelineInit` (keyed by timeline id,
+carrying tenant + branch name + Bootstrap/Branch mode); the first
+`endpoint create` for a timeline runs that pending init (allocates the
+pair, starts the processes, runs initdb/import or the branch's
+safekeeper-create), then registers the branch-name mapping with the
+storage controller (deferred because the controller rejects a branch
+name for a timeline it doesn't yet know).
+
+Key implementation points beyond the original plan:
+
+- `LocalEnv` keeps the init-TOML confs as `pageserver_templates` /
+  `safekeeper_templates`; `pageservers` (discovered from
+  `endpoints/*/pageserver/`) and `safekeepers` (persisted) start empty
+  on a fresh repo. `allocate_{pageserver,safekeeper}_conf` is the single
+  allocation path — the first node reuses the lowest-id template's
+  id/ports, later ones get the next id + per-id port delta.
+- `PageServerConf` gained a non-serialized `data_dir` (the discovered /
+  allocated `endpoints/<name>/pageserver`); `repo_path()` uses it.
+  `SafekeeperConf` gained `endpoint_id`; its datadir derives from it.
+- `StorageController::from_env` and the SC-start safekeeper-count / auth
+  derivation fall back to the templates (no node is provisioned at
+  `start`); the main safekeeper is registered with the controller during
+  bootstrap provisioning, before `tenant_timeline_create`.
+- `endpoint stop --destroy` deprovisions the co-located pair (stops the
+  PS/SK, drops the SK from config) and tolerates a never-started
+  endpoint (no pgdata → skip pg_ctl).
+
+Tests: `control_plane` unit tests (discovery scan, path helpers,
+allocation, pending-init round-trip) + `test/e2e/fast/layout.sh`.
+Verified with `cargo test -p control_plane` and `test/e2e/run.sh all`.
 
 ## Goal
 

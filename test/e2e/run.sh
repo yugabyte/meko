@@ -93,15 +93,16 @@ step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 
 MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
 
-# Pidfile locations under YB_LIGHT_REPO_DIR.
-PS_PIDFILE=$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.pid
-SK_PIDFILE=$YB_LIGHT_REPO_DIR/safekeepers/sk1/safekeeper.pid
+# Pidfile locations under YB_LIGHT_REPO_DIR. The main timeline's
+# pageserver + safekeeper are co-located under endpoints/main/.
+PS_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.pid
+SK_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/safekeeper/safekeeper.pid
 SC_PIDFILE=$YB_LIGHT_REPO_DIR/storage_controller_1/storage_controller.pid
 ES_PIDFILE=$YB_LIGHT_REPO_DIR/endpoint_storage/endpoint_storage.pid
 EP_COMPUTE_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/compute_ctl.pid
 EP_PG_PIDFILE=$YB_LIGHT_REPO_DIR/endpoints/main/pgdata/postmaster.pid
 
-LOG=$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log
+LOG=$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log
 
 is_running() {
     local pidfile=$1

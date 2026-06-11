@@ -22,7 +22,7 @@ CHUNK=1000000
 TENANT=530ed53aa3154f7d3c12af2237b89e3a
 TIMELINE=86bda9db8ad069904cd33e619872c8a0
 PS_API=http://172.151.20.28:9988
-PS_DIR=/mnt/ps/pageserver_1
+PS_DIR=/mnt/ps/endpoints/main/pageserver
 PS_BIN=/home/ec2-user/yb-neon-bundle/bin/pageserver
 export YB_STORAGE_PASSWORD='Yugabyte!1'
 

@@ -161,16 +161,16 @@ if ! timeout "$ENDPOINT_START_TIMEOUT" "$NEON" endpoint start main >/dev/null; t
     echo "  (tail of pageserver log:)"
     DEST="${RUN_LOG_DIR:-${YB_LIGHT_REPO_DIR}-logs}"
     mkdir -p "$DEST"
-    cp "$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
+    cp "$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
     find "$YB_LIGHT_REPO_DIR" -name 'safekeeper.log' -exec cp {} "$DEST/restart-wal-replay-sk-$$.log" \; 2>/dev/null || true
-    tail -n 500 "$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log"
+    tail -n 500 "$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log"
     exit 1
 fi
 
 preserve_logs_on_failure() {
     local DEST="${RUN_LOG_DIR:-${YB_LIGHT_REPO_DIR}-logs}"
     mkdir -p "$DEST"
-    cp "$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
+    cp "$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log" "$DEST/restart-wal-replay-ps-$$.log" 2>/dev/null || true
     find "$YB_LIGHT_REPO_DIR" -name 'safekeeper.log' -exec cp {} "$DEST/restart-wal-replay-sk-$$.log" \; 2>/dev/null || true
 }
 
@@ -207,7 +207,7 @@ fi
 echo "  ok — n advanced by $(( n_after - n_before_stop )) during the SK-only window"
 
 step "Scan pageserver log for catch-up failure markers"
-LOG=$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log
+LOG=$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log
 [[ -r $LOG ]] || { echo "FAIL — pageserver log not readable at $LOG"; exit 1; }
 
 # The signature of the bug is the walreceiver retry loop hammering

@@ -1,9 +1,10 @@
 //! Code to manage safekeepers
 //!
-//! In the local test environment, the data for each safekeeper is stored in
+//! In the local test environment, each safekeeper is co-located under the
+//! endpoint that owns it:
 //!
 //! ```text
-//!   .yb_light/safekeepers/<safekeeper id>
+//!   .yb_light/endpoints/<endpoint_id>/safekeeper
 //! ```
 use std::error::Error as _;
 use std::io::Write;
@@ -86,12 +87,8 @@ impl SafekeeperNode {
         PgConnectionConfig::new_host_port(url::Host::parse(addr).unwrap(), port)
     }
 
-    pub fn datadir_path_by_id(env: &LocalEnv, sk_id: NodeId) -> PathBuf {
-        env.safekeeper_data_dir(&format!("sk{sk_id}"))
-    }
-
     pub fn datadir_path(&self) -> PathBuf {
-        SafekeeperNode::datadir_path_by_id(&self.env, self.id)
+        self.env.safekeeper_data_dir(&self.conf.endpoint_id)
     }
 
     pub fn pid_file(&self) -> Utf8PathBuf {

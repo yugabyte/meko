@@ -1061,30 +1061,33 @@ fn bump_addr_port(addr: &str, delta: u16) -> anyhow::Result<String> {
     Ok(format!("{host}:{}", port + delta))
 }
 
-/// Allocate the conf for a new branch pageserver: next free node id,
-/// listen ports derived from the lowest-id pageserver's by a stable
-/// per-id offset. Auth/no_sync settings copied from `template`.
-fn allocate_branch_pageserver_conf(
-    env: &LocalEnv,
-    template: &PageServerConf,
-) -> anyhow::Result<PageServerConf> {
-    let base_conf = env
-        .pageservers
+/// Allocate the conf for a pageserver to be provisioned under `endpoint_id`.
+/// The node id is the next free one (the lowest-id template's id when none
+/// are provisioned yet, so the first/main pageserver reuses the template's
+/// id and ports); listen ports derive from the lowest-id template by a
+/// stable per-id offset. Auth/no_sync come from the template. This is the
+/// single allocation path for all pageservers, main and branch alike.
+fn allocate_pageserver_conf(env: &LocalEnv, endpoint_id: &str) -> anyhow::Result<PageServerConf> {
+    let template = env
+        .pageserver_templates
         .iter()
         .min_by_key(|p| p.id.0)
-        .context("no pageservers configured")?;
-    let new_id = env.pageservers.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
-    let delta = u16::try_from((new_id - base_conf.id.0) * 2).context("pageserver id overflow")?;
+        .context("no pageserver template configured")?;
+    let new_id = match env.pageservers.iter().map(|p| p.id.0).max() {
+        Some(max) => max + 1,
+        None => template.id.0,
+    };
+    let delta = u16::try_from((new_id - template.id.0) * 2).context("pageserver id overflow")?;
     Ok(PageServerConf {
         id: NodeId(new_id),
-        listen_pg_addr: bump_addr_port(&base_conf.listen_pg_addr, delta)?,
-        listen_http_addr: bump_addr_port(&base_conf.listen_http_addr, delta)?,
-        listen_https_addr: base_conf
+        listen_pg_addr: bump_addr_port(&template.listen_pg_addr, delta)?,
+        listen_http_addr: bump_addr_port(&template.listen_http_addr, delta)?,
+        listen_https_addr: template
             .listen_https_addr
             .as_deref()
             .map(|a| bump_addr_port(a, delta))
             .transpose()?,
-        listen_grpc_addr: base_conf
+        listen_grpc_addr: template
             .listen_grpc_addr
             .as_deref()
             .map(|a| bump_addr_port(a, delta))
@@ -1095,21 +1098,57 @@ fn allocate_branch_pageserver_conf(
         no_sync: template.no_sync,
         tenant_id: None,
         timeline_id: None,
+        data_dir: env.pageserver_data_dir(endpoint_id),
     })
 }
 
-/// Allocate the conf for a new branch safekeeper, dedicated to
-/// `timeline_id`. Ports derived from the lowest-id safekeeper's.
-fn allocate_branch_safekeeper_conf(
+/// Build the full `YbLightLocalInitPageserverConf` (carrying
+/// `remote_storage` + other passthrough keys) for the first/main
+/// pageserver, by cloning the lowest-id template and stamping in the
+/// allocated id/ports/auth. Used to write the bootstrap pageserver.toml;
+/// branch pageservers instead clone their ancestor's toml.
+fn pageserver_init_conf_for(
     env: &LocalEnv,
+    allocated: &PageServerConf,
+) -> anyhow::Result<YbLightLocalInitPageserverConf> {
+    let template = env
+        .pageserver_templates
+        .iter()
+        .min_by_key(|p| p.id.0)
+        .context("no pageserver template configured")?;
+    Ok(YbLightLocalInitPageserverConf {
+        id: allocated.id,
+        listen_pg_addr: allocated.listen_pg_addr.clone(),
+        listen_http_addr: allocated.listen_http_addr.clone(),
+        listen_https_addr: allocated.listen_https_addr.clone(),
+        listen_grpc_addr: allocated.listen_grpc_addr.clone(),
+        pg_auth_type: allocated.pg_auth_type,
+        http_auth_type: allocated.http_auth_type,
+        grpc_auth_type: allocated.grpc_auth_type,
+        no_sync: allocated.no_sync,
+        remote_storage: template.remote_storage.clone(),
+        other: template.other.clone(),
+    })
+}
+
+/// Allocate the conf for a safekeeper to be provisioned under `endpoint_id`,
+/// dedicated to `timeline_id`. Like [`allocate_pageserver_conf`], the first
+/// safekeeper reuses the lowest-id template's id/ports; subsequent ones get
+/// the next free id and a per-id port offset.
+fn allocate_safekeeper_conf(
+    env: &LocalEnv,
+    endpoint_id: &str,
     timeline_id: TimelineId,
 ) -> anyhow::Result<SafekeeperConf> {
     let template = env
-        .safekeepers
+        .safekeeper_templates
         .iter()
         .min_by_key(|s| s.id.0)
-        .context("no safekeepers configured")?;
-    let new_id = env.safekeepers.iter().map(|s| s.id.0).max().unwrap_or(0) + 1;
+        .context("no safekeeper template configured")?;
+    let new_id = match env.safekeepers.iter().map(|s| s.id.0).max() {
+        Some(max) => max + 1,
+        None => template.id.0,
+    };
     let delta = u16::try_from((new_id - template.id.0) * 2).context("safekeeper id overflow")?;
     Ok(SafekeeperConf {
         id: NodeId(new_id),
@@ -1123,6 +1162,7 @@ fn allocate_branch_safekeeper_conf(
         wal_yb_config: template.wal_yb_config.clone(),
         wal_cache_size_mib: template.wal_cache_size_mib,
         timeline_id: Some(timeline_id),
+        endpoint_id: endpoint_id.to_string(),
     })
 }
 
@@ -1155,12 +1195,11 @@ async fn ancestor_durable_lsn(
 /// The pageserver CLI tenant operations target: the first-configured
 /// node, which serves the tenant's main timeline. Branch timelines get
 /// their own pageservers, resolved via `pageserver_conf_for_timeline`.
-fn get_default_pageserver(env: &local_env::LocalEnv) -> PageServerNode {
-    let ps_conf = env
-        .pageservers
-        .first()
-        .expect("Config is validated to contain at least one pageserver");
-    PageServerNode::from_env(env, ps_conf)
+fn get_default_pageserver(env: &local_env::LocalEnv) -> anyhow::Result<PageServerNode> {
+    let ps_conf = env.pageservers.first().context(
+        "no pageserver provisioned yet — create an endpoint (`endpoint create`) first",
+    )?;
+    Ok(PageServerNode::from_env(env, ps_conf))
 }
 
 async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> anyhow::Result<()> {
@@ -1238,58 +1277,29 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
             let tenant_id = args.tenant_id.unwrap_or_else(TenantId::generate);
             let new_timeline_id = args.timeline_id.unwrap_or(TimelineId::generate());
 
-            // Single-timeline pageserver flow: bake the identity into
-            // pageserver.toml, then start the process. The pageserver
-            // bootstraps the timeline itself (initdb + import) because
-            // its timeline_state row doesn't exist yet.
-            let pageserver = get_default_pageserver(env);
-            pageserver.set_timeline_identity(
-                tenant_id,
+            // Co-located topology: the tenant's PS+SK pair is provisioned
+            // under the first endpoint created for this timeline, not here.
+            // `tenant create` just allocates the ids and records the
+            // pending Bootstrap so `endpoint create` knows to run initdb +
+            // import. The `main` branch mapping is registered with the
+            // storage controller only after the timeline exists (during
+            // provisioning) — the controller rejects a branch name for a
+            // timeline it doesn't know yet.
+            env.pending_timeline_inits.insert(
                 new_timeline_id,
-                0, // placeholder; start() bumps via attach_hook
-                Some(&pageserver_api::config::TimelineInitConfig::Bootstrap {
-                    pg_version: args.pg_version,
-                }),
-            )?;
-
-            // Register the node + tenant with the storage controller.
-            pageserver
-                .register_and_attach()
-                .await
-                .context("register tenant with storage controller")?;
-            let storage_controller = StorageController::from_env(env);
-
-            pageserver
-                .start(&std::time::Duration::from_secs(60))
-                .await
-                .context("start pageserver")?;
-            // NB: test/e2e/run.sh extracts the tenant id from this exact
-            // line (`awk '/successfully created/{print $2}'`).
-            println!("tenant {tenant_id} successfully created on the pageserver");
-
-            // The storage controller waits for the pageserver-side
-            // bootstrap to complete (it polls timeline_detail), then
-            // creates the timeline on the safekeeper.
-            storage_controller
-                .tenant_timeline_create(
+                local_env::PendingTimelineInit {
                     tenant_id,
-                    TimelineCreateRequest {
-                        new_timeline_id,
-                        mode: pageserver_api::models::TimelineCreateRequestMode::Bootstrap {
-                            existing_initdb_timeline_id: None,
-                            pg_version: Some(args.pg_version),
-                        },
+                    branch_name: DEFAULT_BRANCH_NAME.to_string(),
+                    mode: local_env::PendingTimelineInitMode::Bootstrap {
+                        pg_version: args.pg_version,
                     },
-                )
-                .await?;
+                },
+            );
 
-            env.register_branch_mapping(
-                DEFAULT_BRANCH_NAME.to_string(),
-                tenant_id,
-                new_timeline_id,
-            )
-            .await?;
-
+            // NB: test/e2e/run.sh extracts the tenant id from this exact
+            // line (`awk '/successfully created/{print $2}'`). The
+            // pageserver that serves it comes up at `endpoint create`.
+            println!("tenant {tenant_id} successfully created on the pageserver");
             println!("Created an initial timeline '{new_timeline_id}' for tenant: {tenant_id}",);
 
             if args.set_default {
@@ -1312,12 +1322,11 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
 }
 
 async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Result<()> {
-    let pageserver = get_default_pageserver(env);
-
     match cmd {
         TimelineCmd::List(args) => {
             // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the storage controller
             // where shard 0 is attached, and query there.
+            let pageserver = get_default_pageserver(env)?;
             let tenant_shard_id = get_tenant_shard_id(args.tenant_shard_id, env)?;
             let timelines = pageserver.timeline_list(&tenant_shard_id).await?;
             print_timelines_tree(timelines, env.timeline_name_mappings().await?)?;
@@ -1350,10 +1359,14 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                     anyhow!("Found no timeline id for branch name '{ancestor_branch_name}'")
                 })?;
 
-            // Per-endpoint pageserver topology: a branch is a NEW
-            // pageserver + safekeeper pair. The branch's pre-branch
-            // data stays under the ancestor's timeline_id in YB and is
-            // served via lineage-aware reads — nothing is copied.
+            // Co-located topology: a branch is a NEW pageserver +
+            // safekeeper pair, but they aren't provisioned here — that
+            // happens under the first endpoint created for the branch
+            // (`endpoint create`). Here we only capture the branch point
+            // and pg_version from the ancestor (which is running now) and
+            // record a pending Branch init. The branch's pre-branch data
+            // stays under the ancestor's timeline_id in YB and is served
+            // via lineage-aware reads — nothing is copied.
             let ancestor_ps_conf = env
                 .pageserver_conf_for_timeline(ancestor_timeline_id)
                 .with_context(|| {
@@ -1375,9 +1388,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // its safekeeper. The pageserver's last_record_lsn is its
             // ingest position, which can lag the compute's flushed WAL
             // by an arbitrary amount — branching there would cut a
-            // recently-committed transaction out of the branch. The
-            // branch pageserver's startup retry waits for the ancestor's
-            // consistent_lsn to reach this LSN before writing the row.
+            // recently-committed transaction out of the branch.
             let start_lsn = match args.ancestor_start_lsn {
                 Some(lsn) => lsn,
                 None => {
@@ -1387,140 +1398,27 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                 }
             };
 
-            // Allocate the new pair and persist the safekeeper conf
-            // (pageserver confs are discovered from pageserver_N dirs).
-            let ps_conf = allocate_branch_pageserver_conf(env, &ancestor_ps_conf)?;
-            let sk_conf = allocate_branch_safekeeper_conf(env, new_timeline_id)?;
-            env.safekeepers.push(sk_conf.clone());
-            env.persist_config()?;
-
-            // Safekeeper first: it must hold the timeline (starting at
-            // the branch LSN) before the pageserver's walreceiver and
-            // the compute's walproposer dial in.
-            println!(
-                "Provisioning safekeeper {} (pg port {}) for branch '{new_branch_name}'",
-                sk_conf.id, sk_conf.pg_port
-            );
-            std::fs::create_dir_all(SafekeeperNode::datadir_path_by_id(env, sk_conf.id))?;
-            let safekeeper = SafekeeperNode::from_env(env, &sk_conf);
-            safekeeper.initialize()?;
-            safekeeper
-                .start(&[], &std::time::Duration::from_secs(30))
-                .await
-                .context("start branch safekeeper")?;
-            let sk_host = sk_conf
-                .listen_addr
-                .clone()
-                .unwrap_or_else(|| "localhost".to_string());
-            let mconf = safekeeper_api::membership::Configuration {
-                generation: SafekeeperGeneration::new(1),
-                members: safekeeper_api::membership::MemberSet {
-                    m: vec![SafekeeperId {
-                        host: sk_host,
-                        id: sk_conf.id,
-                        pg_port: sk_conf.get_compute_port(),
-                    }],
-                },
-                new_members: None,
-            };
-            safekeeper
-                .create_timeline(&safekeeper_api::models::TimelineCreateRequest {
-                    tenant_id,
-                    timeline_id: new_timeline_id,
-                    mconf,
-                    pg_version: PgVersionId::from(pg_version),
-                    system_id: None,
-                    wal_seg_size: None,
-                    start_lsn,
-                    commit_lsn: None,
-                })
-                .await
-                .context("create branch timeline on safekeeper")?;
-
-            // Pageserver: clone the ancestor's config, bake the branch
-            // identity, start. The process writes the branch's
-            // timeline_state row at startup ([timeline_init] branch)
-            // and builds its read lineage from the ancestor links.
-            println!(
-                "Provisioning pageserver {} (pg {}) for branch '{new_branch_name}'",
-                ps_conf.id, ps_conf.listen_pg_addr
-            );
-            let pageserver = PageServerNode::from_env(env, &ps_conf);
-            pageserver.initialize_from_template(
-                &ancestor_ps,
-                &format!("127.0.0.1:{}", sk_conf.pg_port),
-            )?;
-            pageserver.set_timeline_identity(
-                tenant_id,
+            // The branch-name mapping is registered with the storage
+            // controller only after the timeline exists (during
+            // provisioning); until then the pending entry carries the
+            // branch name so `endpoint create` can resolve it.
+            env.pending_timeline_inits.insert(
                 new_timeline_id,
-                0, // placeholder; start() bumps via attach_hook
-                Some(&pageserver_api::config::TimelineInitConfig::Branch {
-                    ancestor_timeline_id,
-                    ancestor_lsn: start_lsn,
-                }),
-            )?;
-            pageserver
-                .start(&std::time::Duration::from_secs(60))
-                .await
-                .context("start branch pageserver")?;
-
-            // Wait for the branch timeline to come up Active.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-            loop {
-                match pageserver
-                    .timeline_info(
-                        TenantId::unsharded(tenant_id),
-                        new_timeline_id,
-                        pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
-                    )
-                    .await
-                {
-                    Ok(info)
-                        if matches!(
-                            info.state,
-                            pageserver_api::models::TimelineState::Active
-                        ) =>
-                    {
-                        break;
-                    }
-                    Ok(_) | Err(_) if std::time::Instant::now() < deadline => {
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    }
-                    Ok(info) => {
-                        anyhow::bail!(
-                            "branch timeline did not become Active in time (state: {:?})",
-                            info.state
-                        );
-                    }
-                    Err(e) => {
-                        return Err(e.context("branch timeline did not become Active in time"));
-                    }
-                }
-            }
-
-            // Record the launcher-created timeline in the storage
-            // controller's bookkeeping (branch names + deletion flows
-            // hang off the timelines row).
-            let storage_controller = StorageController::from_env(env);
-            storage_controller
-                .timeline_register(
+                local_env::PendingTimelineInit {
                     tenant_id,
-                    new_timeline_id,
-                    pageserver_api::controller_api::TimelineRegisterRequest {
+                    branch_name: new_branch_name.to_string(),
+                    mode: local_env::PendingTimelineInitMode::Branch {
+                        ancestor_timeline_id,
                         start_lsn,
-                        sk_set: vec![sk_conf.id],
+                        pg_version,
                     },
-                )
-                .await
-                .context("register branch timeline with storage controller")?;
-
-            env.register_branch_mapping(new_branch_name.to_string(), tenant_id, new_timeline_id)
-                .await?;
+                },
+            );
 
             println!(
                 "Created branch '{new_branch_name}' (timeline {new_timeline_id}) at {start_lsn} \
-                 from '{ancestor_branch_name}', served by pageserver {} + safekeeper {}",
-                ps_conf.id, sk_conf.id
+                 from '{ancestor_branch_name}'; its pageserver + safekeeper come up at \
+                 `endpoint create`",
             );
         }
     }
@@ -1528,7 +1426,288 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
     Ok(())
 }
 
-async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Result<()> {
+/// Provision the pageserver + safekeeper pair that serves `timeline_id`,
+/// co-located under `endpoint_id`, consuming the pending init recorded at
+/// `tenant create` / `timeline branch`. No-op when a pageserver already
+/// serves the timeline (a second endpoint on an already-served branch —
+/// the pair stays under the first endpoint that created it).
+async fn provision_timeline_for_endpoint(
+    env: &mut LocalEnv,
+    endpoint_id: &str,
+    tenant_id: TenantId,
+    timeline_id: TimelineId,
+) -> anyhow::Result<()> {
+    if env.pageserver_conf_for_timeline(timeline_id).is_some() {
+        return Ok(());
+    }
+    let pending = env
+        .pending_timeline_inits
+        .get(&timeline_id)
+        .cloned()
+        .with_context(|| {
+            format!(
+                "timeline {timeline_id} has no provisioned pageserver and no pending init; \
+                 run `tenant create` (for the main branch) or `timeline branch` first"
+            )
+        })?;
+
+    match pending.mode {
+        local_env::PendingTimelineInitMode::Bootstrap { pg_version } => {
+            provision_bootstrap(env, endpoint_id, tenant_id, timeline_id, pg_version).await?;
+        }
+        local_env::PendingTimelineInitMode::Branch {
+            ancestor_timeline_id,
+            start_lsn,
+            pg_version,
+        } => {
+            provision_branch(
+                env,
+                endpoint_id,
+                tenant_id,
+                timeline_id,
+                ancestor_timeline_id,
+                start_lsn,
+                pg_version,
+            )
+            .await?;
+        }
+    }
+
+    // The timeline now exists in the storage controller, so it will accept
+    // the branch-name mapping (deferred from `tenant create` / `timeline
+    // branch`).
+    env.register_branch_mapping(pending.branch_name, tenant_id, timeline_id)
+        .await?;
+
+    env.pending_timeline_inits.remove(&timeline_id);
+    env.persist_config()?;
+    Ok(())
+}
+
+/// Bring up the main timeline's pair: start the safekeeper, then start the
+/// pageserver (which runs initdb + import to bootstrap the timeline), then
+/// have the storage controller create the timeline on the safekeeper.
+async fn provision_bootstrap(
+    env: &mut LocalEnv,
+    endpoint_id: &str,
+    tenant_id: TenantId,
+    timeline_id: TimelineId,
+    pg_version: PgMajorVersion,
+) -> anyhow::Result<()> {
+    let ps_conf = allocate_pageserver_conf(env, endpoint_id)?;
+    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, timeline_id)?;
+    // Record the safekeeper before building the pageserver toml: its
+    // `safekeeper_pg_addr` is taken from `env.safekeepers.first()`.
+    env.safekeepers.push(sk_conf.clone());
+
+    // Safekeeper first: it must be up (and registered with the storage
+    // controller) before the controller creates the timeline on it.
+    println!(
+        "Provisioning safekeeper {} (pg port {}) for endpoint '{endpoint_id}'",
+        sk_conf.id, sk_conf.pg_port
+    );
+    std::fs::create_dir_all(env.safekeeper_data_dir(endpoint_id))?;
+    let safekeeper = SafekeeperNode::from_env(env, &sk_conf);
+    safekeeper.initialize()?;
+    safekeeper
+        .start(&[], &std::time::Duration::from_secs(30))
+        .await
+        .context("start main safekeeper")?;
+    let storage_controller = StorageController::from_env(env);
+    storage_controller
+        .register_safekeeper(&sk_conf)
+        .await
+        .context("register main safekeeper with storage controller")?;
+
+    // Pageserver: bake the Bootstrap identity, start it (runs initdb +
+    // import). Mirrors the body of the old `tenant create`.
+    println!(
+        "Provisioning pageserver {} (pg {}) for endpoint '{endpoint_id}'",
+        ps_conf.id, ps_conf.listen_pg_addr
+    );
+    std::fs::create_dir_all(&ps_conf.data_dir)?;
+    let init_conf = pageserver_init_conf_for(env, &ps_conf)?;
+    let pageserver = PageServerNode::from_env(env, &ps_conf);
+    pageserver
+        .initialize(init_conf)
+        .context("initialize main pageserver")?;
+    pageserver.set_timeline_identity(
+        tenant_id,
+        timeline_id,
+        0, // placeholder; start() bumps via attach_hook
+        Some(&pageserver_api::config::TimelineInitConfig::Bootstrap { pg_version }),
+    )?;
+    pageserver
+        .register_and_attach()
+        .await
+        .context("register tenant with storage controller")?;
+    pageserver
+        .start(&std::time::Duration::from_secs(60))
+        .await
+        .context("start main pageserver")?;
+
+    // The storage controller waits for the pageserver-side bootstrap to
+    // complete (it polls timeline_detail), then creates the timeline on
+    // the safekeeper.
+    storage_controller
+        .tenant_timeline_create(
+            tenant_id,
+            TimelineCreateRequest {
+                new_timeline_id: timeline_id,
+                mode: pageserver_api::models::TimelineCreateRequestMode::Bootstrap {
+                    existing_initdb_timeline_id: None,
+                    pg_version: Some(pg_version),
+                },
+            },
+        )
+        .await?;
+
+    env.pageservers.push(ps_conf);
+    Ok(())
+}
+
+/// Bring up a branch's pair: create the safekeeper at the branch LSN, then
+/// start the pageserver cloned from the ancestor's config with a Branch
+/// identity, then register the branch timeline with the storage controller.
+#[allow(clippy::too_many_arguments)]
+async fn provision_branch(
+    env: &mut LocalEnv,
+    endpoint_id: &str,
+    tenant_id: TenantId,
+    timeline_id: TimelineId,
+    ancestor_timeline_id: TimelineId,
+    start_lsn: Lsn,
+    pg_version: PgMajorVersion,
+) -> anyhow::Result<()> {
+    let ancestor_ps_conf = env
+        .pageserver_conf_for_timeline(ancestor_timeline_id)
+        .with_context(|| {
+            format!("no pageserver serves ancestor timeline {ancestor_timeline_id}")
+        })?
+        .clone();
+    let ancestor_ps = PageServerNode::from_env(env, &ancestor_ps_conf);
+
+    let ps_conf = allocate_pageserver_conf(env, endpoint_id)?;
+    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, timeline_id)?;
+    env.safekeepers.push(sk_conf.clone());
+
+    // Safekeeper first: it must hold the timeline (starting at the branch
+    // LSN) before the pageserver's walreceiver and the compute's
+    // walproposer dial in.
+    println!(
+        "Provisioning safekeeper {} (pg port {}) for endpoint '{endpoint_id}'",
+        sk_conf.id, sk_conf.pg_port
+    );
+    std::fs::create_dir_all(env.safekeeper_data_dir(endpoint_id))?;
+    let safekeeper = SafekeeperNode::from_env(env, &sk_conf);
+    safekeeper.initialize()?;
+    safekeeper
+        .start(&[], &std::time::Duration::from_secs(30))
+        .await
+        .context("start branch safekeeper")?;
+    let sk_host = sk_conf
+        .listen_addr
+        .clone()
+        .unwrap_or_else(|| "localhost".to_string());
+    let mconf = safekeeper_api::membership::Configuration {
+        generation: SafekeeperGeneration::new(1),
+        members: safekeeper_api::membership::MemberSet {
+            m: vec![SafekeeperId {
+                host: sk_host,
+                id: sk_conf.id,
+                pg_port: sk_conf.get_compute_port(),
+            }],
+        },
+        new_members: None,
+    };
+    safekeeper
+        .create_timeline(&safekeeper_api::models::TimelineCreateRequest {
+            tenant_id,
+            timeline_id,
+            mconf,
+            pg_version: PgVersionId::from(pg_version),
+            system_id: None,
+            wal_seg_size: None,
+            start_lsn,
+            commit_lsn: None,
+        })
+        .await
+        .context("create branch timeline on safekeeper")?;
+
+    // Pageserver: clone the ancestor's config, bake the branch identity,
+    // start. The process writes the branch's timeline_state row at startup
+    // ([timeline_init] branch) and builds its read lineage from the
+    // ancestor links.
+    println!(
+        "Provisioning pageserver {} (pg {}) for endpoint '{endpoint_id}'",
+        ps_conf.id, ps_conf.listen_pg_addr
+    );
+    std::fs::create_dir_all(&ps_conf.data_dir)?;
+    let pageserver = PageServerNode::from_env(env, &ps_conf);
+    pageserver.initialize_from_template(&ancestor_ps, &format!("127.0.0.1:{}", sk_conf.pg_port))?;
+    pageserver.set_timeline_identity(
+        tenant_id,
+        timeline_id,
+        0, // placeholder; start() bumps via attach_hook
+        Some(&pageserver_api::config::TimelineInitConfig::Branch {
+            ancestor_timeline_id,
+            ancestor_lsn: start_lsn,
+        }),
+    )?;
+    pageserver
+        .start(&std::time::Duration::from_secs(60))
+        .await
+        .context("start branch pageserver")?;
+
+    // Wait for the branch timeline to come up Active.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        match pageserver
+            .timeline_info(
+                TenantId::unsharded(tenant_id),
+                timeline_id,
+                pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
+            )
+            .await
+        {
+            Ok(info) if matches!(info.state, pageserver_api::models::TimelineState::Active) => {
+                break;
+            }
+            Ok(_) | Err(_) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            Ok(info) => {
+                anyhow::bail!(
+                    "branch timeline did not become Active in time (state: {:?})",
+                    info.state
+                );
+            }
+            Err(e) => {
+                return Err(e.context("branch timeline did not become Active in time"));
+            }
+        }
+    }
+
+    // Record the launcher-created timeline in the storage controller's
+    // bookkeeping (branch names + deletion flows hang off the timelines row).
+    let storage_controller = StorageController::from_env(env);
+    storage_controller
+        .timeline_register(
+            tenant_id,
+            timeline_id,
+            pageserver_api::controller_api::TimelineRegisterRequest {
+                start_lsn,
+                sk_set: vec![sk_conf.id],
+            },
+        )
+        .await
+        .context("register branch timeline with storage controller")?;
+
+    env.pageservers.push(ps_conf);
+    Ok(())
+}
+
+async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) -> Result<()> {
     let mut cplane = ComputeControlPlane::load(env.clone()).await?;
 
     match subcmd {
@@ -1601,10 +1780,22 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
                 .clone()
                 .unwrap_or_else(|| format!("ep-{branch_name}"));
 
-            let timeline_id = env
-                .get_branch_timeline_id(&branch_name, tenant_id)
-                .await?
-                .ok_or_else(|| anyhow!("Found no timeline id for branch name '{branch_name}'"))?;
+            // Resolve the branch to its timeline. A provisioned branch is
+            // known to the storage controller; an as-yet-unprovisioned one
+            // (recorded by `tenant create` / `timeline branch`, mapping not
+            // registered with the controller yet) is found in the local
+            // pending-init set.
+            let timeline_id = match env.get_branch_timeline_id(&branch_name, tenant_id).await? {
+                Some(tid) => tid,
+                None => env
+                    .pending_timeline_inits
+                    .iter()
+                    .find(|(_, p)| p.tenant_id == tenant_id && p.branch_name == branch_name)
+                    .map(|(tid, _)| *tid)
+                    .ok_or_else(|| {
+                        anyhow!("Found no timeline id for branch name '{branch_name}'")
+                    })?,
+            };
 
             let mode = match (args.lsn, args.hot_standby) {
                 (Some(lsn), false) => ComputeMode::Static(lsn),
@@ -1630,6 +1821,13 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &local_env::LocalEnv) -> Res
             if !args.allow_multiple {
                 cplane.check_conflicting_endpoints(mode, tenant_id, timeline_id)?;
             }
+
+            // Provision the timeline's pageserver + safekeeper under this
+            // endpoint's folder if nothing serves it yet (running the
+            // pending Bootstrap/Branch init from `tenant create` /
+            // `timeline branch`). A second endpoint on an already-served
+            // branch skips this — the pair stays under the first endpoint.
+            provision_timeline_for_endpoint(env, &endpoint_id, tenant_id, timeline_id).await?;
 
             cplane.new_endpoint(
                 &endpoint_id,
@@ -2359,5 +2557,129 @@ async fn try_stop_all(env: &local_env::LocalEnv, immediate: bool) {
         if let Err(e) = storage_controller.stop(stop_args).await {
             eprintln!("Storage controller instance {instance_id} stop failed: {e:#}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn ps_template() -> YbLightLocalInitPageserverConf {
+        YbLightLocalInitPageserverConf {
+            id: NodeId(1),
+            listen_pg_addr: "127.0.0.1:64000".to_string(),
+            listen_http_addr: "127.0.0.1:9898".to_string(),
+            listen_https_addr: None,
+            listen_grpc_addr: Some("127.0.0.1:51051".to_string()),
+            pg_auth_type: AuthType::Trust,
+            http_auth_type: AuthType::Trust,
+            grpc_auth_type: AuthType::Trust,
+            no_sync: true,
+            remote_storage: Some("{ host = 'h' }".to_string()),
+            other: Default::default(),
+        }
+    }
+
+    fn sk_template() -> SafekeeperConf {
+        SafekeeperConf {
+            id: NodeId(1),
+            pg_port: 5454,
+            http_port: 7676,
+            wal_yb_config: Some("{ host = 'h' }".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn env_with_templates() -> LocalEnv {
+        LocalEnv {
+            base_data_dir: PathBuf::from("/tmp/repo"),
+            pg_distrib_dir: PathBuf::from("/pg"),
+            neon_distrib_dir: PathBuf::from("/neon"),
+            default_tenant_id: None,
+            private_key_path: PathBuf::from("k"),
+            public_key_path: PathBuf::from("k.pub"),
+            storage_controller: NeonStorageControllerConf::default(),
+            pageservers: Vec::new(),
+            safekeepers: Vec::new(),
+            pageserver_templates: vec![ps_template()],
+            safekeeper_templates: vec![sk_template()],
+            pending_timeline_inits: HashMap::new(),
+            endpoint_storage: EndpointStorageConf::default(),
+            control_plane_api: "http://127.0.0.1:1234/".parse().unwrap(),
+            control_plane_hooks_api: None,
+            use_local_tls: false,
+        }
+    }
+
+    #[test]
+    fn first_pageserver_reuses_template_id_and_ports() {
+        let env = env_with_templates();
+        let conf = allocate_pageserver_conf(&env, "main").unwrap();
+        assert_eq!(conf.id, NodeId(1));
+        assert_eq!(conf.listen_pg_addr, "127.0.0.1:64000");
+        assert_eq!(conf.listen_grpc_addr.as_deref(), Some("127.0.0.1:51051"));
+        assert_eq!(
+            conf.data_dir,
+            PathBuf::from("/tmp/repo/endpoints/main/pageserver")
+        );
+    }
+
+    #[test]
+    fn second_pageserver_gets_next_id_and_port_delta() {
+        let mut env = env_with_templates();
+        env.pageservers
+            .push(allocate_pageserver_conf(&env.clone(), "main").unwrap());
+        let conf = allocate_pageserver_conf(&env, "ep_b1").unwrap();
+        // id 2, delta = (2 - 1) * 2 = 2
+        assert_eq!(conf.id, NodeId(2));
+        assert_eq!(conf.listen_pg_addr, "127.0.0.1:64002");
+        assert_eq!(conf.listen_grpc_addr.as_deref(), Some("127.0.0.1:51053"));
+        assert_eq!(
+            conf.data_dir,
+            PathBuf::from("/tmp/repo/endpoints/ep_b1/pageserver")
+        );
+    }
+
+    #[test]
+    fn first_safekeeper_reuses_template_id_and_ports() {
+        let env = env_with_templates();
+        let tl = TimelineId::generate();
+        let conf = allocate_safekeeper_conf(&env, "main", tl).unwrap();
+        assert_eq!(conf.id, NodeId(1));
+        assert_eq!(conf.pg_port, 5454);
+        assert_eq!(conf.http_port, 7676);
+        assert_eq!(conf.timeline_id, Some(tl));
+        assert_eq!(conf.endpoint_id, "main");
+        assert_eq!(conf.wal_yb_config.as_deref(), Some("{ host = 'h' }"));
+    }
+
+    #[test]
+    fn second_safekeeper_gets_next_id_and_port_delta() {
+        let mut env = env_with_templates();
+        let main_tl = TimelineId::generate();
+        env.safekeepers
+            .push(allocate_safekeeper_conf(&env.clone(), "main", main_tl).unwrap());
+        let branch_tl = TimelineId::generate();
+        let conf = allocate_safekeeper_conf(&env, "ep_b1", branch_tl).unwrap();
+        // id 2, delta = 2
+        assert_eq!(conf.id, NodeId(2));
+        assert_eq!(conf.pg_port, 5456);
+        assert_eq!(conf.http_port, 7678);
+        assert_eq!(conf.timeline_id, Some(branch_tl));
+        assert_eq!(conf.endpoint_id, "ep_b1");
+    }
+
+    #[test]
+    fn pageserver_init_conf_preserves_template_remote_storage() {
+        let env = env_with_templates();
+        let allocated = allocate_pageserver_conf(&env, "main").unwrap();
+        let init_conf = pageserver_init_conf_for(&env, &allocated).unwrap();
+        assert_eq!(init_conf.id, allocated.id);
+        assert_eq!(init_conf.listen_pg_addr, allocated.listen_pg_addr);
+        assert_eq!(init_conf.remote_storage.as_deref(), Some("{ host = 'h' }"));
+        assert!(init_conf.no_sync);
     }
 }

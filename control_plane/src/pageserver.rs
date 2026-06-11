@@ -1,9 +1,10 @@
 //! Code to manage pageservers
 //!
-//! In the local test environment, the data for each pageserver is stored in
+//! In the local test environment, each pageserver is co-located under the
+//! endpoint that owns it:
 //!
 //! ```text
-//!   .yb_light/pageserver_<pageserver_id>
+//!   .yb_light/endpoints/<endpoint_id>/pageserver
 //! ```
 //!
 use std::collections::HashMap;
@@ -89,9 +90,12 @@ impl PageServerNode {
         &self,
         conf: YbLightLocalInitPageserverConf,
     ) -> anyhow::Result<toml_edit::DocumentMut> {
+        // `data_dir` is a runtime-only field (where the toml lives), not
+        // derived from the init conf, so exclude it from the equality check.
+        let mut expected = PageServerConf::from(&conf);
+        expected.data_dir = self.conf.data_dir.clone();
         assert_eq!(
-            &PageServerConf::from(&conf),
-            &self.conf,
+            &expected, &self.conf,
             "during yb_light_local init, we derive the runtime state of ps conf (self.conf) from the --config flag fully"
         );
 
@@ -189,7 +193,7 @@ impl PageServerNode {
     }
 
     pub fn repo_path(&self) -> PathBuf {
-        self.env.pageserver_data_dir(self.conf.id)
+        self.conf.data_dir.clone()
     }
 
     /// The pid file is created by the pageserver process, with its pid stored inside.

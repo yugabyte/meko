@@ -19,10 +19,9 @@ use safekeeper_api::PgMajorVersion;
 use serde::{Deserialize, Serialize};
 use utils::auth::encode_from_key_file;
 use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
+use utils::lsn::Lsn;
 
 use crate::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage};
-use crate::pageserver::PageServerNode;
-use crate::safekeeper::SafekeeperNode;
 
 pub const DEFAULT_PG_VERSION: u32 = 17;
 
@@ -33,7 +32,7 @@ pub const DEFAULT_PG_VERSION: u32 = 17;
 // to 'yb_light_local init --config=<path>' option. See control_plane/simple.conf for
 // an example.
 //
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct LocalEnv {
     // Base directory for all the nodes (the pageserver, safekeepers and
     // compute endpoints).
@@ -64,12 +63,35 @@ pub struct LocalEnv {
     // Configuration for the storage controller (1 per yb_light_local environment)
     pub storage_controller: NeonStorageControllerConf,
 
-    /// This Vec must always contain at least one pageserver
-    /// Populdated by [`Self::load_config`] from the individual `pageserver.toml`s.
-    /// NB: not used anymore except for informing users that they need to change their `.yb_light/config`.
+    /// The *provisioned* pageservers, discovered by [`Self::load_config`]
+    /// from the `pageserver.toml` under each `endpoints/<name>/pageserver/`.
+    /// Empty on a fresh repo; pageservers are provisioned at
+    /// `endpoint create`. The launcher allocates new ones from
+    /// [`Self::pageserver_templates`].
     pub pageservers: Vec<PageServerConf>,
 
+    /// The *provisioned* safekeepers, persisted in `.yb_light/config`.
+    /// Empty on a fresh repo; a safekeeper is provisioned (datadir,
+    /// `endpoint_id`, `timeline_id`) at `endpoint create`, allocated from
+    /// [`Self::safekeeper_templates`].
     pub safekeepers: Vec<SafekeeperConf>,
+
+    /// Init-time pageserver conf(s) from the `yb_light_local init` TOML.
+    /// Not a running node — the template (ports, `remote_storage`, auth)
+    /// that `endpoint create` clones for the first/main pageserver. The
+    /// lowest-id template is the port base for all pageserver allocation.
+    pub pageserver_templates: Vec<YbLightLocalInitPageserverConf>,
+
+    /// Init-time safekeeper conf(s) from the `yb_light_local init` TOML.
+    /// The template (ports, `wal_yb_config`, auth) that `endpoint create`
+    /// clones for the first/main safekeeper.
+    pub safekeeper_templates: Vec<SafekeeperConf>,
+
+    /// Timelines whose ids/branch-mapping have been allocated (at
+    /// `tenant create` / `timeline branch`) but whose PS+SK have not been
+    /// provisioned yet. `endpoint create` consumes the entry to know how
+    /// to bring the pair up, then clears it.
+    pub pending_timeline_inits: HashMap<TimelineId, PendingTimelineInit>,
 
     pub endpoint_storage: EndpointStorageConf,
 
@@ -87,7 +109,7 @@ pub struct LocalEnv {
 }
 
 /// On-disk state stored in `.yb_light/config`.
-#[derive(PartialEq, Eq, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(PartialEq, Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OnDiskConfig {
     pub pg_distrib_dir: PathBuf,
@@ -102,6 +124,9 @@ pub struct OnDiskConfig {
     )]
     pub pageservers: Vec<PageServerConf>,
     pub safekeepers: Vec<SafekeeperConf>,
+    pub pageserver_templates: Vec<YbLightLocalInitPageserverConf>,
+    pub safekeeper_templates: Vec<SafekeeperConf>,
+    pub pending_timeline_inits: HashMap<TimelineId, PendingTimelineInit>,
     pub endpoint_storage: EndpointStorageConf,
     pub control_plane_api: Option<Url>,
     pub control_plane_hooks_api: Option<Url>,
@@ -110,6 +135,37 @@ pub struct OnDiskConfig {
     // to load new config file. May be removed after this field is in release branch.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub use_local_tls: bool,
+}
+
+/// A timeline whose ids + branch name are allocated (at `tenant create` /
+/// `timeline branch`) but whose pageserver+safekeeper haven't been
+/// provisioned yet. Recorded keyed by timeline id, consumed and cleared by
+/// `endpoint create`. The branch-name mapping is registered with the
+/// storage controller only after provisioning (the controller validates
+/// the timeline exists), so it is held here in the meantime — that's why
+/// `endpoint create` resolves a branch to its timeline from these entries
+/// when the controller doesn't know it yet.
+#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+pub struct PendingTimelineInit {
+    pub tenant_id: TenantId,
+    pub branch_name: String,
+    pub mode: PendingTimelineInitMode,
+}
+
+/// How `endpoint create` should bring a pending timeline's pair up.
+#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+pub enum PendingTimelineInitMode {
+    /// The tenant's initial timeline: the pageserver bootstraps it
+    /// (initdb + import) on first start.
+    Bootstrap { pg_version: PgMajorVersion },
+    /// A branch off `ancestor_timeline_id` at `start_lsn`. The safekeeper
+    /// is created at `start_lsn`; the pageserver builds its read lineage
+    /// from the ancestor links.
+    Branch {
+        ancestor_timeline_id: TimelineId,
+        start_lsn: Lsn,
+        pg_version: PgMajorVersion,
+    },
 }
 
 fn fail_if_pageservers_field_specified<'de, D>(_: D) -> Result<Vec<PageServerConf>, D::Error>
@@ -251,6 +307,12 @@ pub struct PageServerConf {
     /// `timeline branch`).
     pub tenant_id: Option<TenantId>,
     pub timeline_id: Option<TimelineId>,
+    /// The pageserver's data directory (`endpoints/<name>/pageserver`),
+    /// captured at discovery / allocation time. Not part of the on-disk
+    /// config — derived from where the `pageserver.toml` was found, or set
+    /// when the launcher allocates a new pageserver at `endpoint create`.
+    #[serde(skip)]
+    pub data_dir: PathBuf,
 }
 
 impl Default for PageServerConf {
@@ -267,6 +329,7 @@ impl Default for PageServerConf {
             no_sync: false,
             tenant_id: None,
             timeline_id: None,
+            data_dir: PathBuf::new(),
         }
     }
 }
@@ -274,7 +337,7 @@ impl Default for PageServerConf {
 /// The toml that can be passed to `yb_light_local init --config`.
 /// This is a subset of the `pageserver.toml` configuration.
 // TODO(christian): use pageserver_api::config::ConfigToml (PR #7656)
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct YbLightLocalInitPageserverConf {
     pub id: NodeId,
     pub listen_pg_addr: String,
@@ -325,6 +388,7 @@ impl From<&YbLightLocalInitPageserverConf> for PageServerConf {
             no_sync: *no_sync,
             tenant_id: None,
             timeline_id: None,
+            data_dir: PathBuf::new(),
         }
     }
 }
@@ -354,6 +418,11 @@ pub struct SafekeeperConf {
     /// safekeeper topology). `None` for the legacy/main safekeeper
     /// that serves the initial timeline.
     pub timeline_id: Option<TimelineId>,
+    /// The endpoint whose folder holds this safekeeper's datadir
+    /// (`endpoints/<endpoint_id>/safekeeper`). Empty for an init-time
+    /// template; set at `endpoint create` when the safekeeper is
+    /// provisioned under its owning endpoint.
+    pub endpoint_id: String,
 }
 
 impl Default for SafekeeperConf {
@@ -370,6 +439,7 @@ impl Default for SafekeeperConf {
             wal_yb_config: None,
             wal_cache_size_mib: None,
             timeline_id: None,
+            endpoint_id: String::new(),
         }
     }
 }
@@ -485,13 +555,16 @@ impl LocalEnv {
         self.base_data_dir.join("endpoints")
     }
 
-    pub fn pageserver_data_dir(&self, pageserver_id: NodeId) -> PathBuf {
-        self.base_data_dir
-            .join(format!("pageserver_{pageserver_id}"))
+    /// A pageserver's datadir, co-located under its owning endpoint:
+    /// `endpoints/<endpoint_id>/pageserver`.
+    pub fn pageserver_data_dir(&self, endpoint_id: &str) -> PathBuf {
+        self.endpoints_path().join(endpoint_id).join("pageserver")
     }
 
-    pub fn safekeeper_data_dir(&self, data_dir_name: &str) -> PathBuf {
-        self.base_data_dir.join("safekeepers").join(data_dir_name)
+    /// A safekeeper's datadir, co-located under its owning endpoint:
+    /// `endpoints/<endpoint_id>/safekeeper`.
+    pub fn safekeeper_data_dir(&self, endpoint_id: &str) -> PathBuf {
+        self.endpoints_path().join(endpoint_id).join("safekeeper")
     }
 
     pub fn endpoint_storage_data_dir(&self) -> PathBuf {
@@ -665,6 +738,9 @@ impl LocalEnv {
                 storage_controller,
                 pageservers,
                 safekeepers,
+                pageserver_templates,
+                safekeeper_templates,
+                pending_timeline_inits,
                 control_plane_api,
                 control_plane_hooks_api,
                 control_plane_compute_hook_api: _,
@@ -681,6 +757,9 @@ impl LocalEnv {
                 storage_controller,
                 pageservers,
                 safekeepers,
+                pageserver_templates,
+                safekeeper_templates,
+                pending_timeline_inits,
                 control_plane_api: control_plane_api.unwrap(),
                 control_plane_hooks_api,
                 use_local_tls,
@@ -688,106 +767,104 @@ impl LocalEnv {
             }
         };
 
-        // The source of truth for pageserver configuration is the pageserver.toml.
+        // The source of truth for a pageserver's runtime config is the
+        // `pageserver.toml` under its endpoint's `pageserver/` subdir.
         assert!(
             env.pageservers.is_empty(),
             "we ensure this during deserialization"
         );
-        env.pageservers = {
-            let iter = std::fs::read_dir(repopath).context("open dir")?;
-            let mut pageservers = Vec::new();
-            for res in iter {
-                let dentry = res?;
-                const PREFIX: &str = "pageserver_";
-                let dentry_name = dentry
-                    .file_name()
-                    .into_string()
-                    .ok()
-                    .with_context(|| format!("non-utf8 dentry: {:?}", dentry.path()))
-                    .unwrap();
-                if !dentry_name.starts_with(PREFIX) {
-                    continue;
-                }
-                if !dentry.file_type().context("determine file type")?.is_dir() {
-                    anyhow::bail!("expected a directory, got {:?}", dentry.path());
-                }
-                let id = dentry_name[PREFIX.len()..]
-                    .parse::<NodeId>()
-                    .with_context(|| format!("parse id from {:?}", dentry.path()))?;
-                // TODO(christian): use pageserver_api::config::ConfigToml (PR #7656)
-                #[derive(serde::Serialize, serde::Deserialize)]
-                // (allow unknown fields, unlike PageServerConf)
-                struct PageserverConfigTomlSubset {
-                    listen_pg_addr: String,
-                    listen_http_addr: String,
-                    listen_https_addr: Option<String>,
-                    listen_grpc_addr: Option<String>,
-                    pg_auth_type: AuthType,
-                    http_auth_type: AuthType,
-                    grpc_auth_type: AuthType,
-                    #[serde(default)]
-                    no_sync: bool,
-                    #[serde(default)]
-                    tenant_id: Option<TenantId>,
-                    #[serde(default)]
-                    timeline_id: Option<TimelineId>,
-                }
-                let config_toml_path = dentry.path().join("pageserver.toml");
-                let config_toml: PageserverConfigTomlSubset = toml_edit::de::from_str(
-                    &std::fs::read_to_string(&config_toml_path)
-                        .with_context(|| format!("read {config_toml_path:?}"))?,
-                )
-                .context("parse pageserver.toml")?;
-                let identity_toml_path = dentry.path().join("identity.toml");
-                #[derive(serde::Serialize, serde::Deserialize)]
-                struct IdentityTomlSubset {
-                    id: NodeId,
-                }
-                let identity_toml: IdentityTomlSubset = toml_edit::de::from_str(
-                    &std::fs::read_to_string(&identity_toml_path)
-                        .with_context(|| format!("read {identity_toml_path:?}"))?,
-                )
-                .context("parse identity.toml")?;
-                let PageserverConfigTomlSubset {
-                    listen_pg_addr,
-                    listen_http_addr,
-                    listen_https_addr,
-                    listen_grpc_addr,
-                    pg_auth_type,
-                    http_auth_type,
-                    grpc_auth_type,
-                    no_sync,
-                    tenant_id,
-                    timeline_id,
-                } = config_toml;
-                let IdentityTomlSubset {
-                    id: identity_toml_id,
-                } = identity_toml;
-                let conf = PageServerConf {
-                    id: {
-                        anyhow::ensure!(
-                            identity_toml_id == id,
-                            "id mismatch: identity.toml:id={identity_toml_id} pageserver_(.*) id={id}",
-                        );
-                        id
-                    },
-                    listen_pg_addr,
-                    listen_http_addr,
-                    listen_https_addr,
-                    listen_grpc_addr,
-                    pg_auth_type,
-                    http_auth_type,
-                    grpc_auth_type,
-                    no_sync,
-                    tenant_id,
-                    timeline_id,
-                };
-                pageservers.push(conf);
-            }
-            pageservers
-        };
+        env.pageservers = Self::discover_pageservers(&env.endpoints_path())?;
 
         Ok(env)
+    }
+
+    /// Scan `endpoints/*/pageserver/` for provisioned pageservers,
+    /// reconstructing each [`PageServerConf`] from its `pageserver.toml`
+    /// (listen addrs, auth, identity) and `identity.toml` (node id). The
+    /// `data_dir` is the discovered `endpoints/<name>/pageserver` path.
+    /// Endpoint dirs without a `pageserver/` subdir are skipped.
+    pub fn discover_pageservers(endpoints_path: &Path) -> anyhow::Result<Vec<PageServerConf>> {
+        let mut pageservers = Vec::new();
+        if !endpoints_path.exists() {
+            return Ok(pageservers);
+        }
+        for res in std::fs::read_dir(endpoints_path).context("open endpoints dir")? {
+            let endpoint_dentry = res?;
+            if !endpoint_dentry
+                .file_type()
+                .context("determine file type")?
+                .is_dir()
+            {
+                continue;
+            }
+            let data_dir = endpoint_dentry.path().join("pageserver");
+            let config_toml_path = data_dir.join("pageserver.toml");
+            if !config_toml_path.exists() {
+                // Endpoint that doesn't own a pageserver (e.g. a second
+                // endpoint on a branch already served elsewhere).
+                continue;
+            }
+            // TODO(christian): use pageserver_api::config::ConfigToml (PR #7656)
+            #[derive(serde::Serialize, serde::Deserialize)]
+            // (allow unknown fields, unlike PageServerConf)
+            struct PageserverConfigTomlSubset {
+                listen_pg_addr: String,
+                listen_http_addr: String,
+                listen_https_addr: Option<String>,
+                listen_grpc_addr: Option<String>,
+                pg_auth_type: AuthType,
+                http_auth_type: AuthType,
+                grpc_auth_type: AuthType,
+                #[serde(default)]
+                no_sync: bool,
+                #[serde(default)]
+                tenant_id: Option<TenantId>,
+                #[serde(default)]
+                timeline_id: Option<TimelineId>,
+            }
+            let config_toml: PageserverConfigTomlSubset = toml_edit::de::from_str(
+                &std::fs::read_to_string(&config_toml_path)
+                    .with_context(|| format!("read {config_toml_path:?}"))?,
+            )
+            .context("parse pageserver.toml")?;
+            let identity_toml_path = data_dir.join("identity.toml");
+            #[derive(serde::Serialize, serde::Deserialize)]
+            struct IdentityTomlSubset {
+                id: NodeId,
+            }
+            let identity_toml: IdentityTomlSubset = toml_edit::de::from_str(
+                &std::fs::read_to_string(&identity_toml_path)
+                    .with_context(|| format!("read {identity_toml_path:?}"))?,
+            )
+            .context("parse identity.toml")?;
+            let PageserverConfigTomlSubset {
+                listen_pg_addr,
+                listen_http_addr,
+                listen_https_addr,
+                listen_grpc_addr,
+                pg_auth_type,
+                http_auth_type,
+                grpc_auth_type,
+                no_sync,
+                tenant_id,
+                timeline_id,
+            } = config_toml;
+            pageservers.push(PageServerConf {
+                id: identity_toml.id,
+                listen_pg_addr,
+                listen_http_addr,
+                listen_https_addr,
+                listen_grpc_addr,
+                pg_auth_type,
+                http_auth_type,
+                grpc_auth_type,
+                no_sync,
+                tenant_id,
+                timeline_id,
+                data_dir,
+            });
+        }
+        Ok(pageservers)
     }
 
     pub fn persist_config(&self) -> anyhow::Result<()> {
@@ -802,6 +879,9 @@ impl LocalEnv {
                 storage_controller: self.storage_controller.clone(),
                 pageservers: vec![], // it's skip_serializing anyway
                 safekeepers: self.safekeepers.clone(),
+                pageserver_templates: self.pageserver_templates.clone(),
+                safekeeper_templates: self.safekeeper_templates.clone(),
+                pending_timeline_inits: self.pending_timeline_inits.clone(),
                 control_plane_api: Some(self.control_plane_api.clone()),
                 control_plane_hooks_api: self.control_plane_hooks_api.clone(),
                 control_plane_compute_hook_api: None,
@@ -946,9 +1026,13 @@ impl LocalEnv {
         let private_key_path = PathBuf::from("auth_private_key.pem");
         let public_key_path = PathBuf::from("auth_public_key.pem");
 
-        // create the runtime type because the remaining initialization code below needs
-        // a LocalEnv instance op operation
-        // TODO: refactor to avoid this, LocalEnv should only be constructed from on-disk state
+        // No pageserver/safekeeper dirs are created at init: the
+        // PS+SK pair for a timeline is provisioned under its owning
+        // `endpoints/<name>/` folder at `endpoint create`. The init
+        // confs are kept as templates that the launcher clones (ports,
+        // `remote_storage`/`wal_yb_config`, auth) when it allocates a
+        // pageserver/safekeeper. `pageservers`/`safekeepers` start empty
+        // and are populated as endpoints are created.
         let env = LocalEnv {
             base_data_dir: base_path.clone(),
             pg_distrib_dir,
@@ -957,8 +1041,11 @@ impl LocalEnv {
             private_key_path,
             public_key_path,
             storage_controller: storage_controller.unwrap_or_default(),
-            pageservers: pageservers.iter().map(Into::into).collect(),
-            safekeepers,
+            pageservers: Vec::new(),
+            safekeepers: Vec::new(),
+            pageserver_templates: pageservers,
+            safekeeper_templates: safekeepers,
+            pending_timeline_inits: HashMap::new(),
             control_plane_api: control_plane_api.unwrap(),
             control_plane_hooks_api,
             use_local_tls,
@@ -971,24 +1058,6 @@ impl LocalEnv {
 
         // create endpoints dir
         fs::create_dir_all(env.endpoints_path())?;
-
-        // create safekeeper dirs
-        for safekeeper in &env.safekeepers {
-            fs::create_dir_all(SafekeeperNode::datadir_path_by_id(&env, safekeeper.id))?;
-            SafekeeperNode::from_env(&env, safekeeper)
-                .initialize()
-                .context("safekeeper init failed")?;
-        }
-
-        // initialize pageserver state
-        for (i, ps) in pageservers.into_iter().enumerate() {
-            let runtime_ps = &env.pageservers[i];
-            assert_eq!(&PageServerConf::from(&ps), runtime_ps);
-            fs::create_dir(env.pageserver_data_dir(ps.id))?;
-            PageServerNode::from_env(&env, runtime_ps)
-                .initialize(ps)
-                .context("pageserver init failed")?;
-        }
 
         EndpointStorage::from_env(&env)
             .init()
@@ -1134,4 +1203,141 @@ fn generate_ssl_cert(
     fs::remove_file(csr_path)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use camino_tempfile::Utf8TempDir;
+
+    fn minimal_env(base: PathBuf) -> LocalEnv {
+        LocalEnv {
+            base_data_dir: base,
+            pg_distrib_dir: PathBuf::from("/pg"),
+            neon_distrib_dir: PathBuf::from("/neon"),
+            default_tenant_id: None,
+            private_key_path: PathBuf::from("auth_private_key.pem"),
+            public_key_path: PathBuf::from("auth_public_key.pem"),
+            storage_controller: NeonStorageControllerConf::default(),
+            pageservers: Vec::new(),
+            safekeepers: Vec::new(),
+            pageserver_templates: Vec::new(),
+            safekeeper_templates: Vec::new(),
+            pending_timeline_inits: HashMap::new(),
+            endpoint_storage: EndpointStorageConf::default(),
+            control_plane_api: "http://127.0.0.1:1234/upcall/v1/".parse().unwrap(),
+            control_plane_hooks_api: None,
+            use_local_tls: false,
+        }
+    }
+
+    /// `pageserver.toml` / `identity.toml` for a provisioned pageserver
+    /// under `endpoints/<name>/pageserver/`.
+    fn write_pageserver_dir(endpoints: &Path, name: &str, id: u64, pg_port: u16) {
+        let dir = endpoints.join(name).join("pageserver");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("pageserver.toml"),
+            format!(
+                "listen_pg_addr = '127.0.0.1:{pg_port}'\n\
+                 listen_http_addr = '127.0.0.1:{}'\n\
+                 pg_auth_type = 'Trust'\n\
+                 http_auth_type = 'Trust'\n\
+                 grpc_auth_type = 'Trust'\n",
+                pg_port + 1000
+            ),
+        )
+        .unwrap();
+        fs::write(dir.join("identity.toml"), format!("id = {id}\n")).unwrap();
+    }
+
+    #[test]
+    fn data_dir_paths_are_endpoint_keyed() {
+        let base = PathBuf::from("/tmp/repo");
+        let env = minimal_env(base.clone());
+        assert_eq!(
+            env.pageserver_data_dir("main"),
+            base.join("endpoints").join("main").join("pageserver")
+        );
+        assert_eq!(
+            env.safekeeper_data_dir("ep_b1"),
+            base.join("endpoints").join("ep_b1").join("safekeeper")
+        );
+    }
+
+    #[test]
+    fn discover_pageservers_reconstructs_from_endpoint_dirs() {
+        let tmp = Utf8TempDir::new().unwrap();
+        let endpoints = tmp.path().as_std_path().join("endpoints");
+        write_pageserver_dir(&endpoints, "main", 1, 64000);
+        write_pageserver_dir(&endpoints, "ep_b1", 2, 64002);
+        // An endpoint without a pageserver/ subdir is skipped.
+        fs::create_dir_all(endpoints.join("ro").join("pgdata")).unwrap();
+
+        let mut found = LocalEnv::discover_pageservers(&endpoints).unwrap();
+        found.sort_by_key(|p| p.id.0);
+        assert_eq!(found.len(), 2);
+
+        assert_eq!(found[0].id, NodeId(1));
+        assert_eq!(found[0].listen_pg_addr, "127.0.0.1:64000");
+        assert_eq!(found[0].data_dir, endpoints.join("main").join("pageserver"));
+
+        assert_eq!(found[1].id, NodeId(2));
+        assert_eq!(found[1].data_dir, endpoints.join("ep_b1").join("pageserver"));
+    }
+
+    #[test]
+    fn discover_pageservers_errors_on_malformed_toml() {
+        let tmp = Utf8TempDir::new().unwrap();
+        let endpoints = tmp.path().as_std_path().join("endpoints");
+        let dir = endpoints.join("main").join("pageserver");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("pageserver.toml"), "this is not = valid = toml").unwrap();
+        fs::write(dir.join("identity.toml"), "id = 1\n").unwrap();
+        assert!(LocalEnv::discover_pageservers(&endpoints).is_err());
+    }
+
+    #[test]
+    fn discover_pageservers_empty_when_no_endpoints_dir() {
+        let tmp = Utf8TempDir::new().unwrap();
+        let missing = tmp.path().as_std_path().join("endpoints");
+        assert!(LocalEnv::discover_pageservers(&missing).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pending_timeline_inits_round_trip_through_config() {
+        let tmp = Utf8TempDir::new().unwrap();
+        let base = tmp.path().as_std_path().to_path_buf();
+        let mut env = minimal_env(base.clone());
+
+        let bootstrap_tl = TimelineId::generate();
+        let branch_tl = TimelineId::generate();
+        let ancestor_tl = TimelineId::generate();
+        env.pending_timeline_inits.insert(
+            bootstrap_tl,
+            PendingTimelineInit {
+                tenant_id: TenantId::generate(),
+                branch_name: "main".to_string(),
+                mode: PendingTimelineInitMode::Bootstrap {
+                    pg_version: PgMajorVersion::PG17,
+                },
+            },
+        );
+        env.pending_timeline_inits.insert(
+            branch_tl,
+            PendingTimelineInit {
+                tenant_id: TenantId::generate(),
+                branch_name: "b1".to_string(),
+                mode: PendingTimelineInitMode::Branch {
+                    ancestor_timeline_id: ancestor_tl,
+                    start_lsn: Lsn(0x1234),
+                    pg_version: PgMajorVersion::PG17,
+                },
+            },
+        );
+        env.persist_config().unwrap();
+
+        let loaded = LocalEnv::load_config(&base).unwrap();
+        assert_eq!(loaded.pending_timeline_inits, env.pending_timeline_inits);
+    }
 }

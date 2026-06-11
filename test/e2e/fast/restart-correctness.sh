@@ -68,7 +68,7 @@ fi
 echo "  ok  (total=$TOTAL, updated=$UPDATED)"
 
 step "Scan pageserver log for corruption markers introduced by the restart"
-LOG=$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log
+LOG=$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log
 MARKERS='MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP'
 HITS=$(grep -cE "$MARKERS" "$LOG" || true)
 if (( HITS > 0 )); then

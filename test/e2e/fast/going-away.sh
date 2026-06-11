@@ -52,7 +52,7 @@ step "Confirm the pageserver wrote GoingAway frames during shutdown"
 # emission is the load-bearing half of the protocol; compute
 # wire-up is exercised by libpagestore unit-level logic and the
 # C `T_NeonGoingAwayResponse` parser, both verified at build time.
-PS_LOG="$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log"
+PS_LOG="$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log"
 [[ -r $PS_LOG ]] || { echo "FAIL — pageserver log not readable at $PS_LOG"; exit 1; }
 
 FRAMES=$(grep -c "writing GoingAway frame on graceful shutdown" "$PS_LOG" || true)

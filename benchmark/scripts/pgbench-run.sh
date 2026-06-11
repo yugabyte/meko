@@ -64,7 +64,7 @@ for w in "$@"; do
 
   # Start CPU sampler (compute, via ssh) + off-box PS cpu/mem sampler (local) + pg_stat snapshot
   cpu_pid=$(start_server_cpu_sampler "$outdir/server-cpu.log")
-  ps_pid=$(start_local_proc_sampler "$outdir/ps-cpu-mem.log" "yb-pageserver -D /mnt/ps/pageserver_1")
+  ps_pid=$(start_local_proc_sampler "$outdir/ps-cpu-mem.log" "yb-pageserver -D /mnt/ps/endpoints/main/pageserver")
   snapshot_ps_metrics "$outdir/ps-metrics-start.txt"
   snapshot_pg_stat "$dbname" "$outdir/pg-stat-start.raw"
   mark_timestamp "$outdir" "START"

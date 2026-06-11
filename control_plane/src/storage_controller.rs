@@ -120,12 +120,16 @@ pub struct InspectResponse {
 impl StorageController {
     pub fn from_env(env: &LocalEnv) -> Self {
         // Assume all pageservers have symmetric auth configuration: this service
-        // expects to use one JWT token to talk to all of them.
-        let ps_conf = env
+        // expects to use one JWT token to talk to all of them. On a fresh repo
+        // no pageserver is provisioned yet, so fall back to the init template
+        // (and to Trust if there isn't even a template).
+        let http_auth_type = env
             .pageservers
             .first()
-            .expect("Config is validated to contain at least one pageserver");
-        let (private_key, public_key) = match ps_conf.http_auth_type {
+            .map(|p| p.http_auth_type)
+            .or_else(|| env.pageserver_templates.first().map(|t| t.http_auth_type))
+            .unwrap_or(AuthType::Trust);
+        let (private_key, public_key) = match http_auth_type {
             AuthType::Trust => (None, None),
             AuthType::NeonJWT => {
                 let private_key_path = env.get_private_key_path();
@@ -738,7 +742,16 @@ impl StorageController {
             args.push(format!("--control-plane-url={control_plane_hooks_api}"));
         }
 
-        if self.env.safekeepers.iter().any(|sk| sk.auth_enabled) && self.private_key.is_none() {
+        // Safekeepers aren't provisioned until `endpoint create`, so on a
+        // fresh repo `env.safekeepers` is empty; fall back to the init
+        // templates for the auth check and the per-timeline count.
+        let auth_enabled = self
+            .env
+            .safekeepers
+            .iter()
+            .chain(self.env.safekeeper_templates.iter())
+            .any(|sk| sk.auth_enabled);
+        if auth_enabled && self.private_key.is_none() {
             anyhow::bail!("Safekeeper set up for auth but no private key specified");
         }
 
@@ -746,14 +759,17 @@ impl StorageController {
             args.push("--timelines-onto-safekeepers".to_string());
         }
 
+        // Per-timeline safekeeper count: how many safekeepers each new
+        // timeline is placed on. In yb-light this is the size of the init
+        // safekeeper template set (one safekeeper per timeline), not the
+        // running total across all provisioned timelines.
+        let timeline_sk_count = self
+            .config
+            .timeline_safekeeper_count
+            .unwrap_or(self.env.safekeeper_templates.len());
         // yb_light_local is used in test environments where we often have less than 3 safekeepers.
-        if self.config.timeline_safekeeper_count.is_some() || self.env.safekeepers.len() < 3 {
-            let sk_cnt = self
-                .config
-                .timeline_safekeeper_count
-                .unwrap_or(self.env.safekeepers.len());
-
-            args.push(format!("--timeline-safekeeper-count={sk_cnt}"));
+        if self.config.timeline_safekeeper_count.is_some() || timeline_sk_count < 3 {
+            args.push(format!("--timeline-safekeeper-count={timeline_sk_count}"));
         }
 
         let envs = vec![
@@ -955,28 +971,40 @@ impl StorageController {
         Ok(response)
     }
 
-    /// Register the safekeepers in the storage controller
+    /// Register the already-provisioned safekeepers in the storage
+    /// controller. On a fresh repo this is empty — safekeepers are
+    /// provisioned at `endpoint create`, which registers each one via
+    /// [`Self::register_safekeeper`].
     #[instrument(skip(self))]
     async fn register_safekeepers(&self) -> anyhow::Result<()> {
         for sk in self.env.safekeepers.iter() {
-            let sk_id = sk.id;
-            let body = serde_json::json!({
-                "id": sk_id,
-                "created_at": "2023-10-25T09:11:25Z",
-                "updated_at": "2024-08-28T11:32:43Z",
-                "region_id": "aws-us-east-2",
-                "host": "127.0.0.1",
-                "port": sk.pg_port,
-                "http_port": sk.http_port,
-                "https_port": sk.https_port,
-                "version": 5957,
-                "availability_zone_id": format!("us-east-2b-{sk_id}"),
-            });
-            self.upsert_safekeeper(sk_id, body).await?;
-            self.safekeeper_scheduling_policy(sk_id, SkSchedulingPolicy::Active)
-                .await?;
+            self.register_safekeeper(sk).await?;
         }
         Ok(())
+    }
+
+    /// Register a single safekeeper and mark it Active. Idempotent.
+    #[instrument(skip(self, sk))]
+    pub async fn register_safekeeper(
+        &self,
+        sk: &crate::local_env::SafekeeperConf,
+    ) -> anyhow::Result<()> {
+        let sk_id = sk.id;
+        let body = serde_json::json!({
+            "id": sk_id,
+            "created_at": "2023-10-25T09:11:25Z",
+            "updated_at": "2024-08-28T11:32:43Z",
+            "region_id": "aws-us-east-2",
+            "host": "127.0.0.1",
+            "port": sk.pg_port,
+            "http_port": sk.http_port,
+            "https_port": sk.https_port,
+            "version": 5957,
+            "availability_zone_id": format!("us-east-2b-{sk_id}"),
+        });
+        self.upsert_safekeeper(sk_id, body).await?;
+        self.safekeeper_scheduling_policy(sk_id, SkSchedulingPolicy::Active)
+            .await
     }
 
     /// Call into the attach_hook API, for use before handing out attachments to pageservers

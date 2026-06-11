@@ -86,7 +86,9 @@ use pageserver_api::controller_api::ComputeEndpoint;
 use postgres_connection::parse_host_port;
 
 use crate::local_env::LocalEnv;
+use crate::pageserver::PageServerNode;
 use crate::postgresql_conf::PostgresConf;
+use crate::safekeeper::SafekeeperNode;
 use crate::storage_controller::StorageController;
 
 // contents of a endpoint.json file
@@ -1171,10 +1173,18 @@ impl Endpoint {
         mode: EndpointTerminateMode,
         destroy: bool,
     ) -> Result<TerminateResponse> {
+        // An endpoint that was created but never started has no pgdata and
+        // no compute to stop — skip straight to teardown (used by `endpoint
+        // stop --destroy` for cleanup of a create-but-never-started
+        // endpoint, e.g. a co-located pair provisioned at `endpoint create`).
+        let started = self.pgdata().exists();
+
         // pg_ctl stop is fast but doesn't allow us to collect LSN. /terminate is
         // slow, and test runs time out. Solution: special mode "immediate-terminate"
         // which uses /terminate
-        let response = if let EndpointTerminateMode::ImmediateTerminate = mode {
+        let response = if !started {
+            TerminateResponse { lsn: None }
+        } else if let EndpointTerminateMode::ImmediateTerminate = mode {
             let ip = self.external_http_address.ip();
             let port = self.external_http_address.port();
             let url = format!("http://{ip}:{port}/terminate?mode=immediate");
@@ -1196,13 +1206,22 @@ impl Endpoint {
         // waiting. Sometimes we do *not* want this cleanup: tests intentionally
         // do stop when majority of safekeepers is down, so sync-safekeepers
         // would hang otherwise. This could be a separate flag though.
-        let send_sigterm = destroy || !matches!(mode, EndpointTerminateMode::Fast);
-        self.wait_for_compute_ctl_to_exit(send_sigterm)?;
+        if started {
+            let send_sigterm = destroy || !matches!(mode, EndpointTerminateMode::Fast);
+            self.wait_for_compute_ctl_to_exit(send_sigterm)?;
+        }
         if destroy {
             println!(
                 "Destroying postgres data directory '{}'",
                 self.pgdata().to_str().unwrap()
             );
+            // If this endpoint owns a co-located pageserver+safekeeper
+            // (it was the first endpoint created for its timeline), tear
+            // them down before removing the folder, and drop the
+            // safekeeper from the persisted config. v1 semantics: stop the
+            // processes and remove the dir — no cascade / refusal when a
+            // sibling endpoint still references the timeline.
+            self.deprovision_colocated_storage()?;
             // Remove the local working directory if it exists. Unlike before,
             // this is just runtime state — the endpoint's durable record is the
             // row we delete below, not this directory.
@@ -1216,6 +1235,54 @@ impl Endpoint {
                 .context("deleting endpoint from storage controller")?;
         }
         Ok(response)
+    }
+
+    /// Stop the pageserver and safekeeper co-located under this endpoint's
+    /// folder (if any) and drop the safekeeper from the persisted config.
+    /// The pageserver leaves no config trace — it is discovered from its
+    /// `pageserver/` subdir, which the caller removes with the folder.
+    fn deprovision_colocated_storage(&self) -> Result<()> {
+        let endpoint_path = self.endpoint_path();
+
+        // Pageserver: the one whose datadir lives under this endpoint.
+        for ps_conf in &self.env.pageservers {
+            if ps_conf.data_dir.starts_with(&endpoint_path) {
+                let pageserver = PageServerNode::from_env(&self.env, ps_conf);
+                if let Err(e) = pageserver.stop(true) {
+                    eprintln!("pageserver {} stop failed: {e:#}", ps_conf.id);
+                }
+            }
+        }
+
+        // Safekeeper(s): the ones owned by this endpoint.
+        let owned_sk_ids: Vec<_> = self
+            .env
+            .safekeepers
+            .iter()
+            .filter(|sk| sk.endpoint_id == self.endpoint_id)
+            .map(|sk| sk.id)
+            .collect();
+        for sk_conf in self
+            .env
+            .safekeepers
+            .iter()
+            .filter(|sk| owned_sk_ids.contains(&sk.id))
+        {
+            let safekeeper = SafekeeperNode::from_env(&self.env, sk_conf);
+            if let Err(e) = safekeeper.stop(true) {
+                eprintln!("safekeeper {} stop failed: {e:#}", sk_conf.id);
+            }
+        }
+
+        if !owned_sk_ids.is_empty() {
+            let mut env = self.env.clone();
+            env.safekeepers
+                .retain(|sk| !owned_sk_ids.contains(&sk.id));
+            env.persist_config()
+                .context("persist config after dropping co-located safekeeper")?;
+        }
+
+        Ok(())
     }
 
     pub async fn refresh_configuration(&self) -> Result<()> {

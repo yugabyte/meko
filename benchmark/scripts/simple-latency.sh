@@ -77,7 +77,7 @@ for t in "${tests[@]}"; do
   # Per-test CPU + disk-IO sampler + off-box PS cpu/mem sampler (local on this box).
   cpu_pid=$(start_server_cpu_sampler "$outdir/${t}-server-cpu.log")
   io_pid=$(start_server_io_sampler  "$outdir/${t}-server-io.log" nvme1n1)
-  ps_pid=$(start_local_proc_sampler "$outdir/${t}-ps-cpu-mem.log" "yb-pageserver -D /mnt/ps/pageserver_1")
+  ps_pid=$(start_local_proc_sampler "$outdir/${t}-ps-cpu-mem.log" "yb-pageserver -D /mnt/ps/endpoints/main/pageserver")
 
   # Warmup (5 s, discarded).
   $PGBENCH -n -c 1 -j 1 -T 5 -f "$sql" -d $DBNAME -h $PGHOST -p $PGPORT -U $PGUSER \

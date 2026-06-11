@@ -51,3 +51,6 @@ endpoint_storage.workspace = true
 compute_api.workspace = true
 workspace_hack.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+camino-tempfile.workspace = true

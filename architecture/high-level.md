@@ -82,9 +82,9 @@ key the pageserver/safekeeper use. In YB the path is split across the
 | Safekeeper live WAL | YB `yb_storage.wals` | `((tenant_id, timeline_id) HASH, segno, chunk_offset)` |
 | Storage controller relational state | YB `yb_storage` DB, `storage_controller` schema | 8 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
 | Compute endpoint registry | YB `yb_storage` DB, `storage_controller.endpoints` | one row per endpoint: endpoint_id, tenant_id, timeline_id + opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `endpoint.json` folder |
-| Pageserver local layer cache | local FS | `.yb_light/pageserver_*/tenants/.../timelines/.../<layer>` |
-| Safekeeper local FS | local FS | `.yb_light/safekeepers/sk*/` — only logs + pidfile (no WAL, no control file, no id) |
-| Compute `pgdata` + runtime | local FS | `.yb_light/endpoints/main/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on start, removed on destroy |
+| Pageserver local FS | local FS | `.yb_light/endpoints/<endpoint>/pageserver/` — `pageserver.toml`, `identity.toml`, `metadata.json`, log + pidfile (no layer files; pages live in YB) |
+| Safekeeper local FS | local FS | `.yb_light/endpoints/<endpoint>/safekeeper/` — only logs + pidfile (no WAL, no control file, no id) |
+| Compute `pgdata` + runtime | local FS | `.yb_light/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`), plus the timeline's co-located `pageserver/` + `safekeeper/`; created on `endpoint create`, removed on destroy |
 
 ## What did *not* change from upstream Neon
 
@@ -110,8 +110,11 @@ These subsystems run unmodified upstream Neon code in yb-light:
 ## Topology in our current dev cluster
 
 Single host, single YB instance, one pageserver + one safekeeper **per
-timeline** (the main timeline's pair comes up with `tenant create`;
-`timeline branch` provisions a dedicated pair for each branch).
+timeline**, co-located under the endpoint that owns the timeline. The
+pair is provisioned at `endpoint create` — `tenant create` and `timeline
+branch` only record the timeline (ids, branch mapping, pending init);
+the PS+SK processes come up under `endpoints/<endpoint>/{pageserver,
+safekeeper}` when the first endpoint for that timeline is created.
 
 ```
 yugabyted                       :7100 (master), :5433 (ysql)

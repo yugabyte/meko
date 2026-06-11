@@ -455,15 +455,17 @@ universes through a TLS-bridging proxy.
 ## What's on local FS after all changes (YB-backed mode)
 
 ```
-<workdir>/safekeepers/sk<id>/
+<workdir>/endpoints/<endpoint_id>/safekeeper/
 ├── safekeeper-N.log          (rolling log — operational)
 ├── safekeeper.pid            (running-process lock)
 └── <tenant>/<timeline>/
     └── (empty — no control file, no segments, no .partial file)
 ```
 
-Delete the entire `<workdir>` and the safekeeper rebuilds from YB on next
-start. Logs and pidfile are recreated.
+The safekeeper is co-located under the endpoint that owns its timeline
+(provisioned at `endpoint create`). Delete the entire
+`endpoints/<endpoint_id>/safekeeper` dir and the safekeeper rebuilds from
+YB on next start. Logs and pidfile are recreated.
 
 ## Run / configure
 

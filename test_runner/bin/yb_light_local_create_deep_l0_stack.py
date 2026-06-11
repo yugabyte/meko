@@ -10,7 +10,7 @@ The last line of this bash snippet will run this file here.
  $NEON_BIN_DIR/yb_light_local stop
  rm -rf $YB_LIGHT_REPO_DIR
  $NEON_BIN_DIR/yb_light_local init
- cat >>  $YB_LIGHT_REPO_DIR/pageserver_1/pageserver.toml <<"EOF"
+ cat >>  $YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.toml <<"EOF"
  # customizations
  virtual_file_io_mode = "direct-rw"
  page_service_pipelining={mode="pipelined", max_batch_size=32, execution="concurrent-futures"}
@@ -19,7 +19,7 @@ EOF
  $NEON_BIN_DIR/yb_light_local start
 
  psql 'postgresql://localhost:1235/storage_controller' -c 'DELETE FROM tenant_shards'
- sed 's/.*get_vectored_concurrent_io.*/get_vectored_concurrent_io={mode="sidecar-task"}/' -i $YB_LIGHT_REPO_DIR/pageserver_1/pageserver.toml
+ sed 's/.*get_vectored_concurrent_io.*/get_vectored_concurrent_io={mode="sidecar-task"}/' -i $YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.toml
  $NEON_BIN_DIR/yb_light_local pageserver restart
  sleep 2
  $NEON_BIN_DIR/yb_light_local tenant create --set-default

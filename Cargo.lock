@@ -814,6 +814,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "camino",
+ "camino-tempfile",
  "clap",
  "comfy-table",
  "compute_api",

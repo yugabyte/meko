@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# End-to-end verification of the per-endpoint pageserver/safekeeper
-# topology: `timeline branch` provisions a NEW pageserver + safekeeper
-# pair for the branch, and the branch endpoint serves
+# End-to-end verification of the co-located pageserver/safekeeper
+# topology: a branch gets a NEW pageserver + safekeeper pair, provisioned
+# under the branch's endpoint at `endpoint create` (not at `timeline
+# branch`), and the branch endpoint serves
 #
 #   1. pre-branch-point data — via lineage-aware reads against the
 #      ANCESTOR's rows in YB (nothing is copied at branch time), and
@@ -37,13 +38,13 @@ SQL
 PRE_COUNT=$(psql_main -c "SELECT count(*) FROM branch_seed")
 [[ $PRE_COUNT == 1000 ]] || { echo "FAIL — seed count $PRE_COUNT != 1000"; exit 1; }
 
-step "Create branch b1 (provisions pageserver 2 + safekeeper 2)"
+step "Create branch b1 (records the branch point; PS/SK come up at endpoint create)"
 "$NEON" timeline branch --tenant-id "$TID" --branch-name b1
 
 step "Write post-branch data on main (must NOT be visible on b1)"
 psql_main -c "INSERT INTO branch_seed SELECT g, 'post-branch-main-' || g FROM generate_series(1001, 1100) g" >/dev/null
 
-step "Create + start endpoint on b1"
+step "Create + start endpoint on b1 (provisions pageserver 2 + safekeeper 2)"
 "$NEON" endpoint create ep_b1 --tenant-id "$TID" --branch-name b1 \
     --pg-version 17 --pg-port "$BRANCH_PG_PORT" >/dev/null
 "$NEON" endpoint start ep_b1 >/dev/null

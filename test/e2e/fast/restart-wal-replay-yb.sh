@@ -120,16 +120,16 @@ if [[ -z $last_record_lsn || $last_record_lsn == "0/0" ]]; then
     echo "FAIL — PS last_record_lsn never advanced past $ts_start_lsn within ${PS_HTTP_TIMEOUT}s"
     echo
     echo "  --- pageserver log tail ---"
-    tail -n 80 "$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log" 2>/dev/null || true
+    tail -n 80 "$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log" 2>/dev/null || true
     echo
     echo "  --- safekeeper log tail ---"
-    tail -n 80 "$YB_LIGHT_REPO_DIR/safekeepers/sk1/safekeeper-1.log" 2>/dev/null || true
+    tail -n 80 "$YB_LIGHT_REPO_DIR/endpoints/main/safekeeper/safekeeper-1.log" 2>/dev/null || true
     exit 1
 fi
 echo "  ok — PS last_record_lsn advanced to $last_record_lsn (start was $ts_start_lsn)"
 
 step "Scan logs for catch-up failure markers"
-LOG=$YB_LIGHT_REPO_DIR/pageserver_1/pageserver.log
+LOG=$YB_LIGHT_REPO_DIR/endpoints/main/pageserver/pageserver.log
 [[ -r $LOG ]] || { echo "FAIL — pageserver log not readable at $LOG"; exit 1; }
 
 WEDGE_HITS=$(grep -c "interpreted wal reader finished" "$LOG" || true)
@@ -140,7 +140,7 @@ if (( WEDGE_HITS > 5 )); then
     grep "interpreted wal reader finished" "$LOG" | tail -n 5
     echo
     echo "  --- safekeeper log tail ---"
-    tail -n 60 "$YB_LIGHT_REPO_DIR/safekeepers/sk1/safekeeper-1.log" 2>/dev/null || true
+    tail -n 60 "$YB_LIGHT_REPO_DIR/endpoints/main/safekeeper/safekeeper-1.log" 2>/dev/null || true
     echo
     echo "  --- yb_storage.wals layout (per-segno min/max/count) ---"
     PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d "$YB_DBNAME" -c \
