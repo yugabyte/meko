@@ -103,3 +103,4 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 25 | [Validate the output of `.sql` e2e tests](25_e2e-sql-output-validation.md) | ✅ done | medium | yb-pageserver |
 | 26 | [PS + SK under the endpoint folder](26_ps-sk-under-endpoint-dir.md) | ⏳ pending | medium | yb_light_local |
 | 27 | [PS cache-walk regression (`scan_range` `cache_ms`)](27_ps-cache-walk-regression.md) | ⏳ pending | high | yb-pageserver |
+| 28 | ["Catch me if you can" walredo corruption](28_walredo-corruption-catch-me-if-you-can.md) | 🚧 in_progress | highest | yb-pageserver |
