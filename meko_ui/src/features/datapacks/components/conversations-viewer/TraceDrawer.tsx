@@ -21,15 +21,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
+  Brain,
   BrainCircuit,
   ChevronDown,
   ChevronRight,
   Clock,
+  Code2,
   Cpu,
   Database,
   ExternalLink,
   Loader2,
-  Sparkles,
   Wrench,
   X,
   Zap,
@@ -44,6 +45,7 @@ import {
 } from "@/lib/mekoApi";
 import { ROUTES } from "@/app/routes/paths";
 import { parseMemoryOutput } from "./parseMemoryOutput";
+import { beautifyStatement } from "./sqlBeautify";
 import { MemoryIcon } from "@/components/conversation-telemetry";
 
 type Props = {
@@ -62,6 +64,11 @@ type Props = {
   onShimmerMemoriesDone?: () => void;
   /** mem0 row id from ?memoryId= deep-link — highlights the matching card. */
   highlightMemoryId?: string;
+  /** Langfuse observation id of a span to focus when the drawer opens
+   *  (set when "View Trace" is clicked on a Decision Trace step). The
+   *  drawer expands the span's ancestors, scrolls it into view, and
+   *  flashes it so the user lands on the query/hits for that step. */
+  focusSpanId?: string;
 };
 
 /** Which side of the drawer triggered the current hover.
@@ -82,6 +89,7 @@ export function TraceDrawer({
   shimmerMemories,
   onShimmerMemoriesDone,
   highlightMemoryId,
+  focusSpanId,
 }: Props) {
   const [spans, setSpans] = useState<DatapackTraceSpan[]>([]);
   // `langfuse_project_id` rides along on the same trace response — the
@@ -102,17 +110,29 @@ export function TraceDrawer({
   const hoveredSpanId = hover.id;
   const hoverSource = hover.source;
   const [shimmering, setShimmering] = useState(false);
+  // Tracks the message whose memories panel we've already swept, so the
+  // sweep fires only ONCE per trace. The "view trace" affordance on a
+  // memory bubble always asks for a shimmer, so without this guard the
+  // panel re-sweeps every time the same trace is reopened.
+  const shimmeredMessageIdRef = useRef<string | null>(null);
 
-  // When the parent signals a shimmer, run the sweep then report done.
+  // When the parent signals a shimmer, run the sweep then report done —
+  // but only the first time for a given message. Reopening the same trace
+  // acknowledges the request without replaying the animation.
   useEffect(() => {
     if (!shimmerMemories) return;
+    if (shimmeredMessageIdRef.current === messageId) {
+      onShimmerMemoriesDone?.();
+      return;
+    }
+    shimmeredMessageIdRef.current = messageId ?? null;
     setShimmering(true);
     const t = setTimeout(() => {
       setShimmering(false);
       onShimmerMemoriesDone?.();
     }, 1600);
     return () => clearTimeout(t);
-  }, [shimmerMemories, onShimmerMemoriesDone]);
+  }, [shimmerMemories, onShimmerMemoriesDone, messageId]);
 
   useEffect(() => {
     if (!open || !messageId) return;
@@ -173,6 +193,29 @@ export function TraceDrawer({
     const { childrenOf, roots } = buildTree(spans);
     setCollapsed(defaultCollapsedForShallowTree(childrenOf, roots));
   }, [spans]);
+
+  // Focus a specific span (from "View Trace" on a Decision Trace step):
+  // expand its ancestors so it's visible, then flash it. Declared AFTER
+  // the default-collapse effect so its ancestor-expansion wins (both run
+  // on `spans` change; React fires effects top-to-bottom).
+  const [flashSpanId, setFlashSpanId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || !focusSpanId || spans.length === 0) return;
+    const byId = Object.fromEntries(spans.map((s) => [s.id, s]));
+    if (!byId[focusSpanId]) return; // step span not in this message's window
+    setCollapsed((prev) => {
+      const next = { ...prev };
+      let parentId = byId[focusSpanId]?.parent_observation_id;
+      while (parentId && byId[parentId]) {
+        next[parentId] = false;
+        parentId = byId[parentId].parent_observation_id;
+      }
+      return next;
+    });
+    setFlashSpanId(focusSpanId);
+    const t = window.setTimeout(() => setFlashSpanId(null), 2800);
+    return () => window.clearTimeout(t);
+  }, [open, focusSpanId, spans]);
 
   /** Top-level memory spans that have output.
    *
@@ -252,6 +295,33 @@ export function TraceDrawer({
     [memorySpans],
   );
   const hasMemories = memoryItems.length > 0;
+
+  // "View execution trace" (a step's span focus) flashes ONLY the span row
+  // in the left tree — it must not flash the memory cards on the right.
+  // Memory-card flashing is reserved for the memory-targeted entry points
+  // (the `?memoryId=` deep-link and the memory bubble's "View Trace", which
+  // drive `flashMemoryId` / the panel shimmer).
+  const treeFlashSpanId = flashSpanId;
+
+  // Deep-link (`?memoryId=`) memory flash — fire ONCE per target.
+  //
+  // `highlightMemoryId` rides along on the URL and therefore stays set for
+  // the whole visit, so binding the card flash straight to it replays the
+  // animation every time the drawer is reopened. Instead we convert it into
+  // a transient `flashMemoryId` that is set once (guarded by a ref keyed on
+  // the id) and cleared after the animation. Reopening the drawer with the
+  // same id is a no-op; navigating to a new id flashes again.
+  const [flashMemoryId, setFlashMemoryId] = useState<string | null>(null);
+  const flashedMemoryIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || !highlightMemoryId || memoryItems.length === 0) return;
+    if (flashedMemoryIdRef.current === highlightMemoryId) return;
+    if (!memoryItems.some((it) => it.memoryId === highlightMemoryId)) return;
+    flashedMemoryIdRef.current = highlightMemoryId;
+    setFlashMemoryId(highlightMemoryId);
+    const t = window.setTimeout(() => setFlashMemoryId(null), 2800);
+    return () => window.clearTimeout(t);
+  }, [open, highlightMemoryId, memoryItems]);
 
   const handleHoverSpan = useCallback(
     (id: string | null, source: HoverSource) =>
@@ -374,6 +444,7 @@ export function TraceDrawer({
                       hoverSource={hoverSource}
                       activePathSpanIds={activePathSpanIds}
                       onHoverSpan={handleHoverSpan}
+                      flashSpanId={treeFlashSpanId}
                     />
                   ))}
                 </ul>
@@ -422,7 +493,7 @@ export function TraceDrawer({
                       signals={item.signals}
                       ordinal={idx + 1}
                       highlighted={hoveredSpanId === item.span.id}
-                      targeted={!!highlightMemoryId && item.memoryId === highlightMemoryId}
+                      targeted={!!flashMemoryId && item.memoryId === flashMemoryId}
                       hoverSource={hoverSource}
                       onHoverSpan={handleHoverSpan}
                     />
@@ -560,7 +631,7 @@ function MemoryCard({
       onMouseLeave={() => onHoverSpan(null, "memory")}
     >
       <div className="mb-1.5 flex items-center gap-1.5">
-        <Sparkles className="h-3 w-3 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
+        <Brain className="h-3 w-3 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
         <span className="truncate text-[11px] text-blue-700 dark:text-blue-200/70" title={span.name}>
           {`${span.name} #${ordinal}`}
         </span>
@@ -754,7 +825,58 @@ type NodeProps = {
   hoverSource: HoverSource;
   activePathSpanIds: Set<string> | null;
   onHoverSpan: (id: string | null, source: HoverSource) => void;
+  /** Span to flash + scroll into view (from "View Trace" on a step). */
+  flashSpanId: string | null;
 };
+
+/** Token usage + cost aggregated across a span subtree. */
+type SubtreeUsage = {
+  model: string;
+  input: number;
+  output: number;
+  total: number;
+  cost: number;
+  count: number;
+};
+
+/** Sum token usage and cost across the GENERATION (LLM) spans that belong
+ *  to one operation (TOOL) span like "Memory Add" / "Memory Search", whose
+ *  own row carries no usage — the LLM calls live on nested GENERATION
+ *  children. The model is taken from the first GENERATION encountered.
+ *
+ *  Attribution is to the NEAREST TOOL ancestor: the walk does not descend
+ *  into a nested child TOOL, so generations belonging to a sub-operation
+ *  are counted on that sub-operation's own row, never double-counted here.
+ *  This matches the per-operation totals computed server-side. */
+function aggregateSubtreeUsage(
+  spanId: string,
+  byId: Record<string, DatapackTraceSpan>,
+  childrenOf: Record<string, string[]>,
+): SubtreeUsage {
+  const agg: SubtreeUsage = { model: "", input: 0, output: 0, total: 0, cost: 0, count: 0 };
+  const visit = (id: string, isRoot: boolean) => {
+    const s = byId[id];
+    if (!s) return;
+    // A nested TOOL is a separate operation with its own row — don't count
+    // its LLM calls against this one.
+    if (!isRoot && s.type === "TOOL") return;
+    if (s.type === "GENERATION") {
+      const u = parseTraceUsage(s.usage);
+      if (u) {
+        agg.input += u.input ?? 0;
+        agg.output += u.output ?? 0;
+        agg.total += u.total ?? (u.input ?? 0) + (u.output ?? 0);
+        agg.count += 1;
+      }
+      const c = parseTraceCost(s.total_cost);
+      if (c !== null) agg.cost += c;
+      if (!agg.model && s.model) agg.model = s.model;
+    }
+    for (const childId of childrenOf[id] ?? []) visit(childId, false);
+  };
+  visit(spanId, true);
+  return agg;
+}
 
 function SpanTreeNode({
   spanId,
@@ -768,6 +890,7 @@ function SpanTreeNode({
   hoverSource,
   activePathSpanIds,
   onHoverSpan,
+  flashSpanId,
 }: NodeProps) {
   const span = byId[spanId];
   if (!span) return null;
@@ -779,6 +902,16 @@ function SpanTreeNode({
   const isOnActivePath = activePathSpanIds?.has(spanId) ?? false;
 
   const rowRef = useRef<HTMLDivElement>(null);
+  const isFlashing = flashSpanId === spanId;
+
+  // The DB statement this span itself executed (if any). Each span shows
+  // its OWN statement directly beneath its row — e.g. the three
+  // "Execute Query" leaves under "Knowledgebase Search" each show their
+  // own BEGIN / SELECT / ROLLBACK — rather than rolling the whole subtree
+  // up into a single consolidated list on the operation (TOOL) span.
+  const ownStatement = span.input?.trim() ?? "";
+  const hasQuery = ownStatement.length > 0;
+  const [showQuery, setShowQuery] = useState(false);
 
   // Only auto-scroll when the hover came from the memory cards. If the
   // user is moving the cursor inside the tree, scrolling this row would
@@ -793,6 +926,13 @@ function SpanTreeNode({
     }
   }, [isHovered, hoverSource]);
 
+  // "View Trace" focus: scroll the targeted span into view when it flashes.
+  useEffect(() => {
+    if (isFlashing && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [isFlashing]);
+
   // Waterfall sizing — left offset and width are percentages of the
   // total message wall time.
   const leftPct = (span.offset_ms / totalMs) * 100;
@@ -804,18 +944,41 @@ function SpanTreeNode({
   const tokenText = usage ? formatTokenUsage(usage) : null;
   const costText = totalCost !== null ? formatUsdCompact(totalCost) : null;
 
+  // Operation (TOOL) spans (e.g. "Memory Add", "Memory Search") carry no
+  // usage of their own — the LLM work that extracts entities lives on
+  // nested GENERATION children. Roll those up so the row shows the model +
+  // total tokens + cost for the whole operation. Falls back gracefully
+  // when there are no LLM calls (e.g. Knowledgebase Search).
+  const aggUsage =
+    !usage && span.type === "TOOL"
+      ? aggregateSubtreeUsage(spanId, byId, childrenOf)
+      : null;
+  const showAgg = !!aggUsage && aggUsage.count > 0;
+  const aggSuffix = showAgg
+    ? ` (sum of ${aggUsage!.count} LLM call${aggUsage!.count === 1 ? "" : "s"})`
+    : "";
+  const displayModel = span.model || (showAgg ? aggUsage!.model : "");
+  const displayTokens = tokenText || (showAgg ? formatTokenUsage(aggUsage!) : null);
+  const displayCost =
+    costText || (showAgg && aggUsage!.cost > 0 ? formatUsdCompact(aggUsage!.cost) : null);
+
   return (
     <li>
       <div
         ref={rowRef}
         className={cn(
           "group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors duration-100 cursor-default",
-          isHovered
-            ? "bg-blue-500/15 ring-1 ring-inset ring-blue-400/30"
-            : "hover:bg-muted",
-          hasHoverContext && !isOnActivePath && "opacity-45",
+          isFlashing
+            ? "border border-amber-400/80 bg-amber-500/15"
+            : isHovered
+              ? "bg-blue-500/15 ring-1 ring-inset ring-blue-400/30"
+              : "hover:bg-muted",
+          hasHoverContext && !isOnActivePath && !isFlashing && "opacity-45",
         )}
-        style={{ paddingLeft: `${depth * 14 + 6}px` }}
+        style={{
+          paddingLeft: `${depth * 14 + 6}px`,
+          ...(isFlashing ? { animation: "meko-memory-flash 0.7s ease-in-out 4" } : {}),
+        }}
         onMouseEnter={() => onHoverSpan(spanId, "tree")}
         onMouseLeave={() => onHoverSpan(null, "tree")}
       >
@@ -851,27 +1014,41 @@ function SpanTreeNode({
         </span>
 
         <div className="flex items-center gap-3 shrink-0 ml-auto">
-          {span.model ? (
-            <code className="hidden w-20 truncate text-right font-mono text-[10px] text-muted-foreground sm:inline">
-              {span.model}
+          {displayModel ? (
+            <code
+              className={cn(
+                "hidden w-20 truncate text-right font-mono text-[10px] sm:inline",
+                showAgg ? "text-muted-foreground/80 italic" : "text-muted-foreground",
+              )}
+              title={showAgg ? `Extraction model${aggSuffix}` : undefined}
+            >
+              {displayModel}
             </code>
           ) : null}
 
-          {tokenText ? (
+          {displayTokens ? (
             <span
-              className="hidden w-28 shrink-0 text-right tabular-nums text-[10px] text-muted-foreground md:inline"
-              title={`Tokens: ${tokenText}`}
+              className={cn(
+                "hidden w-28 shrink-0 text-right tabular-nums text-[10px] md:inline",
+                showAgg ? "text-muted-foreground/80 italic" : "text-muted-foreground",
+              )}
+              title={`Tokens: ${displayTokens}${aggSuffix}`}
             >
-              {tokenText}
+              {displayTokens}
             </span>
           ) : null}
 
-          {costText ? (
+          {displayCost ? (
             <span
-              className="hidden w-14 shrink-0 text-right tabular-nums text-[10px] text-emerald-600 dark:text-emerald-300/85 md:inline"
-              title={`Cost: ${costText}`}
+              className={cn(
+                "hidden w-14 shrink-0 text-right tabular-nums text-[10px] md:inline",
+                showAgg
+                  ? "text-emerald-600/80 dark:text-emerald-300/70 italic"
+                  : "text-emerald-600 dark:text-emerald-300/85",
+              )}
+              title={`Cost: ${displayCost}${aggSuffix}`}
             >
-              {costText}
+              {displayCost}
             </span>
           ) : null}
 
@@ -900,6 +1077,35 @@ function SpanTreeNode({
         />
       </div>
 
+      {/* DB statement disclosure — the SQL / Cypher statement this span
+          executed, shown directly beneath its own row. Bind params
+          (embedding vectors) are stripped backend-side, so placeholders
+          (%s / $1) are shown as-is. */}
+      {hasQuery ? (
+        <div
+          className={cn(
+            "mb-1",
+            hasHoverContext && !isOnActivePath && !isFlashing && "opacity-45",
+          )}
+          style={{ marginLeft: `${depth * 14 + 32}px`, marginRight: "12px" }}
+        >
+          <button
+            type="button"
+            onClick={() => setShowQuery((v) => !v)}
+            className="inline-flex items-center gap-1 text-[10.5px] text-muted-foreground hover:text-foreground transition-colors"
+            title="Show the statement executed in this step"
+          >
+            <Code2 className="h-3 w-3" aria-hidden />
+            {showQuery ? "Hide query" : "View query"}
+          </button>
+          {showQuery ? (
+            <pre className="mt-1 max-h-56 overflow-auto rounded-md border border-border bg-muted/50 px-2.5 py-2 font-mono text-[10.5px] leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
+              {beautifyStatement(span.name, ownStatement)}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
+
       {hasChildren && !isCollapsed ? (
         <ul>
           {children.map((childId) => (
@@ -916,6 +1122,7 @@ function SpanTreeNode({
               hoverSource={hoverSource}
               activePathSpanIds={activePathSpanIds}
               onHoverSpan={onHoverSpan}
+              flashSpanId={flashSpanId}
             />
           ))}
         </ul>

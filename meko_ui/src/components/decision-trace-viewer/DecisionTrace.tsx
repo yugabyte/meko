@@ -25,6 +25,7 @@ import {
 } from "./DecisionTraceHeader";
 import { PhaseAccordion } from "./PhaseAccordion";
 import { PlanContent } from "./PlanContent";
+import { DecisionTraceProvider } from "./decisionTraceContext";
 import {
   derivePlanAndReasoning,
   executeTagline,
@@ -39,6 +40,20 @@ export type DecisionTraceProps = {
   message: DatapackThreadMessage;
   conversationId: string;
   langfuseProjectId?: string;
+  /** Datapack context used to deep-link a step's `conversation_id` param
+   *  to the conversation viewer (new tab). Optional: when absent the id
+   *  renders as plain text. */
+  datapackName?: string;
+  datapackId?: string;
+  /** When set, a `user_id` PARAMS row renders as this email. */
+  userEmail?: string;
+  /** Enables the `conversation_id` PARAMS deep-link (WorkbenchLM only;
+   *  redundant inside the conversation viewer). */
+  enableConversationLink?: boolean;
+  /** When provided, each step's footer shows a "View Trace" button that
+   *  opens the internal trace drawer focused on that step's span (instead
+   *  of the external "Open in Langfuse" link). */
+  onViewTrace?: (spanId: string) => void;
   /** Initial expanded state. Defaults to collapsed. Set true when the
    *  card is mounted as a result of the user already having clicked to
    *  expand (e.g. WorkbenchLM's lazy live-trace fetch) so the content
@@ -50,9 +65,25 @@ export function DecisionTrace({
   message,
   conversationId,
   langfuseProjectId,
+  datapackName,
+  datapackId,
+  userEmail,
+  enableConversationLink,
+  onViewTrace,
   defaultExpanded = false,
 }: DecisionTraceProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+
+  const traceContext = useMemo(
+    () => ({
+      datapackName,
+      datapackId,
+      userEmail,
+      enableConversationLink,
+      onViewTrace,
+    }),
+    [datapackName, datapackId, userEmail, enableConversationLink, onViewTrace],
+  );
 
   const reasoningRaw = normalizeMarkdownText(message.reasoning).trim();
   const { reasoningText, planSteps } = useMemo(
@@ -143,6 +174,7 @@ export function DecisionTrace({
       </button>
 
       {expanded ? (
+        <DecisionTraceProvider value={traceContext}>
         <div className="space-y-2 border-t border-purple-500/15 px-3 py-3">
           <DecisionTraceHeader
             totalMs={message.latency_ms}
@@ -163,6 +195,8 @@ export function DecisionTrace({
             taglineFallback={preprocessTagline(phases.preprocess, memoryHits, kbHits)}
             conversationId={conversationId}
             langfuseProjectId={langfuseProjectId}
+            memoryHits={memoryHits}
+            kbHits={kbHits}
           />
 
           <PhaseAccordion
@@ -195,6 +229,7 @@ export function DecisionTrace({
             langfuseProjectId={langfuseProjectId}
           />
         </div>
+        </DecisionTraceProvider>
       ) : null}
     </div>
   );

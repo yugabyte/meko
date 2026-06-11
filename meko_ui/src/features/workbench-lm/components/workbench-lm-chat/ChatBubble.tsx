@@ -103,6 +103,9 @@ export function ChatBubble({
                 message={traceMessage}
                 conversationId={conversationId ?? ""}
                 langfuseProjectId={langfuseProjectId}
+                datapackName={datapackName ?? undefined}
+                datapackId={datapackId ?? undefined}
+                enableConversationLink
               />
             ) : canFetchLiveTrace ? (
               <LiveDecisionTrace

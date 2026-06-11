@@ -1088,6 +1088,11 @@ export type DatapackTraceSpan = {
   /** Raw output blob, populated only for memory-related spans.
    *  May be a JSON string; UI parses and surfaces the memory text. */
   output?: string;
+  /** Statement executed by a DB span — SQL for `Execute Query (...)`
+   *  spans, Cypher for `Execute Cypher Query (...)` spans. Bind params
+   *  (embedding vectors) are stripped backend-side. Empty for non-DB
+   *  spans; UI shows it in an expandable "query" disclosure. */
+  input?: string;
   /** Backend-expanded memory rows for this span with exact metrics. */
   memory_items?: Array<{
     memory_id?: string;

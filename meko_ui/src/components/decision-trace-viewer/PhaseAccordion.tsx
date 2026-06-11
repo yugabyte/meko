@@ -13,7 +13,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "@/components/markdown-message";
-import type { ProcessingStep } from "@/lib/inferenceGateway";
+import type { KbHit, MemoryHit, ProcessingStep } from "@/lib/inferenceGateway";
 import { DecisionTraceStep } from "./DecisionTraceStep";
 import { formatDuration } from "./helpers";
 
@@ -50,6 +50,8 @@ export function PhaseAccordion({
   taglineFallback,
   conversationId,
   langfuseProjectId,
+  memoryHits,
+  kbHits,
   children,
   hasContentOverride,
 }: {
@@ -62,6 +64,10 @@ export function PhaseAccordion({
   taglineFallback: string;
   conversationId: string;
   langfuseProjectId?: string;
+  /** Per-turn retrieval hits, forwarded to retrieval steps so they can
+   *  show their matched chunks/memories. */
+  memoryHits?: MemoryHit[];
+  kbHits?: KbHit[];
   /** When supplied, replaces the default reasoning + steps body.
    *  Used by the Plan phase to mount the split-source `PlanContent`. */
   children?: React.ReactNode;
@@ -138,6 +144,8 @@ export function PhaseAccordion({
                   accent={accent}
                   conversationId={conversationId}
                   langfuseProjectId={langfuseProjectId}
+                  memoryHits={memoryHits}
+                  kbHits={kbHits}
                 />
               ))}
             </>
