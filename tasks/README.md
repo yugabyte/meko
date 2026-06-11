@@ -49,6 +49,11 @@ Use one of these in the `area:` frontmatter field:
   libpagestore, communicator.
 - `yb_light_local` — local-dev orchestrator; CLI + child-process
   management.
+- `yblc` — yblight-controller: the placement-group control plane — its
+  build/packaging, init, tenancy, and endpoint provisioning (k8s/VM).
+  Design doc: [`yblight_controller/yblight-controller.md`](../yblight_controller/yblight-controller.md).
+  Distinct from `yb_light_local`, the dev-only launcher it will eventually
+  supersede.
 
 Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 
@@ -109,3 +114,8 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 31 | [Bundle runtime libs for the walredo child](31_bundle-libs-for-walredo-child.md) | ⏳ pending | high | yb_light_local |
 | 32 | [`yb-dump-pages` LSN sort uses rendered text](32_yb-dump-pages-lsn-sort.md) | ⏳ pending | medium | yb-pageserver |
 | 33 | [SK interpreted reader wedges on decode error](33_sk-interpreted-reader-decode-wedge.md) | ⏳ pending | high | safekeeper |
+| 34 | [k8s deployment mechanism for endpoints](34_k8s-endpoint-deploy.md) | ⏳ pending | high | yblc |
+| 35 | [Build & package yblc + global services](35_yblc-build-bundle.md) | ⏳ pending | high | yblc |
+| 36 | [yblight-controller init process](36_yblc-init.md) | ⏳ pending | high | yblc |
+| 37 | [First-time login: admin user + empty tenant pool](37_yblc-first-time-login.md) | ⏳ pending | medium | yblc |
+| 38 | [Create-tenant flow → PG cluster + r/w endpoint](38_yblc-create-tenant-flow.md) | ⏳ pending | high | yblc |
