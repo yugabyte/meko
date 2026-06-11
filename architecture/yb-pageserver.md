@@ -254,9 +254,19 @@ CREATE TABLE pageserver.timeline_state (
 );
 ```
 
-- `consistent_lsn` — highest LSN durably present in `pageserver.pages`/
-  `slru_pages`/`meta`. Advances on every successful `PageWriter::flush`.
-  Drives both safekeeper WAL truncation and ingest resume on restart.
+- `consistent_lsn` — durability *frontier*: every row at lsn ≤ this is
+  durably present in `pageserver.pages`/`slru_pages`/`meta`. Advances on
+  successful `PageWriter::flush` to the **ingest frontier** — the
+  highest record `finish_write` had noted *before* the flush snapshot
+  was taken (a noted record's rows are all buffered by then, so the
+  snapshot provably contains every unflushed row ≤ frontier). It is
+  NOT max(lsn) of the flushed rows: the snapshot races concurrent puts
+  and can hold a row at lsn X while missing a sibling at lsn < X —
+  deriving the checkpoint from the max is how task 28's bug B silently
+  lost records across a crash (`flush_horizon_lsn`, the materialiser's
+  durable-read bound, follows the same frontier rule for the same
+  reason). Drives both safekeeper WAL truncation and ingest resume on
+  restart.
   `last_record_lsn` is intentionally not persisted — on restart, the
   walreceiver streams from `consistent_lsn` forward and the
   in-memory value re-derives within seconds.

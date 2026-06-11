@@ -29,16 +29,21 @@ release line, not this corruption); [task 23 — SK kill-9 WAL hole](23_sk-kill9
 
 # yb-neon walredo corruption — collected evidence
 
-Last updated: 2026-06-11 (night). Root cause found AND fixed for the
-zero-image shadowing (bug A): crash-replay rel-size cache pin → gap-fill
-writes zero-page images over live tail blocks (see "ROOT CAUSE FOUND").
-Fixes landed: unconditional cache advance (`rel_extend_plan`) + exclusive
-pre-record reads (`get_committed_before` / `Version::at(lsn-1)`); e2e
-regression `restart_relsize_zero_shadow` green 10/10 under SIGKILL.
-Still open: bug B (single-record loss when the checkpoint passes an
-unflushed row — reproduced once by the e2e scenario), a retry-healed
-transient walredo failure in the same family, and the W10 data-repair
-pass for existing zero-image landmines.
+Last updated: 2026-06-11 (late night). **Both root causes fixed.**
+Bug A (crash-replay rel-size cache pin → zero-image shadowing): fixed
+via unconditional cache advance (`rel_extend_plan`) + exclusive
+pre-record reads (`get_committed_before` / `Version::at(lsn-1)`),
+commit f8f4da82a. Bug B (checkpoint passes an unflushed row → permanent
+single-record loss; also the retry-healed transient walredo failures):
+fixed by computing `flush_horizon_lsn` and `disk_consistent_lsn` from
+the **ingest frontier** captured before the flush snapshot (highest
+`note_record_lsn`'d record — its rows are provably all in the
+snapshot) instead of max(snapshot lsns), which could include a row at
+lsn X while a sibling at lsn < X missed the snapshot. Unit test
+`watermarks_capped_at_ingest_frontier` fails pre-fix; e2e
+`restart_relsize_zero_shadow -n 10` green, restart scenarios green.
+Still open: W10 data-repair pass for existing zero-image landmines
+(plus task 33 blocking one-shot fast-suite runs).
 
 ## Update 2026-06-10 — two recorded hypotheses falsified by git
 
@@ -315,6 +320,42 @@ only partially visible/durable — same family as the
 bug B. Next: the flush/checkpoint/visibility ordering audit in
 `page_writer.rs`/`unified_pages.rs`, using this scenario with `-n` as
 the repro harness.
+
+### Update 2026-06-11 (late night) — bug B fixed: watermarks from the ingest frontier
+
+The audit landed on a one-line-shaped root cause with two symptoms.
+`PageWriter::flush` derived both `flush_horizon_lsn` (materialiser's
+durable-read bound) and the `disk_consistent_lsn` candidate from
+`max(lsn)` over the rows in the flush snapshot. But the snapshot races
+concurrent puts (sharded-map iteration), so it can capture a row at
+lsn X while missing a row at lsn < X that was put moments earlier into
+an already-visited shard. Consequences:
+
+- checkpoint > missed row → crash in the window → replay starts above
+  it → **permanent single-record loss** (the e2e-caught missing btree
+  insert; the W10 lp35/lp37/lp5 cases; the lost size-key write behind
+  the residual zero-fill burst);
+- horizon > missed row → materialiser walks a "durable" chain with a
+  hole → the retry-healed `failed to add new item` transient and the
+  `unified_pages.rs:441` durability-invariant panics.
+
+Fix: capture the **ingest frontier** — the highest record
+`note_record_lsn`'d by `Timeline::finish_write` — *before* taking the
+snapshot. `DatadirModification::commit` puts the whole batch before
+`finish_write`, so a noted record's rows (rel + SLRU + meta) are all
+buffered by capture time, and the snapshot provably contains every
+unflushed row ≤ frontier. After a successful write, everything ≤
+frontier is durable — that, not max(snapshot), is what both watermarks
+advance to. Records still mid-put sit above the frontier and can't be
+passed.
+
+Contract changes encoded in unit tests (page_writer): watermarks
+advance only to noted records (`watermarks_capped_at_ingest_frontier`
+— fails pre-fix), a flush with no noted records does not move the
+checkpoint at all, and the prev-record pairing now always resolves
+(the frontier IS a noted record). e2e: `restart_relsize_zero_shadow
+-n 10` clean (this scenario caught B pre-fix), restart_correctness /
+restart_wal_replay_yb / smoke / update-churn clean.
 
 ### Minor tooling notes
 

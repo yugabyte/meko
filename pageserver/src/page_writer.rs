@@ -1011,6 +1011,24 @@ impl PageWriter {
         // same buffer, or an overlapping flush silently drops fresh
         // SLRU/meta rows. See the `flush_serialize` field doc.
         let _flush_guard = self.flush_serialize.lock().await;
+        // Capture the ingest frontier BEFORE snapshotting: the highest
+        // record noted by `finish_write` (`note_record_lsn`). A noted
+        // record's rows — rel, SLRU and meta — are all in the buffers
+        // already, because `DatadirModification::commit` puts the whole
+        // batch before calling `finish_write`. The snapshots below are
+        // therefore guaranteed to contain EVERY unflushed row at
+        // lsn ≤ frontier. Rows from records still mid-put can be
+        // captured only partially (sharded-map iteration races the
+        // put), so no durability watermark may be derived from them:
+        // computing `flush_horizon_lsn` / `disk_consistent_lsn` from
+        // max(snapshot lsns) is how task 28's bug B lost rows — the
+        // checkpoint passed a row that had missed the snapshot, and
+        // replay never re-ingested it.
+        let ingest_frontier: Option<Lsn> = self
+            .record_lsn_history
+            .lock()
+            .ok()
+            .and_then(|m| m.keys().next_back().copied());
         // Snapshot. UnifiedPages snapshots the unflushed prefix
         // without removing it (rows stay visible to concurrent reads
         // during the YB round-trip — critical for walreceiver's RMW
@@ -1053,16 +1071,14 @@ impl PageWriter {
         let res = self.try_write_rows(&rel_rows, &slru_rows, &meta_rows).await;
 
         if res.is_ok() {
-            // Compute the max LSN we just durabilised across all three
-            // tables — that's the new candidate for
-            // `disk_consistent_lsn`. We compute it from the snapshot
-            // we just flushed; the buffer is unchanged at this point.
-            let max_flushed_lsn = rel_rows
-                .iter()
-                .map(|r| r.lsn.0)
-                .chain(slru_rows.iter().map(|r| r.lsn.0))
-                .chain(meta_rows.iter().map(|r| r.lsn.0))
-                .max();
+            // Everything at lsn ≤ ingest_frontier is now durable: rows
+            // ≤ frontier were either already durable or in the
+            // snapshots we just wrote (see the frontier capture above).
+            // The frontier — NOT the max lsn of the flushed rows — is
+            // the new candidate for `flush_horizon_lsn` and
+            // `disk_consistent_lsn`: the snapshot can contain a row at
+            // lsn X while missing a concurrently-put row at lsn < X,
+            // so max(snapshot) is not a durability frontier.
             // Promote rel rows in-place: flip durable on the exact
             // `Arc<PageEntry>`s we captured in the snapshot. No
             // by-(key, lsn) lookup, so a materialiser race that
@@ -1071,16 +1087,20 @@ impl PageWriter {
             self.pages.mark_flushed(&rel_snapshot);
             self.pages.evict_to_capacity();
             // Advance the materialiser's safe-to-read-from-YB watermark
-            // to the just-flushed max LSN. Until this point, YB
-            // contained a partial view of this flush's chunks
-            // (buffer_unordered dispatch order ≠ commit order) and
-            // the materialiser would have seen holes in the chain.
-            // After mark_flushed every snapshot row is durable
-            // in both cache and YB.
-            if let Some(max) = max_flushed_lsn {
+            // to the ingest frontier. Until this point, YB contained a
+            // partial view of this flush's chunks (buffer_unordered
+            // dispatch order ≠ commit order) and the materialiser
+            // would have seen holes in the chain. After mark_flushed
+            // every row ≤ frontier is durable in both cache and YB —
+            // rows above the frontier may still have unflushed
+            // same-record siblings, so the horizon must not pass it
+            // (the pre-frontier horizon was the source of the
+            // transient walredo failures / unified_pages durability
+            // invariant panics in task 28).
+            if let Some(frontier) = ingest_frontier {
                 let cur = self.flush_horizon_lsn.load(Ordering::Relaxed);
-                if max > cur {
-                    self.flush_horizon_lsn.store(max, Ordering::Relaxed);
+                if frontier.0 > cur {
+                    self.flush_horizon_lsn.store(frontier.0, Ordering::Relaxed);
                 }
             }
             // Materialiser trigger fires here, not from `put`. The
@@ -1195,12 +1215,12 @@ impl PageWriter {
             // a missed UPDATE just means the next flush retries; SK
             // still has the WAL because the timeline row's persisted
             // dc_lsn hasn't moved.
-            if let Some(new_lsn) = max_flushed_lsn {
+            if let Some(new_lsn) = ingest_frontier.map(|l| l.0) {
                 use std::sync::atomic::Ordering::Relaxed;
                 // Always advance `consistent_lsn_observed` — that's the
-                // "max durable in YB pages/slru/meta" tracker. The
-                // throttle below only gates the YB UPDATE on the
-                // timeline row, not the underlying durability.
+                // "everything ≤ this is durable in YB pages/slru/meta"
+                // tracker. The throttle below only gates the YB UPDATE
+                // on the timeline row, not the underlying durability.
                 self.consistent_lsn_observed.fetch_max(new_lsn, Relaxed);
                 let prev = self.consistent_lsn_watermark.load(Relaxed);
                 let elapsed_ok = {
@@ -2805,7 +2825,7 @@ mod tests {
     /// `target_lsn ≤ horizon` by construction, which is what makes
     /// `read_chain_durable` safe.
     #[tokio::test]
-    async fn flush_horizon_advances_to_snapshot_max_lsn() {
+    async fn flush_horizon_advances_to_ingest_frontier() {
         let (store, schema) = make_store("mat_horizon").await;
         const LIMIT: u32 = 10;
         let (w, _t, _tl, _rx, _in_flight) =
@@ -2818,27 +2838,82 @@ mod tests {
             "horizon starts at zero before any flush",
         );
 
-        // Push three rows at increasing LSNs across two keys; their
-        // max is 30. After the flush, horizon = 30.
+        // Push three rows at increasing LSNs across two keys, then
+        // note the record at 30 as fully applied (walreceiver's
+        // finish_write). After the flush, horizon = the noted
+        // frontier, 30.
         w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();
         w.put(&[(k(2), Lsn(20), delta_non_init())]).await.unwrap();
         w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
+        w.note_record_lsn(Lsn(30), Lsn(20));
         w.flush().await.unwrap();
         assert_eq!(
             w.flush_horizon_lsn
                 .load(std::sync::atomic::Ordering::Relaxed),
             30,
-            "horizon advances to max(snapshot.lsn) after mark_flushed",
+            "horizon advances to the noted ingest frontier after mark_flushed",
         );
 
-        // A second flush with smaller-LSN-then-larger pushes
-        // monotonically extends the horizon.
+        // A second flush with a later noted record monotonically
+        // extends the horizon.
         w.put(&[(k(1), Lsn(40), delta_non_init())]).await.unwrap();
+        w.note_record_lsn(Lsn(40), Lsn(30));
         w.flush().await.unwrap();
         assert_eq!(
             w.flush_horizon_lsn
                 .load(std::sync::atomic::Ordering::Relaxed),
             40,
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Bug-B regression (task 28): rows at LSNs beyond the noted
+    /// ingest frontier may belong to records whose sibling rows are
+    /// still being put — the flush snapshot can capture them while
+    /// missing a lower-LSN sibling. Neither `flush_horizon_lsn` nor
+    /// the consistent_lsn may pass the frontier, even though such
+    /// rows are in the flush we just wrote. Pre-fix, both watermarks
+    /// advanced to max(snapshot.lsn) and a crash in that window lost
+    /// the missed sibling permanently (replay started above it).
+    #[tokio::test]
+    async fn watermarks_capped_at_ingest_frontier() {
+        let (store, schema) = make_store("frontier_cap").await;
+        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t, tl).await;
+
+        let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
+        w.set_consistent_lsn_slot(slot.clone());
+
+        // Record at 100 fully applied (noted); a row of the record at
+        // 200 is in the buffer but the record is NOT noted — its
+        // siblings may still be mid-put.
+        w.put(&[(k(1), Lsn(100), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(100), Lsn(90));
+        w.put(&[(k(2), Lsn(200), image())]).await.unwrap();
+        w.flush().await.unwrap();
+
+        assert_eq!(
+            w.flush_horizon_lsn
+                .load(std::sync::atomic::Ordering::Relaxed),
+            100,
+            "horizon must stop at the ingest frontier, not max(snapshot.lsn)",
+        );
+        assert_eq!(
+            slot.load(),
+            Lsn(100),
+            "consistent_lsn must stop at the ingest frontier, not max(snapshot.lsn)",
+        );
+
+        // Once the record at 200 finishes applying, the next flush
+        // moves the horizon up to it.
+        w.note_record_lsn(Lsn(200), Lsn(100));
+        w.put(&[(k(3), Lsn(210), image())]).await.unwrap();
+        w.flush().await.unwrap();
+        assert_eq!(
+            w.flush_horizon_lsn
+                .load(std::sync::atomic::Ordering::Relaxed),
+            200,
         );
 
         drop_schema(&store, &schema).await;
@@ -2901,6 +2976,7 @@ mod tests {
         for lsn in [10u64, 20, 30] {
             w.put(&[(k(1), Lsn(lsn), delta_non_init())]).await.unwrap();
         }
+        w.note_record_lsn(Lsn(30), Lsn(20));
         w.flush().await.unwrap();
         assert!(
             rx.try_recv().is_err(),
@@ -2995,10 +3071,11 @@ mod tests {
         w.put(&[(k(1), Lsn(0x100), image())]).await.unwrap();
         w.put(&[(k(2), Lsn(0x200), image())]).await.unwrap();
         w.put(&[(k(3), Lsn(0x300), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(0x300), Lsn(0x200));
         assert_eq!(
             slot.load(),
             Lsn(0),
-            "consistent_lsn slot must not advance on put alone"
+            "consistent_lsn slot must not advance on put (or note) alone"
         );
 
         // After a real flush, the slot reaches the max successfully
@@ -3034,8 +3111,10 @@ mod tests {
         // Slot is zero before any flush.
         assert_eq!(slot.load(), Lsn(0));
 
-        // One image at Lsn(42). After flush the slot must reflect it.
+        // One image at Lsn(42), record noted as applied. After flush
+        // the slot must reflect the noted frontier.
         w.put(&[(k(1), Lsn(42), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(42), Lsn(40));
         w.flush().await.unwrap();
         assert_eq!(
             slot.load(),
@@ -3055,6 +3134,7 @@ mod tests {
         ])
         .await
         .unwrap();
+        w.note_record_lsn(Lsn(75), Lsn(60));
         // The throttle has `max_age` since the last successful upsert.
         // Default `max_age` is 5s; the first flush set the watermark,
         // and we're calling flush() again before the window elapses,
@@ -3155,23 +3235,29 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// When `note_record_lsn` hasn't run for the flush's max lsn
-    /// (rare race: pages landed in the buffer before their record's
-    /// `finish_write` ran), the persisted `prev_record_lsn` column
-    /// is NULL — the walreceiver re-derives prev on restart.
+    /// When `note_record_lsn` hasn't run at all (rows landed in the
+    /// buffer but no record has finished applying), there is no
+    /// durability frontier and the flush must not advance the
+    /// checkpoint: rows in the snapshot may have same-record siblings
+    /// that are still being put, and a checkpoint past them is how
+    /// task 28's bug B lost records across a crash.
     #[tokio::test]
-    async fn flush_writes_null_prev_when_not_noted() {
+    async fn flush_without_noted_record_does_not_advance_consistent_lsn() {
         let (store, schema) = make_store("flush_null_prev").await;
         let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
         seed_timeline_row(&store, t, tl).await;
+        let seeded = store.get_timeline(t, tl).await.unwrap().unwrap();
 
         // Deliberately skip note_record_lsn.
         w.put(&[(k(1), Lsn(42), image())]).await.unwrap();
         w.flush().await.unwrap();
 
         let row = store.get_timeline(t, tl).await.unwrap().unwrap();
-        assert_eq!(row.consistent_lsn, Lsn(42));
-        assert_eq!(row.prev_record_lsn, None);
+        assert_eq!(
+            row.consistent_lsn, seeded.consistent_lsn,
+            "no noted record => no frontier => checkpoint must not move"
+        );
+        assert_eq!(row.prev_record_lsn, seeded.prev_record_lsn);
 
         drop_schema(&store, &schema).await;
     }
@@ -3249,6 +3335,7 @@ mod tests {
         // returns `StaleGeneration` and the flush path calls
         // `shutdown_for_stale_generation`.
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(10), Lsn(8));
         w.flush().await.unwrap();
 
         // Either the token we installed got cancelled (init won the
@@ -3288,6 +3375,7 @@ mod tests {
 
         // First flush: the first upsert always goes through.
         w.put(&[(k(1), Lsn(0x100), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(0x100), Lsn(0x80));
         w.flush().await.unwrap();
         let row = store.get_timeline(t, tl).await.unwrap().unwrap();
         assert_eq!(row.consistent_lsn, Lsn(0x100));
@@ -3295,6 +3383,7 @@ mod tests {
         // Second flush within `policy.max_age`: pages durable, the
         // timeline_state UPDATE is throttled.
         w.put(&[(k(2), Lsn(0x200), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(0x200), Lsn(0x100));
         w.flush().await.unwrap();
 
         // Page row IS durable in `pages`.
