@@ -104,4 +104,4 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 26 | [PS + SK under the endpoint folder](26_ps-sk-under-endpoint-dir.md) | ✅ done | medium | yb_light_local |
 | 27 | [PS cache-walk regression (`scan_range` `cache_ms`)](27_ps-cache-walk-regression.md) | ⏳ pending | high | yb-pageserver |
 | 28 | ["Catch me if you can" walredo corruption](28_walredo-corruption-catch-me-if-you-can.md) | 🚧 in_progress | highest | yb-pageserver |
-| 29 | [Move pending-timeline init recipe into YB](29_pending-init-to-yb.md) | ⏳ pending | medium | storage_ctl / yb_light_local |
+| 29 | [Move pending-timeline init recipe into YB](29_pending-init-to-yb.md) | ✅ done | medium | storage_ctl / yb_light_local |

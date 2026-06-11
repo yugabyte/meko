@@ -86,10 +86,25 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::PgLsn;
+
+    pending_timeline_inits (tenant_id, timeline_id) {
+        tenant_id -> Varchar,
+        timeline_id -> Varchar,
+        branch_name -> Varchar,
+        pg_version -> Int4,
+        ancestor_timeline_id -> Nullable<Varchar>,
+        start_lsn -> PgLsn,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     endpoints,
     metadata_health,
     nodes,
+    pending_timeline_inits,
     safekeepers,
     tenants,
     timeline_imports,

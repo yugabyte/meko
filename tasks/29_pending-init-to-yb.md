@@ -1,11 +1,59 @@
 ---
-status: pending
+status: done
 severity: medium
 area: storage_ctl / yb_light_local
 opened: 2026-06-10
 ---
 
 # Move the pending-timeline init recipe out of local config into YB
+
+## Landed
+
+The pending init recipe now lives in YugabyteDB, not `.yb_light/config`.
+A dedicated `storage_controller.pending_timeline_inits` table (keyed by
+`(tenant_id, timeline_id)`) holds the recipe; `endpoint create` reads it
+back to materialize the PS+SK pair, then deletes the row. Chose a
+separate table (not new `timelines` columns) so the existing timeline
+create/register/safekeeper-generation logic — which assumes a row only
+exists once the PS is up with a valid `sk_set`/`generation` — is left
+untouched.
+
+Schema (Bootstrap = NULL `ancestor_timeline_id`, Branch = non-NULL):
+
+```
+pending_timeline_inits(tenant_id, timeline_id, branch_name,
+    pg_version, ancestor_timeline_id NULL, start_lsn)
+```
+
+- **Migration:** added the table to the single collapsed bootstrap
+  migration (`00000000000001_initial_schema/{up,down}.sql`) and
+  `schema.rs` (per [task 10](10_collapse-storage_ctl-diesel-migrations.md)).
+- **Persistence:** `PendingTimelineInitPersistence` +
+  `insert_pending_timeline_init` (idempotent upsert),
+  `list_pending_timeline_inits_for_tenant`, `delete_pending_timeline_init`.
+- **HTTP API (`/control/v1`):** `POST …/timeline/:id/pending_init`,
+  `GET …/tenant/:id/pending_timeline_inits`,
+  `DELETE …/timeline/:id/pending_init`; wire types
+  `PendingTimelineInitRequest` / `PendingTimelineInit` in
+  `controller_api`; client methods on `control_plane::StorageController`.
+- **`control_plane` rewiring:** `tenant create` / `timeline branch`
+  record the recipe in the SC instead of `env.pending_timeline_inits`;
+  `endpoint create` resolves an unprovisioned branch and reads the recipe
+  from the SC; `provision_timeline_for_endpoint` deletes the pending row
+  via the SC after registering the branch mapping. Deleted
+  `PendingTimelineInit` / `PendingTimelineInitMode` and the
+  `pending_timeline_inits` field from `LocalEnv` / `OnDiskConfig`, plus
+  its round-trip unit test.
+
+The deferred branch-mapping registration in `provision_timeline_for_endpoint`
+was kept as-is (the pending row carries the branch name only until the
+timeline is materialized); the optional simplification noted below was
+left out to keep the change focused.
+
+Verified: `cargo test -p control_plane` + full-workspace build, then
+`test/e2e/run.sh fast` (PASS — `branch-endpoint.sh` and `layout.sh`
+exercise the create/branch/endpoint lifecycle this rewires, against real
+YugabyteDB).
 
 ## Goal
 

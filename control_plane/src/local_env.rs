@@ -19,7 +19,6 @@ use safekeeper_api::PgMajorVersion;
 use serde::{Deserialize, Serialize};
 use utils::auth::encode_from_key_file;
 use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
-use utils::lsn::Lsn;
 
 use crate::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage};
 
@@ -87,12 +86,6 @@ pub struct LocalEnv {
     /// clones for the first/main safekeeper.
     pub safekeeper_templates: Vec<SafekeeperConf>,
 
-    /// Timelines whose ids/branch-mapping have been allocated (at
-    /// `tenant create` / `timeline branch`) but whose PS+SK have not been
-    /// provisioned yet. `endpoint create` consumes the entry to know how
-    /// to bring the pair up, then clears it.
-    pub pending_timeline_inits: HashMap<TimelineId, PendingTimelineInit>,
-
     pub endpoint_storage: EndpointStorageConf,
 
     // Control plane upcall API for pageserver: if None, we will not run storage_controller  If set, this will
@@ -126,7 +119,6 @@ pub struct OnDiskConfig {
     pub safekeepers: Vec<SafekeeperConf>,
     pub pageserver_templates: Vec<YbLightLocalInitPageserverConf>,
     pub safekeeper_templates: Vec<SafekeeperConf>,
-    pub pending_timeline_inits: HashMap<TimelineId, PendingTimelineInit>,
     pub endpoint_storage: EndpointStorageConf,
     pub control_plane_api: Option<Url>,
     pub control_plane_hooks_api: Option<Url>,
@@ -135,37 +127,6 @@ pub struct OnDiskConfig {
     // to load new config file. May be removed after this field is in release branch.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub use_local_tls: bool,
-}
-
-/// A timeline whose ids + branch name are allocated (at `tenant create` /
-/// `timeline branch`) but whose pageserver+safekeeper haven't been
-/// provisioned yet. Recorded keyed by timeline id, consumed and cleared by
-/// `endpoint create`. The branch-name mapping is registered with the
-/// storage controller only after provisioning (the controller validates
-/// the timeline exists), so it is held here in the meantime — that's why
-/// `endpoint create` resolves a branch to its timeline from these entries
-/// when the controller doesn't know it yet.
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-pub struct PendingTimelineInit {
-    pub tenant_id: TenantId,
-    pub branch_name: String,
-    pub mode: PendingTimelineInitMode,
-}
-
-/// How `endpoint create` should bring a pending timeline's pair up.
-#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
-pub enum PendingTimelineInitMode {
-    /// The tenant's initial timeline: the pageserver bootstraps it
-    /// (initdb + import) on first start.
-    Bootstrap { pg_version: PgMajorVersion },
-    /// A branch off `ancestor_timeline_id` at `start_lsn`. The safekeeper
-    /// is created at `start_lsn`; the pageserver builds its read lineage
-    /// from the ancestor links.
-    Branch {
-        ancestor_timeline_id: TimelineId,
-        start_lsn: Lsn,
-        pg_version: PgMajorVersion,
-    },
 }
 
 fn fail_if_pageservers_field_specified<'de, D>(_: D) -> Result<Vec<PageServerConf>, D::Error>
@@ -740,7 +701,6 @@ impl LocalEnv {
                 safekeepers,
                 pageserver_templates,
                 safekeeper_templates,
-                pending_timeline_inits,
                 control_plane_api,
                 control_plane_hooks_api,
                 control_plane_compute_hook_api: _,
@@ -759,7 +719,6 @@ impl LocalEnv {
                 safekeepers,
                 pageserver_templates,
                 safekeeper_templates,
-                pending_timeline_inits,
                 control_plane_api: control_plane_api.unwrap(),
                 control_plane_hooks_api,
                 use_local_tls,
@@ -881,7 +840,6 @@ impl LocalEnv {
                 safekeepers: self.safekeepers.clone(),
                 pageserver_templates: self.pageserver_templates.clone(),
                 safekeeper_templates: self.safekeeper_templates.clone(),
-                pending_timeline_inits: self.pending_timeline_inits.clone(),
                 control_plane_api: Some(self.control_plane_api.clone()),
                 control_plane_hooks_api: self.control_plane_hooks_api.clone(),
                 control_plane_compute_hook_api: None,
@@ -1045,7 +1003,6 @@ impl LocalEnv {
             safekeepers: Vec::new(),
             pageserver_templates: pageservers,
             safekeeper_templates: safekeepers,
-            pending_timeline_inits: HashMap::new(),
             control_plane_api: control_plane_api.unwrap(),
             control_plane_hooks_api,
             use_local_tls,
@@ -1223,7 +1180,6 @@ mod tests {
             safekeepers: Vec::new(),
             pageserver_templates: Vec::new(),
             safekeeper_templates: Vec::new(),
-            pending_timeline_inits: HashMap::new(),
             endpoint_storage: EndpointStorageConf::default(),
             control_plane_api: "http://127.0.0.1:1234/upcall/v1/".parse().unwrap(),
             control_plane_hooks_api: None,
@@ -1302,42 +1258,5 @@ mod tests {
         let tmp = Utf8TempDir::new().unwrap();
         let missing = tmp.path().as_std_path().join("endpoints");
         assert!(LocalEnv::discover_pageservers(&missing).unwrap().is_empty());
-    }
-
-    #[test]
-    fn pending_timeline_inits_round_trip_through_config() {
-        let tmp = Utf8TempDir::new().unwrap();
-        let base = tmp.path().as_std_path().to_path_buf();
-        let mut env = minimal_env(base.clone());
-
-        let bootstrap_tl = TimelineId::generate();
-        let branch_tl = TimelineId::generate();
-        let ancestor_tl = TimelineId::generate();
-        env.pending_timeline_inits.insert(
-            bootstrap_tl,
-            PendingTimelineInit {
-                tenant_id: TenantId::generate(),
-                branch_name: "main".to_string(),
-                mode: PendingTimelineInitMode::Bootstrap {
-                    pg_version: PgMajorVersion::PG17,
-                },
-            },
-        );
-        env.pending_timeline_inits.insert(
-            branch_tl,
-            PendingTimelineInit {
-                tenant_id: TenantId::generate(),
-                branch_name: "b1".to_string(),
-                mode: PendingTimelineInitMode::Branch {
-                    ancestor_timeline_id: ancestor_tl,
-                    start_lsn: Lsn(0x1234),
-                    pg_version: PgMajorVersion::PG17,
-                },
-            },
-        );
-        env.persist_config().unwrap();
-
-        let loaded = LocalEnv::load_config(&base).unwrap();
-        assert_eq!(loaded.pending_timeline_inits, env.pending_timeline_inits);
     }
 }

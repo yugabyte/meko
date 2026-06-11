@@ -19,7 +19,8 @@ use metrics::{BuildInfo, NeonMetrics};
 use pageserver_api::controller_api::{
     ComputeEndpoint, MetadataHealthListOutdatedRequest, MetadataHealthListOutdatedResponse,
     MetadataHealthListUnhealthyResponse, MetadataHealthUpdateRequest, MetadataHealthUpdateResponse,
-    NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, SafekeeperSchedulingPolicyRequest,
+    NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, PendingTimelineInitRequest,
+    SafekeeperSchedulingPolicyRequest,
     SetTimelineBranchNameRequest, TenantCreateRequest,
     TenantPolicyRequest, TimelineBranchName, TimelineImportRequest,
  TimelineRegisterRequest,
@@ -672,6 +673,46 @@ async fn handle_list_timeline_branch_names(
     check_permissions(&req, Scope::Admin)?;
     let names: Vec<TimelineBranchName> = service.list_timeline_branch_names().await?;
     json_response(StatusCode::OK, names)
+}
+
+async fn handle_record_pending_timeline_init(
+    service: Arc<Service>,
+    req: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+
+    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let mut req = req;
+    let body = json_request::<PendingTimelineInitRequest>(&mut req).await?;
+
+    service
+        .record_pending_timeline_init(tenant_id, timeline_id, body)
+        .await?;
+    json_response(StatusCode::OK, ())
+}
+
+async fn handle_list_pending_timeline_inits(
+    service: Arc<Service>,
+    req: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let inits = service.list_pending_timeline_inits(tenant_id).await?;
+    json_response(StatusCode::OK, inits)
+}
+
+async fn handle_delete_pending_timeline_init(
+    service: Arc<Service>,
+    req: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    service
+        .delete_pending_timeline_init(tenant_id, timeline_id)
+        .await?;
+    json_response(StatusCode::OK, ())
 }
 
 async fn handle_tenant_list(
@@ -1514,6 +1555,33 @@ pub fn make_router(
                 r,
                 handle_list_timeline_branch_names,
                 RequestName("v1_list_timeline_branch_names"),
+            )
+        })
+        .post(
+            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/pending_init",
+            |r| {
+                tenant_service_handler(
+                    r,
+                    handle_record_pending_timeline_init,
+                    RequestName("v1_record_pending_timeline_init"),
+                )
+            },
+        )
+        .delete(
+            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/pending_init",
+            |r| {
+                tenant_service_handler(
+                    r,
+                    handle_delete_pending_timeline_init,
+                    RequestName("v1_delete_pending_timeline_init"),
+                )
+            },
+        )
+        .get("/control/v1/tenant/:tenant_id/pending_timeline_inits", |r| {
+            tenant_service_handler(
+                r,
+                handle_list_pending_timeline_inits,
+                RequestName("v1_list_pending_timeline_inits"),
             )
         })
         .delete("/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {

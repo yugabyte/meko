@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 /// Request/response types for the storage controller
 /// API (`/control/v1` prefix).  Implemented by the server
 /// in [`storage_controller::http`]
+use postgres_versioninfo::PgMajorVersion;
 use serde::{Deserialize, Serialize};
 use utils::id::{NodeId, ShardStripeSize, TenantId, TimelineId};
 use utils::lsn::Lsn;
@@ -613,6 +614,35 @@ pub struct TimelineBranchName {
     pub tenant_id: TenantId,
     pub timeline_id: TimelineId,
     pub branch_name: String,
+}
+
+/// Recipe for a timeline whose ids + branch name are allocated (at
+/// `tenant create` / `timeline branch`) but whose pageserver + safekeeper
+/// aren't provisioned yet. Persisted in the storage controller's
+/// `pending_timeline_inits` table and read back by `endpoint create` to
+/// materialize the pair.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PendingTimelineInitRequest {
+    pub branch_name: String,
+    pub pg_version: PgMajorVersion,
+    /// `None` => Bootstrap (the tenant's initial timeline, brought up via
+    /// initdb + import). `Some` => Branch off this ancestor at `start_lsn`.
+    pub ancestor_timeline_id: Option<TimelineId>,
+    /// Branch point. Ignored for Bootstrap — the pageserver picks the start
+    /// LSN after initdb.
+    pub start_lsn: Lsn,
+}
+
+/// A pending timeline init together with its ids, as returned by the list
+/// endpoint.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PendingTimelineInit {
+    pub tenant_id: TenantId,
+    pub timeline_id: TimelineId,
+    pub branch_name: String,
+    pub pg_version: PgMajorVersion,
+    pub ancestor_timeline_id: Option<TimelineId>,
+    pub start_lsn: Lsn,
 }
 
 #[cfg(test)]

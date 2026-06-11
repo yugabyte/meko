@@ -19,8 +19,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use nix::unistd::Pid;
 use pageserver_api::controller_api::{
     ComputeEndpoint, NodeConfigureRequest, NodeDescribeResponse, NodeRegisterRequest,
-    SafekeeperSchedulingPolicyRequest, SetTimelineBranchNameRequest, SkSchedulingPolicy,
-    TenantCreateRequest, TenantCreateResponse, TimelineBranchName,
+    PendingTimelineInit, PendingTimelineInitRequest, SafekeeperSchedulingPolicyRequest,
+    SetTimelineBranchNameRequest, SkSchedulingPolicy, TenantCreateRequest, TenantCreateResponse,
+    TimelineBranchName,
 };
 use pageserver_api::models::{
     TenantConfig, TimelineCreateRequest, TimelineInfo,
@@ -1185,6 +1186,52 @@ impl StorageController {
         self.dispatch::<(), _>(
             Method::GET,
             "control/v1/timeline_branch_names".to_string(),
+            None,
+        )
+        .await
+    }
+
+    /// Record a pending timeline init recipe (`tenant create` / `timeline
+    /// branch` allocate the ids before the PS+SK exist). Idempotent on the
+    /// (tenant, timeline) key.
+    pub async fn record_pending_timeline_init(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        req: PendingTimelineInitRequest,
+    ) -> anyhow::Result<()> {
+        self.dispatch::<_, ()>(
+            Method::POST,
+            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/pending_init"),
+            Some(req),
+        )
+        .await
+    }
+
+    /// List the pending timeline inits recorded for a tenant. Used by
+    /// `endpoint create` to resolve an unprovisioned branch and read its
+    /// materialization recipe.
+    pub async fn list_pending_timeline_inits(
+        &self,
+        tenant_id: TenantId,
+    ) -> anyhow::Result<Vec<PendingTimelineInit>> {
+        self.dispatch::<(), _>(
+            Method::GET,
+            format!("control/v1/tenant/{tenant_id}/pending_timeline_inits"),
+            None,
+        )
+        .await
+    }
+
+    /// Delete a pending timeline init after its PS+SK have been materialized.
+    pub async fn delete_pending_timeline_init(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+    ) -> anyhow::Result<()> {
+        self.dispatch::<(), ()>(
+            Method::DELETE,
+            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/pending_init"),
             None,
         )
         .await

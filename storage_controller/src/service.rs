@@ -19,6 +19,7 @@ use itertools::Itertools;
 use pageserver_api::controller_api::{
     ComputeEndpoint, MetadataHealthRecord, MetadataHealthUpdateRequest, NodeAvailability,
     NodeRegisterRequest, NodeSchedulingPolicy, NodeShard, NodeShardResponse, PlacementPolicy,
+    PendingTimelineInit, PendingTimelineInitRequest,
     ShardSchedulingPolicy,
     SkSchedulingPolicy, TenantCreateRequest, TenantCreateResponse, TenantCreateResponseShard,
     TenantDescribeResponse, TenantDescribeResponseShard, TenantLocateResponse, TenantPolicyRequest, TenantTimelineDescribeResponse,
@@ -39,6 +40,7 @@ use pageserver_api::upcall_api::{
 };
 use pageserver_client::{BlockUnblock, mgmt_api};
 use reqwest::{Certificate, StatusCode};
+use safekeeper_api::PgMajorVersion;
 use safekeeper_api::models::SafekeeperUtilization;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, instrument, warn};
@@ -59,8 +61,8 @@ use crate::node::{AvailabilityTransition, Node};
 use crate::pageserver_client::PageserverClient;
 use crate::persistence::split_state::SplitState;
 use crate::persistence::{
-    DatabaseError, MetadataHealthPersistence, Persistence, ShardGenerationState, TenantFilter,
-    TenantShardPersistence,
+    DatabaseError, MetadataHealthPersistence, PendingTimelineInitPersistence, Persistence,
+    ShardGenerationState, TenantFilter, TenantShardPersistence,
 };
 use crate::safekeeper::Safekeeper;
 use crate::scheduler::{ScheduleContext, ScheduleError, Scheduler};
@@ -3569,6 +3571,87 @@ impl Service {
             });
         }
         Ok(out)
+    }
+
+    /// Record (or overwrite) a pending timeline init recipe. `tenant create`
+    /// and `timeline branch` allocate a timeline's ids + branch name before
+    /// its pageserver + safekeeper exist; the recipe says how `endpoint
+    /// create` should later bring the pair up. Idempotent on the (tenant,
+    /// timeline) key.
+    pub(crate) async fn record_pending_timeline_init(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+        req: PendingTimelineInitRequest,
+    ) -> Result<(), ApiError> {
+        let entry = PendingTimelineInitPersistence {
+            tenant_id: tenant_id.to_string(),
+            timeline_id: timeline_id.to_string(),
+            branch_name: req.branch_name,
+            pg_version: req.pg_version.major_version_num() as i32,
+            ancestor_timeline_id: req.ancestor_timeline_id.map(|id| id.to_string()),
+            start_lsn: req.start_lsn.into(),
+        };
+        self.persistence.insert_pending_timeline_init(entry).await?;
+        Ok(())
+    }
+
+    /// List the pending timeline inits recorded for a tenant. `endpoint
+    /// create` uses this both to resolve a branch name to its (not-yet-
+    /// materialized) timeline and to read the recipe for materializing it.
+    pub(crate) async fn list_pending_timeline_inits(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<PendingTimelineInit>, ApiError> {
+        let rows = self
+            .persistence
+            .list_pending_timeline_inits_for_tenant(tenant_id)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let pg_version = PgMajorVersion::ALL
+                .iter()
+                .copied()
+                .find(|v| v.major_version_num() as i32 == r.pg_version)
+                .ok_or_else(|| {
+                    ApiError::InternalServerError(anyhow::anyhow!(
+                        "unsupported pg_version {} in pending_timeline_inits",
+                        r.pg_version
+                    ))
+                })?;
+            out.push(PendingTimelineInit {
+                tenant_id: r
+                    .tenant_id
+                    .parse()
+                    .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
+                timeline_id: r
+                    .timeline_id
+                    .parse()
+                    .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
+                branch_name: r.branch_name,
+                pg_version,
+                ancestor_timeline_id: r
+                    .ancestor_timeline_id
+                    .map(|s| s.parse())
+                    .transpose()
+                    .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
+                start_lsn: r.start_lsn.0,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Delete a pending timeline init once its pageserver + safekeeper have
+    /// been materialized. No-op if the row is already gone.
+    pub(crate) async fn delete_pending_timeline_init(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+    ) -> Result<(), ApiError> {
+        self.persistence
+            .delete_pending_timeline_init(tenant_id, timeline_id)
+            .await?;
+        Ok(())
     }
 
     /// limit & offset are pagination parameters. Since we are walking an in-memory HashMap, `offset` does not

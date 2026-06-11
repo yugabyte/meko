@@ -126,6 +126,9 @@ pub(crate) enum DatabaseOperation {
     InsertTimeline,
     UpdateTimeline,
     GetTimeline,
+    InsertPendingTimelineInit,
+    ListPendingTimelineInits,
+    DeletePendingTimelineInit,
     InsertTimelineImport,
     UpdateTimelineImport,
     DeleteTimelineImport,
@@ -1463,6 +1466,78 @@ impl Persistence {
         .await
     }
 
+    /// Record (or overwrite) a pending timeline init recipe. Idempotent on
+    /// the `(tenant_id, timeline_id)` key — re-recording the same timeline
+    /// replaces the recipe.
+    pub(crate) async fn insert_pending_timeline_init(
+        &self,
+        entry: PendingTimelineInitPersistence,
+    ) -> DatabaseResult<()> {
+        use crate::schema::pending_timeline_inits;
+
+        let entry = &entry;
+        self.with_measured_conn(DatabaseOperation::InsertPendingTimelineInit, move |conn| {
+            Box::pin(async move {
+                diesel::insert_into(pending_timeline_inits::table)
+                    .values(entry)
+                    .on_conflict((
+                        pending_timeline_inits::tenant_id,
+                        pending_timeline_inits::timeline_id,
+                    ))
+                    .do_update()
+                    .set(entry)
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Load every pending timeline init recorded for a tenant.
+    pub(crate) async fn list_pending_timeline_inits_for_tenant(
+        &self,
+        tenant_id: TenantId,
+    ) -> DatabaseResult<Vec<PendingTimelineInitPersistence>> {
+        use crate::schema::pending_timeline_inits::dsl;
+
+        let tenant_id = &tenant_id;
+        self.with_measured_conn(DatabaseOperation::ListPendingTimelineInits, move |conn| {
+            Box::pin(async move {
+                let rows: Vec<PendingTimelineInitPersistence> = dsl::pending_timeline_inits
+                    .filter(dsl::tenant_id.eq(&tenant_id.to_string()))
+                    .load(conn)
+                    .await?;
+                Ok(rows)
+            })
+        })
+        .await
+    }
+
+    /// Delete a pending timeline init once its pageserver + safekeeper have
+    /// been materialized. No-op if the row is already gone.
+    pub(crate) async fn delete_pending_timeline_init(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+    ) -> DatabaseResult<()> {
+        use crate::schema::pending_timeline_inits::dsl;
+
+        let tenant_id = &tenant_id;
+        let timeline_id = &timeline_id;
+        self.with_measured_conn(DatabaseOperation::DeletePendingTimelineInit, move |conn| {
+            Box::pin(async move {
+                diesel::delete(dsl::pending_timeline_inits)
+                    .filter(dsl::tenant_id.eq(&tenant_id.to_string()))
+                    .filter(dsl::timeline_id.eq(&timeline_id.to_string()))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
     pub(crate) async fn insert_timeline_import(
         &self,
         import: TimelineImportPersistence,
@@ -2165,6 +2240,25 @@ pub(crate) struct TimelinePersistence {
     pub(crate) sk_set: Vec<i64>,
     pub(crate) deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) branch_name: Option<String>,
+}
+
+/// The init recipe for a timeline whose ids + branch name are allocated
+/// (at `tenant create` / `timeline branch`) but whose pageserver +
+/// safekeeper aren't provisioned yet. `endpoint create` reads it back to
+/// materialize the pair, then deletes the row. A NULL `ancestor_timeline_id`
+/// marks a Bootstrap recipe; a non-NULL one marks a Branch off that
+/// ancestor at `start_lsn`. `treat_none_as_null` so re-recording overwrites
+/// the ancestor column rather than leaving a stale value.
+#[derive(Insertable, AsChangeset, Queryable, Selectable, Clone)]
+#[diesel(table_name = crate::schema::pending_timeline_inits)]
+#[diesel(treat_none_as_null = true)]
+pub(crate) struct PendingTimelineInitPersistence {
+    pub(crate) tenant_id: String,
+    pub(crate) timeline_id: String,
+    pub(crate) branch_name: String,
+    pub(crate) pg_version: i32,
+    pub(crate) ancestor_timeline_id: Option<String>,
+    pub(crate) start_lsn: LsnWrapper,
 }
 
 /// This is separate from [TimelinePersistence] only because postgres allows NULLs

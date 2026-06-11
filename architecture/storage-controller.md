@@ -30,6 +30,7 @@ in the same `yb_storage` DB.
 | `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), lifecycle, scheduling policy |
 | `safekeepers` | Safekeeper identities: id, region_id, version, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
 | `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name |
+| `pending_timeline_inits` | Init recipe for a timeline whose ids + branch name are allocated (at `tenant create` / `timeline branch`) but whose PS+SK aren't provisioned yet: branch_name, pg_version, ancestor_timeline_id (NULL ⇒ Bootstrap, non-NULL ⇒ Branch), start_lsn. `endpoint create` reads it to materialize the pair, then deletes the row; driven by the `/control/v1/.../pending_init` + `/control/v1/tenant/:id/pending_timeline_inits` APIs |
 | `metadata_health` | Per-shard health markers (last successful scrub timestamps) |
 | `timeline_imports` | In-progress imports (e.g., from pg_dump) |
 | `endpoints` | Compute endpoints managed by `yb_light_local`: endpoint_id, tenant_id, timeline_id, and the opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `.yb_light/endpoints/<id>/endpoint.json` folder registry; driven by the `/control/v1/endpoint` API. |

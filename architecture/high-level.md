@@ -112,9 +112,11 @@ These subsystems run unmodified upstream Neon code in yb-light:
 Single host, single YB instance, one pageserver + one safekeeper **per
 timeline**, co-located under the endpoint that owns the timeline. The
 pair is provisioned at `endpoint create` — `tenant create` and `timeline
-branch` only record the timeline (ids, branch mapping, pending init);
+branch` only record the timeline's init recipe (ids, branch name, pending
+init) in the storage controller's `pending_timeline_inits` table in YB;
 the PS+SK processes come up under `endpoints/<endpoint>/{pageserver,
-safekeeper}` when the first endpoint for that timeline is created.
+safekeeper}` when the first endpoint for that timeline is created, which
+reads the recipe back and then deletes the pending row.
 
 ```
 yugabyted                       :7100 (master), :5433 (ysql)

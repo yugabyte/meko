@@ -82,6 +82,22 @@ CREATE TABLE storage_controller.timelines (
     PRIMARY KEY (tenant_id, timeline_id)
 );
 
+-- Init recipe for a timeline whose ids + branch name are allocated (at
+-- `tenant create` / `timeline branch`) but whose pageserver + safekeeper
+-- aren't provisioned yet. `endpoint create` reads it back to materialize
+-- the pair, then deletes the row. A NULL ancestor_timeline_id marks a
+-- Bootstrap recipe (initdb + import on first start); a non-NULL one marks
+-- a Branch off that ancestor at start_lsn.
+CREATE TABLE storage_controller.pending_timeline_inits (
+    tenant_id                   VARCHAR NOT NULL,
+    timeline_id                 VARCHAR NOT NULL,
+    branch_name                 VARCHAR NOT NULL,
+    pg_version                  INTEGER NOT NULL,
+    ancestor_timeline_id        VARCHAR,
+    start_lsn                   pg_lsn NOT NULL,
+    PRIMARY KEY (tenant_id, timeline_id)
+);
+
 -- Per-timeline import progress, shard-keyed JSON.
 CREATE TABLE storage_controller.timeline_imports (
     tenant_id      VARCHAR NOT NULL,

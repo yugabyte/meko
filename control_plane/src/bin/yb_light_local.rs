@@ -1279,22 +1279,25 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
 
             // Co-located topology: the tenant's PS+SK pair is provisioned
             // under the first endpoint created for this timeline, not here.
-            // `tenant create` just allocates the ids and records the
-            // pending Bootstrap so `endpoint create` knows to run initdb +
-            // import. The `main` branch mapping is registered with the
-            // storage controller only after the timeline exists (during
-            // provisioning) — the controller rejects a branch name for a
-            // timeline it doesn't know yet.
-            env.pending_timeline_inits.insert(
+            // `tenant create` just allocates the ids and records the pending
+            // Bootstrap recipe in the storage controller (durable cluster
+            // state in YB) so `endpoint create` knows to run initdb + import.
+            // The `main` branch mapping is registered with the controller
+            // only after the timeline exists (during provisioning) — the
+            // controller rejects a branch name for a timeline it doesn't
+            // know yet, so until then the pending row carries the name.
+            let sc = StorageController::from_env(env);
+            sc.record_pending_timeline_init(
+                tenant_id,
                 new_timeline_id,
-                local_env::PendingTimelineInit {
-                    tenant_id,
+                pageserver_api::controller_api::PendingTimelineInitRequest {
                     branch_name: DEFAULT_BRANCH_NAME.to_string(),
-                    mode: local_env::PendingTimelineInitMode::Bootstrap {
-                        pg_version: args.pg_version,
-                    },
+                    pg_version: args.pg_version,
+                    ancestor_timeline_id: None,
+                    start_lsn: Lsn(0),
                 },
-            );
+            )
+            .await?;
 
             // NB: test/e2e/run.sh extracts the tenant id from this exact
             // line (`awk '/successfully created/{print $2}'`). The
@@ -1400,20 +1403,20 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
 
             // The branch-name mapping is registered with the storage
             // controller only after the timeline exists (during
-            // provisioning); until then the pending entry carries the
-            // branch name so `endpoint create` can resolve it.
-            env.pending_timeline_inits.insert(
+            // provisioning); until then the pending row carries the branch
+            // name so `endpoint create` can resolve it.
+            let sc = StorageController::from_env(env);
+            sc.record_pending_timeline_init(
+                tenant_id,
                 new_timeline_id,
-                local_env::PendingTimelineInit {
-                    tenant_id,
+                pageserver_api::controller_api::PendingTimelineInitRequest {
                     branch_name: new_branch_name.to_string(),
-                    mode: local_env::PendingTimelineInitMode::Branch {
-                        ancestor_timeline_id,
-                        start_lsn,
-                        pg_version,
-                    },
+                    pg_version,
+                    ancestor_timeline_id: Some(ancestor_timeline_id),
+                    start_lsn,
                 },
-            );
+            )
+            .await?;
 
             println!(
                 "Created branch '{new_branch_name}' (timeline {new_timeline_id}) at {start_lsn} \
@@ -1440,34 +1443,38 @@ async fn provision_timeline_for_endpoint(
     if env.pageserver_conf_for_timeline(timeline_id).is_some() {
         return Ok(());
     }
-    let pending = env
-        .pending_timeline_inits
-        .get(&timeline_id)
-        .cloned()
-        .with_context(|| {
-            format!(
-                "timeline {timeline_id} has no provisioned pageserver and no pending init; \
-                 run `tenant create` (for the main branch) or `timeline branch` first"
-            )
-        })?;
+    // Read the recipe from the storage controller (durable cluster state in
+    // YB). Scoped so the borrow of `env` ends before the `&mut env`
+    // provisioning calls below.
+    let pending = {
+        let sc = StorageController::from_env(env);
+        sc.list_pending_timeline_inits(tenant_id)
+            .await?
+            .into_iter()
+            .find(|p| p.timeline_id == timeline_id)
+            .with_context(|| {
+                format!(
+                    "timeline {timeline_id} has no provisioned pageserver and no pending init; \
+                     run `tenant create` (for the main branch) or `timeline branch` first"
+                )
+            })?
+    };
 
-    match pending.mode {
-        local_env::PendingTimelineInitMode::Bootstrap { pg_version } => {
-            provision_bootstrap(env, endpoint_id, tenant_id, timeline_id, pg_version).await?;
+    match pending.ancestor_timeline_id {
+        // No ancestor => Bootstrap (the tenant's initial timeline).
+        None => {
+            provision_bootstrap(env, endpoint_id, tenant_id, timeline_id, pending.pg_version)
+                .await?;
         }
-        local_env::PendingTimelineInitMode::Branch {
-            ancestor_timeline_id,
-            start_lsn,
-            pg_version,
-        } => {
+        Some(ancestor_timeline_id) => {
             provision_branch(
                 env,
                 endpoint_id,
                 tenant_id,
                 timeline_id,
                 ancestor_timeline_id,
-                start_lsn,
-                pg_version,
+                pending.start_lsn,
+                pending.pg_version,
             )
             .await?;
         }
@@ -1479,8 +1486,10 @@ async fn provision_timeline_for_endpoint(
     env.register_branch_mapping(pending.branch_name, tenant_id, timeline_id)
         .await?;
 
-    env.pending_timeline_inits.remove(&timeline_id);
-    env.persist_config()?;
+    // The pair is materialized; drop the pending recipe from YB.
+    StorageController::from_env(env)
+        .delete_pending_timeline_init(tenant_id, timeline_id)
+        .await?;
     Ok(())
 }
 
@@ -1781,17 +1790,18 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 .unwrap_or_else(|| format!("ep-{branch_name}"));
 
             // Resolve the branch to its timeline. A provisioned branch is
-            // known to the storage controller; an as-yet-unprovisioned one
-            // (recorded by `tenant create` / `timeline branch`, mapping not
-            // registered with the controller yet) is found in the local
-            // pending-init set.
+            // known to the storage controller via its materialized branch
+            // name; an as-yet-unprovisioned one (recorded by `tenant create`
+            // / `timeline branch`, mapping not registered yet) is found in
+            // the controller's pending-init rows.
             let timeline_id = match env.get_branch_timeline_id(&branch_name, tenant_id).await? {
                 Some(tid) => tid,
-                None => env
-                    .pending_timeline_inits
-                    .iter()
-                    .find(|(_, p)| p.tenant_id == tenant_id && p.branch_name == branch_name)
-                    .map(|(tid, _)| *tid)
+                None => StorageController::from_env(env)
+                    .list_pending_timeline_inits(tenant_id)
+                    .await?
+                    .into_iter()
+                    .find(|p| p.branch_name == branch_name)
+                    .map(|p| p.timeline_id)
                     .ok_or_else(|| {
                         anyhow!("Found no timeline id for branch name '{branch_name}'")
                     })?,
@@ -2562,7 +2572,6 @@ async fn try_stop_all(env: &local_env::LocalEnv, immediate: bool) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::path::PathBuf;
 
     use super::*;
@@ -2606,7 +2615,6 @@ mod tests {
             safekeepers: Vec::new(),
             pageserver_templates: vec![ps_template()],
             safekeeper_templates: vec![sk_template()],
-            pending_timeline_inits: HashMap::new(),
             endpoint_storage: EndpointStorageConf::default(),
             control_plane_api: "http://127.0.0.1:1234/".parse().unwrap(),
             control_plane_hooks_api: None,
