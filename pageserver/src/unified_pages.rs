@@ -425,11 +425,22 @@ impl UnifiedPages {
     ///
     /// Caller invariant: `target_lsn ≤ flush_horizon_lsn`. Under that
     /// invariant every cache row with LSN ≤ target_lsn is durable
-    /// (post-flush `mark_flushed` promotes them all
-    /// atomically), so this is a plain backward walk for an anchor.
-    /// The `debug_assert!` guards the invariant so callers that
-    /// regress to passing a pre-flush LSN crash in tests rather than
-    /// silently feed walredo a partial chain.
+    /// (post-flush `mark_flushed` promotes them all atomically), so
+    /// this is a plain backward walk for an anchor.
+    ///
+    /// Seeing an unflushed row here is therefore either (a) the
+    /// benign attach-time race — legacy compaction overlaps the
+    /// walreceiver's replay, which re-puts rows that are already
+    /// durable in YB from the first pass as fresh (unflushed) cache
+    /// entries the cache can't tell apart — or (b) a real horizon
+    /// violation at a dispatch site (task 28 bug B family). Both are
+    /// answered the same way: bail out of the fast path and let
+    /// `read_chain_durable` consult YB, which holds the durable
+    /// truth in case (a) and surfaces the violation as a retryable
+    /// redo failure in case (b), instead of silently folding a
+    /// pre-flush row into an image. The counter + warn replace what
+    /// used to be a `debug_assert!` — release builds had no tripwire
+    /// at all.
     pub fn lookup_chain_durable_if_complete(
         &self,
         key: &Bytes,
@@ -438,13 +449,31 @@ impl UnifiedPages {
         let ks = self.by_key.get(key)?;
         let mut out = Vec::new();
         for (_, e) in ks.chain.range(..=target_lsn).rev() {
-            debug_assert!(
-                e.is_durable(),
-                "lookup_chain_durable_if_complete saw an unflushed row at \
-                 lsn={} while walking ≤ target_lsn={} — caller passed a \
-                 target_lsn above the flush horizon",
-                e.row.lsn, target_lsn,
-            );
+            if !e.is_durable() {
+                crate::metrics::CORRECTNESS_ERRORS
+                    .with_label_values(&["durable_walk_unflushed_row"])
+                    .inc();
+                use std::sync::Mutex;
+
+                use once_cell::sync::Lazy;
+                use utils::rate_limit::RateLimit;
+                static LOGGED: Lazy<Mutex<RateLimit>> = Lazy::new(|| {
+                    Mutex::new(RateLimit::new(std::time::Duration::from_secs(10)))
+                });
+                if let Ok(mut limiter) = LOGGED.try_lock() {
+                    let (lsn, tgt) = (e.row.lsn, target_lsn);
+                    limiter.call(|| {
+                        tracing::warn!(
+                            "durable chain walk saw an unflushed row at lsn={lsn} \
+                             ≤ target_lsn={tgt}; falling back to the YB read. \
+                             Benign during attach replay; a sustained rate \
+                             outside attach means a flush-horizon violation \
+                             (metric correctness_errors{{durable_walk_unflushed_row}})",
+                        );
+                    });
+                }
+                return None;
+            }
             out.push(e.row_arc());
             if e.row.will_init {
                 return Some(out);
@@ -648,6 +677,37 @@ mod tests {
         assert_eq!(all.len(), 3);
         assert_eq!(durable.len(), 1);
         assert_eq!(durable[0].lsn, Lsn(1));
+    }
+
+    /// An unflushed row at/below the target makes the durable fast
+    /// path bail out (return None) instead of panicking (the old
+    /// `debug_assert!`, absent in release) or folding the pre-flush
+    /// row into the chain. The caller then consults YB, which is
+    /// correct both for the benign attach-replay race and for a real
+    /// flush-horizon violation.
+    #[test]
+    fn durable_walk_bails_on_unflushed_row() {
+        let u = UnifiedPages::new(4096);
+        u.push(mk(b"k", 1, true, b"img"));
+        u.push(mk(b"k", 2, false, b"d2"));
+        flush_first_n(&u, 2);
+        // Complete durable chain below the target: fast path serves it.
+        assert!(
+            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(100))
+                .is_some()
+        );
+        // An unflushed row enters at lsn 3 ≤ target: fast path must
+        // bail rather than serve a chain it can't prove durable.
+        u.push(mk(b"k", 3, false, b"d3"));
+        assert!(
+            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(100))
+                .is_none()
+        );
+        // A target below the unflushed row keeps the fast path.
+        assert!(
+            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(2))
+                .is_some()
+        );
     }
 
     #[test]
@@ -934,16 +994,16 @@ mod tests {
         u.push(mk(b"k", 10, false, b"second"));
     }
 
-    /// Regression for the AWS BTREE walredo PANIC on 2026-06-02:
-    /// After the materialiser-trigger-on-flush refactor, the caller
-    /// invariant on `lookup_chain_durable_if_complete` is
-    /// `target_lsn ≤ flush_horizon_lsn` — every row in the walk
-    /// range is durable. A `debug_assert!` guards the invariant.
-    /// In debug builds, passing an unflushed-in-range target_lsn
-    /// panics; this test exercises that.
+    /// Regression for the AWS BTREE walredo PANIC on 2026-06-02,
+    /// updated for the always-on tripwire (task 28 hardening): a
+    /// target_lsn covering an unflushed row no longer panics (the old
+    /// `debug_assert!` was compiled out of release builds anyway) —
+    /// the durable fast path bails with None in every build profile
+    /// and the caller falls back to the YB read. The richer scenario
+    /// (interleaved durable rows above the unflushed one) is kept
+    /// from the original test.
     #[test]
-    #[should_panic(expected = "saw an unflushed row")]
-    fn durable_if_complete_debug_asserts_on_unflushed_in_range() {
+    fn durable_if_complete_bails_on_unflushed_in_range() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, true, b"anchor"));
         flush_first_n(&u, 1);
@@ -951,9 +1011,16 @@ mod tests {
         flush_first_n(&u, 1);
         u.push(mk(b"k", 30, false, b"d30")); // UNFLUSHED
         u.push_durable(mk(b"k", 40, false, b"d40")); // already durable
-        // target_lsn=100 covers an unflushed row (d30); the assertion
-        // fires.
-        let _ = u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(100));
+        // target_lsn=100 covers the unflushed d30: bail.
+        assert!(
+            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(100))
+                .is_none()
+        );
+        // target_lsn=20 walks only durable rows: fast path serves.
+        assert!(
+            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(20))
+                .is_some()
+        );
     }
 
     /// Materialiser install at LSN N MUST drop every durable row with
