@@ -73,8 +73,8 @@ func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFil
 //	@Router		/memories [get]
 func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
-	if datapackID == "" {
-		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
+	if _, err := RequireDatapackAccess(c, handler.dpLookup, datapackID); err != nil {
+		return err
 	}
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	pageSize, _ := strconv.Atoi(c.QueryParam("page_size"))
@@ -167,8 +167,8 @@ func (handler *MemoriesHandler) DeleteByID(c echo.Context) error {
 //	@Router		/memories/count [get]
 func (handler *MemoriesHandler) CountGET(c echo.Context) error {
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
-	if datapackID == "" {
-		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "datapack_id is required")
+	if _, err := RequireDatapackAccess(c, handler.dpLookup, datapackID); err != nil {
+		return err
 	}
 
 	slog.Info("counting memories",

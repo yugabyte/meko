@@ -45,6 +45,13 @@ func testConfig(db *sql.DB) api.ServerConfig {
 	return api.ServerConfig{DB: db}
 }
 
+// testConfigFull sets both DB and SystemDB to the same connection, which is
+// required for routes that run DevAuth (the auth middleware needs SystemDB to
+// resolve the dev account) or any middleware that looks up datapacks.
+func testConfigFull(db *sql.DB) api.ServerConfig {
+	return api.ServerConfig{DB: db, SystemDB: db}
+}
+
 func TestRouter_HealthEndpoint(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
@@ -91,6 +98,140 @@ func TestRouter_HealthEndpoint(t *testing.T) {
 	}
 	if dataMap["database"] != "ok" {
 		t.Errorf("expected database=ok, got %v", dataMap["database"])
+	}
+}
+
+// TestRouter_MemoriesRouteRegistered verifies GET /memories is registered on
+// dpDirect (PAT-accepting group). Without datapack_id the handler returns 400
+// VALIDATION_ERROR — distinct from Echo's 404 "Not Found" that would appear if
+// the route were unregistered.
+func TestRouter_MemoriesRouteRegistered(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	router, _, err := api.NewRouter(testConfigFull(db))
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/memories")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %v", errObj["code"])
+	}
+}
+
+// TestRouter_MemoriesCountRouteRegistered mirrors the above for GET /memories/count.
+func TestRouter_MemoriesCountRouteRegistered(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	router, _, err := api.NewRouter(testConfigFull(db))
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/memories/count")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %v", errObj["code"])
+	}
+}
+
+// TestRouter_PromotedMemoriesRouteRegistered verifies GET /promoted-memories is
+// registered on dpDirect. Without datapack_id the handler's access gate returns
+// 400 VALIDATION_ERROR.
+func TestRouter_PromotedMemoriesRouteRegistered(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	router, _, err := api.NewRouter(testConfigFull(db))
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/promoted-memories")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %v", errObj["code"])
+	}
+}
+
+// TestRouter_ConversationsRouteRegistered verifies GET /datapacks/:name/conversations
+// is registered on dpDirect with RequireDatapackAccess middleware. A non-existent
+// datapack returns 404 NOT_FOUND from the middleware — distinct from Echo's generic
+// 404 "Not Found" that would appear if the route were unregistered.
+func TestRouter_ConversationsRouteRegistered(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	router, _, err := api.NewRouter(testConfigFull(db))
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/datapacks/nonexistent-dp-test/conversations")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	// Middleware NOT_FOUND vs Echo's generic "Not Found" — the former proves
+	// the route is registered and RequireDatapackAccess ran.
+	if errObj["code"] != "NOT_FOUND" {
+		t.Errorf("expected NOT_FOUND (middleware), got %v — route may not be registered", errObj["code"])
 	}
 }
 

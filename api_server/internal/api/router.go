@@ -367,8 +367,8 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	g.DELETE("/agents/:agent_id", agentH.DeleteUser)
 
 	memoriesH := handlers.NewMemoriesHandler(reg.memoriesSvc, reg.langfuseSvc, reg.dpRepo)
-	g.GET("/memories", memoriesH.ListGET)
-	g.GET("/memories/count", memoriesH.CountGET)
+	dpDirect.GET("/memories", memoriesH.ListGET, auth.RequireScope(auth.ScopeRead))
+	dpDirect.GET("/memories/count", memoriesH.CountGET, auth.RequireScope(auth.ScopeRead))
 	// Deletion is gated inside the handler (not via Echo middleware) because
 	// the datapack id arrives as a query param, not a `:name` path segment —
 	// auth.RequireDatapackAccess expects the latter. The handler runs two
@@ -386,7 +386,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc, reg.dpRepo)
 	g.POST("/promote-memories", promoteMemoriesH.Promote)
 	g.POST("/keep-as-memory", promoteMemoriesH.KeepAsMemory)
-	g.GET("/promoted-memories", promoteMemoriesH.ListGET)
+	dpDirect.GET("/promoted-memories", promoteMemoriesH.ListGET, auth.RequireScope(auth.ScopeRead))
 
 	feedbackH := handlers.NewFeedbackHandler(reg.feedbackRepo)
 	g.POST("/feedback", feedbackH.Create)
@@ -411,19 +411,25 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 
 	// Langfuse-backed conversations: read-only; same access as Describe /
 	// provision-status (owner or shared member with agent_access).
-	g.GET("/datapacks/:name/conversations", observeH.ConversationList,
+	// On dpDirect so PAT bearers (MCP server) are accepted.
+	dpDirect.GET("/datapacks/:name/conversations", observeH.ConversationList,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	g.GET("/datapacks/:name/conversations/count", observeH.ConversationCount,
+	dpDirect.GET("/datapacks/:name/conversations/count", observeH.ConversationCount,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	g.GET("/datapacks/:name/conversations/:conversation_id", observeH.ConversationDetail,
+	dpDirect.GET("/datapacks/:name/conversations/:conversation_id", observeH.ConversationDetail,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	g.GET("/datapacks/:name/conversations/:conversation_id/messages/:message_id/trace", observeH.MessageTrace,
+	dpDirect.GET("/datapacks/:name/conversations/:conversation_id/messages/:message_id/trace", observeH.MessageTrace,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	g.GET("/datapacks/:name/conversations/:conversation_id/messages/:message_id/decision-trace", observeH.MessageDecisionTrace,
+	dpDirect.GET("/datapacks/:name/conversations/:conversation_id/messages/:message_id/decision-trace", observeH.MessageDecisionTrace,
+		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
