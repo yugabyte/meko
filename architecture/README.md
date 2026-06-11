@@ -16,6 +16,7 @@ upstream Neon can skim) and **changes in yb-light**.
 |---|---|
 | [`high-level.md`](high-level.md) | Cluster topology, components, end-to-end data flows |
 | [`compute.md`](compute.md) | The user-facing Postgres + Neon smgr hooks |
+| [`compute_ctl.md`](compute_ctl.md) | The per-endpoint supervisor: spec, lifecycle, control API |
 | [`safekeeper.md`](safekeeper.md) | Single-SK WAL durability, control file, WAL storage |
 | [`safekeeper-lsns.md`](safekeeper-lsns.md) | SK-side LSN inventory + flows |
 | [`pageserver.md`](pageserver.md) | Inherited Neon pageserver design |

@@ -109,7 +109,8 @@ deployment using a local-FS or S3 backend.
 ## Where the code lives
 
 - Postgres source: `vendor/postgres-v17/` (git submodule, Neon's patched fork).
-- `compute_ctl`: `compute_tools/`.
+- `compute_ctl`: `compute_tools/` — the per-endpoint supervisor. Its lifecycle,
+  spec, and HTTP control API have their own page: [`compute_ctl.md`](compute_ctl.md).
 - Neon's PG extension (`neon.so`, smgr hooks, walproposer): `pgxn/neon/`
   (top-level in this repo, NOT in the vendored postgres tree).
 - Endpoint creation in the dev wrapper: `control_plane/src/endpoint.rs`.

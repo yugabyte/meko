@@ -1,7 +1,7 @@
 # yblight-controller — High-Level Design & Guiding Principles
 
 **Status:** Draft
-**Last updated:** 2026-06-10
+**Last updated:** 2026-06-11
 
 This is the guiding-principles document for yblight-controller, the control plane for YB Light.
 It is intentionally not a feature design doc — individual features (task framework,
@@ -124,7 +124,7 @@ These correspond to real data or real running processes, and yblight-controller 
 - **Endpoint** — a self-contained YB Light instance serving a PG cluster; runs on a
   pod (or, later, a VM). Endpoints are what users actually connect to, so the API
   must return endpoint connection details (host, port, TLS state) to users.
-  Endpoints are **stateless** (§5.1): "physical" here means they consume hardware,
+  Endpoints are **stateless** (§5.3): "physical" here means they consume hardware,
   not that they hold durable data.
 
 ### 4.3 Timelines
@@ -163,13 +163,68 @@ spare capacity per placement group, not per tenant pool or tenant. Subdividing i
 between tenant pools is a later refinement, possible if and when it's needed,
 precisely because we start with the coarser unit.
 
-This works because endpoints are stateless (§5.1) and carry no hardware affinity:
+This works because endpoints are stateless (§5.3) and carry no hardware affinity:
 an endpoint may be scheduled next to endpoints of other tenants — including tenants
 in other tenant pools. Isolation between tenants is enforced by timeline scoping
 (§4.3), with user access granted at the pool level (§10.1) — not by dedicated
 hardware.
 
-## 5. Anatomy of an endpoint
+## 5. Service topology
+
+Every process in a running placement group belongs to exactly one of two tiers:
+
+- **Placement-group-global services** (§5.1) — one of each per placement group,
+  deployed once and shared by every endpoint: yblight-controller itself, the storage
+  controller, and endpoint_storage. This is the control-plane tier; none of it serves
+  data-plane traffic.
+- **Per-endpoint services** (§5.2) — the YB Light stack that makes up a single
+  endpoint, deployed once per endpoint: compute/pg, safekeeper, pageserver,
+  compute_ctl, and an otel collector. This is the data-plane tier.
+
+```
+Placement group
+├── Global services (one of each, §5.1)
+│   ├── yblight-controller    — the control plane (this doc)
+│   ├── storage controller    — storage-layer registry + generation fencing (§11.1)
+│   └── endpoint_storage      — endpoint-scoped scratch store (§11.5)
+└── Endpoints (0+)            — one self-contained blob each (§5.4)
+    └── per endpoint (§5.2):
+        ├── compute / pg      — the Postgres users connect to
+        ├── safekeeper        — WAL durability
+        ├── pageserver        — page materialization/serving
+        ├── compute_ctl       — supervises the above; controller's single contact
+        └── otel collector    — metrics
+```
+
+The split is along statefulness. The global tier persists to the universe over YSQL
+and fronts the whole placement group; the per-endpoint tier is stateless (§5.3) and
+disposable — all of an endpoint's durable data lives in the universe, not on the
+endpoint. yblight-controller is the only caller of the global services' internal APIs
+and the only thing that talks to each endpoint's compute_ctl.
+
+### 5.1 Placement-group-global services
+
+Exactly one of each runs per placement group (§1):
+
+- **yblight-controller** — the control plane this document describes. The deployment
+  boundary is one placement group, one controller (§1); it owns the lifecycle of
+  everything below it and exposes the API (§3) that an agent layer (§12) will consume.
+- **storage controller** — the existing `storage_controller/` crate, reused as an
+  internal storage-layer registry and the generation-fencing authority the pageserver
+  and safekeeper binaries already speak to. It runs *under* yblight-controller as a
+  managed service (§11.1): never yblight-controller's state store, never exposed to
+  users.
+- **endpoint_storage** — YB Light's small standalone store for endpoint-scoped scratch
+  data (LFC prewarm/offload state today). Also a managed service (§11.5); its contents
+  are performance state, not correctness state.
+
+All three persist to the placement group's universe over YSQL, so the global tier adds
+no external dependency beyond the universe itself (principle 2). The storage controller
+and endpoint_storage are *managed* by yblight-controller — it deploys, supervises, and
+fronts them; §11 covers what that posture means, what of the storage controller is
+reused versus left inert, and the open questions.
+
+### 5.2 Per-endpoint services
 
 Each endpoint is a self-contained YB Light instance running a handful of services:
 
@@ -185,7 +240,7 @@ In addition, every endpoint runs an **OpenTelemetry (otel) collector** for metri
 collection. The otel configuration is part of the endpoint spec that yblight-controller owns and
 distributes — observability is provisioned with the endpoint, not bolted on after.
 
-### 5.1 Endpoints are stateless
+### 5.3 Endpoints are stateless
 
 All durable data lives in YBDB. An endpoint's access to that data is purely
 **configuration** — the YBDB connection in its spec, plus its (tenant_id, timeline_id)
@@ -223,7 +278,7 @@ Per-endpoint configuration that yblight-controller owns and tracks includes (non
 - the placement group's endpoint_storage address and the endpoint-scoped access
   token for it (§11.5).
 
-### 5.2 Endpoints are self-contained blobs
+### 5.4 Endpoints are self-contained blobs
 
 An endpoint is packaged and deployed as a single, self-contained software blob —
 compute, safekeeper, pageserver, compute_ctl, and the otel collector travel together.
@@ -234,6 +289,44 @@ The per-runtime packaging details (image layout, process supervision on VMs) are
 deliberately not designed here. What is fixed now is the granularity: the unit of
 deployment, scheduling, replacement, and upgrade is the whole endpoint — never an
 individual service inside one.
+
+### 5.5 Delivering the endpoint spec to compute_ctl
+
+yblight-controller is the source of every endpoint's spec. It assembles the spec from its
+state store (§5.3, §10) — YBDB connection, the `(tenant_id, timeline_id)` binding, role,
+version, TLS/cert references, otel config, the endpoint_storage address + scoped token
+(§11.5) — and hands it to that endpoint's compute_ctl, the single point of contact (§5.2).
+compute_ctl accepts a spec by three transports that all carry the **same payload** (one
+config object: the spec plus the TLS material and the JWKS used to authenticate its own
+API); they differ only in delivery and trust, not content:
+
+- **File** — write the spec to disk and point compute_ctl at it. This is what
+  `yb_light_local` does today; it has no auth and no live-update path, so it suits dev,
+  not the controller.
+- **Push** — `POST /configure` on the endpoint's compute_ctl API. The controller drives;
+  compute_ctl reacts.
+- **Hosted pull** — the controller *serves* the spec endpoint that compute_ctl fetches
+  from at boot (and re-fetches on a refresh), keyed by compute id, with an
+  `Empty`/`Attached` handshake so a compute can come up before its spec is assigned.
+
+**Posture: push by default; hosting the pull API is an optional, additive capability.**
+Delivering or changing a spec is a mutation, so it is a task (§8) like every other —
+idempotent, durable, re-runnable — and the push model maps onto that cleanly: the
+controller decides, issues `POST /configure`, and reconciles (principle 6) against the
+observed status. Hosting the pull endpoint additionally lets endpoints boot *specless*
+and wait for assignment, which pairs with capacity headroom (§4.5) and scale-up from a
+pool of pre-warmed computes — the `Empty` state is exactly that "exists but unassigned"
+signal. Whichever transport is used, this is an **internal** seam: API-first (§3) governs
+the controller's own user-facing surface, not the compute_ctl wire it speaks — the same
+stance taken for the managed services in §11.
+
+Both directions run on the control-plane signing key (§9.4): the controller signs the
+JWTs compute_ctl verifies on inbound `/configure`, and, if it hosts the pull endpoint, it
+verifies the token compute_ctl presents when fetching. The exact endpoint shape and the
+push-vs-pull choice per runtime are deferred to the controller's API design doc; what is
+fixed here is that the spec is one artifact the controller owns and can deliver by any of
+these routes without reshaping it. See
+[`compute_ctl.md`](../architecture/compute_ctl.md) for the compute-side mechanics.
 
 ## 6. Core workflows
 
@@ -260,7 +353,7 @@ corner on any of them:
 
 - **Endpoint upgrades** — endpoints carry a tracked software version; upgrade is a
   task that rolls an endpoint (or a cluster's endpoints) to a new version. Because
-  endpoints are stateless (§5.1), the default strategy is replace-and-cut-over rather
+  endpoints are stateless (§5.3), the default strategy is replace-and-cut-over rather
   than in-place mutation. For read-only endpoints this is seamless. For the write
   endpoint, the single-writer invariant (§4.4) means the old and new endpoints can
   never both be writers: cut-over is demote-old-then-promote-new, which implies a
@@ -371,7 +464,7 @@ not be used in production
 Private key material never lives in the state store. The state store records
 public halves and lifecycle metadata only; verifiers receive public keys
 through what they already consume — the JWKS embedded in each endpoint spec
-(§5.1) and the managed services' own configuration. User-facing API
+(§5.3) and the managed services' own configuration. User-facing API
 authentication is a separate, deferred concern (§12) and must not share this
 key.
 
@@ -399,7 +492,7 @@ The state store tracks both halves of the model:
 - **Physical:** PG clusters and their timelines (including fork ancestry), and
   endpoints (timeline binding and r/w vs. read-only role, exposed ports/address,
   placement, version, TLS/cert state, otel config). Endpoint records must be complete
-  enough to recreate the endpoint from scratch (§5.1).
+  enough to recreate the endpoint from scratch (§5.3).
 - **Operational:** tasks and subtasks, with enough state to resume them.
 
 Records carry intent (desired state) distinctly from observed state, so
@@ -459,7 +552,8 @@ in API-layer validation (full DDL lives with the code and its migrations):
 
 yblight-controller is not the only control-plane process in a placement group: two
 existing yb-light services ride along — the **storage controller** and
-**endpoint_storage**. Both run *under* yblight-controller as **managed services**:
+**endpoint_storage**, the other two global services (§5.1). Both run *under*
+yblight-controller as **managed services**:
 yblight-controller deploys them (one of each per placement group), supervises their
 lifecycle — start, health, upgrade, through tasks like every other mutation —
 and fronts them completely. Their APIs are internal; endpoints and
@@ -507,7 +601,7 @@ binaries already speak, and we do not rewrite it.
   yblight-controller later stays a contained change.
 
 Generations remain load-bearing in our topology: replacement is the recovery
-primitive (§5.1), so an old and a new pageserver for the same timeline can
+primitive (§5.3), so an old and a new pageserver for the same timeline can
 briefly coexist during a replace — generation fencing is what keeps the stale
 one from corrupting storage state.
 
@@ -516,7 +610,7 @@ one from corrupting storage state.
 - **Who serves the upcall API.** The pageserver inside an endpoint must reach
   `/upcall/v1/*` at boot to get fenced. Either the shared storage controller
   serves it — and endpoint blobs gain a second boot-critical dependency beyond
-  compute_ctl (§5) — or yblight-controller absorbs the small upcall surface itself and
+  compute_ctl (§5.2) — or yblight-controller absorbs the small upcall surface itself and
   the separate service is retired. The second option collapses back to a single
   service and a single source of truth; it must be costed before the first
   milestone hardens the dependency.
@@ -542,7 +636,7 @@ rotation is a stated requirement (§7), not yet designed.
 
 Its contents are performance state, not correctness state — losing them costs
 cache warmth, nothing else — so it inherits the replacement-is-recovery posture
-(§5.1) unconditionally.
+(§5.3) unconditionally.
 
 ## 12. Out of scope (for now)
 
