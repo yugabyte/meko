@@ -613,19 +613,32 @@ impl UnifiedPages {
         //     Overwrite to install the image; only byte counters move.
         if let Some(existing) = ks.chain.get(&lsn) {
             if !durable {
-                // Idempotent re-push; keep the existing slot. The skip is
-                // only sound because a WAL record at a given LSN is
-                // deterministic — the replayed row must be byte-identical
-                // to the one we're keeping. A mismatch means replay
-                // diverged (or two distinct records collided on an LSN),
-                // which would silently keep the wrong page.
+                // Idempotent re-push; keep the existing slot. Two
+                // legitimate cases:
+                //   (a) existing is a delta — the walreceiver re-streamed
+                //       the same deterministic WAL record, so it must be
+                //       byte-identical to what we keep;
+                //   (b) existing is a materialiser IMAGE at this LSN — the
+                //       image is folded at a record's max LSN, which
+                //       collides with that record's own delta LSN. The
+                //       image is the folded result and *supersedes* the
+                //       same-LSN delta (the same tie-break `read_chain`
+                //       applies: image sorts first), so keeping it is
+                //       correct even though it differs from the raw delta.
+                // Only assert determinism in case (a); never panic on (b)
+                // and never overwrite an image with a delta.
                 debug_assert!(
-                    *existing.row == *row,
-                    "re-push at lsn={lsn} differs from the buffered row \
+                    existing.row.is_image || *existing.row == *row,
+                    "re-push at lsn={lsn} differs from the buffered delta \
                      (WAL replay not deterministic / LSN collision): \
-                     existing={:?} new={:?}",
-                    existing.row,
-                    row,
+                     existing=(is_image={} will_init={} {}B) \
+                     new=(is_image={} will_init={} {}B)",
+                    existing.row.is_image,
+                    existing.row.will_init,
+                    existing.row.payload.len(),
+                    row.is_image,
+                    row.will_init,
+                    row.payload.len(),
                 );
                 return false;
             }
@@ -1074,11 +1087,34 @@ mod tests {
     /// collided on an LSN — trips the debug-assert instead of silently
     /// keeping the wrong page.
     #[test]
-    #[should_panic(expected = "differs from the buffered row")]
+    #[should_panic(expected = "differs from the buffered delta")]
     fn push_same_key_lsn_divergent_payload_panics_in_debug() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, false, b"first"));
         u.push(mk(b"k", 10, false, b"DIFFERENT"));
+    }
+
+    /// tasks/34 part 2: the materialiser installs an image at a record's
+    /// max LSN, which collides with that record's own delta LSN. When the
+    /// walreceiver later re-streams the record (SK-only restart replay),
+    /// `push` of the raw delta lands on the existing image at the same
+    /// LSN. The image is the folded result and supersedes the delta, so
+    /// `push` must keep it WITHOUT panicking on the (legitimate) content
+    /// difference — the over-strict byte-identity assert here is what
+    /// wedged the walreceiver in a panic loop (debug) and deadlocked the
+    /// basebackup waiting for the un-ingested tail.
+    #[test]
+    fn push_delta_over_materialised_image_keeps_image() {
+        let u = UnifiedPages::new(4096);
+        // Materialiser image at lsn 10 (folded at a record's lsn).
+        u.push_durable(mk(b"k", 10, true, b"folded-image"));
+        // Walreceiver re-streams that record's raw delta at the same lsn.
+        // Must NOT panic and must keep the image.
+        u.push(mk(b"k", 10, false, b"raw-delta-record"));
+        let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
+        assert_eq!(chain.len(), 1, "single slot at (k, 10)");
+        assert!(chain[0].is_image, "image kept over the same-lsn delta");
+        assert_eq!(chain[0].payload.as_ref(), b"folded-image");
     }
 
     /// Regression for the AWS BTREE walredo PANIC on 2026-06-02,

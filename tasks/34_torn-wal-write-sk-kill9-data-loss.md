@@ -426,7 +426,96 @@ itself (still unpinned — the post-flush durable loss). After them, the
 relation` error rather than a silent zero page; all non-torn `fast`
 scenarios stay green (no read-path regression).
 
-### Status: amplification hardened + unit-verified; upstream anchor-loss still open
+### Root-cause hypothesis (2026-06-12): generation-fence gap on the page-write path
+
+Tracing *why* a durable page write disappears post-flush:
+
+1. **Nothing prunes durable rows per-key.** The only DELETEs against
+   `pages` are whole-timeline (`delete_all_pages`); the materialiser's
+   `trim_key_up_to` is **cache-only**. So a row isn't *deleted* from YB.
+2. **`read_chain` floors at the latest `is_image=TRUE` ≤ target**
+   (`page_store.rs` SQL). So a **stale/wrong image hides the correct
+   deltas beneath it** — no deletion needed; the truth is still in YB but
+   shadowed. Matches the observed "block has an anchor image yet is
+   missing a committed tuple", and a stale image at the wrong content =
+   the lost-anchor / zero-page cases.
+3. **`put_pages` is NOT generation-fenced.** It's an unconditional
+   `INSERT INTO pages …` (`page_store.rs:365`). Only
+   `advance_consistent_lsn` carries the `WHERE current_generation = $gen`
+   fence. So page/**image** rows from a *superseded* generation can land.
+4. **The materialiser drains in-flight image INSERTs on shutdown**
+   (`image_materializer.rs:271` — `while let Some(h)=inflight.pop_front(){
+   h.await }`), and shutdown fires at re-attach. So an old generation's
+   folded images get committed via the un-fenced `put_pages` around the
+   re-attach boundary.
+
+**Hypothesis (RETRACTED):** "un-fenced `put_pages` lets a stale generation
+write a masking image." Wrong — a materialiser image is
+`walredo(chain ≤ lsn)`, and `(key, lsn)` content is **deterministic**, so
+a stale generation writes a **byte-identical** image (and the write is an
+idempotent upsert). An unfenced materialiser/flush write is therefore
+**safe**; generation is not the vector. (The gen-fence asymmetry on
+`put_pages` is real but benign for this reason.)
+
+**Refined root direction.** Since (a) durable rows aren't deleted, (b)
+all writes are idempotent/deterministic, the only way to durably corrupt
+is a **hole**: a committed delta is *missing* from the durable chain, so
+a later materialiser fold bakes a page that's missing it (and the image
+then floors reads above the gap). A missing delta ≤ `consistent_lsn` is a
+**flush over-advance** — `consistent_lsn`/`flush_horizon` advanced past a
+record whose page write isn't durable. The rel-FIFO tripwire stayed
+silent, but it can only see rows that *were buffered as unflushed*; it
+**cannot** see a record that was noted (advancing `ingest_frontier`) yet
+whose page write was never put into the buffer at all (or went missing
+before the snapshot). That task-28-bug-B-class gap — `ingest_frontier`
+covering a record whose pages aren't in the snapshot — is the next thing
+to scrutinise in `PageWriter::flush` (frontier capture vs snapshot
+contents) and `Timeline::finish_write`/`note_record_lsn` ordering.
+
+### Deadlock root-caused + fixed (2026-06-12): over-strict idempotent-push assert
+
+Observing the durable state (per the "add logs / query YB" approach) on a
+deadlock run (`compute never served reads`) showed the real cause: the
+basebackup was stuck in `wait_lsn` for the tail LSN while the walreceiver
+**panic-looped** at `unified_pages.rs` — my own Part-1 idempotent-`push`
+`debug_assert!` (byte-identity of a re-pushed row). The panic:
+
+```
+re-push at lsn=0/18E7B10 differs … existing=PageRow{is_image:true,will_init:true,…}
+                                    new    =PageRow{is_image:false,will_init:false,…}
+```
+
+The materialiser installs an **image** at a record's max LSN, which
+**collides** with that record's own **delta** LSN. When the walreceiver
+re-streams the record (SK-only restart replay), `push` of the raw delta
+lands on the existing image at the same LSN — legitimately different
+content. The assert (which assumed byte-identity) fired → walreceiver
+worker panicked → reconnect loop → ingest stalled → basebackup `wait_lsn`
+deadlock → opaque `compute never served reads`. **Debug-only**: in
+release the assert is compiled out and the skip already keeps the image
+(correct). Fix: only assert byte-identity when the existing slot is a
+**delta**; when it's an image, keep it (it supersedes the same-LSN delta,
+the same tie-break `read_chain` uses). New unit test
+`push_delta_over_materialised_image_keeps_image`. Verified: with the fix,
+iteration 1 of `-n 4 torn_wal_write` passes **all 7 modes incl. mode E**
+(previously deadlocked); the deadlock symptom is gone.
+
+### Making caught panics easier to spot (observability)
+
+A caught walreceiver-worker panic was near-invisible (silent reconnect
+loop → downstream timeout, panic buried behind an 8 KB payload dump).
+Added:
+- `walreceiver.rs`: a caught worker panic bumps
+  `correctness_errors{walreceiver_worker_panic}` so the suite's
+  `final_verdict` metric gate (runs for every scenario) fails loudly.
+- `torn_wal_write.rs`: `scan_for_panic` / `first_panic_line` greps the
+  PS+SK logs for panics and names the panic in the failure — incl.
+  enriching the `compute never served reads` timeout with the panic line.
+- `unified_pages.rs`: the assert message now prints a compact
+  `(is_image/will_init/len)` summary instead of dumping full page
+  payloads.
+
+### Status: SK-restart heap loss fixed (part 1); deadlock fixed (over-strict assert); read/materialiser anchorless guards + panic observability added; **catalog-orphan data corruption (iter-2 mode B) still open** — the missing-delta hole / flush over-advance the unflushed-tripwire can't see
 
 A correct fix is in the `consistent_lsn`/flush-frontier machinery and
 must be designed + verified (not guessed) — advancing `consistent_lsn`

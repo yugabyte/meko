@@ -173,8 +173,17 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             Err(e) => {
+                // A common cause of this timeout is a caught PS thread
+                // panic (e.g. walreceiver worker) that loops silently and
+                // stalls ingest → basebackup `wait_lsn` never completes.
+                // Name the panic if there is one, so the failure points at
+                // the root rather than the downstream deadlock.
+                let panic = first_panic_line(c)
+                    .map(|p| format!(" — {p}"))
+                    .unwrap_or_default();
                 return Err(e).context(format!(
-                    "{label}: compute never served reads within timeout (basebackup / walreceiver deadlock?)"
+                    "{label}: compute never served reads within timeout \
+                     (basebackup / walreceiver deadlock?){panic}"
                 ));
             }
         }
@@ -196,6 +205,7 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
     };
 
     scan_for_wal_hole(c, label)?;
+    scan_for_panic(c, label)?;
     assert_catalog_consistent(conn, label).await?;
 
     step(&format!("{label}: assert durable rows are a contiguous prefix"));
@@ -355,4 +365,35 @@ fn count_matches(path: &Path, needle: &str) -> usize {
     std::fs::read_to_string(path)
         .map(|s| s.lines().filter(|l| l.contains(needle)).count())
         .unwrap_or(0)
+}
+
+/// First panic line (truncated) from the PS or SK log, if any. A caught
+/// walreceiver-worker panic otherwise only shows up as a `compute never
+/// served reads` timeout (the panic loops, ingest stalls, basebackup
+/// `wait_lsn` deadlocks) — surfacing the panic text turns that opaque
+/// timeout into a named root cause.
+fn first_panic_line(c: &Cluster) -> Option<String> {
+    let sk_log = c.repo_dir().join("endpoints/main/safekeeper/safekeeper-1.log");
+    for path in [c.ps_log(), sk_log] {
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            if let Some(line) = s.lines().find(|l| l.contains("panicked") || l.contains("panic{thread")) {
+                let who = if path.to_string_lossy().contains("safekeeper") { "safekeeper" } else { "pageserver" };
+                // Truncate: panic lines can carry an 8 KB page-payload dump.
+                let truncated: String = line.chars().take(400).collect();
+                return Some(format!("{who} log panic: {truncated}"));
+            }
+        }
+    }
+    None
+}
+
+/// Fail loudly if any PS/SK thread panicked (e.g. a caught walreceiver
+/// worker panic that would otherwise just reconnect-loop). Surfaces the
+/// panic text so the failure names the root cause instead of a downstream
+/// timeout.
+fn scan_for_panic(c: &Cluster, label: &str) -> anyhow::Result<()> {
+    if let Some(panic) = first_panic_line(c) {
+        bail!("{label}: {panic}");
+    }
+    Ok(())
 }

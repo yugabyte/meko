@@ -214,7 +214,18 @@ impl<E: Clone> TaskHandle<E> {
                             Ok(res) => res,
                             Err(je) if je.is_cancelled() => unreachable!("not used"),
                             Err(je) if je.is_panic() => {
-                                // already logged
+                                // The panic itself is already logged by the
+                                // panic hook, but a caught walreceiver-worker
+                                // panic otherwise only manifests as a silent
+                                // reconnect loop (ingest stalls → basebackup
+                                // wait_lsn deadlock → opaque "compute never
+                                // served reads" timeout). Bump a correctness
+                                // counter so the suite's metric gate
+                                // (`final_verdict`) fails loudly and names it
+                                // (tasks/34).
+                                crate::metrics::CORRECTNESS_ERRORS
+                                    .with_label_values(&["walreceiver_worker_panic"])
+                                    .inc();
                                 Ok(())
                             }
                             Err(je) => Err(anyhow::Error::new(je).context("join walreceiver task")),
