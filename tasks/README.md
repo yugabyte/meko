@@ -107,6 +107,6 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 29 | [Move pending-timeline init recipe into YB](29_pending-init-to-yb.md) | ✅ done | medium | storage_ctl / yb_light_local |
 | 30 | [Convert e2e suite from shell to Rust](30_e2e-tests-sh-to-rust.md) | ✅ done | medium | yb-pageserver |
 | 31 | [Bundle runtime libs for the walredo child](31_bundle-libs-for-walredo-child.md) | ✅ done | high | yb_light_local |
-| 32 | [`yb-dump-pages` LSN sort uses rendered text](32_yb-dump-pages-lsn-sort.md) | ⏳ pending | medium | yb-pageserver |
+| 32 | [`yb-dump-pages` LSN sort uses rendered text](32_yb-dump-pages-lsn-sort.md) | ✅ done | medium | yb-pageserver |
 | 33 | [Skip or optimize zero-page writes to YB](33_skip-or-compress-zero-page-writes.md) | ⏳ pending | medium | yb-pageserver |
 | 34 | [Torn WAL write: SK kill-9 loses acked rows](34_torn-wal-write-sk-kill9-data-loss.md) | ⏳ pending | highest | yb-pageserver / safekeeper |

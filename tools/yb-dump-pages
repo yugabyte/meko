@@ -23,7 +23,8 @@
 #
 # Output is sorted (tenant, timeline, spc, db, rel, fork, blknum ASC,
 # lsn DESC, is_image ASC) so the most recent record for a page shows
-# first. LSN is rendered as `H/L` in hex; forknum is rendered as a
+# first. LSN is rendered as `H/XXXXXXXX` in hex with a zero-padded
+# low word (matching PS log form); forknum is rendered as a
 # name (main/fsm/vm/init); payload is shown as size + leading-bytes
 # hex sample, unless --no-payload is given.
 
@@ -130,7 +131,7 @@ lim_clause=""
 
 sql="SELECT
         blknum,
-        to_hex((lsn >> 32)::int8) || '/' || to_hex((lsn & x'ffffffff'::bigint)::int8) AS lsn,
+        to_hex((lsn >> 32)::int8) || '/' || lpad(to_hex((lsn & x'ffffffff'::bigint)::int8), 8, '0') AS lsn,
         CASE forknum WHEN 0 THEN 'main'
                      WHEN 1 THEN 'fsm'
                      WHEN 2 THEN 'vm'
@@ -142,7 +143,7 @@ sql="SELECT
         ${payload_col}
    FROM pageserver.pages
    ${where}
-  ORDER BY blknum ASC, lsn DESC, is_image ASC
+  ORDER BY blknum ASC, pageserver.pages.lsn DESC, is_image ASC
    ${lim_clause}"
 
 if (( RAW == 1 )); then
