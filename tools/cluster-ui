@@ -199,6 +199,33 @@ def discover(repo_dir, database_url=None):
         if len(r) >= 3 and r[2]:
             branch_names[f"{_norm_id(r[0])}/{_norm_id(r[1])}"] = r[2]
 
+    # Parse [[safekeepers]] http_port from the config file. The DB
+    # safekeepers table loses branch SK entries when the cluster is reset,
+    # but the config file retains them, making it the reliable source.
+    sk_http_by_id: dict = {}
+    for m in re.finditer(
+        r'\[\[safekeepers\]\][^\[]*?\bid\s*=\s*(\d+)[^\[]*?\bhttp_port\s*=\s*(\d+)',
+        cfg_text, re.DOTALL,
+    ):
+        sk_http_by_id[int(m.group(1))] = f"http://127.0.0.1:{m.group(2)}"
+
+    # SK assignment per timeline: sk_set column holds the safekeeper IDs,
+    # resolved against the config-parsed port map above.
+    timeline_sk_urls = {}
+    for r in _query(
+            f"SELECT tenant_id, timeline_id, unnest(sk_set) "
+            f"FROM {SC_SCHEMA}.timelines "
+            f"WHERE deleted_at IS NULL"):
+        if len(r) >= 3 and r[2]:
+            key = f"{_norm_id(r[0])}/{_norm_id(r[1])}"
+            if key not in timeline_sk_urls:
+                try:
+                    url = sk_http_by_id.get(int(r[2]))
+                    if url:
+                        timeline_sk_urls[key] = url
+                except (ValueError, TypeError):
+                    pass
+
     return {
         "repo_dir": os.path.abspath(repo_dir) if repo_dir else None,
         "database_url": database_url,
@@ -209,6 +236,7 @@ def discover(repo_dir, database_url=None):
         "endpoint_storage": es_url,
         "endpoints": endpoints,
         "branch_names": branch_names,
+        "timeline_sk_urls": timeline_sk_urls,
     }
 
 
@@ -386,16 +414,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .pill.ok { color:var(--green); border-color:var(--green); }
   .pill.bad { color:var(--red); border-color:var(--red); }
   .pill.warn { color:var(--amber); border-color:var(--amber); }
+  .pill.branch { color:#e3b341; border-color:#e3b341; }
   .tenant { background:var(--panel); border:1px solid var(--line); border-radius:8px;
-            margin-bottom:12px; }
-  .tenant > .head { padding:10px 14px; display:flex; gap:12px; align-items:center;
-                    border-bottom:1px solid var(--line); }
+            margin-bottom:14px; }
+  .tenant > .head { padding:10px 14px; display:flex; gap:10px; align-items:center;
+                    border-bottom:1px solid var(--line); flex-wrap:wrap; }
   .tenant .tid { font-family:var(--mono); font-size:12px; }
+  .tl-block { padding:8px 14px 10px; }
+  .tl-head { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+  .tl-label { color:var(--muted); font-size:12px; }
+  .tl-children {
+    margin:2px 0 4px 18px;
+    padding-left:16px;
+    border-left:1px solid var(--line);
+  }
+  .tl-children > .tl-tree-node > .tl-block { position:relative; }
+  .tl-children > .tl-tree-node > .tl-block::before {
+    content:'';
+    position:absolute;
+    left:-16px; top:20px;
+    width:16px; height:1px;
+    background:var(--line);
+  }
+  .ep-table { width:100%; border-collapse:collapse; background:var(--panel2);
+              border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  .ep-table th, .ep-table td { text-align:left; padding:5px 9px;
+              border-bottom:1px solid var(--line); font-size:12px; vertical-align:top; }
+  .ep-table th { color:var(--muted); font-weight:600; font-size:11px;
+                 text-transform:uppercase; letter-spacing:.3px; }
+  .ep-table tr:last-child td { border-bottom:none; }
   .empty { color:var(--muted); font-style:italic; padding:8px 2px; }
-  details { margin-top:6px; }
-  summary { cursor:pointer; color:var(--muted); font-size:12px; }
-  pre { background:var(--panel2); border:1px solid var(--line); border-radius:6px;
-        padding:10px; overflow:auto; font:12px var(--mono); margin:6px 0 0; }
   .banner { background:#3a1d1d; border:1px solid var(--red); color:#ffd7d5;
             padding:10px 14px; border-radius:8px; margin-bottom:18px; display:none; }
 </style>
@@ -452,19 +500,81 @@ function renderServices(svcs) {
     </div>`).join("");
 }
 
+function buildTlTree(timelines) {
+  const byId = {};
+  for (const tl of timelines) byId[normId(tl.timeline_id)] = {tl, children: []};
+  const roots = [];
+  for (const tl of timelines) {
+    const anc = tl.ancestor_timeline_id;
+    const parent = anc ? byId[normId(anc)] : null;
+    if (parent) parent.children.push(byId[normId(tl.timeline_id)]);
+    else roots.push(byId[normId(tl.timeline_id)]);
+  }
+  return roots;
+}
+
+function renderTlNode(node, ctx) {
+  const {branchNames, tid, epByTl, skByTl} = ctx;
+  const tl = node.tl;
+  const tlid = tl.timeline_id;
+  const key = normId(tid) + '/' + normId(tlid);
+  const branch = branchNames[key];
+  const skHttp = skByTl[key] || null;
+  const eps = epByTl[key] || [];
+
+  const branchPill = branch
+    ? `<span class="pill branch">${esc(branch)}</span>`
+    : `<span class="pill">${mono(tlid.slice(0,8)+'…')}</span>`;
+
+  const psCell = tl._ps_http ? mono(tl._ps_http) : mono('-');
+  const skCell = skHttp ? mono(skHttp) : mono('-');
+
+  let epSection = '';
+  if (eps.length) {
+    const rows = eps.map(ep => {
+      let cls = 'bad', label = 'stopped';
+      if (ep.running) { cls = 'ok'; label = 'running'; }
+      else if (ep.compute_ctl_up) { cls = 'warn'; label = 'starting'; }
+      return `<tr>
+        <td>${esc(ep.endpoint_id)}</td>
+        <td><span class="pill ${cls}">${label}</span></td>
+        <td>${esc(ep.mode || '-')}</td>
+        <td class="mono">127.0.0.1:${esc(ep.pg_port)}</td>
+        <td class="mono">${esc(ep.external_http_port || '-')}</td>
+        <td>${psCell}</td>
+        <td>${skCell}</td>
+      </tr>`;
+    }).join('');
+    epSection = `<table class="ep-table">
+      <thead><tr>
+        <th>endpoint</th><th>state</th><th>mode</th><th>libpq</th><th>pg http</th><th>ps http</th><th>sk http</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  const childrenHtml = node.children.length
+    ? `<div class="tl-children">${node.children.map(c => renderTlNode(c, ctx)).join('')}</div>`
+    : '';
+
+  return `<div class="tl-tree-node">
+    <div class="tl-block">
+      <div class="tl-head">
+        ${branchPill} <span class="tl-label">Timeline:</span> ${mono(tlid)}
+      </div>
+      ${epSection}
+    </div>
+    ${childrenHtml}
+  </div>`;
+}
+
 function renderUnified(d) {
   const branchNames = d.topology.branch_names || {};
 
-  // timeline key -> safekeeper url
-  const skByTl = {};
-  for (const sk of d.safekeepers || []) {
-    for (const tl of sk.timelines || []) {
-      const key = normId(pick(tl,['tenant_id'])) + '/' + normId(pick(tl,['timeline_id']));
-      if (!skByTl[key]) skByTl[key] = sk.url;
-    }
-  }
+  // DB-derived mapping covers all timelines including branches; the SK
+  // runtime listing only returns timelines it has loaded in memory.
+  const skByTl = d.topology.timeline_sk_urls || {};
 
-  // timeline key -> endpoint list
   const epByTl = {};
   for (const ep of d.endpoints || []) {
     const key = normId(ep.tenant_id) + '/' + normId(ep.timeline_id);
@@ -472,60 +582,27 @@ function renderUnified(d) {
     epByTl[key].push(ep);
   }
 
-  // one row per (timeline, endpoint); timelines without endpoints get one row
-  const rows = [];
-  for (const entry of d.tenants || []) {
-    const tid = pick(entry.tenant, ['id','tenant_id']);
-    for (const tl of entry.timelines || []) {
-      const tlid = tl.timeline_id;
-      const key = normId(tid) + '/' + normId(tlid);
-      const skHttp = skByTl[key] || null;
-      const eps = epByTl[key] || [null];
-      for (const ep of eps) {
-        rows.push({tid, tl, skHttp, ep});
-      }
-    }
-  }
-
-  if (!rows.length) {
-    $("unified").innerHTML = `<div class="empty">no tenants / timelines</div>`;
+  if (!d.tenants || !d.tenants.length) {
+    $("unified").innerHTML = `<div class="empty">no tenants</div>`;
     return;
   }
 
-  const headers = ["tenant","timeline","branch","ancestor","endpoint","state","mode","libpq","pg http","ps http","sk http"];
-  const tableRows = rows.map(({tid, tl, skHttp, ep}) => {
-    const tlid = tl.timeline_id;
-    const ancId = tl.ancestor_timeline_id;
+  $("unified").innerHTML = (d.tenants || []).map(entry => {
+    const tid = pick(entry.tenant, ['id','tenant_id']);
+    const state = entry.tenant.state || '?';
+    const ctx = {branchNames, tid, epByTl, skByTl};
+    const roots = buildTlTree(entry.timelines || []);
+    const tlsHtml = roots.map(r => renderTlNode(r, ctx)).join('');
 
-    let epId = mono('-'), stateCell = mono('-'), modeCell = mono('-');
-    let libpq = mono('-'), pgHttp = mono('-');
-    if (ep) {
-      epId = esc(ep.endpoint_id);
-      let cls = 'bad', label = 'stopped';
-      if (ep.running) { cls = 'ok'; label = 'running'; }
-      else if (ep.compute_ctl_up) { cls = 'warn'; label = 'starting'; }
-      stateCell = `<span class="pill ${cls}">${label}</span>`;
-      modeCell = esc(ep.mode || '-');
-      libpq = mono('127.0.0.1:' + ep.pg_port);
-      pgHttp = mono(ep.external_http_port || '-');
-    }
-
-    return [
-      mono(tid ? tid.slice(0,8)+'…' : '-'),
-      mono(tlid ? tlid.slice(0,8)+'…' : '-'),
-      branchCell(branchNames, tid, tlid),
-      ancId ? mono(ancId.slice(0,8)+'…') : mono('-'),
-      epId,
-      stateCell,
-      modeCell,
-      libpq,
-      pgHttp,
-      tl._ps_http ? mono(tl._ps_http) : mono('-'),
-      skHttp ? mono(skHttp) : mono('-'),
-    ];
-  });
-
-  $("unified").innerHTML = table(headers, tableRows);
+    return `<div class="tenant">
+      <div class="head">
+        <span class="tl-label">Tenant:</span> <span class="tid">${esc(tid)}</span>
+        <span class="pill ${/active/i.test(state)?'ok':'warn'}">${esc(state)}</span>
+        <span class="pill">${entry.timelines.length} timeline(s)</span>
+      </div>
+      ${tlsHtml}
+    </div>`;
+  }).join('');
 }
 
 async function load() {
