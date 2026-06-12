@@ -85,7 +85,12 @@ export function ApiKeyStatusBanner() {
               You don't have an active API key yet.{" "}
               <Link
                 to={ROUTES.settings}
-                className="inline-flex items-center gap-0.5 font-medium text-amber-50 underline-offset-2 hover:underline"
+                // Was `text-amber-50` — near-white that disappeared on the
+                // light-mode warning banner's pale amber background. The
+                // banner sits over `bg-amber-500/10`, so we need a darker
+                // amber in light mode for contrast and the lighter shade
+                // only in dark mode where the band reads as deep amber.
+                className="inline-flex items-center gap-0.5 font-medium text-amber-800 dark:text-amber-100 underline-offset-2 hover:underline hover:text-amber-900 dark:hover:text-amber-50"
               >
                 Manage API keys in Settings → Security
                 <ExternalLink className="h-3 w-3" aria-hidden />
@@ -96,7 +101,9 @@ export function ApiKeyStatusBanner() {
               type="button"
               size="sm"
               variant="outline"
-              className="h-8 shrink-0 gap-1.5 border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-100 hover:bg-amber-500/25 hover:text-amber-50"
+              // Hover token bumped to a darker amber in light mode (was
+              // text-amber-50 which vanished against the pale amber band).
+              className="h-8 shrink-0 gap-1.5 border-amber-500/40 bg-amber-500/15 text-amber-800 dark:text-amber-100 hover:bg-amber-500/25 hover:text-amber-900 dark:hover:text-amber-50"
               onClick={() => setCreateOpen(true)}
             >
               <Plus className="h-3.5 w-3.5" aria-hidden />

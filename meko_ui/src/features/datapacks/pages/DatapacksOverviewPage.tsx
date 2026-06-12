@@ -16,7 +16,7 @@ import {
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
   getDatapackProvisionStatus,
-  listDatapacks,
+  listDatapacks, // imperative call in the provisioning-poll loop only
   type CurrentUser,
   type Datapack,
   type ProvisionStatus,
@@ -29,6 +29,8 @@ import {
   datapackNewConfigurePath,
   datapackSharePath,
 } from "@/app/routes/paths";
+import { queryClient } from "@/lib/queryClient";
+import { DATAPACKS_QUERY_KEY, useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
 import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTilesSection";
 import { DatapackConnectDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
@@ -46,10 +48,19 @@ type OverviewProps = {
 
 export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
   const navigate = useNavigate();
-  const [datapacks, setDatapacks] = useState<Datapack[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Shared react-query cache (see `useDatapacks`). Sidebar + Connect +
+  // WorkbenchLM + ObservePage all subscribe to the same key — first
+  // visit to any of them fetches once, every other surface gets the
+  // result for free until `staleTime` (30s) elapses or
+  // `DATAPACKS_LIST_UPDATED_EVENT` invalidates it.
+  const { data: datapacks = [], isLoading, error: datapacksQueryError } = useDatapacks();
   const [isProvisioningDefaultDatapack, setIsProvisioningDefaultDatapack] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const error =
+    pollError ??
+    (datapacksQueryError
+      ? getApiErrorMessage(datapacksQueryError, "Failed to load datapacks.")
+      : null);
   // First-visit treatment: expand the explainer by default if the user
   // has never seen it.
   //
@@ -85,38 +96,25 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     }
   }, []);
 
+  // Bridge `DATAPACKS_LIST_UPDATED_EVENT` (fired by every page that
+  // mutates the list — create / delete / rename / share-accept) into
+  // a react-query cache invalidation. All consumers of `useDatapacks()`
+  // refetch once collectively, instead of each subscriber maintaining
+  // its own listener.
   useEffect(() => {
-    const loadDatapacks = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        const items = await listDatapacks();
-        setDatapacks(items);
-      } catch (err) {
-        setError(getApiErrorMessage(err, "Failed to load datapacks."));
-      } finally {
-        setIsLoading(false);
-      }
+    const refresh = () => {
+      setPollError(null);
+      void queryClient.invalidateQueries({ queryKey: [DATAPACKS_QUERY_KEY] });
     };
-
-    void loadDatapacks();
+    addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refresh);
+    return () => removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refresh);
   }, []);
 
-  useEffect(() => {
-    const refreshDatapacks = () => {
-      void listDatapacks()
-        .then((items) => {
-          setDatapacks(items);
-          setError(null);
-        })
-        .catch((err) => {
-          setError(getApiErrorMessage(err, "Failed to load datapacks."));
-        });
-    };
-    addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refreshDatapacks);
-    return () => removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refreshDatapacks);
-  }, []);
-
+  // Brand-new accounts: the api_server starts provisioning their default
+  // datapack on first hit, so the very first GET /datapacks may return
+  // empty. Poll until the row appears (or give up after 60s) and write
+  // through the react-query cache so every other surface picks up the
+  // fresh list automatically.
   useEffect(() => {
     if (isLoading || datapacks.length > 0) {
       setIsProvisioningDefaultDatapack(false);
@@ -135,7 +133,10 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
         const items = await listDatapacks();
         if (!mounted) return;
         if (items.length > 0) {
-          setDatapacks(items);
+          // Write into the shared cache instead of a local setState.
+          // Every consumer of `useDatapacks()` re-renders with the new
+          // list — Sidebar, Connect, WorkbenchLM, this page.
+          queryClient.setQueryData<Datapack[]>([DATAPACKS_QUERY_KEY], items);
           setIsProvisioningDefaultDatapack(false);
           return;
         }
@@ -360,15 +361,14 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
               <div className="p-4 sm:px-10 sm:pb-10 pt-0 flex flex-col md:flex-row items-center gap-8 animate-in fade-in slide-in-from-top-4 duration-300">
                 <div className="flex-1">
                   <p className="text-muted-foreground text-base mb-3 leading-relaxed max-w-2xl">
-                    A datapack is everything one project knows, in one place — the conversations
-                    your agents have, the memories they form, the docs you upload, and a traceable
-                    record of what each agent did. Create one per project. Any AI tool you connect
-                    over MCP can read and write to it, so your context follows you when you switch
-                    tools. Private by default, shared by choice.
+                    A datapack is everything your agent knows in one place, usually organized by a
+                    project topic. Conversations you have with your agents, the memories they form,
+                    the docs you upload, and a traceable record of what each agent did. Create one
+                    per topic or project. Any AI tool you connect over MCP can read and write to it,
+                    so your context follows you when you switch tools.
                   </p>
                   <p className="mb-6 max-w-2xl text-xs italic text-muted-foreground/70">
-                    Under the hood, each datapack runs on a YugabyteDB (PostgreSQL-compatible)
-                    database.
+                    Under the hood, each datapack runs on a YugabyteDB database.
                   </p>
                   <div className="flex items-center gap-3">
                     <Button
@@ -389,15 +389,22 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                   </div>
                 </div>
 
+                {/* Decorative chip — reinforces the storage story already
+                    spelled out in the caption below the body copy.
+                    YugabyteDB is the actual storage layer; "Postgres-wire-
+                    compatible" is the relevant compatibility note, not the
+                    primary identity. The earlier "PostgreSQL → Logical DB
+                    Mapping → Via YugabyteDB" framing inverted that and
+                    read as if we ran on Postgres. */}
                 <div className="hidden md:flex w-48 h-38 border border-border bg-input rounded-xl flex-col items-center justify-center gap-4 relative overflow-hidden group">
                   <div className="absolute inset-0 bg-gradient-to-tr from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                   <Database className="w-10 h-10 text-blue-400" />
                   <div className="text-center">
-                    <div className="text-sm font-medium text-foreground">PostgreSQL</div>
-                    <div className="text-xs text-muted-foreground mt-1">Logical DB Mapping</div>
+                    <div className="text-sm font-medium text-foreground">YugabyteDB</div>
+                    <div className="text-xs text-muted-foreground mt-1">Multi-tenant storage</div>
                     <div className="mt-2 flex justify-center">
                       <span className="rounded-md border border-border/70 bg-card/90 px-2 py-0.5 font-mono text-[10px] leading-tight text-muted-foreground/90">
-                        Via YugabyteDB mapping
+                        PostgreSQL-compatible
                       </span>
                     </div>
                   </div>

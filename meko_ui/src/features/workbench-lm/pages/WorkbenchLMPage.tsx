@@ -20,14 +20,13 @@ import {
   getDatapackProvisionStatus,
   listAgents,
   listDatapackConversations,
-  listDatapacks,
   type Agent,
-  type Datapack,
   type DatapackConversation,
   type DatapackThreadMessage,
   type KnowledgeBaseDocument,
 } from "@/lib/mekoApi";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import {
   getPersistedItem,
@@ -67,9 +66,19 @@ type Props = {
 export default function WorkbenchLMPage({ isRouteActive }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const [datapacks, setDatapacks] = useState<Datapack[]>([]);
-  const [datapacksLoading, setDatapacksLoading] = useState(true);
-  const [datapacksError, setDatapacksError] = useState<string | null>(null);
+  // Shared react-query cache (see `useDatapacks` for staleTime + invalidation
+  // semantics). The hook returns `{ data, isLoading, error }` directly — we
+  // rename via destructure to keep the rest of the file's local references
+  // (datapacks / datapacksLoading / datapacksError) untouched.
+  const {
+    data: datapacks = [],
+    isLoading: datapacksLoading,
+    error: datapacksQueryError,
+    refetch: refetchDatapacks,
+  } = useDatapacks();
+  const datapacksError = datapacksQueryError
+    ? getApiErrorMessage(datapacksQueryError, "Failed to load datapacks.")
+    : null;
 
   // `selectedId` is DERIVED from the URL query param (single source of
   // truth). Picking a datapack updates the URL via `setSearchParams`,
@@ -368,36 +377,20 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
     [kbDocs],
   );
 
-  // Stable fetcher so both the mount effect and the cross-page event
-  // subscription below can call it without churn.
-  const refreshDatapacks = useCallback(() => {
-    setDatapacksLoading(true);
-    setDatapacksError(null);
-    listDatapacks()
-      .then((rows) => setDatapacks(rows ?? []))
-      .catch((err) => {
-        if ((err as { name?: string })?.name === "CanceledError") return;
-        setDatapacksError(getApiErrorMessage(err, "Failed to load datapacks."));
-      })
-      .finally(() => setDatapacksLoading(false));
-  }, []);
-
-  useEffect(() => {
-    refreshDatapacks();
-  }, [refreshDatapacks]);
-
   // ProtectedRoutes keeps WorkbenchLMPage permanently mounted (display
-  // toggle), so the mount effect above only runs once per session. Without
-  // this, datapacks created from /datapacks (or shared in) while the
-  // user was on WorkbenchLM wouldn't appear in the picker until a full
-  // page reload. notifyDatapacksListChanged() is fired by every page
-  // that mutates the list (create / update / delete / share-accept).
+  // toggle), so a one-shot mount-time fetch wouldn't notice datapacks
+  // created from /datapacks (or shared in) while the user was here.
+  // notifyDatapacksListChanged() is fired by every page that mutates
+  // the list (create / update / delete / share-accept). We trigger a
+  // refetch on the cached query so this surface + every other surface
+  // subscribed to `useDatapacks()` updates in one call.
   useEffect(() => {
-    addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refreshDatapacks);
+    const onChanged = () => void refetchDatapacks();
+    addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, onChanged);
     return () => {
-      removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refreshDatapacks);
+      removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, onChanged);
     };
-  }, [refreshDatapacks]);
+  }, [refetchDatapacks]);
 
 
   // Auto-select / validate the active datapack against the freshly

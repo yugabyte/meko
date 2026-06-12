@@ -7,7 +7,10 @@ import {
   ensureLangfuseProjectKeys,
   getApiErrorMessage,
   listDatapacks,
+  type Datapack,
 } from "@/lib/mekoApi";
+import { queryClient } from "@/lib/queryClient";
+import { DATAPACKS_QUERY_KEY } from "@/features/datapacks/hooks/useDatapacks";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import {
   clearObserveBootstrapCache,
@@ -125,7 +128,15 @@ export default function ObservePage() {
     }
 
     const prepareObserve = async () => {
-      const datapacks = await listDatapacks();
+      // Use the shared react-query cache so we don't refetch when other
+      // surfaces (Sidebar, Home/Connect, DatapacksOverview) already
+      // populated it. `fetchQuery` returns cached data if fresh,
+      // otherwise fires the queryFn and writes the result through.
+      const datapacks = await queryClient.fetchQuery<Datapack[]>({
+        queryKey: [DATAPACKS_QUERY_KEY],
+        queryFn: () => listDatapacks(),
+        staleTime: 30_000,
+      });
       if (!datapacks.length) {
         throw new Error("No datapacks found for this account");
       }

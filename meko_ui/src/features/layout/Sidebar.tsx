@@ -24,14 +24,13 @@ import {
   AUTH_LOGOUT_EVENT,
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
-  listDatapacks,
   logout,
   ONBOARDING_STATUS_CACHE_KEY,
   PROVISION_STATUS_CACHE_KEY,
-  type Datapack,
 } from "@/lib/mekoApi";
 import { queryClient } from "@/lib/queryClient";
 import { CURRENT_USER_QUERY_KEY, useCurrentUser } from "@/hooks/useCurrentUser";
+import { DATAPACKS_QUERY_KEY, useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
 import { addAppEventListener, dispatchAppEvent, removeAppEventListener } from "@/lib/browserEvents";
 import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
 import { ROUTES, datapackDetailPath } from "@/app/routes/paths";
@@ -60,7 +59,10 @@ export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
-  const [datapackList, setDatapackList] = useState<Datapack[]>([]);
+  // Shared react-query cache — every other surface (HomePage, ObservePage,
+  // WorkbenchLM, DatapacksOverviewPage) subscribes to the same key, so
+  // navigating between them doesn't re-fetch within `staleTime`.
+  const { data: datapackList = [] } = useDatapacks();
   const [datapacksExpanded, setDatapacksExpanded] = useState(true);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   // For the Feedback dialog (account_id + email). Shared session-cached
@@ -100,28 +102,14 @@ export default function Sidebar() {
     location.pathname === ROUTES.workbenchLm ||
     location.pathname.startsWith(`${ROUTES.workbenchLm}/`);
   const activeDatapackId = (new URLSearchParams(location.search).get("datapack_id") ?? "").trim();
-  // Fetch once when entering the datapacks area, not on every `/datapacks/...` subpath change
-  // (otherwise opening a datapack from overview triggers an extra listDatapacks call).
-  useEffect(() => {
-    if (!onDatapacksRoute) return;
-    let cancelled = false;
-    void listDatapacks()
-      .then((items) => {
-        if (!cancelled) setDatapackList(items);
-      })
-      .catch(() => {
-        if (!cancelled) setDatapackList([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [onDatapacksRoute]);
-
+  // Datapack mutations (create/delete/rename) dispatch
+  // `DATAPACKS_LIST_UPDATED_EVENT` to signal "the list you have is now
+  // stale." Previously each subscriber re-fetched locally; now we just
+  // invalidate the shared cache and every consumer of `useDatapacks()`
+  // refetches once collectively.
   useEffect(() => {
     const refresh = () => {
-      void listDatapacks()
-        .then((items) => setDatapackList(items))
-        .catch(() => setDatapackList([]));
+      void queryClient.invalidateQueries({ queryKey: [DATAPACKS_QUERY_KEY] });
     };
     addAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refresh);
     return () => removeAppEventListener(DATAPACKS_LIST_UPDATED_EVENT, refresh);

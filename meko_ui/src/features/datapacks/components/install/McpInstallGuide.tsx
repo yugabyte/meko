@@ -8,7 +8,7 @@
  * Meko personal access token they minted in Settings → Security.
  */
 import { useMemo, useState } from "react";
-import { Check, Copy, Code2, Monitor, MousePointer2, Terminal } from "lucide-react";
+import { Bot, Check, Code2, Copy, Globe, Monitor, MousePointer2, Terminal } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -33,15 +33,80 @@ function injectMcpProvisionIntoCode(code: string, mcpServerUrl?: string | null):
     .replaceAll("<meko-server-api-key>", MEKO_TOKEN_INSTALLER_PLACEHOLDER);
   if (!url) return withKey;
   const qUrl = shellSingleQuoted(url);
-  return withKey
-    .replaceAll("<mcp-server-url>", qUrl)
-    .replaceAll("<meko-mcp-url>", qUrl);
+  return withKey.replaceAll("<mcp-server-url>", qUrl).replaceAll("<meko-mcp-url>", qUrl);
 }
 
 /** Collapsed install-step code preview; copy always uses the full injected command. */
 const INSTALL_GUIDE_CODE_BLOCK_PREVIEW_MAX_CHARS = 320;
 
-type IdeTab = "claude_code" | "claude_desktop" | "cursor" | "manual_mcp";
+type IdeTab = "client_installer" | "manual_mcp" | "connector_oauth";
+
+/**
+ * Per-AI-tool metadata for the tool-picker that lives at the top of the
+ * Client Installer + Connector (OAuth) tabs.
+ *
+ * `slug` is the literal value passed as `--client` to the
+ * `@yugabytedb/meko-mcp` installer in the Client Installer flow, AND
+ * the key used to look up paste instructions in the Connector (OAuth)
+ * flow. The two flows share one selector state so the same chip choice
+ * carries across both tabs.
+ *
+ * Icons today are lucide stand-ins (Monitor / Code2 / MousePointer2 /
+ * Bot). If/when actual brand SVGs land in `meko_ui/public/` (mirroring
+ * the existing `discord-icon.svg` convention — white-on-transparent,
+ * tone via Tailwind `invert dark:invert-0`), swap the `Icon` field for
+ * an `iconSrc: string` and render via `<img>`; the rest of the
+ * structure stays identical.
+ */
+type ClientToolSlug = "claude-desktop" | "claude-code" | "cursor" | "codex";
+
+type ClientTool = {
+  slug: ClientToolSlug;
+  label: string;
+  Icon: typeof Code2;
+  /**
+   * Single-line "how to add Meko to this tool" hint shown as step 2 of
+   * the Connector (OAuth) flow when this tool is selected. Wording
+   * mirrors what the tool's actual UI calls things — "Settings →
+   * Connectors → Add custom connector" for Claude Desktop, "claude mcp
+   * add ..." for the CLI, etc.
+   */
+  connectorInstructions: string;
+};
+
+const CLIENT_TOOLS: ClientTool[] = [
+  {
+    slug: "claude-desktop",
+    label: "Claude Desktop",
+    Icon: Monitor,
+    connectorInstructions: "Settings → Connectors → Add custom connector → paste URL",
+  },
+  {
+    slug: "claude-code",
+    label: "Claude Code",
+    Icon: Code2,
+    // Claude Code has no GUI Settings — adding an MCP server is a
+    // single CLI invocation, mirrored here.
+    connectorInstructions: "Run: claude mcp add meko <mcp-server-url> --transport http",
+  },
+  {
+    slug: "cursor",
+    label: "Cursor",
+    Icon: MousePointer2,
+    connectorInstructions: "Settings → MCP → Add new MCP server → Type: HTTP → paste URL",
+  },
+  {
+    slug: "codex",
+    label: "Codex",
+    Icon: Bot,
+    // Codex's MCP-server UI is still evolving — when the exact path
+    // settles, update this string. The chip is wired up either way so
+    // the layout is final.
+    connectorInstructions: "Settings → MCP servers → Add → paste URL",
+  },
+];
+
+const DEFAULT_CLIENT_TOOL: ClientTool = CLIENT_TOOLS[0];
 
 type InstallStep = {
   title: string;
@@ -68,38 +133,24 @@ const SHARED_NVM_NODE_PREREQ_STEP: InstallStep = {
   codeSingleRowScroll: true,
 };
 
-const CLAUDE_CODE_INSTALL_STEPS: InstallStep[] = [
-  SHARED_NVM_NODE_PREREQ_STEP,
-  {
-    title: "Install Meko MCP for Claude Code",
-    description:
-      "Run once with your MCP URL and API key from the Datapacks page (replace the placeholders before running).",
-    code: "npx @yugabytedb/meko-mcp --client claude-code --url <mcp-server-url> --api-key <mcp-server-api-key>",
-    langLabel: "bash",
-  },
-];
-
-const CLAUDE_DESKTOP_INSTALL_STEPS: InstallStep[] = [
-  SHARED_NVM_NODE_PREREQ_STEP,
-  {
-    title: "Install Meko MCP for Claude Desktop",
-    description:
-      "Run once with your MCP URL and API key from the Datapacks page (replace the placeholders before running).",
-    code: "npx @yugabytedb/meko-mcp --client claude-desktop --url <mcp-server-url> --api-key <mcp-server-api-key>",
-    langLabel: "bash",
-  },
-];
-
-const CURSOR_INSTALL_STEPS: InstallStep[] = [
-  SHARED_NVM_NODE_PREREQ_STEP,
-  {
-    title: "Install Meko MCP for Cursor",
-    description:
-      "Run once with your MCP URL and API key from the Datapacks page (replace the placeholders before running).",
-    code: "npx @yugabytedb/meko-mcp --client cursor --url <mcp-server-url> --api-key <mcp-server-api-key>",
-    langLabel: "bash",
-  },
-];
+// Single "Client Installer" tab covering all AI tools — the flow is
+// identical for each, only the `--client` slug differs. Instead of one
+// tab per tool (or one tab with a placeholder the user has to fill in),
+// we render an icon-picker at the top of the tab and inject the
+// selected tool's slug into the rendered `npx` command. Pick once,
+// copy, paste.
+function buildClientInstallerSteps(tool: ClientTool): InstallStep[] {
+  return [
+    SHARED_NVM_NODE_PREREQ_STEP,
+    {
+      title: `Install Meko MCP for ${tool.label}`,
+      description:
+        "Run once. The MCP URL is filled in below; substitute the API key placeholder with one from Settings → Security.",
+      code: `npx @yugabytedb/meko-mcp --client ${tool.slug} --url <mcp-server-url> --api-key <mcp-server-api-key>`,
+      langLabel: "bash",
+    },
+  ];
+}
 
 const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
   {
@@ -138,9 +189,9 @@ const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
     langLabel: "bash",
   },
   {
-    title: "Integrate skills package with the AI agent",
+    title: "Integrate skills package with the AI tool",
     description:
-      "Integrate the skills package with your AI agent to learn how to use Meko's MCP tools for memory, knowledge, and more.",
+      "Integrate the skills package with your AI tool to learn how to use Meko's MCP tools for memory, knowledge, and more.",
     code: [
       "git clone https://github.com/yugabyte/meko-mcp-server.git",
       "cd meko-mcp-server",
@@ -156,8 +207,43 @@ const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
   },
 ];
 
+/**
+ * "Remote (OAuth)" install path — no API key, no `npx` package.
+ *
+ * The user pastes the MCP server URL into their AI tool's "Add MCP
+ * server / custom connector" UI. The tool detects the OAuth metadata
+ * Meko publishes at `/.well-known/oauth-authorization-server`, opens a
+ * browser tab where the user signs in via Cognito, and stores the
+ * resulting access token. From there every MCP call carries that token —
+ * no friction, no PAT to mint.
+ *
+ * No bash here: the steps are paste-this-URL + click-Authorize, not
+ * shell commands.
+ */
+function buildConnectorOauthSteps(tool: ClientTool): InstallStep[] {
+  return [
+    {
+      title: "Copy your MCP server URL",
+      description: "This is the single URL all AI tools use. Paste it once per tool.",
+      code: "<mcp-server-url>",
+      langLabel: "url",
+      codeSingleRowScroll: true,
+    },
+    {
+      title: `Connect ${tool.label} to Meko`,
+      description: tool.connectorInstructions,
+    },
+    {
+      title: "Authorize",
+      description:
+        `Once the Meko MCP server URL is configured in ${tool.label}, authorize it to use the MCP tools. Your tool opens a browser tab, you sign in to Meko, and the token is stored automatically.`,
+    },
+  ];
+}
+
 function buildInstallGuide(
-  mcpServerUrl?: string | null,
+  mcpServerUrl: string | null | undefined,
+  tool: ClientTool,
 ): Record<IdeTab, InstallStep[]> {
   const inject = (steps: InstallStep[]) =>
     steps.map((step) => ({
@@ -165,20 +251,83 @@ function buildInstallGuide(
       code: step.code != null ? injectMcpProvisionIntoCode(step.code, mcpServerUrl) : undefined,
     }));
 
+  // Raw (non-shell-quoted) URL substitution for the Connector (OAuth)
+  // tab. The standard `inject` runs `shellSingleQuoted(url)` on every
+  // URL because the other tabs' code is bash one-liners that need
+  // quoting. The OAuth tab's "code" is a literal URL the user
+  // copy-pastes into Cursor's MCP-URL field or Claude Desktop's
+  // connector input — GUI inputs, not shells. Shell-quoting would
+  // paste `'https://...'` (with surrounding single quotes) into those
+  // fields, breaking the connection. We also substitute in
+  // `description` here so the Claude Code `claude mcp add meko
+  // <mcp-server-url> --transport http` snippet renders the real URL
+  // instead of the placeholder literal — the standard inject helper
+  // ignores descriptions entirely.
+  const injectRaw = (steps: InstallStep[]) => {
+    const url = mcpServerUrl?.trim();
+    if (!url) return steps;
+    return steps.map((step) => ({
+      ...step,
+      code: step.code?.replaceAll("<mcp-server-url>", url),
+      description: step.description.replaceAll("<mcp-server-url>", url),
+    }));
+  };
+
   return {
-    claude_code: inject(CLAUDE_CODE_INSTALL_STEPS),
-    claude_desktop: inject(CLAUDE_DESKTOP_INSTALL_STEPS),
-    cursor: inject(CURSOR_INSTALL_STEPS),
+    client_installer: inject(buildClientInstallerSteps(tool)),
+    connector_oauth: injectRaw(buildConnectorOauthSteps(tool)),
     manual_mcp: inject(MANUAL_MCP_INSTALL_STEPS),
   };
 }
 
 const TAB_META: { id: IdeTab; label: string; icon: typeof Code2 }[] = [
-  { id: "claude_code", label: "Claude Code", icon: Code2 },
-  { id: "claude_desktop", label: "Claude Desktop", icon: Monitor },
-  { id: "cursor", label: "Cursor", icon: MousePointer2 },
+  { id: "client_installer", label: "Client Installer", icon: Code2 },
+  { id: "connector_oauth", label: "Connector (OAuth)", icon: Globe },
   { id: "manual_mcp", label: "Manual MCP Install", icon: Terminal },
 ];
+
+/**
+ * Icon-chip row letting the user pick which AI tool the install steps
+ * should reflect. Sits at the top of the Client Installer and
+ * Connector (OAuth) tabs. Selection is hoisted to `McpInstallGuide` so
+ * picking a tool on one tab carries over to the other — both tabs
+ * answer the same question ("which tool are you connecting?") so we
+ * don't want the user to repeat the choice.
+ */
+function ToolPicker({
+  value,
+  onChange,
+}: {
+  value: ClientTool;
+  onChange: (next: ClientTool) => void;
+}) {
+  return (
+    <div className="mb-6 flex flex-wrap gap-2" role="radiogroup" aria-label="Choose your AI tool">
+      {CLIENT_TOOLS.map((tool) => {
+        const Icon = tool.Icon;
+        const isActive = tool.slug === value.slug;
+        return (
+          <button
+            key={tool.slug}
+            type="button"
+            role="radio"
+            aria-checked={isActive}
+            onClick={() => onChange(tool)}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+              isActive
+                ? "border-blue-500/50 bg-blue-500/10 text-blue-700 dark:border-blue-400/60 dark:bg-blue-500/15 dark:text-blue-200"
+                : "border-border bg-card/40 text-muted-foreground hover:border-border/80 hover:bg-card/70 hover:text-foreground",
+            )}
+          >
+            <Icon className="h-4 w-4 shrink-0" aria-hidden />
+            {tool.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function CodeBlock({
   code,
@@ -289,8 +438,12 @@ function InstallSteps({ tab, steps }: { tab: IdeTab; steps: InstallStep[] }) {
                 </div>
               </div>
               <div className="min-w-0 space-y-2 pt-0.5">
-                <h3 className="text-base font-semibold tracking-tight text-foreground">{step.title}</h3>
-                <p className="text-sm leading-relaxed text-muted-foreground">{step.description}</p>
+                <h3 className="text-base font-semibold tracking-tight text-foreground">
+                  {step.title}
+                </h3>
+                <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+                  {step.description}
+                </p>
               </div>
             </div>
             {showCode ? (
@@ -329,13 +482,24 @@ type McpInstallGuideProps = {
  * MCP install steps (Claude Code / Claude Desktop / Cursor / Manual MCP Install).
  */
 export function McpInstallGuide({ className, mcpServerUrl = null }: McpInstallGuideProps) {
+  // Selected tool is shared across the Client Installer and Connector
+  // (OAuth) tabs — the user is answering the same question ("which
+  // tool?") on both surfaces, so we lift state up here and pass the
+  // resolved tool down to whichever tab is active.
+  const [selectedTool, setSelectedTool] = useState<ClientTool>(DEFAULT_CLIENT_TOOL);
+
   const installGuide = useMemo(
-    () => buildInstallGuide(mcpServerUrl),
-    [mcpServerUrl],
+    () => buildInstallGuide(mcpServerUrl, selectedTool),
+    [mcpServerUrl, selectedTool],
   );
 
+  // Tabs that show the ToolPicker. Manual MCP Install is intentionally
+  // excluded — that flow targets generic MCP clients (`npx mcp-add`)
+  // and doesn't have a `--client` slug per tool.
+  const tabsWithPicker = new Set<IdeTab>(["client_installer", "connector_oauth"]);
+
   return (
-    <Tabs defaultValue="claude_code" className={cn("w-full", className)}>
+    <Tabs defaultValue="client_installer" className={cn("w-full", className)}>
       <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-xl bg-muted/60 p-1.5 sm:inline-flex sm:w-auto">
         {TAB_META.map(({ id, label, icon: Icon }) => (
           <TabsTrigger
@@ -352,7 +516,14 @@ export function McpInstallGuide({ className, mcpServerUrl = null }: McpInstallGu
       </TabsList>
 
       {TAB_META.map(({ id }) => (
-        <TabsContent key={id} value={id} className="mt-6 rounded-xl border border-border bg-card/30 p-6 sm:p-8">
+        <TabsContent
+          key={id}
+          value={id}
+          className="mt-6 rounded-xl border border-border bg-card/30 p-6 sm:p-8"
+        >
+          {tabsWithPicker.has(id) ? (
+            <ToolPicker value={selectedTool} onChange={setSelectedTool} />
+          ) : null}
           <InstallSteps tab={id} steps={installGuide[id]} />
         </TabsContent>
       ))}
