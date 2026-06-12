@@ -517,11 +517,29 @@ impl ImageMaterializer {
         // caller's bound). Fetch via `read_chain_durable` — the cache
         // fast path handles the hot case and YB fallback handles
         // post-eviction or read-side dispatch.
-        let chain = self
+        // A failure here (no will_init anchor, transient read error)
+        // means we can't assemble a durable chain for this key.
+        // Materialisation is best-effort: log and skip the page rather
+        // than aborting (the `Err` arm in the batch loop is reserved for
+        // walredo failures, which fatal-abort). The deltas stay in
+        // place; reads still serve them, and a later trigger retries.
+        let chain = match self
             .page_writer
             .read_chain_durable(Key::from_slice(&job.key), job.target_lsn)
             .await
-            .context("read_chain_durable")?;
+        {
+            Ok(chain) => chain,
+            Err(e) => {
+                tracing::error!(
+                    tenant_id = %self.tenant_id,
+                    timeline_id = %self.timeline_id,
+                    target_lsn = %job.target_lsn,
+                    key = ?bytes::Bytes::copy_from_slice(&job.key),
+                    "read_chain_durable failed; skipping materialise of this page: {e:#}"
+                );
+                return Ok(None);
+            }
+        };
         tracing::debug!(
             tenant_id = %self.tenant_id,
             timeline_id = %self.timeline_id,

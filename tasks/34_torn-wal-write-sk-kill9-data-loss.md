@@ -385,7 +385,48 @@ didn't fold). NB: this also means the Part-1 `push()` fix is necessary
 heap-loss path is **not fully closed under stacked re-attach** — same
 post-flush materialiser suspect.
 
-### Status: root-caused to a class, NOT yet fixed
+### Deterministic repro + defensive fix (2026-06-12)
+
+`read_chain`'s SQL floors the chain at the latest `is_image=TRUE` row,
+else `lsn>=0` (full history); the Rust side trims at the first
+`will_init`. So an **anchorless** result (no `will_init` anywhere ≤
+`target_lsn`) means the page's init record is **genuinely missing from
+YB** — a lost anchor. `read_chain_durable` returned that anchorless chain
+to the materialiser, which `parse_chain`→`base_img=None`→walredo folds
+onto a **zero page**, then `install`+`trim_key_up_to` makes it durable.
+(The getpage `read_chain` path zero-bases the same way → that's the
+compute-side "unexpected zero page" read error. One mechanism, both
+paths.)
+
+Deterministic repro (no e2e, no non-determinism):
+`page_writer::tests::read_chain_durable_refuses_anchorless_chain` — put
+deltas with no `will_init`, flush, call `read_chain_durable`. Confirmed
+it **fails without the fix** (returns the 2-delta anchorless chain) and
+**passes with it**; all 49 `page_writer` tests green.
+
+Fix — loud-fail corruption **guards** (both paths that fold a chain):
+- **Materialiser** (`read_chain_durable`): errors on an anchorless chain
+  (counter `materialize_unanchored_chain`). `redo_one` **logs it and
+  skips the page** (`Ok(None)`) — it does NOT hit the batch loop's
+  `fatal_abort` arm (reserved for walredo failures). The deltas stay in
+  place; a later trigger retries. So the materialiser can't amplify a
+  lost anchor into a durable zero-based image.
+- **getpage read path** (`chain_to_value_reconstruct_state`): errors on
+  a plain-delta-anchored chain (counter `read_unanchored_chain`) instead
+  of zero-basing. Previously the read path **silently** walredo'd
+  anchorless deltas onto a zero page → silent missing rows for
+  heap/catalog, and only btree's structural check surfaced it as
+  "unexpected zero page". Now every such read fails loudly at the PS.
+
+**Scope:** these are *corruption guards* — they turn a silent
+lost-anchor into a loud error at the source, and stop the materialiser
+making it durable. They do **not** fix the upstream **anchor loss**
+itself (still unpinned — the post-flush durable loss). After them, the
+`-n 2` repro's mode E surfaces as a PS getpage / `could not open
+relation` error rather than a silent zero page; all non-torn `fast`
+scenarios stay green (no read-path regression).
+
+### Status: amplification hardened + unit-verified; upstream anchor-loss still open
 
 A correct fix is in the `consistent_lsn`/flush-frontier machinery and
 must be designed + verified (not guessed) — advancing `consistent_lsn`

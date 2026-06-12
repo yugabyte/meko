@@ -3153,10 +3153,27 @@ fn chain_to_value_reconstruct_state(
         // become records.
         state.img = Some((anchor.lsn, anchor.payload.clone()));
         &chain[..anchor_idx]
-    } else {
-        // will_init delta anchor: include it as the first (oldest)
-        // record. No base_img.
+    } else if anchor.will_init {
+        // will_init delta anchor: it fully initialises the page, so no
+        // base_img is needed — include it as the first (oldest) record.
         &chain[..]
+    } else {
+        // No anchor at all: the oldest row is a plain delta (not an
+        // image, not will_init), so there is nothing to initialise the
+        // page from. Folding these deltas onto a zero base would
+        // silently hand the compute a zero/garbage page — a missing
+        // heap/catalog row, or an "unexpected zero page" for a btree.
+        // Error loudly instead of fabricating a page: the page's init
+        // record is missing upstream and the read is genuinely
+        // unservable.
+        crate::metrics::CORRECTNESS_ERRORS
+            .with_label_values(&["read_unanchored_chain"])
+            .inc();
+        anyhow::bail!(
+            "read chain for key has no will_init anchor (oldest row lsn={} is a plain \
+             delta) — refusing to reconstruct a zero-based page",
+            anchor.lsn,
+        );
     };
 
     state.records.reserve(records_slice.len());

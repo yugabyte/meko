@@ -1010,30 +1010,28 @@ impl PageWriter {
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
         } else if !merged.is_empty() {
-            // Tripwire (tasks/34 part 2): no `will_init` anchor in the
-            // merged cache+YB chain. `parse_chain` would then fold these
-            // deltas onto a ZERO base page (base_img=None) and the
-            // materialiser would install + `trim_key_up_to` that wrong
-            // image — durable corruption that surfaces later as a heap
-            // hole / orphan catalog row / "unexpected zero page". A
-            // complete durable chain ≤ target_lsn must always reach a
-            // will_init anchor; returning one without an anchor is the
-            // bug, not just a symptom.
+            // No `will_init` anchor in the merged cache+YB chain ≤
+            // target_lsn (tasks/34 part 2). `parse_chain` would set
+            // `base_img=None` and walredo would fold these deltas onto a
+            // ZERO page; the materialiser would then `install` +
+            // `trim_key_up_to` that wrong/zero image, making the
+            // corruption durable — surfacing later as a heap hole /
+            // orphan catalog row / "unexpected zero page". A complete
+            // durable chain must always reach a will_init anchor; its
+            // absence means the page's init record is missing upstream.
+            // Refuse loudly rather than fabricate a zero-based page: a
+            // hard error stops the materialiser job (logged + skipped by
+            // `redo_one`) instead of silently amplifying the loss.
             crate::metrics::CORRECTNESS_ERRORS
                 .with_label_values(&["materialize_unanchored_chain"])
                 .inc();
             let lo = merged.last().map(|r| r.lsn);
             let hi = merged.first().map(|r| r.lsn);
-            tracing::error!(
-                tenant_id = %self.tenant_id,
-                timeline_id = %self.timeline_id,
-                %target_lsn,
-                chain_len = merged.len(),
-                ?lo,
-                ?hi,
-                key = ?key_bytes,
-                "read_chain_durable: no will_init anchor in chain ≤ target_lsn \
-                 — folding this would zero-base the page (tasks/34 part 2)"
+            anyhow::bail!(
+                "read_chain_durable: no will_init anchor in chain ≤ target_lsn={target_lsn} \
+                 (chain_len={}, lsn lo={lo:?} hi={hi:?}, key={key_bytes:?}) — the page's \
+                 init record is missing; refusing to materialise a zero-based page",
+                merged.len(),
             );
         }
         Ok(merged)
@@ -2316,6 +2314,49 @@ mod tests {
         assert_eq!(chain[2].lsn, Lsn(10));
         assert!(chain[2].will_init);
         assert!(!chain[2].is_image);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// tasks/34 part 2: deterministic repro of the materialiser's
+    /// anchorless-fold hazard. A key whose `will_init` anchor is absent
+    /// from YB (its init record was lost upstream) leaves only non-init
+    /// deltas. `read_chain_durable` must NOT hand that chain to the
+    /// materialiser: `parse_chain` would set `base_img=None` and walredo
+    /// would fold the deltas onto a ZERO page, then `install + trim`
+    /// would make that wrong/zero page durable — the "unexpected zero
+    /// page" / heap-hole / orphan-catalog corruption. The fix errors;
+    /// `redo_one` logs it and skips the page (leaving the deltas in
+    /// place) rather than materialising a zero-based image.
+    #[tokio::test]
+    async fn read_chain_durable_refuses_anchorless_chain() {
+        let (store, schema) = make_store("anchorless").await;
+        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        // Deltas only, no will_init anchor anywhere ≤ target.
+        w.put(&[(k(1), Lsn(20), delta()), (k(1), Lsn(30), delta())])
+            .await
+            .unwrap();
+        w.flush().await.unwrap();
+
+        // Sanity: the raw store chain is genuinely anchorless (no
+        // will_init), which is the precondition the fix must catch.
+        let raw = store
+            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100))
+            .await
+            .unwrap();
+        assert!(!raw.is_empty(), "deltas should be durable");
+        assert!(
+            !raw.iter().any(|r| r.will_init),
+            "precondition: chain has no will_init anchor"
+        );
+
+        // The materialiser-facing read must refuse the anchorless chain.
+        let res = w.read_chain_durable(k(1), Lsn(100)).await;
+        assert!(
+            res.is_err(),
+            "read_chain_durable must error on an anchorless chain (would zero-base \
+             the page); got Ok with {} rows",
+            res.map(|c| c.len()).unwrap_or(0),
+        );
         drop_schema(&store, &schema).await;
     }
 
