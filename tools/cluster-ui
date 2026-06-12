@@ -202,6 +202,28 @@ def discover(repo_dir, database_url=None):
         except (json.JSONDecodeError, IndexError):
             continue
 
+    # Per-endpoint endpoint_storage address. Each endpoint runs its own
+    # endpoint_storage process on its own port, recorded in that endpoint's
+    # local `endpoint_storage.json` `listen` field. The cluster `config` only
+    # carries a single `[endpoint_storage]` entry, so it can't distinguish
+    # them — key by endpoint_id here and fall back to the cluster es_url when
+    # the file is absent (e.g. running away from the repo).
+    endpoint_storage_by_id: dict = {}
+    if repo_dir:
+        for ep in endpoints:
+            eid = ep.get("endpoint_id")
+            if not eid:
+                continue
+            esj = os.path.join(repo_dir, "endpoints", str(eid),
+                               "endpoint_storage", "endpoint_storage.json")
+            try:
+                with open(esj, "r") as f:
+                    listen = json.load(f).get("listen")
+                if listen:
+                    endpoint_storage_by_id[eid] = f"http://{listen}"
+            except (OSError, json.JSONDecodeError):
+                continue
+
     # Branch names from materialized timelines.
     branch_names = {}
     for r in _query(f"SELECT tenant_id, timeline_id, branch_name "
@@ -264,6 +286,7 @@ def discover(repo_dir, database_url=None):
         "pageservers": pageservers,
         "safekeepers": safekeepers,
         "endpoint_storage": es_url,
+        "endpoint_storage_by_id": endpoint_storage_by_id,
         "endpoints": endpoints,
         "branch_names": branch_names,
         "db_timelines": db_timelines,
@@ -555,7 +578,7 @@ function buildTlTree(timelines) {
 }
 
 function renderTlNode(node, ctx) {
-  const {branchNames, tid, epByTl, skByTl, esUrl} = ctx;
+  const {branchNames, tid, epByTl, skByTl, esUrl, esById} = ctx;
   const tl = node.tl;
   const tlid = tl.timeline_id;
   const key = normId(tid) + '/' + normId(tlid);
@@ -570,7 +593,6 @@ function renderTlNode(node, ctx) {
   const portOf = url => url ? url.split(':').pop() : '-';
   const psCell = mono(tl._ps_http ? portOf(tl._ps_http) : '-');
   const skCell = mono(skHttp ? portOf(skHttp) : '-');
-  const esCell = mono(esUrl ? portOf(esUrl) : '-');
 
   let epSection = '';
   if (eps.length) {
@@ -578,6 +600,10 @@ function renderTlNode(node, ctx) {
       let cls = 'bad', label = 'stopped';
       if (ep.running) { cls = 'ok'; label = 'running'; }
       else if (ep.compute_ctl_up) { cls = 'warn'; label = 'starting'; }
+      // Endpoint storage is per-endpoint (its own port); look it up by
+      // endpoint_id, falling back to the cluster-level es_url.
+      const epEs = (esById && esById[ep.endpoint_id]) || esUrl;
+      const esCell = mono(epEs ? portOf(epEs) : '-');
       return `<tr>
         <td>${esc(ep.endpoint_id)}</td>
         <td><span class="pill ${cls}">${label}</span></td>
@@ -634,7 +660,8 @@ function renderUnified(d) {
   $("unified").innerHTML = (d.tenants || []).map(entry => {
     const tid = pick(entry.tenant, ['id','tenant_id']);
     const state = entry.tenant.state || '?';
-    const ctx = {branchNames, tid, epByTl, skByTl, esUrl: d.topology.endpoint_storage};
+    const ctx = {branchNames, tid, epByTl, skByTl, esUrl: d.topology.endpoint_storage,
+                 esById: d.topology.endpoint_storage_by_id || {}};
     const roots = buildTlTree(entry.timelines || []);
     const tlsHtml = roots.map(r => renderTlNode(r, ctx)).join('');
 
