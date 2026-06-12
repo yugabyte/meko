@@ -105,12 +105,13 @@ These exist only in yblight-controller's state store; they have no physical foot
 - **Placement group** — top-level unit, and the scope of a yblight-controller deployment. Each
   placement group has exactly one YBDB universe (managed by a YBA; one YBA can manage
   multiple universes) and holds zero or more tenant pools.
-- **Tenant pool** — roughly an "org"; contains zero or more tenants. The pool is
-  the finest grain of user access (§10.1).
+- **Tenant pool** — roughly an "org"; contains zero or more tenants. A grant on the
+  pool lets a user create and see its tenants; access to each tenant is granted
+  separately (§10.1).
 - **Tenant** — a customer/team within a pool; owns zero or more PG clusters. The
-  tenant is the unit of timeline ownership (§4.3), and that timeline scoping is what
-  isolates tenants from each other structurally — user access is granted per pool
-  (§10.1), not per tenant.
+  tenant is the unit of timeline ownership (§4.3) and the finest grain of user access
+  (§10.1) — that timeline scoping is what isolates tenants from each other
+  structurally, with access granted per tenant.
 
 ### 4.2 Physical constructs
 
@@ -166,7 +167,7 @@ precisely because we start with the coarser unit.
 This works because endpoints are stateless (§5.3) and carry no hardware affinity:
 an endpoint may be scheduled next to endpoints of other tenants — including tenants
 in other tenant pools. Isolation between tenants is enforced by timeline scoping
-(§4.3), with user access granted at the pool level (§10.1) — not by dedicated
+(§4.3), with user access granted per tenant (§10.1) — not by dedicated
 hardware.
 
 ## 5. Service topology
@@ -333,8 +334,9 @@ these routes without reshaping it. See
 These are the initial user-facing workflows. Each is implemented as a task built from
 re-usable subtasks (§8); none is a special case.
 
-1. **New tenant in a tenant pool** — create the tenant within its pool. User access
-   stays pool-grained (§10.1), so no per-tenant access setup is involved.
+1. **New tenant in a tenant pool** — create the tenant within its pool (the caller
+   needs a grant on that pool). Access to the new tenant is then granted per tenant
+   (§10.1).
 2. **New PG cluster (fresh timeline)** — create a new timeline under the tenant,
    create the PG cluster bound to it, optionally create its first (write) endpoint.
 3. **Fork a PG cluster (branch a timeline)** — fork an existing timeline at a point,
@@ -497,8 +499,10 @@ consequences worth stating up front:
 The state store tracks both halves of the model:
 
 - **Logical:** tenant pools, tenants, and users — users are either **admin**
-  (placement-group-wide, all tenant pools) or **granted access to specific tenant
-  pools** (one or more, via per-pool grants) — plus the RBAC bindings at each level.
+  (placement-group-wide, all pools and tenants) or non-admin, holding a **pool grant**
+  (to create and see tenants in a pool) plus **per-tenant grants** (read-only or
+  read-write access to specific tenants), see §10.1 — plus the RBAC bindings at each
+  level.
 - **Physical:** PG clusters and their timelines (including fork ancestry), and
   endpoints (timeline binding and r/w vs. read-only role, exposed ports/address,
   placement, version, TLS/cert state, otel config). Endpoint records must be complete
@@ -512,8 +516,10 @@ reconciliation has something to reconcile against.
 
 ```
 user ──< user_pool_grant >── tenant_pool ──< tenant ──< pg_cluster (timeline) ──< endpoint
- │
- └─ admin users skip grants: all pools
+ │                                            │
+ └──< user_tenant_grant >─────────────────────┘   (role: read_only | read_write)
+
+admin users skip both grants: all pools and tenants
 ```
 
 - **tenant_pool / tenant** — the plain ownership hierarchy; names are unique within
@@ -531,11 +537,14 @@ user ──< user_pool_grant >── tenant_pool ──< tenant ──< pg_clust
   last-seen — are observed data. Replacing a failed instance keeps the endpoint id
   (new pod, same record); scale-to-zero deletes records, not just instances.
   Address + ports + TLS state form the connection details returned to users.
-- **user / user_pool_grant** — users are either **admin** (all pools, no grants
-  needed) or non-admin, whose access is the union of their per-pool grant rows,
-  keyed `(user_id, tenant_pool_id)`. Revocation is dropping the row; a non-admin
-  user with zero grants is valid and can access nothing. There are no tenant-scoped
-  users — the pool is the finest grain of user access (decided).
+- **user / user_pool_grant / user_tenant_grant** — users are either **admin** (all
+  pools and tenants, no grants needed) or non-admin. A non-admin holds a **pool
+  grant**, keyed `(user_id, tenant_pool_id)`, that lets them create and see tenants in
+  a pool; and **tenant grants**, keyed `(user_id, tenant_id)` with a `read_only` |
+  `read_write` role, that govern access to specific tenants. Effective access is the
+  union of the tenant grants. Revocation is dropping the relevant row; a non-admin with
+  zero grants is valid and can access nothing. The tenant is the finest grain of user
+  access (decided).
 - The **placement group has no table** — a controller instance *is* one placement
   group (§4); its identity and connection-mode configuration are deployment config,
   not rows.
@@ -551,8 +560,9 @@ in API-layer validation (full DDL lives with the code and its migrations):
 2. **Single writer per PG cluster.** A partial unique index —
    `UNIQUE (tenant_id, timeline_id) WHERE role = 'read_write'` — so two write
    endpoints cannot exist no matter what code path tries.
-3. **Pool access is explicit rows.** The `(user_id, tenant_pool_id)` primary key
-   means a grant either exists or it doesn't.
+3. **Access is explicit rows.** Pool grants key on `(user_id, tenant_pool_id)` and
+   tenant grants on `(user_id, tenant_id)`; a grant at either level either exists or it
+   doesn't.
 4. **Deletes are restricted, not cascaded.** Removing a pool with tenants, a tenant
    with clusters, a cluster with endpoints, or a cluster whose timeline has fork
    children is a constraint violation; teardown happens top-down through tasks,
