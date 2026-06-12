@@ -191,13 +191,32 @@ def discover(repo_dir, database_url=None):
         except (json.JSONDecodeError, IndexError):
             continue
 
-    # Branch names: each live timeline carries its human-readable alias.
+    # Branch names from materialized timelines.
     branch_names = {}
     for r in _query(f"SELECT tenant_id, timeline_id, branch_name "
                     f"FROM {SC_SCHEMA}.timelines "
                     f"WHERE branch_name IS NOT NULL AND deleted_at IS NULL"):
         if len(r) >= 3 and r[2]:
             branch_names[f"{_norm_id(r[0])}/{_norm_id(r[1])}"] = r[2]
+
+    # Pending timeline inits: branches created but not yet materialized
+    # (endpoint create hasn't run yet, so PS+SK aren't started). These carry
+    # ancestor_timeline_id and branch_name; we surface them as stub timeline
+    # entries so the UI shows them immediately after `timeline branch`.
+    db_timelines: dict = {}  # tenant_id_norm -> [{timeline_id, ancestor_timeline_id}]
+    for r in _query(f"SELECT tenant_id, timeline_id, branch_name, ancestor_timeline_id "
+                    f"FROM {SC_SCHEMA}.pending_timeline_inits"):
+        if len(r) < 2:
+            continue
+        tnorm = _norm_id(r[0])
+        tlnorm = _norm_id(r[1])
+        key = f"{tnorm}/{tlnorm}"
+        if r[2]:
+            branch_names[key] = r[2]
+        db_timelines.setdefault(tnorm, []).append({
+            "timeline_id": tlnorm,
+            "ancestor_timeline_id": _norm_id(r[3]) if r[3] else None,
+        })
 
     # Parse [[safekeepers]] http_port from the config file. The DB
     # safekeepers table loses branch SK entries when the cluster is reset,
@@ -236,6 +255,7 @@ def discover(repo_dir, database_url=None):
         "endpoint_storage": es_url,
         "endpoints": endpoints,
         "branch_names": branch_names,
+        "db_timelines": db_timelines,
         "timeline_sk_urls": timeline_sk_urls,
     }
 
@@ -288,6 +308,16 @@ def collect(repo_dir, database_url=None):
                 if tlid and tlid not in seen_tl:
                     seen_tl[tlid] = {**t, "_ps_http": http}
         timelines = list(seen_tl.values())
+        # Supplement with DB-known timelines whose PS hasn't started yet
+        # (branch created but no endpoint yet → PS process not running).
+        tid_norm = _norm_id(tid)
+        for db_tl in topo.get("db_timelines", {}).get(tid_norm, []):
+            if db_tl["timeline_id"] not in seen_tl:
+                timelines.append({
+                    "timeline_id": db_tl["timeline_id"],
+                    "ancestor_timeline_id": db_tl["ancestor_timeline_id"],
+                    "_ps_http": None,
+                })
         # Use the first shard's attached node and scheduling policy as the
         # display anchor for this tenant.
         shards = sc_tenant.get("shards", [])
@@ -414,7 +444,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .pill.ok { color:var(--green); border-color:var(--green); }
   .pill.bad { color:var(--red); border-color:var(--red); }
   .pill.warn { color:var(--amber); border-color:var(--amber); }
-  .pill.branch { color:#e3b341; border-color:#e3b341; }
+  .pill.branch { color:#c084fc; border-color:#c084fc; border-radius:4px; padding:1px 7px; }
   .tenant { background:var(--panel); border:1px solid var(--line); border-radius:8px;
             margin-bottom:14px; }
   .tenant > .head { padding:10px 14px; display:flex; gap:10px; align-items:center;
@@ -491,7 +521,7 @@ function table(headers, rows) {
 }
 
 function renderServices(svcs) {
-  const show = svcs.filter(s => s.kind !== 'pageserver' && s.kind !== 'safekeeper');
+  const show = svcs.filter(s => s.kind !== 'pageserver' && s.kind !== 'safekeeper' && s.kind !== 'endpoint_storage');
   $("services").innerHTML = show.map(s => `
     <div class="card">
       <div class="svc"><span class="dot ${s.up?'up':'down'}"></span>${esc(s.name)}</div>
@@ -514,7 +544,7 @@ function buildTlTree(timelines) {
 }
 
 function renderTlNode(node, ctx) {
-  const {branchNames, tid, epByTl, skByTl} = ctx;
+  const {branchNames, tid, epByTl, skByTl, esUrl} = ctx;
   const tl = node.tl;
   const tlid = tl.timeline_id;
   const key = normId(tid) + '/' + normId(tlid);
@@ -526,8 +556,10 @@ function renderTlNode(node, ctx) {
     ? `<span class="pill branch">${esc(branch)}</span>`
     : `<span class="pill">${mono(tlid.slice(0,8)+'…')}</span>`;
 
-  const psCell = tl._ps_http ? mono(tl._ps_http) : mono('-');
-  const skCell = skHttp ? mono(skHttp) : mono('-');
+  const portOf = url => url ? url.split(':').pop() : '-';
+  const psCell = mono(tl._ps_http ? portOf(tl._ps_http) : '-');
+  const skCell = mono(skHttp ? portOf(skHttp) : '-');
+  const esCell = mono(esUrl ? portOf(esUrl) : '-');
 
   let epSection = '';
   if (eps.length) {
@@ -543,11 +575,12 @@ function renderTlNode(node, ctx) {
         <td class="mono">${esc(ep.external_http_port || '-')}</td>
         <td>${psCell}</td>
         <td>${skCell}</td>
+        <td>${esCell}</td>
       </tr>`;
     }).join('');
     epSection = `<table class="ep-table">
       <thead><tr>
-        <th>endpoint</th><th>state</th><th>mode</th><th>libpq</th><th>pg http</th><th>ps http</th><th>sk http</th>
+        <th>endpoint</th><th>state</th><th>mode</th><th>libpq</th><th>pg http</th><th>ps http</th><th>sk http</th><th>es http</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -590,7 +623,7 @@ function renderUnified(d) {
   $("unified").innerHTML = (d.tenants || []).map(entry => {
     const tid = pick(entry.tenant, ['id','tenant_id']);
     const state = entry.tenant.state || '?';
-    const ctx = {branchNames, tid, epByTl, skByTl};
+    const ctx = {branchNames, tid, epByTl, skByTl, esUrl: d.topology.endpoint_storage};
     const roots = buildTlTree(entry.timelines || []);
     const tlsHtml = roots.map(r => renderTlNode(r, ctx)).join('');
 
@@ -598,7 +631,7 @@ function renderUnified(d) {
       <div class="head">
         <span class="tl-label">Tenant:</span> <span class="tid">${esc(tid)}</span>
         <span class="pill ${/active/i.test(state)?'ok':'warn'}">${esc(state)}</span>
-        <span class="pill">${entry.timelines.length} timeline(s)</span>
+        <span class="pill">${entry.timelines.length} branches(s)</span>
       </div>
       ${tlsHtml}
     </div>`;
