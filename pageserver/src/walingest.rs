@@ -1197,17 +1197,15 @@ impl WalIngest {
         let pg_version = modification.tline.pg_version;
 
         if info == pg_constants::XLOG_PARAMETER_CHANGE {
-            if let CheckPoint::V17(cp) = &mut self.checkpoint {
-                let rec = v17::XlParameterChange::decode(&mut buf);
-                cp.wal_level = rec.wal_level;
-                self.checkpoint_modified = true;
-            }
+            let CheckPoint::V17(cp) = &mut self.checkpoint;
+            let rec = v17::XlParameterChange::decode(&mut buf);
+            cp.wal_level = rec.wal_level;
+            self.checkpoint_modified = true;
         } else if info == pg_constants::XLOG_END_OF_RECOVERY {
-            if let CheckPoint::V17(cp) = &mut self.checkpoint {
-                let rec = v17::XlEndOfRecovery::decode(&mut buf);
-                cp.wal_level = rec.wal_level;
-                self.checkpoint_modified = true;
-            }
+            let CheckPoint::V17(cp) = &mut self.checkpoint;
+            let rec = v17::XlEndOfRecovery::decode(&mut buf);
+            cp.wal_level = rec.wal_level;
+            self.checkpoint_modified = true;
         }
 
         enum_pgversion_dispatch!(&mut self.checkpoint, CheckPoint, cp, {
@@ -1472,7 +1470,7 @@ impl WalIngest {
                         &self,
                         pg_version: PgMajorVersion,
                     ) -> Option<&Lazy<Mutex<RateLimit>>> {
-                        const MIN_PG_VERSION: u32 = PgMajorVersion::PG14.major_version_num();
+                        const MIN_PG_VERSION: u32 = PgMajorVersion::PG17.major_version_num();
                         const MAX_PG_VERSION: u32 = PgMajorVersion::PG17.major_version_num();
                         let pg_version = pg_version.major_version_num();
 

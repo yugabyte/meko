@@ -79,20 +79,7 @@ pub async fn do_run_initdb(args: RunInitdbArgs<'_>) -> Result<(), Error> {
         // we would be interested in the stderr output, if there was any
         .stderr(std::process::Stdio::piped());
 
-    // Before version 14, only the libc provide was available.
-    if pg_version > PgMajorVersion::PG14 {
-        // Version 17 brought with it a builtin locale provider which only provides
-        // C and C.UTF-8. While being safer for collation purposes since it is
-        // guaranteed to be consistent throughout a major release, it is also more
-        // performant.
-        let locale_provider = if pg_version >= PgMajorVersion::PG17 {
-            "builtin"
-        } else {
-            "libc"
-        };
-
-        initdb_command.args(["--locale-provider", locale_provider]);
-    }
+    initdb_command.args(["--locale-provider", "builtin"]);
 
     let initdb_proc = initdb_command.spawn().map_err(Error::Spawn)?;
 

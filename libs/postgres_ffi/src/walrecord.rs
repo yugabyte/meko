@@ -204,12 +204,6 @@ impl DecodedWALRecord {
         if self.xl_rmid == pg_constants::RM_DBASE_ID {
             let info = self.xl_info & pg_constants::XLR_RMGR_INFO_MASK;
             match pg_version {
-                PgMajorVersion::PG14 => {
-                    // Postgres 14 database creations are always the legacy kind
-                    info == crate::v14::bindings::XLOG_DBASE_CREATE
-                }
-                PgMajorVersion::PG15 => info == crate::v15::bindings::XLOG_DBASE_CREATE_FILE_COPY,
-                PgMajorVersion::PG16 => info == crate::v16::bindings::XLOG_DBASE_CREATE_FILE_COPY,
                 PgMajorVersion::PG17 => info == crate::v17::bindings::XLOG_DBASE_CREATE_FILE_COPY,
             }
         } else {
@@ -1052,7 +1046,7 @@ impl XlXactParsedRecord {
             }
         }
 
-        if xinfo & crate::v15::bindings::XACT_XINFO_HAS_DROPPED_STATS != 0 {
+        if xinfo & crate::v17::bindings::XACT_XINFO_HAS_DROPPED_STATS != 0 {
             let nitems = buf.get_i32_le();
             tracing::debug!(
                 "XLOG_XACT_COMMIT-XACT_XINFO_HAS_DROPPED_STAT nitems {}",

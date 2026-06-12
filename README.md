@@ -301,6 +301,30 @@ brew install protobuf openssl flex bison icu4c pkg-config m4
 brew install libpq && brew link --force libpq
 ```
 
+### First build: check out the Postgres submodule
+
+ybLight builds against a patched PostgreSQL tree vendored as a git
+submodule. It currently targets **PostgreSQL v17** — only
+`vendor/postgres-v17` is vendored. After cloning, check it out before building:
+
+```sh
+git submodule update --init --recursive --depth 2 --progress .
+```
+
+If you skip this, `configure` aborts with *"Postgres submodule not found
+in vendor/postgres-v17/"*.
+
+The `postgres_ffi` crate generates Rust bindings from the **PostgreSQL
+server headers**, which are produced by building Postgres — so a bare
+`cargo build` fails early with `bindgen_deps.h: 'c.h' file not found`.
+Always build through `make` (below), which installs the headers into
+`pg_install/v17/include/...` first. To generate just the headers without
+a full build (e.g. for `cargo check`/IDE), run once:
+
+```sh
+make postgres-headers-install-v17
+```
+
 ### Build
 
 ```sh
@@ -308,7 +332,10 @@ make -j`nproc` -s                     # debug
 BUILD_TYPE=release make -j`nproc` -s  # release
 ```
 
-Build artefacts land in `target/{debug,release}/`. The release bundle
+The `make` target builds the Postgres headers, the walproposer static
+lib, and the neon PG extensions before invoking `cargo build`, so it is
+the correct entry point for a clean first build. Build artefacts land in
+`target/{debug,release}/`. The release bundle
 deployed to a target host typically contains:
 
 ```

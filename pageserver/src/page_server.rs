@@ -165,9 +165,6 @@ fn synth_timeline_metadata_from_row(
     row: &crate::page_store::TimelineRow,
 ) -> anyhow::Result<TimelineMetadata> {
     let pg_major = match row.pg_version {
-        14 => PgMajorVersion::PG14,
-        15 => PgMajorVersion::PG15,
-        16 => PgMajorVersion::PG16,
         17 => PgMajorVersion::PG17,
         v => anyhow::bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
     };

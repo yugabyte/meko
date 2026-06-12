@@ -210,7 +210,7 @@ impl TimelineMetadata {
             ancestor_lsn: body.ancestor_lsn,
             latest_gc_cutoff_lsn: body.latest_gc_cutoff_lsn,
             initdb_lsn: body.initdb_lsn,
-            pg_version: PgMajorVersion::PG14, // All timelines created before this version had pg_version 14
+            pg_version: PgMajorVersion::PG17, // v17-only fork; this legacy-metadata default is otherwise unreachable
         };
 
         hdr.format_version = METADATA_FORMAT_VERSION;

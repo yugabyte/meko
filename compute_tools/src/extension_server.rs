@@ -129,9 +129,6 @@ fn parse_pg_version(human_version: &str) -> PgMajorVersion {
         .captures(human_version)
     {
         Some(captures) if captures.len() == 2 => match &captures["major"] {
-            "14" => return PG14,
-            "15" => return PG15,
-            "16" => return PG16,
             "17" => return PG17,
             _ => {}
         },
@@ -330,24 +327,17 @@ mod tests {
     #[test]
     fn test_parse_pg_version() {
         use postgres_versioninfo::PgMajorVersion::*;
-        assert_eq!(parse_pg_version("PostgreSQL 15.4"), PG15);
-        assert_eq!(parse_pg_version("PostgreSQL 15.14"), PG15);
+        assert_eq!(parse_pg_version("PostgreSQL 17.4"), PG17);
+        assert_eq!(parse_pg_version("PostgreSQL 17.14"), PG17);
         assert_eq!(
-            parse_pg_version("PostgreSQL 15.4 (Ubuntu 15.4-0ubuntu0.23.04.1)"),
-            PG15
+            parse_pg_version("PostgreSQL 17.4 (Ubuntu 17.4-0ubuntu0.23.04.1)"),
+            PG17
         );
 
-        assert_eq!(parse_pg_version("PostgreSQL 14.15"), PG14);
-        assert_eq!(parse_pg_version("PostgreSQL 14.0"), PG14);
-        assert_eq!(
-            parse_pg_version("PostgreSQL 14.9 (Debian 14.9-1.pgdg120+1"),
-            PG14
-        );
-
-        assert_eq!(parse_pg_version("PostgreSQL 16devel"), PG16);
-        assert_eq!(parse_pg_version("PostgreSQL 16beta1"), PG16);
-        assert_eq!(parse_pg_version("PostgreSQL 16rc2"), PG16);
-        assert_eq!(parse_pg_version("PostgreSQL 16extra"), PG16);
+        assert_eq!(parse_pg_version("PostgreSQL 17devel"), PG17);
+        assert_eq!(parse_pg_version("PostgreSQL 17beta1"), PG17);
+        assert_eq!(parse_pg_version("PostgreSQL 17rc2"), PG17);
+        assert_eq!(parse_pg_version("PostgreSQL 17extra"), PG17);
     }
 
     #[test]

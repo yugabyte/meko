@@ -8,9 +8,6 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Deserialize_repr, Serialize_repr)]
 #[repr(u32)]
 pub enum PgMajorVersion {
-    PG14 = 14,
-    PG15 = 15,
-    PG16 = 16,
     PG17 = 17,
     // !!! When you add a new PgMajorVersion, don't forget to update PgMajorVersion::ALL
 }
@@ -73,9 +70,6 @@ impl PgMajorVersion {
     /// Get the numerical representation of the represented Major Version
     pub const fn major_version_num(&self) -> u32 {
         match self {
-            PgMajorVersion::PG14 => 14,
-            PgMajorVersion::PG15 => 15,
-            PgMajorVersion::PG16 => 16,
             PgMajorVersion::PG17 => 17,
         }
     }
@@ -86,9 +80,6 @@ impl PgMajorVersion {
     /// owns the data in a PostgreSQL data directory.
     pub fn versionfile_string(&self) -> &'static str {
         match self {
-            PgMajorVersion::PG14 => "14",
-            PgMajorVersion::PG15 => "15",
-            PgMajorVersion::PG16 => "16\x0A",
             PgMajorVersion::PG17 => "17\x0A",
         }
     }
@@ -99,29 +90,18 @@ impl PgMajorVersion {
     /// implementation.
     pub fn v_str(&self) -> String {
         match self {
-            PgMajorVersion::PG14 => "v14",
-            PgMajorVersion::PG15 => "v15",
-            PgMajorVersion::PG16 => "v16",
             PgMajorVersion::PG17 => "v17",
         }
         .to_string()
     }
 
     /// All currently supported major versions of PostgreSQL.
-    pub const ALL: &'static [PgMajorVersion] = &[
-        PgMajorVersion::PG14,
-        PgMajorVersion::PG15,
-        PgMajorVersion::PG16,
-        PgMajorVersion::PG17,
-    ];
+    pub const ALL: &'static [PgMajorVersion] = &[PgMajorVersion::PG17];
 }
 
 impl Display for PgMajorVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            PgMajorVersion::PG14 => "PgMajorVersion::PG14",
-            PgMajorVersion::PG15 => "PgMajorVersion::PG15",
-            PgMajorVersion::PG16 => "PgMajorVersion::PG16",
             PgMajorVersion::PG17 => "PgMajorVersion::PG17",
         })
     }
@@ -142,9 +122,6 @@ impl TryFrom<PgVersionId> for PgMajorVersion {
 
     fn try_from(value: PgVersionId) -> Result<Self, Self::Error> {
         Ok(match value.0 / 10000 {
-            14 => PgMajorVersion::PG14,
-            15 => PgMajorVersion::PG15,
-            16 => PgMajorVersion::PG16,
             17 => PgMajorVersion::PG17,
             _ => return Err(InvalidPgVersion(value.0)),
         })
@@ -171,9 +148,6 @@ impl FromStr for PgMajorVersion {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
-            "14" => PgMajorVersion::PG14,
-            "15" => PgMajorVersion::PG15,
-            "16" => PgMajorVersion::PG16,
             "17" => PgMajorVersion::PG17,
             _ => return Err(PgMajorVersionParseError(s.to_string())),
         })

@@ -55,7 +55,7 @@ pub struct StorageController {
 
 const COMMAND: &str = "storage_controller";
 
-const STORAGE_CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG16;
+const STORAGE_CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG17;
 
 // All three subsystems (storage_controller, pageserver YbStore for blobs,
 // safekeeper for wals) share `yb_storage` on the YB cluster by default.
@@ -200,13 +200,7 @@ impl StorageController {
     /// to other versions if that one isn't found.  Some automated tests create circumstances
     /// where only one version is available in pg_distrib_dir, such as `test_remote_extensions`.
     async fn get_pg_dir(&self, dir_name: &str) -> anyhow::Result<Utf8PathBuf> {
-        const PREFER_VERSIONS: [PgMajorVersion; 5] = [
-            STORAGE_CONTROLLER_POSTGRES_VERSION,
-            PgMajorVersion::PG16,
-            PgMajorVersion::PG15,
-            PgMajorVersion::PG14,
-            PgMajorVersion::PG17,
-        ];
+        const PREFER_VERSIONS: [PgMajorVersion; 1] = [STORAGE_CONTROLLER_POSTGRES_VERSION];
 
         for v in PREFER_VERSIONS {
             let path = Utf8PathBuf::from_path_buf(self.env.pg_dir(v, dir_name)?).unwrap();

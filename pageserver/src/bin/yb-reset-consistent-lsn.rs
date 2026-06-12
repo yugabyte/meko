@@ -29,7 +29,7 @@ use std::cmp::min;
 use anyhow::{Context, bail};
 use clap::Parser;
 use postgres_ffi::waldecoder::WalStreamDecoder;
-use postgres_ffi::v14::xlog_utils::XLP_FIRST_IS_CONTRECORD;
+use postgres_ffi::v17::xlog_utils::XLP_FIRST_IS_CONTRECORD;
 use postgres_ffi::{
     PgMajorVersion, WAL_SEGMENT_SIZE, XLOG_BLCKSZ, XLOG_SIZE_OF_XLOG_LONG_PHD,
     XLOG_SIZE_OF_XLOG_SHORT_PHD,
@@ -122,9 +122,6 @@ async fn main() -> anyhow::Result<()> {
 
     let state = read_timeline_state(&client, &tenant, &timeline).await?;
     let pg_version = match state.pg_version {
-        14 => PgMajorVersion::PG14,
-        15 => PgMajorVersion::PG15,
-        16 => PgMajorVersion::PG16,
         17 => PgMajorVersion::PG17,
         v => bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
     };
