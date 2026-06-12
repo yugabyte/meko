@@ -22,6 +22,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use hashlink::LruCache;
+
 use anyhow::Result;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -192,6 +194,9 @@ pub struct PageWriter {
     /// Total rows ever appended to the buffer (rel + slru + meta).
     /// Reported in `WriterStats`; not load-bearing.
     rows_written: AtomicU64,
+    /// Total single-key `scan_meta_range` calls served from the in-process
+    /// LRU cache without a YB round-trip. Reported in `WriterStats`.
+    meta_cache_hits: AtomicU64,
     /// Per-key tally of consecutive non-image, non-`will_init` deltas
     /// since the last anchor for that key. Both fields advance on
     /// each non-anchor `put`; either hitting its
@@ -282,6 +287,27 @@ pub struct PageWriter {
     /// flushes. `put()` never takes it, so ingest is not serialized
     /// against flush.
     flush_serialize: tokio::sync::Mutex<()>,
+    /// In-process LRU cache for `pageserver.meta` point reads, keyed by
+    /// raw key bytes. `None` when disabled.
+    ///
+    /// Invariant: when an entry is present, it holds the highest-LSN
+    /// `MetaRow` seen for that key since it was last evicted. `put()`
+    /// only overwrites an existing entry when the incoming LSN is strictly
+    /// higher, so an idempotent re-write of the same (key, lsn) leaves the
+    /// cached entry untouched.
+    ///
+    /// Reads: a single-key hit at `cached.lsn ≤ target_lsn` is returned
+    /// immediately — no YB round-trip. This is correct because:
+    ///   1. `PageWriter` is the sole writer for its timeline; any newer
+    ///      write would have overwritten this cache entry.
+    ///   2. WAL ordering guarantees writes for a key arrive with strictly
+    ///      increasing LSNs, so an evict-then-older-write scenario cannot
+    ///      occur within a single `PageWriter` lifetime.
+    ///
+    /// Cache misses (key never written here, or evicted by LRU) fall
+    /// through to the normal YB + aux-buffer blend, which also covers
+    /// ancestor timeline segments.
+    meta_cache: Option<PlMutex<LruCache<Bytes, MetaRow>>>,
 }
 
 /// Non-rel flush buffers, kept under a small `parking_lot::Mutex`.
@@ -307,6 +333,9 @@ pub struct WriterStats {
     pub buffered_rows: usize,
     pub buffered_slru_rows: usize,
     pub buffered_meta_rows: usize,
+    /// Number of `scan_meta_range` single-key calls that returned a
+    /// result directly from the in-process LRU cache, skipping YB.
+    pub meta_cache_hits: u64,
 }
 
 impl PageWriter {
@@ -318,6 +347,7 @@ impl PageWriter {
         fpu_page_store: Arc<PageStore>,
         policy: FlushPolicy,
         read_cache_bytes: usize,
+        meta_cache_entries: usize,
     ) -> Self {
         Self {
             tenant_id,
@@ -335,6 +365,7 @@ impl PageWriter {
                 opened_at: None,
             }),
             rows_written: AtomicU64::new(0),
+            meta_cache_hits: AtomicU64::new(0),
             delta_counts: DashMap::new(),
             materializer: None,
             consistent_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
@@ -346,6 +377,8 @@ impl PageWriter {
             backpressure_waits: std::sync::atomic::AtomicU64::new(0),
             flush_horizon_lsn: std::sync::atomic::AtomicU64::new(0),
             flush_serialize: tokio::sync::Mutex::new(()),
+            meta_cache: (meta_cache_entries > 0)
+                .then(|| PlMutex::new(LruCache::new(meta_cache_entries))),
         }
     }
 
@@ -579,19 +612,34 @@ impl PageWriter {
         // are O(rows-in-this-batch); read paths blend buffered with
         // persisted but only briefly snapshot here too.
         if !slru_rows.is_empty() || !meta_rows.is_empty() {
-            let mut aux = self.aux.lock();
-            if aux.opened_at.is_none() {
-                aux.opened_at = Some(Instant::now());
+            {
+                let mut aux = self.aux.lock();
+                if aux.opened_at.is_none() {
+                    aux.opened_at = Some(Instant::now());
+                }
+                for row in slru_rows {
+                    aux.bytes_in_aux_buffers += slru_row_size(&row);
+                    aux.slru_buffer.push(row);
+                    self.rows_written.fetch_add(1, Ordering::Relaxed);
+                }
+                for row in &meta_rows {
+                    aux.bytes_in_aux_buffers += meta_row_size(row);
+                    aux.meta_buffer.push(row.clone());
+                    self.rows_written.fetch_add(1, Ordering::Relaxed);
+                }
             }
-            for row in slru_rows {
-                aux.bytes_in_aux_buffers += slru_row_size(&row);
-                aux.slru_buffer.push(row);
-                self.rows_written.fetch_add(1, Ordering::Relaxed);
-            }
-            for row in meta_rows {
-                aux.bytes_in_aux_buffers += meta_row_size(&row);
-                aux.meta_buffer.push(row);
-                self.rows_written.fetch_add(1, Ordering::Relaxed);
+            // Write-through: populate the meta cache outside the aux lock so
+            // reads hitting the cache never block on an aux write.
+            if let Some(cache) = &self.meta_cache {
+                let mut cache = cache.lock();
+                for row in meta_rows {
+                    match cache.get(&row.key) {
+                        Some(existing) if existing.lsn >= row.lsn => {}
+                        _ => {
+                            cache.insert(row.key.clone(), row);
+                        }
+                    }
+                }
             }
         } else {
             // Even when only rel rows arrived we still need to arm
@@ -1368,7 +1416,14 @@ impl PageWriter {
             buffered_rows: self.pages.unflushed_count(),
             buffered_slru_rows: slru_len,
             buffered_meta_rows: meta_len,
+            meta_cache_hits: self.meta_cache_hits.load(Ordering::Relaxed),
         }
+    }
+
+    /// Number of entries currently in the meta LRU cache. Returns `None`
+    /// if the cache is disabled (`meta_cache_entries = 0`).
+    pub fn meta_cache_len(&self) -> Option<usize> {
+        self.meta_cache.as_ref().map(|c| c.lock().len())
     }
 
     /// Total `put()` calls that had to wait on backpressure since
@@ -1421,6 +1476,28 @@ impl PageWriter {
         range: std::ops::Range<Key>,
         target_lsn: Lsn,
     ) -> Result<std::collections::HashMap<bytes::Bytes, MetaRow>> {
+        // Single-key fast path: check the in-process LRU cache before
+        // issuing a YB round-trip. A hit means this timeline has written
+        // this key; the cached row is always the most recently written
+        // version (write-through invariant from `put()`). It's valid as
+        // the answer whenever cached.lsn ≤ target_lsn — any older row
+        // in YB would be shadowed by this one.
+        if range.end == range.start.next() {
+            if let Some(cache) = &self.meta_cache {
+                let mut key_bytes = vec![0u8; KEY_SIZE];
+                range.start.write_to_byte_slice(&mut key_bytes);
+                let key_bytes = Bytes::from(key_bytes);
+                if let Some(row) = cache.lock().get(&key_bytes).cloned() {
+                    if row.lsn <= target_lsn {
+                        self.meta_cache_hits.fetch_add(1, Ordering::Relaxed);
+                        let mut out = HashMap::with_capacity(1);
+                        out.insert(row.key.clone(), row);
+                        return Ok(out);
+                    }
+                }
+            }
+        }
+
         let mut out = self
             .compute_page_store
             .scan_meta_range_lineage(self.tenant_id, &self.lineage, range.clone(), target_lsn)
@@ -1930,10 +2007,48 @@ mod tests {
                 store,
                 policy,
                 64 * 1024 * 1024,
+                0,
             ),
             t,
             tl,
         )
+    }
+
+    /// A `PageWriter` with the meta LRU cache enabled and capacity
+    /// `entries`. Pass `entries = 1` to force eviction on the second key.
+    fn writer_with_cache(
+        store: Arc<PageStore>,
+        policy: FlushPolicy,
+        entries: usize,
+    ) -> (PageWriter, TenantId, TimelineId) {
+        let t = TenantId::generate();
+        let tl = TimelineId::generate();
+        (
+            PageWriter::new(
+                t,
+                tl,
+                utils::generation::Generation::new(1),
+                store.clone(),
+                store,
+                policy,
+                64 * 1024 * 1024,
+                entries,
+            ),
+            t,
+            tl,
+        )
+    }
+
+    /// A metadata-range key (field1 = 0x60) with a unique discriminator.
+    fn mk(n: u32) -> Key {
+        Key {
+            field1: 0x60,
+            field2: 0,
+            field3: 0,
+            field4: 0,
+            field5: 0,
+            field6: n,
+        }
     }
 
     /// `writer` plus an installed materializer handle. Returns the
@@ -1985,6 +2100,7 @@ mod tests {
             store,
             policy,
             64 * 1024 * 1024,
+            0,
         );
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let in_flight = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
@@ -2317,6 +2433,7 @@ mod tests {
             store.clone(),
             policy,
             64 * 1024 * 1024,
+            0,
         ));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
@@ -2350,6 +2467,7 @@ mod tests {
             store.clone(),
             policy,
             64 * 1024 * 1024,
+            0,
         ));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
@@ -3508,5 +3626,178 @@ mod tests {
             assert_eq!(pre.key, key_to_bytes(k(99)));
             assert!(rx.try_recv().is_err());
         }
+    }
+
+    // ── meta cache unit tests ────────────────────────────────────────────────
+
+    /// After `put()` the cache is populated; after `flush()` the
+    /// `meta_buffer` is drained but the cache retains the entry.
+    #[tokio::test]
+    async fn meta_cache_populated_by_put_and_survives_flush() {
+        let (store, schema) = make_store("mc_populated").await;
+        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
+
+        assert_eq!(w.meta_cache_len(), Some(0));
+        w.put(&[(mk(0), Lsn(10), image())]).await.unwrap();
+        assert_eq!(w.meta_cache_len(), Some(1), "put should populate cache");
+
+        w.flush().await.unwrap();
+        assert_eq!(
+            w.stats().await.buffered_meta_rows,
+            0,
+            "flush must drain meta_buffer"
+        );
+        assert_eq!(w.meta_cache_len(), Some(1), "cache survives flush");
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A scan immediately after `flush()` (meta_buffer empty) is served
+    /// from the in-process cache, not from YB.
+    #[tokio::test]
+    async fn meta_cache_serves_after_buffer_drain() {
+        let (store, schema) = make_store("mc_after_drain").await;
+        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
+        let payload = Bytes::from_static(b"cache-served-payload");
+
+        w.put(&[(mk(1), Lsn(10), Value::Image(payload.clone()))])
+            .await
+            .unwrap();
+        w.flush().await.unwrap();
+        assert_eq!(w.stats().await.buffered_meta_rows, 0);
+
+        let hits_before = w.stats().await.meta_cache_hits;
+        let result = w
+            .scan_meta_range(mk(1)..mk(1).next(), Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(w.stats().await.meta_cache_hits, hits_before + 1, "should be a cache hit");
+        let row = result.into_values().next().expect("row present");
+        assert_eq!(row.payload, payload);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A second write for the same key at a higher LSN replaces the cache
+    /// entry; a subsequent scan returns the newer payload.
+    #[tokio::test]
+    async fn meta_cache_newer_write_supersedes() {
+        let (store, schema) = make_store("mc_newer_wins").await;
+        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
+
+        w.put(&[(mk(2), Lsn(10), Value::Image(Bytes::from_static(b"old")))])
+            .await
+            .unwrap();
+        w.put(&[(mk(2), Lsn(20), Value::Image(Bytes::from_static(b"new")))])
+            .await
+            .unwrap();
+        assert_eq!(w.meta_cache_len(), Some(1), "same key → single entry");
+
+        w.flush().await.unwrap();
+        let result = w
+            .scan_meta_range(mk(2)..mk(2).next(), Lsn(100))
+            .await
+            .unwrap();
+        let row = result.into_values().next().expect("row present");
+        assert_eq!(row.payload, Bytes::from_static(b"new"), "latest write wins");
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Requesting a `target_lsn` that is below the cached entry's LSN
+    /// must skip the cache and fall through to YB (which may have an
+    /// older row or return nothing).
+    #[tokio::test]
+    async fn meta_cache_skips_for_older_target_lsn() {
+        let (store, schema) = make_store("mc_old_lsn").await;
+        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
+
+        w.put(&[(mk(3), Lsn(100), Value::Image(Bytes::from_static(b"v100")))])
+            .await
+            .unwrap();
+        w.flush().await.unwrap();
+
+        let hits_before = w.stats().await.meta_cache_hits;
+        // target_lsn=50 is before the cached row at LSN=100 — must miss.
+        let result = w
+            .scan_meta_range(mk(3)..mk(3).next(), Lsn(50))
+            .await
+            .unwrap();
+        assert_eq!(
+            w.stats().await.meta_cache_hits, hits_before,
+            "cache must not be used when cached.lsn > target_lsn"
+        );
+        assert!(result.is_empty(), "no row at LSN ≤ 50");
+        drop_schema(&store, &schema).await;
+    }
+
+    /// When the cache is at capacity and a new key evicts an existing one,
+    /// a read for the evicted key falls through to YB and still returns the
+    /// correct value.
+    #[tokio::test]
+    async fn meta_cache_eviction_falls_back_to_yb() {
+        let (store, schema) = make_store("mc_evict").await;
+        // Capacity 1 → writing a second key evicts the first.
+        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 1);
+
+        w.put(&[(mk(4), Lsn(10), Value::Image(Bytes::from_static(b"key4")))])
+            .await
+            .unwrap();
+        assert_eq!(w.meta_cache_len(), Some(1));
+
+        // Write a second key — evicts mk(4) from the size-1 cache.
+        w.put(&[(mk(5), Lsn(20), Value::Image(Bytes::from_static(b"key5")))])
+            .await
+            .unwrap();
+        assert_eq!(w.meta_cache_len(), Some(1));
+
+        w.flush().await.unwrap();
+
+        // mk(4) was evicted — read must go to YB.
+        let hits_before = w.stats().await.meta_cache_hits;
+        let r4 = w
+            .scan_meta_range(mk(4)..mk(4).next(), Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(w.stats().await.meta_cache_hits, hits_before, "mk(4) evicted — no cache hit");
+        assert_eq!(
+            r4.into_values().next().map(|r| r.payload),
+            Some(Bytes::from_static(b"key4")),
+            "YB must serve the evicted key"
+        );
+
+        // mk(5) is still cached.
+        let hits_before = w.stats().await.meta_cache_hits;
+        let r5 = w
+            .scan_meta_range(mk(5)..mk(5).next(), Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(w.stats().await.meta_cache_hits, hits_before + 1, "mk(5) must hit cache");
+        assert_eq!(
+            r5.into_values().next().map(|r| r.payload),
+            Some(Bytes::from_static(b"key5"))
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// With `meta_cache_entries = 0` (disabled), writes and reads still
+    /// produce the correct result through YB.
+    #[tokio::test]
+    async fn meta_cache_disabled_is_transparent() {
+        let (store, schema) = make_store("mc_disabled").await;
+        // `writer()` uses 0 entries — cache disabled.
+        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+
+        assert_eq!(w.meta_cache_len(), None, "cache must be None when disabled");
+        w.put(&[(mk(6), Lsn(10), Value::Image(Bytes::from_static(b"no-cache")))])
+            .await
+            .unwrap();
+        w.flush().await.unwrap();
+
+        let result = w
+            .scan_meta_range(mk(6)..mk(6).next(), Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(w.stats().await.meta_cache_hits, 0, "no hits when disabled");
+        let row = result.into_values().next().expect("row from YB");
+        assert_eq!(row.payload, Bytes::from_static(b"no-cache"));
+        drop_schema(&store, &schema).await;
     }
 }

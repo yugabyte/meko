@@ -347,6 +347,10 @@ pub struct YbPageWriterConfigToml {
     pub read_cache_bytes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backpressure_bytes: Option<usize>,
+    /// Maximum entries in the in-process LRU cache for `pageserver.meta`
+    /// point reads. 0 disables the cache. Default 8192.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta_cache_entries: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -423,6 +427,12 @@ pub struct YbPageWriterConfig {
     /// flush trigger fires first; recommended 2× `flush_size_bytes`.
     /// Default 50 MiB.
     pub backpressure_bytes: usize,
+
+    /// Maximum entries in the in-process LRU cache for `pageserver.meta`
+    /// point reads. Writes populate the cache (write-through) so a read
+    /// at any LSN ≥ the write LSN hits the cache without a YB round-trip.
+    /// 0 disables the cache. Default 8192.
+    pub meta_cache_entries: usize,
 }
 
 impl YbPageWriterConfig {
@@ -438,6 +448,7 @@ impl YbPageWriterConfig {
             materialize_queue_capacity: 2000,
             read_cache_bytes: 1024 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
+            meta_cache_entries: 8192,
         }
     }
 }
@@ -473,6 +484,7 @@ impl YbPageWriterConfigToml {
             backpressure_bytes: self
                 .backpressure_bytes
                 .unwrap_or_else(|| scale_count(base.backpressure_bytes, scale_factor)),
+            meta_cache_entries: self.meta_cache_entries.unwrap_or(base.meta_cache_entries),
         }
     }
 }

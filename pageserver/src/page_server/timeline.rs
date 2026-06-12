@@ -1895,6 +1895,7 @@ impl Timeline {
                     backpressure_bytes: pw_cfg.backpressure_bytes,
                 },
                 pw_cfg.read_cache_bytes,
+                pw_cfg.meta_cache_entries,
             );
             // Lineage-aware reads: a branch serves pre-branch-point
             // data from its ancestors' rows. Must be installed before
