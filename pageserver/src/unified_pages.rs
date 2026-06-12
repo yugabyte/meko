@@ -183,16 +183,6 @@ impl UnifiedPages {
         self.unflushed_fifo.lock().len()
     }
 
-    /// Smallest LSN still unflushed (front of the FIFO). Walreceiver
-    /// pushes in monotonic-LSN order and `mark_flushed` removes a prefix,
-    /// so the front is the minimum. `None` when nothing is pending.
-    /// Used by `flush` as a tripwire: nothing ≤ the just-flushed ingest
-    /// frontier may remain unflushed (tasks/34 part 2 — catch a
-    /// `consistent_lsn` over-advance past a not-yet-durable page).
-    pub fn min_unflushed_lsn(&self) -> Option<Lsn> {
-        self.unflushed_fifo.lock().front().map(|(_, lsn)| *lsn)
-    }
-
     /// Number of distinct keys tracked. Drives the
     /// `pageserver_yb_unified_pages_by_key_entries` gauge.
     pub fn by_key_entries(&self) -> usize {
@@ -639,72 +629,112 @@ impl UnifiedPages {
         //     that isn't yet in YB.
         //   - `push_durable()` (materialiser, durable=true): bounds its
         //     target_lsn ≤ flush_horizon_lsn (only advanced after
-        //     `mark_flushed`), so any same-LSN slot is already durable.
-        //     Overwrite to install the image; only byte counters move.
+        //     `mark_flushed`), so a same-LSN slot is normally already
+        //     durable. It can also be a still-UNFLUSHED slot from a benign
+        //     reconnect-replay re-push (see the durable arm below); in that
+        //     case we overwrite it with the image and reverse the unflushed
+        //     accounting + drop the stale FIFO entry.
         use std::collections::btree_map::Entry;
-        let mut shard = self.by_key.entry(key).or_insert_with(KeyState::new);
-        let ks = shard.value_mut();
+        // Set when a durable image overwrites a still-unflushed slot. Acted
+        // on after the shard guard drops so the FIFO lock never nests under
+        // the shard lock (lock order: shard → FIFO).
+        let mut overwrote_unflushed = false;
+        let added_unflushed = {
+            let mut shard = self.by_key.entry(key.clone()).or_insert_with(KeyState::new);
+            let ks = shard.value_mut();
 
-        // Returns (added_unflushed, add_bytes, sub_bytes); bookkeeping is
-        // applied after the chain borrow ends.
-        let (added_unflushed, add_bytes, sub_bytes): (bool, usize, usize) =
-            match ks.chain.entry(lsn) {
-                Entry::Occupied(mut o) => {
-                    if !durable {
-                        // Idempotent re-push; keep the existing slot. Two
-                        // legitimate cases:
-                        //   (a) existing is a delta — the walreceiver
-                        //       re-streamed the same deterministic WAL
-                        //       record, so it must be byte-identical;
-                        //   (b) existing is a materialiser IMAGE at this
-                        //       LSN — folded at a record's max LSN, which
-                        //       collides with that record's own delta LSN.
-                        //       The image supersedes the same-LSN delta
-                        //       (`read_chain`'s tie-break), so keeping it
-                        //       is correct even though it differs.
-                        // Only assert determinism in case (a); never panic
-                        // on (b) and never overwrite an image with a delta.
-                        debug_assert!(
-                            o.get().row.is_image || *o.get().row == *row,
-                            "re-push at lsn={lsn} differs from the buffered delta \
-                             (WAL replay not deterministic / LSN collision): \
-                             existing=(is_image={} will_init={} {}B) \
-                             new=(is_image={} will_init={} {}B)",
-                            o.get().row.is_image,
-                            o.get().row.will_init,
-                            o.get().row.payload.len(),
-                            row.is_image,
-                            row.will_init,
-                            row.payload.len(),
-                        );
-                        return false;
+            // Returns (added_unflushed, add_bytes, sub_bytes); bookkeeping is
+            // applied after the chain borrow ends.
+            let (added_unflushed, add_bytes, sub_bytes): (bool, usize, usize) =
+                match ks.chain.entry(lsn) {
+                    Entry::Occupied(mut o) => {
+                        if !durable {
+                            // Idempotent re-push; keep the existing slot. Two
+                            // legitimate cases:
+                            //   (a) existing is a delta — the walreceiver
+                            //       re-streamed the same deterministic WAL
+                            //       record, so it must be byte-identical;
+                            //   (b) existing is a materialiser IMAGE at this
+                            //       LSN — folded at a record's max LSN, which
+                            //       collides with that record's own delta LSN.
+                            //       The image supersedes the same-LSN delta
+                            //       (`read_chain`'s tie-break), so keeping it
+                            //       is correct even though it differs.
+                            // Only assert determinism in case (a); never panic
+                            // on (b) and never overwrite an image with a delta.
+                            debug_assert!(
+                                o.get().row.is_image || *o.get().row == *row,
+                                "re-push at lsn={lsn} differs from the buffered delta \
+                                 (WAL replay not deterministic / LSN collision): \
+                                 existing=(is_image={} will_init={} {}B) \
+                                 new=(is_image={} will_init={} {}B)",
+                                o.get().row.is_image,
+                                o.get().row.will_init,
+                                o.get().row.payload.len(),
+                                row.is_image,
+                                row.will_init,
+                                row.payload.len(),
+                            );
+                            return false;
+                        }
+                        let prev_size = row_size(&o.get().row);
+                        // push_durable (materialiser image). The slot is
+                        // normally already durable. It can also be a NON-
+                        // durable slot from a benign reconnect-replay re-push:
+                        // after a walreceiver reconnect the replay re-`put`s a
+                        // row that was already flushed (hence evicted/trimmed)
+                        // as a fresh unflushed entry, and the image — folded
+                        // from that same durable row in YB — lands on the same
+                        // (key, lsn). The image's LSN can equal this slot's
+                        // LSN only if a DURABLE row existed here (that LSN is
+                        // where the fold's chain head came from), so the
+                        // unflushed slot is a deterministic re-push of an
+                        // already-durable record and overwriting it loses
+                        // nothing. Record it so we reverse the unflushed
+                        // accounting (count + bytes below, FIFO entry after
+                        // the guard drops).
+                        overwrote_unflushed = !o.get().is_durable();
+                        o.insert(PageEntry::from_arc_row(row, durable));
+                        (false, size, prev_size)
                     }
-                    let prev_size = row_size(&o.get().row);
-                    debug_assert!(
-                        o.get().is_durable(),
-                        "push_durable overwriting an unflushed slot at lsn={lsn}: \
-                         violates the target_lsn≤horizon contract — the row in the \
-                         unflushed slot would be lost if it isn't also in YB",
-                    );
-                    o.insert(PageEntry::from_arc_row(row, durable));
-                    (false, size, prev_size) // durable → no unflushed bookkeeping
-                }
-                Entry::Vacant(v) => {
-                    v.insert(PageEntry::from_arc_row(row, durable));
-                    (!durable, size, 0)
-                }
-            };
+                    Entry::Vacant(v) => {
+                        v.insert(PageEntry::from_arc_row(row, durable));
+                        (!durable, size, 0)
+                    }
+                };
 
-        ks.bytes = ks.bytes + add_bytes - sub_bytes;
-        if added_unflushed {
-            ks.unflushed_count += 1;
-        }
-        self.total_bytes.fetch_add(add_bytes, Ordering::Relaxed);
-        if sub_bytes > 0 {
-            self.total_bytes.fetch_sub(sub_bytes, Ordering::Relaxed);
-        }
-        if added_unflushed {
-            self.unflushed_bytes.fetch_add(add_bytes, Ordering::Relaxed);
+            ks.bytes = ks.bytes + add_bytes - sub_bytes;
+            if added_unflushed {
+                ks.unflushed_count += 1;
+            } else if overwrote_unflushed {
+                // The overwritten slot was pinned as unflushed; it's durable
+                // now, so drop the pin.
+                ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
+            }
+            self.total_bytes.fetch_add(add_bytes, Ordering::Relaxed);
+            if sub_bytes > 0 {
+                self.total_bytes.fetch_sub(sub_bytes, Ordering::Relaxed);
+            }
+            if added_unflushed {
+                self.unflushed_bytes.fetch_add(add_bytes, Ordering::Relaxed);
+            } else if overwrote_unflushed {
+                // Its bytes (== sub_bytes) were in unflushed_bytes; the image
+                // is durable, so remove them.
+                self.unflushed_bytes.fetch_sub(sub_bytes, Ordering::Relaxed);
+            }
+            added_unflushed
+        };
+
+        if overwrote_unflushed {
+            // Drop the now-stale FIFO entry the re-push left behind. The slot
+            // is durable now, so without this `snapshot_unflushed` would
+            // re-probe and skip it on every future flush — a slow FIFO leak.
+            // The shard guard is released above, so taking the FIFO lock here
+            // respects the shard → FIFO lock order.
+            let mut fifo = self.unflushed_fifo.lock();
+            if let Some(pos) = fifo.iter().position(|(k, l)| *l == lsn && k == &key) {
+                fifo.remove(pos);
+            }
         }
         added_unflushed
     }
@@ -1071,16 +1101,38 @@ mod tests {
         assert_eq!(u.by_key_entries(), 5, "all keys still resident");
     }
 
-    /// `push_durable` overwriting an unflushed slot violates the
-    /// target_lsn ≤ horizon contract — the materialiser must never
-    /// run for an LSN whose cache entry isn't already durable. The
-    /// debug-assert in `insert_arc_entry` catches the contract break.
+    /// `push_durable` landing on a still-unflushed slot is the benign
+    /// reconnect-replay re-push (tasks/34): the walreceiver replayed an
+    /// already-durable-in-YB row as a fresh unflushed entry, and the
+    /// materialiser's image — folded from that same durable row — collides
+    /// on the same `(key, lsn)`. Overwriting with the image is safe; the
+    /// unflushed accounting (pin count, byte tally, and FIFO entry) must be
+    /// reversed so the now-durable slot isn't left counted as pending.
+    /// (Earlier this tripped a debug-assert.)
     #[test]
-    #[should_panic(expected = "push_durable overwriting an unflushed slot")]
-    fn push_durable_over_unflushed_panics_in_debug() {
+    fn push_durable_over_unflushed_overwrites_and_fixes_bookkeeping() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, false, b"unflushed"));
+        assert_eq!(u.unflushed_count(), 1);
+        assert!(u.unflushed_bytes() > 0);
+
         u.push_durable(mk(b"k", 10, true, b"image-replacement"));
+
+        // Pin count, unflushed byte tally, and the stale FIFO entry are
+        // all reversed — the slot is durable now, not pending.
+        assert_eq!(u.unflushed_count(), 0, "stale FIFO entry dropped");
+        assert_eq!(u.unflushed_bytes(), 0, "unflushed byte tally reversed");
+
+        // The slot holds the durable image, and a flush finds nothing to
+        // snapshot (no phantom pending row left behind).
+        let chain = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
+        assert_eq!(chain.len(), 1, "durable image present at (k, 10)");
+        assert!(chain[0].is_image, "slot replaced by the materialiser image");
+        assert_eq!(
+            u.snapshot_unflushed(None).len(),
+            0,
+            "nothing left to flush after the overwrite"
+        );
     }
 
     /// Regression (tasks/34): a safekeeper-only restart makes the

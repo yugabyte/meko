@@ -605,6 +605,22 @@ live in `pg_class` block 0, ctid `(0,x)`):
   **fully exonerated** for this symptom (the earlier "flush over-advance
   / FIFO race" hypotheses are wrong).
 
+> **RETRACTION (2026-06-12): this trace was blind to `torn_a` — the
+> "exoneration" does NOT hold.** The trace pinned block 0 on the
+> assumption that `torn_*` rows live in `pg_class` block 0. That is false:
+> a freshly-`initdb`'d `pg_class` already holds ~400 system-catalog rows
+> (~50 rows per 8 KB page → ~8+ blocks before any user DDL), and `-n N`
+> runs only grow it. `torn_a`'s `pg_class` row almost certainly lands well
+> past block 0, so "92/92 block-0 puts durable, `torn_a` absent" is
+> trivially true and says nothing about whether `torn_a`'s create was put.
+> It neither proves "never put" NOR exonerates the page-write/flush path.
+> The over-advance hypothesis (consistent_lsn advancing past a record
+> whose `pages` write never became durable — including via the
+> `set_lsn(next_record_lsn)` advance on filtered/no-put records at
+> `walreceiver_connection.rs:490`) is therefore still live. **Re-run the
+> trace targeting the actual block `torn_a`'s `pg_class` row lands on (or
+> trace the whole rel `1663/5/1259`, all blocks), not block 0.**
+
 **Root: a WAL/recovery-stream divergence.** The committed
 `CREATE TABLE torn_a` record was never applied by the pageserver.
 Trigger is mode-B (compute crash + recycle); the loss alternates
@@ -619,4 +635,272 @@ content across a mode-B recycle to find where the committed create LSN
 drops out of the stream. Safekeeper / walproposer / recovery-epoch
 investigation — a different subsystem from everything touched so far.
 
-### Status: bisected to a WAL/recovery-stream divergence (committed record never re-applied after mode-B recycle); whole page-write path exonerated by the block-0 trace; part-1 + deadlock fixes, anchorless guards, diagnostics, and harness/setup fixes landed
+### ROOT CAUSE CAUGHT (2026-06-12): consistent_lsn over-advances past an unflushed rel row
+
+The over-advance tripwire **fired** in a `-n 4` run (it's intermittent —
+the earlier traced run just didn't hit it):
+
+```
+ERROR consistent_lsn over-advance: unflushed rel row at lsn=0/19094B8
+  ≤ ingest_frontier=0/1988560 after mark_flushed — a committed page write
+  is not durable but the frontier passed it
+```
+
+So `PageWriter::flush` advances `consistent_lsn` to `ingest_frontier`
+while a rel row at a **lower** LSN is still unflushed (not durable). The
+race is in the attach-replay re-stream: a flush captures a high
+`ingest_frontier` while a lower-LSN row is buffered-but-not-in-this
+-snapshot. On the next re-attach the PS resumes from the (over-advanced)
+`consistent_lsn`, never re-applies the row at `0/19094B8`, and the
+committed catalog/heap write is gone. This is THE catalog-orphan /
+heap-hole root (the block-0 trace just happened to be a run that didn't
+over-advance; the tripwire is the reliable catch).
+
+**Fix:** never advance `consistent_lsn` to or past the smallest unflushed
+row's LSN. Cap the advance at `min(ingest_frontier, <largest noted
+record < min_unflushed_lsn>)`; if none, skip the advance this flush (the
+unflushed row flushes in a later flush, then `consistent_lsn` catches
+up). Verify: the over-advance tripwire stops firing and the
+catalog/heap loss stops across many `-n` iterations.
+
+(Other symptoms seen in the same chaotic attach — a transient
+IDENTIFY_SYSTEM "not found" when the walreceiver beats the SK's timeline
+load, and materialiser ERRORs — are startup races, separate from this
+data-loss root.)
+
+### CORRECTION (2026-06-12): the cap fix FAILED verification — reverted
+
+The "cap `consistent_lsn` at `min_unflushed`" fix above was implemented
+and verified, and it **does not stop the orphan**. Reverted via
+`git checkout pageserver/src/page_writer.rs` (only the debug-gated
+over-advance tripwire remains; the caps are gone).
+
+Two attempts, both failed in `-n 8` repro runs:
+
+1. Cap `consistent_lsn` at `min_unflushed` in the advance block → orphan
+   persisted (loss signal still fired), over-advance tripwire still fired.
+2. Also cap `flush_horizon` → orphan STILL persisted.
+
+**Why it cannot work, reconciled with the trace proof:** the over-advance
+tripwire detects a *put-but-unflushed* row ≤ frontier. The block-0 trace
+proved the orphan record (`torn_a`'s `pg_class` create) was **never
+`put`**. These are two DIFFERENT conditions:
+
+- **Over-advance (#2):** a row that WAS `put` is still in the unflushed
+  FIFO when `consistent_lsn` passes its LSN. `min_unflushed_lsn()` knows
+  about it, so the cap can guard it. This is a real latent resume-loss
+  bug — worth keeping the tripwire — but it is NOT the orphan.
+- **Never-put (#1):** the committed `CREATE TABLE` record never reached
+  `put` at all. It is not in the FIFO, so `min_unflushed_lsn()` cannot
+  see it and **no cap on the advance can recover it.** Capping the
+  over-advance is structurally incapable of fixing a never-put loss.
+
+So #1 (the orphan) is upstream of ingest: a WAL/recovery-stream
+divergence where the committed create record is never (re-)applied by the
+PS after the mode-B compute-crash+recycle. The SK provably retains the
+committed WAL — the hard `truncate_wal` assert in `handle_elected`
+(`safekeeper.rs:913`, `start_streaming_at >= flush_lsn`) never fires, so
+the SK never drops committed data. The miss is in how the PS walreceiver
+resumes/applies the stream across the recycle, not in page-write/flush.
+
+**Standing rule honored:** no unverified corruption fix is committed. The
+caps were reverted rather than left in. Next step is the SK/walproposer
+/walreceiver-resume investigation below — understand the mechanism before
+touching corruption-critical code again.
+
+### Next investigation: PS walreceiver resume across a mode-B recycle
+
+Concrete questions to answer with targeted (debug-gated) instrumentation:
+
+1. What LSN does the PS walreceiver pass to `START_REPLICATION` when it
+   reconnects after the compute recycle? Is it ≥ the committed create
+   record's LSN (so the SK legitimately never re-sends it)?
+2. If yes: was the create record applied BEFORE the recycle and then lost
+   (→ a flush/durability gap after all), or applied-but-to-a-stale
+   timeline, or genuinely never applied because the walreceiver advanced
+   `consistent_lsn` past it without applying? Distinguish via the
+   per-record apply trace vs the resume LSN.
+3. Does the recycle spin up a fresh walproposer epoch that re-streams from
+   a `basebackup`/checkpoint that post-dates the create, leaving the PS to
+   rely on a stream segment it already skipped?
+
+### OVER-ADVANCE CAUGHT LIVE — but the MECHANISM is NOT yet proven (2026-06-12)
+
+A `torn_wal_write -n 10 --no-fail-clean` run with `YB_PS_TRACE_REL_BLK=1663/5/1259/0/*`
+(+ a new `decode` trace at `DatadirModification::put`) caught the over-
+advance and a same-root `push_durable` panic in one mode-E attach. The
+over-advance is real and reproducing. **BUT my first writeup over-claimed
+the mechanism — see the CORRECTION below; the "how" is still open.**
+
+Timeline from the PS log (`run_1781283488_3617073`):
+
+```
+consistent_lsn 0/239AE00, resume replication from 0/239AE00 (SK end 0/23E9EA8)
+OVER-ADVANCE (rel):  unflushed 0/239B2C8 ≤ frontier 0/23E9C60   ← tripwire fired
+OVER-ADVANCE (meta): unflushed 0/239B048 ≤ frontier 0/23E9C60   ← tripwire fired
+WARN durable-walk:   unflushed 0/23B7398 ≤ target 0/23B7398 → YB fallback
+PANIC push_durable:  over unflushed slot 0/23B7398   (unified_pages.rs:683)
+```
+
+Every offending LSN sits in the committed gap `[consistent_lsn, SK_end]`
+the walreceiver re-streams right after attach. Mechanism:
+
+1. `PageWriter::flush` captures `ingest_frontier = max(record_lsn_history)`
+   = `0/23E9C60` (line 1099). The frontier comes from **noted records**,
+   not from what's been `put`+snapshotted.
+2. The documented contract (page_writer.rs:1086-1098) — "`commit` puts the
+   whole batch before `note_record_lsn`, so the snapshot contains EVERY
+   unflushed row ≤ frontier" — **is violated under attach-re-stream
+   concurrency.** A row at `0/239B2C8` was `put` (it's in the FIFO) but
+   missed the snapshot (the comment itself admits "sharded-map iteration
+   races the put"), so after `mark_flushed` it is still unflushed yet
+   ≤ frontier.
+3. The flush advances the durable horizon to the **uncapped** frontier:
+   `flush_horizon_lsn` (line 1172), `consistent_lsn_observed` **uncondit-
+   ionally** (line 1363), and persists it via `advance_consistent_lsn`
+   (line 1372, throttled) — and on shutdown `force_upsert_consistent_lsn_if_advanced`
+   (line 415) re-persists `consistent_lsn_observed`.
+4. The materializer trusts the over-advanced `flush_horizon`, targets
+   `0/23B7398` (still unflushed) → `durable_walk` YB-fallback, then
+   `push_durable` over the unflushed slot → **panic** (debug) / silent
+   overwrite (release).
+5. `get_consistent_lsn()` reads `remote_state.consistent_lsn` (advanced
+   only after a successful persist). Once the over-advanced frontier is
+   persisted (step 3) and the PS then restarts/re-attaches (the panic
+   aborts the worker; any recycle suffices) **before a later flush writes
+   the lagging rows**, the next resume starts PAST them → the committed
+   catalog/heap rows are never re-applied → **permanent orphan.**
+
+**Why the earlier `min_unflushed` cap failed:** it capped the persisted-
+watermark candidate but (a) `consistent_lsn_observed` is advanced
+unconditionally at line 1363 and (b) the shutdown `force_upsert` re-
+persists that observed value — so an uncapped path leaked the over-
+advanced frontier to disk anyway. (Also: the over-advance *tripwire*
+checks the RAW frontier, so it keeps firing even with a correct cap — its
+firing was misread as "cap didn't work".)
+
+**Correct fix (proposed — needs OK before touching corruption-critical
+code):** derive ONE safe watermark after `mark_flushed` —
+`safe = min(ingest_frontier, min_unflushed_lsn().map(pred).unwrap_or(frontier))`
+— and route ALL horizon advances through it: `flush_horizon_lsn`,
+`consistent_lsn_observed`, the persisted `advance_consistent_lsn`, AND the
+shutdown force-upsert. The lagging row flushes in a later flush, which then
+advances the watermark — self-healing, no permanent loss, materializer
+never sees an over-advanced horizon. Verify: tripwire may still fire
+(detector of the raw race) but the orphan + push_durable panic stop across
+`-n` iterations.
+
+### CORRECTION 2 (2026-06-12): the over-advance MECHANISM above is NOT proven
+
+Pushed back on the "snapshot races the put" story and it does not survive
+a code read. Verified facts that make the over-advance look *impossible*
+for a single in-order producer:
+
+- `commit` does `put_batch().await` (synchronously lands the row in the
+  buffer) **then** `finish_write → note_record_lsn` (`pgdatadir_mapping.rs:2689`
+  then `:2706`; `timeline.rs:3054`). So put-before-note genuinely holds.
+- `snapshot_unflushed(None)` captures the **entire** FIFO, not a prefix
+  (`unified_pages.rs:550`), and has a `snapshot_fifo_orphan` probe.
+- `record_lsn_history` is a fresh-empty per-`PageWriter` map at attach,
+  and the failing run's PS log shows only ONE successful `START_REPLICATION`
+  (from `0/239AE00`) before the over-advance — earlier connects were
+  "connection refused" (noted nothing). No stale-high frontier carried in.
+
+Under those rules `frontier=0/23E9C60` ⇒ every record ≤ it noted ⇒ every
+page ≤ it already `put` ⇒ the `0/239B2C8` row was in the buffer before the
+snapshot ⇒ snapshot captured it ⇒ durable after `mark_flushed`. The
+over-advance should be impossible. Since the tripwire DID fire, a premise
+is false. Remaining candidates (UNPROVEN):
+
+1. **Evict/trim then re-push.** `mark_flushed` → `evict_to_capacity`
+   (`page_writer.rs`), and the materializer `trim_key_up_to`. A durable
+   low-LSN row evicted/trimmed, then re-touched by replay, re-enters the
+   FIFO as fresh-unflushed at a LOW lsn. (The `lookup_chain_durable_if_complete`
+   doc at `unified_pages.rs:449-461` already names this: "legacy compaction
+   overlaps the walreceiver's replay, which re-puts rows already durable in
+   YB as fresh unflushed cache entries.")
+2. **A second producer** during attach churn breaks single-producer order.
+3. **Aux (meta/SLRU) buffer isn't strictly LSN-ordered** — the meta
+   over-advance fired in the same flush; the aux path uses a count-based
+   drain against a clone.
+
+**NOT re-proposing the cap until the mechanism is proven.** If it's
+evict-then-re-push, a cap is the wrong fix.
+
+### Instrumentation added (2026-06-12) to pin the mechanism
+
+Uncommitted, debug-gated, diagnostic only:
+
+- `decode` trace at `DatadirModification::put` (`pgdatadir_mapping.rs`) —
+  earliest "walingest staged this page" signal.
+- **FIFO provenance** (`unified_pages.rs`): the `unflushed_fifo` tuple now
+  carries a global monotonic `push_seq` stamp; `push()` emits one
+  `target=yb_fifo_prov stage=fifo_push key/lsn/seq` line per FRESH
+  unflushed push (the enclosing tracing span names the producer —
+  `connection{node_id}` vs `image_materializer` vs evict/replay).
+- **Tripwire verdict** (`page_writer.rs:flush`): captures
+  `snapshot_push_hwm = push_seq_hwm()` just before snapshotting; the
+  over-advance error now logs `offending_seq`, `snapshot_push_hwm`, and
+  `post_snapshot = offending_seq >= snapshot_push_hwm`.
+  - `post_snapshot=true` ⇒ the row entered the FIFO during the YB round-
+    trip at an lsn below the already-captured frontier (candidate 1/2 —
+    non-monotonic / second producer). Grep `yb_fifo_prov seq=<offending_seq>`
+    for the producer span.
+  - `post_snapshot=false` ⇒ the row was present at snapshot time yet not
+    promoted (snapshot/FIFO completeness defect).
+
+Build green (`cargo build -p pageserver`). Next: re-run `torn_wal_write -n 10
+--no-fail-clean` with `YB_PS_TRACE_REL_BLK=1663/5/1259/0/*` and read the
+`post_snapshot` verdict + the producer span for `offending_seq`.
+
+### RESOLUTION OF THE OVER-ADVANCE THREAD (2026-06-12): it is BENIGN — tripwires removed
+
+The FIFO-provenance run settled it. Every over-advance the tripwire
+caught was a **benign reconnect-replay re-push**, NOT data loss:
+
+- The offending `(key, lsn)` (e.g. `…00c005…0001` @ `0/18D9968`) was
+  pushed TWICE in one PS generation — seq `2846` then seq `5568` — both by
+  the walreceiver (`connection{node_id=1}`), with `post_snapshot=true` on
+  the second.
+- Between the two pushes the log shows `walreceiver connection closed →
+  starting replication from 0/18D9750` — a reconnect that rewound the
+  stream to the durable `consistent_lsn` and replayed the committed gap.
+- The row could only be re-`put` as a FRESH unflushed slot because it had
+  been **evicted/trimmed after the first flush** — and eviction/trim only
+  touch DURABLE rows. So the row was **already in YB** from the first
+  pass. Advancing `consistent_lsn` past it loses nothing; the next flush
+  re-writes it (idempotent) and clears the FIFO entry.
+
+Therefore the over-advance is a cache-bookkeeping artifact, not a
+durability bug. Both debug tripwires (rel FIFO + meta/SLRU) and the
+`min_unflushed_lsn()` helper were **removed** and replaced with an
+explanatory comment (`page_writer.rs:flush`). All the session's
+provenance scaffolding (FIFO `push_seq`, `front_unflushed_provenance`,
+`push_seq_hwm`, `fifo_push` trace, `decode` trace) was reverted —
+diagnosis complete.
+
+The proposed `min_unflushed`/frontier "cap" fix is therefore also
+**withdrawn**: there was never a real over-advance loss to cap.
+
+### Validation run (2026-06-12): noise gone, real corruption unchanged
+
+`torn_wal_write -n 10 --no-fail-clean` after removing both tripwires +
+relaxing the `push_durable` assert + the bookkeeping/FIFO fix:
+
+- `push_durable overwriting` panics: **0** (was a per-attach loop before).
+- `consistent_lsn over-advance` lines: **0**.
+- `snapshot_fifo_orphan` probe: **0** — the FIFO-leak fix holds.
+- Real corruption STILL reproduces (8/10 iterations), now as a clean data
+  assertion instead of a debug abort:
+  `FAIL — B compute: torn catalog — rowtype missing from pg_type: [torn_a]`
+  (this run lost the `pg_type` row, oid 139265; prior run lost `pg_index`
+  90117 — same class, lossy rel varies).
+
+This VALIDATES the diagnosis: with both debug signals removed the
+corruption still happens with zero panics / zero over-advance, proving
+neither was the cause. The unit suites (`unified_pages` 26/26,
+`page_writer` 49/49) pass. The real catalog tear (a committed catalog
+page write from the last txn missing from durable YB after crash
+recovery) remains OPEN.
+
+### Status: Part 1 + deadlock + anchorless guards + harness fixes LANDED. The consistent_lsn over-advance is CONFIRMED BENIGN (reconnect-replay re-push of an already-durable row) — tripwires + provenance scaffolding removed, comment left in place. STILL OPEN and now cleanly separated: a REAL catalog/heap tear (e.g. `torn_a`'s `pg_index` rows 90117/90116 genuinely absent from durable YB while `consistent_lsn` sits above the highest durable page write) — a committed FIRST-TIME page write missing from YB, distinct from the benign over-advance. Mechanism for THAT loss is not yet pinned (was it ever `put`/flushed, or never ingested?). The debug-only `push_durable`-over-unflushed panic correlates with the failing runs and remains to be explained.

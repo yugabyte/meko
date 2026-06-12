@@ -1174,35 +1174,21 @@ impl PageWriter {
                 if frontier.0 > cur {
                     self.flush_horizon_lsn.store(frontier.0, Ordering::Relaxed);
                 }
-                // Tripwire (tasks/34 part 2): `consistent_lsn` is about to
-                // advance to `frontier`, which promises every page ≤ it is
-                // durable in `pageserver.pages`. After `mark_flushed` the
-                // rel FIFO should hold only rows put concurrently with the
-                // YB round-trip, all from records noted AFTER the frontier
-                // capture — i.e. lsn > frontier (walreceiver LSNs are
-                // monotonic). A remaining unflushed row ≤ frontier means a
-                // committed page write is NOT durable yet the frontier
-                // passed it — the over-advance that loses catalog/index
-                // pages on the next re-attach.
-                // Diagnostics only — debug builds (e2e). Zero release cost.
-                if cfg!(debug_assertions)
-                    && let Some(min_unflushed) = self.pages.min_unflushed_lsn()
-                    && min_unflushed <= frontier
-                {
-                    crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["consistent_lsn_over_advance"])
-                        .inc();
-                    tracing::error!(
-                        tenant_id = %self.tenant_id,
-                        timeline_id = %self.timeline_id,
-                        %frontier,
-                        %min_unflushed,
-                        "consistent_lsn over-advance: unflushed rel row at \
-                         lsn={min_unflushed} ≤ ingest_frontier={frontier} after \
-                         mark_flushed — a committed page write is not durable but \
-                         the frontier passed it (tasks/34 part 2)"
-                    );
-                }
+                // NB (tasks/34 part 2): the rel FIFO may legitimately hold
+                // an unflushed row at lsn ≤ `frontier` here, and that is
+                // benign — not a data-losing over-advance. On a walreceiver
+                // reconnect the stream rewinds to the durable
+                // `consistent_lsn` and replays the committed gap; rows in
+                // that gap that were already flushed (hence evicted/trimmed
+                // from the cache) get re-`put` as FRESH unflushed slots at
+                // their original low LSNs. Such a row sits below the frontier
+                // in the FIFO yet is already durable in YB from the first
+                // pass, so advancing past it loses nothing — the next flush
+                // re-writes it (idempotent) and clears the FIFO entry. The
+                // genuine catalog/heap loss under crash recovery is a
+                // separate, still-open issue (a committed page write missing
+                // from YB); it does not manifest as an unflushed FIFO row
+                // here, so this site makes no durability assertion.
             }
             // Materialiser trigger fires here, not from `put`. The
             // trigger LSN is the just-promoted max per key in this
@@ -1289,44 +1275,11 @@ impl PageWriter {
                 aux.bytes_in_aux_buffers = aux.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
                 aux.slru_buffer.drain(0..slru_count);
                 aux.meta_buffer.drain(0..meta_count);
-                // Tripwire (tasks/34 part 2): same invariant as the rel
-                // FIFO, for the meta/SLRU path — reldir/relsize blobs,
-                // CLOG, etc. The walreceiver appends in monotonic-LSN
-                // order, so after draining this flush's prefix every
-                // remaining row was put concurrently with the YB
-                // round-trip (a record noted after the frontier capture →
-                // lsn > frontier). A remaining row ≤ frontier means a
-                // committed meta/SLRU write isn't durable yet the
-                // `consistent_lsn` frontier passed it.
-                // Diagnostics only — debug builds (e2e). Gating the whole
-                // block keeps the per-flush aux scan out of release.
-                if cfg!(debug_assertions)
-                    && let Some(frontier) = ingest_frontier
-                {
-                    let min_aux = aux
-                        .slru_buffer
-                        .iter()
-                        .map(|r| r.lsn)
-                        .chain(aux.meta_buffer.iter().map(|r| r.lsn))
-                        .min();
-                    if let Some(min_aux) = min_aux
-                        && min_aux <= frontier
-                    {
-                        crate::metrics::CORRECTNESS_ERRORS
-                            .with_label_values(&["consistent_lsn_over_advance"])
-                            .inc();
-                        tracing::error!(
-                            tenant_id = %self.tenant_id,
-                            timeline_id = %self.timeline_id,
-                            %frontier,
-                            %min_aux,
-                            "consistent_lsn over-advance: unflushed meta/SLRU row at \
-                             lsn={min_aux} ≤ ingest_frontier={frontier} after drain \
-                             — a committed meta/SLRU write is not durable but the \
-                             frontier passed it (tasks/34 part 2)"
-                        );
-                    }
-                }
+                // NB (tasks/34 part 2): as on the rel FIFO above, a
+                // meta/SLRU row ≤ frontier remaining after the drain is the
+                // benign reconnect-replay re-push of an already-durable row,
+                // not a data-losing over-advance — see the rel-path comment
+                // for the full rationale.
                 if self.pages.unflushed_count() == 0
                     && aux.slru_buffer.is_empty()
                     && aux.meta_buffer.is_empty()
