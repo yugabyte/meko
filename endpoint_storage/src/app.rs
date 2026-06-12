@@ -4,10 +4,9 @@ use axum::response::{IntoResponse, Response};
 use axum::{Router, http::StatusCode};
 use endpoint_storage::{PrefixS3Path, S3Path, Storage, bad_request, internal_error, not_found, ok};
 use remote_storage::TimeoutOrCancel;
-use remote_storage::{DownloadError, DownloadOpts, GenericRemoteStorage, RemotePath};
-use std::{sync::Arc, time::SystemTime, time::UNIX_EPOCH};
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use remote_storage::{DownloadError, DownloadOpts};
+use std::sync::Arc;
+use tracing::info;
 use utils::backoff::retry;
 
 pub fn app(state: Arc<Storage>) -> Router<()> {
@@ -149,51 +148,6 @@ async fn delete_prefix(PrefixS3Path { path }: PrefixS3Path, state: State) -> Res
     .unwrap_or(Err(anyhow!("deleting prefix cancelled")))
     .map_err(|e| internal_error(e, path, "deleting prefix"))?;
     Ok(ok())
-}
-
-pub async fn check_storage_permissions(
-    client: &GenericRemoteStorage,
-    cancel: CancellationToken,
-) -> anyhow::Result<()> {
-    info!("storage permissions check");
-
-    // as_nanos() as multiple instances proxying same bucket may be started at once
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_nanos()
-        .to_string();
-
-    let path = RemotePath::from_string(&format!("write_access_{now}"))?;
-    info!(%path, "uploading");
-
-    let body = now.to_string();
-    let stream = bytes_to_stream(Bytes::from(body.clone()));
-    client
-        .upload(stream, body.len(), &path, None, &cancel)
-        .await?;
-
-    use tokio::io::AsyncReadExt;
-    info!(%path, "downloading");
-    let download_opts = DownloadOpts {
-        kind: remote_storage::DownloadKind::Small,
-        ..Default::default()
-    };
-    let mut body_read_buf = Vec::new();
-    let stream = client
-        .download(&path, &download_opts, &cancel)
-        .await?
-        .download_stream;
-    tokio_util::io::StreamReader::new(stream)
-        .read_to_end(&mut body_read_buf)
-        .await?;
-    let body_read = String::from_utf8(body_read_buf)?;
-    if body != body_read {
-        error!(%body, %body_read, "File contents do not match");
-        anyhow::bail!("Read back file doesn't match original")
-    }
-
-    info!(%path, "removing");
-    client.delete(&path, &cancel).await
 }
 
 fn bytes_to_stream(bytes: Bytes) -> impl futures::Stream<Item = std::io::Result<Bytes>> {

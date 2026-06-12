@@ -22,9 +22,6 @@ const fn listen() -> SocketAddr {
 struct Args {
     #[arg(exclusive = true)]
     config_file: Option<String>,
-    #[arg(long, default_value = "false", requires = "config")]
-    /// to allow testing k8s helm chart where we don't have s3 credentials
-    no_s3_check_on_startup: bool,
     #[arg(long, value_name = "FILE")]
     /// inline config mode for k8s helm chart
     config: Option<String>,
@@ -72,9 +69,6 @@ async fn main() -> anyhow::Result<()> {
     let storage =
         remote_storage::GenericRemoteStorage::from_storage_kind(config.storage_kind).await?;
     let cancel = tokio_util::sync::CancellationToken::new();
-    if !args.no_s3_check_on_startup {
-        app::check_storage_permissions(&storage, cancel.clone()).await?;
-    }
 
     let proxy = std::sync::Arc::new(endpoint_storage::Storage {
         auth,
