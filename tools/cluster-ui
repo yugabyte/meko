@@ -228,25 +228,48 @@ def collect(repo_dir, database_url=None):
 
     nodes, nodes_err = http_get_json(f"{sc}/control/v1/node")
     sc_sks, _ = http_get_json(f"{sc}/control/v1/safekeeper")
+    sc_tenants, _ = http_get_json(f"{sc}/control/v1/tenant")
 
-    # Pageservers + their tenants/timelines.
-    tenants = []
+    # Pageservers: check status. The pageserver has no /v1/tenant listing
+    # endpoint; tenant discovery comes from the storage controller above.
+    ps_alive = {}
     for ps in topo["pageservers"]:
         st, err = http_get_json(f"{ps['http']}/v1/status")
         services.append({"name": f"pageserver-{ps['id']}", "kind": "pageserver",
                          "url": ps["http"], "up": err is None, "detail": err,
                          "info": st})
-        if err is not None:
-            continue
-        tlist, terr = http_get_json(f"{ps['http']}/v1/tenant")
-        for t in (tlist or []):
-            tid = t.get("id") or t.get("tenant_id")
-            timelines = []
-            if tid:
-                tl, _ = http_get_json(f"{ps['http']}/v1/tenant/{tid}/timeline")
-                timelines = tl or []
-            tenants.append({"pageserver": ps["id"], "tenant": t,
-                            "timelines": timelines})
+        ps_alive[ps["id"]] = err is None
+
+    # Tenants + timelines: discover tenants from the storage controller, then
+    # query every live pageserver for the tenant's timelines and aggregate.
+    # Timelines for a given tenant may be spread across pageservers (a new
+    # branch may land on a different node than its parent), so a single
+    # node_attached lookup misses timelines on other nodes.
+    ps_http = {ps["id"]: ps["http"] for ps in topo["pageservers"]}
+    tenants = []
+    for sc_tenant in (sc_tenants or []):
+        tid = sc_tenant.get("tenant_id")
+        # Collect timelines from every live pageserver, deduplicated.
+        seen_tl = {}
+        for ps_id, http in ps_http.items():
+            if not ps_alive.get(ps_id):
+                continue
+            tl, _ = http_get_json(f"{http}/v1/tenant/{tid}/timeline")
+            for t in (tl or []):
+                tlid = t.get("timeline_id")
+                if tlid and tlid not in seen_tl:
+                    seen_tl[tlid] = {**t, "_ps_http": http}
+        timelines = list(seen_tl.values())
+        # Use the first shard's attached node and scheduling policy as the
+        # display anchor for this tenant.
+        shards = sc_tenant.get("shards", [])
+        node_id = shards[0].get("node_attached") if shards else None
+        state = shards[0].get("scheduling_policy", "?") if shards else "?"
+        tenants.append({
+            "pageserver": node_id,
+            "tenant": {"tenant_id": tid, "state": state},
+            "timelines": timelines,
+        })
 
     # Safekeepers + their timelines.
     safekeepers = []
@@ -391,17 +414,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <main>
   <div class="banner" id="banner"></div>
   <section><h2>Services</h2><div class="cards" id="services"></div></section>
-  <section><h2>Pageserver nodes (storage controller)</h2><div id="nodes"></div></section>
-  <section><h2>Tenants &amp; timelines</h2><div id="tenants"></div></section>
-  <section><h2>Safekeepers</h2><div id="safekeepers"></div></section>
-  <section><h2>Compute endpoints</h2><div id="endpoints"></div></section>
+  <section><h2>Tenants, Timelines &amp; Endpoints</h2><div id="unified"></div></section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const mono = (s) => `<span class="mono">${esc(s)}</span>`;
 
-// Pull the first present key from an object.
 function pick(o, keys) {
   for (const k of keys) if (o && o[k] !== undefined && o[k] !== null) return o[k];
   return undefined;
@@ -411,28 +430,10 @@ function normId(v) {
   return String(v == null ? "" : v).replace(/-/g, "").toLowerCase();
 }
 
-function branchName(branchNames, tenantId, timelineId) {
-  if (!branchNames) return null;
-  const key = normId(tenantId) + "/" + normId(timelineId);
-  return branchNames[key] || null;
-}
-
 function branchCell(branchNames, tenantId, timelineId) {
-  const name = branchName(branchNames, tenantId, timelineId);
+  const key = normId(tenantId) + "/" + normId(timelineId);
+  const name = branchNames[key] || null;
   return name ? `<span class="pill ok">${esc(name)}</span>` : mono('-');
-}
-
-function rawDetails(label, obj) {
-  return `<details><summary>${esc(label)}</summary><pre>${esc(JSON.stringify(obj, null, 2))}</pre></details>`;
-}
-
-function renderServices(svcs) {
-  $("services").innerHTML = svcs.map(s => `
-    <div class="card">
-      <div class="svc"><span class="dot ${s.up?'up':'down'}"></span>${esc(s.name)}</div>
-      <div class="url">${esc(s.url)}</div>
-      ${s.up ? '' : `<div class="err">${esc(s.detail||'unreachable')}</div>`}
-    </div>`).join("");
 }
 
 function table(headers, rows) {
@@ -441,141 +442,100 @@ function table(headers, rows) {
     <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
 
-function renderNodes(nodes, err) {
-  if (err) { $("nodes").innerHTML = `<div class="empty">storage controller unreachable: ${esc(err)}</div>`; return; }
-  const rows = nodes.map(n => [
-    mono(pick(n,['id','node_id'])),
-    esc(pick(n,['listen_http_addr'])||'') + ':' + esc(pick(n,['listen_http_port'])||''),
-    mono(esc(pick(n,['listen_pg_addr'])||'') + ':' + esc(pick(n,['listen_pg_port'])||'')),
-    `<span class="pill ${/active|available/i.test(pick(n,['availability'])||'')?'ok':'warn'}">${esc(pick(n,['availability'])||'?')}</span>`,
-    esc(pick(n,['scheduling'])||'-'),
-  ]);
-  $("nodes").innerHTML = table(["id","http","libpq","availability","scheduling"], rows);
+function renderServices(svcs) {
+  const show = svcs.filter(s => s.kind !== 'pageserver' && s.kind !== 'safekeeper');
+  $("services").innerHTML = show.map(s => `
+    <div class="card">
+      <div class="svc"><span class="dot ${s.up?'up':'down'}"></span>${esc(s.name)}</div>
+      <div class="url">${esc(s.url)}</div>
+      ${s.up ? '' : `<div class="err">${esc(s.detail||'unreachable')}</div>`}
+    </div>`).join("");
 }
 
-function isZeroLsn(v) {
-  return v === "0/0" || v === 0;
-}
+function renderUnified(d) {
+  const branchNames = d.topology.branch_names || {};
 
-function lsnCell(v, stuck) {
-  if (v === undefined || v === null || v === "") return mono('-');
-  const cls = isZeroLsn(v) ? "pill bad" : (stuck ? "pill warn" : "");
-  const inner = esc(v);
-  return cls ? `<span class="${cls}" style="font-family:var(--mono);font-size:12px">${inner}</span>` : mono(v);
-}
+  // timeline key -> safekeeper url
+  const skByTl = {};
+  for (const sk of d.safekeepers || []) {
+    for (const tl of sk.timelines || []) {
+      const key = normId(pick(tl,['tenant_id'])) + '/' + normId(pick(tl,['timeline_id']));
+      if (!skByTl[key]) skByTl[key] = sk.url;
+    }
+  }
 
-function lsnCols(tl) {
-  return {
-    last_record_lsn: pick(tl,['last_record_lsn']),
-    disk_consistent_lsn: pick(tl,['disk_consistent_lsn']),
-    remote_consistent_lsn: pick(tl,['remote_consistent_lsn']),
-    initdb_lsn: pick(tl,['initdb_lsn']),
-    ancestor_lsn: pick(tl,['ancestor_lsn']),
-    walreceiver_status: pick(tl,['walreceiver_status']),
-  };
-}
+  // timeline key -> endpoint list
+  const epByTl = {};
+  for (const ep of d.endpoints || []) {
+    const key = normId(ep.tenant_id) + '/' + normId(ep.timeline_id);
+    if (!epByTl[key]) epByTl[key] = [];
+    epByTl[key].push(ep);
+  }
 
-function renderTenants(tenants, branchNames) {
-  if (!tenants.length) { $("tenants").innerHTML = `<div class="empty">no tenants attached</div>`; return; }
-  $("tenants").innerHTML = tenants.map(entry => {
-    const t = entry.tenant;
-    const tid = pick(t,['id','tenant_id']);
-    const state = pick(t,['state']);
-    const stateStr = (typeof state === 'object') ? pick(state,['slug','Attached','state']) || JSON.stringify(state) : state;
-    const rows = entry.timelines.map(tl => {
-      const l = lsnCols(tl);
-      const walDisconnected = /disconnected/i.test(l.walreceiver_status || "");
-      const lastStuck = walDisconnected && !!l.last_record_lsn;
-      const wal = l.walreceiver_status
-        ? `<span class="pill ${walDisconnected ? 'bad' : 'ok'}">${esc((l.walreceiver_status.split(',')[0] || l.walreceiver_status).trim())}</span>`
-        : mono('-');
-      const tlid = pick(tl,['timeline_id']);
-      return [
-        branchCell(branchNames, tid, tlid),
-        mono(tlid),
-        lsnCell(l.last_record_lsn, lastStuck),
-        lsnCell(l.disk_consistent_lsn, false),
-        lsnCell(l.remote_consistent_lsn, false),
-        mono(l.ancestor_lsn && l.ancestor_lsn!=="0/0" ? l.ancestor_lsn : '-'),
-        wal,
-        rawDetails("raw", tl),
-      ];
-    });
-    return `<div class="tenant">
-      <div class="head">
-        <span class="tid">${esc(tid)}</span>
-        <span class="pill ${/active/i.test(stateStr||'')?'ok':'warn'}">${esc(stateStr||'?')}</span>
-        <span class="pill">ps ${esc(entry.pageserver)}</span>
-        <span class="pill">${entry.timelines.length} timeline(s)</span>
-      </div>
-      <div style="padding:10px 14px">
-        ${table(["branch","timeline","last_record","disk_consistent","remote_consistent","ancestor","walreceiver",""], rows)}
-      </div>
-    </div>`;
-  }).join("");
-}
+  // one row per (timeline, endpoint); timelines without endpoints get one row
+  const rows = [];
+  for (const entry of d.tenants || []) {
+    const tid = pick(entry.tenant, ['id','tenant_id']);
+    for (const tl of entry.timelines || []) {
+      const tlid = tl.timeline_id;
+      const key = normId(tid) + '/' + normId(tlid);
+      const skHttp = skByTl[key] || null;
+      const eps = epByTl[key] || [null];
+      for (const ep of eps) {
+        rows.push({tid, tl, skHttp, ep});
+      }
+    }
+  }
 
-function renderSafekeepers(sks, branchNames) {
-  $("safekeepers").innerHTML = sks.map(sk => {
-    const rows = sk.timelines.map(tl => {
-      const tenant = pick(tl,['tenant_id']);
-      const tlid = pick(tl,['timeline_id']);
-      return [
-      branchCell(branchNames, tenant, tlid),
-      mono(tenant),
-      mono(tlid),
-      mono(pick(tl,['flush_lsn'])||'-'),
-      mono(pick(tl,['commit_lsn'])||'-'),
-      mono(pick(tl,['remote_consistent_lsn'])||'-'),
-    ];
-    });
-    return `<div class="tenant">
-      <div class="head">
-        <span class="dot ${sk.up?'up':'down'}"></span>
-        <span>safekeeper ${esc(sk.id)}</span>
-        <span class="repo mono">${esc(sk.url)}</span>
-        <span class="pill">${sk.timelines.length} timeline(s)</span>
-      </div>
-      <div style="padding:10px 14px">
-        ${table(["branch","tenant","timeline","flush_lsn","commit_lsn","remote_consistent",], rows)}
-      </div>
-    </div>`;
-  }).join("");
-}
+  if (!rows.length) {
+    $("unified").innerHTML = `<div class="empty">no tenants / timelines</div>`;
+    return;
+  }
 
-function renderEndpoints(eps, branchNames) {
-  if (!eps.length) { $("endpoints").innerHTML = `<div class="empty">no endpoints created (cargo yb_light endpoint create &lt;name&gt;)</div>`; return; }
-  const rows = eps.map(ep => {
-    let cls = 'bad', label = 'stopped';
-    if (ep.running) { cls = 'ok'; label = 'running'; }
-    else if (ep.compute_ctl_up) { cls = 'warn'; label = 'starting'; }
+  const headers = ["tenant","timeline","branch","ancestor","endpoint","state","mode","libpq","pg http","ps http","sk http"];
+  const tableRows = rows.map(({tid, tl, skHttp, ep}) => {
+    const tlid = tl.timeline_id;
+    const ancId = tl.ancestor_timeline_id;
+
+    let epId = mono('-'), stateCell = mono('-'), modeCell = mono('-');
+    let libpq = mono('-'), pgHttp = mono('-');
+    if (ep) {
+      epId = esc(ep.endpoint_id);
+      let cls = 'bad', label = 'stopped';
+      if (ep.running) { cls = 'ok'; label = 'running'; }
+      else if (ep.compute_ctl_up) { cls = 'warn'; label = 'starting'; }
+      stateCell = `<span class="pill ${cls}">${label}</span>`;
+      modeCell = esc(ep.mode || '-');
+      libpq = mono('127.0.0.1:' + ep.pg_port);
+      pgHttp = mono(ep.external_http_port || '-');
+    }
+
     return [
-    esc(ep.endpoint_id),
-    branchCell(branchNames, ep.tenant_id, ep.timeline_id),
-    `<span class="pill ${cls}" title="${esc(ep.compute_detail||'')}">${label}</span>`,
-    esc(ep.mode||'-'),
-    mono(ep.tenant_id),
-    mono(ep.timeline_id),
-    mono('127.0.0.1:'+ep.pg_port),
-    mono(ep.external_http_port),
-  ];
+      mono(tid ? tid.slice(0,8)+'…' : '-'),
+      mono(tlid ? tlid.slice(0,8)+'…' : '-'),
+      branchCell(branchNames, tid, tlid),
+      ancId ? mono(ancId.slice(0,8)+'…') : mono('-'),
+      epId,
+      stateCell,
+      modeCell,
+      libpq,
+      pgHttp,
+      tl._ps_http ? mono(tl._ps_http) : mono('-'),
+      skHttp ? mono(skHttp) : mono('-'),
+    ];
   });
-  $("endpoints").innerHTML = table(
-    ["endpoint","branch","compute","mode","tenant","timeline","libpq","http"], rows);
+
+  $("unified").innerHTML = table(headers, tableRows);
 }
 
 async function load() {
   try {
     const r = await fetch("/api/data", {cache:"no-store"});
     const d = await r.json();
-    const branchNames = d.topology.branch_names || {};
     $("banner").style.display = "none";
     $("repo").textContent = d.topology.repo_dir;
     renderServices(d.services);
-    renderNodes(d.nodes, d.nodes_error);
-    renderTenants(d.tenants, branchNames);
-    renderSafekeepers(d.safekeepers, branchNames);
-    renderEndpoints(d.endpoints, branchNames);
+    renderUnified(d);
     $("updated").textContent = "updated " + new Date().toLocaleTimeString();
   } catch (e) {
     $("banner").style.display = "block";
