@@ -1030,6 +1030,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
             endpoint_storage: EndpointStorageConf {
                 listen_addr: ENDPOINT_STORAGE_DEFAULT_ADDR,
                 remote_storage_json: None,
+                endpoint_id: String::new(),
             },
             pg_distrib_dir: None,
             yb_light_distrib_dir: None,
@@ -1164,6 +1165,60 @@ fn allocate_safekeeper_conf(
         timeline_id: Some(timeline_id),
         endpoint_id: endpoint_id.to_string(),
     })
+}
+
+/// Allocate the conf for the endpoint_storage instance to be provisioned
+/// under `endpoint_id`. The listen port is the lowest free port of the form
+/// `template_base + 2k` not already taken by another instance — so the
+/// first endpoint reuses the template's port and later ones step by 2.
+/// `remote_storage_json` is cloned from the template.
+fn allocate_endpoint_storage_conf(env: &LocalEnv, endpoint_id: &str) -> EndpointStorageConf {
+    let base = env.endpoint_storage.listen_addr.port();
+    let used: std::collections::HashSet<u16> = env
+        .endpoint_storages
+        .iter()
+        .map(|e| e.listen_addr.port())
+        .collect();
+    let mut port = base;
+    while used.contains(&port) {
+        port += 2;
+    }
+    let mut listen_addr = env.endpoint_storage.listen_addr;
+    listen_addr.set_port(port);
+    EndpointStorageConf {
+        listen_addr,
+        remote_storage_json: env.endpoint_storage.remote_storage_json.clone(),
+        endpoint_id: endpoint_id.to_string(),
+    }
+}
+
+/// Provision and start the endpoint_storage instance dedicated to
+/// `endpoint_id` under `endpoints/<endpoint_id>/endpoint_storage`, then
+/// record it in the env. One instance per endpoint, alongside the
+/// co-located PS/SK pair. Tolerates an old yb-light binary without the
+/// `endpoint_storage` executable (compat tests): skip rather than fail.
+async fn provision_endpoint_storage(env: &mut LocalEnv, endpoint_id: &str) -> anyhow::Result<()> {
+    let conf = allocate_endpoint_storage_conf(env, endpoint_id);
+    let storage = EndpointStorage::from_conf(env, &conf);
+    if !storage.bin.exists() {
+        eprintln!(
+            "{} binary not found; skipping endpoint_storage provisioning \
+             (ignore if this is a compatibility test)",
+            storage.bin
+        );
+        return Ok(());
+    }
+    println!(
+        "Provisioning endpoint_storage ({}) for endpoint '{endpoint_id}'",
+        conf.listen_addr
+    );
+    storage.init().context("endpoint_storage init")?;
+    storage
+        .start(&std::time::Duration::from_secs(30))
+        .await
+        .context("start endpoint_storage")?;
+    env.endpoint_storages.push(conf);
+    Ok(())
 }
 
 /// The ancestor timeline's durable WAL end (`flush_lsn`), read from its
@@ -1903,6 +1958,11 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             // branch skips this — the pair stays under the first endpoint.
             provision_timeline_for_endpoint(env, &endpoint_id, tenant_id, timeline_id).await?;
 
+            // One endpoint_storage instance per endpoint, under this
+            // endpoint's folder. Unlike the PS/SK pair (one per timeline,
+            // shared by siblings), every endpoint gets its own.
+            provision_endpoint_storage(env, &endpoint_id).await?;
+
             cplane.new_endpoint(
                 &endpoint_id,
                 tenant_id,
@@ -2017,7 +2077,16 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             };
 
             let endpoint_storage_token = env.generate_auth_token(&claims)?;
-            let endpoint_storage_addr = env.endpoint_storage.listen_addr.to_string();
+            // Point the compute at this endpoint's own endpoint_storage
+            // instance. Fall back to the template addr only if none was
+            // provisioned (e.g. an old binary skipped it in compat tests).
+            let endpoint_storage_addr = env
+                .endpoint_storages
+                .iter()
+                .find(|e| e.endpoint_id == **endpoint_id)
+                .map(|e| e.listen_addr)
+                .unwrap_or(env.endpoint_storage.listen_addr)
+                .to_string();
 
             let args = control_plane::endpoint::EndpointStartArgs {
                 auth_token,
@@ -2328,23 +2397,26 @@ async fn handle_endpoint_storage(
     env: &local_env::LocalEnv,
 ) -> Result<()> {
     use EndpointStorageCmd::*;
-    let storage = EndpointStorage::from_env(env);
 
-    // In tests like test_forward_compatibility or test_graceful_cluster_restart
-    // old ybLight binaries (without endpoint_storage) are present
-    if !storage.bin.exists() {
-        eprintln!(
-            "{} binary not found. Ignore if this is a compatibility test",
-            storage.bin
-        );
-        return Ok(());
-    }
-
+    // Per-endpoint topology: start/stop every provisioned instance.
     match subcmd {
         Start(EndpointStorageStartCmd { start_timeout }) => {
-            if let Err(e) = storage.start(start_timeout).await {
-                eprintln!("endpoint_storage start failed: {e}");
-                exit(1);
+            for es_conf in &env.endpoint_storages {
+                let storage = EndpointStorage::from_conf(env, es_conf);
+                // In tests like test_forward_compatibility or
+                // test_graceful_cluster_restart old ybLight binaries
+                // (without endpoint_storage) are present.
+                if !storage.bin.exists() {
+                    eprintln!(
+                        "{} binary not found. Ignore if this is a compatibility test",
+                        storage.bin
+                    );
+                    return Ok(());
+                }
+                if let Err(e) = storage.start(start_timeout).await {
+                    eprintln!("endpoint_storage start failed: {e}");
+                    exit(1);
+                }
             }
         }
         Stop(EndpointStorageStopCmd { stop_mode }) => {
@@ -2352,9 +2424,12 @@ async fn handle_endpoint_storage(
                 StopMode::Fast => false,
                 StopMode::Immediate => true,
             };
-            if let Err(e) = storage.stop(immediate) {
-                eprintln!("proxy stop failed: {e}");
-                exit(1);
+            for es_conf in &env.endpoint_storages {
+                let storage = EndpointStorage::from_conf(env, es_conf);
+                if let Err(e) = storage.stop(immediate) {
+                    eprintln!("endpoint_storage stop failed: {e}");
+                    exit(1);
+                }
             }
         }
     };
@@ -2469,12 +2544,19 @@ async fn handle_start_all_impl(
             });
         }
 
-        js.spawn(async move {
-            EndpointStorage::from_env(env)
-                .start(&retry_timeout)
-                .await
-                .map_err(|e| e.context("start endpoint_storage"))
-        });
+        for es_conf in &env.endpoint_storages {
+            js.spawn(async move {
+                EndpointStorage::from_conf(env, es_conf)
+                    .start(&retry_timeout)
+                    .await
+                    .map_err(|e| {
+                        e.context(format!(
+                            "start endpoint_storage for endpoint {}",
+                            es_conf.endpoint_id
+                        ))
+                    })
+            });
+        }
     })();
 
     let mut errors = Vec::new();
@@ -2596,9 +2678,14 @@ async fn try_stop_all(env: &local_env::LocalEnv, immediate: bool) {
         }
     }
 
-    let storage = EndpointStorage::from_env(env);
-    if let Err(e) = storage.stop(immediate) {
-        eprintln!("endpoint_storage stop failed: {e:#}");
+    for es_conf in &env.endpoint_storages {
+        let storage = EndpointStorage::from_conf(env, es_conf);
+        if let Err(e) = storage.stop(immediate) {
+            eprintln!(
+                "endpoint_storage for endpoint {} stop failed: {e:#}",
+                es_conf.endpoint_id
+            );
+        }
     }
 
     for ps_conf in &env.pageservers {
@@ -2680,6 +2767,7 @@ mod tests {
             pageserver_templates: vec![ps_template()],
             safekeeper_templates: vec![sk_template()],
             endpoint_storage: EndpointStorageConf::default(),
+            endpoint_storages: Vec::new(),
             control_plane_api: "http://127.0.0.1:1234/".parse().unwrap(),
             control_plane_hooks_api: None,
             use_local_tls: false,
@@ -2742,6 +2830,39 @@ mod tests {
         assert_eq!(conf.http_port, 7678);
         assert_eq!(conf.timeline_id, Some(branch_tl));
         assert_eq!(conf.endpoint_id, "ep_b1");
+    }
+
+    #[test]
+    fn first_endpoint_storage_reuses_template_port() {
+        let env = env_with_templates();
+        let conf = allocate_endpoint_storage_conf(&env, "main");
+        // Template default port (9993), endpoint_id stamped in.
+        assert_eq!(conf.listen_addr.port(), 9993);
+        assert_eq!(conf.endpoint_id, "main");
+    }
+
+    #[test]
+    fn second_endpoint_storage_gets_next_free_port() {
+        let mut env = env_with_templates();
+        env.endpoint_storages
+            .push(allocate_endpoint_storage_conf(&env.clone(), "main"));
+        let conf = allocate_endpoint_storage_conf(&env, "ep_b1");
+        // Lowest free port of the form base + 2k → 9995.
+        assert_eq!(conf.listen_addr.port(), 9995);
+        assert_eq!(conf.endpoint_id, "ep_b1");
+    }
+
+    #[test]
+    fn endpoint_storage_reuses_freed_port_after_deprovision() {
+        let mut env = env_with_templates();
+        env.endpoint_storages
+            .push(allocate_endpoint_storage_conf(&env.clone(), "main"));
+        env.endpoint_storages
+            .push(allocate_endpoint_storage_conf(&env.clone(), "ep_b1"));
+        // Drop the first endpoint's instance (port 9993 freed).
+        env.endpoint_storages.retain(|e| e.endpoint_id != "main");
+        let conf = allocate_endpoint_storage_conf(&env, "ep_b2");
+        assert_eq!(conf.listen_addr.port(), 9993);
     }
 
     #[test]

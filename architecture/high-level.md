@@ -9,7 +9,7 @@
 | Safekeeper | Raft acceptor for WAL. Receives WAL from compute, durably stores it, streams to pageserver. **Limited to one instance per cluster in YB WAL mode** — YB's own Raft already provides quorum durability. | `target/debug/safekeeper` |
 | Pageserver | Materializes pages from WAL and serves them to compute on demand. Holds the only durable copy of relfiles (via `remote_storage`). | `target/debug/yb-pageserver` |
 | Storage controller | Tracks cluster topology: which tenants are on which pageservers, which safekeepers hold which timelines, generations, etc. | `target/debug/storage_controller` |
-| Endpoint storage | Small auxiliary service for endpoint-scoped scratch data (LFC pre-warm hints, etc.). | `target/debug/endpoint_storage` |
+| Endpoint storage | Small auxiliary service for endpoint-scoped scratch data (LFC pre-warm hints, etc.). One instance **per endpoint**, co-located under `endpoints/<name>/endpoint_storage`. | `target/debug/endpoint_storage` |
 | YugabyteDB | Durable storage backend for everything Neon-internal. Replaces S3/Azure/GCS *and* the storage controller's local Postgres. | external (`yugabyted`) |
 
 ## Write path (one INSERT from a client)
@@ -110,13 +110,17 @@ These subsystems run unmodified upstream Neon code in yb-light:
 ## Topology in our current dev cluster
 
 Single host, single YB instance, one pageserver + one safekeeper **per
-timeline**, co-located under the endpoint that owns the timeline. The
-pair is provisioned at `endpoint create` — `tenant create` and `timeline
-branch` only record the timeline's init recipe (ids, branch name, pending
-init) in the storage controller's `pending_timeline_inits` table in YB;
-the PS+SK processes come up under `endpoints/<endpoint>/{pageserver,
-safekeeper}` when the first endpoint for that timeline is created, which
-reads the recipe back and then deletes the pending row.
+timeline**, co-located under the endpoint that owns the timeline, plus one
+endpoint_storage **per endpoint**. The PS+SK pair is provisioned at
+`endpoint create` — `tenant create` and `timeline branch` only record the
+timeline's init recipe (ids, branch name, pending init) in the storage
+controller's `pending_timeline_inits` table in YB; the PS+SK processes come
+up under `endpoints/<endpoint>/{pageserver,safekeeper}` when the first
+endpoint for that timeline is created, which reads the recipe back and then
+deletes the pending row. The endpoint_storage instance comes up under
+`endpoints/<endpoint>/endpoint_storage` for **every** endpoint (siblings
+share the PS+SK pair but each gets its own endpoint_storage); the compute
+talks to its own instance.
 
 ```
 yugabyted                       :7100 (master), :5433 (ysql)
@@ -139,7 +143,7 @@ yb-light binaries (target/debug/)
   storage_controller --database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage --listen 127.0.0.1:<port>
   yb-pageserver   (config from on-disk pageserver.toml; yb_light_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
   safekeeper --id 1 --wal-yb-config <YbStore TOML>   (yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
-  endpoint_storage   :9983
+  endpoint_storage   (config from endpoints/<name>/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
   compute_ctl --pgdata .yb_light/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
     +-- postgres (v17.5 + Neon patches)  :55440
 ```

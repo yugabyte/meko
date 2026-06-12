@@ -86,6 +86,7 @@ use pageserver_api::controller_api::ComputeEndpoint;
 use postgres_connection::parse_host_port;
 
 use crate::local_env::LocalEnv;
+use crate::endpoint_storage::EndpointStorage;
 use crate::pageserver::PageServerNode;
 use crate::postgresql_conf::PostgresConf;
 use crate::safekeeper::SafekeeperNode;
@@ -1242,10 +1243,11 @@ impl Endpoint {
         Ok(response)
     }
 
-    /// Stop the pageserver and safekeeper co-located under this endpoint's
-    /// folder (if any) and drop the safekeeper from the persisted config.
-    /// The pageserver leaves no config trace — it is discovered from its
-    /// `pageserver/` subdir, which the caller removes with the folder.
+    /// Stop the pageserver, safekeeper and endpoint_storage co-located
+    /// under this endpoint's folder (if any) and drop the safekeeper and
+    /// endpoint_storage from the persisted config. The pageserver leaves no
+    /// config trace — it is discovered from its `pageserver/` subdir, which
+    /// the caller removes with the folder.
     fn deprovision_colocated_storage(&self) -> Result<()> {
         let endpoint_path = self.endpoint_path();
 
@@ -1279,12 +1281,32 @@ impl Endpoint {
             }
         }
 
-        if !owned_sk_ids.is_empty() {
+        // endpoint_storage: this endpoint's own instance.
+        let owns_endpoint_storage = self
+            .env
+            .endpoint_storages
+            .iter()
+            .any(|es| es.endpoint_id == self.endpoint_id);
+        for es_conf in self
+            .env
+            .endpoint_storages
+            .iter()
+            .filter(|es| es.endpoint_id == self.endpoint_id)
+        {
+            let storage = EndpointStorage::from_conf(&self.env, es_conf);
+            if let Err(e) = storage.stop(true) {
+                eprintln!("endpoint_storage for endpoint {} stop failed: {e:#}", self.endpoint_id);
+            }
+        }
+
+        if !owned_sk_ids.is_empty() || owns_endpoint_storage {
             let mut env = self.env.clone();
             env.safekeepers
                 .retain(|sk| !owned_sk_ids.contains(&sk.id));
+            env.endpoint_storages
+                .retain(|es| es.endpoint_id != self.endpoint_id);
             env.persist_config()
-                .context("persist config after dropping co-located safekeeper")?;
+                .context("persist config after dropping co-located storage")?;
         }
 
         Ok(())

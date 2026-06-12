@@ -1,9 +1,10 @@
 //! On-disk layout contract of the co-located topology: a timeline's
 //! pageserver + safekeeper live under the endpoint that owns them
-//! (`endpoints/<endpoint>/{pageserver,safekeeper}`), no legacy
-//! top-level `pageserver_*/` or `safekeepers/` dirs exist, and a
-//! branch's pair is provisioned at `endpoint create` and torn down at
-//! `endpoint stop --destroy`.
+//! (`endpoints/<endpoint>/{pageserver,safekeeper}`), each endpoint also
+//! gets its own `endpoint_storage/`, no legacy top-level `pageserver_*/`,
+//! `safekeepers/`, or `endpoint_storage/` dirs exist, and a branch's
+//! pair + endpoint_storage are provisioned at `endpoint create` and torn
+//! down at `endpoint stop --destroy`.
 
 use std::path::Path;
 
@@ -54,8 +55,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &r.join("endpoints/main/safekeeper/safekeeper.pid"),
         "endpoints/main/safekeeper/safekeeper.pid",
     )?;
+    must_exist(
+        &r.join("endpoints/main/endpoint_storage/endpoint_storage.pid"),
+        "endpoints/main/endpoint_storage/endpoint_storage.pid",
+    )?;
 
-    step("no legacy top-level pageserver_*/ or safekeepers/ dirs");
+    step("no legacy top-level pageserver_*/, safekeepers/, or endpoint_storage/ dirs");
     if let Ok(entries) = std::fs::read_dir(r) {
         for e in entries.flatten() {
             if e.file_name().to_string_lossy().starts_with("pageserver_") {
@@ -65,6 +70,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
     if r.join("safekeepers").is_dir() {
         bail!("found legacy top-level safekeepers/ dir");
+    }
+    if r.join("endpoint_storage").is_dir() {
+        bail!("found legacy top-level endpoint_storage/ dir");
     }
 
     step(&format!("branch {LAYOUT_BRANCH} (no new on-disk dirs yet)"));
@@ -88,6 +96,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     must_exist(
         &ep_dir.join("safekeeper/safekeeper.pid"),
         &format!("endpoints/{LAYOUT_EP}/safekeeper/safekeeper.pid"),
+    )?;
+    must_exist(
+        &ep_dir.join("endpoint_storage/endpoint_storage.pid"),
+        &format!("endpoints/{LAYOUT_EP}/endpoint_storage/endpoint_storage.pid"),
     )?;
     // pgdata is only laid down on `endpoint start`, not at create time.
     if ep_dir.join("pgdata").exists() {

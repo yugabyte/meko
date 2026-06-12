@@ -17,7 +17,8 @@ export PSQL=<path-to>/psql
 ```
 Component config locations vary by deployment but typically:
 `pageserver.toml` + `identity.toml` in the PS data dir; the safekeeper/SC/endpoint-storage start
-scripts; the yb_light_local repo dir (`.yb_light/config`, `.yb_light/endpoint_storage/`, `.yb_light/endpoints/<ep>/`).
+scripts; the yb_light_local repo dir (`.yb_light/config`, `.yb_light/endpoints/<ep>/` — which
+holds that endpoint's `pageserver/`, `safekeeper/`, and `endpoint_storage/`).
 
 ---
 
@@ -97,7 +98,7 @@ old start script to a new build without checking `--help`.
 ## D. "no pg_hba.conf entry … no encryption" (TLS to YB)
 A client opened a **non-TLS** connection to YugabyteDB, which requires TLS. Seen when the
 endpoint_storage `YbStore` config derived `sslmode:None`. Fix the relevant config to force TLS and
-supply the password env, e.g. in `.yb_light/endpoint_storage/endpoint_storage.json` add
+supply the password env, e.g. in `.yb_light/endpoints/<ep>/endpoint_storage/endpoint_storage.json` add
 `"sslmode":"require"` and `"password_env":"YB_STORAGE_PASSWORD"`. Any component talking to YB
 (`pageserver.toml remote_storage`, safekeeper `--remote-storage`, SC `--database-url`) must specify
 `sslmode=require`/`sslmode="require"`.

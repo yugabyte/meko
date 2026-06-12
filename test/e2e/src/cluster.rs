@@ -379,7 +379,7 @@ impl Cluster {
         let sc = r.join("storage_controller_1/storage_controller.pid");
         let ps = r.join("endpoints/main/pageserver/pageserver.pid");
         let sk = r.join("endpoints/main/safekeeper/safekeeper.pid");
-        let es = r.join("endpoint_storage/endpoint_storage.pid");
+        let es = r.join("endpoints/main/endpoint_storage/endpoint_storage.pid");
 
         if !is_running(&sc) {
             step("restart storage_controller (prior test left it down)");

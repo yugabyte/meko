@@ -1,5 +1,5 @@
 use crate::background_process::{self, start_process, stop_process};
-use crate::local_env::LocalEnv;
+use crate::local_env::{EndpointStorageConf, LocalEnv};
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use std::io::Write;
@@ -26,13 +26,19 @@ pub struct EndpointStorage {
 }
 
 impl EndpointStorage {
-    pub fn from_env(env: &LocalEnv) -> EndpointStorage {
+    /// Build the runtime handle for the per-endpoint instance described by
+    /// `conf` (its `listen_addr` and owning `endpoint_id`); the binary,
+    /// pemfile and default-store database URL come from the shared `env`.
+    pub fn from_conf(env: &LocalEnv, conf: &EndpointStorageConf) -> EndpointStorage {
         EndpointStorage {
             bin: Utf8PathBuf::from_path_buf(env.endpoint_storage_bin()).unwrap(),
-            data_dir: Utf8PathBuf::from_path_buf(env.endpoint_storage_data_dir()).unwrap(),
-            pemfile: Utf8PathBuf::from_path_buf(env.public_key_path.clone()).unwrap(),
-            addr: env.endpoint_storage.listen_addr,
-            remote_storage_json: env.endpoint_storage.remote_storage_json.clone(),
+            data_dir: Utf8PathBuf::from_path_buf(
+                env.endpoint_storage_data_dir(&conf.endpoint_id),
+            )
+            .unwrap(),
+            pemfile: Utf8PathBuf::from_path_buf(env.get_public_key_path()).unwrap(),
+            addr: conf.listen_addr,
+            remote_storage_json: conf.remote_storage_json.clone(),
             storage_controller_database_url: env.storage_controller.database_url.clone(),
         }
     }
@@ -86,7 +92,6 @@ impl EndpointStorage {
 
     pub fn init(&self) -> Result<()> {
         println!("Initializing object storage in {:?}", self.data_dir);
-        let parent = self.data_dir.parent().unwrap();
 
         // The endpoint_storage service deserializes the top-level config
         // via `#[serde(flatten)] storage_kind: TypedRemoteStorageKind`,
@@ -100,7 +105,7 @@ impl EndpointStorage {
 
         let cfg = serde_json::json!({
             "listen": self.listen_addr(),
-            "pemfile": parent.join(self.pemfile.clone()),
+            "pemfile": self.pemfile.clone(),
         });
         let cfg_obj = cfg.as_object().unwrap().clone();
         let storage_obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(

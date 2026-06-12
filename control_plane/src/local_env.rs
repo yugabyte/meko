@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use utils::auth::encode_from_key_file;
 use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 
-use crate::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage};
+use crate::endpoint_storage::ENDPOINT_STORAGE_DEFAULT_ADDR;
 
 pub const DEFAULT_PG_VERSION: u32 = 17;
 
@@ -86,7 +86,16 @@ pub struct LocalEnv {
     /// clones for the first/main safekeeper.
     pub safekeeper_templates: Vec<SafekeeperConf>,
 
+    /// Init-time endpoint_storage conf from the `yb_light_local init` TOML:
+    /// the template (base `listen_addr`, `remote_storage_json`) that
+    /// `endpoint create` clones for each endpoint's instance.
     pub endpoint_storage: EndpointStorageConf,
+
+    /// Per-endpoint endpoint_storage instances, one per endpoint, each
+    /// with its own `listen_addr` and a datadir under
+    /// `endpoints/<endpoint_id>/endpoint_storage`. Starts empty on a fresh
+    /// repo; populated as endpoints are created.
+    pub endpoint_storages: Vec<EndpointStorageConf>,
 
     // Control plane upcall API for pageserver: if None, we will not run storage_controller  If set, this will
     // be propagated into each pageserver's configuration.
@@ -120,6 +129,8 @@ pub struct OnDiskConfig {
     pub pageserver_templates: Vec<YbLightLocalInitPageserverConf>,
     pub safekeeper_templates: Vec<SafekeeperConf>,
     pub endpoint_storage: EndpointStorageConf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoint_storages: Vec<EndpointStorageConf>,
     pub control_plane_api: Option<Url>,
     pub control_plane_hooks_api: Option<Url>,
     pub control_plane_compute_hook_api: Option<Url>,
@@ -174,6 +185,12 @@ pub struct EndpointStorageConf {
     /// by `TypedRemoteStorageKind` in the target service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_storage_json: Option<String>,
+    /// The endpoint whose folder holds this instance's datadir
+    /// (`endpoints/<endpoint_id>/endpoint_storage`). Empty for the
+    /// init-time template; set at `endpoint create` when an instance is
+    /// provisioned under its owning endpoint.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub endpoint_id: String,
 }
 
 /// A part of storage controller's config the yb_light_local knows about.
@@ -242,6 +259,7 @@ impl Default for EndpointStorageConf {
         Self {
             listen_addr: ENDPOINT_STORAGE_DEFAULT_ADDR,
             remote_storage_json: None,
+            endpoint_id: String::new(),
         }
     }
 }
@@ -528,8 +546,11 @@ impl LocalEnv {
         self.endpoints_path().join(endpoint_id).join("safekeeper")
     }
 
-    pub fn endpoint_storage_data_dir(&self) -> PathBuf {
-        self.base_data_dir.join("endpoint_storage")
+    /// `endpoints/<endpoint_id>/endpoint_storage`.
+    pub fn endpoint_storage_data_dir(&self, endpoint_id: &str) -> PathBuf {
+        self.endpoints_path()
+            .join(endpoint_id)
+            .join("endpoint_storage")
     }
 
     pub fn get_pageserver_conf(&self, id: NodeId) -> anyhow::Result<&PageServerConf> {
@@ -706,6 +727,7 @@ impl LocalEnv {
                 control_plane_compute_hook_api: _,
                 use_local_tls,
                 endpoint_storage,
+                endpoint_storages,
             } = on_disk_config;
             LocalEnv {
                 base_data_dir: repopath.to_owned(),
@@ -723,6 +745,7 @@ impl LocalEnv {
                 control_plane_hooks_api,
                 use_local_tls,
                 endpoint_storage,
+                endpoint_storages,
             }
         };
 
@@ -845,6 +868,7 @@ impl LocalEnv {
                 control_plane_compute_hook_api: None,
                 use_local_tls: self.use_local_tls,
                 endpoint_storage: self.endpoint_storage.clone(),
+                endpoint_storages: self.endpoint_storages.clone(),
             },
         )
     }
@@ -1007,6 +1031,7 @@ impl LocalEnv {
             control_plane_hooks_api,
             use_local_tls,
             endpoint_storage,
+            endpoint_storages: Vec::new(),
         };
 
         if use_local_tls {
@@ -1016,9 +1041,10 @@ impl LocalEnv {
         // create endpoints dir
         fs::create_dir_all(env.endpoints_path())?;
 
-        EndpointStorage::from_env(&env)
-            .init()
-            .context("object storage init failed")?;
+        // No endpoint_storage instance is created at init: like the
+        // PS+SK pair, one is provisioned under each `endpoints/<name>/`
+        // folder at `endpoint create`. `endpoint_storage` is kept as the
+        // template (base port, `remote_storage_json`) the launcher clones.
 
         env.persist_config()
     }
@@ -1181,6 +1207,7 @@ mod tests {
             pageserver_templates: Vec::new(),
             safekeeper_templates: Vec::new(),
             endpoint_storage: EndpointStorageConf::default(),
+            endpoint_storages: Vec::new(),
             control_plane_api: "http://127.0.0.1:1234/upcall/v1/".parse().unwrap(),
             control_plane_hooks_api: None,
             use_local_tls: false,
@@ -1218,6 +1245,10 @@ mod tests {
         assert_eq!(
             env.safekeeper_data_dir("ep_b1"),
             base.join("endpoints").join("ep_b1").join("safekeeper")
+        );
+        assert_eq!(
+            env.endpoint_storage_data_dir("main"),
+            base.join("endpoints").join("main").join("endpoint_storage")
         );
     }
 
