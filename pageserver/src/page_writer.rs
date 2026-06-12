@@ -1009,6 +1009,32 @@ impl PageWriter {
         merged.dedup_by(|a, b| a.lsn == b.lsn);
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
+        } else if !merged.is_empty() {
+            // Tripwire (tasks/34 part 2): no `will_init` anchor in the
+            // merged cache+YB chain. `parse_chain` would then fold these
+            // deltas onto a ZERO base page (base_img=None) and the
+            // materialiser would install + `trim_key_up_to` that wrong
+            // image — durable corruption that surfaces later as a heap
+            // hole / orphan catalog row / "unexpected zero page". A
+            // complete durable chain ≤ target_lsn must always reach a
+            // will_init anchor; returning one without an anchor is the
+            // bug, not just a symptom.
+            crate::metrics::CORRECTNESS_ERRORS
+                .with_label_values(&["materialize_unanchored_chain"])
+                .inc();
+            let lo = merged.last().map(|r| r.lsn);
+            let hi = merged.first().map(|r| r.lsn);
+            tracing::error!(
+                tenant_id = %self.tenant_id,
+                timeline_id = %self.timeline_id,
+                %target_lsn,
+                chain_len = merged.len(),
+                ?lo,
+                ?hi,
+                key = ?key_bytes,
+                "read_chain_durable: no will_init anchor in chain ≤ target_lsn \
+                 — folding this would zero-base the page (tasks/34 part 2)"
+            );
         }
         Ok(merged)
     }
@@ -1150,6 +1176,33 @@ impl PageWriter {
                 if frontier.0 > cur {
                     self.flush_horizon_lsn.store(frontier.0, Ordering::Relaxed);
                 }
+                // Tripwire (tasks/34 part 2): `consistent_lsn` is about to
+                // advance to `frontier`, which promises every page ≤ it is
+                // durable in `pageserver.pages`. After `mark_flushed` the
+                // rel FIFO should hold only rows put concurrently with the
+                // YB round-trip, all from records noted AFTER the frontier
+                // capture — i.e. lsn > frontier (walreceiver LSNs are
+                // monotonic). A remaining unflushed row ≤ frontier means a
+                // committed page write is NOT durable yet the frontier
+                // passed it — the over-advance that loses catalog/index
+                // pages on the next re-attach.
+                if let Some(min_unflushed) = self.pages.min_unflushed_lsn()
+                    && min_unflushed <= frontier
+                {
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["consistent_lsn_over_advance"])
+                        .inc();
+                    tracing::error!(
+                        tenant_id = %self.tenant_id,
+                        timeline_id = %self.timeline_id,
+                        %frontier,
+                        %min_unflushed,
+                        "consistent_lsn over-advance: unflushed rel row at \
+                         lsn={min_unflushed} ≤ ingest_frontier={frontier} after \
+                         mark_flushed — a committed page write is not durable but \
+                         the frontier passed it (tasks/34 part 2)"
+                    );
+                }
             }
             // Materialiser trigger fires here, not from `put`. The
             // trigger LSN is the just-promoted max per key in this
@@ -1236,6 +1289,40 @@ impl PageWriter {
                 aux.bytes_in_aux_buffers = aux.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
                 aux.slru_buffer.drain(0..slru_count);
                 aux.meta_buffer.drain(0..meta_count);
+                // Tripwire (tasks/34 part 2): same invariant as the rel
+                // FIFO, for the meta/SLRU path — reldir/relsize blobs,
+                // CLOG, etc. The walreceiver appends in monotonic-LSN
+                // order, so after draining this flush's prefix every
+                // remaining row was put concurrently with the YB
+                // round-trip (a record noted after the frontier capture →
+                // lsn > frontier). A remaining row ≤ frontier means a
+                // committed meta/SLRU write isn't durable yet the
+                // `consistent_lsn` frontier passed it.
+                if let Some(frontier) = ingest_frontier {
+                    let min_aux = aux
+                        .slru_buffer
+                        .iter()
+                        .map(|r| r.lsn)
+                        .chain(aux.meta_buffer.iter().map(|r| r.lsn))
+                        .min();
+                    if let Some(min_aux) = min_aux
+                        && min_aux <= frontier
+                    {
+                        crate::metrics::CORRECTNESS_ERRORS
+                            .with_label_values(&["consistent_lsn_over_advance"])
+                            .inc();
+                        tracing::error!(
+                            tenant_id = %self.tenant_id,
+                            timeline_id = %self.timeline_id,
+                            %frontier,
+                            %min_aux,
+                            "consistent_lsn over-advance: unflushed meta/SLRU row at \
+                             lsn={min_aux} ≤ ingest_frontier={frontier} after drain \
+                             — a committed meta/SLRU write is not durable but the \
+                             frontier passed it (tasks/34 part 2)"
+                        );
+                    }
+                }
                 if self.pages.unflushed_count() == 0
                     && aux.slru_buffer.is_empty()
                     && aux.meta_buffer.is_empty()

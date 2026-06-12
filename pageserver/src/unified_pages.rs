@@ -183,6 +183,16 @@ impl UnifiedPages {
         self.unflushed_fifo.lock().len()
     }
 
+    /// Smallest LSN still unflushed (front of the FIFO). Walreceiver
+    /// pushes in monotonic-LSN order and `mark_flushed` removes a prefix,
+    /// so the front is the minimum. `None` when nothing is pending.
+    /// Used by `flush` as a tripwire: nothing ≤ the just-flushed ingest
+    /// frontier may remain unflushed (tasks/34 part 2 — catch a
+    /// `consistent_lsn` over-advance past a not-yet-durable page).
+    pub fn min_unflushed_lsn(&self) -> Option<Lsn> {
+        self.unflushed_fifo.lock().front().map(|(_, lsn)| *lsn)
+    }
+
     /// Number of distinct keys tracked. Drives the
     /// `pageserver_yb_unified_pages_by_key_entries` gauge.
     pub fn by_key_entries(&self) -> usize {

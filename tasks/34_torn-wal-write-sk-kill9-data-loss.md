@@ -337,7 +337,55 @@ write isn't yet durable in `pageserver.pages` (flush snapshot vs.
 frontier in `page_writer.rs::flush`), exposed by the re-attach's
 "re-stream from `consistent_lsn` only" resume.
 
-### Status: root-caused, NOT yet fixed
+### Instrumentation result (2026-06-12): flush-frontier ruled OUT
+
+Added a tripwire in `page_writer.rs::flush` (counter
+`consistent_lsn_over_advance` + `min_unflushed_lsn()` on `UnifiedPages`):
+after `mark_flushed`, assert no **rel** row remains unflushed at
+`lsn ≤ ingest_frontier` (the value `consistent_lsn` advances to). It
+fired **0 times** across many `-n` crash-recovery cycles that produced
+*every* Part-2 symptom (orphan catalog, `count>max` index skew, index
+`unexpected zero page`, compute basebackup/walreceiver deadlock). So the
+committed write is **not** lost at the rel-page flush frontier — that
+hypothesis is wrong.
+
+Remaining suspects (narrowed):
+- **Meta/SLRU path** (`pageserver.meta` blobs, CLOG, etc.), which the
+  rel-FIFO tripwire does *not* cover and which the flush comment already
+  flags as fragile (count-based drain under overlapping flushes). Now
+  also instrumented (same `consistent_lsn_over_advance` tripwire, meta
+  variant). NB: the *observed* `pg_class` orphan is heap content (a rel
+  page), so the meta probe is to rule the meta path in/out, not a
+  confirmed cause.
+- **Materialiser** folding an incomplete catalog-page chain into a stale
+  image, then `trim_key_up_to` dropping the real deltas.
+- **Basebackup/recycle divergence**: the fresh primary basebackups at
+  `consistent_lsn` and re-streams above it. (If both flush tripwires stay
+  silent through a tear, the loss is *post-flush* — here.)
+
+Part-2 symptoms are **non-deterministic** (different mode/symptom each
+run), so this is a multi-pronged investigation, not a single fix.
+
+**Update 2 — over-advance-at-flush DISPROVEN; loss is POST-FLUSH.** With
+both tripwires (rel FIFO + meta/SLRU) active, `-n` runs reproduced *every*
+symptom — including **heap holes** (`count=27 < max=1359` mode A,
+`count=482 < max=1454` mode E; the Part-1 lost-rows symptom recurring
+under stacking) and catalog tears — while the tripwire stayed at **0
+fires**. So at flush time the buffer *is* fully durable ≤ `consistent_lsn`;
+the committed page is lost **after** a clean flush. That moves the prime
+suspect to the **image materialiser**: it folds a key's chain into an
+image (`read_chain_durable` → walredo) and then `trim_key_up_to` deletes
+the folded deltas. If it ever folds an incomplete/wrong chain and trims,
+the durable page is permanently corrupted — and it runs on every
+re-attach (gen 1→6 under `-n`), matching the non-determinism and the
+heap+catalog+index spread. Next probe: assert the materialiser's image
+equals a full replay of the chain it trims (or never trims deltas it
+didn't fold). NB: this also means the Part-1 `push()` fix is necessary
+(it removed the re-ingest panic, and single/fresh runs pass) but the
+heap-loss path is **not fully closed under stacked re-attach** — same
+post-flush materialiser suspect.
+
+### Status: root-caused to a class, NOT yet fixed
 
 A correct fix is in the `consistent_lsn`/flush-frontier machinery and
 must be designed + verified (not guessed) — advancing `consistent_lsn`
