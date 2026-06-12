@@ -1184,7 +1184,9 @@ impl PageWriter {
                 // committed page write is NOT durable yet the frontier
                 // passed it — the over-advance that loses catalog/index
                 // pages on the next re-attach.
-                if let Some(min_unflushed) = self.pages.min_unflushed_lsn()
+                // Diagnostics only — debug builds (e2e). Zero release cost.
+                if cfg!(debug_assertions)
+                    && let Some(min_unflushed) = self.pages.min_unflushed_lsn()
                     && min_unflushed <= frontier
                 {
                     crate::metrics::CORRECTNESS_ERRORS
@@ -1296,7 +1298,11 @@ impl PageWriter {
                 // lsn > frontier). A remaining row ≤ frontier means a
                 // committed meta/SLRU write isn't durable yet the
                 // `consistent_lsn` frontier passed it.
-                if let Some(frontier) = ingest_frontier {
+                // Diagnostics only — debug builds (e2e). Gating the whole
+                // block keeps the per-flush aux scan out of release.
+                if cfg!(debug_assertions)
+                    && let Some(frontier) = ingest_frontier
+                {
                     let min_aux = aux
                         .slru_buffer
                         .iter()

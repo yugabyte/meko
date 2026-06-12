@@ -515,7 +515,66 @@ Added:
   `(is_image/will_init/len)` summary instead of dumping full page
   payloads.
 
-### Status: SK-restart heap loss fixed (part 1); deadlock fixed (over-strict assert); read/materialiser anchorless guards + panic observability added; **catalog-orphan data corruption (iter-2 mode B) still open** — the missing-delta hole / flush over-advance the unflushed-tripwire can't see
+### Catalog-orphan: durable per-key write loss (bisected 2026-06-12)
+
+Caught a corrupted cluster (`-n 2 torn_wal_write` corrupts intermittently,
+~1 in 2 post-deadlock-fix; `run … db yb_storage_e2e_3505065`) and probed
+the durable state directly (the "query YB" approach):
+
+- `torn_a` rel-oid = 73728. Its tuple is **physically absent from every
+  `pg_class` block** (checked all blocks via
+  `heap_page_items` + matching `t_data`'s leading oid bytes); `torn_b`
+  (oid 24576) is present. So the row is **not present-but-invisible** —
+  it's a **durable page-write loss**, NOT a clog/visibility issue (rules
+  out the [task 24](24_early-clog-slru-deltas-lost.md) family).
+- It is **per-key within one txn**: the same `CREATE TABLE torn_a`
+  durably wrote **`pg_type`** (rowtype 73730 + array `_torn_a` 73729 both
+  present) but its write to **`pg_class`** block 0 (relnode 1259) is
+  gone. So one rel-page delta from a committed transaction survived and a
+  sibling rel-page delta from the *same* transaction did not.
+- YB `pageserver.pages` for `(relnode=1259, db=5, fork=0, blk=0)`: a
+  materialiser **image at `0/01b7bac0`** (+ a same-LSN delta), older
+  deltas below it, and a recent delta batch at `0/01c5xxxx` — with a
+  **gap** where `torn_a`'s `pg_class` create delta should be. No delta
+  carries it; walredo of the durable chain reproduces the
+  compute's `torn_a`-less page exactly.
+
+So: `consistent_lsn` advanced past `torn_a`'s `pg_class` block-0 write,
+but that write was never durably in `pages`. The unflushed-row tripwire
+can't see it (the row was never an unflushed entry — it was never
+buffered, or dropped before the snapshot). All static write-path checks
+(put always pushes; `commit` puts before `finish_write`/`note`; idempotent
+skip keeps correct content; `put_pages` never logged a short affected
+count; PK separates image/delta) pass — so the loss is a **race in the
+put→note→flush(snapshot/frontier)→materialise pipeline** for one key, not
+a single obviously-wrong line.
+
+**Flush snapshot ruled OUT (2026-06-12).** Added a `snapshot_fifo_orphan`
+probe in `snapshot_unflushed`: every FIFO pair must resolve to a live,
+non-durable slot (under `flush_serialize` + the unflushed pin, anything
+else means a pending write is dropped from the flush). It fired **0
+times** in a run that *did* corrupt. Combined with `put_pages` never
+logging a short affected-count, this means **anything `put` to the
+PageWriter is persisted** — so `torn_a`'s `pg_class` delta was **never
+`put`**. The loss is therefore **upstream of the PageWriter** (ingest /
+WAL / recovery), not the flush snapshot/frontier.
+
+**Next (upstream of the PageWriter):** the candidates are now
+- **walingest / `DatadirModification::commit`** not putting the page for
+  `torn_a`'s catalog insert (or putting it then it never reaching
+  `put_batch`), or
+- a **full-page-image overwrite** of `pg_class` blk 0 during mode-B
+  recovery that captures a `torn_a`-less version, or
+- **recycle / WAL divergence**: the mode-B fresh primary basebackups at
+  `consistent_lsn` and re-streams, and the original committed
+  `torn_a` WAL is overwritten/never re-applied.
+Trace the `put` stage for `pg_class` blk 0 (`YB_PS_TRACE_REL_BLK=
+1663/5/1259/0/0`, plumb the env to the PS) to see whether `torn_a`'s
+create is ever `put` — present ⇒ lost downstream (contradiction, re-check);
+absent ⇒ ingest/WAL/recovery. Mode B (compute crash + recycle) is the
+trigger, so the recycle/divergence path is the strongest lead.
+
+### Status: part 1 fixed; deadlock fixed (over-strict assert); anchorless read/materialiser guards + panic observability added; **catalog-orphan = confirmed durable per-key write loss (not visibility), still open** — a put→flush-snapshot/frontier race for one rel-page key
 
 A correct fix is in the `consistent_lsn`/flush-frontier machinery and
 must be designed + verified (not guessed) — advancing `consistent_lsn`
