@@ -1,0 +1,626 @@
+//! Find — and optionally set — the maximum valid `consistent_lsn` at or
+//! below a target LSN, for a single (tenant, timeline) in `yb_storage`.
+//!
+//! `pageserver.timeline_state.consistent_lsn` must point at a *real WAL
+//! record boundary*: the byte just after a complete record (= the start
+//! of the next record). The pageserver's WAL reader does not scan
+//! forward to the next boundary — it starts decoding at exactly
+//! `consistent_lsn` and fails (looping forever) if that byte is mid-record
+//! or in a WAL hole:
+//!
+//!   - `YB WAL hole at segno N offset O` — no `public.wals` chunk covers it.
+//!   - `invalid xlog page header: xlp_rem_len=X, expected Y` — chunk exists
+//!     but the LSN is in the middle of a multi-page record.
+//!
+//! So you cannot just pick a segment- or page-aligned LSN to rewind to.
+//! This tool derives a guaranteed-good boundary the only reliable way: it
+//! anchors on a nearby WAL page that starts a fresh record, replays the
+//! real `WalStreamDecoder` forward across the `public.wals` bytes, and
+//! reports the largest record boundary that is `<= target`. The boundary
+//! just before it is reported as the matching `prev_record_lsn`.
+//!
+//! By default it only prints. `--set` writes the pair back to
+//! `pageserver.timeline_state` (stop the pageserver for this timeline
+//! first — a running one will overwrite this on its next flush, and may
+//! be generation-fenced against this write).
+
+use std::cmp::min;
+
+use anyhow::{Context, bail};
+use clap::Parser;
+use postgres_ffi::waldecoder::WalStreamDecoder;
+use postgres_ffi::v14::xlog_utils::XLP_FIRST_IS_CONTRECORD;
+use postgres_ffi::{
+    PgMajorVersion, WAL_SEGMENT_SIZE, XLOG_BLCKSZ, XLOG_SIZE_OF_XLOG_LONG_PHD,
+    XLOG_SIZE_OF_XLOG_SHORT_PHD,
+};
+use utils::id::{TenantId, TimelineId};
+use utils::lsn::Lsn;
+use ysql_client::tokio_postgres::types::ToSql;
+use ysql_client::{YbConnConfig, YsqlClient};
+
+/// How far below `target` we are willing to scan, page by page, looking
+/// for a WAL page that begins a fresh record (no continuation). One real
+/// WAL record almost never exceeds a few MiB; 64 MiB is a generous bound
+/// past which we'd rather fail loudly than scan into the next tenant's
+/// history.
+const MAX_ANCHOR_SCAN_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Parser)]
+#[command(
+    about = "Find (and optionally set) the max valid pageserver consistent_lsn <= a target LSN"
+)]
+struct Args {
+    /// Tenant id (32 hex chars).
+    #[arg(long)]
+    tenant: TenantId,
+    /// Timeline id (32 hex chars).
+    #[arg(long)]
+    timeline: TimelineId,
+    /// Target max LSN in `X/Y` hex form. The result is the largest real
+    /// WAL record boundary `<= target`.
+    #[arg(long, value_name = "X/Y")]
+    target_lsn: Lsn,
+
+    /// Write the computed pair back to `pageserver.timeline_state`.
+    /// Without this the tool only prints (dry run).
+    #[arg(long)]
+    set: bool,
+    /// When writing, store NULL for `prev_record_lsn` and let the
+    /// walreceiver re-derive it from the safekeeper stream, instead of
+    /// the boundary this tool computed.
+    #[arg(long)]
+    null_prev: bool,
+    /// When writing, fence the UPDATE on this `current_generation`. The
+    /// write affects 0 rows (and warns) if the row's generation differs.
+    #[arg(long)]
+    expect_generation: Option<i32>,
+
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    #[arg(long, default_value_t = 5433)]
+    port: u16,
+    #[arg(long, default_value = "yugabyte")]
+    user: String,
+    #[arg(long, default_value = "yb_storage")]
+    db_name: String,
+    /// Name of an env var holding the password (default connection is
+    /// trust/no-TLS, matching a local dev cluster).
+    #[arg(long)]
+    password_env: Option<String>,
+}
+
+/// The subset of `pageserver.timeline_state` this tool reads.
+struct TimelineState {
+    consistent_lsn: Lsn,
+    prev_record_lsn: Option<Lsn>,
+    applied_gc_cutoff_lsn: Lsn,
+    pg_version: i32,
+    current_generation: i32,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    let seg = WAL_SEGMENT_SIZE as u64;
+
+    let cfg = YbConnConfig {
+        host: args.host.clone(),
+        port: args.port,
+        user: args.user.clone(),
+        dbname: args.db_name.clone(),
+        password_env: args.password_env.clone(),
+        sslmode: None,
+        sslrootcert: None,
+    };
+    let client = YsqlClient::from_yb_config(&cfg, "yb-reset-consistent-lsn", false)
+        .await
+        .context("connecting to yb_storage")?;
+
+    let tenant = args.tenant.to_string();
+    let timeline = args.timeline.to_string();
+
+    let state = read_timeline_state(&client, &tenant, &timeline).await?;
+    let pg_version = match state.pg_version {
+        14 => PgMajorVersion::PG14,
+        15 => PgMajorVersion::PG15,
+        16 => PgMajorVersion::PG16,
+        17 => PgMajorVersion::PG17,
+        v => bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
+    };
+
+    println!("tenant   {tenant}");
+    println!("timeline {timeline}");
+    println!("pg_version            {}", state.pg_version);
+    println!("current_generation    {}", state.current_generation);
+    println!("applied_gc_cutoff_lsn {}", state.applied_gc_cutoff_lsn);
+    println!("current consistent_lsn  {}", state.consistent_lsn);
+    println!(
+        "current prev_record_lsn {}",
+        state
+            .prev_record_lsn
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "NULL".into())
+    );
+    println!("target_lsn              {}", args.target_lsn);
+    println!();
+
+    if args.target_lsn < state.applied_gc_cutoff_lsn {
+        eprintln!(
+            "WARNING: target {} is below applied_gc_cutoff_lsn {} — WAL there may be garbage-collected",
+            args.target_lsn, state.applied_gc_cutoff_lsn
+        );
+    }
+
+    let reader = WalReader {
+        client: &client,
+        tenant: &tenant,
+        timeline: &timeline,
+        seg,
+    };
+
+    // 1. Anchor: walk back from target's page to one that starts a fresh
+    //    record (XLP_FIRST_IS_CONTRECORD clear). That page boundary is a
+    //    guaranteed record boundary the decoder can be seeded at.
+    let anchor = find_anchor(&reader, args.target_lsn).await?;
+    println!("anchor (decode start)   {anchor}");
+
+    // 2. Replay the real decoder forward, collecting record boundaries.
+    let (boundaries, stop) = decode_forward(&reader, anchor, args.target_lsn, pg_version).await?;
+
+    // 3. Largest boundary <= target is the answer; the one before it is
+    //    the matching prev_record_lsn.
+    let idx = boundaries
+        .iter()
+        .rposition(|b| *b <= args.target_lsn)
+        .context("no WAL record boundary found at or below target (anchor scan/decoder produced none)")?;
+    let consistent = boundaries[idx];
+    let prev = idx.checked_sub(1).map(|i| boundaries[i]);
+
+    if let Some(reason) = stop {
+        println!("note: forward decode stopped early: {reason}");
+    }
+    println!();
+    println!("==> max valid consistent_lsn <= target: {consistent}");
+    match prev {
+        Some(p) => println!("    matching prev_record_lsn:           {p}"),
+        None => println!(
+            "    matching prev_record_lsn:           UNKNOWN (anchor was the first boundary) — will write NULL"
+        ),
+    }
+    if consistent == state.consistent_lsn {
+        println!("    (equal to the current consistent_lsn — no rewind needed)");
+    } else if let Some(behind) = state.consistent_lsn.checked_sub(consistent) {
+        println!("    ({} bytes below current consistent_lsn)", behind.0);
+    }
+
+    if !args.set {
+        println!();
+        println!("dry run: pass --set to write this to pageserver.timeline_state");
+        return Ok(());
+    }
+
+    let prev_to_write: Option<Lsn> = if args.null_prev { None } else { prev };
+    eprintln!();
+    eprintln!(
+        "WARNING: writing consistent_lsn={consistent} prev_record_lsn={} — stop the pageserver \
+         for this timeline first; a running one will overwrite this on its next flush.",
+        prev_to_write
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "NULL".into())
+    );
+
+    let affected = write_timeline_state(
+        &client,
+        &tenant,
+        &timeline,
+        consistent,
+        prev_to_write,
+        args.expect_generation,
+    )
+    .await?;
+    if affected == 0 {
+        bail!(
+            "UPDATE affected 0 rows{}",
+            match args.expect_generation {
+                Some(g) => format!(
+                    " — current_generation != {g} (row is at {}); re-run without --expect-generation \
+                     or with the right value",
+                    state.current_generation
+                ),
+                None => " — row not found (tenant/timeline mismatch?)".into(),
+            }
+        );
+    }
+    println!();
+    println!("done: updated {affected} row(s) in pageserver.timeline_state");
+    Ok(())
+}
+
+async fn read_timeline_state(
+    client: &YsqlClient,
+    tenant: &str,
+    timeline: &str,
+) -> anyhow::Result<TimelineState> {
+    let sql = "SELECT consistent_lsn, prev_record_lsn, applied_gc_cutoff_lsn, pg_version, \
+               current_generation \
+               FROM pageserver.timeline_state WHERE tenant_id = $1 AND timeline_id = $2";
+    let params: [&(dyn ToSql + Sync); 2] = [&tenant, &timeline];
+    let row = client
+        .query_opt(sql, &params)
+        .await
+        .context("reading pageserver.timeline_state")?
+        .with_context(|| format!("no timeline_state row for tenant={tenant} timeline={timeline}"))?;
+    let consistent_lsn = Lsn(row.get::<_, i64>(0) as u64);
+    let prev_record_lsn = row.get::<_, Option<i64>>(1).map(|v| Lsn(v as u64));
+    let applied_gc_cutoff_lsn = Lsn(row.get::<_, i64>(2) as u64);
+    let pg_version = row.get::<_, i32>(3);
+    let current_generation = row.get::<_, i32>(4);
+    Ok(TimelineState {
+        consistent_lsn,
+        prev_record_lsn,
+        applied_gc_cutoff_lsn,
+        pg_version,
+        current_generation,
+    })
+}
+
+async fn write_timeline_state(
+    client: &YsqlClient,
+    tenant: &str,
+    timeline: &str,
+    consistent: Lsn,
+    prev: Option<Lsn>,
+    expect_generation: Option<i32>,
+) -> anyhow::Result<u64> {
+    let consistent_i = consistent.0 as i64;
+    let prev_i = prev.map(|l| l.0 as i64);
+    if let Some(generation) = expect_generation {
+        let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $3, prev_record_lsn = $4 \
+                   WHERE tenant_id = $1 AND timeline_id = $2 AND current_generation = $5";
+        let params: [&(dyn ToSql + Sync); 5] =
+            [&tenant, &timeline, &consistent_i, &prev_i, &generation];
+        client.execute(sql, &params).await.context("UPDATE timeline_state")
+    } else {
+        let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $3, prev_record_lsn = $4 \
+                   WHERE tenant_id = $1 AND timeline_id = $2";
+        let params: [&(dyn ToSql + Sync); 4] = [&tenant, &timeline, &consistent_i, &prev_i];
+        client.execute(sql, &params).await.context("UPDATE timeline_state")
+    }
+}
+
+/// A source of raw WAL bytes addressed by LSN. The DB-backed
+/// [`WalReader`] resolves chunks from `public.wals`; tests supply an
+/// in-memory buffer. `find_anchor` / `decode_forward` are generic over
+/// this so they can run without a database.
+trait WalSource {
+    /// WAL segment size, for LSN ↔ `(segno, offset)` mapping.
+    fn seg(&self) -> u64;
+
+    /// Fetch the chunk covering `lsn`: its absolute start LSN and raw
+    /// bytes. Errors if no chunk covers `lsn` (a WAL hole).
+    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)>;
+
+    /// Read exactly `len` bytes starting at `lsn`, assembling across
+    /// chunk (and segment) boundaries. Errors on a hole.
+    async fn read_exact(&self, lsn: Lsn, len: usize) -> anyhow::Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(len);
+        let mut pos = lsn;
+        while out.len() < len {
+            let (chunk_start, data) = self.chunk_at(pos).await?;
+            let from = (pos.0 - chunk_start.0) as usize;
+            let take = min(data.len() - from, len - out.len());
+            out.extend_from_slice(&data[from..from + take]);
+            pos = Lsn(pos.0 + take as u64);
+        }
+        Ok(out)
+    }
+}
+
+/// Reads raw WAL bytes by LSN from `public.wals`, mapping each LSN to
+/// `(segno, chunk_offset)` and resolving the chunk that covers it.
+struct WalReader<'a> {
+    client: &'a YsqlClient,
+    tenant: &'a str,
+    timeline: &'a str,
+    seg: u64,
+}
+
+impl WalSource for WalReader<'_> {
+    fn seg(&self) -> u64 {
+        self.seg
+    }
+
+    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
+        let segno = (lsn.0 / self.seg) as i64;
+        let off = (lsn.0 % self.seg) as i64;
+        let sql = "SELECT chunk_offset, data FROM public.wals \
+                   WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 AND chunk_offset <= $4 \
+                   ORDER BY chunk_offset DESC LIMIT 1";
+        let params: [&(dyn ToSql + Sync); 4] = [&self.tenant, &self.timeline, &segno, &off];
+        let row = self
+            .client
+            .query_opt(sql, &params)
+            .await
+            .context("reading public.wals")?
+            .with_context(|| {
+                format!("WAL hole at {lsn} (segno {segno} offset {off}): no covering chunk in public.wals")
+            })?;
+        let chunk_offset = row.get::<_, i64>(0) as u64;
+        let data: Vec<u8> = row.get::<_, Vec<u8>>(1);
+        let chunk_start = segno as u64 * self.seg + chunk_offset;
+        if lsn.0 >= chunk_start + data.len() as u64 {
+            bail!(
+                "WAL hole at {lsn}: nearest chunk covers [{}, {}) only",
+                Lsn(chunk_start),
+                Lsn(chunk_start + data.len() as u64)
+            );
+        }
+        Ok((Lsn(chunk_start), data))
+    }
+}
+
+/// The size of the page header at a page-aligned `lsn`: long header at a
+/// segment boundary, short header otherwise.
+fn page_header_size(lsn: Lsn, seg: u64) -> usize {
+    if lsn.0 % seg == 0 {
+        XLOG_SIZE_OF_XLOG_LONG_PHD
+    } else {
+        XLOG_SIZE_OF_XLOG_SHORT_PHD
+    }
+}
+
+/// Walk back from `target`'s page to the first page that begins a fresh
+/// record (i.e. `XLP_FIRST_IS_CONTRECORD` is clear, so the page is not a
+/// record continuation). That page boundary is itself a guaranteed
+/// record boundary `<= target`: seeding the decoder there makes it
+/// consume the page header and the first record exactly as the
+/// pageserver does, so the boundaries it then reports use the same
+/// (page-boundary) representation the pageserver persists.
+async fn find_anchor<S: WalSource>(reader: &S, target: Lsn) -> anyhow::Result<Lsn> {
+    let blk = XLOG_BLCKSZ as u64;
+    let mut page = Lsn(target.0 - target.0 % blk);
+    let scan_floor = target.0.saturating_sub(MAX_ANCHOR_SCAN_BYTES);
+    loop {
+        let hdr_size = page_header_size(page, reader.seg());
+        let hdr = reader
+            .read_exact(page, hdr_size)
+            .await
+            .with_context(|| format!("reading WAL page header at {page}"))?;
+        // xlp_info is the u16 right after xlp_magic (offset 2). See
+        // XLogPageHeaderData layout in postgres_ffi.
+        let xlp_info = u16::from_le_bytes([hdr[2], hdr[3]]);
+        if xlp_info & XLP_FIRST_IS_CONTRECORD == 0 {
+            return Ok(page);
+        }
+        if page.0 == 0 || page.0 <= scan_floor {
+            bail!(
+                "no fresh-record WAL page found within {} MiB below {target}; target may sit inside \
+                 an unusually large record or outside the persisted WAL range",
+                MAX_ANCHOR_SCAN_BYTES / (1024 * 1024)
+            );
+        }
+        page = Lsn(page.0 - blk);
+    }
+}
+
+/// Seed the real `WalStreamDecoder` at `anchor` and replay forward over
+/// `public.wals` bytes, collecting record boundaries until one exceeds
+/// `target` (or the WAL runs out / a hole / a decode error stops us).
+/// Returns the boundaries (ascending, starting with `anchor`) and, if the
+/// walk stopped before passing `target`, a human-readable reason.
+async fn decode_forward<S: WalSource>(
+    reader: &S,
+    anchor: Lsn,
+    target: Lsn,
+    pg_version: PgMajorVersion,
+) -> anyhow::Result<(Vec<Lsn>, Option<String>)> {
+    let mut decoder = WalStreamDecoder::new(anchor, pg_version);
+    let mut boundaries = vec![anchor];
+    let mut pos = anchor;
+    let mut stop: Option<String> = None;
+
+    'outer: loop {
+        loop {
+            match decoder.poll_decode() {
+                Ok(Some((next_lsn, _rec))) => {
+                    boundaries.push(next_lsn);
+                    if next_lsn > target {
+                        break 'outer;
+                    }
+                }
+                Ok(None) => break, // need more bytes
+                Err(e) => {
+                    stop = Some(format!("decode error: {e}"));
+                    break 'outer;
+                }
+            }
+        }
+        // Feed the next chunk of WAL bytes.
+        match reader.chunk_at(pos).await {
+            Ok((chunk_start, data)) => {
+                let from = (pos.0 - chunk_start.0) as usize;
+                decoder.feed_bytes(&data[from..]);
+                pos = Lsn(chunk_start.0 + data.len() as u64);
+            }
+            Err(e) => {
+                stop = Some(format!("WAL ended before reaching target: {e}"));
+                break 'outer;
+            }
+        }
+    }
+    Ok((boundaries, stop))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use postgres_ffi::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
+
+    /// In-memory WAL: a single contiguous byte buffer covering
+    /// `[start, start + buf.len())`. Serves the whole buffer as one
+    /// "chunk", and reports a hole for any LSN outside it.
+    struct MemWal {
+        start: Lsn,
+        buf: Vec<u8>,
+    }
+
+    impl WalSource for MemWal {
+        fn seg(&self) -> u64 {
+            WAL_SEGMENT_SIZE as u64
+        }
+        async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
+            let end = self.start.0 + self.buf.len() as u64;
+            if lsn.0 < self.start.0 || lsn.0 >= end {
+                bail!("WAL hole at {lsn} (mem buffer is [{}, {}))", self.start, Lsn(end));
+            }
+            Ok((self.start, self.buf.clone()))
+        }
+    }
+
+    /// Generate a realistic WAL image starting at `start_lsn` with `count`
+    /// uniform logical-message records of `value_size` payload bytes.
+    /// Returns the buffer and the true record-start boundaries (the LSN of
+    /// each record's first byte, in order).
+    fn gen_wal(start_lsn: Lsn, count: usize, value_size: usize) -> (Vec<u8>, Vec<Lsn>) {
+        gen_wal_sizes(start_lsn, &vec![value_size; count])
+    }
+
+    /// As [`gen_wal`], but one record per entry in `value_sizes`, so the
+    /// caller can mix small and large (multi-page) records.
+    fn gen_wal_sizes(start_lsn: Lsn, value_sizes: &[usize]) -> (Vec<u8>, Vec<Lsn>) {
+        let mut g = WalGenerator::new(LogicalMessageGenerator::new(c"t", &[]), start_lsn);
+        let mut buf = Vec::new();
+        let mut starts = Vec::new();
+        for &sz in value_sizes {
+            let value = vec![7u8; sz];
+            let (lsn, bytes) = g.append_logical_message(c"t", &value);
+            starts.push(lsn);
+            buf.extend_from_slice(&bytes);
+        }
+        (buf, starts)
+    }
+
+    /// A segment boundary, so the buffer opens with a long page header and
+    /// `find_anchor` exercises both header sizes as it scans back.
+    const START: Lsn = Lsn(WAL_SEGMENT_SIZE as u64);
+
+    #[tokio::test]
+    async fn decodes_exact_boundaries_including_multipage_record() {
+        // Small records, plus the run is long enough to cross several 8 KiB
+        // page boundaries (so contrecord pages exist in the image).
+        let (buf, starts) = gen_wal(START, 4000, 16);
+        let src = MemWal { start: START, buf };
+
+        // Decode the whole thing from the very start (itself a boundary).
+        let target = *starts.last().unwrap();
+        let (boundaries, stop) = decode_forward(&src, START, target, PgMajorVersion::PG17)
+            .await
+            .unwrap();
+        assert!(stop.is_none(), "unexpected early stop: {stop:?}");
+
+        // Every generator record-start must appear as a decoded boundary.
+        for s in &starts {
+            assert!(
+                boundaries.contains(s),
+                "decoded boundaries missing generator record-start {s}"
+            );
+        }
+        // Boundaries are strictly increasing.
+        assert!(boundaries.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[tokio::test]
+    async fn picks_largest_boundary_at_or_below_target() {
+        let (buf, starts) = gen_wal(START, 4000, 64);
+        let src = MemWal {
+            start: START,
+            buf: buf.clone(),
+        };
+
+        // Target exactly on a boundary -> that boundary, prev = the one before.
+        let k = 2500;
+        let target = starts[k];
+        let anchor = find_anchor(&src, target).await.unwrap();
+        assert!(anchor <= target, "anchor {anchor} must be <= target {target}");
+        let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG17)
+            .await
+            .unwrap();
+        let idx = boundaries.iter().rposition(|b| *b <= target).unwrap();
+        assert_eq!(boundaries[idx], starts[k], "consistent_lsn on a boundary");
+        assert_eq!(
+            boundaries[idx - 1],
+            starts[k - 1],
+            "prev_record_lsn is the preceding boundary"
+        );
+
+        // Target a few bytes PAST a boundary (mid-record) -> rounds down to
+        // that boundary, never above it.
+        let mid = Lsn(starts[k].0 + 8);
+        assert!(mid < starts[k + 1], "test setup: 8 bytes stays within record k");
+        let anchor = find_anchor(&src, mid).await.unwrap();
+        let (boundaries, _) = decode_forward(&src, anchor, mid, PgMajorVersion::PG17)
+            .await
+            .unwrap();
+        let idx = boundaries.iter().rposition(|b| *b <= mid).unwrap();
+        assert_eq!(
+            boundaries[idx], starts[k],
+            "mid-record target must round down to the record's start boundary"
+        );
+        assert!(
+            boundaries[idx] <= mid && (idx + 1 >= boundaries.len() || boundaries[idx + 1] > mid),
+            "result must be the largest boundary <= target"
+        );
+    }
+
+    #[tokio::test]
+    async fn rounds_down_through_a_multipage_record() {
+        // A record whose payload far exceeds 8 KiB spans several pages,
+        // creating contrecord pages that find_anchor must scan back past.
+        // Layout: 50 small, one ~40 KiB record (≈5 pages), then 50 small.
+        let mut sizes = vec![32usize; 50];
+        let big_idx = sizes.len();
+        sizes.push(40 * 1024);
+        sizes.extend(std::iter::repeat_n(32usize, 50));
+        let (buf, starts) = gen_wal_sizes(START, &sizes);
+        let big_start = starts[big_idx];
+        let after_big = starts[big_idx + 1];
+        assert!(
+            after_big.0 - big_start.0 > 4 * XLOG_BLCKSZ as u64,
+            "test setup: big record should span several pages"
+        );
+        let src = MemWal { start: START, buf };
+
+        // Target deep inside the multi-page record. The only real boundary
+        // at or below it is the record's own start.
+        let target = Lsn(big_start.0 + 3 * XLOG_BLCKSZ as u64);
+        assert!(target < after_big);
+        let anchor = find_anchor(&src, target).await.unwrap();
+        assert!(anchor <= target);
+        let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG17)
+            .await
+            .unwrap();
+        let idx = boundaries.iter().rposition(|b| *b <= target).unwrap();
+        assert_eq!(
+            boundaries[idx], big_start,
+            "a target inside a multi-page record must round down to that record's start"
+        );
+        assert_eq!(boundaries[idx - 1], starts[big_idx - 1]);
+    }
+
+    #[tokio::test]
+    async fn anchor_is_a_real_boundary_far_from_buffer_start() {
+        // A target deep in the buffer: find_anchor should land on a real
+        // record-start near (and <=) it, not the buffer start.
+        let (buf, starts) = gen_wal(START, 4000, 200);
+        let src = MemWal { start: START, buf };
+        let target = starts[3000];
+        let anchor = find_anchor(&src, target).await.unwrap();
+        assert!(anchor <= target);
+        // The anchor is itself a generator record-start (a true boundary).
+        assert!(
+            starts.contains(&anchor),
+            "anchor {anchor} is not a real record boundary"
+        );
+    }
+}

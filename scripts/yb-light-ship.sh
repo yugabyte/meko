@@ -56,6 +56,14 @@ for tool in yb-dump-pages yb-dump-wals; do
     cp -v "tools/${tool}" "${BUNDLE}/tools/${tool}"
 done
 
+# Compiled operator tools (built above by `-p pageserver`, so they
+# already exist in target/release/). yb-reset-consistent-lsn finds and
+# optionally rewinds pageserver.timeline_state.consistent_lsn to a real
+# WAL record boundary during a replay-repair.
+for tool in yb-reset-consistent-lsn; do
+    cp -v "target/release/${tool}" "${BUNDLE}/tools/${tool}"
+done
+
 # Runtime libs not present on stock AlmaLinux/RHEL 9 (OpenSSL 1.1, ICU 60).
 # See memory/bundle-runtime-libs.md for the background. Staged into the
 # top-level lib/ for the daemons (yb_light_local passes LD_LIBRARY_PATH
