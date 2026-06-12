@@ -38,7 +38,7 @@ to get the connection string of an endpoint.
    │   (the control  │   compute_ctl,    │  + computes   │   never called by
    │     plane)      │   storage ctlr    └──────────────┘   agents directly)
    └─────────────────┘
-        ▲
+        
         │  (data: SQL) ── apps/agents connect DIRECTLY to ▶  [ endpoint = Postgres ]
 ```
 
@@ -69,11 +69,10 @@ Placement Group  (= one YugabyteDB universe, one Controller)
 | To create / do… | You need (cumulatively)… | Notes |
 |---|---|---|
 | **Tenant pool** | **Admin** on the placement group | Pools are how non-admins get any access at all, so creating one is an admin action. |
-| **Tenant** | RBAC access to the target pool + the pool exists | Access is currently granted at the *pool* level, not per tenant. |
+| **Tenant** | RBAC access to the target pool + the pool exists | Access is currently granted at the pool level, not per tenant. |
 | **Timeline / PG cluster** | A tenant to create the timeline in | Creating the database also by default creates its first endpoint. |
-| **Endpoint** | an existing timeline | A *write* endpoint is only allowed if the database has no writer yet (single-writer rule); all others are read-only. |
 | **Branch** (fork a timeline) | an existing parent timeline (same tenant) + a fork point | Produces a new timeline + a new database, with parent/child ancestry tracked. |
-| **Pause / resume** an endpoint | an existing endpoint | Pause suspends the running compute; resume brings it back. Resume is an explicit API call — there is no "wake on connect" planned today.  |
+| **Endpoint** | an existing timeline | A *write* endpoint is only allowed if the database has no writer yet (single-writer rule); all others are read-only. |
 
 Two structural guarantees worth calling out, because they are enforced in the schema
 itself, not just in code:
@@ -100,12 +99,12 @@ from reusable steps — so a crash mid-operation resumes rather than leaving a m
 4. **Branch** — fork an existing timeline at a chosen point. This creates a *new*
    timeline plus a new database linked to its parent; optionally stands up an endpoint on it.
 5. **Pause / resume** — an API call against an endpoint. Pause suspends the compute (the
-   endpoint *record* and its spec survive); resume recreates the running instance from
+   endpoint record and its spec survive); resume recreates the running instance from
    that stored spec. Because endpoints are stateless, "resume" is just "recreate from the
    spec we already hold."
 
-> **Important nuance for the resume case:** with an endpoint paused/removed, **nothing is
-> listening**, so a connection can't wake it. Scale-up from zero is API-driven only.
+> **Important nuance for the resume case:** with an endpoint paused/removed, nothing is
+> listening, so a connection can't wake it. Scale-up from zero is API-driven only.
 
 ## 5. YBLC access is required for control operations
 
