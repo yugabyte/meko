@@ -33,10 +33,25 @@ step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 step "Stop any running pageserver/neon processes"
 pkill -9 -f "yb-pageserver|safekeeper|storage_broker|endpoint_storag|storage_controller|yb_light_local|compute_ctl" 2>/dev/null || true
 # Compute postgres survives a hung pg_ctl shutdown. It runs as
-# `postgres -D <YB_LIGHT_REPO_DIR>/endpoints/<id>/pgdata`, so anchor the
-# pattern on the repo dir to avoid hitting the YugabyteDB postgres.
+# `postgres -D <run_dir>/endpoints/<id>/pgdata`, so anchor the pattern on
+# the repo dir to avoid hitting the YugabyteDB postgres.
 pkill -9 -f "postgres .*${YB_LIGHT_REPO_DIR}/endpoints" 2>/dev/null || true
+# Also kill any compute postgres from a PRIOR e2e run dir: a failed run
+# (or `--no-fail-clean`) leaves a compute squatting on COMPUTE_PORT under
+# a *different* `.e2e-tests/run_*` dir, which the run-scoped pattern above
+# misses — and the leftover then trips the next run's duplicate-primary
+# -endpoint check. The e2e harness owns every `.e2e-tests` cluster (one at
+# a time), so any such process is stale.
+pkill -9 -f "postgres .*/\.e2e-tests/.*/endpoints" 2>/dev/null || true
 sleep 2
+# pkill -9 is async w.r.t. the kernel releasing the listen sockets; wait
+# for COMPUTE_PORT to actually free so `endpoint start` doesn't race a
+# half-dead listener (the duplicate-endpoint check reads it as "running").
+COMPUTE_PORT=${COMPUTE_PORT:-55432}
+for _ in $(seq 1 20); do
+    ss -ltn 2>/dev/null | grep -q ":${COMPUTE_PORT}\b" || break
+    sleep 0.5
+done
 
 step "Drop $YB_DBNAME"
 PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \

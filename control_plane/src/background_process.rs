@@ -267,6 +267,9 @@ fn fill_rust_env_vars(cmd: &mut Command) -> &mut Command {
         "RUST_LOG",
         "ASAN_OPTIONS",
         "UBSAN_OPTIONS",
+        // Per-rel-block write-path trace filter (yb_ps_trace target);
+        // unset in normal operation, used to debug page-write loss.
+        "YB_PS_TRACE_REL_BLK",
         // Needed so children (initdb, postgres, pg_ctl, ...) can find
         // libs shipped alongside a relocatable bundle.
         "LD_LIBRARY_PATH",

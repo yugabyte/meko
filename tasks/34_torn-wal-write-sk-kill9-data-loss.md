@@ -584,3 +584,39 @@ in `pageserver.pages`. The catalog-consistency gate
 deterministic to validate a fix against. Also fold the catalog/index
 checks into the permanent corruption gate (`final_verdict` only watches
 the metric counter and is blind to these tears).
+
+### TRACE PROOF (2026-06-12) — supersedes the "flush-frontier race" guess above
+
+Plumbed `YB_PS_TRACE_REL_BLK` to the PS (`background_process.rs` env
+passthrough) and hardened the harness so setup is reliable (`clean.sh`
+now kills leaked computes from *any* `.e2e-tests` run dir + waits for
+`COMPUTE_PORT` to free — a leaked compute/SC from a prior run was
+tripping `endpoint create` with "duplicate primary endpoint", the
+session-long setup flakiness). Captured a `pg_class`-direction orphan run
+with the block-0 write-trace on (`1663/5/1259/0/0`; all `torn_*` rels
+live in `pg_class` block 0, ctid `(0,x)`):
+
+- **92 unique block-0 `put` LSNs → all 92 reached `durable` +
+  `put_pages_ok`. "put but not durable" is empty.** Every block-0 write
+  that was `put` got persisted; nothing dropped in
+  flush/snapshot/`put_pages`.
+- Yet `torn_a` is absent ⇒ **`torn_a`'s `pg_class` create was never
+  `put`.** The page-write / flush / snapshot / materialiser subsystem is
+  **fully exonerated** for this symptom (the earlier "flush over-advance
+  / FIFO race" hypotheses are wrong).
+
+**Root: a WAL/recovery-stream divergence.** The committed
+`CREATE TABLE torn_a` record was never applied by the pageserver.
+Trigger is mode-B (compute crash + recycle); the loss alternates
+per-record between the catalog rels (`pg_class` *or* `pg_type`, whichever
+record's apply is missed). After the recycle the fresh primary
+re-streams from a point that omits the original committed record
+(fresh-primary epoch divergence / SK `wals` truncation-overwrite), so the
+PS never (re-)applies it.
+
+**Next:** trace the PS walreceiver `START_REPLICATION` range + SK `wals`
+content across a mode-B recycle to find where the committed create LSN
+drops out of the stream. Safekeeper / walproposer / recovery-epoch
+investigation — a different subsystem from everything touched so far.
+
+### Status: bisected to a WAL/recovery-stream divergence (committed record never re-applied after mode-B recycle); whole page-write path exonerated by the block-0 trace; part-1 + deadlock fixes, anchorless guards, diagnostics, and harness/setup fixes landed
