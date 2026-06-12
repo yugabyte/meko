@@ -32,8 +32,10 @@
 import argparse
 import json
 import os
+import random
 import re
 import socket
+import string
 import subprocess
 import sys
 import urllib.request
@@ -608,7 +610,9 @@ function renderTlNode(node, ctx) {
         <td>${esc(ep.endpoint_id)}</td>
         <td><span class="pill ${cls}">${label}</span></td>
         <td>${esc(ep.mode || '-')}</td>
-        <td class="mono">127.0.0.1:${esc(ep.pg_port)}</td>
+        <td class="mono"><a href="#" onclick="openSqlTool(${ep.pg_port});return false;"
+          title="Open in SQL tool (localhost:8081)"
+          style="color:#7fb0ff;text-decoration:underline;cursor:pointer">127.0.0.1:${esc(ep.pg_port)}</a></td>
         <td class="mono">${esc(ep.external_http_port || '-')}</td>
         <td>${psCell}</td>
         <td>${skCell}</td>
@@ -617,7 +621,7 @@ function renderTlNode(node, ctx) {
     }).join('');
     epSection = `<table class="ep-table">
       <thead><tr>
-        <th>endpoint</th><th>state</th><th>mode</th><th>libpq</th><th>pg http</th><th>ps http</th><th>sk http</th><th>es http</th>
+        <th>endpoint</th><th>state</th><th>mode</th><th>URL</th><th>pg http</th><th>ps http</th><th>sk http</th><th>es http</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -627,10 +631,18 @@ function renderTlNode(node, ctx) {
     ? `<div class="tl-children">${node.children.map(c => renderTlNode(c, ctx)).join('')}</div>`
     : '';
 
+  // Branching uses --ancestor-branch-name, so only offer the button on
+  // timelines that actually have a branch name.
+  const branchBtn = branch
+    ? `<button onclick='createBranch(${JSON.stringify(tid)},${JSON.stringify(branch)},${JSON.stringify(tlid)},this)'
+        style="margin-left:10px;font-size:11px;padding:2px 8px;cursor:pointer;background:#1e222b;color:#9fb3d1;border:1px solid #2a2f3a;border-radius:4px;"
+        title="Branch off ${esc(branch)} and create + start a new endpoint">+ branch</button>`
+    : '';
+
   return `<div class="tl-tree-node">
     <div class="tl-block">
       <div class="tl-head">
-        ${branchPill} <span class="tl-label">Timeline:</span> ${mono(tlid)}
+        ${branchPill} <span class="tl-label">Timeline:</span> ${mono(tlid)}${branchBtn}
       </div>
       ${epSection}
     </div>
@@ -676,6 +688,69 @@ function renderUnified(d) {
   }).join('');
 }
 
+// Open this endpoint's libpq connection in pgweb (localhost:8081).
+//
+// pgweb runs in --sessions mode and derives its session id from its own
+// per-tab sessionStorage, and it lives on a different origin than this page —
+// so we can neither script its window nor reuse a backend-established session.
+// The reliable path is therefore: copy the connection string to the clipboard
+// (one paste into pgweb's connect form) and open pgweb. The DOM auto-fill below
+// is best-effort and only succeeds if pgweb is served same-origin (e.g. behind
+// a reverse proxy).
+async function openSqlTool(pgPort) {
+  const url = 'postgresql://cloud_admin@127.0.0.1:' + pgPort + '/postgres?sslmode=disable';
+  try { await navigator.clipboard.writeText(url); } catch (e) { /* non-secure ctx */ }
+  const w = window.open('http://localhost:8081/');
+  if (!w) { alert('Popup blocked — allow popups; the connection string is on your clipboard.'); return; }
+  let tries = 0;
+  const checkLoad = setInterval(function () {
+    tries++;
+    try {
+      if (w.document.readyState === 'complete') {
+        const field = w.document.querySelector('textarea[name="url"]')
+                   || w.document.querySelector('input[placeholder*="postgresql://"]');
+        if (field) {
+          clearInterval(checkLoad);
+          field.value = url;
+          field.dispatchEvent(new Event('input', {bubbles: true}));
+          const btn = w.document.querySelector('button[type="submit"]')
+                   || w.document.querySelector('.btn-primary');
+          if (btn) btn.click();
+        }
+      }
+    } catch (e) { /* cross-origin: can't script pgweb; clipboard paste is the path */ }
+    if (tries > 50) clearInterval(checkLoad);  // give up after ~5s
+  }, 100);
+}
+
+async function createBranch(tid, ancestor, ancestorTlid, btn) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "…creating";
+  try {
+    const r = await fetch("/api/branch", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({tenant_id: tid, ancestor_branch: ancestor,
+                            ancestor_timeline_id: ancestorTlid}),
+    });
+    const d = await r.json();
+    // No prompts on success — just refresh and the new branch appears.
+    // Surface failures only, so a click that does nothing isn't a mystery.
+    if (!(r.ok && d.ok)) {
+      const detail = d.error
+        || (d.steps || []).map(s => `${s.ok ? "✓" : "✗"} ${s.cmd}\n${s.output}`).join("\n\n");
+      alert("Branch creation failed:\n\n" + detail);
+    }
+  } catch (e) {
+    alert("Branch creation failed: " + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+    load();
+  }
+}
+
 async function load() {
   try {
     const r = await fetch("/api/data", {cache:"no-store"});
@@ -703,6 +778,73 @@ load(); tick();
 """
 
 
+# --------------------------------------------------------------------------
+# Mutating action: branch + endpoint create/start via the yb_light_local CLI.
+# --------------------------------------------------------------------------
+
+def create_branch_with_endpoint(repo_dir, tenant_id, ancestor_branch, ancestor_timeline_id):
+    """Branch off `ancestor_branch`, then create and start an endpoint on the
+    new branch. Branch name and endpoint id are a shared random 6-char token.
+
+    yb_light_local resolves `--ancestor-branch-name` through its local branch
+    mappings, which can be missing or out of sync with the durable controller
+    state. Since the UI already knows the ancestor's timeline id (from the
+    controller), we first register that mapping (`mappings map`) so the branch
+    resolves regardless. Shells out to the repo's `target/debug/yb_light_local`
+    (args passed as a list, never via a shell). Returns
+    {ok, token, branch, endpoint, steps:[{cmd, ok, output}]} or {ok: False, error}.
+    """
+    if not tenant_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(tenant_id)):
+        return {"ok": False, "error": f"invalid tenant_id {tenant_id!r}"}
+    if not ancestor_branch or not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}", str(ancestor_branch)):
+        return {"ok": False, "error": f"invalid ancestor branch {ancestor_branch!r}"}
+    if not ancestor_timeline_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(ancestor_timeline_id)):
+        return {"ok": False, "error": f"invalid ancestor timeline id {ancestor_timeline_id!r}"}
+
+    # The CLI operates on the repo (parent of .yb_light) and finds .yb_light
+    # relative to its working directory.
+    repo_root = os.path.dirname(os.path.abspath(repo_dir)) if repo_dir else os.getcwd()
+    binary = os.path.join(repo_root, "target", "debug", "yb_light_local")
+    if not os.path.exists(binary):
+        return {"ok": False, "error": f"yb_light_local binary not found at {binary}"}
+
+    token = "".join(random.choices(string.ascii_lowercase, k=6))
+
+    def run(args, timeout=180):
+        try:
+            p = subprocess.run([binary, *args], cwd=repo_root,
+                               capture_output=True, text=True, timeout=timeout)
+            return p.returncode, (p.stdout + p.stderr).strip()
+        except subprocess.TimeoutExpired:
+            return 124, "timed out"
+
+    steps = []
+
+    # Best-effort: make sure the ancestor branch name maps to its timeline id.
+    # `mappings map` errors if the mapping already exists — that's fine (the
+    # mapping is present), so this step is never fatal.
+    rc, out = run(["mappings", "map", "--tenant-id", tenant_id,
+                   "--timeline-id", ancestor_timeline_id, "--branch-name", ancestor_branch])
+    steps.append({"cmd": f"mappings map {ancestor_branch} -> {ancestor_timeline_id}",
+                  "ok": True,
+                  "output": ("already mapped" if rc != 0 else out) or "mapped"})
+
+    for c in [
+        ["timeline", "branch", "--tenant-id", tenant_id,
+         "--branch-name", token, "--ancestor-branch-name", ancestor_branch],
+        ["endpoint", "create", token, "--tenant-id", tenant_id, "--branch-name", token],
+        ["endpoint", "start", token],
+    ]:
+        rc, out = run(c)
+        steps.append({"cmd": " ".join(c), "ok": rc == 0, "output": out[-2000:]})
+        if rc != 0:
+            return {"ok": False, "token": token, "branch": token,
+                    "endpoint": token, "steps": steps}
+
+    return {"ok": True, "token": token, "branch": token, "endpoint": token,
+            "steps": steps}
+
+
 class Handler(BaseHTTPRequestHandler):
     repo_dir = ".yb_light"
     database_url = None
@@ -725,6 +867,23 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 body = json.dumps({"error": str(e)}).encode("utf-8")
                 self._send(500, body, "application/json")
+        else:
+            self._send(404, b"not found", "text/plain")
+
+    def do_POST(self):
+        if self.path.rstrip("/") == "/api/branch":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError) as e:
+                self._send(400, json.dumps({"ok": False, "error": f"bad request: {e}"}).encode("utf-8"),
+                           "application/json")
+                return
+            result = create_branch_with_endpoint(
+                self.repo_dir, payload.get("tenant_id"), payload.get("ancestor_branch"),
+                payload.get("ancestor_timeline_id"))
+            code = 200 if result.get("ok") else 500
+            self._send(code, json.dumps(result).encode("utf-8"), "application/json")
         else:
             self._send(404, b"not found", "text/plain")
 
