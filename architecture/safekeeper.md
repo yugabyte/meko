@@ -201,20 +201,11 @@ return                              │
 - **Backpressure.** Bounded mpsc (capacity 1024). If the consumer
   stalls, `write_wal`'s `tx.send().await` blocks → walproposer stalls
   rather than safekeeper memory growing unboundedly.
-- **`truncate_wal(end_pos)`** waits on the watermark first; otherwise a
-  buffered chunk past `end_pos` could land after the truncate. It
-  refuses `end_pos` past the confirmed durable LSN, but `end_pos`
-  *below* it is a real case: a walproposer elected off an older
-  basebackup diverges, and everything in `(end_pos, durable]` is a
-  superseded WAL generation the new stream will rewrite with different
-  bytes. Both copies of that range are purged: the in-memory
-  `WalCache` via `truncate_after` (inserts are insert-if-vacant, so
-  rewrites never refresh a stale entry — an unpurged cache serves
-  mixed generations and wedges the interpreted WAL reader on
-  `invalid xlog page header`, task 33), and the YB rows starting
-  at/after `end_pos`'s segment offset (plus all higher segnos) via
-  DELETE. A row that merely *spans* `end_pos` survives — its prefix is
-  committed history and the consumer's upsert rewrites it in place.
+- **`truncate_wal(end_pos)`** waits on the watermark before issuing
+  the DELETE; otherwise a buffered chunk past `end_pos` could land
+  after the truncate. The DELETE itself drops rows whose
+  `chunk_offset + chunk_size` lies past `end_pos`. After a
+  partial-segment truncate, `chunk_seq` state is reloaded from YB.
 - **`remove_up_to(segno)`** deletes all rows with smaller `segno`. Does
   *not* wait on the watermark — by construction the producer's current
   segno is well above any segno targeted by `remove_up_to`.

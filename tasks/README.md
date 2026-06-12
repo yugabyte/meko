@@ -108,5 +108,5 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 30 | [Convert e2e suite from shell to Rust](30_e2e-tests-sh-to-rust.md) | ✅ done | medium | yb-pageserver |
 | 31 | [Bundle runtime libs for the walredo child](31_bundle-libs-for-walredo-child.md) | ⏳ pending | high | yb_light_local |
 | 32 | [`yb-dump-pages` LSN sort uses rendered text](32_yb-dump-pages-lsn-sort.md) | ⏳ pending | medium | yb-pageserver |
-| 33 | [SK interpreted reader wedges on decode error](33_sk-interpreted-reader-decode-wedge.md) | ✅ done | high | safekeeper |
+| 33 | [SK interpreted reader wedges on decode error](33_sk-interpreted-reader-decode-wedge.md) | 🚧 in_progress | high | safekeeper |
 | 34 | [Skip or optimize zero-page writes to YB](34_skip-or-compress-zero-page-writes.md) | ⏳ pending | medium | yb-pageserver |
