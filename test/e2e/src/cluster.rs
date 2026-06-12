@@ -1,8 +1,8 @@
 //! The shared-cluster fixture. Owns the suite lifecycle: ephemeral-db
 //! setup, `init`/`start`, one shared tenant + `main` endpoint, the
 //! per-scenario cluster recycle, the corruption-marker log gate, and a
-//! teardown that runs `clean.sh` on success (and leaves the cluster up
-//! on failure for postmortem).
+//! teardown that runs `clean.sh` but keeps the run's `*.log` files
+//! (`--no-fail-clean` instead leaves a failed cluster up for postmortem).
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -41,9 +41,14 @@ pub struct Cluster {
     tid: String,
     /// Regex form of [`MARKERS`].
     markers: Regex,
-    /// When false (the default), teardown leaves everything up for
-    /// inspection; [`Cluster::mark_success`] flips it to clean.
+    /// Set by [`Cluster::mark_success`] at the end of a fully-passing
+    /// run. Drives the final-verdict messaging; teardown keeps logs
+    /// either way (see `no_fail_clean` for the failure postmortem opt-in).
     success: bool,
+    /// `--no-fail-clean` (env `E2E_NO_FAIL_CLEAN`): on failure, leave the
+    /// cluster + db up for postmortem instead of the default
+    /// tear-down-but-keep-logs.
+    no_fail_clean: bool,
 }
 
 impl Cluster {
@@ -74,7 +79,8 @@ impl Cluster {
         let test_dir = env_or(&["TEST_DIR"], &repo.join(".e2e-tests").to_string_lossy());
         let test_dir = PathBuf::from(test_dir);
 
-        // GC failed runs older than 7 days (run_<id>/ dirs + .log files).
+        // GC run dirs older than 7 days under .e2e-tests: a passing run
+        // leaves a logs-only `run_<id>/`, a failed one its full dir.
         gc_old_runs(&test_dir);
 
         let run_id = run_id();
@@ -131,6 +137,7 @@ impl Cluster {
             tid: String::new(),
             markers: Regex::new(MARKERS).expect("static marker regex"),
             success: false,
+            no_fail_clean: std::env::var("E2E_NO_FAIL_CLEAN").is_ok_and(|v| !v.is_empty()),
         };
 
         // clean leftover state, then init + start the stack.
@@ -316,6 +323,24 @@ impl Cluster {
         Ok(())
     }
 
+    /// Tear down the cluster + db but leave this run's `*.log` files in
+    /// place under .e2e-tests/run_<id>/ (clean.sh's `KEEP_LOGS` prune).
+    /// Best-effort — this is teardown. gc_old_runs reaps the run dir at
+    /// 7 days.
+    fn teardown_keep_logs(&self) {
+        let _ = Command::new("bash")
+            .arg(self.repo.join("test/e2e/clean.sh"))
+            .current_dir(&self.repo)
+            .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
+            .env("YB_DBNAME", &self.db_name)
+            .env("YB_HOST", &self.yb_host)
+            .env("YB_PORT", self.yb_port.to_string())
+            .env("KEEP_LOGS", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
     /// Restart any cluster component the prior scenario left stopped,
     /// then recycle the compute, so each scenario starts from a clean
     /// compute state.
@@ -434,19 +459,8 @@ impl Cluster {
 
 impl Drop for Cluster {
     fn drop(&mut self) {
-        if self.success {
-            let _ = Command::new("bash")
-                .arg(self.repo.join("test/e2e/clean.sh"))
-                .current_dir(&self.repo)
-                .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
-                .env("YB_DBNAME", &self.db_name)
-                .env("YB_HOST", &self.yb_host)
-                .env("YB_PORT", self.yb_port.to_string())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-        } else {
-            // Leave the cluster + db up for postmortem.
+        if !self.success && self.no_fail_clean {
+            // --no-fail-clean: leave the cluster + db up for postmortem.
             eprintln!();
             eprintln!("run FAILED — leaving cluster up for inspection:");
             eprintln!("  logs/dir: {}", self.repo_dir.display());
@@ -456,6 +470,18 @@ impl Drop for Cluster {
                 self.repo_dir.display(),
                 self.db_name
             );
+        } else {
+            // Default teardown for both a passing and a failing run: drop
+            // the cluster + db but keep this run's `*.log` files.
+            if !self.success {
+                eprintln!();
+                eprintln!(
+                    "run FAILED — cluster torn down; logs kept at {}",
+                    self.repo_dir.display()
+                );
+                eprintln!("  (re-run with --no-fail-clean to leave the cluster up for postmortem)");
+            }
+            self.teardown_keep_logs();
         }
         let _ = std::fs::remove_file(&self.init_toml);
     }

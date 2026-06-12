@@ -33,6 +33,9 @@ Options:
                   tallied, not fatal). Useful for flakiness hunting.
   --release       build + run in release mode (default: debug, which is
                   what the dev/e2e loop normally wants)
+  --no-fail-clean on failure, leave the cluster + DB up for postmortem
+                  (default: a failed run is torn down like a passing one,
+                  keeping only its logs under .e2e-tests/run_<id>/)
   -h, --help      show this help
 
 Honoured env vars (passed through): E2E_REGEN_EXPECTED, TEST_DIR,
@@ -58,6 +61,7 @@ for arg in "$@"; do
     case "$arg" in
         -h|--help) usage; exit 0 ;;
         --release) PROFILE=release ;;
+        --no-fail-clean) export E2E_NO_FAIL_CLEAN=1 ;;
         *) ARGS+=("$arg") ;;  # forwarded to the harness (selection, -n, …)
     esac
 done

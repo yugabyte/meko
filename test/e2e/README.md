@@ -28,8 +28,10 @@ the release binaries.
   `passed / failed` count. It runs *all* selected tests each iteration
   (failures are tallied, not fatal) — for hunting flakiness. Without
   `-n` the run is fail-fast: the first failure aborts.
-- A failing run leaves the cluster + ephemeral DB up for postmortem and
-  prints how to tear it down; a passing run cleans up after itself.
+- By default both passing and failing runs tear the cluster + DB down but
+  keep their `*.log` files under `.e2e-tests/run_<id>/`; the run dir is
+  GC'd after 7 days. Pass `--no-fail-clean` to leave a *failed* run's
+  cluster + DB up for postmortem (it prints how to tear it down).
 
 ### Prerequisites
 
