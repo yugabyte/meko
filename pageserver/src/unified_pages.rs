@@ -189,15 +189,23 @@ impl UnifiedPages {
         self.by_key.len()
     }
 
-    /// Append a row as unflushed. Walreceiver's LSNs are strictly
-    /// monotonic within a PS lifetime so this never overlaps an
-    /// existing slot; on restart the cache is empty. Both invariants
-    /// are checked by the debug-assert in `insert_entry`.
+    /// Append a row as unflushed.
+    ///
+    /// Walreceiver's LSNs are monotonic within a single connection, but
+    /// the cache is **not** guaranteed empty across (re)connects: when
+    /// only the safekeeper restarts (the pageserver stays up), the
+    /// walreceiver reconnects and replays from the durable
+    /// `consistent_lsn` over rows still buffered from the first pass
+    /// (tasks/34). A WAL record at a given LSN is deterministic, so a
+    /// pre-existing slot at the same `(key, lsn)` already represents
+    /// this row — `insert_entry` keeps it and reports back that nothing
+    /// new was added, so we don't double-record it in the FIFO.
     pub fn push(&self, row: PageRow) {
         let key = row.key.clone();
         let lsn = row.lsn;
-        self.insert_entry(key.clone(), lsn, row, false);
-        self.unflushed_fifo.lock().push_back((key, lsn));
+        if self.insert_entry(key.clone(), lsn, row, false) {
+            self.unflushed_fifo.lock().push_back((key, lsn));
+        }
     }
 
     /// Append a row that is already durable in YB. Used by the image
@@ -554,13 +562,15 @@ impl UnifiedPages {
     ///
     /// Lock order: LRU lock → DashMap shard lock. `evict_to_capacity`
     /// follows the same order, so no deadlock.
-    fn insert_entry(&self, key: Bytes, lsn: Lsn, row: PageRow, durable: bool) {
-        self.insert_arc_entry(key, lsn, Arc::new(row), durable);
+    /// Returns `true` iff a brand-new **unflushed** entry was added, so
+    /// the caller (`push`) knows to record it in `unflushed_fifo`.
+    /// Durable inserts and idempotent re-pushes return `false`.
+    fn insert_entry(&self, key: Bytes, lsn: Lsn, row: PageRow, durable: bool) -> bool {
+        self.insert_arc_entry(key, lsn, Arc::new(row), durable)
     }
 
-    fn insert_arc_entry(&self, key: Bytes, lsn: Lsn, row: Arc<PageRow>, durable: bool) {
+    fn insert_arc_entry(&self, key: Bytes, lsn: Lsn, row: Arc<PageRow>, durable: bool) -> bool {
         let size = row_size(&row);
-        let entry = PageEntry::from_arc_row(row, durable);
 
         // Step 1: ensure the key is at the back of the LRU.
         {
@@ -576,37 +586,64 @@ impl UnifiedPages {
         let mut shard = self.by_key.entry(key).or_insert_with(KeyState::new);
         let ks = shard.value_mut();
 
-        let prev = ks.chain.insert(lsn, entry);
-
-        // Production invariant: if we overwrote an existing slot, that
-        // slot was already durable.
-        //   - `push()` is walreceiver-only and walreceiver's LSNs are
-        //     strictly monotonic within a PS lifetime, so it never
-        //     overlaps a same-LSN slot. (On restart the cache is empty.)
-        //   - `push_durable()` is materialiser-only and the materialiser
-        //     bounds its target_lsn ≤ flush_horizon_lsn (only advanced
-        //     after `mark_flushed`), so any same-LSN slot is durable by
-        //     the time the image arrives.
-        // So only the byte counters move on overwrite — the unflushed
-        // counters can't be touched.
-        if let Some(prev) = prev {
+        // A slot may already exist at this (key, lsn):
+        //   - `push()` (walreceiver, durable=false): the connection
+        //     re-streamed an already-ingested record — the cache is not
+        //     empty across a safekeeper-only restart (tasks/34). The WAL
+        //     record at a given LSN is deterministic, so the existing
+        //     slot already represents this row, whether it's still
+        //     unflushed (pending the same flush, and already in the
+        //     FIFO) or already durable. Keep it untouched and report
+        //     "nothing added": re-inserting would double-count the
+        //     unflushed FIFO / pin, and overwriting could drop a row
+        //     that isn't yet in YB.
+        //   - `push_durable()` (materialiser, durable=true): bounds its
+        //     target_lsn ≤ flush_horizon_lsn (only advanced after
+        //     `mark_flushed`), so any same-LSN slot is already durable.
+        //     Overwrite to install the image; only byte counters move.
+        if let Some(existing) = ks.chain.get(&lsn) {
+            if !durable {
+                // Idempotent re-push; keep the existing slot. The skip is
+                // only sound because a WAL record at a given LSN is
+                // deterministic — the replayed row must be byte-identical
+                // to the one we're keeping. A mismatch means replay
+                // diverged (or two distinct records collided on an LSN),
+                // which would silently keep the wrong page.
+                debug_assert!(
+                    *existing.row == *row,
+                    "re-push at lsn={lsn} differs from the buffered row \
+                     (WAL replay not deterministic / LSN collision): \
+                     existing={:?} new={:?}",
+                    existing.row,
+                    row,
+                );
+                return false;
+            }
+            let prev_size = row_size(&existing.row);
+            let prev_durable = existing.is_durable();
             debug_assert!(
-                prev.is_durable(),
-                "insert_entry overwriting an unflushed slot at lsn={lsn}: \
-                 violates the monotonic-LSN (push) / target_lsn≤horizon (push_durable) \
-                 contract — the row in the unflushed slot would be lost if it isn't \
-                 also in YB",
+                prev_durable,
+                "push_durable overwriting an unflushed slot at lsn={lsn}: \
+                 violates the target_lsn≤horizon contract — the row in the \
+                 unflushed slot would be lost if it isn't also in YB",
             );
-            let prev_size = row_size(&prev.row);
-            ks.bytes -= prev_size;
+            ks.chain.insert(lsn, PageEntry::from_arc_row(row, durable));
+            ks.bytes = ks.bytes - prev_size + size;
+            self.total_bytes.fetch_add(size, Ordering::Relaxed);
             self.total_bytes.fetch_sub(prev_size, Ordering::Relaxed);
+            return false; // durable → no unflushed bookkeeping
         }
+
+        // Fresh slot.
+        ks.chain.insert(lsn, PageEntry::from_arc_row(row, durable));
         ks.bytes += size;
         self.total_bytes.fetch_add(size, Ordering::Relaxed);
         if !durable {
             self.unflushed_bytes.fetch_add(size, Ordering::Relaxed);
             ks.unflushed_count += 1;
+            return true;
         }
+        false
     }
 }
 
@@ -893,8 +930,8 @@ mod tests {
     /// The materialiser overwrite path: a durable delta at lsn=L gets
     /// replaced by a durable image at lsn=L. The byte counters must
     /// reflect the new payload size; the chain must show the image.
-    /// (The pre-overwrite slot is durable — overwriting an unflushed
-    /// slot is forbidden by `insert_entry`'s debug-assert.)
+    /// (The pre-overwrite slot is durable — `push_durable` overwriting
+    /// an unflushed slot is forbidden by its debug-assert.)
     #[test]
     fn overwrite_same_key_lsn_adjusts_bytes() {
         let u = UnifiedPages::new(4096);
@@ -974,24 +1011,64 @@ mod tests {
     /// `push_durable` overwriting an unflushed slot violates the
     /// target_lsn ≤ horizon contract — the materialiser must never
     /// run for an LSN whose cache entry isn't already durable. The
-    /// debug-assert in `insert_entry` catches the contract break.
+    /// debug-assert in `insert_arc_entry` catches the contract break.
     #[test]
-    #[should_panic(expected = "insert_entry overwriting an unflushed slot")]
+    #[should_panic(expected = "push_durable overwriting an unflushed slot")]
     fn push_durable_over_unflushed_panics_in_debug() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, false, b"unflushed"));
         u.push_durable(mk(b"k", 10, true, b"image-replacement"));
     }
 
-    /// `push` overwriting any existing slot violates walreceiver's
-    /// monotonic-LSN invariant — the same WAL record can't land twice
-    /// at the same LSN. The debug-assert catches it.
+    /// Regression (tasks/34): a safekeeper-only restart makes the
+    /// walreceiver reconnect and replay records that are still buffered
+    /// as unflushed cache rows (the pageserver never restarted, so the
+    /// cache isn't empty). Re-`push`ing the same `(key, lsn)` must be
+    /// idempotent — the existing entry is kept, the unflushed FIFO and
+    /// pin are not double-counted, and a durable slot is not reverted
+    /// to unflushed. Before the fix this panicked (debug) or silently
+    /// overwrote and lost the pending row (release).
     #[test]
-    #[should_panic(expected = "insert_entry overwriting an unflushed slot")]
-    fn push_over_unflushed_panics_in_debug() {
+    fn push_same_key_lsn_is_idempotent() {
         let u = UnifiedPages::new(4096);
         u.push(mk(b"k", 10, false, b"first"));
-        u.push(mk(b"k", 10, false, b"second"));
+        let bytes_after_first = u.total_bytes();
+
+        // Replay of the same record while still unflushed: no-op.
+        u.push(mk(b"k", 10, false, b"first"));
+        assert_eq!(u.unflushed_count(), 1, "FIFO must not double-count the replayed row");
+        assert_eq!(
+            u.total_bytes(),
+            bytes_after_first,
+            "byte counters unchanged on idempotent re-push"
+        );
+        assert_eq!(
+            u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100)).len(),
+            1,
+            "still a single slot at (k, 10)"
+        );
+
+        // The single kept entry promotes to durable exactly once.
+        flush_first_n(&u, 1);
+        assert_eq!(u.unflushed_count(), 0, "single entry promoted, pin cleared");
+
+        // Replay after the row is durable: still a no-op — the slot
+        // stays durable rather than being re-pinned as unflushed.
+        u.push(mk(b"k", 10, false, b"first"));
+        assert_eq!(u.unflushed_count(), 0, "re-push over a durable slot must not re-pin it");
+    }
+
+    /// The idempotent skip is only sound if the replayed row is
+    /// identical. A divergent re-push at the same `(key, lsn)` — which
+    /// would mean WAL replay wasn't deterministic or two records
+    /// collided on an LSN — trips the debug-assert instead of silently
+    /// keeping the wrong page.
+    #[test]
+    #[should_panic(expected = "differs from the buffered row")]
+    fn push_same_key_lsn_divergent_payload_panics_in_debug() {
+        let u = UnifiedPages::new(4096);
+        u.push(mk(b"k", 10, false, b"first"));
+        u.push(mk(b"k", 10, false, b"DIFFERENT"));
     }
 
     /// Regression for the AWS BTREE walredo PANIC on 2026-06-02,

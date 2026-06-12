@@ -71,26 +71,18 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         Mode { label: "G all three", table: "torn_g", sk: true, ps: true, compute: true },
     ];
 
-    // Run every mode regardless of individual failures so one invocation
-    // reports the whole matrix, then fail if any lost data.
-    let mut results: Vec<(&str, anyhow::Result<()>)> = Vec::new();
+    // Stop at the first failed mode: a single losing mode is enough to
+    // condemn the build, and leaving the cluster at the point of failure
+    // (with `--no-fail-clean`) keeps the forensics for that exact mode.
     for m in &modes {
-        results.push((m.label, crash_scenario(c, m).await));
-    }
-
-    step("torn-write summary");
-    let mut failed = 0;
-    for (label, r) in &results {
-        match r {
-            Ok(()) => tee_println!("  PASS — {label}"),
+        match crash_scenario(c, m).await {
+            Ok(()) => tee_println!("  PASS — {}", m.label),
             Err(e) => {
-                failed += 1;
-                tee_println!("  FAIL — {label}: {e:#}");
+                tee_println!("  FAIL — {}: {e:#}", m.label);
+                return Err(e)
+                    .with_context(|| format!("torn-write mode {} lost committed data", m.label));
             }
         }
-    }
-    if failed > 0 {
-        bail!("{failed}/{} torn-write crash modes lost committed data", results.len());
     }
     Ok(())
 }
@@ -204,6 +196,7 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
     };
 
     scan_for_wal_hole(c, label)?;
+    assert_catalog_consistent(conn, label).await?;
 
     step(&format!("{label}: assert durable rows are a contiguous prefix"));
     tee_println!("  {label}: count={cnt} max(id)={mx}");
@@ -235,6 +228,51 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
         bail!("{label}: post-recovery write failed (count={cnt2} max={mx2}, expected {})", mx + 5);
     }
     tee_println!("  {label}: ok — contiguous through {mx2} after post-recovery write");
+    Ok(())
+}
+
+/// Catch durable *catalog* tears that the user-data counter misses
+/// (tasks/34 part 2): a committed multi-page catalog transaction whose
+/// pages didn't all survive recovery leaves the system catalogs
+/// internally inconsistent. The sharpest signal seen so far is an orphan
+/// composite rowtype — a `pg_type` (typtype='c') whose backing relation
+/// (`typrelid`) is gone from `pg_class` — which then breaks the next
+/// `CREATE TABLE` with `type "…" already exists`. Check both directions
+/// for any `public`-schema table.
+async fn assert_catalog_consistent(conn: &str, label: &str) -> anyhow::Result<()> {
+    // Orphan rowtype: composite type with no live backing relation.
+    let orphans = db::query_text(
+        conn,
+        "SELECT COALESCE(string_agg(t.typname, ', ' ORDER BY t.typname), '')
+         FROM pg_type t
+         JOIN pg_namespace n ON n.oid = t.typnamespace
+         WHERE t.typtype = 'c' AND t.typrelid <> 0 AND n.nspname = 'public'
+           AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = t.typrelid)",
+    )
+    .await?;
+    if !orphans.is_empty() {
+        bail!(
+            "{label}: torn catalog — orphan composite rowtype(s) with no backing \
+             pg_class relation: [{orphans}] (committed catalog pages lost in recovery)"
+        );
+    }
+    // Reverse skew: a relation in `pg_class` whose declared rowtype
+    // (`reltype`) is missing from `pg_type`.
+    let missing_types = db::query_text(
+        conn,
+        "SELECT COALESCE(string_agg(c.relname, ', ' ORDER BY c.relname), '')
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relkind = 'r' AND c.reltype <> 0 AND n.nspname = 'public'
+           AND NOT EXISTS (SELECT 1 FROM pg_type t WHERE t.oid = c.reltype)",
+    )
+    .await?;
+    if !missing_types.is_empty() {
+        bail!(
+            "{label}: torn catalog — relation(s) whose rowtype is missing from \
+             pg_type: [{missing_types}] (committed catalog pages lost in recovery)"
+        );
+    }
     Ok(())
 }
 

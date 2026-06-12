@@ -1,11 +1,21 @@
 ---
-status: pending
+status: in_progress
 severity: highest
 area: yb-pageserver / safekeeper
 opened: 2026-06-11
 ---
 
-# Torn WAL write: SK kill-9 recovery loses acked committed rows + trips `durable_walk_unflushed_row`
+# Torn WAL write: crash-recovery loses acked committed data (heap rows, then catalog/index pages)
+
+> **Scope note (2026-06-12):** part 1 — the SK-only-restart heap-row loss
+> + `durable_walk_unflushed_row` — is **fixed and verified** (see "Fix
+> (part 1)"). Part 2 — durable **torn catalog / torn index** corruption
+> surfaced by repeated crash-recovery — is **open** (see "Part 2"). The
+> two share a theme (committed page writes not surviving recovery) but
+> have different mechanisms; keeping them in one task because they're the
+> same reproducer family.
+
+# Part 1 — SK kill-9 recovery loses acked committed rows + trips `durable_walk_unflushed_row`
 
 Found by the new e2e reproducer
 `test/e2e/src/scenarios/fast/torn_wal_write.rs` (scenario A): SIGKILL the
@@ -84,11 +94,13 @@ violations surfaced by the same `durable_walk_unflushed_row` counter).
 ## Repro
 
 `test/e2e/run.sh torn_wal_write` (fast). Scenario A (SK alone) is the
-repro; its contiguity assertion is timing-flaky, but the
-`durable_walk_unflushed_row` Final-verdict counter is the reliable catch.
-`-n 5` to hit the contiguity hole directly. The other matrix modes (B
-compute, C PS, D SK+PS, E SK+compute, F PS+compute, G all three) come back
-contiguous.
+repro and is mode 1 in the matrix, so the run stops there on failure
+(the matrix now bails at the first losing mode). The contiguity
+assertion (`count == max(id)`) catches it directly — the *amount* lost
+varies run to run (debug repro `run_1781239715` lost everything below
+the boundary: `count=1, max=1459`), but the failure itself is reliable.
+The other matrix modes (B compute, C PS, D SK+PS, E SK+compute, F
+PS+compute, G all three) come back contiguous.
 
 ## Where to look
 
@@ -101,3 +113,237 @@ contiguous.
   (YB-persisted) LSN or merely the applied/received LSN.
 - `safekeeper/src/yb_wal_storage.rs` `YbWalStorage::new` rehydration +
   `delete_after` at restart.
+
+## Root cause (CONFIRMED 2026-06-12)
+
+The original hypothesis (PS trims `wals` ahead of durability) is **wrong /
+inverted**. The actual mechanism, captured from a live debug repro
+(`run_1781239715`, tenant `0c25b270…`, timeline `9d008d6a…`):
+
+**The walreceiver re-ingests over still-unflushed cache slots on
+reconnect, panicking `UnifiedPages::insert_arc_entry`.**
+
+Sequence for scenario A:
+
+1. The 3 s warmup is shorter than the flush/advance cadence, so the PS
+   **never advances `consistent_lsn` past `initdb_lsn` (`0/15404B0` =
+   `0/1540438`)**. Every workload row (ids 1..N) sits in the in-memory
+   `UnifiedPages` cache as an **unflushed** entry; nothing is durable in
+   `pageserver.pages` yet. (PS log: `consistent_lsn 0/15404B0 starting
+   replication from 0/15404B0` throughout the window.)
+2. SK is SIGKILLed and restarted. The committed WAL is still in `wals`
+   (`min chunk_offset = 5506224 = 0/15404B0` is just the **timeline
+   floor / initdb_lsn**, not evidence of over-trimming).
+3. The PS does **not** restart — only its walreceiver connection drops.
+   It reconnects and re-streams from its durable watermark
+   (`get_consistent_lsn()` = `0/15404B0`) and re-ingests the record at
+   `0/15406B8`.
+4. That `(key, lsn)` is **already in the cache as an unflushed slot**
+   from the pre-crash pass. `insert_arc_entry` (`unified_pages.rs:593`)
+   asserts the overwritten slot was durable — it isn't — and **panics
+   the walreceiver worker**:
+   `insert_entry overwriting an unflushed slot at lsn=0/15406B8 …
+   the row in the unflushed slot would be lost if it isn't also in YB`.
+5. The panic kills the connection → reconnect from `0/15404B0` →
+   same panic → **tight loop** (seen ~every 100–250 ms). The
+   unflushed early rows are never flushed; a later re-attach rebuilds
+   the timeline with a fresh empty cache seeded from the still-initial
+   `consistent_lsn`, discarding them. **Result: ids 1..1458 are gone
+   for good** (`torn_a` reads `count=1, max=1459` permanently, fully
+   quiesced at gen 6 — not a delayed read).
+
+The faulty assumption is in the `insert_arc_entry` comment itself:
+*"walreceiver's LSNs are strictly monotonic within a PS lifetime, so it
+never overlaps a same-LSN slot. **(On restart the cache is empty.)**"*
+True for a **PS** restart; false when only the **SK** restarts and the
+walreceiver reconnects against a non-empty cache.
+
+Why only mode A: modes that also restart the PS (C/D/F/G) get a
+genuinely empty cache on PS restart; mode B (compute only) doesn't force
+the walreceiver to replay from `consistent_lsn` over live unflushed
+rows. Only "SK alone, PS+compute live" hits the overlap.
+
+Build-mode note: debug builds **panic** (the `debug_assert!`); release
+builds compile the assert out and **silently overwrite** the unflushed
+slot — same loss, no loop, no log. The `durable_walk_unflushed_row`
+counter is a downstream symptom of the same non-durable-cache state, not
+the primary signal.
+
+### Fix direction (not yet implemented — needs design sign-off)
+
+The re-streamed row is byte-identical to the buffered unflushed row, so
+the overwrite is semantically a no-op. Options:
+- Make `push()` idempotent against an existing **unflushed** same-`(key,
+  lsn)` slot (keep the existing entry, don't panic) — narrowest fix.
+- On walreceiver reconnect, reconcile/replay-skip records already
+  present in the unflushed buffer.
+- Have the PS resume from `max(consistent_lsn, highest-unflushed-lsn)`
+  so it doesn't re-stream rows it already holds (careful: must not skip
+  a genuine gap).
+
+First option is the smallest and matches the invariant's intent; verify
+against the full torn-write matrix + `restart_*` scenarios before
+claiming fixed.
+
+## Fix (part 1, landed 2026-06-12)
+
+Implemented the narrowest option in `pageserver/src/unified_pages.rs`:
+`push()` (walreceiver) is now **idempotent** against an existing
+same-`(key, lsn)` slot. `insert_arc_entry` returns whether it added a
+brand-new unflushed entry; on a duplicate it keeps the existing entry
+untouched (whether unflushed-and-already-in-FIFO or already durable) and
+`push()` skips the FIFO append, so there's no double-count, no
+unflushed→durable revert, and no overwrite that could drop a
+not-yet-durable row. `push_durable()` (materialiser) keeps its overwrite
+semantics and its `debug_assert!` tripwire (now worded "push_durable
+overwriting an unflushed slot").
+
+Tests (`unified_pages` unit tests): replaced
+`push_over_unflushed_panics_in_debug` with
+`push_same_key_lsn_is_idempotent` (re-push while unflushed and re-push
+after durable are both no-ops; FIFO/pin/bytes unchanged); updated
+`push_durable_over_unflushed_panics_in_debug`'s expected message.
+
+Verified:
+- `cargo test -p pageserver --lib unified_pages` — 25 pass, incl. the new
+  `push_same_key_lsn_is_idempotent` and
+  `push_same_key_lsn_divergent_payload_panics_in_debug`.
+- `test/e2e/run.sh torn_wal_write` — all 7 matrix modes PASS (A
+  `count=1476 max=1476`, contiguous); Final verdict
+  `durable_walk_unflushed_row` correctness counter at **0** (previously
+  fired).
+- Full `test/e2e/run.sh fast` — every scenario PASS (incl. `restart_*`),
+  counter at 0. No restart-path regression.
+
+A defensive `debug_assert!` in the skip path checks the replayed row is
+byte-identical to the kept slot (deterministic-WAL assumption); a
+mismatch panics in debug rather than silently keeping the wrong page.
+
+# Part 2 — durable torn catalog / torn index under repeated crash-recovery (OPEN)
+
+With part 1 fixed, mode A stopped failing fast, which let
+`test/e2e/run.sh -n N torn_wal_write` stack multiple crash-recovery
+cycles on one shared cluster (it reuses `torn_a..torn_g` across `-n`
+iterations). That surfaced a *different*, durable corruption — not user
+heap-row loss (the correctness counter stays 0), but **internally torn
+system-catalog and index state**:
+
+Observed in a captured `-n 5` run (`run_1781242577`, since torn down):
+
+- **Torn catalog (orphan rowtype).** After several iterations,
+  `torn_a` exists in `pg_type` (composite rowtype 147458 + array type
+  147457), `pg_depend` (4 rows), and `pg_constraint`, but **not** in
+  `pg_class` or `pg_attribute`. The next iteration's
+  `CREATE TABLE torn_a` then fails `type "torn_a" already exists`.
+  - **It is durable**, not transient replay state: recycling the
+    compute (fresh basebackup at the PS's `consistent_lsn`) and
+    re-querying still shows `pg_class=0, pg_type=1, pg_attribute=0,
+    pg_depend=4`. So `pageserver.pages` itself holds a catalog where
+    different catalog relations disagree.
+  - **Cross-table casualty.** oid trace: the orphan `torn_a` (type
+    147458) was created by **iter-4 mode A**, which *passed* its verify
+    (`count=1417`). It was torn before iter-5 — i.e. during **iter-4
+    mode B**, a *compute* crash + recycle that operates on `torn_b`,
+    not `torn_a`. So an unrelated table's crash recovery corrupted
+    `torn_a`'s catalog.
+
+- **Torn index/heap.** iter-3 mode B failed `count=1322 but
+  max(id)=1317`: the heap seqscan sees 5 rows the PK-index scan
+  doesn't — index missing its tail entries while the heap has them, at
+  the same `consistent_lsn`.
+
+- A `fast`-suite run also saw a one-off `index "torn_a_pkey" contains
+  unexpected zero page at block 5` in the post-recovery read.
+
+Common theme: **pages that should all be durable at `consistent_lsn`
+are not — some catalog/index pages are durable at an older version than
+their sibling pages from the same committed transaction.** This is the
+same "gap-free `consistent_lsn` frontier" invariant that
+[task 28](28_walredo-corruption-catch-me-if-you-can.md) bug-B was about, now seen on
+catalog + index relations rather than user heap.
+
+## Part 2 — not yet root-caused
+
+The part-1 `push()` fix does **not** address this; mode A passed 4/4
+times it ran in the `-n 5` repro. The mechanism is unconfirmed and the
+`-n` logs are too entangled (stacked crashes across 7 modes × N
+iterations) to trust. Candidate directions to investigate with a
+*single-crash* repro:
+
+- `consistent_lsn`/`ingest_frontier` advancing past a record whose
+  page set wasn't fully captured by the flush snapshot (task-28 bug-B
+  family) — esp. multi-page catalog records (`CREATE TABLE` touches
+  `pg_class` + `pg_attribute` + `pg_type` + `pg_depend` + `pg_constraint`
+  in one record group).
+- Compute recycle (`verify()` / mode B) basebackuping at
+  `consistent_lsn` and the fresh primary diverging the WAL above it,
+  dropping committed-but-not-yet-durable records.
+- The materialiser overwriting a catalog/index page with a stale image.
+
+### Repro hardening (done) + sharpened repro
+
+The harness's `final_verdict` gate (`cluster.rs:461`) only checks the
+`pageserver_yb_correctness_errors_total` *metric* — it is **blind to
+catalog/index tears** (they don't touch that counter). That's why the
+tear slipped past: a `-n` run prints `cumulative: N passed, M failed`
+(scenario assertions) *and* `PASS — all workloads clean, counter at 0`
+(metric gate) side by side — the second does **not** mean "no
+corruption". So I added an explicit catalog-consistency assertion to
+`torn_wal_write::verify()` (`assert_catalog_consistent`): orphan
+composite rowtype (`pg_type typtype='c'` with no live `pg_class` at
+`typrelid`) and the reverse (relation whose `reltype` is missing from
+`pg_type`).
+
+With that check, the repro is now **minimal and deterministic**:
+`test/e2e/run.sh -n 2 torn_wal_write` →
+- iteration 1: all 7 modes pass (catalog stays consistent).
+- iteration 2 mode A (re-`CREATE TABLE torn_a`): passes.
+- **iteration 2 mode B (compute SIGKILL + recycle): tears `torn_a`'s
+  catalog** — `pg_class`/`pg_attribute` lose `torn_a` while
+  `pg_type`/`pg_depend`/`pg_constraint` keep it. Mode B operates on
+  `torn_b`, so this is a **cross-table** casualty of a *compute*-crash
+  recovery, reproducible on the 2nd iteration (no deep stacking).
+
+### Root cause (page-level, 2026-06-12)
+
+Forensics on the freshly-torn `-n 2` cluster (`run_1781243940`,
+tenant `f7c5fb9b…`, db oid 5, `pg_class` = relnode 1259):
+
+- `pg_class` block 0 (the actively-appended catalog block) is durable
+  only up to **`0/01c42148`**, while `timeline_state.consistent_lsn` is
+  **`0/01d14ce8`** — the block lags the frontier.
+- That durable block 0 contains `torn_b` (created *after* `torn_a`, in
+  mode B) but **not** `torn_a` (created earlier, mode A). So `torn_a`'s
+  `pg_class` block-0 write was **acked and `consistent_lsn` advanced
+  past it, yet never durably materialized into block 0**. `pg_type`'s
+  block happened to be durable with `torn_a`, hence the orphan rowtype.
+- PS log: the timeline is **re-attached repeatedly** (gen 1→6; each
+  compute recycle triggers a storage_controller re-attach). Every
+  re-attach rebuilds the in-memory cache and **re-streams only from the
+  durable `consistent_lsn`** (e.g. gen 6: `consistent_lsn=0/1AB1FB8 …
+  starting replication from 0/1AB1FB8`). Records below the frontier are
+  trusted as durable and never re-applied — so a write that was lost
+  before it was flushed never comes back, and the stale durable page
+  becomes permanent truth.
+
+**Conclusion:** this is the **same class as part 1 / [task 28](28_walredo-corruption-catch-me-if-you-can.md)
+bug-B** — a committed write lost while the `consistent_lsn` frontier
+over-advances past it — but on a **different trigger path**:
+compute-recycle → PS re-attach (not SK-restart → walreceiver reconnect).
+The part-1 `push()` idempotency fix closed the re-ingest path; it does
+**not** close this one. The defect is upstream, in whatever lets
+`consistent_lsn` / `ingest_frontier` advance past a record whose page
+write isn't yet durable in `pageserver.pages` (flush snapshot vs.
+frontier in `page_writer.rs::flush`), exposed by the re-attach's
+"re-stream from `consistent_lsn` only" resume.
+
+### Status: root-caused, NOT yet fixed
+
+A correct fix is in the `consistent_lsn`/flush-frontier machinery and
+must be designed + verified (not guessed) — advancing `consistent_lsn`
+only once *every* page of *every* record ≤ frontier is confirmed durable
+in `pageserver.pages`. The catalog-consistency gate
+(`assert_catalog_consistent`) and the `-n 2` repro above make it
+deterministic to validate a fix against. Also fold the catalog/index
+checks into the permanent corruption gate (`final_verdict` only watches
+the metric counter and is blind to these tears).
