@@ -39,7 +39,7 @@
 //!
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
@@ -157,7 +157,7 @@ impl ComputeControlPlane {
         })
     }
 
-    fn get_port(&mut self) -> u16 {
+    fn next_candidate_port(&self) -> u16 {
         1 + self
             .endpoints
             .values()
@@ -169,6 +169,17 @@ impl ComputeControlPlane {
             })
             .max()
             .unwrap_or(self.base_port)
+    }
+
+    /// Returns the first port >= `start` that can be bound on localhost.
+    fn find_free_port(start: u16) -> u16 {
+        let localhost = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        for port in start..=u16::MAX {
+            if TcpListener::bind(SocketAddr::new(localhost, port)).is_ok() {
+                return port;
+            }
+        }
+        panic!("no free port found in range [{start}, 65535]");
     }
 
     /// Create a JSON Web Key Set. This ideally matches the way we create a JWKS
@@ -221,9 +232,11 @@ impl ComputeControlPlane {
         lfc_size: Option<String>,
         pg_settings: Vec<(String, String)>,
     ) -> Result<Arc<Endpoint>> {
-        let pg_port = pg_port.unwrap_or_else(|| self.get_port());
-        let external_http_port = external_http_port.unwrap_or_else(|| self.get_port() + 1);
-        let internal_http_port = internal_http_port.unwrap_or_else(|| external_http_port + 1);
+        let pg_port = pg_port.unwrap_or_else(|| Self::find_free_port(self.next_candidate_port()));
+        let external_http_port =
+            external_http_port.unwrap_or_else(|| Self::find_free_port(pg_port + 1));
+        let internal_http_port =
+            internal_http_port.unwrap_or_else(|| Self::find_free_port(external_http_port + 1));
         let compute_ctl_config = ComputeCtlConfig {
             jwks: Self::create_jwks_from_pem(&self.env.read_public_key()?)?,
             tls: None::<TlsConfig>,
