@@ -338,7 +338,7 @@ controller's transactional updates to behave as expected.
 
 `YsqlClient::run_with_retries` (the wrapper every component goes
 through — `PageStore`, `YbStore`, safekeeper WAL backup,
-storage_controller metadata DB) retries three classes of failure
+storage_controller metadata schema) retries three classes of failure
 internally before surfacing anything to the caller:
 
 - **Connection drops**: TCP socket closed mid-statement (YB tserver

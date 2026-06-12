@@ -21,8 +21,9 @@ Read in this order:
 
 1. `architecture/high-level.md` — component diagram, what lives where, the
    topology of a dev cluster.
-2. `architecture/yugabyte.md` — the two YB databases (`yb_storage`,
-   `storage_controller`), schemas of `blobs` and `wals`, the
+2. `architecture/yugabyte.md` — the single YB database (`yb_storage`)
+   and its schemas (`public`, `pageserver`, `safekeeper`,
+   `storage_controller`), the `blobs` and `wals` tables, the
    `blob_namespace` ENUM, the `rpc_max_message_size` chunking story.
 3. `architecture/remote-storage.md` — `YbStore` design, `parse_key` /
    `reconstruct_key`, the round-trip-lossless path mapping.
@@ -39,8 +40,8 @@ Read in this order:
    `YbWalStorage`, the `WalReader` fallback chain, the single-safekeeper
    constraint in YB-WAL mode.
 7. `architecture/storage-controller.md` — `database_url` → external
-   Postgres (YB) flow, the auto-provisioning of `storage_controller` +
-   `yb_storage` DBs on first start.
+   Postgres (YB) flow, the auto-provisioning of the `yb_storage` DB
+   (and its `storage_controller` schema) on first start.
 
 Code anchors:
 

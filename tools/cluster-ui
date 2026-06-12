@@ -169,12 +169,23 @@ def discover(repo_dir, database_url=None):
             db_error = err
         return rows or []
 
-    # Pageservers: the nodes registered with the storage controller.
+    # Pageservers: the nodes registered with the storage controller. The
+    # controller serves its live node list from /control/v1/node and does
+    # not persist it to the storage_controller.nodes table (that table stays
+    # empty), so the API is the source of truth. Fall back to the table only
+    # if the API is unreachable.
     pageservers = []
-    for r in _query(f"SELECT node_id, listen_http_addr, listen_http_port "
-                    f"FROM {SC_SCHEMA}.nodes ORDER BY node_id"):
-        if len(r) >= 3:
-            pageservers.append({"id": int(r[0]), "http": f"http://{r[1]}:{r[2]}"})
+    api_nodes, _ = http_get_json(f"{sc_url}/control/v1/node")
+    for n in api_nodes or []:
+        host = n.get("listen_http_addr")
+        port = n.get("listen_http_port")
+        if n.get("id") is not None and host and port:
+            pageservers.append({"id": int(n["id"]), "http": f"http://{host}:{port}"})
+    if not pageservers:
+        for r in _query(f"SELECT node_id, listen_http_addr, listen_http_port "
+                        f"FROM {SC_SCHEMA}.nodes ORDER BY node_id"):
+            if len(r) >= 3:
+                pageservers.append({"id": int(r[0]), "http": f"http://{r[1]}:{r[2]}"})
 
     # Safekeepers.
     safekeepers = []

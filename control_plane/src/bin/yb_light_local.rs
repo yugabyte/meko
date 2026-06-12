@@ -1357,7 +1357,7 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
             // NB: test/e2e/run.sh extracts the tenant id from this exact
             // line (`awk '/successfully created/{print $2}'`). The
             // pageserver that serves it comes up at `endpoint create`.
-            println!("tenant {tenant_id} successfully created on the pageserver");
+            println!("tenant {tenant_id} successfully created");
             println!("Created an initial timeline '{new_timeline_id}' for tenant: {tenant_id}",);
 
             if args.set_default {
