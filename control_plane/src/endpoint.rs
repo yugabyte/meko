@@ -160,7 +160,12 @@ impl ComputeControlPlane {
         1 + self
             .endpoints
             .values()
-            .map(|ep| std::cmp::max(ep.pg_address.port(), ep.external_http_address.port()))
+            .map(|ep| {
+                ep.pg_address
+                    .port()
+                    .max(ep.external_http_address.port())
+                    .max(ep.internal_http_address.port())
+            })
             .max()
             .unwrap_or(self.base_port)
     }
