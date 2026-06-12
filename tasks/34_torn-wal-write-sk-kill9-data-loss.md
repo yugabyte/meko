@@ -17,14 +17,23 @@ walproposer reconnect, then read durable state from a fresh basebackup.
 
 Two distinct corruption signals, both from the crash-recovery path:
 
-1. **Intermittent loss of acked committed rows.** The counter table comes
-   back non-contiguous: across four runs the read-back was
-   `count=677 max=2117`, `692/2132`, `802/2260` (loss), then `1452/1452`
-   (clean) — timing-dependent. When it loses, the survivors are a
-   contiguous *suffix* (`min(id)=1459, max=2260, count=802`): the *early*
-   committed rows are gone, later ones intact. Each lost row's `COMMIT`
-   had returned to the client (synchronous), so this is loss of
+1. **Loss of acked committed rows.** The counter table comes back
+   non-contiguous: across runs the read-back was `count=677 max=2117`,
+   `692/2132`, `802/2260`, and — worst seen — `count=4 max=1462`, with one
+   clean `1452/1452` run (timing-dependent). When it loses, the survivors
+   are a contiguous *suffix* (`min(id)=1459, max=2260, count=802`): the
+   *early* committed rows are gone, later ones intact. Each lost row's
+   `COMMIT` had returned to the client (synchronous), so this is loss of
    acknowledged data, not an expected tail truncation.
+
+   **The loss is specific to crashing _only_ the safekeeper with a live
+   compute** (matrix scenario A). The full
+   `test/e2e/.../torn_wal_write.rs` matrix — singles {SK, compute, PS},
+   pairs, and all-three — shows only the SK-alone mode losing data; every
+   mode that *also* restarts the compute or the PS (D–G) recovers cleanly.
+   That points at the surviving compute's walproposer resuming above the
+   SK's trimmed start (it never re-sends WAL it believes already handed
+   off), combined with the PS never having durably materialised it.
 
 2. **`pageserver_yb_correctness_errors_total{kind="durable_walk_unflushed_row"}`**
    fires (14 in one run) at the suite Final verdict — the PS cache-only
@@ -74,12 +83,12 @@ violations surfaced by the same `durable_walk_unflushed_row` counter).
 
 ## Repro
 
-`test/e2e/run.sh torn_wal_write` (fast). Scenario A's contiguity assertion
-is timing-flaky; the `durable_walk_unflushed_row` Final-verdict counter is
-the more reliable catch. `-n 5` to hit the contiguity hole directly.
-Scenarios B (compute kill-9 mid-commit) and C (both killed together)
-currently come back contiguous — the loss is specific to the SK-only
-crash with a surviving compute.
+`test/e2e/run.sh torn_wal_write` (fast). Scenario A (SK alone) is the
+repro; its contiguity assertion is timing-flaky, but the
+`durable_walk_unflushed_row` Final-verdict counter is the reliable catch.
+`-n 5` to hit the contiguity hole directly. The other matrix modes (B
+compute, C PS, D SK+PS, E SK+compute, F PS+compute, G all three) come back
+contiguous.
 
 ## Where to look
 

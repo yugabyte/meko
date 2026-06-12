@@ -1,28 +1,28 @@
 //! Crash recovery across a torn / partial WAL write. Each sub-scenario
 //! hammers a counter table with `INSERT id=i; COMMIT;` (so the durable
-//! survivors must be a contiguous prefix `1..k`), then SIGKILLs a
-//! component mid-flush — leaving WAL chunks queued in the producer
-//! channel / mid-batch, never landed in `public.wals`:
+//! survivors must be a contiguous prefix `1..k`), then SIGKILLs one or
+//! more components mid-flush — leaving WAL chunks queued in the producer
+//! channel / mid-batch, never landed in `public.wals`. The full crash
+//! matrix over {safekeeper (SK), pageserver (PS), compute}:
 //!
-//!   A. safekeeper crash  — kill -9 the SK; the still-running compute's
-//!      walproposer must reconcile with the SK's rehydrated `write_lsn`.
-//!   B. compute crash     — kill -9 the postmaster; restart does crash
-//!      recovery + basebackup, replaying WAL from the SK.
-//!   C. both crash        — kill -9 SK + postmaster together; restart
-//!      both and replay.
+//!   A. SK            B. compute        C. PS              (singles)
+//!   D. SK + PS       E. SK + compute   F. PS + compute    (pairs)
+//!   G. SK + PS + compute                                  (all)
 //!
-//! The post-crash invariant in every case: `count(*) == max(id)` (a hole
-//! means a committed record below a surviving one was lost — torn-replay
-//! corruption), the compute reconnects (no basebackup deadlock), and
-//! neither log shows a "YB WAL hole". The shared corruption gate
-//! (`run_scenario`) scans the PS log for the marker set on top.
+//! The post-crash invariant in every case: `count(*) == max(id)` read from
+//! a fresh basebackup (a hole means a committed record below a surviving
+//! one was lost — torn-replay corruption), the compute reconnects (no
+//! basebackup deadlock), and neither log shows a "YB WAL hole". The shared
+//! corruption gate (`run_scenario`) scans the PS log for the marker set on
+//! top, and the suite Final verdict checks the correctness counter.
 //!
-//! KNOWN BUG: scenario A reproduces an open data-loss bug (tasks/34) — an
-//! SK kill-9 with a surviving compute intermittently loses early acked
+//! KNOWN BUG: scenario A (safekeeper crash, surviving compute) reproduces
+//! an open data-loss bug (tasks/34) — the SK kill-9 loses early acked
 //! commits and trips the `durable_walk_unflushed_row` correctness counter
-//! caught by the suite Final verdict. The contiguity hole is timing-flaky;
-//! the counter is the reliable catch. Expect this test to fail until 34 is
-//! fixed.
+//! caught by the Final verdict. The loss is specific to crashing *only* the
+//! safekeeper with a live compute; the pairs/triple that also restart the
+//! compute or PS (D–G) recover cleanly. Expect this test to fail until 34
+//! is fixed.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -32,7 +32,11 @@ use anyhow::{Context, bail};
 use crate::cluster::{Cluster, step};
 use crate::{db, psql};
 
-/// Seconds the background write loop runs before we yank a component —
+const SK_PID: &str = "endpoints/main/safekeeper/safekeeper.pid";
+const PS_PID: &str = "endpoints/main/pageserver/pageserver.pid";
+const PM_PID: &str = "endpoints/main/pgdata/postmaster.pid";
+
+/// Seconds the background write loop runs before we yank components —
 /// long enough that WAL is actively flowing through the SK producer.
 fn warmup_secs() -> u64 {
     std::env::var("TORN_WARMUP_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(3)
@@ -46,13 +50,32 @@ fn reconnect_timeout() -> Duration {
     )
 }
 
+/// One crash mode: which components to SIGKILL mid-flush.
+struct Mode {
+    label: &'static str,
+    table: &'static str,
+    sk: bool,
+    ps: bool,
+    compute: bool,
+}
+
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    // Run all three crash modes regardless of individual failures so one
-    // invocation reports every verdict, then fail if any lost data.
+    let modes = [
+        Mode { label: "A safekeeper", table: "torn_a", sk: true, ps: false, compute: false },
+        Mode { label: "B compute", table: "torn_b", sk: false, ps: false, compute: true },
+        Mode { label: "C pageserver", table: "torn_c", sk: false, ps: true, compute: false },
+        Mode { label: "D safekeeper+pageserver", table: "torn_d", sk: true, ps: true, compute: false },
+        Mode { label: "E safekeeper+compute", table: "torn_e", sk: true, ps: false, compute: true },
+        Mode { label: "F pageserver+compute", table: "torn_f", sk: false, ps: true, compute: true },
+        Mode { label: "G all three", table: "torn_g", sk: true, ps: true, compute: true },
+    ];
+
+    // Run every mode regardless of individual failures so one invocation
+    // reports the whole matrix, then fail if any lost data.
     let mut results: Vec<(&str, anyhow::Result<()>)> = Vec::new();
-    results.push(("A safekeeper-crash", sk_crash(c).await));
-    results.push(("B compute-crash", compute_crash(c).await));
-    results.push(("C both-crash", both_crash(c).await));
+    for m in &modes {
+        results.push((m.label, crash_scenario(c, m).await));
+    }
 
     step("torn-write summary");
     let mut failed = 0;
@@ -71,81 +94,43 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A. SIGKILL the safekeeper mid-flush, restart it, and let the
-/// still-running compute's walproposer reconnect to the rehydrated SK.
-async fn sk_crash(c: &Cluster) -> anyhow::Result<()> {
+/// Seed the counter table, hammer it with commit-per-row inserts, SIGKILL
+/// the targeted components mid-flush, restart the crashed infra (SK then
+/// PS — the compute is recycled inside `verify`), and assert recovery.
+async fn crash_scenario(c: &Cluster, m: &Mode) -> anyhow::Result<()> {
     let conn = db::compute_conn(c.compute_port());
-    let table = "torn_sk";
-    step("A: seed counter table + commit-per-row fill procedure");
-    seed(&conn, table).await?;
 
-    step("A: spawn background commit-per-row loop");
-    let mut bg = psql::spawn_bg(c.compute_port(), &format!("CALL {table}_fill(100000000);"))?;
+    step(&format!("{}: seed counter table + commit-per-row fill procedure", m.label));
+    seed(&conn, m.table).await?;
+
+    step(&format!("{}: spawn background commit-per-row loop", m.label));
+    let mut bg = psql::spawn_bg(c.compute_port(), &format!("CALL {}_fill(100000000);", m.table))?;
     tokio::time::sleep(Duration::from_secs(warmup_secs())).await;
 
-    step("A: SIGKILL safekeeper mid-flush (chunks still queued, not in `wals`)");
-    kill9(c, "endpoints/main/safekeeper/safekeeper.pid", "safekeeper")?;
+    step(&format!("{}: SIGKILL {} mid-flush", m.label, crashed_label(m)));
+    if m.sk {
+        kill9(c, SK_PID, "safekeeper")?;
+    }
+    if m.ps {
+        kill9(c, PS_PID, "pageserver")?;
+    }
+    if m.compute {
+        kill9(c, PM_PID, "postmaster")?;
+    }
     let _ = bg.kill();
     let _ = bg.wait();
 
-    step("A: restart safekeeper (rehydrates write_lsn from YB)");
-    c.yb_quiet(&["safekeeper", "stop", "-m", "immediate"]);
-    c.yb(&["safekeeper", "start"])?;
-    // Give the surviving compute's walproposer a moment to reconnect.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    step(&format!("{}: restart crashed infra (SK, then PS)", m.label));
+    if m.sk {
+        c.yb_quiet(&["safekeeper", "stop", "-m", "immediate"]);
+        c.yb(&["safekeeper", "start"])?;
+    }
+    if m.ps {
+        c.yb_quiet(&["pageserver", "stop", "-m", "immediate"]);
+        c.yb(&["pageserver", "start"])?;
+    }
 
-    verify(c, &conn, table, "A").await
-}
-
-/// B. SIGKILL the compute postmaster mid-commit, restart the endpoint,
-/// and replay WAL back from the (still-up) safekeeper.
-async fn compute_crash(c: &Cluster) -> anyhow::Result<()> {
-    recycle_compute(c)?;
-    let conn = db::compute_conn(c.compute_port());
-    let table = "torn_compute";
-    step("B: seed counter table + commit-per-row fill procedure");
-    seed(&conn, table).await?;
-
-    step("B: spawn background commit-per-row loop");
-    let mut bg = psql::spawn_bg(c.compute_port(), &format!("CALL {table}_fill(100000000);"))?;
-    tokio::time::sleep(Duration::from_secs(warmup_secs())).await;
-
-    step("B: SIGKILL compute postmaster mid-commit");
-    kill9(c, "endpoints/main/pgdata/postmaster.pid", "postmaster")?;
-    let _ = bg.kill();
-    let _ = bg.wait();
-
-    step("B: restart endpoint (crash recovery + basebackup, WAL replay from SK)");
-    recycle_compute(c)?;
-
-    verify(c, &conn, table, "B").await
-}
-
-/// C. SIGKILL both the safekeeper and the compute postmaster together,
-/// restart both, and replay.
-async fn both_crash(c: &Cluster) -> anyhow::Result<()> {
-    recycle_compute(c)?;
-    let conn = db::compute_conn(c.compute_port());
-    let table = "torn_both";
-    step("C: seed counter table + commit-per-row fill procedure");
-    seed(&conn, table).await?;
-
-    step("C: spawn background commit-per-row loop");
-    let mut bg = psql::spawn_bg(c.compute_port(), &format!("CALL {table}_fill(100000000);"))?;
-    tokio::time::sleep(Duration::from_secs(warmup_secs())).await;
-
-    step("C: SIGKILL safekeeper + compute postmaster together");
-    kill9(c, "endpoints/main/safekeeper/safekeeper.pid", "safekeeper")?;
-    kill9(c, "endpoints/main/pgdata/postmaster.pid", "postmaster")?;
-    let _ = bg.kill();
-    let _ = bg.wait();
-
-    step("C: restart safekeeper, then endpoint");
-    c.yb_quiet(&["safekeeper", "stop", "-m", "immediate"]);
-    c.yb(&["safekeeper", "start"])?;
-    recycle_compute(c)?;
-
-    verify(c, &conn, table, "C").await
+    verify(c, &conn, m.table, m.label).await
 }
 
 /// Drop+create the counter table and a procedure that inserts sequential
@@ -178,15 +163,16 @@ async fn seed(conn: &str, table: &str) -> anyhow::Result<()> {
 /// post-recovery write still lands.
 async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Result<()> {
     // Read durable state from a fresh basebackup so the assertion can't be
-    // masked by pages still warm in the surviving compute's shared_buffers
-    // (scenario A keeps the compute alive across the crash). After this the
-    // seqscan reconstructs every page from the pageserver at the recovered
-    // LSN — a hole here is genuine durable data loss, not a cache artifact.
+    // masked by pages still warm in a surviving compute's shared_buffers
+    // (several modes keep the compute alive across the crash). After this
+    // the seqscan reconstructs every page from the pageserver at the
+    // recovered LSN — a hole here is genuine durable data loss.
     step(&format!("{label}: recycle compute for a cache-free durable read"));
     recycle_compute(c)?;
 
-    step(&format!("{label}: wait for compute to serve reads again"));
+    step(&format!("{label}: wait for compute to serve reads, then for replay to quiesce"));
     let deadline = Instant::now() + reconnect_timeout();
+    // First, wait until the recycled compute accepts queries.
     loop {
         match db::query_i64(conn, "SELECT 1::bigint").await {
             Ok(_) => break,
@@ -200,17 +186,30 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
             }
         }
     }
+    // Then let post-crash WAL replay settle: a freshly-basebackup'd compute
+    // catches up to the durable WAL tail in the background, so count/max
+    // climb for a beat after it starts serving. Poll until two consecutive
+    // reads agree (or the deadline) and assert on the settled values — a
+    // genuine hole (scenario A) stays a hole once settled.
+    let mut prev: Option<(i64, i64)> = None;
+    let (cnt, mx) = loop {
+        let cnt = db::query_i64(conn, &format!("SELECT count(*) FROM {table}")).await?;
+        let mx = db::query_i64(conn, &format!("SELECT COALESCE(max(id), 0) FROM {table}")).await?;
+        if prev == Some((cnt, mx)) || Instant::now() > deadline {
+            break (cnt, mx);
+        }
+        prev = Some((cnt, mx));
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    };
 
     scan_for_wal_hole(c, label)?;
 
     step(&format!("{label}: assert durable rows are a contiguous prefix"));
-    let cnt = db::query_i64(conn, &format!("SELECT count(*) FROM {table}")).await?;
-    let mx = db::query_i64(conn, &format!("SELECT COALESCE(max(id), 0) FROM {table}")).await?;
     println!("  {label}: count={cnt} max(id)={mx}");
     if cnt == 0 {
         bail!("{label}: no rows survived — workload never committed before the crash");
     }
-    if cnt as i64 != mx {
+    if cnt != mx {
         bail!(
             "{label}: count={cnt} but max(id)={mx} — WAL replay left a hole \
              (a committed record was lost below a surviving one)"
@@ -231,11 +230,26 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
     .await?;
     let cnt2 = db::query_i64(conn, &format!("SELECT count(*) FROM {table}")).await?;
     let mx2 = db::query_i64(conn, &format!("SELECT COALESCE(max(id), 0) FROM {table}")).await?;
-    if cnt2 as i64 != mx2 || mx2 != mx + 5 {
+    if cnt2 != mx2 || mx2 != mx + 5 {
         bail!("{label}: post-recovery write failed (count={cnt2} max={mx2}, expected {})", mx + 5);
     }
     println!("  {label}: ok — contiguous through {mx2} after post-recovery write");
     Ok(())
+}
+
+/// Human label for the set of components a mode crashes.
+fn crashed_label(m: &Mode) -> String {
+    let mut v = Vec::new();
+    if m.sk {
+        v.push("safekeeper");
+    }
+    if m.ps {
+        v.push("pageserver");
+    }
+    if m.compute {
+        v.push("compute postmaster");
+    }
+    v.join(" + ")
 }
 
 /// SIGKILL the process named in `rel` (a pidfile under the run dir).
@@ -260,8 +274,8 @@ fn kill9(c: &Cluster, rel: &str, what: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Recycle the compute so a sub-scenario starts (or resumes) from a fresh
-/// endpoint. Tolerant of a still-running compute (immediate stop) and of a
+/// Recycle the compute so a sub-scenario resumes from a fresh endpoint.
+/// Tolerant of a still-running compute (immediate stop) and of a
 /// `kill -9`'d one: a hard kill leaves a stale `postmaster.pid`, so
 /// `status()` reads `Crashed` (not `Stopped`) and the control-plane
 /// duplicate-endpoint guard refuses `endpoint start` — clear the dead
