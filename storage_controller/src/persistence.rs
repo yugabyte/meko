@@ -238,6 +238,24 @@ impl Persistence {
         let mut async_wrapper: AsyncConnectionWrapper<AsyncPgConnection> =
             AsyncConnectionWrapper::from(conn);
         tokio::task::spawn_blocking(move || {
+            // Ensure the schema that hosts Diesel's unqualified
+            // `__diesel_schema_migrations` bookkeeping table exists BEFORE
+            // run_pending_migrations sets it up. On a fresh database the
+            // `storage_controller` schema doesn't exist yet (the migration is
+            // what creates it), so the connection's
+            // `search_path = storage_controller,public` resolves the tracking
+            // table into `public`; on every later run it resolves into
+            // `storage_controller` — a different, empty table — so Diesel sees
+            // the migrations as unapplied and re-runs them. Creating the schema
+            // up front pins the tracking table to `storage_controller` from the
+            // first run, so applied migrations are tracked and skipped.
+            if let Err(e) = diesel::RunQueryDsl::execute(
+                diesel::sql_query(format!("CREATE SCHEMA IF NOT EXISTS {SC_SCHEMA}")),
+                &mut async_wrapper,
+            ) {
+                return Err(DatabaseError::Migration(e.to_string()));
+            }
+
             let mut retry_count = 0;
             loop {
                 let result = HarnessWithOutput::write_to_stdout(&mut async_wrapper)
