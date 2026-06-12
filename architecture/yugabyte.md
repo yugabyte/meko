@@ -22,12 +22,25 @@ every schema, ENUM, and table — across `public`, `pageserver`,
 controller binary's Diesel migrations on first start. The single
 authoritative migration is
 `storage_controller/migrations/00000000000001_initial_schema/up.sql`,
-which `CREATE SCHEMA IF NOT EXISTS`'s all four schemas and creates
-every table referenced below. The controller amends its connection
-URL with `options=-c search_path=storage_controller,public` so
-unqualified DDL lands in `storage_controller`; cross-schema DDL is
-written schema-qualified. All idempotent — re-runs are no-ops. No
-operator DDL is required on a fresh YB cluster.
+which `CREATE SCHEMA IF NOT EXISTS`'s the `storage_controller`,
+`pageserver`, and `safekeeper` schemas (`public` is built-in) and
+creates every table referenced below. The controller's connections use
+`search_path = storage_controller,public` (`add_search_path_to_url`), so
+unqualified DDL — and Diesel's `__diesel_schema_migrations` bookkeeping —
+resolve to `storage_controller`; cross-schema objects are written
+schema-qualified.
+
+The migration SQL is **not** itself idempotent (plain `CREATE TABLE`); it
+is Diesel's applied-migration tracking that makes each migration run
+exactly once and be skipped on restart. For that tracking to be reliable
+the bookkeeping table must always live in the same schema, so
+`Persistence::migration_run` runs `CREATE SCHEMA IF NOT EXISTS
+storage_controller` *before* applying migrations. Without that, on the
+very first start the schema doesn't exist yet, so the unqualified
+`__diesel_schema_migrations` lands in `public`; on later starts it
+resolves to `storage_controller` — a different, empty table — and Diesel
+re-runs every migration against already-existing objects (which then
+fails). No operator DDL is required on a fresh YB cluster.
 
 ## `yb_storage.blobs`
 
