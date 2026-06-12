@@ -389,7 +389,17 @@ now are the guarantees we require from it:
   When reconciliation detects drift (principle 6), the repair is a task like any
   other. There is no second code path for mutations.
 - **Tasks are durable and observable.** Task state lives in yblight-controller's state store and
-  survives restarts; in-flight tasks resume or retry rather than vanish.
+  survives restarts; in-flight tasks resume or retry rather than vanish. Because task
+  state is in the universe rather than in any one process, a crashed controller doesn't
+  strand its in-flight work: another instance can reclaim and finish it, which is what
+  makes the control plane highly available rather than a single point of failure.
+
+> **Implementation note (deferred, not a decision).** If yblight-controller is built in
+> Rust, Microsoft's [`duroxide`](https://github.com/microsoft/duroxide) — a
+> durable-execution / durable-task library for Rust — is a candidate runtime for these
+> guarantees, rather than hand-rolling the durable-step and resume machinery. It is a
+> lead to evaluate in the task framework's own design doc; the language and the runtime
+> choice are both still open.
 
 ## 9. Deployment configuration
 

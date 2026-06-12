@@ -44,13 +44,13 @@ to get the connection string of an endpoint.
 
 ## 2. One Controller, or many?
 
-**One Controller per placement group.** A placement group is one YugabyteDB universe 
-plus everything running on top of it; the Controller lives *inside* the placement 
-group it manages and is the single authority for it.
+**One Controller per foundation.** A foundation is one YugabyteDB universe 
+plus everything running on top of it; the Controller lives *inside* the foundation
+it manages and is the single authority for it.
 
-- A deployment with **N placement groups has N controllers**, each independent and
-  authoritative only for its own placement group.
-- Coordinating *across* controllers (managing a fleet of placement groups) is the job
+- A deployment with **N foundations has N controllers**, each independent and
+  authoritative only for its own foundation.
+- Coordinating *across* controllers (managing a fleet of foundations) is the job
   of a future project and not currently in scope of YBLight Controller
 
 ## 3. The resource ladder: what each "create" step requires
@@ -59,7 +59,7 @@ Resources form a strict hierarchy; you cannot create a level without the level b
 it. Requirements are cumulative going down the table.
 
 ```
-Placement Group  (= one YugabyteDB universe, one Controller)
+Foundation (= one YugabyteDB universe, one Controller)
   └── Tenant Pool        ≈ an "org"; the unit of user access
         └── Tenant       a customer/team; the unit of timeline ownership
               └── PG Cluster / Timeline   a database + its data
@@ -68,7 +68,7 @@ Placement Group  (= one YugabyteDB universe, one Controller)
 
 | To create / do… | You need (cumulatively)… | Notes |
 |---|---|---|
-| **Tenant pool** | **Admin** on the placement group | Pools are how non-admins get any access at all, so creating one is an admin action. |
+| **Tenant pool** | **Admin** on the foundation | Pools are how non-admins get any access at all, so creating one is an admin action. |
 | **Tenant** | RBAC access to the target pool + the pool exists | Access is currently granted at the pool level, not per tenant. |
 | **Timeline / PG cluster** | A tenant to create the timeline in | Creating the database also by default creates its first endpoint. |
 | **Branch** (fork a timeline) | an existing parent timeline (same tenant) + a fork point | Produces a new timeline + a new database, with parent/child ancestry tracked. |
@@ -106,7 +106,26 @@ from reusable steps — so a crash mid-operation resumes rather than leaving a m
 > **Important nuance for the resume case:** with an endpoint paused/removed, nothing is
 > listening, so a connection can't wake it. Scale-up from zero is API-driven only.
 
-## 5. YBLC access is required for control operations
+## 5. How the task framework keeps YBLC available across crashes
+
+Because every operation is a task, YBLC can lose the instance that happens to be
+running one and still finish the work. The framework rests on three properties:
+
+- **Task state lives in the managed YBDB, not in the running process.** A task and its
+  subtasks — which step it is on, which steps already finished, their results — are
+  persisted as rows. A controller crash loses no progress, because the progress was
+  never only in memory.
+- **Subtasks are idempotent and checkpointed.** Each step records its own completion, so
+  re-running a task skips the steps that already succeeded and resumes from the one that
+  didn't. Replaying a half-finished operation converges to the same result instead of
+  double-applying it.
+- **A task is owned by one instance at a time, and ownership is recoverable.** Claiming a
+  task is an atomic transition (pending → running), so two instances never run the same
+  task at once. If the owner crashes, its task is left `running` with its checkpoints
+  intact; another instance reclaims orphaned tasks (running → pending) and carries them
+  to completion, skipping the steps the dead instance already finished.
+
+## 6. YBLC access is required for control operations
 
 Every lifecycle operation — create a tenant, create or branch a timeline, add/remove an
 endpoint, pause/resume, scale — is a **control-plane mutation**, and the only way to
@@ -117,7 +136,7 @@ needed to perform these control operations, this lives only in the control plane
 
 ## What this doc intentionally leaves out
 
-UX (CLI/console), the cross-placement-group agent layer, billing/quotas, end-user API
+UX (CLI/console), the cross foundation agent layer, billing/quotas, end-user API
 authentication, and physical data GC are all deferred. The full
 `yblight-controller.md` covers the complete model, the
 managed-services posture, and the open questions.
