@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 
 use crate::cluster::{Cluster, step};
+use crate::tee_println;
 use crate::{db, psql};
 
 const SK_PID: &str = "endpoints/main/safekeeper/safekeeper.pid";
@@ -81,10 +82,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let mut failed = 0;
     for (label, r) in &results {
         match r {
-            Ok(()) => println!("  PASS — {label}"),
+            Ok(()) => tee_println!("  PASS — {label}"),
             Err(e) => {
                 failed += 1;
-                println!("  FAIL — {label}: {e:#}");
+                tee_println!("  FAIL — {label}: {e:#}");
             }
         }
     }
@@ -205,7 +206,7 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
     scan_for_wal_hole(c, label)?;
 
     step(&format!("{label}: assert durable rows are a contiguous prefix"));
-    println!("  {label}: count={cnt} max(id)={mx}");
+    tee_println!("  {label}: count={cnt} max(id)={mx}");
     if cnt == 0 {
         bail!("{label}: no rows survived — workload never committed before the crash");
     }
@@ -233,7 +234,7 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
     if cnt2 != mx2 || mx2 != mx + 5 {
         bail!("{label}: post-recovery write failed (count={cnt2} max={mx2}, expected {})", mx + 5);
     }
-    println!("  {label}: ok — contiguous through {mx2} after post-recovery write");
+    tee_println!("  {label}: ok — contiguous through {mx2} after post-recovery write");
     Ok(())
 }
 
@@ -270,7 +271,7 @@ fn kill9(c: &Cluster, rel: &str, what: &str) -> anyhow::Result<()> {
     if !status.success() {
         bail!("kill -9 {pid} ({what}) exited with {status}");
     }
-    println!("  killed {what} pid {pid} (SIGKILL)");
+    tee_println!("  killed {what} pid {pid} (SIGKILL)");
     Ok(())
 }
 

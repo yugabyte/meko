@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 severity: high
 area: yb_light_local
 opened: 2026-06-11
@@ -63,6 +63,22 @@ deliberate part of the seccomp/sandbox posture.
   ldd <bundle>/pg_install/v17/bin/postgres` shows no `not found`).
 - Task-28 repro recipe runs past the first materializer wave without
   the libicu ABORT.
+
+## Resolution
+
+`yb-light-ship.sh` now stages the five runtime libs into
+`pg_install/v17/lib/` in addition to the top-level `lib/`. The lib list
+is a single `RUNTIME_LIBS` array so the two staging sites can't drift.
+The pg_install copy runs right after the `rsync -a pg_install/v17`
+staging, so the target dir is guaranteed to exist.
+
+Verified locally: `cp` dereferences the `/usr/lib64/*.so.*` symlinks
+into self-contained regular files, and their names match the
+`postgres` binary's `NEEDED` entries exactly (`libssl.so.1.1`,
+`libcrypto.so.1.1`, `libicui18n.so.60`, `libicuuc.so.60`, with
+`libicudata.so.60` pulled in transitively by the ICU libs). The
+clean-host `ldd`/task-28 acceptance is confirmed on the next bundle
+deploy — not shipped from here per the no-auto-ship rule.
 
 ## Notes / links
 

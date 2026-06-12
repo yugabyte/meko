@@ -15,6 +15,7 @@ use anyhow::bail;
 use regex::Regex;
 
 use crate::cluster::{Cluster, MARKERS, step};
+use crate::tee_println;
 use crate::{db, psql};
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
@@ -37,7 +38,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     .await?;
 
     let ts_start_lsn = db::query_text(&main, "SELECT pg_current_wal_lsn()::text").await?;
-    println!("starting compute LSN: {ts_start_lsn}");
+    tee_println!("starting compute LSN: {ts_start_lsn}");
 
     step("Create the bump procedure (each iteration is its own transaction)");
     db::batch(
@@ -56,11 +57,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("Spawn background UPDATE loop (CALL bump_loop, COMMIT per iter)");
     let mut bg = psql::spawn_bg(c.compute_port(), "CALL bump_loop(2000000);")?;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    println!("background loop ran for 2s pre-stop");
+    tee_println!("background loop ran for 2s pre-stop");
 
     step("Snapshot n after warmup");
     let n_before_stop = db::query_i64(&main, "SELECT n FROM single_page WHERE id = 1").await?;
-    println!("n at PS-stop time: {n_before_stop}");
+    tee_println!("n at PS-stop time: {n_before_stop}");
 
     step("Stop pageserver (immediate — no GoingAway frame, simulates a kill -9 restart)");
     c.yb(&["pageserver", "stop", "-m", "immediate"])?;
@@ -72,7 +73,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let pre_sk = db::query_text(&main, "SELECT pg_current_wal_lsn()::text")
         .await
         .unwrap_or_else(|_| "(unavailable while PS is down)".to_string());
-    println!("compute LSN before SK stop: {pre_sk}");
+    tee_println!("compute LSN before SK stop: {pre_sk}");
 
     step("Stop safekeeper -m immediate (this will break the background loop's next commit)");
     c.yb(&["safekeeper", "stop", "-m", "immediate"])?;
@@ -108,7 +109,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
             bail!("could not read row back");
         }
     };
-    println!("n after restart: {n_after}  (before PS stop: {n_before_stop})");
+    tee_println!("n after restart: {n_after}  (before PS stop: {n_before_stop})");
 
     if n_after < n_before_stop {
         bail!(
@@ -121,7 +122,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
              the WAL gap was zero, so the test isn't exercising the catch-up path"
         );
     }
-    println!("  ok — n advanced by {} during the SK-only window", n_after - n_before_stop);
+    tee_println!("  ok — n advanced by {} during the SK-only window", n_after - n_before_stop);
 
     step("Scan pageserver log for catch-up failure markers");
     let log = std::fs::read_to_string(c.ps_log()).unwrap_or_default();
@@ -133,7 +134,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         eprintln!("FAIL — pageserver log shows {wedge} 'interpreted wal reader finished' retries");
         bail!("walreceiver wedged ({wedge} retries)");
     }
-    println!("  ok — {wedge} 'interpreted wal reader finished' occurrence(s) (threshold 5)");
+    tee_println!("  ok — {wedge} 'interpreted wal reader finished' occurrence(s) (threshold 5)");
 
     let markers = Regex::new(MARKERS).expect("static regex");
     let hits: Vec<&str> = log.lines().filter(|l| markers.is_match(l)).collect();
@@ -144,7 +145,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
         bail!("corruption markers in pageserver.log");
     }
-    println!("  pageserver log clean of corruption markers");
+    tee_println!("  pageserver log clean of corruption markers");
 
     Ok(())
 }

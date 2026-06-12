@@ -10,6 +10,7 @@ use anyhow::bail;
 use regex::Regex;
 
 use crate::cluster::{Cluster, MARKERS, step};
+use crate::tee_println;
 use crate::{db, psql};
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
@@ -42,15 +43,15 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Snapshot starting LSN (for the catch-up assertion)");
     let ts_start_lsn = db::query_text(&main, "SELECT pg_current_wal_lsn()::text").await?;
-    println!("starting compute LSN: {ts_start_lsn}");
+    tee_println!("starting compute LSN: {ts_start_lsn}");
 
     step("Spawn background UPDATE loop");
     let mut bg = psql::spawn_bg(c.compute_port(), "CALL bump_loop(2000000);")?;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    println!("background loop ran for 2s pre-stop");
+    tee_println!("background loop ran for 2s pre-stop");
 
     let n_before_stop = db::query_i64(&main, "SELECT n FROM single_page WHERE id = 1").await?;
-    println!("n at PS-stop time: {n_before_stop}");
+    tee_println!("n at PS-stop time: {n_before_stop}");
 
     step("Stop pageserver (immediate)");
     c.yb(&["pageserver", "stop", "-m", "immediate"])?;
@@ -100,7 +101,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         );
         bail!("PS last_record_lsn never advanced");
     }
-    println!("  ok — PS last_record_lsn advanced to {last_record_lsn} (start was {ts_start_lsn})");
+    tee_println!("  ok — PS last_record_lsn advanced to {last_record_lsn} (start was {ts_start_lsn})");
 
     step("Scan logs for catch-up failure markers");
     let log = std::fs::read_to_string(c.ps_log()).unwrap_or_default();
@@ -112,7 +113,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         eprintln!("FAIL — pageserver log shows {wedge} 'interpreted wal reader finished' retries");
         bail!("walreceiver wedged ({wedge} retries)");
     }
-    println!("  ok — {wedge} 'interpreted wal reader finished' occurrence(s) (threshold 5)");
+    tee_println!("  ok — {wedge} 'interpreted wal reader finished' occurrence(s) (threshold 5)");
 
     let markers = Regex::new(MARKERS).expect("static regex");
     let hits: Vec<&str> = log.lines().filter(|l| markers.is_match(l)).collect();
@@ -123,7 +124,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
         bail!("corruption markers in pageserver.log");
     }
-    println!("  pageserver log clean of corruption markers");
+    tee_println!("  pageserver log clean of corruption markers");
 
     Ok(())
 }

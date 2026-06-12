@@ -9,6 +9,7 @@ use anyhow::{Context, bail};
 use regex::Regex;
 
 use crate::cluster::Cluster;
+use crate::tee_println;
 
 /// Normalize psql stdout for golden diffing: drop `\timing`'s `Time:`
 /// lines and libpq/server version-mismatch warnings, strip trailing
@@ -45,7 +46,7 @@ pub fn run_sql_workload(cluster: &Cluster, label: &str, sql: &Path) -> anyhow::R
     if regen {
         std::fs::write(&expected, &norm)
             .with_context(|| format!("regenerating {}", expected.display()))?;
-        println!(
+        tee_println!(
             "  ok  — regenerated {}",
             expected.file_name().unwrap_or_default().to_string_lossy()
         );
@@ -65,7 +66,7 @@ pub fn run_sql_workload(cluster: &Cluster, label: &str, sql: &Path) -> anyhow::R
     );
 
     if expected_norm == norm {
-        println!("  ok  (output matches)");
+        tee_println!("  ok  (output matches)");
         return Ok(());
     }
 

@@ -9,6 +9,7 @@ use anyhow::bail;
 use regex::Regex;
 
 use crate::cluster::{Cluster, MARKERS, step};
+use crate::tee_println;
 use crate::db;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
@@ -41,7 +42,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await?;
     match prev.as_deref() {
-        Some(v) if !v.is_empty() => println!("  prev_record_lsn persisted as: {v}"),
+        Some(v) if !v.is_empty() => tee_println!("  prev_record_lsn persisted as: {v}"),
         _ => bail!("prev_record_lsn was not persisted (column is NULL after graceful shutdown)"),
     }
 
@@ -56,7 +57,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     if total != 200 || updated != 50 {
         bail!("post-restart counts wrong: total={total} updated={updated} (expected 200 / 50)");
     }
-    println!("  ok  (total={total}, updated={updated})");
+    tee_println!("  ok  (total={total}, updated={updated})");
 
     step("Scan pageserver log for corruption markers introduced by the restart");
     let markers = Regex::new(MARKERS).expect("static regex");
@@ -69,7 +70,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
         bail!("corruption markers in pageserver.log");
     }
-    println!("  pageserver log clean");
+    tee_println!("  pageserver log clean");
 
     Ok(())
 }

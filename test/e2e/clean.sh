@@ -14,9 +14,6 @@
 # - Terminate sessions on the YugabyteDB `$YB_DBNAME` database
 #   (defaults to `yb_storage`) and drop it.
 # - Remove the on-disk `YB_LIGHT_REPO_DIR` so init can start fresh.
-#   With `KEEP_LOGS=1` (passing-run teardown) the heavy cluster state is
-#   pruned but every `*.log` is left in place, so the run's logs persist
-#   under .e2e-tests for postmortem.
 #
 # Idempotent — re-running on an already-clean tree is a no-op.
 #
@@ -47,16 +44,7 @@ PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
 PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
     -c "DROP DATABASE IF EXISTS \"$YB_DBNAME\"" >/dev/null
 
-if [[ ${KEEP_LOGS:-0} == 1 && -d $YB_LIGHT_REPO_DIR ]]; then
-    # Teardown of a passing run: drop the heavy cluster state but leave
-    # every *.log in place, so the run's logs persist under .e2e-tests
-    # for postmortem (find -delete is depth-first, so emptied dirs go too).
-    step "Prune $YB_LIGHT_REPO_DIR (keeping *.log)"
-    find "$YB_LIGHT_REPO_DIR" -mindepth 1 ! -type d ! -name '*.log' -delete 2>/dev/null || true
-    find "$YB_LIGHT_REPO_DIR" -type d -empty -delete 2>/dev/null || true
-else
-    step "Remove $YB_LIGHT_REPO_DIR"
-    rm -rf "$YB_LIGHT_REPO_DIR"
-fi
+step "Remove $YB_LIGHT_REPO_DIR"
+rm -rf "$YB_LIGHT_REPO_DIR"
 
 echo "clean."

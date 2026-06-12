@@ -5,21 +5,40 @@
 //! (`--no-fail-clean` instead leaves a failed cluster up for postmortem).
 
 use std::future::Future;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, bail};
 use regex::Regex;
 
+static RUN_LOG: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
+/// Write `s` to stdout and, if initialized, to the run log file.
+pub fn tee_line(s: &str) {
+    println!("{s}");
+    if let Some(f) = RUN_LOG.get() {
+        let _ = writeln!(f.lock().unwrap(), "{s}");
+    }
+}
+
+/// Drop-in for `println!` that also writes to the run log.
+#[macro_export]
+macro_rules! tee_println {
+    () => { $crate::cluster::tee_line("") };
+    ($($arg:tt)*) => { $crate::cluster::tee_line(&format!($($arg)*)) };
+}
+
 /// Corruption markers scanned in the pageserver log after every
 /// scenario. First hit aborts the run.
 pub const MARKERS: &str = "MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP";
 
-/// Print a step banner.
+/// Print a step banner to stdout and the run log.
 pub fn step(msg: &str) {
-    println!();
-    println!("=== {msg} ===");
+    tee_line("");
+    tee_line(&format!("=== {msg} ==="));
 }
 
 pub struct Cluster {
@@ -84,12 +103,25 @@ impl Cluster {
         gc_old_runs(&test_dir);
 
         let run_id = run_id();
-        let repo_dir = match std::env::var("YB_LIGHT_REPO_DIR") {
-            Ok(d) if !d.is_empty() => PathBuf::from(d),
-            _ => test_dir.join(format!("run_{run_id}")),
+        let yb_light_repo_dir_env = std::env::var("YB_LIGHT_REPO_DIR").ok().filter(|v| !v.is_empty());
+        let repo_dir = match &yb_light_repo_dir_env {
+            Some(d) => PathBuf::from(d),
+            None => test_dir.join(format!("run_{run_id}")),
         };
         std::fs::create_dir_all(&repo_dir)
             .with_context(|| format!("creating {}", repo_dir.display()))?;
+
+        // Open the run log: inside repo_dir when YB_LIGHT_REPO_DIR was set,
+        // otherwise a sibling of the run dir under test_dir.
+        let log_dir = match &yb_light_repo_dir_env {
+            Some(_) => repo_dir.clone(),
+            None => test_dir.clone(),
+        };
+        let log_path = log_dir.join(format!("run_{run_id}.log"));
+        if let Ok(f) = std::fs::File::create(&log_path) {
+            let _ = RUN_LOG.set(Mutex::new(f));
+            println!("run log: {}", log_path.display());
+        }
 
         let yb_host = env_or(&["YB_HOST"], "127.0.0.1");
         let yb_port: u16 = env_or(&["YB_PORT"], "5433").parse().context("YB_PORT")?;
@@ -159,7 +191,7 @@ impl Cluster {
         if tid.is_empty() {
             bail!("tenant create failed");
         }
-        println!("tenant: {tid}");
+        tee_println!("tenant: {tid}");
         cluster.tid = tid;
 
         // Default port allocation gives the first endpoint pg=55432
@@ -284,7 +316,7 @@ impl Cluster {
         let t0 = Instant::now();
         fut.await?;
         self.corruption_gate(label, before)?;
-        println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
+        tee_println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
         Ok(())
     }
 
@@ -299,7 +331,7 @@ impl Cluster {
         let t0 = Instant::now();
         crate::workload::run_sql_workload(self, label, sql)?;
         self.corruption_gate(label, before)?;
-        println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
+        tee_println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
         Ok(())
     }
 
@@ -323,11 +355,10 @@ impl Cluster {
         Ok(())
     }
 
-    /// Tear down the cluster + db but leave this run's `*.log` files in
-    /// place under .e2e-tests/run_<id>/ (clean.sh's `KEEP_LOGS` prune).
+    /// Tear down the cluster + db.
     /// Best-effort — this is teardown. gc_old_runs reaps the run dir at
     /// 7 days.
-    fn teardown_keep_logs(&self) {
+    fn teardown(&self) {
         let _ = Command::new("bash")
             .arg(self.repo.join("test/e2e/clean.sh"))
             .current_dir(&self.repo)
@@ -335,7 +366,6 @@ impl Cluster {
             .env("YB_DBNAME", &self.db_name)
             .env("YB_HOST", &self.yb_host)
             .env("YB_PORT", self.yb_port.to_string())
-            .env("KEEP_LOGS", "1")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
@@ -377,7 +407,7 @@ impl Cluster {
         self.yb(&["endpoint", "start", "main"])?;
         let secs = t0.elapsed().as_secs();
         if secs > 2 {
-            println!("  (endpoint recycle: {secs}s)");
+            tee_println!("  (endpoint recycle: {secs}s)");
         }
         Ok(())
     }
@@ -452,7 +482,7 @@ impl Cluster {
             }
             bail!("correctness counter non-zero");
         }
-        println!("PASS — all workloads clean, counter at 0");
+        tee_println!("PASS — all workloads clean, counter at 0");
         Ok(())
     }
 }
@@ -481,7 +511,7 @@ impl Drop for Cluster {
                 );
                 eprintln!("  (re-run with --no-fail-clean to leave the cluster up for postmortem)");
             }
-            self.teardown_keep_logs();
+            self.teardown();
         }
         let _ = std::fs::remove_file(&self.init_toml);
     }

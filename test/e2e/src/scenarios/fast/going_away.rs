@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 
 use crate::cluster::{Cluster, step};
+use crate::tee_println;
 use crate::{db, psql};
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
@@ -37,7 +38,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let t0 = Instant::now();
     c.yb(&["pageserver", "stop"])?;
     let stop_secs = t0.elapsed().as_secs_f64();
-    println!("  pageserver stop took {stop_secs:.2}s");
+    tee_println!("  pageserver stop took {stop_secs:.2}s");
 
     // Kill the background loop; we don't care about its outcome.
     let _ = bg.kill();
@@ -54,7 +55,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         .filter(|l| l.contains("writing GoingAway frame on graceful shutdown"))
         .count();
     if frames >= 1 {
-        println!("  ok  — pageserver wrote {frames} GoingAway frame(s)");
+        tee_println!("  ok  — pageserver wrote {frames} GoingAway frame(s)");
     } else {
         eprintln!("FAIL — pageserver did not write any GoingAway frames");
         eprintln!("  (tail of pageserver log:)");
@@ -68,7 +69,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Generous 3s ceiling for host noise; the per-connection task exits
     // cleanly before the 1s shutdown budget with the frame in place.
     if stop_secs < 3.0 {
-        println!("  ok  — stop took {stop_secs:.2}s (< 3s)");
+        tee_println!("  ok  — stop took {stop_secs:.2}s (< 3s)");
     } else {
         bail!("pageserver stop took {stop_secs:.2}s, expected < 3s");
     }

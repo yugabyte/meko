@@ -17,6 +17,7 @@ use anyhow::bail;
 use regex::Regex;
 
 use crate::cluster::{Cluster, MARKERS, step};
+use crate::tee_println;
 use crate::db;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
@@ -38,7 +39,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     .await?;
     let dbnode = db::query_text(&main, "SELECT oid::text FROM pg_database WHERE datname = current_database()").await?;
     let relnode = db::query_text(&main, "SELECT pg_relation_filenode('zero_shadow')::text").await?;
-    println!("zero_shadow dbnode={dbnode} relnode={relnode}");
+    tee_println!("zero_shadow dbnode={dbnode} relnode={relnode}");
 
     // Outlive the PageWriter's dc_lsn upsert throttle (5s default) so
     // the last persisted checkpoint is guaranteed to lag the rows the
@@ -57,7 +58,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
     let nblocks =
         db::query_i64(&main, "SELECT pg_relation_size('zero_shadow') / 8192").await?;
-    println!("{batches} insert batches, relation at {nblocks} blocks");
+    tee_println!("{batches} insert batches, relation at {nblocks} blocks");
     if nblocks < 50 {
         bail!("workload too small to exercise extension ({nblocks} blocks < 50)");
     }
@@ -136,7 +137,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
              {dup_zeros} block(s) with duplicate zero images (task 28 regression)"
         );
     }
-    println!("  ok — no shadowing zero images, no duplicate zeros");
+    tee_println!("  ok — no shadowing zero images, no duplicate zeros");
 
     step("Verify the data reads back intact through the restarted PS");
     let rows = db::query_i64(&main, "SELECT count(*) FROM zero_shadow").await?;
@@ -144,7 +145,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     if rows != expected {
         bail!("row count mismatch after restart: {rows} != {expected}");
     }
-    println!("  ok — {rows} rows intact");
+    tee_println!("  ok — {rows} rows intact");
 
     step("Scan pageserver log for corruption markers (this iteration only)");
     let full_log = std::fs::read_to_string(c.ps_log()).unwrap_or_default();
@@ -158,7 +159,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
         bail!("corruption markers in pageserver.log");
     }
-    println!("  pageserver log clean");
+    tee_println!("  pageserver log clean");
 
     Ok(())
 }

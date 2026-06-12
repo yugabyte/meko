@@ -8,6 +8,7 @@
 use anyhow::bail;
 
 use crate::cluster::{Cluster, step};
+use crate::tee_println;
 use crate::db;
 
 const A_PORT: u16 = 55570;
@@ -23,8 +24,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     if tb.is_empty() {
         bail!("tenant B create failed");
     }
-    println!("tenant A: {ta}");
-    println!("tenant B: {tb}");
+    tee_println!("tenant A: {ta}");
+    tee_println!("tenant B: {tb}");
     if ta == tb {
         bail!("two tenant creates returned the same id");
     }
