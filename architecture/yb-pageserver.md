@@ -110,7 +110,7 @@ alike). At startup the pageserver walks the
 (`PageStore::load_lineage`) and builds an ordered segment list
 `[(self, MAX), (parent, cap), (grandparent, min(caps)), …]` — static
 for the process lifetime. Every PageStore read path (`read_chain`,
-`scan_range`, `read_slru_chain`, `scan_slru_range`, `read_meta`,
+`scan_range`, `read_slru_chain`, `scan_slru_range`,
 `scan_meta_range`) has a `*_lineage` variant that walks the segments
 nearest-first, capping each segment's read LSN at
 `min(target_lsn, cap)`. The walk stops only at an anchor (`will_init`)

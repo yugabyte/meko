@@ -1482,25 +1482,6 @@ impl PageStore {
         Ok(out)
     }
 
-    /// Lineage-aware [`Self::read_meta`]. Meta rows are full values
-    /// (latest-wins), so the first segment that has the key at or
-    /// below its effective LSN shadows everything older.
-    pub async fn read_meta_lineage(
-        &self,
-        tenant: TenantId,
-        lineage: &[LineageSegment],
-        key: &[u8],
-        target_lsn: Lsn,
-    ) -> Result<Option<MetaRow>> {
-        for seg in lineage {
-            let eff = std::cmp::min(target_lsn, seg.cap_lsn);
-            if let Some(row) = self.read_meta(tenant, seg.timeline_id, key, eff).await? {
-                return Ok(Some(row));
-            }
-        }
-        Ok(None)
-    }
-
     /// Lineage-aware [`Self::scan_meta_range`]. Nearest-segment-wins
     /// per key: a descendant's version of a key (reldir listing,
     /// relsize sentinel, …) shadows the ancestor's.
@@ -3650,27 +3631,27 @@ mod tests {
         let lineage = lineage2(child, anc, 25);
 
         // Nearest segment wins for the shared key.
-        let got = store
-            .read_meta_lineage(tenant, &lineage, &shared, Lsn(100))
-            .await
-            .unwrap()
-            .expect("row");
-        assert_eq!(got.payload.as_ref(), b"child");
-
-        // Below the child's version, the ancestor's value shows through.
-        let got = store
-            .read_meta_lineage(tenant, &lineage, &shared, Lsn(15))
-            .await
-            .unwrap()
-            .expect("row");
-        assert_eq!(got.payload.as_ref(), b"anc");
-
-        // Ancestor row above the branch point: invisible.
-        let got = store
-            .read_meta_lineage(tenant, &lineage, &anc_late, Lsn(100))
+        let s = Key::from_slice(&shared);
+        let out = store
+            .scan_meta_range_lineage(tenant, &lineage, s..s.next(), Lsn(100))
             .await
             .unwrap();
-        assert!(got.is_none(), "lsn 28 > cap 25 must be invisible");
+        assert_eq!(out[shared.as_slice()].payload.as_ref(), b"child");
+
+        // Below the child's version (lsn 30), the ancestor's value shows through.
+        let out = store
+            .scan_meta_range_lineage(tenant, &lineage, s..s.next(), Lsn(15))
+            .await
+            .unwrap();
+        assert_eq!(out[shared.as_slice()].payload.as_ref(), b"anc");
+
+        // Ancestor row above the branch point: invisible.
+        let al = Key::from_slice(&anc_late);
+        let out = store
+            .scan_meta_range_lineage(tenant, &lineage, al..al.next(), Lsn(100))
+            .await
+            .unwrap();
+        assert!(out.is_empty(), "lsn 28 > cap 25 must be invisible");
 
         // Range scan: shared key takes the child version, ancestor-only
         // key is discovered, capped key is absent.

@@ -1415,29 +1415,6 @@ impl PageWriter {
         Some((last, prev))
     }
 
-    /// Read the latest meta value for `key` at LSN ≤ `target_lsn`,
-    /// blending buffer + PageStore.
-    pub async fn read_meta(&self, key: Key, target_lsn: Lsn) -> Result<Option<MetaRow>> {
-        let key_bytes = key_to_bytes(key);
-        let buffered = {
-            let aux = self.aux.lock();
-            aux.meta_buffer
-                .iter()
-                .filter(|r| r.key == key_bytes && r.lsn <= target_lsn)
-                .max_by_key(|r| r.lsn)
-                .cloned()
-        };
-        let persisted = self
-            .compute_page_store
-            .read_meta_lineage(self.tenant_id, &self.lineage, &key_bytes, target_lsn)
-            .await?;
-        Ok(match (buffered, persisted) {
-            (Some(b), Some(p)) => Some(if b.lsn >= p.lsn { b } else { p }),
-            (Some(b), None) => Some(b),
-            (None, p) => p,
-        })
-    }
-
     /// Range scan over meta keys. Returns the latest version per key.
     pub async fn scan_meta_range(
         &self,
