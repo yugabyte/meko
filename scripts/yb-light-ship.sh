@@ -57,8 +57,13 @@ for tool in yb-dump-pages yb-dump-wals; do
 done
 
 # Runtime libs not present on stock AlmaLinux/RHEL 9 (OpenSSL 1.1, ICU 60).
-# See memory/bundle-runtime-libs.md for the background.
-for lib in libssl.so.1.1 libcrypto.so.1.1 libicui18n.so.60 libicuuc.so.60 libicudata.so.60; do
+# See memory/bundle-runtime-libs.md for the background. Staged into the
+# top-level lib/ for the daemons (yb_light_local passes LD_LIBRARY_PATH
+# via the child-env allowlist) and, below, into pg_install/v17/lib/ for
+# the walredo postgres child (the PS spawns it with env_clear() and
+# LD_LIBRARY_PATH=pg_install/v17/lib only — see task 31).
+RUNTIME_LIBS=(libssl.so.1.1 libcrypto.so.1.1 libicui18n.so.60 libicuuc.so.60 libicudata.so.60)
+for lib in "${RUNTIME_LIBS[@]}"; do
     cp -v "/usr/lib64/${lib}" "${BUNDLE}/lib/${lib}"
 done
 
@@ -71,6 +76,12 @@ echo
 echo ">>> Staging pg_install/v17/ ($(du -sh pg_install/v17 | awk '{print $1}'))..."
 mkdir -p "${BUNDLE}/pg_install"
 rsync -a pg_install/v17 "${BUNDLE}/pg_install/"
+
+# Same runtime libs into pg_install/v17/lib/ so the walredo postgres
+# child can load them; its LD_LIBRARY_PATH is only this dir (task 31).
+for lib in "${RUNTIME_LIBS[@]}"; do
+    cp -v "/usr/lib64/${lib}" "${BUNDLE}/pg_install/v17/lib/${lib}"
+done
 
 cat > "${BUNDLE}/REVISION.txt" <<TXT
 Build host: $(hostname)
