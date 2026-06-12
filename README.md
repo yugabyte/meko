@@ -401,9 +401,9 @@ reconstruction, and the materialiser.
 
 Diagnostic helpers under [`tools/`](tools/) that wrap `psql` against
 the YB cluster and render the row-store tables in a human-readable
-form. They're staged into `${BUNDLE}/tools/` by
-`scripts/yb-light-ship.sh` so they ship to deploy hosts alongside the
-binaries.
+form, plus one compiled repair binary. They're staged into
+`${BUNDLE}/tools/` by `scripts/yb-light-ship.sh` so they ship to deploy
+hosts alongside the binaries.
 
 - [`tools/yb-dump-pages`](tools/yb-dump-pages) — dump
   `pageserver.pages` rows for one (rel, fork) tuple. Renders the
@@ -423,6 +423,19 @@ binaries.
   swaps the row dump for a per-segno health view
   (`(min/max chunk_offset, total_bytes, gap_bytes)`) which is the
   fastest way to spot a WAL hole during an incident.
+- [`yb-reset-consistent-lsn`](pageserver/src/bin/yb-reset-consistent-lsn.rs)
+  — find (and optionally rewind) `pageserver.timeline_state.consistent_lsn`
+  to a real WAL record boundary. Unlike the `yb-dump-*` scripts this is a
+  compiled binary (built by `cargo build -p pageserver`; ships to
+  `${BUNDLE}/tools/`). Given `--tenant --timeline --target-lsn X/Y` it
+  anchors on a fresh-record WAL page, replays the real WAL decoder over
+  `public.wals`, and reports the largest record boundary `<= target` plus
+  its matching `prev_record_lsn`. Defaults to a dry run; `--set` writes the
+  pair back (`--expect-generation N` to generation-fence the write,
+  `--null-prev` to let the walreceiver re-derive prev). Use it to rewind
+  past a bad replay point — picking an arbitrary segment/page-aligned LSN
+  instead makes PS loop forever on `YB WAL hole` or `invalid xlog page
+  header: xlp_rem_len`.
 
 Sample invocations:
 
@@ -433,9 +446,14 @@ tools/yb-dump-wals  --tenant <hex> --timeline <hex> \
 tools/yb-dump-pages --tenant <hex> --timeline <hex> \
                     --spc 1663 --db 5 --rel 16384 --fork 0 \
                     --blknum 0 --limit 3 --raw
+# dry run: print the max valid consistent_lsn <= target, then rewind to it
+tools/yb-reset-consistent-lsn --tenant <hex> --timeline <hex> \
+                    --target-lsn 22/63000000
+tools/yb-reset-consistent-lsn --tenant <hex> --timeline <hex> \
+                    --target-lsn 22/63000000 --set
 ```
 
-Both default to a local `yb_light_local` cluster (`127.0.0.1:5433`,
+All three default to a local `yb_light_local` cluster (`127.0.0.1:5433`,
 `yugabyte`/`yb_storage`) and accept `--host`/`--port`/`--user`/
 `--db-name`/`--password-env` overrides for remote clusters.
 
