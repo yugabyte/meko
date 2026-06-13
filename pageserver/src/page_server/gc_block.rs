@@ -7,10 +7,7 @@ pub(crate) enum GcBlockingReason {
     DetachAncestor,
 }
 
-/// GcBlock provides gc blocking for this process's single timeline.
-///
-/// A pageserver process serves exactly one (tenant, timeline) (#16), so the
-/// blocking state is a single set of reasons rather than a per-timeline map.
+/// GcBlock provides gc blocking for the timeline.
 #[derive(Default)]
 pub(crate) struct GcBlock {
     /// Reasons currently blocking gc for the timeline; empty means gc is

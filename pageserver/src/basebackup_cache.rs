@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Context;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -58,7 +58,7 @@ pub struct BasebackupCache {
     data_dir: Utf8PathBuf,
     config: Option<BasebackupCacheConfig>,
 
-    entries: std::sync::Mutex<HashMap<TenantTimelineId, CacheEntry>>,
+    entries: std::sync::Mutex<Option<(TenantTimelineId, CacheEntry)>>,
 
     prepare_sender: BasebackupPrepareSender,
 
@@ -88,7 +88,7 @@ impl BasebackupCache {
         let cache = Arc::new(BasebackupCache {
             data_dir,
             config,
-            entries: std::sync::Mutex::new(HashMap::new()),
+            entries: std::sync::Mutex::new(None),
             prepare_sender,
 
             read_hit_count: BASEBACKUP_CACHE_READ.with_label_values(&["hit"]),
@@ -186,7 +186,14 @@ impl BasebackupCache {
 
         // Fast path. Check if the entry exists using the in-memory state.
         let tti = TenantTimelineId::new(tenant_id, timeline_id);
-        if self.entries.lock().unwrap().get(&tti).map(|e| e.lsn) != Some(lsn) {
+        let cached_lsn = self
+            .entries
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(k, _)| *k == tti)
+            .map(|(_, e)| e.lsn);
+        if cached_lsn != Some(lsn) {
             self.read_miss_count.inc();
             return None;
         }
@@ -306,23 +313,23 @@ impl BackgroundTask {
 
         // Leave only up-to-date entries.
         let entries_old = self.c.entries.lock().unwrap().clone();
-        let mut entries_new = HashMap::new();
+        let mut entries_new = None;
         for (tenant_shard_id, tenant) in self.tenant_manager.list() {
             let tenant_id = tenant_shard_id;
 
             for timeline in tenant.list_timelines() {
                 let tti = TenantTimelineId::new(tenant_id, timeline.timeline_id);
-                if let Some(entry) = entries_old.get(&tti) {
-                    if timeline.get_last_record_lsn() <= entry.lsn {
-                        entries_new.insert(tti, entry.clone());
+                if let Some((old_tti, entry)) = &entries_old {
+                    if *old_tti == tti && timeline.get_last_record_lsn() <= entry.lsn {
+                        entries_new = Some((tti, entry.clone()));
                     }
                 }
             }
         }
 
-        // Try to remove all entries that are not up-to-date.
-        for (&tti, entry) in entries_old.iter() {
-            if !entries_new.contains_key(&tti) {
+        // Remove the cached entry if it is not the up-to-date one we kept.
+        if let Some((tti, entry)) = &entries_old {
+            if entries_new.as_ref().map(|(k, _)| k) != Some(tti) {
                 self.try_remove_entry(tti.tenant_id, tti.timeline_id, entry)
                     .await;
             }
@@ -346,7 +353,7 @@ impl BackgroundTask {
             .context("Failed to clean tmp directory")?;
 
         // Read existing entries from the data_dir and add them to in-memory state.
-        let mut entries = HashMap::<TenantTimelineId, CacheEntry>::new();
+        let mut entries: Option<(TenantTimelineId, CacheEntry)> = None;
         let mut dir = tokio::fs::read_dir(&self.c.data_dir).await?;
         while let Some(dir_entry) = dir.next_entry().await? {
             let filename = dir_entry.file_name();
@@ -380,11 +387,8 @@ impl BackgroundTask {
 
             let tti = TenantTimelineId::new(tenant_id, timeline_id);
 
-            use std::collections::hash_map::Entry::*;
-
-            match entries.entry(tti) {
-                Occupied(mut entry) => {
-                    let found_entry = entry.get();
+            match &mut entries {
+                Some((k, found_entry)) if *k == tti => {
                     // Leave only the latest entry, remove the old one.
                     if cur_entry.lsn < found_entry.lsn {
                         self.try_remove_entry(tenant_id, timeline_id, &cur_entry)
@@ -392,7 +396,7 @@ impl BackgroundTask {
                     } else if cur_entry.lsn > found_entry.lsn {
                         self.try_remove_entry(tenant_id, timeline_id, found_entry)
                             .await;
-                        entry.insert(cur_entry);
+                        *found_entry = cur_entry;
                     } else {
                         // Two different filenames parsed to the same timline_id and LSN.
                         // Should never happen.
@@ -402,8 +406,14 @@ impl BackgroundTask {
                         ));
                     }
                 }
-                Vacant(entry) => {
-                    entry.insert(cur_entry);
+                Some(_) => {
+                    // A file for a different (tenant, timeline) left over in
+                    // this data_dir; drop the stale file.
+                    self.try_remove_entry(tenant_id, timeline_id, &cur_entry)
+                        .await;
+                }
+                None => {
+                    entries = Some((tti, cur_entry));
                 }
             }
         }
@@ -503,7 +513,7 @@ impl BackgroundTask {
         self.total_size_bytes += entry.size_bytes;
         BASEBACKUP_CACHE_SIZE.set(self.total_size_bytes);
 
-        let old_entry = self.c.entries.lock().unwrap().insert(tti, entry);
+        let old_entry = self.c.entries.lock().unwrap().replace((tti, entry)).map(|(_, e)| e);
 
         if let Some(old_entry) = old_entry {
             self.try_remove_entry(tenant_id, timeline_id, &old_entry)
@@ -559,7 +569,7 @@ impl BackgroundTask {
 
         {
             let entries = self.c.entries.lock().unwrap();
-            if let Some(entry) = entries.get(&tti) {
+            if let Some((_, entry)) = entries.as_ref().filter(|(k, _)| *k == tti) {
                 if entry.lsn >= req_lsn {
                     tracing::info!(
                         %timeline_id,

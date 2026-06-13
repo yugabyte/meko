@@ -153,8 +153,9 @@ struct TimelinePreload {
 }
 
 pub(crate) struct TenantPreload {
-    /// Map from timeline ID to a possible timeline preload. It is None iff the timeline is offloaded according to the manifest.
-    timelines: HashMap<TimelineId, Option<TimelinePreload>>,
+    /// The timeline's preload, or `None` if no `pageserver.timeline_state`
+    /// row exists yet (attach then runs the create-if-missing path).
+    timeline: Option<(TimelineId, TimelinePreload)>,
 }
 
 /// Build a `TimelineMetadata` from a `pageserver.timeline_state` row.
@@ -213,9 +214,7 @@ pub struct PageServer {
     /// Guards the bootstrap-time timeline creation (crash-retry runs it
     /// again on the same id). Held as a set for the `TimelineCreateGuard`
     /// release-on-drop protocol.
-    /// The timeline currently being created, if any. Single-timeline
-    /// pageserver: at most one create is in flight, so this is an
-    /// `Option` rather than a set of ids.
+    /// The timeline currently being created, if any.
     timelines_creating: std::sync::Mutex<Option<TimelineId>>,
 
     // This mutex prevents creation of new timelines during GC.
@@ -690,8 +689,7 @@ impl PageServer {
             r = self.compute_page_store.get_timeline(tenant_id, identity.timeline_id) => r?,
             _ = cancel.cancelled() => anyhow::bail!("cancelled"),
         };
-        let mut timelines = HashMap::with_capacity(1);
-        match row {
+        let timeline = match row {
             Some(row) => {
                 if row.deleted_at.is_some() {
                     anyhow::bail!(
@@ -710,12 +708,12 @@ impl PageServer {
                     "preload: timeline LSNs read from pageserver.timeline_state"
                 );
                 let metadata = synth_timeline_metadata_from_row(&row)?;
-                timelines.insert(
+                Some((
                     row.timeline_id,
-                    Some(TimelinePreload {
+                    TimelinePreload {
                         metadata: Ok(metadata),
-                    }),
-                );
+                    },
+                ))
             }
             None => {
                 // Row absent: attach() runs the [timeline_init]
@@ -724,9 +722,10 @@ impl PageServer {
                     timeline_id = %identity.timeline_id,
                     "preload: no timeline_state row yet; will create at attach if configured"
                 );
+                None
             }
-        }
-        Ok(TenantPreload { timelines })
+        };
+        Ok(TenantPreload { timeline })
     }
 
     ///
@@ -749,16 +748,17 @@ impl PageServer {
             );
         };
 
-        let mut timeline_ancestors = HashMap::new();
-        for (timeline_id, preload) in preload.timelines {
-            let Some(preload) = preload else { continue };
+        // The timeline to load, if its row already existed; the
+        // create-if-missing path below fills it for a fresh branch.
+        let mut timeline_ancestors = None;
+        if let Some((timeline_id, preload)) = preload.timeline {
             // `preload.metadata` is synthesised from
             // `pageserver.timeline_state` in `Tenant::preload`, so it's
             // always `Ok(_)` — no remote blob download path remains in yb-mode.
             let metadata = preload
                 .metadata
                 .expect("yb-mode preload always builds an Ok TimelineMetadata");
-            timeline_ancestors.insert(timeline_id, metadata);
+            timeline_ancestors = Some((timeline_id, metadata));
         }
 
         // Create-if-missing: the configured timeline has no
@@ -772,7 +772,7 @@ impl PageServer {
             .timeline_identity
             .context("attach requires a timeline identity in pageserver.toml")?;
         let mut bootstrapped_timeline = None;
-        if !timeline_ancestors.contains_key(&identity.timeline_id) {
+        if timeline_ancestors.is_none() {
             use pageserver_api::config::TimelineInitConfig;
             match &self.conf.timeline_init {
                 None => anyhow::bail!(
@@ -883,7 +883,7 @@ impl PageServer {
                         }
                     };
                     let metadata = synth_timeline_metadata_from_row(&row)?;
-                    timeline_ancestors.insert(identity.timeline_id, metadata);
+                    timeline_ancestors = Some((identity.timeline_id, metadata));
                 }
             }
         }
@@ -892,7 +892,7 @@ impl PageServer {
         // Single-timeline pageserver: at most one timeline loads here,
         // and a branch's ancestor is served by a DIFFERENT process —
         // no in-process ancestor ordering to respect.
-        for (timeline_id, remote_metadata) in timeline_ancestors {
+        if let Some((timeline_id, remote_metadata)) = timeline_ancestors {
             // TODO again handle early failure
             let effect = self
                 .load_remote_timeline(
@@ -1463,8 +1463,7 @@ impl PageServer {
             return Err(GcError::TimelineNotFound);
         }
 
-        let mut gc_cutoffs: HashMap<TimelineId, GcCutoffs> =
-            HashMap::with_capacity(timelines.len());
+        let mut gc_cutoffs: Option<(TimelineId, GcCutoffs)> = None;
 
         // Ensures all timelines use the same start time when computing the time cutoff.
         let now_ts_for_pitr_calc = SystemTime::now();
@@ -1478,7 +1477,7 @@ impl PageServer {
             let cutoffs = timeline
                 .find_gc_cutoffs(now_ts_for_pitr_calc, cutoff, pitr, cancel, ctx)
                 .await?;
-            let old = gc_cutoffs.insert(timeline.timeline_id, cutoffs);
+            let old = gc_cutoffs.replace((timeline.timeline_id, cutoffs));
             assert!(old.is_none());
         }
 
@@ -1513,7 +1512,9 @@ impl PageServer {
 
                 // Look up parent's PITR cutoff to update the child's knowledge of whether it is within parent's PITR
                 if let Some(ancestor_id) = timeline.get_ancestor_timeline_id() {
-                    if let Some(ancestor_gc_cutoffs) = gc_cutoffs.get(&ancestor_id) {
+                    if let Some((_, ancestor_gc_cutoffs)) =
+                        gc_cutoffs.as_ref().filter(|(id, _)| *id == ancestor_id)
+                    {
                         target.within_ancestor_pitr =
                             Some(timeline.get_ancestor_lsn()) >= ancestor_gc_cutoffs.time;
                     }
@@ -1541,7 +1542,9 @@ impl PageServer {
                 // Apply the cutoffs we found to the Timeline's GcInfo.  Why might we _not_ have cutoffs for a timeline?
                 // - this timeline was created while we were finding cutoffs
                 // - lsn for timestamp search fails for this timeline repeatedly
-                if let Some(cutoffs) = gc_cutoffs.get(&timeline.timeline_id) {
+                if let Some((_, cutoffs)) =
+                    gc_cutoffs.as_ref().filter(|(id, _)| *id == timeline.timeline_id)
+                {
                     let original_cutoffs = target.cutoffs.clone();
                     // GC cutoffs should never go back
                     target.cutoffs = GcCutoffs {

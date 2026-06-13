@@ -46,14 +46,26 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("pick an existing (rel, fork, blk) from pageserver.pages");
-    let key = db::query_text(
-        &yb,
-        &format!(
-            "SELECT spcnode||' '||dbnode||' '||relnode||' '||forknum||' '||blknum \
-             FROM pageserver.pages WHERE tenant_id='{tenant}' AND timeline_id='{timeline}' LIMIT 1"
-        ),
-    )
-    .await?;
+    // `pageserver.pages` is populated by the asynchronous pageserver→YB
+    // flush, which lags the CHECKPOINT above, so the row may not be there
+    // the instant we look. Poll until it lands rather than one-shot query.
+    let key_sql = format!(
+        "SELECT spcnode||' '||dbnode||' '||relnode||' '||forknum||' '||blknum \
+         FROM pageserver.pages WHERE tenant_id='{tenant}' AND timeline_id='{timeline}' LIMIT 1"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let key = loop {
+        if let Some(k) = db::query_text_opt(&yb, &key_sql).await? {
+            break k;
+        }
+        if std::time::Instant::now() > deadline {
+            bail!(
+                "no rows in pageserver.pages for tenant {tenant} timeline {timeline} \
+                 within 30s — the flush never landed"
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    };
     let f: Vec<&str> = key.split_whitespace().collect();
     if f.len() != 5 {
         bail!("expected 5 key columns from pageserver.pages, got {key:?}");
