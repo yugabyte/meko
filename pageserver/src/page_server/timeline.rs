@@ -1048,6 +1048,31 @@ impl Timeline {
         self.remote_state.consistent_lsn.load()
     }
 
+    /// tasks/34: flush the `PageWriter` so every write with LSN ≤ the
+    /// applied frontier is durable in `pageserver.{pages,slru_pages,meta}`
+    /// before a basebackup reads at `backup_lsn`.
+    ///
+    /// `handle_basebackup_request` only `wait_lsn`s on the APPLIED frontier
+    /// (`last_record_lsn`), not the durable watermark (`consistent_lsn`).
+    /// When `backup_lsn > consistent_lsn`, the read blends durable YB with
+    /// not-yet-durable in-RAM buffer state. During crash recovery that
+    /// blend can read inconsistently: e.g. a clog page-1 extend is in the
+    /// (write-through) meta cache — so `get_slru_segment_size` returns 2 —
+    /// while block 1's content is still only buffered and momentarily
+    /// invisible to the durable+buffer read, yielding a 1-page `pg_xact`
+    /// tarball and a recovering compute FATAL ("could not access status of
+    /// transaction"). Flushing first makes everything ≤ the frontier (hence
+    /// ≤ `backup_lsn`, which `wait_lsn` has already guaranteed ≤ applied)
+    /// durable, so the basebackup reads a self-consistent snapshot.
+    ///
+    /// No-op in upstream pageserver mode (no `page_writer`).
+    pub(crate) async fn flush_for_basebackup(&self) -> anyhow::Result<()> {
+        if let Some(pw) = self.page_writer.as_ref() {
+            pw.flush().await?;
+        }
+        Ok(())
+    }
+
     /// Phase 5b: write the full timeline row into `pageserver.timeline_state`
     /// once at creation time, so the per-flush `advance_consistent_lsn`
     /// UPDATE has a row to target. Also seeds `PageWriter`'s in-memory

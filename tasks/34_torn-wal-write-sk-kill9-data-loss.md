@@ -882,6 +882,377 @@ diagnosis complete.
 The proposed `min_unflushed`/frontier "cap" fix is therefore also
 **withdrawn**: there was never a real over-advance loss to cap.
 
+### LOCALIZED (2026-06-12): the corruption is the image materializer's fold+trim of pg_class block 0
+
+Mode-A repro (`-n 6`, `YB_PS_TRACE_REL_BLK=1663/5/1259/0/*` + the
+over-advance-loss detector + `decode`/`trim` traces) reproduced the
+`torn_a` `pg_class` orphan (oid 73728) and pinned the mechanism:
+
+- **Not over-advance**: the YB-point-read detector fired **0** times across
+  9 reconnect windows where it provably ran.
+- **Not a flush drop**: every traced pg_class `(key,lsn)` that reached
+  `put` also reached `durable` (no put-without-durable).
+- **All 42 `trim`s are on pg_class block 0** (every `torn_*` catalog row
+  lives on block 0). YB shows block 0 is materializer-image-anchored
+  (`is_image=t will_init=t` at lsn `0x1b643f8`); the trims are deltas
+  ≤ that image.
+- The compute's read of block 0 returns 26 rows with `torn_a` (oid 73728)
+  **absent**; torn_a's create delta is ≤ the image (else it would survive
+  as an untrimmed delta above it).
+
+⟹ **The materializer folded a pg_class block-0 image that excluded
+torn_a's committed row, then `trim_key_up_to` dropped the delta that
+carried it — a durable committed row destroyed.** The walreceiver / flush
+/ consistent_lsn paths are exonerated for this symptom.
+
+### CLOG-WRITE TRACE (2026-06-12): clog flush durability is NOT the bug
+
+Added an env-gated `yb_clog` trace (`YB_PS_TRACE_CLOG`) on the SLRU clog
+write path: put → flush-snapshot → durable (put_slru_pages ok) + each
+consistent_lsn persist. `-n 2` repro (orphan torn_a, create xid 16384):
+
+- **0 clog block-0 writes were put-without-durable** (of ~19k). Every clog
+  page write that happens reaches YB durably. ⟹ the commit's clog page is
+  NOT dropped at flush; **SLRU/clog flush durability is exonerated.**
+- This run's orphan create xid (16384) sits at the WAL floor (0/15404B0),
+  in the first page pg_waldump can't decode (missing page header), so it
+  wasn't re-traceable here — but the mechanism was fully decoded the prior
+  run (torn_b xid 21505: COMMIT present + post-recovery PRUNE of its rows).
+
+So the loss is NOT "clog write dropped at flush." Remaining candidates:
+(a) the recovered compute's basebackup is served a clog folded/bounded
+BELOW the commit (so it reads the create xid uncommitted and prunes before
+the commit's clog is re-applied/served), or (b) the COMMIT's clog update
+was never applied because its WAL was trimmed/not re-streamed on resume
+(create xid at the floor + lagging consistent_lsn → SK trim).
+
+Decisive next: capture the clog page the recovered compute READS at the
+recovery basebackup (does it show the create xid committed?) — i.e. trace/
+inspect the basebackup's served clog vs the durable clog at that LSN. That
+distinguishes (a) basebackup-serving from (b) commit-not-applied, and is
+the last fork before the fix.
+
+### CLOG-LOSS VERIFIED (2026-06-12): the prune itself is the proof
+
+Checked the durable clog SLRU for xid 21505 on the corrupted cluster: the
+latest clog page-0 IMAGE has its bits = 0 (uncommitted), but the newest
+durable versions are 24-byte SLRU set-bits DELTAS, so the folded value is
+ambiguous from a raw read; and `txid_status` reads the COMPUTE's local
+clog (which self-corrected after the prune), not the PS durable copy. So
+"is the durable clog permanently holed" can't be read off cleanly — and it
+doesn't matter:
+
+**The PRUNE is the verification.** `PRUNE_ON_ACCESS` marks an insert-only
+tuple (xmax=0) DEAD only when its `xmin` reads aborted/crashed in the
+pruner's clog. pg_waldump shows the recovered compute (xid 23553,
+post-recycle) pruned torn_b's rows whose xmin (21505) has a `COMMIT` record
+in the WAL. ⟹ at prune time the recovered compute's clog (sourced from the
+PS recovery basebackup) showed 21505 as NOT committed. The clog/
+commit-visibility gap across the kill-recovery is confirmed; the prune
+destroyed the rows irreversibly regardless of any later self-correction.
+
+Fix territory (subtle — note the consistent_lsn cap already FAILED, so a
+plain rel/aux min_unflushed cap is NOT sufficient): the clog SLRU commit
+must be durable in the PS and reflected in the basebackup the recovered
+compute reads BEFORE it prunes pg_class. Likely the SLRU/clog flush
+durability + recovery ordering, OR the basebackup serving clog at a stale
+LSN. Needs design, not another blind cap.
+
+### ROOT CAUSE PROVEN via pg_waldump (2026-06-12): recovered compute prunes a COMMITTED txn's catalog rows because CLOG shows it uncommitted
+
+Reconstructed the SK WAL (segno 1+2 chunks from `wals` → 16 MiB segment
+files; fabricated seg1's offset-0 long header since WAL starts mid-page at
+the initdb floor) and decoded with PG17 `pg_waldump`. For orphan torn_b
+(oid 98304, create xid 21505):
+
+- torn_b's CREATE (xid 21505) **COMMITTED**: `Transaction COMMIT` record at
+  lsn `0/1E0E298` (names `relcache 98304` + toast/index oids); `txid_status(21505)
+  = committed`. Its pg_class rows are at block-0 offsets **52,53,54,55**
+  (the `INPLACE` catalog updates).
+- A later `PRUNE_ON_ACCESS` (xid 23553, lsn `0/1EE73B8`, block 0) marks
+  `dead: [...,52,53,55]  unused: [54]` — **exactly torn_b's offsets**,
+  reclaiming the slots; a later CREATE reuses them.
+- xid timeline confirms the recovery link: torn_b is **mode B's table**
+  (mode B SIGKILLs the compute). create=21505 → fill → compute killed →
+  recycled → the prune at 23553 is the RECYCLED compute.
+
+⟹ **The recovered compute HOT-prunes a committed transaction's pg_class
+rows because its CLOG shows that xid as NOT committed** (an insert-only
+tuple is only pruned dead if its xmin reads aborted/crashed). torn_b's
+pg_type row sits on a page not pruned in that window, so it survives →
+orphan. ROOT = **CLOG / commit-visibility durability across the
+kill-recovery** (the clog SLRU path — the aux buffer's count-based drain
+that "can silently drop fresh SLRU/meta rows"; ties to the meta/SLRU
+over-advance noted early). NOT the rel-page watermark or materialiser —
+which is why those fixes did nothing.
+
+Fix territory: ensure the commit's CLOG bit is durable in the PS and
+correctly served to the recovered compute BEFORE it can prune pg_class
+(SLRU/clog durability + recovery ordering), so prune never sees a
+committed xact as aborted.
+
+### CONVERGED (2026-06-12): orphan = compute HOT-prunes a committed-live catalog tuple
+
+After falsifying both the materialiser and consistent_lsn, inspected a
+corrupted cluster's `pg_class` with `pageinspect` (orphan = torn_b, oid
+98304):
+
+- torn_b's pg_class row is **absent from EVERY block** (full
+  `heap_page_items` scan over all blocks, incl. dead/redirect — empty).
+- Block 0 is the active insertion block: **48 `LP_DEAD` + 6 `LP_REDIRECT`**
+  (heavy HOT churn), and high-oid inserts (106496+) have **reused
+  reclaimed slots** there.
+
+By elimination: the compute COMMITTED torn_b (its pg_type 98304 +
+pg_attribute rows survive), so the compute's WAL contains torn_b's
+pg_class INSERT. The storage path is faithful (materialiser +
+consistent_lsn both exonerated by controlled experiments). So torn_b's row
+existing-then-vanishing with its slot now holding a later object means
+**the compute itself generated a PRUNE + slot-reuse over torn_b's
+committed-live pg_class tuple** — i.e. the recovered compute **HOT-prunes a
+committed-live catalog tuple as if dead** and reuses its line pointer.
+
+⟹ Root is **compute-side (Postgres) HOT-prune / visibility under crash
+recovery** (or the PS serving a page whose prune hints / `pd_prune_xid` /
+xmin-committed bits mislead the compute's prune), NOT the durable
+watermark or the materialiser. Consistent with why those fixes changed
+nothing.
+
+Decisive next: `pg_waldump` the pg_class WAL around a torn_X creation to
+see `HEAP_INSERT` → (wrong) `HEAP2_PRUNE` → reuse, and the prune's
+`snapshotConflictHorizon`/OldestXmin — does the recovered compute prune a
+tuple whose creating xact is committed? Then the fix is in PG's
+prune/visibility after a yb-light basebackup-recovery, or in the
+xmin-commit hint bits the PS serves.
+
+### CONSISTENT_LSN HYPOTHESIS FALSIFIED (2026-06-12) — 3 fixes, all 0/8
+
+Implemented the full "capped + prompt" fix and verified it works
+MECHANICALLY:
+- `consistent_lsn` now advances and repeatedly catches up to the SK end
+  (`clsn==sk` in the resume log), no longer pinned at the initdb floor.
+- All persist sites (flush advance + `force_upsert`) re-cap at the current
+  `min_unflushed` (rel FIFO + aux), via `safe_consistent_lsn()` — the
+  over-advance-loss detector fires **0**.
+- Catch-up flush fired 31× (`Timeline::flush_and_advance_consistent_lsn`).
+
+Yet `torn_wal_write -n 8` = **0 passed, 8 failed**, corruption UNCHANGED
+(orphan rowtype + missing rels). Across all three attempts (eager-uncapped,
+per-flush cap, capped-everywhere) the result was 0/8 — WORSE than the 1/8
+baseline (the aggressive catch-up flush adds a `compute never served reads`
+deadlock).
+
+⟹ **`consistent_lsn` lag / over-advance is NOT the root of the catalog
+orphan.** Making the durable watermark track commits, and making it
+provably safe, changes nothing. The line-pointer reuse (a committed
+pg_class row's heap slot reused by a later object) happens regardless of
+the watermark — so the recovered compute's view of pg_class block-0 free
+space is wrong for a reason UNRELATED to durability lag.
+
+ALL of these reverted (full `git checkout pageserver/src/`). New leading
+suspect: the **recovered compute's free-space tracking (FSM fork) /
+basebackup** — after recovery the compute reuses an occupied heap line
+pointer, i.e. it believes the slot is free though the served heap page
+holds the committed tuple. Investigate the FSM (fork 1) content the
+basebackup serves vs the heap, and PG's slot-selection on INSERT after a
+crash-recovery basebackup. Not the durable watermark.
+
+### FAILED FIX (2026-06-12): catch-up flush + eager consistent_lsn persist made it WORSE — reverted
+
+Attempt: on walreceiver catch-up (`streaming_lsn >= end_of_wal`), call a
+new `Timeline::flush_and_advance_consistent_lsn()` = `pw.flush()` +
+`pw.force_upsert_consistent_lsn_if_advanced()`, to make `consistent_lsn`
+track commits instead of lagging at the 5s cadence.
+
+Result: `-n 8` → **0 passed, 8 failed**, with NEW corruption beyond the
+orphan — heap holes (`count=1018 but max=1485 — WAL replay left a hole`),
+missing relations (`torn_c does not exist`), missing pg_attribute rows.
+Strictly worse. Reverted both edits.
+
+**Why it backfired (important):** `force_upsert_consistent_lsn_if_advanced`
+persists `consistent_lsn_observed`, advanced UNCONDITIONALLY to each
+flush's `ingest_frontier` (page_writer.rs:1363) — it carries the
+OVER-ADVANCE (frontier past not-yet-durable rows). Persisting it EAGERLY
+locks in a durable watermark past rows not in YB; a crash drops them. The
+5s persist throttle was **accidentally mitigating** the over-advance by
+delaying the persist until later flushes wrote the lagging rows.
+
+**Revised fix design:** advancing `consistent_lsn` promptly requires it be
+SAFE — a value where everything ≤ it is provably durable. Advance to
+`min(frontier, pred(min_unflushed))`, persist only that, and route the
+shutdown `force_upsert` + `consistent_lsn_observed` through the same cap.
+(This is the earlier "cap" idea — now necessary, not wrong; it likely
+"failed" before because the uncapped `observed`/`force_upsert` leaked.)
+Two fix attempts have failed; align on the safe-advance design first.
+
+### MATERIALISER EXONERATED + gap confirmed (2026-06-12, controlled experiment)
+
+Disabled the materialiser by bumping BOTH fold triggers in
+`pageserver_api::config` defaults (`image_chain_limit` 20 → 1e9,
+`image_chain_payload_bytes_limit` 4096 → 1e9). A monitor confirmed the
+materialiser was genuinely off during the run (`trim`+`fold` count stayed
+**0** while `put` climbed 59→96→136 — ingest working, no folding).
+
+Result: `torn_wal_write -n 8` = **1 passed, 7 failed** — the orphan
+reproduces just as reliably with the materialiser OFF as ON (`-n 6` was
+5/6 with it on). **⟹ the materialiser is NOT the cause.** The lp-41
+overwrite lives in the raw compute deltas, not the fold. (The earlier
+`-n 2` mat-off "2 passed" was small-sample luck.)
+
+Gap confirmed directly on the preserved failed cluster:
+- Slot reuse: torn_a's pg_class slot **(0,41)** now holds
+  `pg_toast_81920_index` (oid 81924) — a LATER object reused torn_a's
+  committed-row slot. torn_a (typrelid 73728, xid 16384) stays committed +
+  live in pg_type (xmax 0).
+- **`consistent_lsn` is pinned at the initdb floor `0/15404B0` while the
+  SK races ahead** (`sk_end=0/162CFF0`), then lurches forward in big jumps
+  each recovery cycle, always lagging `sk_end`. So the durable watermark
+  badly lags committed WAL across the SK-kill recoveries — the PS
+  re-streams `[0/15404B0 ..]` every reconnect. This is the Part-1-class
+  non-advancement, and it is the enabling gap: with durability pinned near
+  initdb across the churned recovery, pg_class block 0's line-pointer
+  state diverges and a committed row's slot is reused.
+
+Net: Part 2's catalog orphan is a **recovery/durability-lag (consistent_lsn
+stuck at initdb) → heap line-pointer reuse over a committed pg_class row**,
+NOT a materialiser or storage-fold bug. Fix territory: make `consistent_lsn`
+advance during these SK-kill recovery cycles (so durability tracks commits
+and the recovered compute's pg_class block 0 reflects all committed rows
+before it resumes inserting).
+
+### ROOT MECHANISM — line-pointer reuse over a committed tuple (2026-06-12, pageinspect-verified)
+
+Decoded reliably with PG's own `pageinspect` (`heap_page_items` on both
+the live folded page and the durable image bytes fetched from
+`pageserver.pages` — no hand-rolled decoder):
+
+- Durable **image** of pg_class block 0 (lsn `0x1b71348`): line pointer
+  **lp 41** = torn_a's pg_class row — oid 73728, **xmin 16384, xmax 0
+  (LIVE)**. `txid_status(16384)=committed`. So torn_a's pg_class row was
+  committed AND durable.
+- **Folded** (current) block 0: **lp 41 now holds oid 81924** (xmin
+  18433) = **torn_b**; lp 48 = 81925 = torn_b_pkey. The line pointer was
+  **reused**.
+
+⟹ **torn_a's committed-live pg_class tuple was overwritten: a later
+`CREATE TABLE torn_b` (iteration-2 mode B, xid 18433) reused heap line
+pointer lp 41 that held torn_a's row.** pg_type/pg_attribute live on other
+pages whose slots weren't reused, so they survive → orphan rowtype.
+
+The PS stored everything faithfully (image with torn_a@lp41; a later delta
+overwriting lp41 with torn_b) — which is why every storage-pipeline
+detector (over-advance, flush, trim, fold, CLOG) was clean. The loss is a
+**heap line-pointer reuse over a committed-live tuple across the mode-A
+crash+recycle**: the recycled compute's view of pg_class block 0 did not
+include torn_a (lp 41 looked free), so it inserted torn_b there. Root
+points at the recycle **basebackup / consistent_lsn not reflecting
+torn_a's committed create** at recovery time (a storage-visibility gap at
+recycle), surfaced as a compute slot reuse. `yb-dump-wals --summary` shows
+the SK WAL is gap-free (`0/15404b0..0/1d25be0`), so the WAL is intact — the
+divergence is in what the recycled compute READ, not what the SK kept.
+
+Next: determine consistent_lsn at the mode-A recycle vs torn_a's create
+LSN — if the basebackup served block 0 below torn_a's create while
+torn_a's create was already durable, that's the gap.
+
+### CLEAN -n 2 REPRO (2026-06-12 late): torn CREATE, last pg_class write lost; needs churn
+
+Reliable findings (from the compute's own catalog — no hand-decoding):
+
+- `-n 1` PASSES all 7 modes; `-n 2` fails in iteration 2 (mode A passes,
+  mode B's catalog check finds the orphan). **A single create does NOT
+  reproduce — the orphan needs the repeated DROP+CREATE-of-torn_a churn
+  across iterations** on the heavily-materialised pg_class block 0 + the
+  SK kill.
+- The orphan rowtype `torn_a` (pg_type oid 73730, **typrelid 73728**) has
+  **xmin=16384, xmax=0** — committed by xid 16384, NOT deleted. Its 8
+  `pg_attribute` rows (attrelid 73728) also survive. Only its `pg_class`
+  relation row (oid 73728) is missing ⇒ **torn CREATE: the committed
+  transaction's `pg_class` insert is lost while its `pg_type` /
+  `pg_attribute` inserts survive.** Not a drop.
+- torn_a (73728) is the **highest oid / last-created** rel; torn_c..g
+  (32768..65536, iteration 1) survive on block 0. So it's the LAST
+  pg_class block-0 write before the crash that's lost.
+
+Methodology caveat: hand-decoding heap pages bit me twice (the `t_hoff`
+offset; an image-vs-folded mixup) and `pageinspect get_raw_page` returns
+empty on this compute, so the byte-level "where exactly does 73728
+vanish" is NOT yet reliably pinned. The reliable signals (compute catalog;
+the put→durable trace showing every pg_class put reached durable; the
+over-advance / trim-race / CLOG detectors all clean) stand. Open: was
+torn_a's pg_class insert never `put`, or put→durable then lost from the
+folded read.
+
+### (earlier, partly from a buggy decoder) CORRECTION + reopened (2026-06-12 late): decoder bug; image-vs-folded; CLOG fine
+
+The walredo-I/O capture run reproduced the orphan, but two findings walk
+back the "materialiser fold drops the tuple" conclusion below:
+
+1. **Decoder bug.** `heap_page_oids`'s `t_hoff` offset was 18; correct is
+   **22** (`t_choice`=12 + `t_ctid`=6 + `t_infomask2`=2 + `t_infomask`=2).
+   So that run's `fold_image` `oids_in`/`oids_out` were garbage. Fixed in
+   code; offset validated in Python against a live durable image.
+2. **Image HAS the row; the folded read does NOT.** With the corrected
+   offset the latest durable **image** of pg_class block 0 contains oid
+   73728 (torn_a), but the compute's **folded** read (`pageinspect`,
+   MVCC-correct) has NO tuple with oid 73728 on any block (439 live rels,
+   none torn_a). So a delta ABOVE the final image removes 73728 in the
+   folded view (page reinit/prune or delete) — not a materialiser fold.
+3. **CLOG is fine.** `txid_status(16384) = committed`; the "CLOG/SLRU
+   visibility loss" idea is dead.
+
+Reopened hypotheses (need a clean repro to disambiguate):
+- **Torn DROP**: torn_a's `pg_class` row legitimately deleted while its
+  `pg_type` row's delete was LOST ⇒ orphan rowtype. (`-n` seed does
+  `DROP TABLE IF EXISTS torn_a` each iteration; once an orphan exists it
+  blocks DROP and cascades, muddying the accumulated state.)
+- **Wrong reinit**: a will_init/FPI delta for block 0 from before torn_a's
+  create re-applied above the image, reverting the page.
+
+Next: re-run with the CORRECTED decoder and **`-n 1`** (single iteration —
+avoids the orphan-cascade contamination) to capture the FIRST orphan
+cleanly, and decode the exact post-image delta that makes oid 73728 vanish
+from the folded page.
+
+### (SUPERSEDED by the correction above) NARROWED to the walredo fold output (2026-06-12)
+
+Added `fold_chain` (input-chain anchor + LSN list) and `fold_image`
+(produced image LSN) traces to the materialiser; re-ran mode-A with the
+pg_class trace. The pg_class-victim run (oid 73728) gave 4 chained folds
+(each anchors on the previous fold's image) and 42 block-0 trims. Diffing
+the **trimmed** LSNs against the **folded** LSNs:
+
+- Every trimmed delta LSN ∈ a fold's input chain (comm -23 empty) ⇒ NO
+  trim-race; nothing was trimmed that wasn't folded.
+- The fold chains are clean: exactly one `will_init` anchor (the prior
+  image) per fold, all other rows plain deltas ⇒ no early chain
+  truncation. `parse_chain` is correct (base_img = anchor, deltas reversed
+  to LSN-ascending, guards stray images).
+
+⟹ torn_a's `pg_class` insert delta WAS fed to walredo (it's trimmed, and
+every trimmed LSN was folded) yet the produced block-0 image lacks the
+tuple. **The loss is in the fold's walredo output: an image missing a
+committed tuple present in its input chain.** Everything upstream
+(walreceiver, flush, consistent_lsn, chain assembly, trim boundary) is
+exonerated.
+
+Remaining probe: capture the losing fold's walredo INPUT (record
+types/payloads) and OUTPUT page (tuple/oid set) for pg_class block 0, and
+identify the fold where the live-tuple set first drops torn_a — i.e. does
+walredo mis-apply torn_a's HEAP_INSERT, or does a later record in the same
+chain remove it. Needs torn_a's exact create LSN (trace pg_type's CREATE
+txn alongside) + page-tuple decoding of the fold I/O.
+
+Superseded earlier sub-question (kept for history): WHY the fold's input chain excluded torn_a's delta —
+either `read_chain_durable` returned an incomplete chain (truncated at a
+will_init anchor above torn_a's delta, or the delta wasn't durable at fold
+time), or an earlier bad fold already dropped it and this image inherited
+the loss. Next: instrument the materializer fold to log its input-chain
+LSNs vs the produced image LSN + the trim range, and catch a fold whose
+input is missing a delta it then trims. `decode`=14 (bootstrap only) — the
+interpreted-WAL walreceiver path does not go through
+`DatadirModification::put`, so `put` (PageWriter) is the ingest signal here.
+
 ### Validation run (2026-06-12): noise gone, real corruption unchanged
 
 `torn_wal_write -n 10 --no-fail-clean` after removing both tripwires +
@@ -904,3 +1275,339 @@ page write from the last txn missing from durable YB after crash
 recovery) remains OPEN.
 
 ### Status: Part 1 + deadlock + anchorless guards + harness fixes LANDED. The consistent_lsn over-advance is CONFIRMED BENIGN (reconnect-replay re-push of an already-durable row) — tripwires + provenance scaffolding removed, comment left in place. STILL OPEN and now cleanly separated: a REAL catalog/heap tear (e.g. `torn_a`'s `pg_index` rows 90117/90116 genuinely absent from durable YB while `consistent_lsn` sits above the highest durable page write) — a committed FIRST-TIME page write missing from YB, distinct from the benign over-advance. Mechanism for THAT loss is not yet pinned (was it ever `put`/flushed, or never ingested?). The debug-only `push_durable`-over-unflushed panic correlates with the failing runs and remains to be explained.
+
+### DECISIVE NARROWING (2026-06-12 late): the orphan is a TRANSIENT STALE clog READ at recovery time — NOT durable loss, NOT consistent_lsn, NOT materializer
+
+Run `run_1781307603_4037726` (`-n 6`, mode B orphan on `torn_a`) was left LIVE
+(YB db `yb_storage_e2e_4037726_508707780`, PS pid 4040441, page-service
+`127.0.0.1:64200`, `YB_PS_TRACE_CLOG=1`). The orphan first appears in
+iteration 2 (iter 1 fully PASSED), so it needs churn/accumulation.
+
+The `basebackup_clog` trace (clog page 0, committed xids in 16000..30000):
+every recovery basebackup from `0/15404B0`..`0/1C40A88` served
+`committed_count=0`, then `0/1D1FCD0` jumped to `2873` (xids 16384..19873).
+
+Forensics on the LIVE durable state (querying `pageserver.slru_pages`
+directly) settle every fork:
+
+1. **Commit-bit deltas ARE durable.** Clog page 0 = ONE base image
+   (`0/1540438`, the empty initdb page; the ONLY `will_init=true`/image row
+   ever) + ~11.6k 24-byte `ClogSetCommitted` deltas. Delta wire format
+   (big-endian): `tag=00000002 | vec_len(8B)=1 | xid(4B) | timestamp(8B)`.
+   Monotonic xid↔LSN. xid **16384 commits at LSN `0/1B725B8`**; **1431**
+   deltas with xid∈[16000,30000) sit at lsn ≤ `0/1C40A88`. So at backup_lsn
+   `0/1C40A88` the basebackup SHOULD have served ~1431 committed — it served 0.
+   ⟹ writes are NOT lost; the basebackup read dropped durable deltas.
+2. **The read path is CORRECT on a quiescent system.** Replaying the *same*
+   basebackup request now (`basebackup … 0/1C40A88` over port 64200) returns
+   `committed_count=1431, lo=16384, hi=17814` — exactly the durable deltas.
+   ⟹ the empty read was TRANSIENT, during active recovery, and has healed.
+3. **Materializer is exonerated for clog.** `put()` only tallies REL rows in
+   `delta_counts` (page_writer.rs:568/591); SLRU rows go straight to the aux
+   buffer and are never materialized. The `chain_rows=3011` materialise batch
+   logged just before the stale basebackup was rel pages, not clog.
+4. **It is not simple temporal lag.** Log timeline around the stale backup:
+   `0/1B725B8` delta written `durable` 23:41:25.110/.125; `consistent_lsn`
+   persisted `0/1C40A88` at .164 (so clog ≤ `0/1C40A88` was provably durable);
+   basebackup served `count=0` at .367 — ~250 ms AFTER the data was durable.
+   No clog image, delete, or gen transition in that window.
+
+⟹ **Root cause is a transient stale READ of clog page 0 during heavy
+concurrent recovery (ingest + reconnect-replay + flush/drain + basebackup),
+where the durable deltas exist but the served folded page lacks the bits.**
+The recovering compute then HOT-prunes the "uncommitted"-per-clog but
+present-per-heap catalog tuples (heap rel-pages survive — they drain by
+identity), reuses the slots, and the rowtype is orphaned.
+
+Note a reconnect-replay just before the stale backup: walreceiver restarted
+from `consistent_lsn 0/1B69950` TWICE (puts of `0/1B725B8` at 23:41:20.122
+and 23:41:23.428), then a flush snapshotted the whole clog run with
+`frontier=0/1C40A88` at 23:41:24.837. The transient empty read happens in
+this window — a candidate race between the flush's snapshot→durable→drain of
+the aux SLRU buffer and the basebackup's durable+buffer blend/fold.
+
+Next: a `read_chain` trace was added to `PageWriter::scan_slru_range` (clog
+seg0 blk0: durable-row count, anchor/min/max LSN, buffered count, final
+chain_len, target_lsn), env-gated on `YB_PS_TRACE_CLOG`. Rebuild + fresh
+`-n` repro to catch the failing basebackup's assembled chain and tell a
+SHORT durable query apart from a FULL chain that folds empty.
+
+### REFRAMED (2026-06-12 late, run_1781309017_4056749): not clog — a STALE catalog HEAP PAGE; symptom is BIDIRECTIONAL
+
+Fresh traced `-n 8` repro (clog `read_chain` trace live; db
+`yb_storage_e2e_4056749_859009316`, PS pid 4060849 @ 64200 still LIVE). 2/8
+passed, orphan from iter 4 mode B.
+
+1. **Clog reads are CONSISTENT this run.** Aligning every `basebackup_clog`
+   with its `read_chain`: `committed_count` turns nonzero exactly at the
+   backup_lsn where xids ≥16000 first commit (`0/1C4E378`, count 1420); the
+   chain's `max_lsn` equals the LSN of the last actual commit ≤ backup_lsn
+   (e.g. `0/1FCAB60` reads max `0/1EEC3F8` because no page-0 commit happened
+   in between — count correctly unchanged). NO stale clog read at the
+   critical transition. So the previous run's clog `count=0`-at-`0/1C40A88`
+   was an intermittent stale READ, not the universal mechanism.
+2. **Symptom is BIDIRECTIONAL.** This run: `pg_class.torn_a` PRESENT
+   (oid 139264, reltype 139266) but NO `pg_type` row for 139266 (rowtype
+   lost). Previous run: rowtype present, pg_class relation lost. Opposite
+   halves of the same `CREATE TABLE`.
+3. **Pure clog-prune is IMPOSSIBLE for either run.** `CREATE TABLE` inserts
+   the pg_class row AND the pg_type rowtype under the SAME xid/commit. A
+   clog-visibility prune of that xid removes BOTH. One surviving means the
+   pruning backend saw the xid COMMITTED — so the other tuple cannot be
+   pruned as "uncommitted". (The pg_waldump "prune of a committed xid" in the
+   earlier section is then a prune over a STALE page version, not a
+   clog-uncommitted read.)
+
+⟹ Unifying root: **the recovery basebackup serves a STALE version of one
+catalog page — missing its last committed, durable update** — and WAL
+replay from backup_lsn does not repair it (the relevant commit is ≤
+backup_lsn). This is the SAME read-staleness class caught on clog in the
+prior run, landing on a heap (pg_type) page here. The lossy half (pg_class
+vs pg_type) varies run to run because it's whichever page's read goes stale.
+
+Open: confirm directly that the durable PS `pages` row for the pg_type page
+DID hold 139266 at recovery LSN (⇒ stale READ) vs never held it (⇒ lost
+WRITE). Next experiment: add the `read_chain`-equivalent trace to the REL
+read path (`PageWriter::scan_range`) and reproduce, checking whether the
+failing basebackup's catalog-page read returns a SHORT/stale chain while the
+delta is durable — mirroring the clog probe. `pageinspect` on the live
+compute shows pg_type has 20 dead LPs (churn DROPs) — not conclusive on its
+own.
+
+### REL-READ TRACE built + run (2026-06-12 late): the basebackup carries NO heap pages — catalog pages reach the compute via GetPage during recovery
+
+Added `trace_catalog_read_chain` (env `YB_PS_TRACE_CLOG`) to BOTH rel read
+paths in `PageWriter` — `read_chain` (incl. the cache-only fast-path
+early-return) and `scan_range` — logging assembled-chain stats (chain_len,
+deltas, anchor, min/max LSN, target_lsn) for pg_class (1259), pg_type (1247),
+and any user relation (relnode ≥ 16384 = the `torn_X` table + PK index).
+
+Three traced `-n 8` repros (run dirs 1781309017 / 1781310330 / 1781310692 /
+1781311197). Findings:
+
+1. **The failure surface is stochastic**: same root shows up as a catalog
+   tear (`rowtype missing from pg_type: torn_a`) OR a user-data hole
+   (`count=N but max(id)=N-k — a committed record lost below a surviving
+   one`). The `torn_X` table IS the counter table (`id BIGINT PRIMARY KEY,
+   pad TEXT`), so its lost-row and its lost-rowtype are the same bug on
+   different pages.
+2. **ALL rel_read_chain traces are under `handle_get_page_request`; ZERO
+   under `handle_basebackup_request`.** Root: the basebackup is NON-FULL
+   (`basebackup.rs:466` only sends rels under `full_backup`), so it ships
+   SLRU/clog + control file + aux files but NOT heap pages. The recovering
+   compute reads catalog AND table heap pages from the PS via **GetPage on
+   demand** during its own crash recovery. So the torn page is served through
+   the GetPage read path, not the basebackup. (The clog stale-read in the
+   prior run WAS basebackup-side because SLRU *is* shipped; heap is not.)
+
+⟹ Refined: the stale/lost catalog (or table) HEAP page is exposed on the
+**GetPage** path the recovering compute drives — `read_chain` /
+`read_chain_cachefast` / `scan_range`. In mode B the PS is never killed, so
+those reads hit the warm-cache fast path. Next: pin lost-WRITE vs stale-READ
+by comparing, on the live repro cluster, the PS durable `pages` chain for the
+pg_type page (does it hold the rowtype tuple at the compute's read LSN?)
+against the compute's view, and locate the failing GetPage in the trace.
+
+### NOT A LOST WRITE — the rowtype IS durable in the PS (2026-06-12, durable decode, run 1781311197)
+
+Decoded pg_type (relnode 1247, fork 0) directly from the durable
+`pageserver.pages` table on the live repro cluster (db
+`yb_storage_e2e_4086554_896266490`, timeline `ef55e377…`). pg_type has 15
+blocks; blocks 0–13 are untouched initdb images (LSN `0/1540438`); block 14
+is the active tail (6 images + 56 deltas). Heap-decode (oid = first 4-byte
+attr at `lp_off + t_hoff`, `t_hoff` at tuple byte 22) of the block-14
+images:
+
+| durable image LSN | has 139265 (array) | has 139266 (rowtype) | oid range |
+|---|---|---|---|
+| `0x1C47AF0` | no | no | 14453..81922 (pre-torn_a) |
+| `0x20A2428` | no | no | 14453..122882 |
+| **`0x225A620`** (latest) | **YES** | **YES** | 14453..**139266** |
+
+⟹ **torn_a's rowtype 139266 reached durable YB.** This is NOT a lost write;
+the data is safe in the PS. The corruption is introduced on the recovery
+READ/REPLAY side, with the committed catalog tuple sitting durable in YB the
+whole time. (The compute's *current* folded page omits 139266 only because
+the `-n 8` cascade's later iterations DROP'd it and pushed oids to 147458 —
+contamination, not the original loss.)
+
+GetPage correlation (rel_read_chain on relnode=1247 blk=14): every read
+carries a valid `anchor` (will_init image) and a chain whose `max_lsn`
+tracks `target_lsn`; the anchor advances `0/1540438 → 0/1C47AF0 →
+0/20A2428 → 0/225A620` as the materialiser installs images. No gross
+stale/short read in steady state. 139266's insert lands right around
+`0x225A620` (the image just above the last read that still lacks it).
+
+⟹ Open (needs a STOP-AT-FIRST-FAIL repro — the `-n 8` cascade overwrote the
+clean iter-4 state): does the recovering compute read block 14 (a) at a
+recovery target BELOW 139266's insert and then NOT replay the insert (redo
+starts above it per the basebackup checkpoint), leaving the lazily-served
+page permanently without it; or (b) via some cache/relcache path that pins a
+pre-139266 page? The PS durably has it; the question is purely why the
+recovered compute's view omits it. The single-iteration clean repro +
+control-file redo LSN vs 139266 insert LSN is the next decisive datum.
+
+### CLEAN STOP-AT-FIRST-FAIL repro (2026-06-12, run 1781312444): basebackup serves a clog MISSING PAGE 1; the same request later serves it — transient stale SLRU read; SK rewind below page-1 creation implicated
+
+Added `E2E_STOP_ON_FAIL` to the harness (`test/e2e/src/main.rs`): with `-n`
+(churn) it re-enables `fail_fast` so the run halts at the FIRST failing
+iteration; paired with `--no-fail-clean` the failing cluster is left LIVE
+and UNCONTAMINATED (db `yb_storage_e2e_4099986_852668380`, timeline
+`ba723e79…`, PS pid 4104974 @ 64200).
+
+First failure was iter-3 **mode A** (SK kill) — the recovering compute
+**won't start**:
+```
+FATAL: could not access status of transaction 33792
+DETAIL: Could not read from file "pg_xact/0000" at offset 8192: read too few bytes.
+LOG: aborting startup due to startup process failure
+```
+xid 33792 is on clog PAGE 1 (page 0 = xids 0..32767; 33792 ≥ 32768). The
+basebackup served `pg_xact/0000` = **8192 B (page 0 only)** — page 1 missing.
+
+Forensics on the live cluster:
+- **Durable YB HAS clog page 1**: `slru_pages` kind=0 seg=0 has blknum=0
+  (21506 rows) AND **blknum=1** (263 rows, will_init, first row LSN
+  `0x221ba00`); consistent_lsn `0x22417f0`. So page 1 is durable below the
+  backup_lsn.
+- **The failing basebackup was at `0/22417F0`** (compute log: "starting with
+  neon basebackup at LSN 0/22417F0" → immediate FATAL). Re-issuing the SAME
+  request `basebackup … 0/22417F0` against the live PS now returns
+  `pg_xact/0000` = **16384 B (pages 0+1)** — CORRECT. ⟹ transient stale read
+  at recovery time, healed now. Identical pattern to the clog-commit-bit
+  staleness, here on the clog SEGMENT SIZE / page count.
+- **Path**: basebackup `get_slru_keyspace` → `get_slru_segment_size(Clog,0)`
+  reads the meta key `slru_segment_size_to_key(Clog,0)` at backup_lsn
+  (`pgdatadir_mapping.rs:881`). A stale value (1 not 2) truncates the served
+  clog. Meta reads blend a write-through `meta_cache` single-key fast path +
+  durable + aux buffer (`scan_meta_range`); the cache is updated on every
+  higher-LSN put, so a plain stale cache shouldn't occur.
+- **SK rewind smoking gun**: after the mode-A SK kill, the compute log shows
+  `synced safekeepers lsn=0/217C4E0` — BELOW page-1 creation `0x221ba00`.
+  The walproposer rewound the SK WAL to `0x217C4E0`, discarding the WAL that
+  created clog page 1, *while the PS had already durably ingested page 1*.
+  It then re-accumulated to `0/217CFC0` → `0/22417F0`; the basebackup at
+  `0/22417F0` served the stale page-0-only clog.
+
+⟹ Same root family confirmed end-to-end: the recovery basebackup's SLRU read
+is transiently stale (commit-bits in one run, segment-size/page-1 here) —
+the PS durably holds the data; the read at recovery time misses it; the same
+read later returns it. Next: trace `get_slru_segment_size`(Clog) at
+basebackup time (returned size, target_lsn, cache-vs-durable-vs-buffer) and
+pin how the SK rewind to `0x217C4E0` interacts with the PS's already-durable
+page-1 / size=2 meta to make the read return size=1 at `0/22417F0`.
+
+### ROOT CAUSE PINNED (2026-06-12, run 1781313520, size+cache traces): it is NOT the size meta — block-1 CONTENT read lags its size-meta visibility
+
+Added traces: `get_slru_segment_size`(Clog) logs the returned size + lsn;
+`scan_meta_range` logs the clog size-key served from cache vs durable+buffer.
+Full `-n 8` run; iter-3 mode A FATAL'd again on xid 33792 (clog page 1).
+
+The size-meta hypothesis is **REFUTED**. At the FATAL compute's basebackup
+LSN `0/22473A0`:
+- `slru_segment_size`(Clog) returned **size=2** (correct — page 1's extend
+  wrote size=2 at `0/220B828`, below `0/22473A0`), served from the
+  write-through `meta_cache` (`row_lsn=0/220B828`). The size meta is NOT
+  stale.
+- Page-0 commit bits were fine (`basebackup_clog committed_count=10006`).
+- **But two basebackups at the SAME `0/22473A0` disagree on block count**:
+  one logged `Collected 3 SLRU blocks` (clog = page 0 only → `pg_xact/0000`
+  = 8192 B → the FATAL'd compute), the other `Collected 4 SLRU blocks`
+  (clog = pages 0+1 → correct).
+
+⟹ The size meta says 2 (keyspace includes clog block 1), but the
+`get_vectored` CONTENT read of block 1 transiently returned **nothing** — so
+the tarball got only block 0. Block 1 IS durable (`slru_pages` blknum=1 first
+row `0/220B828` ≤ backup_lsn). So the failure is a read-time consistency gap:
+**block 1's content read lags its size-meta visibility at backup_lsn.** The
+`meta_cache` retains `size=2` (write-through, survives flush drain), while the
+SLRU block-1 row is momentarily invisible to `scan_slru_range`
+(durable+`slru_buffer` blend) — most likely the post-snapshot/pre-durable (or
+drained-but-not-yet-YB-visible) window of a concurrent flush during recovery.
+
+This is the SAME mechanism as the clog-commit-bit staleness and the
+catalog-heap staleness: **a basebackup/GetPage SLRU/page read at backup_lsn
+transiently returns less than what is durable in YB.** The size-meta cache
+just makes the clog-page-1 variant especially sharp (keyspace says 2, content
+read yields 1).
+
+⟹ Fix direction (for sign-off): make the basebackup's SLRU read internally
+consistent — e.g. the per-block content read must see everything the size
+meta (and durability watermark) claims at `backup_lsn`; or bound the
+basebackup at an LSN where all SLRU blocks < size are provably durable; or
+detect served-block-count < size and wait/retry. The unifying invariant to
+restore: **a read at `backup_lsn` must reflect every write with LSN ≤
+`backup_lsn` that the PS reports durable** — today the meta/size, SLRU-block,
+and rel-page sub-reads can momentarily disagree during recovery.
+
+### YB UPSERT MODE EXONERATED (2026-06-12, run 1781315427)
+
+Tested the hypothesis that `yb_enable_upsert_mode=true` (the fpu write-path
+fast path that skips read-before-write) causes the transient stale read.
+Disabled it (`set_fast_path_upsert=false` on the fpu store) + added
+`ON CONFLICT DO NOTHING` to the three put SQLs (`pages`/`slru_pages`/`meta`)
+so the reconnect-replay re-push stays idempotent without upsert mode (a naive
+disable alone hits `duplicate key violates *_pkey` and stalls the PS — the
+affected-count check only logs, so it's harmless). Clean run: **0 flush
+errors, but the corruption STILL reproduces identically** — iter-2 mode B
+orphan rowtype, 1 passed / 7 failed (same as upsert-on). ⟹ Upsert mode is NOT
+the cause; the staleness persists with standard transactional INSERTs.
+Reverted all experiment edits. Pursuing fix direction 1.
+
+### FIX LANDED + VERIFIED (2026-06-13, approach A): pre-flush the basebackup
+
+Root cause (final): `handle_basebackup_request` `wait_lsn`s on the APPLIED
+frontier (`last_record_lsn`), not the durable watermark (`consistent_lsn`).
+When `backup_lsn > consistent_lsn` the served snapshot mixes durable YB with
+not-yet-durable in-RAM buffer state and can read inconsistently during
+recovery. Confirmed precisely: at the failing basebackup `0/22473A0`,
+`consistent_lsn` was `0/216CDE8` < clog-page-1 LSN `0/220B828` < `backup_lsn`
+`0/22473A0`; block 1 wasn't durable yet so its content read came back empty
+while the (write-through cached) size meta read 2 → truncated `pg_xact` →
+compute FATAL.
+
+Fix (approach A):
+- `Timeline::flush_for_basebackup()` (page_server/timeline.rs) — flush the
+  PageWriter so every write ≤ the applied frontier (hence ≤ `backup_lsn`,
+  already guaranteed ≤ applied by `wait_lsn`) is durable in YB.
+- `handle_basebackup_request` (libpq) AND the gRPC `GetBaseBackup` handler
+  call it after `wait_lsn`/`check_lsn_is_in_scope`, before reading the
+  tarball.
+
+Verification: `torn_wal_write -n 10` twice — **0 corruption signatures**
+(no clog FATAL / torn catalog / orphan / WAL hole), where the bug previously
+reproduced ~7/8 iterations.
+
+### Port-bind race fixed (2026-06-13)
+
+With the corruption gone, the only remaining `-n 10` failures were a
+pre-existing infra race: during a fast compute recycle (`endpoint stop` →
+`endpoint start`, or a `start` retry) a new compute_ctl could try to bind its
+HTTP ports (55433/55434) while the predecessor was still releasing them, and
+`compute_tools/src/http/server.rs` panicked on the first `EADDRINUSE`
+(server.rs:211) → "endpoint start exited 1" → counted as data loss. 37 such
+panics in one run. Fix: `Server::listener()` retries the bind on `AddrInUse`
+for ~10s (50 × 200ms) before failing. Re-run: **0 bind panics** (was 37),
+the retry absorbed the hand-off 18+ times, 0 corruption.
+
+NOTE: diagnostic scaffolding still uncommitted and to be removed before the
+fix commit — clog/rel/meta read traces (page_writer.rs, pgdatadir_mapping.rs,
+basebackup.rs `basebackup_clog`), the `YB_PS_TRACE_CLOG` allowlist entry
+(background_process.rs), and the `E2E_STOP_ON_FAIL` harness helper
+(test/e2e/src/main.rs — arguably worth keeping). The two fixes above
+(timeline.rs, page_service.rs, server.rs) are the keepers.
+
+### (superseded notes below) The likely concrete mechanism (to confirm while implementing fix 1): the
+basebackup serves at `backup_lsn` after `wait_lsn`, which waits on the
+**applied frontier** (`last_record_lsn`), NOT the durable watermark
+(`consistent_lsn`). When `backup_lsn > consistent_lsn`, the read blends
+durable YB + in-RAM cache; during recovery a block at LSN ≤ `backup_lsn`
+can be momentarily absent from BOTH (ingested-then-evicted/drained but its
+flush not yet durable, or not re-populated after a walreceiver reconnect).
+The two `0/22473A0` basebackups ("Collected 3" then "Collected 4") differ
+precisely because block 1 became durable between them. ⟹ Fix 1 concretely:
+ensure everything ≤ `backup_lsn` is durable before serving — either flush
+the PageWriter up to `backup_lsn` in `handle_basebackup_request` after
+`wait_lsn`, or clamp the basebackup read to `consistent_lsn`. Trade-off to
+weigh: per-basebackup flush latency vs. serving a slightly older (durable)
+LSN.
