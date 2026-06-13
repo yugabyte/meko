@@ -569,7 +569,24 @@ impl Timeline {
         }
 
         let key = rel_size_to_key(tag);
-        let mut buf = version.get(self, key, ctx).await?;
+        let mut buf = match version.get(self, key, ctx).await {
+            Ok(buf) => buf,
+            // tasks/35: the rel-directory can list an FSM/VM fork while its
+            // rel-size key is absent at this LSN — e.g. crash-recovery
+            // replay resuming at a `consistent_lsn` that fell between the
+            // directory write and the first size write. FSM/VM are advisory
+            // (rebuilt by VACUUM), so treat a missing size as 0 rather than
+            // letting `MissingKey` wedge the walreceiver on an
+            // `SMGR_TRUNCATE_FSM/_VM` ingest. Same spirit as the
+            // smgrcreate-then-smgrnblocks tolerance above; scoped to FSM/VM
+            // so a missing MAIN-fork size still surfaces as an error.
+            Err(PageReconstructError::MissingKey(_))
+                if tag.forknum == FSM_FORKNUM || tag.forknum == VISIBILITYMAP_FORKNUM =>
+            {
+                return Ok(Some(0));
+            }
+            Err(e) => return Err(e),
+        };
         let nblocks = buf.get_u32_le();
 
         self.update_cached_rel_size(tag, version, nblocks);

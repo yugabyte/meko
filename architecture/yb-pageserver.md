@@ -413,6 +413,20 @@ over live tail blocks. The regression test is
 `test/e2e/src/scenarios/fast/restart_relsize_zero_shadow.rs` (SIGKILL
 + replay + tenant-wide zero-image shadowing assertions).
 
+FSM and visibility-map forks are a tolerated exception to the implicit
+"relation exists ⇒ its size key is readable" coupling. The rel-directory
+can list an FSM/VM fork at a record's *pre-record* LSN while that fork's
+`rel_size_to_key` first appears only at the record's *own* LSN — recovery
+resuming at a `consistent_lsn` that fell between the directory write and
+the first size write. `get_rel_size_in_reldir` therefore treats a
+`MissingKey` on an FSM/VM size read as size 0 (extending the existing
+"smgrcreate-then-smgrnblocks" size-0 tolerance) so an
+`SMGR_TRUNCATE_FSM`/`_VM` ingest no-ops instead of wedging the
+walreceiver on `could not find data for key`. MAIN-fork size reads still
+error on a missing key. FSM/VM are advisory (VACUUM-rebuilt), so an
+imprecise post-recovery size is harmless. Exercised by the
+`torn_wal_write` e2e scenario (#36).
+
 Default knobs (configurable via `pageserver.toml` under the
 `yb_page_writer` block):
 
