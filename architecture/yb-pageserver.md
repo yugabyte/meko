@@ -134,6 +134,16 @@ slow read. Writes (`put_*`, materialiser installs,
 `advance_consistent_lsn`, `delete_all_for_timeline`) always target the
 own timeline_id, never an ancestor.
 
+**Boundary.** The per-segment `timeline_id` binding (the read SQL's
+`$2`, rebound for each ancestor — never baked as a literal, see the
+`read_chain`/`scan_range` comment in `page_store.rs`) plus the `lineage`
+vector are the one place reads are genuinely multi-timeline. Writes are
+single-timeline, so the rest of the pageserver state collapses to the
+process's single (tenant, timeline); the read path does **not**. A
+simplification that hard-codes the write timeline on the read path, or
+bakes it into the read SQL, would silently break branch reads — keep the
+lineage walk and its per-segment binding intact.
+
 Note the `lineage` JSONB column on `timeline_state` is unrelated: it
 carries upstream detach-ancestor state (always `Default` in yb-mode);
 the ancestry chain is derived from the `ancestor_*` columns.
