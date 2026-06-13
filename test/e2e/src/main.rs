@@ -222,6 +222,26 @@ fn collect_items<'a>(c: &'a Cluster, mode: &Mode) -> anyhow::Result<Vec<(String,
             }
         }
     }
+
+    // `E2E_SKIP=<substr>[,<substr>...]` drops matching tests from the run
+    // (e.g. a known-flaky one). Reported, never silent.
+    if let Ok(skip) = std::env::var("E2E_SKIP") {
+        let pats: Vec<&str> = skip.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        if !pats.is_empty() {
+            let mut skipped: Vec<String> = Vec::new();
+            items.retain(|(name, _)| {
+                if pats.iter().any(|p| name.contains(p)) {
+                    skipped.push(name.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            if !skipped.is_empty() {
+                eprintln!("E2E_SKIP: skipping {} test(s): {}", skipped.len(), skipped.join(", "));
+            }
+        }
+    }
     Ok(items)
 }
 

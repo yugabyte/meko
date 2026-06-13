@@ -120,7 +120,9 @@ test/e2e/
 `PS_HTTP_TIMEOUT`, `ENDPOINT_START_TIMEOUT` (restart-scenario timing),
 `YB_HOST`/`YB_PORT`/`COMPUTE_PORT`, `YB_DBNAME`/`YB_LIGHT_REPO_DIR`/`TEST_DIR`
 (override the ephemeral DB / run dir), `YB_LIGHT` (path to the binary),
-`YB_PS_VERIFY_WAL_ROUNDTRIP` (defaults to 1).
+`YB_PS_VERIFY_WAL_ROUNDTRIP` (defaults to 1), `E2E_SKIP=<substr>[,…]`
+(drop matching tests from the run — e.g. a known-flaky one — printing
+what was skipped).
 
 **Concurrency:** every run is isolated by construction — it synthesizes
 its own config on a free port block (auto-picked in 20000..60000, pin
