@@ -405,7 +405,7 @@ form, plus one compiled repair binary. They're staged into
 `${BUNDLE}/tools/` by `scripts/yb-light-ship.sh` so they ship to deploy
 hosts alongside the binaries.
 
-- [`tools/yb-dump-pages`](tools/yb-dump-pages) — dump
+- [`tools/yb-dump-pages`](tools/yb-dump-pages) — dump or decode
   `pageserver.pages` rows for one (rel, fork) tuple. Renders the
   LSN bigint as `H/L` hex, forknum as `main`/`fsm`/`vm`/`init`, and
   the payload as `<bytes>; <16-byte hex sample>`. Required hash
@@ -413,7 +413,13 @@ hosts alongside the binaries.
   filters: `--blknum` (or `--blknum-from/--blknum-to`),
   `--lsn-from`/`--lsn-to` (PG `X/Y` hex). Add `--raw` for the wide
   table form, `--no-payload` to drop the byte preview,
-  `--limit 0` for unbounded.
+  `--limit 0` for unbounded. `--decode` switches to a single-block
+  chain decoder: it walks the chain LSN-ascending (the order walredo
+  applies it), prints each image's line-pointer `max_off` and each
+  delta's WAL resource-manager + op + target `offnum`, and flags a
+  GAP when a delta's `offnum` exceeds the running max+1 — the
+  signature of a chain walredo can't fold and of a base image too
+  small for the deltas above it (see issue #22).
 - [`tools/yb-dump-wals`](tools/yb-dump-wals) — dump
   `public.wals` rows (the safekeeper's WAL-in-YB chunks). Required
   hash columns: `--tenant --timeline`. Range filters: `--segno`
@@ -446,6 +452,9 @@ tools/yb-dump-wals  --tenant <hex> --timeline <hex> \
 tools/yb-dump-pages --tenant <hex> --timeline <hex> \
                     --spc 1663 --db 5 --rel 16384 --fork 0 \
                     --blknum 0 --limit 3 --raw
+# decode one block's chain and check it folds (offnum gaps = landmine)
+tools/yb-dump-pages --decode --tenant <hex> --timeline <hex> \
+                    --spc 1663 --db 16384 --rel 16414 --fork 0 --blknum 1456384
 # dry run: print the max valid consistent_lsn <= target, then rewind to it
 tools/yb-reset-consistent-lsn --tenant <hex> --timeline <hex> \
                     --target-lsn 22/63000000
