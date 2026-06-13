@@ -159,6 +159,13 @@ Use the Meko datapack above for repo-scoped memory. Don't store:
 - Secrets, passwords, connection strings with credentials.
 - Ephemeral state (what's in flight this session — use plans/tasks).
 - Things derivable from `git log` / current code.
+- **Resolved-bug narratives.** Once a fix has shipped, its root cause,
+  the change, and the verification all live in the commit message and the
+  closed GitHub issue. Don't re-record "issue #N: cause was X, fixed by Y,
+  verified by Z" in Meko — that's git/issue-tracker territory, not memory.
+  The only durable carve-out is a *recurring sharp edge* (see below): a
+  trap the fix itself doesn't prevent and a future session would hit
+  again. Store that one sentence, not the case history.
 
 Do store:
 
