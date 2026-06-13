@@ -3350,11 +3350,14 @@ impl GrpcPageServiceHandler {
             // Run the page service.
             .service(
                 proto::PageServiceServer::new(page_service_handler)
-                    // Support both gzip and zstd compression. The client decides what to use.
+                    // yb-light co-locates the pageserver and compute, so
+                    // compressing getpage responses only burns PS CPU for no
+                    // bandwidth win. Don't `send_compressed`: responses go out
+                    // uncompressed regardless of what the client advertises.
+                    // Still `accept_compressed` both codecs so a client that
+                    // compresses its (tiny) requests keeps working.
                     .accept_compressed(tonic::codec::CompressionEncoding::Gzip)
-                    .accept_compressed(tonic::codec::CompressionEncoding::Zstd)
-                    .send_compressed(tonic::codec::CompressionEncoding::Gzip)
-                    .send_compressed(tonic::codec::CompressionEncoding::Zstd),
+                    .accept_compressed(tonic::codec::CompressionEncoding::Zstd),
             );
         let server = server.add_service(page_service);
 

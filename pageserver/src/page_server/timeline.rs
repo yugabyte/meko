@@ -2156,7 +2156,12 @@ impl Timeline {
 
         let protocol = PostgresClientProtocol::Interpreted {
             format: utils::postgres_client::InterpretedFormat::Protobuf,
-            compression: Some(utils::postgres_client::Compression::Zstd { level: 1 }),
+            // yb-light co-locates the safekeeper and pageserver on one box, so
+            // the SK→PS interpreted-WAL stream never leaves the host. ZSTD on
+            // that link only burned CPU (the walreceiver's ZSTD-decompress
+            // showed up in the under-load profile) without buying bandwidth —
+            // ship it uncompressed.
+            compression: None,
         };
 
         *guard = Some(WalReceiver::start(
