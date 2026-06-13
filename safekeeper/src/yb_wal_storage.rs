@@ -447,15 +447,18 @@ impl YbWalStorage {
         wal_seg_size: usize,
         commit_lsn: Lsn,
     ) -> Result<Lsn> {
-        let sql = format!(
-            "SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2 \
-             GROUP BY segno ORDER BY segno DESC LIMIT 1",
-            quote_ident(table)
+        let sql = bake_ttid(
+            &format!(
+                "SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM {} \
+                 WHERE tenant_id = $1 AND timeline_id = $2 \
+                 GROUP BY segno ORDER BY segno DESC LIMIT 1",
+                quote_ident(table)
+            ),
+            tenant_id,
+            timeline_id,
         );
-        let params: [&(dyn ToSql + Sync); 2] = [&tenant_id, &timeline_id];
         let row_opt = client
-            .query_opt(&sql, &params)
+            .query_opt(&sql, &[])
             .await
             .context("YbWalStorage: rehydrate write_lsn from YB")?;
         let lsn = match row_opt {
@@ -479,16 +482,19 @@ impl YbWalStorage {
         tenant_id: &str,
         timeline_id: &str,
     ) -> Result<u64> {
-        let sql = format!(
-            "SELECT min(segno) AS m FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2",
-            quote_ident(table)
+        let sql = bake_ttid(
+            &format!(
+                "SELECT min(segno) AS m FROM {} \
+                 WHERE tenant_id = $1 AND timeline_id = $2",
+                quote_ident(table)
+            ),
+            tenant_id,
+            timeline_id,
         );
-        let params: [&(dyn ToSql + Sync); 2] = [&tenant_id, &timeline_id];
         // Aggregate over an empty set still returns one row (NULL); a
         // missing row would mean the query itself didn't run.
         let row = client
-            .query_opt(&sql, &params)
+            .query_opt(&sql, &[])
             .await
             .context("YbWalStorage: rehydrate min(segno) from YB")?;
         let m: Option<i64> = row.and_then(|r| r.get("m"));
@@ -724,14 +730,18 @@ impl Storage for YbWalStorage {
             // `segno_up_to <= lower`: the predicate is unsatisfiable and
             // the DELETE is a no-op.
             let lower = delete_lower_bound.load(Ordering::Relaxed);
-            let sql = format!(
-                "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
-                 AND segno >= $3 AND segno < $4",
-                quote_ident(&table)
+            let sql = bake_ttid(
+                &format!(
+                    "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
+                     AND segno >= $3 AND segno < $4",
+                    quote_ident(&table)
+                ),
+                &tenant_id,
+                &timeline_id,
             );
             let lower_i: i64 = lower as i64;
             let upper_i: i64 = segno_up_to as i64;
-            let params: [&(dyn ToSql + Sync); 4] = [&tenant_id, &timeline_id, &lower_i, &upper_i];
+            let params: [&(dyn ToSql + Sync); 2] = [&lower_i, &upper_i];
             system_client
                 .execute(&sql, &params)
                 .await
@@ -754,6 +764,32 @@ impl Storage for YbWalStorage {
 fn quote_ident(ident: &str) -> String {
     let escaped = ident.replace('"', "\"\"");
     format!("\"{escaped}\"")
+}
+
+/// Bake the per-instance `(tenant_id, timeline_id)` into a `wals` query
+/// whose `$1` is `tenant_id` and `$2` is `timeline_id` (the convention
+/// here): replace those two binds with quoted literals and shift every
+/// remaining `$N` (N ≥ 3) down by two. Each `YbWalStorage` is bound to one
+/// `(tenant, timeline)` for its lifetime and the safekeeper does no
+/// lineage/ancestor reads, so the ids are fixed for every query on this
+/// instance — baking drops the two binds from the wire. The ids render as
+/// fixed-width hex (`TenantId`/`TimelineId` `Display`), so the literals are
+/// injection-safe.
+fn bake_ttid(sql: &str, tenant_id: &str, timeline_id: &str) -> String {
+    let with_ids = sql
+        .replace("tenant_id = $1", &format!("tenant_id = '{tenant_id}'"))
+        .replace("timeline_id = $2", &format!("timeline_id = '{timeline_id}'"));
+    // No bare `$1`/`$2` may remain — they're tenant_id/timeline_id only.
+    regex::Regex::new(r"\$(\d+)")
+        .expect("static regex")
+        .replace_all(&with_ids, |c: &regex::Captures<'_>| {
+            let n: u32 = c[1].parse().expect("param index");
+            let shifted = n
+                .checked_sub(2)
+                .expect("wals query must use $1=tenant_id, $2=timeline_id only");
+            format!("${shifted}")
+        })
+        .into_owned()
 }
 
 /// Consumer task body. Builds batches by:
@@ -902,7 +938,7 @@ async fn flush_batch(
         .map(|d| d.as_micros() as i64)
         .unwrap_or(0);
 
-    let mut sql = String::with_capacity(128 + n * 56);
+    let mut sql = String::with_capacity(128 + n * 96);
     sql.push_str("INSERT INTO ");
     sql.push_str(&quote_ident(table_name));
     sql.push_str(
@@ -913,18 +949,18 @@ async fn flush_batch(
         if i > 0 {
             sql.push_str(", ");
         }
-        let b = i * 7;
+        let b = i * 5;
         use std::fmt::Write as _;
+        // tenant_id/timeline_id baked as literals (fixed for this
+        // instance's lifetime); only the 5 per-row columns bind.
         let _ = write!(
             sql,
-            "(${},${},${},${},${},${},${})",
+            "('{tenant_id}','{timeline_id}',${},${},${},${},${})",
             b + 1,
             b + 2,
             b + 3,
             b + 4,
             b + 5,
-            b + 6,
-            b + 7,
         );
     }
 
@@ -936,10 +972,8 @@ async fn flush_batch(
     // to a `&[u8]` for the param vector.
     let datas: Vec<&[u8]> = batch.iter().map(|p| p.data.as_slice()).collect();
 
-    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 7);
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 5);
     for i in 0..n {
-        params.push(&tenant_id);
-        params.push(&timeline_id);
         params.push(&segno_is[i]);
         params.push(&offset_is[i]);
         params.push(&size_is[i]);
@@ -1213,21 +1247,23 @@ async fn fetch_chunks_from_yb(
     segno: u64,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
-    let sql = format!(
-        "SELECT chunk_offset, chunk_size, data FROM {} \
-         WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-           AND chunk_offset >= $4 AND chunk_offset < $5 \
-         ORDER BY chunk_offset ASC \
-         LIMIT $6",
-        quote_ident(table)
+    let sql = bake_ttid(
+        &format!(
+            "SELECT chunk_offset, chunk_size, data FROM {} \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
+               AND chunk_offset >= $4 AND chunk_offset < $5 \
+             ORDER BY chunk_offset ASC \
+             LIMIT $6",
+            quote_ident(table)
+        ),
+        tenant_id,
+        timeline_id,
     );
     let segno_i: i64 = segno as i64;
     let lo_i: i64 = byte_offset as i64;
     let hi_i: i64 = byte_offset.saturating_add(FETCH_FORWARD_BYTES) as i64;
     let limit_i: i64 = FETCH_FORWARD_CHUNKS as i64;
-    let params: [&(dyn ToSql + Sync); 6] = [
-        &tenant_id, &timeline_id, &segno_i, &lo_i, &hi_i, &limit_i,
-    ];
+    let params: [&(dyn ToSql + Sync); 4] = [&segno_i, &lo_i, &hi_i, &limit_i];
     let started_at = std::time::Instant::now();
     let rows = client
         .query(&sql, &params)
@@ -1258,16 +1294,19 @@ async fn fetch_chunks_from_yb(
     // position. Skipped on the steady-state boundary-aligned path
     // (first row == byte_offset), so the hot path stays one round trip.
     if out.first().map(|c| c.chunk_offset) != Some(byte_offset) {
-        let cov_sql = format!(
-            "SELECT chunk_offset, chunk_size, data FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-               AND chunk_offset <= $4 \
-             ORDER BY chunk_offset DESC \
-             LIMIT 1",
-            quote_ident(table)
+        let cov_sql = bake_ttid(
+            &format!(
+                "SELECT chunk_offset, chunk_size, data FROM {} \
+                 WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
+                   AND chunk_offset <= $4 \
+                 ORDER BY chunk_offset DESC \
+                 LIMIT 1",
+                quote_ident(table)
+            ),
+            tenant_id,
+            timeline_id,
         );
-        let cov_params: [&(dyn ToSql + Sync); 4] =
-            [&tenant_id, &timeline_id, &segno_i, &lo_i];
+        let cov_params: [&(dyn ToSql + Sync); 2] = [&segno_i, &lo_i];
         let cov_rows = client
             .query(&cov_sql, &cov_params)
             .await
@@ -1324,6 +1363,30 @@ mod tests {
     // type paths; the production code in this module doesn't need the
     // alias.
     use yb_tokio_postgres as tokio_postgres;
+
+    /// `bake_ttid` inlines tenant/timeline as literals and shifts the
+    /// remaining params down by two — no live YB needed. Locks the
+    /// numbering the `wals` query call sites depend on.
+    #[test]
+    fn bake_ttid_bakes_and_shifts() {
+        let t = "00112233445566778899aabbccddeeff";
+        let tl = "ffeeddccbbaa99887766554433221100";
+        let sql = bake_ttid(
+            "SELECT chunk_offset FROM \"wals\" \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
+               AND chunk_offset >= $4 AND chunk_offset < $5 LIMIT $6",
+            t,
+            tl,
+        );
+        assert!(sql.contains(&format!("tenant_id = '{t}'")));
+        assert!(sql.contains(&format!("timeline_id = '{tl}'")));
+        // $3..$6 shifted to $1..$4; no $5/$6 and no bare $1/$2 left.
+        assert!(sql.contains("segno = $1"));
+        assert!(sql.contains("chunk_offset >= $2 AND chunk_offset < $3"));
+        assert!(sql.contains("LIMIT $4"));
+        assert!(!sql.contains("$5"));
+        assert!(!sql.contains("$6"));
+    }
 
     fn pgcfg() -> tokio_postgres::Config {
         let mut cfg = tokio_postgres::Config::new();
