@@ -431,7 +431,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>yb-light cluster</title>
+<title>YugabyteDB AMP</title>
 <style>
   :root {
     --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
@@ -515,7 +515,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>yb-light cluster</h1>
+  <h1>YugabyteDB AMP</h1>
   <span class="repo" id="repo"></span>
   <span class="spacer"></span>
   <span class="updated" id="updated"></span>
@@ -616,7 +616,7 @@ function renderTlNode(node, ctx) {
         <td>${esc(ep.endpoint_id)}</td>
         <td><span class="pill ${cls}">${label}</span></td>
         <td>${esc(ep.mode || '-')}</td>
-        <td class="mono"><a href="#" onclick="openSqlTool(${ep.pg_port});return false;"
+        <td class="mono"><a href="#" onclick="openSqlTool(${ep.pg_port}, '${ep.endpoint_id}');return false;"
           title="Open in SQL tool (localhost:8081)"
           style="color:#7fb0ff;text-decoration:underline;cursor:pointer">127.0.0.1:${esc(ep.pg_port)}</a></td>
         <td class="mono">${esc(ep.external_http_port || '-')}</td>
@@ -722,8 +722,8 @@ function renderUnified(d) {
 // you straight into the query view — no clipboard paste or connect-form fiddling
 // needed. The connection string is passed raw in the path (pgweb takes the rest
 // of the path, query string included, as the URL).
-function openSqlTool(pgPort) {
-  const conn = 'postgresql://cloud_admin@127.0.0.1:' + pgPort + '/postgres?sslmode=disable';
+function openSqlTool(pgPort, endpoint_id) {
+  const conn = 'postgresql://cloud_admin@127.0.0.1:' + pgPort + '/postgres?sslmode=disable&name='+ endpoint_id;
   window.open('http://localhost:8081/open/' + conn);
 }
 
