@@ -35,6 +35,14 @@ macro_rules! tee_println {
 /// scenario. First hit aborts the run.
 pub const MARKERS: &str = "MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specified item offset|image row at lsn|deserialize error|WRITE-PATH ROUNDTRIP";
 
+/// Fatal markers polled across ALL cluster logs (pageserver + safekeeper)
+/// *while a test runs*, so a wedge fails fast instead of hanging until a
+/// timeout. The safekeeper's interpreted-WAL-reader decode panic
+/// (`critical_timeline!`) is the prime case: it aborts the WAL sender, the
+/// PS then loops forever in `wait_lsn` and the test silently stalls (#61).
+pub const FATAL_MARKERS: &str =
+    r"interpreted wal reader: failed to decode|invalid xlog page header|panicked at|thread '[^']*' panicked";
+
 /// Print a step banner to stdout and the run log.
 pub fn step(msg: &str) {
     tee_line("");
@@ -63,6 +71,9 @@ pub struct Cluster {
     tid: String,
     /// Regex form of [`MARKERS`].
     markers: Regex,
+    /// Regex form of [`FATAL_MARKERS`] (polled across all cluster logs
+    /// during a test so a wedge fails fast).
+    fatal_markers: Regex,
     /// Set by [`Cluster::mark_success`] at the end of a fully-passing
     /// run. Drives the final-verdict messaging; teardown keeps logs
     /// either way (see `no_fail_clean` for the failure postmortem opt-in).
@@ -178,6 +189,7 @@ impl Cluster {
             compute_port,
             tid: String::new(),
             markers: Regex::new(MARKERS).expect("static marker regex"),
+            fatal_markers: Regex::new(FATAL_MARKERS).expect("static fatal-marker regex"),
             success: false,
             no_fail_clean: std::env::var("E2E_NO_FAIL_CLEAN").is_ok_and(|v| !v.is_empty()),
         };
@@ -335,10 +347,68 @@ impl Cluster {
         step(&format!("script: {label}"));
         let before = self.ps_log_lines();
         let t0 = Instant::now();
-        fut.await?;
+        // Run the scenario, but fail FAST if the cluster wedges: a
+        // watchdog polls every cluster log for a fatal marker (e.g. the
+        // safekeeper WAL-decode panic, #61) that would otherwise leave the
+        // test hung in `wait_lsn`, and a wall-clock backstop catches any
+        // other stall. Either beats waiting out a silent hang.
+        let budget = Duration::from_secs(
+            env_or(&["E2E_TEST_TIMEOUT"], "180").parse().unwrap_or(180),
+        );
+        tokio::select! {
+            r = fut => r?,
+            hit = self.watch_fatal() => {
+                bail!("{label}: fatal marker in a cluster log while running (cluster wedged): {hit}");
+            }
+            _ = tokio::time::sleep(budget) => {
+                bail!(
+                    "{label}: timed out after {}s with no fatal marker — cluster wedged; logs under {}",
+                    budget.as_secs(),
+                    self.repo_dir.display()
+                );
+            }
+        }
         self.corruption_gate(label, before)?;
         tee_println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
         Ok(())
+    }
+
+    /// Poll every pageserver + safekeeper log under the run dir for a
+    /// [`FATAL_MARKERS`] hit; resolves with the offending `path: line` the
+    /// moment one appears. Used as a fail-fast arm in [`Self::run_scenario`].
+    async fn watch_fatal(&self) -> String {
+        loop {
+            if let Some(hit) = self.scan_fatal() {
+                return hit;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    /// First [`FATAL_MARKERS`] line across all `endpoints/*/{pageserver,
+    /// safekeeper}/*.log` under the run dir, prefixed with its file.
+    fn scan_fatal(&self) -> Option<String> {
+        let eps = std::fs::read_dir(self.repo_dir.join("endpoints")).ok()?;
+        for ep in eps.flatten() {
+            for sub in ["safekeeper", "pageserver"] {
+                let Ok(rd) = std::fs::read_dir(ep.path().join(sub)) else {
+                    continue;
+                };
+                for f in rd.flatten() {
+                    let p = f.path();
+                    if p.extension().is_none_or(|e| e != "log") {
+                        continue;
+                    }
+                    let Ok(content) = std::fs::read_to_string(&p) else {
+                        continue;
+                    };
+                    if let Some(line) = content.lines().find(|l| self.fatal_markers.is_match(l)) {
+                        return Some(format!("{}: {}", p.display(), line));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Recycle the cluster, then run a `.sql` workload through `psql`,
